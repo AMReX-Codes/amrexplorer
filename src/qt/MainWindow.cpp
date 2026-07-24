@@ -3203,6 +3203,9 @@ void MainWindow::exportAnimation()
     m_exportAnim.includeColorBar = includeColorBar;
     // Freeze the export zoom from the current view so every frame renders at the
     // same dimensions even if a frame's image size changes and refits the view.
+    // In 3-D this single scale is shared by all three panels, so a panel whose
+    // fitted zoom differs from the active view exports at the active view's
+    // scale -- constant across frames, which is the goal.
     m_exportAnim.scale = std::max(1.0, view->transform().m11());
     m_exportAnim.hasFfmpeg = probeFfmpeg();
     m_exportAnim.totalFrames = total;

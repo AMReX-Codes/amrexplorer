@@ -83,7 +83,7 @@ public:
     void panViewport(const QPoint& delta);
     // When enabled (the 3-D slice views): a plain right click emits
     // sliceMoveRequested; a Shift+middle/right click or drag, or a right
-    // drag, arms a line-plot request. A plain middle click is a no-op.
+    // drag, arms a line-plot request. A plain middle click or drag is a no-op.
     // (Only Shift is honored; Control is not.)
     void setSliceMoveEnabled(bool enabled) noexcept;
     // Highlight (or clear) a coloured border indicating the active panel.

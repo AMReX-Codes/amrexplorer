@@ -78,7 +78,10 @@ void ensureDesktopEntry()
         const QString dir = dataDir + QString("/icons/hicolor/%1x%1/apps").arg(size);
         const QString path = QDir(dir).filePath("amrexplorer.png");
         if (QFileInfo::exists(path)) {
-            continue;  // already installed; skip the no-op rewrite
+            // Already installed: skip the no-op rewrite. Conscious trade-off
+            // -- this also means a changed bundled icon won't reach an existing
+            // install; delete the file to force a refresh.
+            continue;
         }
         QDir().mkpath(dir);
         QFile in(QStringLiteral(":/amrexplorer-%1.png").arg(size));
@@ -89,6 +92,10 @@ void ensureDesktopEntry()
         }
     }
     QDir().mkpath(dataDir + "/applications");
+    // Rewritten wholesale when the binary moved (the Exec line must track the
+    // running binary), which discards user edits to the other fields. That is
+    // intentional for this install-on-startup helper; a surgical Exec-only
+    // patch would preserve edits but is out of scope.
     QFile desktop(desktopPath);
     if (desktop.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
         QTextStream out(&desktop);

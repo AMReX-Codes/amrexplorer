@@ -29,7 +29,14 @@ cmake --build --preset default
 Install the dependencies with [Homebrew][]:
 
 ```bash
-brew install cmake ninja qt6
+brew install cmake ninja qt
+```
+
+Homebrew's Qt is keg-only, so CMake cannot locate it without a prefix hint.
+Export this before configuring (or add it to your shell profile):
+
+```bash
+export CMAKE_PREFIX_PATH="$(brew --prefix qt)"
 ```
 
 [Homebrew]: https://brew.sh

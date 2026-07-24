@@ -1,7 +1,10 @@
 # Building AMReXplorer
 
 AMReXplorer requires a C++20 compiler, CMake 3.25 or newer, and Ninja for the
-provided presets. Qt 6.4 or newer is required only by the desktop target.
+provided presets. Qt 6.4 or newer is required only by the desktop target. On
+macOS, Homebrew's Qt is keg-only, so export
+`CMAKE_PREFIX_PATH="$(brew --prefix qt)"` before configuring or CMake cannot
+find it.
 There is no build-time dataset dimension: one executable reads 2-D and 3-D
 data, and the same runtime metadata representation accepts 1-D data.
 

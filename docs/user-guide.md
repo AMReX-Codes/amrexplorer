@@ -122,7 +122,7 @@ the visible physical region. Values are grouped by AMR level. Clicking a
 value highlights the corresponding sample in the main view.
 
 Choose **View > Number Format...** to set the `printf`-style format used for
-numeric readouts. The default is `%7.5f`.
+numeric readouts. The default is `%g`.
 
 ## Working with 3-D data
 

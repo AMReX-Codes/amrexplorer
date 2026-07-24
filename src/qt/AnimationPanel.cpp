@@ -58,6 +58,10 @@ AnimationPanel::AnimationPanel(QWidget* parent)
     sequenceLayout->addWidget(m_frameSlider, 0, 0, 1, 2);
     m_frameSpin = new QSpinBox(m_sequenceGroup);
     m_frameSpin->setRange(0, 0);
+    // Defer typed input to Enter/focus-out (matching ScientificDoubleSpinBox
+    // and the frame slider's sliderReleased): each intermediate keystroke
+    // otherwise emits valueChanged, which reloads a plotfile per key.
+    m_frameSpin->setKeyboardTracking(false);
     sequenceLayout->addWidget(m_frameSpin, 0, 2);
     m_frameCountLabel = new QLabel(tr("/ 0"), m_sequenceGroup);
     sequenceLayout->addWidget(m_frameCountLabel, 0, 3);

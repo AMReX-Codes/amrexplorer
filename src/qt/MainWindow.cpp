@@ -1632,22 +1632,26 @@ void MainWindow::rebuildLevelMenu()
         });
         m_levelMenu->addAction(action);
     }
-    for (int level = 0; level <= metadata.finestLevel; ++level) {
-        auto* action = new QAction(tr("Level %1 only").arg(level), m_levelMenu);
-        action->setCheckable(true);
-        action->setActionGroup(m_levelGroup);
-        action->setData(level);
-        if (level < 10) {
-            action->setShortcut(QKeySequence(
-                Qt::ALT | static_cast<Qt::Key>(Qt::Key_0 + level)));
-        }
-        connect(action, &QAction::triggered, this, [this, level] {
-            const auto index = m_levelSelector->findData(level);
-            if (index >= 0) {
-                m_levelSelector->setCurrentIndex(index);
+    // "Level N only" is redundant for a single-level dataset (mirrors
+    // populateLevelCombo, which also drops these for finestLevel == 0).
+    if (metadata.finestLevel > 0) {
+        for (int level = 0; level <= metadata.finestLevel; ++level) {
+            auto* action = new QAction(tr("Level %1 only").arg(level), m_levelMenu);
+            action->setCheckable(true);
+            action->setActionGroup(m_levelGroup);
+            action->setData(level);
+            if (level < 10) {
+                action->setShortcut(QKeySequence(
+                    Qt::ALT | static_cast<Qt::Key>(Qt::Key_0 + level)));
             }
-        });
-        m_levelMenu->addAction(action);
+            connect(action, &QAction::triggered, this, [this, level] {
+                const auto index = m_levelSelector->findData(level);
+                if (index >= 0) {
+                    m_levelSelector->setCurrentIndex(index);
+                }
+            });
+            m_levelMenu->addAction(action);
+        }
     }
     syncMenuChecks();
 }
@@ -3244,10 +3248,8 @@ void MainWindow::onExportFrameDisplayed(int index)
             if (panelView == nullptr || !panelView->hasImage()) {
                 continue;
             }
-            const qreal scale = std::max(1.0,
-                panelView->transform().m11());
             const QImage frame = composeExportFrame(
-                panelView, m_exportAnim.includeColorBar, scale);
+                panelView, m_exportAnim.includeColorBar, m_exportAnim.scale);
             if (frame.isNull()) {
                 endExportAnimation(false,
                     tr("A frame could not be rendered."));
@@ -4700,6 +4702,13 @@ void MainWindow::goToSequenceFrame(int index)
     m_sliceDebounce->stop();
     // The dataset window shows the previous frame's raw values; drop it.
     closeDatasetWindow();
+    // Line plot curves are snapshots of this dataset; drop the window so its
+    // title and curves do not go stale across the frame switch.
+    auto* linePlotWindow = m_linePlotWindow;
+    m_linePlotWindow = nullptr;
+    if (linePlotWindow != nullptr) {
+        linePlotWindow->close();
+    }
     const auto generation = ++m_generation;
     m_sequenceIndex = index;
     m_sequenceInFlight = true;
@@ -4750,9 +4759,14 @@ void MainWindow::startFrameLoad(int index, std::uint64_t generation)
                 if (generation == m_generation && index == m_sequenceIndex) {
                     m_sequenceInFlight = false;
                     statusBar()->showMessage(tr("Frame load failed"));
+                    // During animation export the failure is reported by the
+                    // export handler (endExportAnimation); avoid a second dialog.
+                    const bool wasExporting = m_exportAnim.active;
                     emit sequenceFrameFailed();
-                    QMessageBox::critical(this, tr("Cannot load frame"),
-                        exceptionMessage(error));
+                    if (!wasExporting) {
+                        QMessageBox::critical(this, tr("Cannot load frame"),
+                            exceptionMessage(error));
+                    }
                 } else {
                     ++m_staleResults;
                 }
@@ -4773,9 +4787,14 @@ void MainWindow::finishFrameLoad(InitialSliceResult result, bool defaultPosition
     } catch (const std::exception& error) {
         m_sequenceInFlight = false;
         statusBar()->showMessage(tr("Frame load failed"));
+        // During animation export the failure is reported by the export
+        // handler (endExportAnimation); avoid a second dialog.
+        const bool wasExporting = m_exportAnim.active;
         emit sequenceFrameFailed();
-        QMessageBox::critical(this, tr("Cannot load frame"),
-            exceptionMessage(error));
+        if (!wasExporting) {
+            QMessageBox::critical(this, tr("Cannot load frame"),
+                exceptionMessage(error));
+        }
         updateDiagnostics();
         return;
     }

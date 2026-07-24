@@ -37,6 +37,12 @@ namespace {
 // resources/install-desktop-entry.sh does the same thing by hand.
 void ensureDesktopEntry()
 {
+#ifndef Q_OS_LINUX
+    // Desktop entry + hicolor icons are a GNOME/KDE (Linux) mechanism. On
+    // other platforms the writes land in nonsensical locations and the
+    // cache-refresh helpers do not exist, so do nothing.
+    return;
+#endif
     static constexpr int kSizes[] = {16, 32, 64, 128, 256};
     const QString dataDir =
         QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
@@ -70,9 +76,13 @@ void ensureDesktopEntry()
 
     for (int size : kSizes) {
         const QString dir = dataDir + QString("/icons/hicolor/%1x%1/apps").arg(size);
+        const QString path = QDir(dir).filePath("amrexplorer.png");
+        if (QFileInfo::exists(path)) {
+            continue;  // already installed; skip the no-op rewrite
+        }
         QDir().mkpath(dir);
         QFile in(QStringLiteral(":/amrexplorer-%1.png").arg(size));
-        QFile out(QDir(dir).filePath("amrexplorer.png"));
+        QFile out(path);
         if (in.open(QIODevice::ReadOnly)
             && out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
             out.write(in.readAll());

@@ -61,10 +61,11 @@ std::vector<VectorSegment> generateVectorGlyphs(
         return segments;
     }
 
-    // Legacy partitions the longest side with integer division before
-    // truncating again to the stride (AmrPicture::DrawVectorField).
+    // Partition the longest side, then truncate to the stride. Floating-point
+    // division keeps sight (and thus arrowMax) nonzero when count exceeds the
+    // longest side, so small planes still draw glyphs instead of vanishing.
     const int longestSide = std::max(uComponent.width, uComponent.height);
-    const double sight = static_cast<double>(longestSide / count);
+    const double sight = static_cast<double>(longestSide) / count;
     const int stride = std::max(1, static_cast<int>(sight));
     const double arrowMax = 1.25 * sight;
 

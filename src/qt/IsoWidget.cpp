@@ -272,9 +272,13 @@ void IsoWidget::wheelEvent(QWheelEvent* event)
         QWidget::wheelEvent(event);
         return;
     }
+    const auto vertical = event->angleDelta().y();
+    if (vertical == 0) {
+        QWidget::wheelEvent(event);
+        return;
+    }
     constexpr double zoomStep = 1.15;
-    const auto factor = event->angleDelta().y() >= 0
-        ? zoomStep : 1.0 / zoomStep;
+    const auto factor = vertical > 0 ? zoomStep : 1.0 / zoomStep;
     m_zoom = std::clamp(m_zoom * factor, 0.1, 10.0);
     update();
     event->accept();

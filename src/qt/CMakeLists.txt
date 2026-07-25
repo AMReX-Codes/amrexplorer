@@ -1,4 +1,6 @@
 add_executable(amrexplorer_qt
+    AnimationExporter.cpp
+    AnimationExporter.hpp
     AnimationPanel.cpp
     AnimationPanel.hpp
     CacheConfig.hpp

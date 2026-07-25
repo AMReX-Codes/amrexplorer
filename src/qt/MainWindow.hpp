@@ -62,6 +62,7 @@ enum class CompositionPolicy : std::uint8_t;
 
 namespace amrvis::qt {
 
+class AnimationExporter;
 class AnimationPanel;
 class ColorBarWidget;
 class DatasetWindow;
@@ -264,20 +265,12 @@ private:
     void exportImage();
     void exportAnimation();
     // Shared body of exportAnimation once the output path and color-bar choice
-    // are known (from the dialogs, or from the test hook): configures the export
-    // state, progress dialog, and kicks off frame 0.
+    // are known (from the dialogs, or from the test hook): freezes the export
+    // zoom, starts the AnimationExporter (which owns the export state machine),
+    // and kicks off frame 0.
     void beginAnimationExport(const QString& path, bool includeColorBar);
-    // Animation export is signal-driven (frame rendering is async): exportAnimation
-    // kicks off frame 0; onExportFrameDisplayed saves each rendered frame and
-    // advances; finalizeExportAnimation encodes the MP4; endExportAnimation is the
-    // shared cleanup/restore/report path.
-    void onExportFrameDisplayed(int index);
-    void onExportFrameFailed();
-    void finalizeExportAnimation();
-    void endExportAnimation(bool success, const QString& message);
     [[nodiscard]] QImage composeExportFrame(const ImageView* view,
         bool includeColorBar, qreal scaleFactor) const;
-    [[nodiscard]] bool probeFfmpeg() const;
     void createMenus();
     void rebuildLevelMenu();
     void rebuildVariableMenu();
@@ -500,24 +493,10 @@ private:
     QAction* m_datasetAction = nullptr;
     QAction* m_exportAnimationAction = nullptr;
 
-    // Drives File -> Export Animation... Active only while an export is running;
-    // sequenceFrameDisplayed advances it one frame at a time.
-    struct ExportAnimationState {
-        bool active = false;
-        bool canceled = false;
-        std::shared_ptr<std::atomic<bool>> encoderCancel;
-        bool framesDone = false;
-        bool includeColorBar = false;
-        bool hasFfmpeg = false;
-        qreal scale = 1.0;  // frozen export zoom factor so every frame matches
-        int totalFrames = 0;
-        int restoreIndex = -1;
-        int digitWidth = 5;
-        QString directory;
-        QString stem;
-        QProgressDialog* progress = nullptr;
-    };
-    ExportAnimationState m_exportAnim;
+    // Drives File -> Export Animation...: owns the whole export state machine
+    // (progress, cancellation, FFmpeg encoding). This window supplies frame
+    // rendering and sequence navigation, and restores its UI on finished().
+    AnimationExporter* m_animationExporter = nullptr;
     std::shared_ptr<PlotfileDataset> m_dataset;
     std::shared_ptr<const DatasetMetadata> m_openMetadata;
     std::string m_fileVersion;

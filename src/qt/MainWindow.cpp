@@ -1,4 +1,5 @@
 #include "MainWindow.hpp"
+#include "AnimationExporter.hpp"
 #include "AnimationPanel.hpp"
 #include "CacheConfig.hpp"
 #include "ColorBarWidget.hpp"
@@ -616,11 +617,56 @@ MainWindow::MainWindow(QWidget* parent)
     // stops the other (see setPlaybackMode).
     m_playbackTimer = new QTimer(this);
     connect(m_playbackTimer, &QTimer::timeout, this, [this] { playbackTick(); });
-    // Animation export advances one frame at a time as each renders.
+    // Animation export advances one frame at a time as each renders. The
+    // exporter owns the whole export state machine; this window supplies
+    // frame rendering and navigation, and restores its UI on finished().
+    m_animationExporter = new AnimationExporter(
+        [this](bool includeColorBar, qreal scale) {
+            std::vector<std::pair<QString, QImage>> frames;
+            if (m_viewDimension == 3) {
+                constexpr std::array<const char*, 3> suffixes{
+                    "_yz", "_xz", "_xy"};
+                for (int normal = 0; normal < 3; ++normal) {
+                    const auto idx = static_cast<std::size_t>(normal);
+                    auto* panelView = m_planeViews[idx].view;
+                    if (panelView == nullptr || !panelView->hasImage()) {
+                        continue;
+                    }
+                    frames.emplace_back(QString::fromLatin1(suffixes[idx]),
+                        composeExportFrame(panelView, includeColorBar, scale));
+                }
+            } else {
+                frames.emplace_back(QString(), composeExportFrame(
+                    m_activeView != nullptr ? m_activeView->view : nullptr,
+                    includeColorBar, scale));
+            }
+            return frames;
+        },
+        [this](int index) { goToSequenceFrame(index); },
+        this);
+    connect(m_animationExporter, &AnimationExporter::encodingStarted,
+        this, &MainWindow::exportEncodingStarted);
+    connect(m_animationExporter, &AnimationExporter::finished, this,
+        [this](bool success, const QString& message, int restoreIndex) {
+            // Return the user to the frame they were viewing (unless we are
+            // closing, which would launch a new frame load mid-shutdown).
+            if (!m_closing && !m_sequenceFrames.empty()) {
+                goToSequenceFrame(restoreIndex < 0 ? 0 : restoreIndex);
+            }
+            m_exportAnimationAction->setEnabled(!m_sequenceFrames.empty());
+            if (!m_closing) {
+                if (success) {
+                    QMessageBox::information(
+                        this, tr("Export Animation"), message);
+                } else {
+                    reportBackgroundError(message);
+                }
+            }
+        });
     connect(this, &MainWindow::sequenceFrameDisplayed,
-        this, [this](int index) { onExportFrameDisplayed(index); });
+        m_animationExporter, &AnimationExporter::onFrameDisplayed);
     connect(this, &MainWindow::sequenceFrameFailed,
-        this, [this] { onExportFrameFailed(); });
+        m_animationExporter, &AnimationExporter::onFrameFailed);
     applySpeed();
     connect(m_animationPanel, &AnimationPanel::sweepStepRequested, this,
         [this](int direction) { stepSweep(direction); });
@@ -2330,15 +2376,9 @@ void MainWindow::closeEvent(QCloseEvent* event)
         m_userGuideDialog = nullptr;
         dialog->close();
     }
-    if (m_exportAnim.progress != nullptr) {
-        // Dismiss the export progress dialog and signal the encoder workers to
-        // terminate their FFmpeg processes (see finalizeExportAnimation).
-        m_exportAnim.canceled = true;
-        if (m_exportAnim.encoderCancel) {
-            m_exportAnim.encoderCancel->store(true);
-        }
-        m_exportAnim.progress->cancel();
-    }
+    // Dismiss any export progress dialog and signal the encoder workers to
+    // terminate their FFmpeg processes (see AnimationExporter).
+    m_animationExporter->cancelForShutdown();
     saveSettings();
     auto settings = makeSettings();
     settings.setValue(QStringLiteral("geometry"), saveGeometry());
@@ -2775,19 +2815,9 @@ QImage MainWindow::composeExportFrame(const ImageView* view,
     return composite;
 }
 
-bool MainWindow::probeFfmpeg() const
-{
-    QProcess proc;
-    proc.start("ffmpeg", {"-version"});
-    if (!proc.waitForStarted(2000) || !proc.waitForFinished(2000)) {
-        return false;
-    }
-    return proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0;
-}
-
 void MainWindow::exportAnimation()
 {
-    if (m_exportAnim.active) {
+    if (m_animationExporter->active()) {
         return;
     }
     if (m_sequenceFrames.empty()) {
@@ -2833,7 +2863,7 @@ void MainWindow::exportAnimation()
 void MainWindow::startAnimationExportForTest(const QString& path,
     bool includeColorBar)
 {
-    if (m_exportAnim.active) {
+    if (m_animationExporter->active()) {
         return;
     }
     beginAnimationExport(path, includeColorBar);
@@ -2845,283 +2875,30 @@ void MainWindow::beginAnimationExport(const QString& path, bool includeColorBar)
     if (view == nullptr || !view->hasImage() || m_sequenceFrames.empty()) {
         return;
     }
-    const QFileInfo info(path);
-    const auto total = static_cast<int>(m_sequenceFrames.size());
-    const int digits =
-        std::max(5, static_cast<int>(QString::number(total - 1).length()));
-
-    m_exportAnim = ExportAnimationState{};
-    m_exportAnim.active = true;
-    m_exportAnim.includeColorBar = includeColorBar;
     // Freeze the export zoom from the current view so every frame renders at the
     // same dimensions even if a frame's image size changes and refits the view.
     // In 3-D this single scale is shared by all three panels, so a panel whose
     // fitted zoom differs from the active view exports at the active view's
     // scale -- constant across frames, which is the goal.
-    m_exportAnim.scale = std::max(1.0, view->transform().m11());
-    m_exportAnim.hasFfmpeg = probeFfmpeg();
-    m_exportAnim.totalFrames = total;
-    m_exportAnim.restoreIndex = m_sequenceIndex;
-    m_exportAnim.digitWidth = digits;
-    m_exportAnim.directory = info.absolutePath();
-    m_exportAnim.stem = info.completeBaseName();
-
-    m_exportAnim.progress = new QProgressDialog(
-        tr("Rendering frame 1 of %1...").arg(total), tr("Cancel"), 0, total, this);
-    m_exportAnim.progress->setWindowTitle(tr("Export Animation"));
-    m_exportAnim.progress->setWindowModality(Qt::WindowModal);
-    m_exportAnim.progress->setMinimumDuration(0);
-    m_exportAnim.progress->setValue(0);
-    connect(m_exportAnim.progress, &QProgressDialog::canceled,
-        this, [this] {
-            m_exportAnim.canceled = true;
-            if (m_exportAnim.encoderCancel) {
-                m_exportAnim.encoderCancel->store(true);
-            }
-        });
+    const auto scale = std::max(1.0, view->transform().m11());
+    std::vector<QString> suffixes;
+    if (m_viewDimension == 3) {
+        suffixes = {QStringLiteral("_yz"), QStringLiteral("_xz"),
+            QStringLiteral("_xy")};
+    } else {
+        suffixes = {QString()};
+    }
+    if (!m_animationExporter->begin(path, includeColorBar,
+            static_cast<int>(m_sequenceFrames.size()), m_sequenceIndex, scale,
+            std::move(suffixes), this)) {
+        return;
+    }
 
     // Freeze the action and stop playback while exporting.
     m_exportAnimationAction->setEnabled(false);
     setPlaybackMode(PlaybackMode::None);
 
     goToSequenceFrame(0);
-}
-
-void MainWindow::onExportFrameDisplayed(int index)
-{
-    if (!m_exportAnim.active || m_exportAnim.framesDone) {
-        return;
-    }
-    if (m_exportAnim.canceled) {
-        endExportAnimation(false, tr("Animation export cancelled."));
-        return;
-    }
-
-    const QString padded = QString("%1").arg(index,
-        m_exportAnim.digitWidth, 10, QChar('0'));
-
-    if (m_viewDimension == 3) {
-        constexpr std::array<const char*, 3> suffixes{"_yz", "_xz", "_xy"};
-        for (int normal = 0; normal < 3; ++normal) {
-            const auto idx = static_cast<std::size_t>(normal);
-            auto* panelView = m_planeViews[idx].view;
-            if (panelView == nullptr || !panelView->hasImage()) {
-                continue;
-            }
-            const QImage frame = composeExportFrame(
-                panelView, m_exportAnim.includeColorBar, m_exportAnim.scale);
-            if (frame.isNull()) {
-                endExportAnimation(false,
-                    tr("A frame could not be rendered."));
-                return;
-            }
-            const QString filePath = QDir(m_exportAnim.directory)
-                .absoluteFilePath(m_exportAnim.stem
-                    + QString::fromLatin1(suffixes[idx])
-                    + "_" + padded + ".png");
-            if (!frame.save(filePath, "PNG")) {
-                endExportAnimation(false,
-                    tr("Could not write %1.").arg(filePath));
-                return;
-            }
-        }
-    } else {
-        const QImage frame = composeExportFrame(
-            m_activeView != nullptr ? m_activeView->view : nullptr,
-            m_exportAnim.includeColorBar, m_exportAnim.scale);
-        if (frame.isNull()) {
-            endExportAnimation(false,
-                tr("A frame could not be rendered."));
-            return;
-        }
-        const QString filePath = QDir(m_exportAnim.directory)
-            .absoluteFilePath(m_exportAnim.stem + "_" + padded + ".png");
-        if (!frame.save(filePath, "PNG")) {
-            endExportAnimation(false,
-                tr("Could not write %1.").arg(filePath));
-            return;
-        }
-    }
-
-    m_exportAnim.progress->setValue(index + 1);
-    m_exportAnim.progress->setLabelText(tr("Rendering frame %1 of %2...")
-        .arg(index + 2).arg(m_exportAnim.totalFrames));
-
-    if (index + 1 < m_exportAnim.totalFrames) {
-        goToSequenceFrame(index + 1);
-    } else {
-        finalizeExportAnimation();
-    }
-}
-
-void MainWindow::onExportFrameFailed()
-{
-    if (!m_exportAnim.active) {
-        return;
-    }
-    endExportAnimation(false, tr("A frame failed to load; animation export aborted."));
-}
-
-void MainWindow::finalizeExportAnimation()
-{
-    m_exportAnim.framesDone = true;
-
-    if (!m_exportAnim.hasFfmpeg) {
-        endExportAnimation(true, tr("Exported %1 PNG frames "
-            "(FFmpeg not found; skipped MP4).").arg(m_exportAnim.totalFrames));
-        return;
-    }
-
-    m_exportAnim.progress->setLabelText(tr("Encoding MP4..."));
-    m_exportAnim.progress->setRange(0, 0);
-    // Cancellation flag shared with the encoder workers (captured by value, so
-    // it outlives this window). Set by the progress Cancel and by closeEvent.
-    m_exportAnim.encoderCancel = std::make_shared<std::atomic<bool>>(false);
-    // Frames are written; the FFmpeg workers are about to run. The export-quit
-    // smoke test quits here to exercise bounded encoder cancellation.
-    emit exportEncodingStarted();
-
-    auto encode = [this](const QString& stem) {
-        const QString inputPattern = m_exportAnim.directory + "/"
-            + stem + "_%0" + QString::number(m_exportAnim.digitWidth)
-            + "d.png";
-        const QString outputPath = QDir(m_exportAnim.directory)
-            .absoluteFilePath(stem + ".mp4");
-        const QStringList args{
-            "-y", "-framerate", "24", "-i", inputPattern,
-            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-            "-pix_fmt", "yuv420p", "-crf", "14", outputPath,
-        };
-        return QtConcurrent::run([args, cancel = m_exportAnim.encoderCancel]() -> QPair<int, QString> {
-            QProcess proc;
-            proc.setProcessChannelMode(QProcess::MergedChannels);
-            proc.start("ffmpeg", args);
-            if (!proc.waitForStarted(3000)) {
-                return { -2,
-                    QString::fromLocal8Bit(proc.readAllStandardOutput()) };
-            }
-            // Bounded wait: poll so Cancel/close can interrupt instead of
-            // blocking the global pool forever. This worker owns proc, so it
-            // terminates -- and kills, if needed -- the encoder itself.
-            while (proc.state() != QProcess::NotRunning) {
-                if (proc.waitForFinished(200)) {
-                    break;
-                }
-                if (cancel && cancel->load()) {
-                    proc.terminate();
-                    if (!proc.waitForFinished(3000)) {
-                        proc.kill();
-                        proc.waitForFinished(1000);
-                    }
-                    break;
-                }
-            }
-            const int code = proc.exitStatus() == QProcess::NormalExit
-                ? proc.exitCode() : -1;
-            QString log = QString::fromLocal8Bit(
-                proc.readAllStandardOutput());
-            if (log.length() > 800) {
-                log = QStringLiteral("...") + log.right(800);
-            }
-            return { code, log.trimmed() };
-        });
-    };
-
-    if (m_viewDimension == 3) {
-        const QStringList stems{
-            m_exportAnim.stem + "_yz",
-            m_exportAnim.stem + "_xz",
-            m_exportAnim.stem + "_xy",
-        };
-        int* remaining = new int(3);
-        bool* failed = new bool(false);
-        QString* failMsg = new QString();
-        for (const auto& stem : stems) {
-            auto* watcher = new QFutureWatcher<QPair<int, QString>>(this);
-            connect(watcher,
-                &QFutureWatcher<QPair<int, QString>>::finished,
-                this, [this, watcher, remaining, failed, failMsg, stems] {
-                    const auto result = watcher->result();
-                    watcher->deleteLater();
-                    if (result.first != 0) {
-                        *failed = true;
-                        *failMsg = result.second;
-                    }
-                    if (--(*remaining) == 0) {
-                        delete remaining;
-                        if (m_exportAnim.canceled) {
-                            endExportAnimation(false, tr("Export cancelled."));
-                        } else if (*failed) {
-                            endExportAnimation(false,
-                                tr("FFmpeg failed. PNG frames were "
-                                "still written.\n\n%1").arg(*failMsg));
-                        } else {
-                            endExportAnimation(true,
-                                tr("Exported %1 frames and %2, %3, %4.")
-                                .arg(m_exportAnim.totalFrames)
-                                .arg(stems[0] + ".mp4")
-                                .arg(stems[1] + ".mp4")
-                                .arg(stems[2] + ".mp4"));
-                        }
-                        delete failed;
-                        delete failMsg;
-                    }
-                });
-            watcher->setFuture(encode(stem));
-        }
-    } else {
-        const QString stem = m_exportAnim.stem;
-        auto* watcher = new QFutureWatcher<QPair<int, QString>>(this);
-        connect(watcher, &QFutureWatcher<QPair<int, QString>>::finished,
-            this, [this, watcher, stem] {
-                const auto result = watcher->result();
-                watcher->deleteLater();
-                if (m_exportAnim.canceled) {
-                    endExportAnimation(false, tr("Export cancelled."));
-                    return;
-                }
-                const QString outputPath = QDir(m_exportAnim.directory)
-                    .absoluteFilePath(stem + ".mp4");
-                if (result.first == 0) {
-                    endExportAnimation(true,
-                        tr("Exported %1 frames and %2.")
-                        .arg(m_exportAnim.totalFrames).arg(outputPath));
-                } else {
-                    endExportAnimation(false,
-                        tr("FFmpeg failed (exit %1). "
-                        "PNG frames were still written.\n\n%2")
-                        .arg(result.first).arg(result.second));
-                }
-            });
-        watcher->setFuture(encode(stem));
-    }
-}
-
-void MainWindow::endExportAnimation(bool success, const QString& message)
-{
-    const bool wasActive = m_exportAnim.active;
-    const int restoreIndex = m_exportAnim.restoreIndex;
-
-    if (m_exportAnim.progress != nullptr) {
-        m_exportAnim.progress->hide();
-        m_exportAnim.progress->deleteLater();
-    }
-    m_exportAnim = ExportAnimationState{};
-
-    // Return the user to the frame they were viewing (unless we are closing,
-    // which would launch a new frame load mid-shutdown).
-    if (wasActive && !m_closing && !m_sequenceFrames.empty()) {
-        goToSequenceFrame(restoreIndex < 0 ? 0 : restoreIndex);
-    }
-    m_exportAnimationAction->setEnabled(!m_sequenceFrames.empty());
-
-    if (wasActive && !m_closing) {
-        if (success) {
-            QMessageBox::information(this, tr("Export Animation"), message);
-        } else {
-            reportBackgroundError(message);
-        }
-    }
 }
 
 std::optional<DatasetRequest> MainWindow::buildDatasetRequest() const
@@ -4544,7 +4321,7 @@ void MainWindow::startFrameLoad(int index, std::uint64_t generation)
                     statusBar()->showMessage(tr("Frame load failed"));
                     // During animation export the failure is reported by the
                     // export handler (endExportAnimation); avoid a second dialog.
-                    const bool wasExporting = m_exportAnim.active;
+                    const bool wasExporting = m_animationExporter->active();
                     emit sequenceFrameFailed();
                     if (!wasExporting) {
                         reportBackgroundError(
@@ -4573,7 +4350,7 @@ void MainWindow::finishFrameLoad(InitialSliceResult result, bool defaultPosition
         statusBar()->showMessage(tr("Frame load failed"));
         // During animation export the failure is reported by the export
         // handler (endExportAnimation); avoid a second dialog.
-        const bool wasExporting = m_exportAnim.active;
+        const bool wasExporting = m_animationExporter->active();
         emit sequenceFrameFailed();
         if (!wasExporting) {
             reportBackgroundError(

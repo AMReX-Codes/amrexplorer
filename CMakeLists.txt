@@ -65,6 +65,7 @@ add_subdirectory(src/cache)
 add_subdirectory(src/io)
 add_subdirectory(src/query)
 add_subdirectory(src/render2d)
+add_subdirectory(src/viewer)
 
 if(AMREXPLORER_ENABLE_QT)
     find_package(Qt6 6.4 REQUIRED COMPONENTS Concurrent Core Gui Widgets)

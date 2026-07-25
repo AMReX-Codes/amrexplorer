@@ -507,7 +507,7 @@ bool expressionDefinitionMatches(amrvis::qt::MainWindow& window,
     return matches;
 }
 
-bool expressionEditorMatchesInstalledFrame(amrvis::qt::MainWindow& window)
+bool expressionEditorPreservesDesiredCatalog(amrvis::qt::MainWindow& window)
 {
     auto* action = window.findChild<QAction*>(
         QStringLiteral("expressionEditorAction"));
@@ -525,9 +525,11 @@ bool expressionEditorMatchesInstalledFrame(amrvis::qt::MainWindow& window)
             QStringLiteral("expressionList"));
         const auto* help = dialog->findChild<QLabel*>(
             QStringLiteral("expressionHelp"));
-        matches = list != nullptr && list->count() == 2
-            && list->item(0)->text() == QStringLiteral("derived-b")
-            && list->item(1)->text() == QStringLiteral("derived-c")
+        matches = list != nullptr && list->count() == 3
+            && list->item(0)->text() == QStringLiteral("derived-a")
+            && !list->item(0)->toolTip().isEmpty()
+            && list->item(1)->text() == QStringLiteral("derived-b")
+            && list->item(2)->text() == QStringLiteral("derived-c")
             && help != nullptr
             && help->text().contains(QStringLiteral("temperature"));
         dialog->reject();
@@ -1017,7 +1019,7 @@ int main(int argc, char* argv[])
                         QStringLiteral("derived-c")));
                     application.exit(
                         visibleRangeMatches(window, 30.0, 40.0)
-                            && expressionEditorMatchesInstalledFrame(window)
+                            && expressionEditorPreservesDesiredCatalog(window)
                         ? 0 : 1);
                 }
             });

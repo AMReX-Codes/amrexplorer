@@ -108,6 +108,17 @@ add_test(
         "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
 )
 
+add_executable(test_viewer_session integration/test_viewer_session.cpp)
+target_link_libraries(
+    test_viewer_session
+    PRIVATE amrexplorer::viewer amrexplorer::warnings
+)
+add_test(
+    NAME viewer_session
+    COMMAND test_viewer_session
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+)
+
 # Writes FAB payloads into copies of the metadata-only fixtures; Qt-free so
 # the headless build can compile it too.
 add_executable(fixture_materializer fixture_materializer/main.cpp)

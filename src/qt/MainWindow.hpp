@@ -12,6 +12,7 @@
 #include <amrexplorer/render2d/ImageBuffer.hpp>
 #include <amrexplorer/render2d/Palette.hpp>
 #include <amrexplorer/render2d/VectorGlyphs.hpp>
+#include <amrexplorer/viewer/ViewerSession.hpp>
 
 #include <QElapsedTimer>
 #include <QImage>
@@ -24,7 +25,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -57,6 +57,8 @@ enum class CompositionPolicy : std::uint8_t;
 
 namespace amrvis::qt {
 
+using ::amrvis::RangeMode;
+
 class AnimationPanel;
 class ColorBarWidget;
 class DatasetWindow;
@@ -66,13 +68,6 @@ class IsoWidget;
 class LinePlotWindow;
 class ScientificDoubleSpinBox;
 class UserGuideDialog;
-
-enum class RangeMode {
-    Visible,
-    Level,
-    File,
-    User
-};
 
 struct SliceDisplayResult {
     // The request that produced everything below; PlaneViewState keeps it as
@@ -104,15 +99,7 @@ struct SliceDisplayResult {
 };
 
 struct InitialSliceResult {
-    std::shared_ptr<PlotfileDataset> dataset;
-    // Field selections resolved against this dataset's metadata. Sequence
-    // frames can skip invalid derived definitions, which changes numeric IDs.
-    std::uint32_t field = 0;
-    std::uint32_t vectorUField = 0;
-    std::uint32_t vectorVField = 0;
-    std::uint32_t vectorWField = 0;
-    // Definitions successfully installed in dataset, in dependency order.
-    std::vector<std::pair<std::string, std::string>> derivedFields;
+    PreparedViewerSnapshot prepared;
     // One entry per displayed view, ordered by normal axis (2-D: one entry).
     std::vector<SliceDisplayResult> displays;
     // First line of the plotfile Header when the path is a plotfile
@@ -133,27 +120,16 @@ struct InitialSliceResult {
 // slice positions, whole domain, 640x640 output).
 struct FrameSliceSpec {
     DisplayMode displayMode = DisplayMode::Raster;
-    std::uint32_t field = 0;
-    std::string fieldName;
     int levelSelection = -1;  // level combo data: -1 = finest available
     RangeMode rangeMode = RangeMode::File;
     std::optional<std::pair<double, double>> userRange;
     bool logarithmic = false;
     Palette palette;
-    std::uint32_t vectorUField = 0;
-    std::uint32_t vectorVField = 0;
-    std::uint32_t vectorWField = 0;
-    std::string vectorUFieldName;
-    std::string vectorVFieldName;
-    std::string vectorWFieldName;
     int contourCount = 10;
     bool defaultPositions = true;
     std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
     std::vector<std::optional<RealBox>> visibleRegions;  // per view, normal order
     std::vector<std::array<int, 2>> outputSizes;         // per view, normal order
-    // Re-applied in order when a plotfile-sequence frame creates its own
-    // PlotfileDataset, so derived variables remain available across frames.
-    std::vector<std::pair<std::string, std::string>> derivedFields;
 };
 
 class MainWindow final : public QMainWindow {
@@ -236,7 +212,7 @@ private:
     // consumable only while the slice spec that produced it is unchanged.
     struct PrefetchedFrame {
         int frameIndex = -1;
-        std::uint64_t specGeneration = 0;
+        ViewerRevision revision;
         bool defaultPositions = false;
         InitialSliceResult result;
     };
@@ -286,6 +262,13 @@ private:
     void commitFieldRange(std::uint32_t field);
     void applyFieldRange(std::uint32_t field);
     void resetRangeState();
+    [[nodiscard]] std::optional<FieldKey> fieldKey(std::uint32_t field) const;
+    [[nodiscard]] std::shared_ptr<PlotfileDataset>
+    currentDataset() const noexcept;
+    void syncRequestedFields();
+    [[nodiscard]] bool acceptPreparedSnapshot(
+        PreparedViewerSnapshot snapshot);
+    void applySnapshot();
     void showExpressionEditor();
     void updateRangeModeAvailability();
     void showContoursDialog();
@@ -427,20 +410,9 @@ private:
     QCheckBox* m_logarithmic = nullptr;
     ScientificDoubleSpinBox* m_rangeMinimum = nullptr;
     ScientificDoubleSpinBox* m_rangeMaximum = nullptr;
-    // Per-field range state for the current dataset. m_trackedField is the
-    // field the range widgets currently represent; the field selector swaps
-    // snapshots through this map when the user changes fields.
-    struct FieldRange {
-        RangeMode mode = RangeMode::File;
-        std::optional<std::pair<double, double>> userRange;
-    };
-    std::unordered_map<std::uint32_t, FieldRange> m_fieldRanges;
+    // Dataset-local projection of the field represented by the range widgets.
+    // Persistent ranges are keyed by FieldKey in ViewerSession.
     std::uint32_t m_trackedField = 0;
-    // Definitions requested for future loads can include entries that the
-    // displayed sequence frame could not install. The editor operates only on
-    // the subset actually present in the current dataset.
-    std::vector<std::pair<std::string, std::string>> m_derivedFields;
-    std::vector<std::pair<std::string, std::string>> m_installedDerivedFields;
     QWidget* m_slicePositionControls = nullptr;
     std::array<QSpinBox*, 3> m_sliceSpinboxes{nullptr, nullptr, nullptr};
     QTimer* m_sliceDebounce = nullptr;
@@ -498,7 +470,7 @@ private:
         QProgressDialog* progress = nullptr;
     };
     ExportAnimationState m_exportAnim;
-    std::shared_ptr<PlotfileDataset> m_dataset;
+    ViewerSession m_viewerSession;
     std::shared_ptr<const DatasetMetadata> m_openMetadata;
     std::string m_fileVersion;
     PlaneViewState m_view2d;
@@ -556,9 +528,6 @@ private:
     std::vector<std::filesystem::path> m_sequenceFrames;
     int m_sequenceIndex = -1;
     bool m_sequenceInFlight = false;
-    // Bumped by every slice-affecting UI change; prefetched frames store the
-    // value they were built against and are discarded once it moves on.
-    std::uint64_t m_specGeneration = 0;
     // Bumped whenever the prefetch slot is cancelled/invalidated, so a late
     // prefetch watcher knows to drop its result.
     std::uint64_t m_prefetchGeneration = 0;

@@ -56,6 +56,7 @@ target_link_libraries(amrexplorer_qt
         amrexplorer::io
         amrexplorer::query
         amrexplorer::render2d
+        amrexplorer::viewer
         amrexplorer::warnings
         Qt6::Concurrent
         Qt6::Core

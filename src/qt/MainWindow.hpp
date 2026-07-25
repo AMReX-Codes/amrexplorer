@@ -62,6 +62,7 @@ enum class CompositionPolicy : std::uint8_t;
 
 namespace amrvis::qt {
 
+class AnimationExporter;
 class AnimationPanel;
 class ColorBarWidget;
 class DatasetWindow;
@@ -70,6 +71,7 @@ class ImageView;
 class IsoWidget;
 class LinePlotWindow;
 class ScientificDoubleSpinBox;
+class SequenceController;
 class UserGuideDialog;
 
 // These now live in the Qt-free pipeline layer (SlicePipeline.hpp); re-export
@@ -246,15 +248,6 @@ private:
         int pendingRequests = 0;
     };
 
-    // One prefetched sequence frame: the dataset plus its rendered slice(s),
-    // consumable only while the slice spec that produced it is unchanged.
-    struct PrefetchedFrame {
-        int frameIndex = -1;
-        std::uint64_t specGeneration = 0;
-        bool defaultPositions = false;
-        InitialSliceResult result;
-    };
-
     void chooseDataset();
     void chooseStandaloneDataset(const QString& caption, bool rawFab);
     void openDatasetImpl(const std::filesystem::path& path, bool metadataOnly,
@@ -271,20 +264,12 @@ private:
     void exportImage();
     void exportAnimation();
     // Shared body of exportAnimation once the output path and color-bar choice
-    // are known (from the dialogs, or from the test hook): configures the export
-    // state, progress dialog, and kicks off frame 0.
+    // are known (from the dialogs, or from the test hook): freezes the export
+    // zoom, starts the AnimationExporter (which owns the export state machine),
+    // and kicks off frame 0.
     void beginAnimationExport(const QString& path, bool includeColorBar);
-    // Animation export is signal-driven (frame rendering is async): exportAnimation
-    // kicks off frame 0; onExportFrameDisplayed saves each rendered frame and
-    // advances; finalizeExportAnimation encodes the MP4; endExportAnimation is the
-    // shared cleanup/restore/report path.
-    void onExportFrameDisplayed(int index);
-    void onExportFrameFailed();
-    void finalizeExportAnimation();
-    void endExportAnimation(bool success, const QString& message);
     [[nodiscard]] QImage composeExportFrame(const ImageView* view,
         bool includeColorBar, qreal scaleFactor) const;
-    [[nodiscard]] bool probeFfmpeg() const;
     void createMenus();
     void rebuildLevelMenu();
     void rebuildVariableMenu();
@@ -428,16 +413,11 @@ private:
     void playbackTick();
     void applySpeed();
 
-    // Sequence frame switching. At most one sync frame load and one
-    // prefetch are alive; everything superseded is cancelled via stop
-    // sources and discarded via generation counters.
-    void startFrameLoad(int index, std::uint64_t generation);
-    void finishFrameLoad(InitialSliceResult result, bool defaultPositions);
+    // Sequence frame switching lives in the SequenceController; this window
+    // supplies the GUI-coupled pieces below as its hooks.
     void displayFrameResult(InitialSliceResult& result, bool defaultPositions);
     void configureSequenceControls(bool defaultPositions);
     [[nodiscard]] FrameSliceSpec buildFrameSpec();
-    void startPrefetch(int frameIndex);
-    void discardPrefetch();
     void applyParticleSelection(
         std::vector<std::string> species, double fraction, int pointSize);
     // Stop timers, request stop on every async task this window can launch,
@@ -515,24 +495,10 @@ private:
     QAction* m_datasetAction = nullptr;
     QAction* m_exportAnimationAction = nullptr;
 
-    // Drives File -> Export Animation... Active only while an export is running;
-    // sequenceFrameDisplayed advances it one frame at a time.
-    struct ExportAnimationState {
-        bool active = false;
-        bool canceled = false;
-        std::shared_ptr<std::atomic<bool>> encoderCancel;
-        bool framesDone = false;
-        bool includeColorBar = false;
-        bool hasFfmpeg = false;
-        qreal scale = 1.0;  // frozen export zoom factor so every frame matches
-        int totalFrames = 0;
-        int restoreIndex = -1;
-        int digitWidth = 5;
-        QString directory;
-        QString stem;
-        QProgressDialog* progress = nullptr;
-    };
-    ExportAnimationState m_exportAnim;
+    // Drives File -> Export Animation...: owns the whole export state machine
+    // (progress, cancellation, FFmpeg encoding). This window supplies frame
+    // rendering and sequence navigation, and restores its UI on finished().
+    AnimationExporter* m_animationExporter = nullptr;
     std::shared_ptr<PlotfileDataset> m_dataset;
     std::shared_ptr<const DatasetMetadata> m_openMetadata;
     std::string m_fileVersion;
@@ -594,24 +560,13 @@ private:
     std::uint64_t m_cachePinnedBytes = 0;
     std::uint64_t m_cacheEvictions = 0;
 
-    // Animation state.
+    // Animation state. The sequence frames/index/in-flight/prefetch state
+    // machine lives in the SequenceController; this window keeps only the
+    // playback timer and mode.
     AnimationPanel* m_animationPanel = nullptr;
     QTimer* m_playbackTimer = nullptr;
     PlaybackMode m_playbackMode = PlaybackMode::None;
-    std::vector<std::filesystem::path> m_sequenceFrames;
-    int m_sequenceIndex = -1;
-    bool m_sequenceInFlight = false;
-    // Bumped by every slice-affecting UI change; prefetched frames store the
-    // value they were built against and are discarded once it moves on.
-    std::uint64_t m_specGeneration = 0;
-    // Bumped whenever the prefetch slot is cancelled/invalidated, so a late
-    // prefetch watcher knows to drop its result.
-    std::uint64_t m_prefetchGeneration = 0;
-    std::uint64_t m_sequenceDatasetCounter = 0;
-    StopSource m_prefetchStopSource;
-    std::optional<PrefetchedFrame> m_prefetched;
-    QElapsedTimer m_frameTimer;
-    qint64 m_lastFrameSwitchMs = 0;
+    SequenceController* m_sequenceController = nullptr;
 };
 
 } // namespace amrvis::qt

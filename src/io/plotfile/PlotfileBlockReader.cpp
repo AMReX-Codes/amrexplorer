@@ -5,10 +5,12 @@
 #include <bit>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 
@@ -302,6 +304,15 @@ BlockReadResult PlotfileBlockReader::readBlock(
     if (!input) {
         throw BlockReadError("cannot open FAB data file '" + dataPath.string() + "'");
     }
+    // Stat the file up front so a crafted box extent (which sizes the buffer
+    // below) cannot force a huge transient allocation or bad_alloc: the
+    // requested component must actually fit within the data file.
+    std::error_code sizeError;
+    const auto fileSize = std::filesystem::file_size(dataPath, sizeError);
+    if (sizeError) {
+        throw BlockReadError("cannot stat FAB data file '" + dataPath.string()
+            + "': " + sizeError.message());
+    }
 
     FabHeader header;
     if (level.visMfHeaderVersion == 1) {
@@ -341,6 +352,12 @@ BlockReadResult PlotfileBlockReader::readBlock(
         || componentBytes
             > static_cast<std::uint64_t>(std::numeric_limits<std::streamsize>::max())) {
         throw BlockReadError("FAB component exceeds addressable memory");
+    }
+    // Bound the allocation by the actual file (staged to avoid overflow in
+    // offset + bytes): a truncated file or an oversized claimed box is caught
+    // here, before the buffer is sized, rather than after a failed read.
+    if (componentOffset > fileSize || componentBytes > fileSize - componentOffset) {
+        throw BlockReadError("FAB component extends past the end of the data file");
     }
 
     std::vector<unsigned char> encoded(static_cast<std::size_t>(componentBytes));

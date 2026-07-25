@@ -28,6 +28,84 @@ void writeText(const std::filesystem::path& path, const std::string& text)
     output << text;
 }
 
+// A minimal 2-D single-component plotfile Header with one small grid. The
+// level data path is supplied so a crafted (escaping) path can be exercised;
+// the index-space domain box is supplied so a large domain (that can contain
+// an oversized _H box) can be exercised. The domain box is a raw index box,
+// independent of the grid's physical-bounds -> cell mapping, so the grid stays
+// small and valid regardless.
+std::string minimalHeader(const std::string& dataPath,
+    const std::string& domainBox = "((0,0) (1,1) (0,0))")
+{
+    return
+        "HyperCLaw-V1.1\n"
+        "1\nphi\n"
+        "2\n0.0\n0\n"
+        "0.0 0.0\n1.0 1.0\n\n"
+        + domainBox + "\n"
+        "0\n0.5 0.5\n0\n0\n"
+        "0 1 0.0\n0\n"
+        "0.0 1.0\n0.0 1.0\n"
+        + dataPath + "\n";
+}
+
+// A path that walks above the plotfile directory must be rejected at metadata
+// read, not silently followed.
+void testRejectsEscapingDataPath(const std::filesystem::path& base)
+{
+    const auto root = base / "escaping_datapath";
+    std::filesystem::create_directories(root);
+    writeText(root / "Header", minimalHeader("../escape/Cell"));
+    bool threw = false;
+    try {
+        (void)amrvis::PlotfileMetadataReader{}.read(root);
+    } catch (const amrvis::MetadataReadError& error) {
+        // Pin the rejection to the path guard (not an incidental "cannot open
+        // the _H at that location" failure, which would also throw).
+        threw = std::string(error.what()).find("parent-directory")
+            != std::string::npos;
+    }
+    require(threw, "an escaping level data path was not rejected by the path guard");
+}
+
+// A box extent larger than the FAB data file must be caught before the read
+// buffer is sized, as a clean BlockReadError rather than std::bad_alloc from
+// a multi-gigabyte allocation.
+void testRejectsOversizedBox(const std::filesystem::path& base)
+{
+    const auto root = base / "oversized_box";
+    std::filesystem::create_directories(root / "Level_0");
+    // The index-space domain is large enough to contain the oversized box so
+    // the metadata itself validates; only the box-vs-file check should fire.
+    writeText(root / "Header",
+        minimalHeader("Level_0/Cell", "((0,0) (80000,80000) (0,0))"));
+    // Version-2 (NoFabHeader) _H: the box claims 80001 x 80001 cells (~51 GB
+    // of doubles), while the data file below holds 16 bytes.
+    writeText(root / "Level_0" / "Cell_H",
+        "2\n1\n1\n0\n"
+        "(1 0\n((0,0) (80000,80000) (0,0))\n)\n"
+        "1\nFabOnDisk: Cell_D_00000 0\n\n"
+        "((8, (64 11 52 0 1 12 0 1023)),(8, (8 7 6 5 4 3 2 1)))\n");
+    writeText(root / "Level_0" / "Cell_D_00000", std::string(16, '\0'));
+
+    const auto metadata = amrvis::PlotfileMetadataReader{}.read(root);
+    amrvis::PlotfileBlockReader reader(root, metadata.metadata);
+    amrvis::BlockRequest request;
+    request.dataset.value = 1;
+    request.field.value = 0;
+    bool threw = false;
+    try {
+        (void)reader.readBlock(request);
+    } catch (const amrvis::BlockReadError& error) {
+        // Pin to the up-front size guard's message: the post-read gcount
+        // "truncated" check would only fire after the (multi-GB) allocation,
+        // so requiring this message proves the allocation was never attempted.
+        threw = std::string(error.what()).find("past the end of the data file")
+            != std::string::npos;
+    }
+    require(threw, "an oversized FAB box was not rejected before allocation");
+}
+
 } // namespace
 
 int main()
@@ -131,6 +209,9 @@ int main()
     const auto multiFabAccess = multiFabDataset.requestBlock(request);
     require(multiFabAccess.handle->values[2] == 30.0,
         "standalone MultiFab selective read value mismatch");
+
+    testRejectsEscapingDataPath(root);
+    testRejectsOversizedBox(root);
 
     std::filesystem::remove_all(root);
     return 0;

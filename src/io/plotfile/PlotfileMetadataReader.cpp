@@ -106,8 +106,40 @@ std::vector<int> parseIntegers(const std::string& line)
     return values;
 }
 
+// Rejects a metadata-derived path that could redirect reads outside the
+// plotfile directory when joined to the plotfile root: an absolute path
+// replaces the root entirely, and a '..' component walks above it. AMReX only
+// ever writes relative names within the tree, so anything else is malformed
+// or crafted.
+void requireContainedPath(const std::string& value, std::string_view what)
+{
+    const std::filesystem::path path(value);
+    // Reject anything with a root: a root-name (drive/UNC) or a root-directory
+    // (leading separator). is_absolute() is not enough — it is platform
+    // specific, so a POSIX-style "/etc/..." reads as relative on Windows yet
+    // still escapes to the drive root when joined to the plotfile path.
+    if (value.empty() || path.has_root_name() || path.has_root_directory()) {
+        throw MetadataReadError(std::string(what)
+            + " must be a relative path inside the plotfile: '" + value + "'");
+    }
+    for (const auto& component : path) {
+        if (component == "..") {
+            throw MetadataReadError(std::string(what)
+                + " must not contain a parent-directory component: '"
+                + value + "'");
+        }
+    }
+}
+
+// Reads a comma-separated VisMF real matrix. AMReX always writes exactly
+// expectedRows x expectedColumns (one row per box, one column per component),
+// so the claimed dimensions are checked against that before any allocation:
+// a crafted header cannot request a huge matrix and OOM the process (the
+// dimensions were previously capped only independently, then allocated in
+// full before the count was cross-checked).
 std::vector<std::vector<double>> readRealMatrix(
-    std::istream& input, std::string_view description)
+    std::istream& input, std::string_view description,
+    std::uint64_t expectedRows, std::uint64_t expectedColumns)
 {
     const auto rows = readRequired<std::uint64_t>(input, description);
     char comma = '\0';
@@ -115,9 +147,9 @@ std::vector<std::vector<double>> readRealMatrix(
         throw MetadataReadError("malformed VisMF matrix dimensions");
     }
     const auto columns = readRequired<std::uint64_t>(input, description);
-    if (rows > static_cast<std::uint64_t>(maximumGridsPerLevel)
-        || columns > static_cast<std::uint64_t>(maximumComponents)) {
-        throw MetadataReadError("VisMF matrix dimensions are outside supported bounds");
+    if (rows != expectedRows || columns != expectedColumns) {
+        throw MetadataReadError("VisMF matrix dimensions do not match the "
+            "BoxArray size and component count");
     }
 
     std::vector<std::vector<double>> matrix(
@@ -209,12 +241,17 @@ detail::VisMfIndex detail::readVisMfIndex(
             throw MetadataReadError("malformed FabOnDisk record");
         }
         index.fileNames.push_back(readRequired<std::string>(input, "FAB data filename"));
+        requireContainedPath(index.fileNames.back(), "FAB data filename");
         index.fileOffsets.push_back(readRequired<std::uint64_t>(input, "FAB data offset"));
     }
 
     if (index.version == 1 || index.version == 3) {
-        index.minimum = readRealMatrix(input, "per-block minima");
-        index.maximum = readRealMatrix(input, "per-block maxima");
+        index.minimum = readRealMatrix(input, "per-block minima",
+            static_cast<std::uint64_t>(boxCount),
+            static_cast<std::uint64_t>(index.components));
+        index.maximum = readRealMatrix(input, "per-block maxima",
+            static_cast<std::uint64_t>(boxCount),
+            static_cast<std::uint64_t>(index.components));
         index.hasPerBlockStatistics = true;
         if (index.minimum.size() != boxCount || index.maximum.size() != boxCount) {
             throw MetadataReadError("VisMF statistics do not match BoxArray size");
@@ -424,6 +461,7 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
                 level.domain.lower, level.domain.centering, metadata->dimension));
         }
         level.dataPath = readRequired<std::string>(input, "level data path");
+        requireContainedPath(level.dataPath, "plotfile level data path");
     }
 
     const auto issues = validateMetadata(*metadata);

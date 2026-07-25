@@ -12,6 +12,10 @@ cmake --preset default     # Release build → build/
 cmake --build --preset default
 ctest --preset default
 
+cmake --preset clang       # Release with Clang, warnings as errors → build-clang/
+cmake --build --preset clang
+ctest --preset clang
+
 cmake --preset debug       # Debug build → build-debug/
 cmake --build --preset debug
 ctest --preset debug
@@ -26,6 +30,11 @@ ctest --preset sanitizers
 ```
 
 The sanitizer preset enables AddressSanitizer and UndefinedBehaviorSanitizer.
+
+The clang preset mirrors the CI clang job (which builds with
+`-DAMREXPLORER_WARNINGS_AS_ERRORS=ON`): run it before pushing to catch
+Clang-only diagnostics that a GCC build stays silent about, such as
+`-Wunused-const-variable`.
 
 On macOS, Qt builds produce `build/src/qt/amrexplorer.app` by default. The bundle
 contains its executable at `Contents/MacOS/amrexplorer` and can be installed into a

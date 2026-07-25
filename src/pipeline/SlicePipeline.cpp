@@ -178,22 +178,71 @@ void appendVectorGlyphs(const std::shared_ptr<PlotfileDataset>& dataset,
         + vSlice.metrics.payloadBytesRead;
 }
 
-// Contour overlays are extracted from a piecewise-constant slice at DATA
-// resolution: one sample per cell of the finest participating level covering
-// the visible region, capped at 1024 samples per axis (for coarse data this
-// plane is tiny — 4x4 on the test fixture). When the data is finer than the
-// display on both axes the display plane doubles as the contour plane,
-// because the cell-scale staircase is sub-pixel there. The contour plane is
-// then bilinearly refined so one fine cell spans at most a few display
-// pixels; marching squares on the refinement converges to the exact
-// iso-curve of the bilinear interpolant (no new extrema, no ringing), and a
-// single Chaikin pass finishes the polyline. This replaces the old second
-// SliceQuery with linear sampling at display resolution, which cost about as
-// much as the display query itself. Extraction runs on the slice worker,
-// with the output mapped to display-plane pixel space; the GUI thread only
-// converts the polylines to painter paths. The planes and the refinement are
-// cached by the GUI, so range and contour-count changes re-run only this
-// cheap extraction (see refreshCachedSlice).
+SliceDisplayResult executeSliceWithFallback(
+    const std::shared_ptr<PlotfileDataset>& dataset, SliceRequest request,
+    RangeMode rangeMode,
+    const std::optional<std::pair<double, double>>& userRange,
+    bool logarithmic, const Palette& palette, DisplayMode displayMode,
+    std::uint32_t vectorUField, std::uint32_t vectorVField, int contourCount,
+    StopToken cancellation)
+{
+    int fallbackFrom = -1;
+    int fallbackTo = -1;
+    for (;;) {
+        try {
+            auto result = executeSlice(dataset, request, rangeMode,
+                userRange, logarithmic, palette, cancellation);
+            result.mode = displayMode;
+            result.vectorUField = vectorUField;
+            result.vectorVField = vectorVField;
+            result.contourCount = contourCount;
+            if (isContourMode(displayMode)) {
+                appendContours(dataset, request, contourCount,
+                    result.minimum, result.maximum, result.logarithmic,
+                    cancellation, result);
+            }
+            if (displayMode == DisplayMode::VelocityVectors) {
+                appendVectorGlyphs(dataset, request,
+                    FieldId{vectorUField}, FieldId{vectorVField},
+                    contourCount, cancellation, result);
+            }
+            result.cacheFallbackFromLevel = fallbackFrom;
+            result.cacheFallbackToLevel = fallbackTo;
+            return result;
+        } catch (const CacheBudgetExceeded&) {
+            const auto budget = cacheBudgetDescription(
+                dataset->cacheMetrics().budgetBytes);
+            if (request.composition != CompositionPolicy::FinestAvailable) {
+                throw std::runtime_error(
+                    "The selected slice level cannot fit in the " + budget
+                    + " cache. Choose a lower level or increase "
+                      "AMREXPLORER_CACHE_SIZE_MB.");
+            }
+            if (request.maximumLevel == 0) {
+                throw std::runtime_error(
+                    "The slice cannot fit in the " + budget
+                    + " cache, even at level 0. Try a smaller plotfile or "
+                      "increase AMREXPLORER_CACHE_SIZE_MB.");
+            }
+            dataset->clearUnpinnedCache();
+            if (fallbackFrom < 0) {
+                fallbackFrom = request.maximumLevel;
+            }
+            fallbackTo = --request.maximumLevel;
+        }
+    }
+}
+
+// Contour overlays are extracted from a dedicated linearly-sampled slice
+// queried at a resolution fine enough that the cell-scale staircase is
+// invisible: at least 512 samples on the shorter axis, capped at 1024 (see
+// contourRequest below). Because this plane already carries the smooth
+// interpolant, contour extraction runs on it directly with no further
+// refinement, and two Chaikin passes finish the polylines. Extraction runs
+// on the slice worker, with the output mapped to display-plane pixel space;
+// the GUI thread only converts the polylines to painter paths. The contour
+// plane is cached by the GUI, so range and contour-count changes re-run only
+// this cheap extraction (see refreshCachedSlice).
 void appendContours(const std::shared_ptr<PlotfileDataset>& dataset,
     const SliceRequest& request, int contourCount, double minimum, double maximum,
     bool logarithmic, StopToken cancellation, SliceDisplayResult& result)

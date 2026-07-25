@@ -48,7 +48,7 @@ void SequenceController::step(int direction)
     goToFrame(m_index + direction);
 }
 
-void SequenceController::goToFrame(int index)
+void SequenceController::goToFrame(int index, bool forceRestart)
 {
     if (m_frames.empty()) {
         return;
@@ -56,7 +56,7 @@ void SequenceController::goToFrame(int index)
     const auto count = static_cast<int>(m_frames.size());
     // Both steps and playback wrap around the ends of the sequence.
     index = ((index % count) + count) % count;
-    if (m_inFlight && index == m_index) {
+    if (!forceRestart && m_inFlight && index == m_index) {
         return;
     }
     // The host cancels the previous frame's in-flight work and closes its

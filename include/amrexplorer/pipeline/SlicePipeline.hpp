@@ -4,6 +4,7 @@
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/StopToken.hpp>
+#include <amrexplorer/io/ParticleReader.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/pipeline/DisplayMode.hpp>
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
@@ -69,6 +70,7 @@ struct InitialSliceResult {
     std::shared_ptr<PlotfileDataset> dataset;
     // One entry per displayed view, ordered by normal axis (2-D: one entry).
     std::vector<SliceDisplayResult> displays;
+    std::vector<ParticleSample> particles;
     // First line of the plotfile Header when the path is a plotfile
     // directory; empty for standalone datasets.
     std::string fileVersion;
@@ -98,7 +100,10 @@ struct FrameSliceSpec {
     bool defaultPositions = true;
     std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
     std::vector<std::optional<RealBox>> visibleRegions;  // per view, normal order
-
+    bool particleSelectionInitialized = false;
+    std::vector<std::string> particleSpecies;
+    double particleFraction = 1.0;
+    std::uint64_t particleSeed = 0;
 };
 
 // Combo data sentinel for "Update to Level N" entries, which composite

@@ -19,4 +19,3 @@ elseif(MSVC)
         target_compile_options(amrexplorer_warnings INTERFACE /WX)
     endif()
 endif()
-

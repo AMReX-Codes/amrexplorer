@@ -179,6 +179,13 @@ public:
     void setCacheBudgetForTest(std::uint64_t bytes);
     [[nodiscard]] std::uint64_t cacheResidentBytesForTest() const;
 
+    // Test-only: apply particle settings through the same synchronization path
+    // as the dialog, and inspect how many points are currently installed.
+    void setParticleSelectionForTest(
+        std::vector<std::string> species, double fraction);
+    [[nodiscard]] std::size_t particleSampleCountForTest() const;
+    [[nodiscard]] std::size_t particleOverlayCountForTest();
+
 signals:
     void datasetOpenFinished(bool success);
     void initialSliceFinished(bool success);
@@ -284,6 +291,11 @@ private:
     void resetRangeState();
     void updateRangeModeAvailability();
     void showContoursDialog();
+    void showParticlesDialog();
+    void configureParticleControls(bool preserveSelection);
+    void requestParticleReload();
+    void updateParticleOverlay(PlaneViewState& state);
+    void updateParticleOverlays();
     void applyContourSettings(DisplayMode mode, int count, int uField, int vField,
         int wField, int contourColor);
     void showNumberFormatDialog();
@@ -393,7 +405,7 @@ private:
     };
     void choosePlotfileSequence();
     void closeSequence();
-    void goToSequenceFrame(int index);
+    void goToSequenceFrame(int index, bool forceRestart = false);
     void toggleSequencePlayback();
     void stepSweep(int direction);
     void toggleSweepPlayback();
@@ -406,6 +418,8 @@ private:
     void displayFrameResult(InitialSliceResult& result, bool defaultPositions);
     void configureSequenceControls(bool defaultPositions);
     [[nodiscard]] FrameSliceSpec buildFrameSpec();
+    void applyParticleSelection(
+        std::vector<std::string> species, double fraction, int pointSize);
     // Stop timers, request stop on every async task this window can launch,
     // and clear queued thread-pool work. Wired to aboutToQuit so the process
     // exits promptly instead of blocking QThreadPool teardown on an in-flight
@@ -477,6 +491,7 @@ private:
     QAction* m_resetZoomAction = nullptr;
     QAction* m_syncRubberBandZoomAction = nullptr;
     QAction* m_contoursAction = nullptr;
+    QAction* m_particlesAction = nullptr;
     QAction* m_datasetAction = nullptr;
     QAction* m_exportAnimationAction = nullptr;
 
@@ -504,6 +519,13 @@ private:
     int m_vectorUField = -1;
     int m_vectorVField = -1;
     int m_vectorWField = -1;
+    std::vector<std::string> m_selectedParticleSpecies;
+    std::vector<ParticleSample> m_particleSamples;
+    double m_particleFraction = 1.0;
+    int m_particlePointSize = 3;
+    bool m_particleSelectionInitialized = false;
+    StopSource m_particleStopSource;
+    std::uint64_t m_particleGeneration = 0;
     std::filesystem::path m_datasetPath;
     struct MultiFabReturnState {
         std::filesystem::path path;

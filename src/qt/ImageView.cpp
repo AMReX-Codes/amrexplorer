@@ -3,6 +3,7 @@
 #include "Theme.hpp"
 
 #include <QGraphicsLineItem>
+#include <QGraphicsItem>
 #include <QGraphicsPathItem>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsRectItem>
@@ -36,6 +37,42 @@ public:
         QGraphicsRectItem::paint(painter, option, widget);
         painter->setRenderHint(QPainter::Antialiasing, antialiasing);
     }
+};
+
+class PointCloudItem final : public QGraphicsItem {
+public:
+    PointCloudItem(std::vector<QPointF> points, const QRectF& bounds,
+        QColor color, qreal size)
+        : m_points(std::move(points))
+        , m_bounds(bounds)
+        , m_color(std::move(color))
+        , m_size(size)
+    {
+    }
+
+    [[nodiscard]] QRectF boundingRect() const override
+    {
+        return m_bounds.adjusted(-m_size, -m_size, m_size, m_size);
+    }
+
+    void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override
+    {
+        QPen pen(m_color);
+        pen.setCosmetic(true);
+        pen.setWidthF(m_size);
+        pen.setCapStyle(Qt::RoundCap);
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        painter->setPen(pen);
+        painter->drawPoints(m_points.data(), static_cast<int>(m_points.size()));
+        painter->restore();
+    }
+
+private:
+    std::vector<QPointF> m_points;
+    QRectF m_bounds;
+    QColor m_color;
+    qreal m_size = 3.0;
 };
 
 } // namespace
@@ -75,6 +112,7 @@ void ImageView::setImage(
     m_gridItems.clear();
     m_overlayItems.clear();
     m_pathItems.clear();
+    m_pointItems.clear();
     m_crosshairVerticalItem = nullptr;
     m_crosshairHorizontalItem = nullptr;
     m_cellHighlightItem = nullptr;
@@ -155,6 +193,34 @@ void ImageView::setOverlayPaths(const std::vector<OverlayPath>& paths)
         item->setZValue(2.0);
         m_pathItems.push_back(item);
     }
+}
+
+void ImageView::setPointOverlays(const std::vector<PointOverlay>& overlays)
+{
+    for (auto* item : m_pointItems) {
+        m_scene->removeItem(item);
+        delete item;
+    }
+    m_pointItems.clear();
+    if (!hasImage()) {
+        return;
+    }
+    m_pointItems.reserve(overlays.size());
+    for (const auto& overlay : overlays) {
+        if (overlay.points.empty()) {
+            continue;
+        }
+        auto* item = new PointCloudItem(
+            overlay.points, m_scene->sceneRect(), overlay.color, overlay.size);
+        item->setZValue(3.0);
+        m_scene->addItem(item);
+        m_pointItems.push_back(item);
+    }
+}
+
+std::size_t ImageView::pointOverlayCount() const noexcept
+{
+    return m_pointItems.size();
 }
 
 void ImageView::setCrosshairs(const std::optional<QLineF>& vertical,
@@ -309,6 +375,7 @@ void ImageView::setPlaceholder(const QString& text)
     m_gridItems.clear();
     m_overlayItems.clear();
     m_pathItems.clear();
+    m_pointItems.clear();
     m_crosshairVertical.reset();
     m_crosshairHorizontal.reset();
     m_crosshairVerticalItem = nullptr;

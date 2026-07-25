@@ -76,6 +76,13 @@ add_executable(test_selective_block_read integration/test_selective_block_read.c
 target_link_libraries(test_selective_block_read PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME selective_block_read COMMAND test_selective_block_read)
 
+add_executable(test_particle_reader integration/test_particle_reader.cpp)
+target_link_libraries(test_particle_reader PRIVATE amrexplorer::io amrexplorer::warnings)
+add_test(
+    NAME particle_reader
+    COMMAND test_particle_reader "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+)
+
 add_executable(test_fab_catalog integration/test_fab_catalog.cpp)
 target_link_libraries(test_fab_catalog PRIVATE amrexplorer::query amrexplorer::warnings)
 add_test(NAME fab_catalog COMMAND test_fab_catalog)
@@ -242,6 +249,18 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_slice_smoke_3d PROPERTIES TIMEOUT 30)
+    add_test(
+        NAME qt_particle_visible_range_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_particle_visible_3d"
+            -DMODE=particle-visible-range
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(
+        qt_particle_visible_range_smoke_3d PROPERTIES TIMEOUT 30)
     # A rubber-band selection in one 3-D panel synchronizes the selected
     # normalized subregion to all three panels by default.
     add_test(
@@ -430,6 +449,20 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_sequence_smoke PROPERTIES TIMEOUT 30)
+    # A normal slice-affecting control change while a foreground frame is
+    # loading invalidates that frame specification. The replacement load must
+    # complete instead of leaving sequence playback latched in-flight.
+    add_test(
+        NAME qt_sequence_spec_change_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_spec_change"
+            -DMODE=sequence-spec-change
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_sequence_spec_change_smoke PROPERTIES TIMEOUT 30)
     # A preserved physical crop rendered at a different raster resolution in
     # the next sequence frame must refit instead of retaining a stale transform.
     add_test(

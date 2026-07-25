@@ -50,7 +50,11 @@ public:
     // host hides its sequence UI itself.
     void close();
     void step(int direction);
-    void goToFrame(int index);
+    // Navigates to a frame. forceRestart reloads even the current frame while
+    // it is already in flight, so a slice-affecting change (field, level,
+    // range, particle selection, ...) mid-load is picked up by a fresh load
+    // built from the new spec instead of being ignored.
+    void goToFrame(int index, bool forceRestart = false);
 
     // A slice-affecting UI change invalidates any prefetched frame rendered
     // against the old spec.

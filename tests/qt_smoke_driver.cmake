@@ -8,6 +8,7 @@
 #   MODE          slice | sequence | missing-range | non-finite | raw-fab |
 #                 multifab-fab | quit | quit-on-failure | export-quit |
 #                 contour-sync | raster-zoom | rubber-zoom-sync |
+#                 particle-visible-range |
 #                 rubber-zoom-local | rubber-overzoom | pan-zoom |
 #                 range-cache | fab-zoom | cache-budget |
 #                 sequence-zoom-refit | sequence-equal-size-zoom-refit
@@ -37,6 +38,11 @@ elseif(MODE STREQUAL "sequence")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
     run_or_die("${AMREXPLORER_QT}" --sequence-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "sequence-spec-change")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --sequence-spec-change-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "sequence-zoom-refit")
     if(NOT DEFINED SECOND_SOURCE)
@@ -69,6 +75,10 @@ elseif(MODE STREQUAL "non-finite")
 elseif(MODE STREQUAL "contour-sync")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --contour-sync-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "particle-visible-range")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --particle-visible-range-smoke-test
+        "${WORK}/plt")
 elseif(MODE STREQUAL "raster-zoom")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --raster-zoom-smoke-test "${WORK}/plt")

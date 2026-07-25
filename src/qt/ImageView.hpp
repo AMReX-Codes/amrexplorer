@@ -8,12 +8,14 @@
 #include <QLineF>
 #include <QPainterPath>
 #include <QPoint>
+#include <QPointF>
 #include <QRectF>
 
 #include <optional>
 #include <vector>
 
 class QGraphicsLineItem;
+class QGraphicsItem;
 class QGraphicsPathItem;
 class QGraphicsPixmapItem;
 class QGraphicsRectItem;
@@ -38,6 +40,12 @@ struct OverlayPath {
     QPainterPath path;
     QColor color;
     float width = 1.0F;
+};
+
+struct PointOverlay {
+    std::vector<QPointF> points;
+    QColor color;
+    float size = 3.0F;
 };
 
 // ImageTransformPolicy lives in the Qt-free pipeline layer (the
@@ -65,6 +73,7 @@ public:
     // segment items are untouched, so callers that switch overlay kinds must
     // also clear the other setter. setImage/setPlaceholder drop both.
     void setOverlayPaths(const std::vector<OverlayPath>& paths);
+    void setPointOverlays(const std::vector<PointOverlay>& overlays);
     // Crosshair guides spanning the whole image, used by the 3-D slice views
     // to mark where the other two slice planes intersect this one. The lines
     // are in scene coordinates; a nullopt line hides that guide. They layer
@@ -82,6 +91,7 @@ public:
     void setPlaceholder(const QString& text);
     [[nodiscard]] bool hasImage() const noexcept;
     [[nodiscard]] const QImage& image() const noexcept;
+    [[nodiscard]] std::size_t pointOverlayCount() const noexcept;
     // Renders the scene (base image plus grid boxes and any other overlays)
     // to a fresh QImage for export. scaleFactor multiplies the raster's native
     // resolution so the export reflects the on-screen zoom (WYSIWYG); an
@@ -139,6 +149,7 @@ private:
     std::vector<QGraphicsRectItem*> m_gridItems;
     std::vector<QGraphicsLineItem*> m_overlayItems;
     std::vector<QGraphicsPathItem*> m_pathItems;
+    std::vector<QGraphicsItem*> m_pointItems;
     std::optional<QLineF> m_crosshairVertical;
     std::optional<QLineF> m_crosshairHorizontal;
     QColor m_crosshairVerticalColor;

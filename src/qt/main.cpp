@@ -491,6 +491,48 @@ int main(int argc, char* argv[])
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
+        && std::string_view(argv[1])
+            == "--particle-visible-range-smoke-test") {
+        // A shared Visible-range reconciliation replaces all three rasters.
+        // Particle point batches must be restored after those setImage calls.
+        const std::filesystem::path path(argv[2]);
+        auto* poll = new QTimer(&window);
+        poll->setInterval(10);
+        auto attempts = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, poll](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                window.setParticleSelectionForTest({"Tracer"}, 1.0);
+                poll->start();
+            });
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, &application, poll, attempts] {
+                if (++*attempts > 500) {
+                    application.exit(1);
+                    return;
+                }
+                if (window.particleSampleCountForTest() == 0
+                    || window.particleOverlayCountForTest() == 0) {
+                    return;
+                }
+                poll->stop();
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(
+                            window.particleSampleCountForTest() > 0
+                                && window.particleOverlayCountForTest() > 0
+                            ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+                window.enableVisibleRasterForTest();
+            });
+        QTimer::singleShot(0, &window, [&window, path] {
+            window.openDataset(path);
+        });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--raster-zoom-smoke-test") {
         // 2-D Visible-range raster/color-bar consistency: after a full-domain
         // Visible slice caches the range, a zoom must re-render the raster
@@ -865,7 +907,40 @@ int main(int argc, char* argv[])
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
             &application, [&window, &application](int index) {
                 if (index == 0) {
+                    if (window.particleSampleCountForTest() != 0) {
+                        application.exit(1);
+                        return;
+                    }
+                    // Opt in, start a frame load carrying that specification,
+                    // then change it before the worker can complete. The final
+                    // frame must reflect the new empty selection.
+                    window.setParticleSelectionForTest({"Tracer"}, 1.0);
                     window.stepSequence(1);
+                    window.setParticleSelectionForTest({}, 1.0);
+                } else if (index == 1) {
+                    application.exit(
+                        window.particleSampleCountForTest() == 0 ? 0 : 1);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--sequence-spec-change-smoke-test") {
+        // Start frame 1, then immediately drive an ordinary slice-affecting
+        // control through scheduleSliceRequest while its worker is in flight.
+        // The queued completion for the obsolete specification must not strand
+        // the sequence in its in-flight state.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application](int index) {
+                if (index == 0) {
+                    window.stepSequence(1);
+                    window.enableVisibleRasterForTest();
                 } else if (index == 1) {
                     application.exit(0);
                 }

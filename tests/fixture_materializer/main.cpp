@@ -209,6 +209,49 @@ void writeFab(const std::filesystem::path& path, BlockRecord& block,
     require(static_cast<bool>(output), "could not write a fixture FAB payload");
 }
 
+// Adds one small native AMReX particle species so the Qt slice and sequence
+// smoke tests exercise particle discovery, binary reads, and point overlays.
+void writeParticles(const std::filesystem::path& root, int dimension)
+{
+    constexpr int particleCount = 8;
+    const auto species = root / "Tracer";
+    std::filesystem::create_directories(species / "Level_0");
+    {
+        std::ofstream header(species / "Header");
+        require(static_cast<bool>(header),
+            "could not create the fixture particle Header");
+        header << "Version_Two_Dot_Zero_double\n"
+               << dimension << '\n'
+               << "0\n"
+               << "0\n"
+               << "1\n"
+               << particleCount << '\n'
+               << "100\n"
+               << "0\n"
+               << "1\n"
+               << "0 " << particleCount << " 0\n";
+    }
+    std::ofstream data(species / "Level_0" / "DATA_00000",
+        std::ios::binary);
+    require(static_cast<bool>(data),
+        "could not create the fixture particle data");
+    for (int id = 1; id <= particleCount; ++id) {
+        const std::int32_t words[2]{id, 0};
+        data.write(reinterpret_cast<const char*>(words), sizeof(words));
+    }
+    for (int id = 1; id <= particleCount; ++id) {
+        const auto fraction = static_cast<double>(id)
+            / static_cast<double>(particleCount + 1);
+        const double positions[3]{
+            fraction, 1.0 - fraction, 0.25 + 0.5 * fraction};
+        data.write(reinterpret_cast<const char*>(positions),
+            static_cast<std::streamsize>(
+                static_cast<std::size_t>(dimension) * sizeof(double)));
+    }
+    require(static_cast<bool>(data),
+        "could not write the fixture particle data");
+}
+
 void writeHeaderWithoutStatistics(const std::filesystem::path& path,
     const std::vector<BlockRecord>& blocks, int fieldCount)
 {
@@ -309,5 +352,6 @@ int main(int argc, char* argv[])
                 levelDir / "Cell_H", blocks, header.fieldCount);
         }
     }
+    writeParticles(destination, header.dimension);
     return 0;
 }

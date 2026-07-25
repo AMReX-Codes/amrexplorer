@@ -31,6 +31,16 @@ std::filesystem::path sourceDataRoot(const std::filesystem::path& path)
     return parent.empty() ? std::filesystem::path(".") : parent;
 }
 
+std::vector<ParticleSpeciesMetadata> discoverParticlesForPlotfileRoot(
+    const std::filesystem::path& root)
+{
+    if (std::filesystem::is_directory(root)
+        && std::filesystem::is_regular_file(root / "Header")) {
+        return discoverParticleSpecies(root);
+    }
+    return {};
+}
+
 } // namespace
 
 PlotfileDataset::PlotfileDataset(
@@ -38,6 +48,9 @@ PlotfileDataset::PlotfileDataset(
     : m_plotfile(sourceDataRoot(plotfile))
     , m_id(id)
     , m_metadataResult(readDatasetMetadata(plotfile))
+    , m_particleSpecies(std::filesystem::is_directory(plotfile)
+            ? discoverParticleSpecies(m_plotfile)
+            : std::vector<ParticleSpeciesMetadata>{})
     , m_blockReader(m_plotfile, m_metadataResult.metadata)
     , m_cache(cacheBudgetBytes)
 {
@@ -51,6 +64,7 @@ PlotfileDataset::PlotfileDataset(std::filesystem::path root, DatasetId id,
     : m_plotfile(std::move(root))
     , m_id(id)
     , m_metadataResult(std::move(metadata))
+    , m_particleSpecies(discoverParticlesForPlotfileRoot(m_plotfile))
     , m_blockReader(m_plotfile, m_metadataResult.metadata)
     , m_cache(cacheBudgetBytes)
 {
@@ -72,6 +86,20 @@ const MetadataReadMetrics& PlotfileDataset::metadataReadMetrics() const noexcept
 DatasetId PlotfileDataset::id() const noexcept
 {
     return m_id;
+}
+
+const std::vector<ParticleSpeciesMetadata>& PlotfileDataset::particleSpecies()
+    const noexcept
+{
+    return m_particleSpecies;
+}
+
+ParticleSample PlotfileDataset::requestParticleSample(
+    const std::string& species, double fraction, std::uint64_t seed,
+    StopToken cancellation) const
+{
+    return readParticleSample(
+        m_plotfile, species, fraction, seed, cancellation);
 }
 
 const std::filesystem::path& PlotfileDataset::dataRoot() const noexcept

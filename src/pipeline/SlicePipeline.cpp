@@ -548,6 +548,16 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
             result.cacheFallbackToLevel = --attemptMaximumLevel;
         }
     }
+    for (const auto& species : result.dataset->particleSpecies()) {
+        const auto enabled = std::find(spec.particleSpecies.begin(),
+            spec.particleSpecies.end(), species.name)
+            != spec.particleSpecies.end();
+        if (enabled) {
+            result.particles.push_back(result.dataset->requestParticleSample(
+                species.name, spec.particleFraction, spec.particleSeed,
+                cancellation));
+        }
+    }
     return result;
 }
 

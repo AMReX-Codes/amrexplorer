@@ -102,6 +102,11 @@ struct SliceDisplayResult {
     // Set when the image was intentionally not re-rendered (contour-only
     // refresh): showSlice keeps the view's current pixmap.
     bool rasterUnchanged = false;
+    // Set when a composite (Finest Available) slice exceeded the cache budget
+    // and was retried at a lower composite maximum level, mirroring
+    // InitialSliceResult (see cache-budget-exceeded-hard-fails-after-load).
+    int cacheFallbackFromLevel = -1;
+    int cacheFallbackToLevel = -1;
 };
 
 struct InitialSliceResult {
@@ -205,6 +210,12 @@ public:
     // Test-only: true when the active view holds a zoom (visibleRegion set).
     // See fab-round-trip-loses-visible-region.
     [[nodiscard]] bool activeViewIsZoomedForTest() const;
+
+    // Test-only: shrink the open dataset's cache budget to force cache-pressure
+    // fallback on the next non-cache slice, and read the current resident bytes
+    // to size that budget. See cache-budget-exceeded-hard-fails-after-load.
+    void setCacheBudgetForTest(std::uint64_t bytes);
+    [[nodiscard]] std::uint64_t cacheResidentBytesForTest() const;
 
 signals:
     void datasetOpenFinished(bool success);

@@ -108,6 +108,21 @@ int main()
                 && expanded.points[2].id == idcpu(3, 7),
             "expanded particle idcpu was not preserved");
 
+        // Exercise both integer and real record boundaries in the reader's
+        // bounded I/O chunks.
+        std::vector<std::pair<std::int32_t, std::int32_t>> chunkedIdentities;
+        chunkedIdentities.reserve(140'000);
+        for (std::int32_t id = 1; id <= 140'000; ++id) {
+            chunkedIdentities.emplace_back(id, 7);
+        }
+        writeFixture(root, chunkedIdentities, 0.0);
+        const auto chunked = amrvis::readParticleSample(root, "Tracer", 1.0);
+        require(chunked.points.size() == chunkedIdentities.size(),
+            "chunked particle read omitted particles");
+        require(chunked.points[43'690].position[0] == 43'691.0
+                && chunked.points[131'072].id == idcpu(131'073, 7),
+            "particle data was decoded incorrectly across chunk boundaries");
+
         writeFixture(root, identities, 0.0);
         const auto half = amrvis::readParticleSample(root, "Tracer", 0.5);
         const auto quarter = amrvis::readParticleSample(root, "Tracer", 0.25);

@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <limits>
 #include <optional>
@@ -17,6 +18,7 @@ namespace {
 constexpr int maximumComponents = 100'000;
 constexpr int maximumLevels = 1'000;
 constexpr int maximumGridsPerLevel = 10'000'000;
+constexpr std::uint64_t particleReadChunkBytes = 1024U * 1024U;
 
 struct GridRecord {
     int level = 0;
@@ -30,6 +32,11 @@ struct ParsedHeader {
     bool expandedIds = false;
     int finestLevel = 0;
     std::vector<GridRecord> grids;
+};
+
+struct SelectedParticle {
+    std::uint64_t index = 0;
+    std::uint64_t id = 0;
 };
 
 template <typename T>
@@ -51,6 +58,35 @@ std::uint64_t checkedProduct(
             "particle " + std::string(description) + " exceeds supported size");
     }
     return lhs * rhs;
+}
+
+std::size_t chunkRecordCount(
+    std::uint64_t remaining, std::uint64_t recordBytes)
+{
+    const auto capacity = std::max(
+        std::uint64_t{1}, particleReadChunkBytes / recordBytes);
+    return static_cast<std::size_t>(std::min(remaining, capacity));
+}
+
+void readChunk(std::istream& input, std::vector<char>& buffer,
+    std::size_t recordCount, std::uint64_t recordBytes,
+    std::string_view description)
+{
+    const auto byteCount = checkedProduct(
+        static_cast<std::uint64_t>(recordCount), recordBytes, description);
+    if (byteCount > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::streamsize>::max())
+        || byteCount > static_cast<std::uint64_t>(
+                           std::numeric_limits<std::size_t>::max())) {
+        throw ParticleReadError(
+            "particle " + std::string(description) + " exceeds supported size");
+    }
+    buffer.resize(static_cast<std::size_t>(byteCount));
+    input.read(buffer.data(), static_cast<std::streamsize>(byteCount));
+    if (!input) {
+        throw ParticleReadError(
+            "truncated particle " + std::string(description));
+    }
 }
 
 ParsedHeader parseHeader(
@@ -246,60 +282,64 @@ void readGrid(const std::filesystem::path& dataPath, const GridRecord& grid,
     const auto realRecordBytes = checkedProduct(
         realValues, sizeof(Real), "real record");
 
-    std::vector<std::uint8_t> keep(static_cast<std::size_t>(grid.count), 0);
-    std::vector<std::uint64_t> ids(static_cast<std::size_t>(grid.count), 0);
+    std::vector<SelectedParticle> selectedParticles;
+    std::vector<char> buffer;
     std::array<std::int32_t, 2> idWords{};
-    for (std::uint64_t index = 0; index < grid.count; ++index) {
+    for (std::uint64_t firstIndex = 0; firstIndex < grid.count;) {
         if (cancellation.stop_requested()) {
             throw ParticleReadError("particle read cancelled");
         }
-        input.read(reinterpret_cast<char*>(idWords.data()),
-            static_cast<std::streamsize>(sizeof(idWords)));
-        if (!input) {
-            throw ParticleReadError("truncated particle integer data");
+        const auto count = chunkRecordCount(
+            grid.count - firstIndex, intRecordBytes);
+        readChunk(input, buffer, count, intRecordBytes, "integer data");
+        for (std::size_t relativeIndex = 0;
+             relativeIndex < count; ++relativeIndex) {
+            if (cancellation.stop_requested()) {
+                throw ParticleReadError("particle read cancelled");
+            }
+            const auto recordOffset = static_cast<std::size_t>(
+                static_cast<std::uint64_t>(relativeIndex) * intRecordBytes);
+            std::memcpy(
+                idWords.data(), buffer.data() + recordOffset, sizeof(idWords));
+            const auto idcpu = decodeIdCpu(
+                idWords[0], idWords[1], header.expandedIds);
+            if (idcpu.has_value() && selected(*idcpu, fraction, seed)) {
+                selectedParticles.push_back(
+                    {firstIndex + relativeIndex, *idcpu});
+            }
         }
-        const auto idcpu = decodeIdCpu(
-            idWords[0], idWords[1], header.expandedIds);
-        if (idcpu.has_value() && selected(*idcpu, fraction, seed)) {
-            keep[static_cast<std::size_t>(index)] = 1;
-            ids[static_cast<std::size_t>(index)] = *idcpu;
-        }
-        input.seekg(static_cast<std::streamoff>(
-            intRecordBytes - sizeof(idWords)), std::ios::cur);
-        if (!input) {
-            throw ParticleReadError("truncated particle integer data");
-        }
+        firstIndex += count;
     }
 
     std::array<Real, 3> position{};
-    for (std::uint64_t index = 0; index < grid.count; ++index) {
+    std::size_t selectedIndex = 0;
+    for (std::uint64_t firstIndex = 0; firstIndex < grid.count;) {
         if (cancellation.stop_requested()) {
             throw ParticleReadError("particle read cancelled");
         }
-        if (keep[static_cast<std::size_t>(index)] != 0) {
-            input.read(reinterpret_cast<char*>(position.data()),
-                static_cast<std::streamsize>(
-                    static_cast<std::uint64_t>(header.metadata.dimension)
-                    * sizeof(Real)));
-            if (!input) {
-                throw ParticleReadError("truncated particle real data");
-            }
+        const auto count = chunkRecordCount(
+            grid.count - firstIndex, realRecordBytes);
+        readChunk(input, buffer, count, realRecordBytes, "real data");
+        const auto pastLastIndex = firstIndex + count;
+        while (selectedIndex < selectedParticles.size()
+            && selectedParticles[selectedIndex].index < pastLastIndex) {
+            const auto& selectedParticle = selectedParticles[selectedIndex];
+            const auto relativeIndex = selectedParticle.index - firstIndex;
+            const auto recordOffset = static_cast<std::size_t>(
+                relativeIndex * realRecordBytes);
+            std::memcpy(position.data(), buffer.data() + recordOffset,
+                static_cast<std::size_t>(header.metadata.dimension)
+                    * sizeof(Real));
             ParticlePoint point;
-            point.id = ids[static_cast<std::size_t>(index)];
+            point.id = selectedParticle.id;
             for (int axis = 0; axis < header.metadata.dimension; ++axis) {
                 point.position[static_cast<std::size_t>(axis)]
                     = static_cast<double>(position[static_cast<std::size_t>(axis)]);
             }
             output.push_back(point);
-            input.seekg(static_cast<std::streamoff>(
-                static_cast<std::uint64_t>(header.metadata.realComponentCount)
-                * sizeof(Real)), std::ios::cur);
-        } else {
-            input.seekg(static_cast<std::streamoff>(realRecordBytes), std::ios::cur);
+            ++selectedIndex;
         }
-        if (!input) {
-            throw ParticleReadError("truncated particle real data");
-        }
+        firstIndex = pastLastIndex;
     }
 }
 

@@ -63,9 +63,6 @@ jobs:
       - name: Install dependencies
         run: brew install cmake ninja qt
 
-      - name: Configure Qt
-        run: echo "CMAKE_PREFIX_PATH=$(brew --prefix qt)" >> "$GITHUB_ENV"
-
       - name: Configure
         run: cmake --preset default -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
 

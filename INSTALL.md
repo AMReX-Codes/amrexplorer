@@ -29,7 +29,7 @@ cmake --build --preset default
 Install the dependencies with [Homebrew][]:
 
 ```bash
-brew install cmake ninja qt6
+brew install cmake ninja qt
 ```
 
 [Homebrew]: https://brew.sh

@@ -16,6 +16,17 @@ void require(bool condition, const char* message)
     }
 }
 
+bool hasIssue(const std::vector<amrvis::MetadataIssue>& issues,
+    const char* pathPrefix)
+{
+    for (const auto& issue : issues) {
+        if (issue.path.rfind(pathPrefix, 0) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 int main()
@@ -93,6 +104,53 @@ int main()
     slice.visibleRegion = {{{0.0, 0.0, 0.0}}, {{1.0, 1.0, 0.0}}};
     slice.outputSize = {640, 480};
     require(amrvis::validateSliceRequest(slice, 2).empty(), "valid slice request was rejected");
+
+    // Negative path: a dimension outside [1,3] must be reported without the
+    // per-axis geometry checks reading past the fixed-size (3-element)
+    // arrays. Pre-fix this loops axis up to dimension-1 over Int3/Real3 and
+    // reads out of bounds; running it to completion (especially under the
+    // sanitizer build) is the real regression assertion.
+    {
+        amrvis::DatasetMetadata bad;
+        bad.dimension = 5;
+        bad.finestLevel = 0;
+        bad.physicalDomain = {{{0.0, 0.0, 0.0}}, {{1.0, 1.0, 1.0}}};
+        bad.fields.push_back({"phi", 1, amrvis::Centering::Cell, {"phi"}});
+        amrvis::LevelMetadata badLevel;
+        badLevel.domain = {{{0, 0, 0}}, {{3, 3, 3}}, {{0, 0, 0}}};
+        badLevel.cellSize = {{0.25, 0.25, 0.25}};
+        badLevel.storedComponents = 1;
+        badLevel.boxes.push_back(badLevel.domain);
+        badLevel.blocks.push_back({badLevel.domain, "Cell_D_00000", 0,
+            amrvis::BlockStatistics{{0.0}, {1.0}}});
+        bad.levels.push_back(std::move(badLevel));
+        require(hasIssue(amrvis::validateMetadata(bad), "dimension"),
+            "an out-of-range dimension was not reported");
+    }
+
+    // Negative path: more blocks than boxes must be reported without indexing
+    // past the level box array. Pre-fix the block loop reads level.boxes[1]
+    // when there is only one box.
+    {
+        amrvis::DatasetMetadata bad;
+        bad.dimension = 2;
+        bad.finestLevel = 0;
+        bad.physicalDomain = {{{0.0, 0.0, 0.0}}, {{1.0, 1.0, 0.0}}};
+        bad.fields.push_back({"phi", 1, amrvis::Centering::Cell, {"phi"}});
+        amrvis::LevelMetadata badLevel;
+        badLevel.domain = {{{0, 0, 0}}, {{3, 3, 0}}, {{0, 0, 0}}};
+        badLevel.cellSize = {{0.25, 0.25, 1.0}};
+        badLevel.storedComponents = 1;
+        badLevel.boxes.push_back(badLevel.domain);
+        badLevel.blocks.push_back({badLevel.domain, "Cell_D_00000", 0,
+            amrvis::BlockStatistics{{0.0}, {1.0}}});
+        // One more block than boxes: blockIndex 1 has no boxes[1].
+        badLevel.blocks.push_back({badLevel.domain, "Cell_D_00001", 4096,
+            amrvis::BlockStatistics{{0.0}, {1.0}}});
+        bad.levels.push_back(std::move(badLevel));
+        require(hasIssue(amrvis::validateMetadata(bad), "levels[0].blocks"),
+            "a blocks/boxes size mismatch was not reported");
+    }
 
     return 0;
 }

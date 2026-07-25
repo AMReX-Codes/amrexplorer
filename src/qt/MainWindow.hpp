@@ -21,6 +21,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -455,6 +456,7 @@ private:
     struct ExportAnimationState {
         bool active = false;
         bool canceled = false;
+        std::shared_ptr<std::atomic<bool>> encoderCancel;
         bool framesDone = false;
         bool includeColorBar = false;
         bool hasFfmpeg = false;

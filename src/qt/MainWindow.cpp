@@ -79,13 +79,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <map>
-#include <atomic>
 #include <memory>
 #include <optional>
 #include <stdexcept>

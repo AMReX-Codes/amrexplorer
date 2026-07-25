@@ -330,6 +330,20 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_fab_zoom_smoke_2d PROPERTIES TIMEOUT 30)
+    # Regression test for cache-budget-exceeded-hard-fails-after-load: a
+    # post-load slice that overflows the cache budget must degrade to a lower
+    # composite level (like the initial load) rather than hard-fail.
+    add_test(
+        NAME qt_cache_budget_smoke_2d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_cache_budget"
+            -DMODE=cache-budget
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_cache_budget_smoke_2d PROPERTIES TIMEOUT 30)
     add_test(
         NAME qt_sequence_smoke
         COMMAND "${CMAKE_COMMAND}"

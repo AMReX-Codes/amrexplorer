@@ -672,6 +672,49 @@ int main(int argc, char* argv[])
                 }
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--cache-budget-smoke-test") {
+        // Regression for cache-budget-exceeded-hard-fails-after-load: load a
+        // 2-D dataset at finest, shrink the cache budget just below the finest
+        // working set, then switch field to force a non-cache finest re-slice
+        // that overflows the budget. With the fix the slice degrades to a lower
+        // composite level (the level combo drops from "Finest available", -1);
+        // without it the slice hard-fails and the level is unchanged.
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                auto* levels = window.findChild<QComboBox*>(
+                    QStringLiteral("levelSelector"));
+                auto* fields = window.findChild<QComboBox*>(
+                    QStringLiteral("fieldSelector"));
+                if (levels == nullptr || fields == nullptr
+                    || fields->count() < 2
+                    || levels->currentData().toInt() != -1) {
+                    application.exit(1);  // expected finest (-1) with >=2 fields
+                    return;
+                }
+                const auto resident = window.cacheResidentBytesForTest();
+                if (resident == 0) {
+                    application.exit(1);
+                    return;
+                }
+                window.setCacheBudgetForTest(resident - 1);
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&application, levels] {
+                        // With the fix the overflowing finest re-slice fell back
+                        // to a lower composite level, so the combo no longer
+                        // reads "Finest available" (-1).
+                        application.exit(
+                            levels->currentData().toInt() != -1 ? 0 : 1);
+                    });
+                fields->setCurrentIndex(1);  // non-cache finest re-slice
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 4
         && std::string_view(argv[1]) == "--sequence-smoke-test") {
         // Opens the two-frame sequence, waits for the first frame to display,

@@ -9,9 +9,9 @@
 #                 multifab-fab | quit | quit-on-failure | export-quit |
 #                 contour-sync | raster-zoom | rubber-zoom-sync |
 #                 particle-visible-range |
-#                 rubber-zoom-local | pan-zoom | range-cache | fab-zoom |
-#                 cache-budget | sequence-zoom-refit |
-#                 sequence-equal-size-zoom-refit
+#                 rubber-zoom-local | rubber-overzoom | pan-zoom |
+#                 range-cache | fab-zoom | cache-budget |
+#                 sequence-zoom-refit | sequence-equal-size-zoom-refit
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -83,6 +83,9 @@ elseif(MODE STREQUAL "rubber-zoom-sync")
 elseif(MODE STREQUAL "rubber-zoom-local")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --rubber-zoom-local-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "rubber-overzoom")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --rubber-overzoom-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "pan-zoom")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --pan-zoom-smoke-test "${WORK}/plt")

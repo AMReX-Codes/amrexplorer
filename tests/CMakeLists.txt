@@ -266,6 +266,21 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_rubber_zoom_local_smoke_3d PROPERTIES TIMEOUT 30)
+    # Regression test for issue #45: rubber-band zoom on a dataset whose
+    # full-domain raster is capped at maxSliceOutputDimension must keep the
+    # arrived (finer-density) crop fully framed instead of over-zooming. The
+    # wide fixture is 8192x8 cells, so its full raster is capped to 4096 px.
+    add_test(
+        NAME qt_rubber_overzoom_smoke_2d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_wide"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_rubber_overzoom"
+            -DMODE=rubber-overzoom
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_rubber_overzoom_smoke_2d PROPERTIES TIMEOUT 30)
     # Shift+dragging a rubber-band-cropped panel must preserve its transform,
     # both for a valid data-region pan and for a no-op at the domain edge.
     add_test(

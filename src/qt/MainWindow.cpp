@@ -1162,10 +1162,14 @@ MainWindow::MainWindow(QWidget* parent)
         tr("Zoom scale and rubber-band synchronization for panels"));
     m_scaleButton->setFocusPolicy(Qt::NoFocus);
     auto* scaleMenu = new QMenu(m_scaleButton);
-    auto* fitAction = scaleMenu->addAction(tr("Fit"));
-    connect(fitAction, &QAction::triggered, this, [this] {
+    // "Reset Zoom" restores the whole domain and refits (issue #45 renamed it
+    // from "Fit", which read as fit-the-current-region). The button label
+    // stays "Fit" as the *scale state*: auto-fit also holds for a panned
+    // crop (applyPanStep), where the region is not the whole domain.
+    auto* resetZoomAction = scaleMenu->addAction(tr("Reset Zoom"));
+    connect(resetZoomAction, &QAction::triggered, this, [this] {
         m_scaleButton->setText(tr("Fit"));
-        fitViewToWindow();
+        resetZoomAllViews();
     });
     constexpr std::array<int, 6> scaleFactors{1, 2, 4, 8, 16, 32};
     for (const auto factor : scaleFactors) {
@@ -1445,7 +1449,7 @@ void MainWindow::wireView(PlaneViewState& state)
             sliceMoveRequested(state, x, y, button);
         });
     connect(view, &ImageView::fitRequested, this,
-        [this, &state] { fitView(state); });
+        [this, &state] { resetViewZoom(state); });
 }
 
 std::vector<MainWindow::PlaneViewState*> MainWindow::currentViews()
@@ -1575,14 +1579,14 @@ void MainWindow::createMenus()
 
     m_scaleGroup = new QActionGroup(this);
     auto* scaleMenu = new QMenu(tr("&Scale"), this);
-    m_fitScaleAction = new QAction(tr("&Fit to Window"), scaleMenu);
-    m_fitScaleAction->setCheckable(true);
-    m_fitScaleAction->setActionGroup(m_scaleGroup);
-    m_fitScaleAction->setChecked(true);
-    m_fitScaleAction->setShortcut(QKeySequence(Qt::Key_0));
-    connect(m_fitScaleAction, &QAction::triggered,
-        this, [this] { fitViewToWindow(); });
-    scaleMenu->addAction(m_fitScaleAction);
+    m_resetZoomAction = new QAction(tr("&Reset Zoom"), scaleMenu);
+    m_resetZoomAction->setCheckable(true);
+    m_resetZoomAction->setActionGroup(m_scaleGroup);
+    m_resetZoomAction->setChecked(true);
+    m_resetZoomAction->setShortcut(QKeySequence(Qt::Key_0));
+    connect(m_resetZoomAction, &QAction::triggered,
+        this, [this] { resetZoomAllViews(); });
+    scaleMenu->addAction(m_resetZoomAction);
     constexpr std::array<int, 6> fixedScales{1, 2, 4, 8, 16, 32};
     for (std::size_t index = 0; index < fixedScales.size(); ++index) {
         const auto factor = fixedScales[index];
@@ -2130,6 +2134,20 @@ bool MainWindow::activeViewIsFitToWindowForTest()
     return before == m_activeView->view->transform();
 }
 
+bool MainWindow::activeViewShowsWholeImageForTest() const
+{
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return false;
+    }
+    auto* view = m_activeView->view;
+    const auto visible = view->mapToScene(
+        view->viewport()->rect()).boundingRect();
+    const auto image = view->image();
+    // Half-a-scene-pixel slack absorbs fitInView rounding at the borders.
+    const QRectF imageRect(QPointF(0.0, 0.0), QSizeF(image.size()));
+    return visible.adjusted(-0.5, -0.5, 0.5, 0.5).contains(imageRect);
+}
+
 void MainWindow::viewFabForTest(std::size_t index)
 {
     viewFab(index);
@@ -2639,9 +2657,9 @@ void MainWindow::showKeyboardMouseReference()
     add(tr("Right click (3-D)"),
         tr("Move both slice planes to intersect at the clicked point"));
     add(tr("Wheel / double click"),
-        tr("Zoom this panel in or out / refit to the window"));
+        tr("Zoom this panel in or out / reset the zoom"));
     add(tr("B"), tr("Toggle AMR grid boxes"));
-    add(tr("0"), tr("Fit to the window"));
+    add(tr("0"), tr("Reset the zoom to the whole domain"));
     add(tr("1-6"), tr("Fixed zoom scales (1x-32x)"));
     add(tr("Ctrl+0"), tr("Composite the finest available level"));
     add(tr("Ctrl+1-9"), tr("Composite levels 0 through N (Levs 0-N)"));
@@ -2679,21 +2697,21 @@ void MainWindow::showAboutDialog()
             .arg(QStringLiteral(AMREXPLORER_VERSION)));
 }
 
-void MainWindow::fitView(PlaneViewState& state)
+void MainWindow::resetViewZoom(PlaneViewState& state)
 {
     state.visibleRegion.reset();
     state.view->fitToWindow();
-    m_fitScaleAction->setChecked(true);
+    m_resetZoomAction->setChecked(true);
     if (m_scaleButton != nullptr) {
         m_scaleButton->setText(tr("Fit"));
     }
     scheduleSliceRequest(state);
 }
 
-void MainWindow::fitViewToWindow()
+void MainWindow::resetZoomAllViews()
 {
     for (auto* state : currentViews()) {
-        fitView(*state);
+        resetViewZoom(*state);
     }
 }
 
@@ -3044,7 +3062,7 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
         }
         state.visibleRegion = *region;
         state.view->fitToWindow();
-        m_fitScaleAction->setChecked(true);
+        m_resetZoomAction->setChecked(true);
         if (m_scaleButton != nullptr) {
             m_scaleButton->setText(tr("Fit"));
         }
@@ -5210,6 +5228,68 @@ void MainWindow::showMetadata(
         .arg(metadata.fields.size()).arg(metadata.levels.size()));
 }
 
+std::optional<QRectF> MainWindow::preservedDataWindow(
+    const PlaneViewState& state, const ScalarPlane& incoming) const
+{
+    const auto& cached = state.plane;
+    if (cached.width <= 0 || cached.height <= 0
+        || incoming.width <= 0 || incoming.height <= 0) {
+        return std::nullopt;
+    }
+    const auto axes = displayAxes(state.normal);
+    const auto xAxis = static_cast<std::size_t>(axes[0]);
+    const auto yAxis = static_cast<std::size_t>(axes[1]);
+    const auto& oldRegion = cached.physicalRegion;
+    const auto& newRegion = incoming.physicalRegion;
+    const auto oldExtentX = oldRegion.upper[xAxis] - oldRegion.lower[xAxis];
+    const auto oldExtentY = oldRegion.upper[yAxis] - oldRegion.lower[yAxis];
+    const auto newExtentX = newRegion.upper[xAxis] - newRegion.lower[xAxis];
+    const auto newExtentY = newRegion.upper[yAxis] - newRegion.lower[yAxis];
+    if (!(oldExtentX > 0.0) || !(oldExtentY > 0.0)
+        || !(newExtentX > 0.0) || !(newExtentY > 0.0)) {
+        return std::nullopt;
+    }
+    // Pixels per physical unit; equal densities mean the preserved scene
+    // transform already preserves the on-screen data, so leave it alone.
+    const auto oldDensityX = cached.width / oldExtentX;
+    const auto oldDensityY = cached.height / oldExtentY;
+    const auto newDensityX = incoming.width / newExtentX;
+    const auto newDensityY = incoming.height / newExtentY;
+    const auto matches = [](double a, double b) {
+        return std::abs(a - b) <= 1.0e-9 * std::max(std::abs(a), std::abs(b));
+    };
+    if (matches(oldDensityX, newDensityX)
+        && matches(oldDensityY, newDensityY)) {
+        return std::nullopt;
+    }
+    // Viewport -> old scene -> physical -> new scene. Scene y runs opposite
+    // to physical y: plane row 0 is the bottom row and the displayed raster
+    // is mirrored vertically (see displayImageFor), for both planes alike.
+    const auto visible = state.view->mapToScene(
+        state.view->viewport()->rect()).boundingRect();
+    const auto dataX = [&](double sceneX) {
+        return oldRegion.lower[xAxis] + sceneX / cached.width * oldExtentX;
+    };
+    const auto dataY = [&](double sceneY) {
+        return oldRegion.upper[yAxis] - sceneY / cached.height * oldExtentY;
+    };
+    const auto newSceneX = [&](double x) {
+        return (x - newRegion.lower[xAxis]) / newExtentX * incoming.width;
+    };
+    const auto newSceneY = [&](double y) {
+        return (newRegion.upper[yAxis] - y) / newExtentY * incoming.height;
+    };
+    const QRectF window(
+        QPointF(newSceneX(dataX(visible.left())),
+            newSceneY(dataY(visible.top()))),
+        QPointF(newSceneX(dataX(visible.right())),
+            newSceneY(dataY(visible.bottom()))));
+    if (window.isEmpty()) {
+        return std::nullopt;
+    }
+    return window;
+}
+
 void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& display)
 {
     if (!display.rasterUnchanged) {
@@ -5238,8 +5318,27 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
             : state.visibleRegion.has_value() && samePanelRenderContext
             ? ImageTransformPolicy::Preserve
             : ImageTransformPolicy::GeometryAware;
+        // Preserve keeps the scene transform, which is only equivalent to
+        // keeping what the user sees while the raster's pixels-per-data
+        // density is unchanged. A zoomed re-slice can arrive denser: the
+        // full-domain raster is capped at maxSliceOutputDimension while a
+        // subregion fits under the cap, so preserving the scene transform
+        // would show the crop over-zoomed with part of it off screen
+        // (issue #45). When the density changes, preserve the visible *data*
+        // window instead: capture the viewport in physical coordinates
+        // through the old plane's geometry before the swap, then re-frame
+        // that window through the new plane's geometry after it. Equal
+        // densities (pan, uncapped zoom) keep the plain Preserve behavior.
+        std::optional<QRectF> dataWindowInNewScene;
+        if (transformPolicy == ImageTransformPolicy::Preserve) {
+            dataWindowInNewScene = preservedDataWindow(
+                state, display.slice.plane);
+        }
         state.view->setImage(
             displayImageFor(display.image), transformPolicy);
+        if (dataWindowInNewScene) {
+            state.view->zoomToRect(*dataWindowInNewScene);
+        }
     }
     state.plane = display.slice.plane;
     state.contourPlane = display.contourPlane;

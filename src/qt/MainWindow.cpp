@@ -85,6 +85,7 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -2738,9 +2739,12 @@ void MainWindow::closeEvent(QCloseEvent* event)
         dialog->close();
     }
     if (m_exportAnim.progress != nullptr) {
-        // Dismiss the export progress dialog and record cancel. Bounding the
-        // encoder itself is handled separately.
+        // Dismiss the export progress dialog and signal the encoder workers to
+        // terminate their FFmpeg processes (see finalizeExportAnimation).
         m_exportAnim.canceled = true;
+        if (m_exportAnim.encoderCancel) {
+            m_exportAnim.encoderCancel->store(true);
+        }
         m_exportAnim.progress->cancel();
     }
     saveSettings();
@@ -3251,7 +3255,12 @@ void MainWindow::exportAnimation()
     m_exportAnim.progress->setMinimumDuration(0);
     m_exportAnim.progress->setValue(0);
     connect(m_exportAnim.progress, &QProgressDialog::canceled,
-        this, [this] { m_exportAnim.canceled = true; });
+        this, [this] {
+            m_exportAnim.canceled = true;
+            if (m_exportAnim.encoderCancel) {
+                m_exportAnim.encoderCancel->store(true);
+            }
+        });
 
     // Freeze the action and stop playback while exporting.
     m_exportAnimationAction->setEnabled(false);
@@ -3347,6 +3356,9 @@ void MainWindow::finalizeExportAnimation()
 
     m_exportAnim.progress->setLabelText(tr("Encoding MP4..."));
     m_exportAnim.progress->setRange(0, 0);
+    // Cancellation flag shared with the encoder workers (captured by value, so
+    // it outlives this window). Set by the progress Cancel and by closeEvent.
+    m_exportAnim.encoderCancel = std::make_shared<std::atomic<bool>>(false);
 
     auto encode = [this](const QString& stem) {
         const QString inputPattern = m_exportAnim.directory + "/"
@@ -3359,7 +3371,7 @@ void MainWindow::finalizeExportAnimation()
             "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
             "-pix_fmt", "yuv420p", "-crf", "14", outputPath,
         };
-        return QtConcurrent::run([args]() -> QPair<int, QString> {
+        return QtConcurrent::run([args, cancel = m_exportAnim.encoderCancel]() -> QPair<int, QString> {
             QProcess proc;
             proc.setProcessChannelMode(QProcess::MergedChannels);
             proc.start("ffmpeg", args);
@@ -3367,7 +3379,22 @@ void MainWindow::finalizeExportAnimation()
                 return { -2,
                     QString::fromLocal8Bit(proc.readAllStandardOutput()) };
             }
-            proc.waitForFinished(-1);
+            // Bounded wait: poll so Cancel/close can interrupt instead of
+            // blocking the global pool forever. This worker owns proc, so it
+            // terminates -- and kills, if needed -- the encoder itself.
+            while (proc.state() != QProcess::NotRunning) {
+                if (proc.waitForFinished(200)) {
+                    break;
+                }
+                if (cancel && cancel->load()) {
+                    proc.terminate();
+                    if (!proc.waitForFinished(3000)) {
+                        proc.kill();
+                        proc.waitForFinished(1000);
+                    }
+                    break;
+                }
+            }
             const int code = proc.exitStatus() == QProcess::NormalExit
                 ? proc.exitCode() : -1;
             QString log = QString::fromLocal8Bit(
@@ -3401,7 +3428,9 @@ void MainWindow::finalizeExportAnimation()
                     }
                     if (--(*remaining) == 0) {
                         delete remaining;
-                        if (*failed) {
+                        if (m_exportAnim.canceled) {
+                            endExportAnimation(false, tr("Export cancelled."));
+                        } else if (*failed) {
                             endExportAnimation(false,
                                 tr("FFmpeg failed. PNG frames were "
                                 "still written.\n\n%1").arg(*failMsg));
@@ -3426,6 +3455,10 @@ void MainWindow::finalizeExportAnimation()
             this, [this, watcher, stem] {
                 const auto result = watcher->result();
                 watcher->deleteLater();
+                if (m_exportAnim.canceled) {
+                    endExportAnimation(false, tr("Export cancelled."));
+                    return;
+                }
                 const QString outputPath = QDir(m_exportAnim.directory)
                     .absoluteFilePath(stem + ".mp4");
                 if (result.first == 0) {
@@ -3454,8 +3487,9 @@ void MainWindow::endExportAnimation(bool success, const QString& message)
     }
     m_exportAnim = ExportAnimationState{};
 
-    // Return the user to the frame they were viewing.
-    if (wasActive && !m_sequenceFrames.empty()) {
+    // Return the user to the frame they were viewing (unless we are closing,
+    // which would launch a new frame load mid-shutdown).
+    if (wasActive && !m_closing && !m_sequenceFrames.empty()) {
         goToSequenceFrame(restoreIndex < 0 ? 0 : restoreIndex);
     }
     m_exportAnimationAction->setEnabled(!m_sequenceFrames.empty());

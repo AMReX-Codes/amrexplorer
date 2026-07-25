@@ -90,6 +90,13 @@ target_link_libraries(
 )
 add_test(NAME single_precision_plotfile COMMAND test_single_precision_plotfile)
 
+add_executable(test_display_transitions integration/test_display_transitions.cpp)
+target_link_libraries(
+    test_display_transitions
+    PRIVATE amrexplorer::pipeline amrexplorer::warnings
+)
+add_test(NAME display_transitions COMMAND test_display_transitions)
+
 add_executable(test_slice_query integration/test_slice_query.cpp)
 target_link_libraries(test_slice_query PRIVATE amrexplorer::query amrexplorer::warnings)
 add_test(NAME slice_query COMMAND test_slice_query)

@@ -7,7 +7,7 @@
 #   WORK          directory the materialized copies are written into
 #   MODE          slice | sequence | missing-range | non-finite | raw-fab |
 #                 multifab-fab | quit | quit-on-failure | export-quit |
-#                 contour-sync | raster-zoom
+#                 contour-sync | raster-zoom | range-cache
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -50,6 +50,13 @@ elseif(MODE STREQUAL "contour-sync")
 elseif(MODE STREQUAL "raster-zoom")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --raster-zoom-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "range-cache")
+    # Two frames of the same fixture; frame 1's field is scaled 10x so its
+    # range differs, making a stale range-cache reuse observable.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "--scale" "10")
+    run_or_die("${AMREXPLORER_QT}" --range-cache-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "raw-fab")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --raw-fab-smoke-test

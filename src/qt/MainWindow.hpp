@@ -483,6 +483,11 @@ private:
     // completes, and reused for RangeMode::Visible during zoom/pan so the
     // color bar stays stable instead of tracking the subregion extrema.
     std::optional<std::pair<double, double>> m_fullDomainRange;
+    // The dataset the cached range belongs to. Sequence frames each load a
+    // fresh dataset (a new DatasetId), so keying on it invalidates the cache
+    // across frames — without it a zoomed Visible color bar would keep an
+    // earlier frame's range (see sequence-frame-range-cache-goes-stale).
+    DatasetId m_fullDomainRangeDataset{};
     FieldId m_fullDomainRangeField{};
     int m_fullDomainRangeMaxLevel = -1;
     CompositionPolicy m_fullDomainRangeComposition{};

@@ -142,7 +142,7 @@ std::vector<BlockRecord> readCellHeader(
 // the level storing the grid.
 std::vector<double> blockValues(
     const BlockRecord& block, int dimension, int fieldCount,
-    bool nonFiniteValues)
+    bool nonFiniteValues, double scale)
 {
     const auto lower = [&block](int axis) {
         return block.indices[static_cast<std::size_t>(axis)];
@@ -176,7 +176,7 @@ std::vector<double> blockValues(
                         }
                     } else {
                         values.push_back(
-                            component == 0 ? base : 100.0 + base);
+                            scale * (component == 0 ? base : 100.0 + base));
                     }
                 }
             }
@@ -189,7 +189,7 @@ std::vector<double> blockValues(
 // test_line_query.cpp's writeFab: an ASCII header line followed by
 // little-endian doubles.
 void writeFab(const std::filesystem::path& path, BlockRecord& block,
-    int dimension, int fieldCount, bool nonFiniteValues)
+    int dimension, int fieldCount, bool nonFiniteValues, double scale)
 {
     if (block.offset == 0) {
         std::ofstream create(path, std::ios::binary | std::ios::trunc);
@@ -203,7 +203,7 @@ void writeFab(const std::filesystem::path& path, BlockRecord& block,
     output << header;
     block.payloadOffset = block.offset + header.size();
     const auto values = blockValues(
-        block, dimension, fieldCount, nonFiniteValues);
+        block, dimension, fieldCount, nonFiniteValues, scale);
     output.write(reinterpret_cast<const char*>(values.data()),
         static_cast<std::streamsize>(values.size() * sizeof(double)));
     require(static_cast<bool>(output), "could not write a fixture FAB payload");
@@ -234,14 +234,17 @@ void writeHeaderWithoutStatistics(const std::filesystem::path& path,
 
 int main(int argc, char* argv[])
 {
-    require(argc >= 3 && argc <= 6,
+    require(argc >= 3 && argc <= 8,
         "usage: fixture_materializer <sourceFixtureDir> <destDir> "
-        "[newTime] [--no-statistics] [--non-finite]");
+        "[newTime] [--no-statistics] [--non-finite] [--scale <factor>]");
     const std::filesystem::path source(argv[1]);
     const std::filesystem::path destination(argv[2]);
     std::optional<std::string> newTime;
     bool omitStatistics = false;
     bool nonFiniteValues = false;
+    // Multiplies the synthesized field values so successive frames of a
+    // sequence can carry different ranges (used by the range-cache test).
+    double scale = 1.0;
     for (int argument = 3; argument < argc; ++argument) {
         const std::string value(argv[argument]);
         if (value == "--no-statistics") {
@@ -252,6 +255,14 @@ int main(int argc, char* argv[])
             require(!nonFiniteValues,
                 "--non-finite was specified more than once");
             nonFiniteValues = true;
+        } else if (value == "--scale") {
+            require(argument + 1 < argc, "--scale requires a factor argument");
+            const std::string factor(argv[++argument]);
+            try {
+                scale = std::stod(factor);
+            } catch (const std::exception&) {
+                require(false, "--scale factor is not a number");
+            }
         } else {
             require(!newTime.has_value(), "more than one new time was specified");
             newTime = value;
@@ -291,7 +302,7 @@ int main(int argc, char* argv[])
         auto blocks = readCellHeader(levelDir / "Cell_H", header.dimension);
         for (auto& block : blocks) {
             writeFab(levelDir / block.fileName, block,
-                header.dimension, header.fieldCount, nonFiniteValues);
+                header.dimension, header.fieldCount, nonFiniteValues, scale);
         }
         if (omitStatistics) {
             writeHeaderWithoutStatistics(

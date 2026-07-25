@@ -58,6 +58,11 @@ ImageBuffer renderScalarPlane(
     if (!(settings.minimum < settings.maximum)) {
         throw std::invalid_argument("scalar render range must have positive extent");
     }
+    if (!std::isfinite(settings.minimum) || !std::isfinite(settings.maximum)
+        || !std::isfinite(settings.maximum - settings.minimum)) {
+        throw std::invalid_argument(
+            "scalar render range must be finite with a finite span");
+    }
     if (settings.logarithmic && !(settings.minimum > 0.0)) {
         throw std::invalid_argument("logarithmic scalar range must be positive");
     }

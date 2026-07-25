@@ -1171,6 +1171,7 @@ MainWindow::MainWindow(QWidget* parent)
         QStringLiteral("syncRubberBandZoomAction"));
     m_syncRubberBandZoomAction->setCheckable(true);
     m_syncRubberBandZoomAction->setChecked(true);
+    m_syncRubberBandZoomAction->setVisible(false);
     m_syncRubberBandZoomAction->setStatusTip(
         tr("Apply rubber-band selections to every 3-D panel; "
            "mouse-wheel zoom remains panel-specific"));
@@ -4291,6 +4292,7 @@ void MainWindow::configureSliceControls()
     // Switch the stacked page to match the dataset dimension and, for 3-D,
     // reveal the shared slice position controls and the iso wireframe.
     const auto isThreeDimensional = metadata.dimension == 3;
+    m_syncRubberBandZoomAction->setVisible(isThreeDimensional);
     m_stack->setCurrentIndex(isThreeDimensional ? 1 : 0);
     m_animationPanel->setSweepVisible(isThreeDimensional);
     updateAnimationDockVisibility();
@@ -5300,6 +5302,7 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
     // 3-D keeps the user's slice positions (clamped into the new domain);
     // the first 3-D frame of a session starts at the domain midpoints.
     const auto isThreeDimensional = metadata.dimension == 3;
+    m_syncRubberBandZoomAction->setVisible(isThreeDimensional);
     if (isThreeDimensional) {
         const auto domain = datasetSampleBounds(metadata);
         for (std::size_t axis = 0; axis < 3; ++axis) {

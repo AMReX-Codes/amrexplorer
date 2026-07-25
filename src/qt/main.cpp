@@ -503,7 +503,9 @@ int main(int argc, char* argv[])
         auto phase = std::make_shared<int>(0);
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
             &application, [&window, &application](bool success) {
-                if (!success) {
+                const auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (!success || sync == nullptr || sync->isVisible()) {
                     application.exit(1);
                     return;
                 }
@@ -529,7 +531,7 @@ int main(int argc, char* argv[])
             &application, [&window, &application](bool success) {
                 auto* sync = window.findChild<QAction*>(
                     QStringLiteral("syncRubberBandZoomAction"));
-                if (!success || sync == nullptr) {
+                if (!success || sync == nullptr || !sync->isVisible()) {
                     application.exit(1);
                     return;
                 }

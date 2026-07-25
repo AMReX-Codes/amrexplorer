@@ -408,4 +408,21 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_sequence_zoom_refit_smoke PROPERTIES TIMEOUT 30)
+    # Regression test for the sequence timing edge: if frame stepping cancels
+    # a rubber-band crop before its raster lands, the next frame's cropped
+    # raster can have the same pixel dimensions as the cached full-domain
+    # raster. The incompatible full-domain transform must still be discarded.
+    add_test(
+        NAME qt_sequence_equal_size_zoom_refit_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DSECOND_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_refined_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_equal_size_zoom_refit"
+            -DMODE=sequence-equal-size-zoom-refit
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(
+        qt_sequence_equal_size_zoom_refit_smoke PROPERTIES TIMEOUT 30)
 endif()

@@ -68,8 +68,9 @@ void ImageView::setImage(
     // keep the user's current zoom/pan. Compatible panel-local cropped-region
     // refreshes explicitly preserve the transform even when the replacement
     // raster dimensions differ.
-    const bool refit = transformPolicy != ImageTransformPolicy::Preserve
-        && (m_image.isNull() || m_image.size() != image.size());
+    const bool refit = transformPolicy == ImageTransformPolicy::Refit
+        || (transformPolicy == ImageTransformPolicy::GeometryAware
+            && (m_image.isNull() || m_image.size() != image.size()));
     m_scene->clear();
     m_gridItems.clear();
     m_overlayItems.clear();

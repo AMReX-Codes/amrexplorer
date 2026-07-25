@@ -40,7 +40,8 @@ struct OverlayPath {
 
 enum class ImageTransformPolicy {
     GeometryAware,
-    Preserve
+    Preserve,
+    Refit
 };
 
 class ImageView final : public QGraphicsView {
@@ -51,7 +52,8 @@ public:
 
     // Preserve keeps the current panel-local transform when replacing a raster
     // after rubber-band zoom or pan. GeometryAware refits only when the raster
-    // dimensions change.
+    // dimensions change. Refit discards the transform even for equal-size
+    // rasters whose data regions are incompatible.
     void setImage(const QImage& image,
         ImageTransformPolicy transformPolicy =
             ImageTransformPolicy::GeometryAware);

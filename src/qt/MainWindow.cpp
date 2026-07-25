@@ -4942,15 +4942,23 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
         // A visibleRegion is physical data state, not evidence that the old
         // raster transform is compatible with this image. Preserve the
         // transform only for a panel-local refresh in the same dataset and
-        // orientation (rubber-band zoom or pan). Across sequence frames and
-        // other dataset replacements, geometry-aware installation retains the
-        // transform when the size matches and refits when it does not.
+        // orientation (rubber-band zoom or pan). If a dataset replacement
+        // overtakes such a refresh, explicitly refit when the cached and
+        // incoming rasters cover different regions: their dimensions can
+        // coincide even though their pixel-to-data mappings do not.
         const bool samePanelRenderContext = state.hasCachedRequest
             && state.cachedRequest.dataset == display.request.dataset
             && state.cachedRequest.normalDirection
                 == display.request.normalDirection;
-        const auto transformPolicy =
-            state.visibleRegion.has_value() && samePanelRenderContext
+        const bool incompatibleRasterContext = state.hasCachedRequest
+            && !samePanelRenderContext
+            && (state.cachedRequest.normalDirection
+                    != display.request.normalDirection
+                || state.cachedRequest.visibleRegion
+                    != display.request.visibleRegion);
+        const auto transformPolicy = incompatibleRasterContext
+            ? ImageTransformPolicy::Refit
+            : state.visibleRegion.has_value() && samePanelRenderContext
             ? ImageTransformPolicy::Preserve
             : ImageTransformPolicy::GeometryAware;
         state.view->setImage(

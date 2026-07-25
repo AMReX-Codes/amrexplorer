@@ -630,6 +630,48 @@ int main(int argc, char* argv[])
             });
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--fab-zoom-smoke-test") {
+        // Regression for fab-round-trip-loses-visible-region: zoom the MultiFab
+        // slice, drill into a FAB, go back, and confirm the restored MultiFab
+        // view still holds the zoom. Without the fix the round-trip resets it to
+        // full domain. initialSliceFinished fires on each open (MultiFab, FAB,
+        // restored MultiFab); interactiveSlicesSettled fires once for the zoom.
+        // A shared phase sequences the two signals across this branch's scope.
+        const std::filesystem::path path(argv[2]);
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, phase](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                if (*phase == 0) {
+                    *phase = 1;
+                    window.zoomActiveViewForTest();       // zoom the MultiFab
+                } else if (*phase == 2) {
+                    *phase = 3;
+                    auto* back = window.findChild<QPushButton*>(
+                        QStringLiteral("fabBackButton"));
+                    if (back == nullptr) {
+                        application.exit(1);
+                        return;
+                    }
+                    QTimer::singleShot(0, back, &QPushButton::click);  // go back
+                } else if (*phase == 3) {
+                    application.exit(
+                        window.activeViewIsZoomedForTest() ? 0 : 1);
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, phase] {
+                if (*phase == 1) {
+                    *phase = 2;
+                    window.viewFabForTest(0);             // drill into FAB 0
+                }
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 4
         && std::string_view(argv[1]) == "--sequence-smoke-test") {
         // Opens the two-frame sequence, waits for the first frame to display,

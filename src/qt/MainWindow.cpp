@@ -2625,9 +2625,8 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
                 }
             } catch (const std::exception& error) {
                 if (generation == m_generation && !cancellation.stop_requested()) {
-                    statusBar()->showMessage(tr("Line plot request failed"));
-                    QMessageBox::critical(this, tr("Cannot load line plot"),
-                        exceptionMessage(error));
+                    reportBackgroundError(
+                        tr("Cannot load line plot: %1").arg(exceptionMessage(error)));
                 } else {
                     ++m_staleResults;
                 }
@@ -3499,7 +3498,7 @@ void MainWindow::endExportAnimation(bool success, const QString& message)
         if (success) {
             QMessageBox::information(this, tr("Export Animation"), message);
         } else {
-            QMessageBox::warning(this, tr("Export Animation"), message);
+            reportBackgroundError(message);
         }
     }
 }
@@ -3938,11 +3937,8 @@ void MainWindow::requestInitialSlice(
                 }
             } catch (const std::exception& error) {
                 if (generation == m_generation && !cancellation.stop_requested()) {
-                    statusBar()->showMessage(tr("Initial slice failed"));
-                    qWarning("initial slice failed: %s",
-                        qUtf8Printable(exceptionMessage(error)));
-                    QMessageBox::critical(this, tr("Cannot load slice"),
-                        exceptionMessage(error));
+                    reportBackgroundError(
+                        tr("Cannot load slice: %1").arg(exceptionMessage(error)));
                     emit initialSliceFinished(false);
                 } else {
                     ++m_staleResults;
@@ -4305,9 +4301,8 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                 if (generation == m_generation
                     && sliceGeneration == state.sliceGeneration
                     && !cancellation.stop_requested()) {
-                    statusBar()->showMessage(tr("Slice request failed"));
-                    QMessageBox::critical(this, tr("Cannot load slice"),
-                        exceptionMessage(error));
+                    reportBackgroundError(
+                        tr("Cannot load slice: %1").arg(exceptionMessage(error)));
                 } else {
                     ++m_staleResults;
                 }
@@ -4854,8 +4849,8 @@ void MainWindow::startFrameLoad(int index, std::uint64_t generation)
                     const bool wasExporting = m_exportAnim.active;
                     emit sequenceFrameFailed();
                     if (!wasExporting) {
-                        QMessageBox::critical(this, tr("Cannot load frame"),
-                            exceptionMessage(error));
+                        reportBackgroundError(
+                            tr("Cannot load frame: %1").arg(exceptionMessage(error)));
                     }
                 } else {
                     ++m_staleResults;
@@ -4882,8 +4877,8 @@ void MainWindow::finishFrameLoad(InitialSliceResult result, bool defaultPosition
         const bool wasExporting = m_exportAnim.active;
         emit sequenceFrameFailed();
         if (!wasExporting) {
-            QMessageBox::critical(this, tr("Cannot load frame"),
-                exceptionMessage(error));
+            reportBackgroundError(
+                tr("Cannot load frame: %1").arg(exceptionMessage(error)));
         }
         updateDiagnostics();
         return;
@@ -5310,6 +5305,25 @@ void MainWindow::applySpeed()
     m_playbackTimer->setInterval(m_animationPanel->frameDelayMs());
 }
 
+void MainWindow::reportBackgroundError(const QString& message)
+{
+    // Non-modal: background-operation failures append to the Diagnostics dock
+    // and set a status-bar message instead of a modal dialog that disables the
+    // window. Suppressed while closing (stage 1 also guards the handlers).
+    if (m_closing) {
+        return;
+    }
+    qWarning("%s", message.toUtf8().constData());
+    m_backgroundErrors.append(message);
+    constexpr int maximumErrors = 50;
+    while (m_backgroundErrors.size() > maximumErrors) {
+        m_backgroundErrors.removeFirst();
+    }
+    statusBar()->showMessage(message.section(QLatin1Char('\n'), 0, 0));
+    m_diagnosticsDock->setVisible(true);
+    updateDiagnostics();
+}
+
 void MainWindow::updateDiagnostics()
 {
     auto text = tr("generation: %1\nactive background requests: %2\n"
@@ -5334,6 +5348,10 @@ void MainWindow::updateDiagnostics()
     for (const auto& line : m_probeLines) {
         text += QLatin1Char('\n');
         text += line;
+    }
+    for (const auto& error : m_backgroundErrors) {
+        text += QLatin1Char('\n');
+        text += tr("background error: %1").arg(error);
     }
     m_diagnostics->setPlainText(text);
 }

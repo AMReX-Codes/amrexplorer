@@ -281,6 +281,7 @@ private:
     void showAboutDialog();
     void showMetadata(const PlotfileMetadataResult& result, const std::filesystem::path& path);
     void updateDiagnostics();
+    void reportBackgroundError(const QString& message);
     void updateAnimationDockVisibility();
     void updateWindowTitle();
     void restoreSettings();
@@ -507,6 +508,7 @@ private:
     QString m_paletteFilePath;
     QString m_numberFormat = defaultNumberFormat();
     QStringList m_probeLines;
+    QStringList m_backgroundErrors;
     bool m_controlsReady = false;
     std::uint64_t m_generation = 0;
     std::uint64_t m_activeRequests = 0;

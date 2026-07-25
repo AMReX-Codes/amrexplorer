@@ -278,6 +278,12 @@ int main(int argc, char* argv[])
         std::filesystem::copy(argv[1], preparedRoot,
             std::filesystem::copy_options::recursive);
         writeFixture(preparedRoot, identities, 0.0);
+        const auto unsupportedSpecies = preparedRoot / "Unsupported";
+        std::filesystem::create_directories(unsupportedSpecies);
+        {
+            std::ofstream header(unsupportedSpecies / "Header");
+            header << "Version_Three_Dot_Zero_double\n";
+        }
         auto preparedMetadata
             = amrvis::PlotfileMetadataReader{}.read(preparedRoot);
         amrvis::PlotfileDataset preparedDataset(

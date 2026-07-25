@@ -420,8 +420,12 @@ std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
         if (!(probe >> version) || !version.starts_with("Version_")) {
             continue;
         }
-        result.push_back(parseHeader(
-            headerPath, entry.path().filename().string()).metadata);
+        try {
+            result.push_back(parseHeader(
+                headerPath, entry.path().filename().string()).metadata);
+        } catch (const ParticleReadError&) {
+            continue;
+        }
     }
     std::ranges::sort(result, {}, &ParticleSpeciesMetadata::name);
     return result;

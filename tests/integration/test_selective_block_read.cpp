@@ -195,6 +195,12 @@ int main()
         "second dataset access did not reuse the cached block");
     require(secondAccess.handle->values[2] == 30.0, "cached block value mismatch");
     require(dataset.cacheMetrics().residentBytes > 0, "dataset cache did not account bytes");
+    // One cold read is one logical lookup: exactly one miss (the in-lock
+    // re-check must not double-count it), and the warm read is exactly one hit.
+    require(dataset.cacheMetrics().misses == 1,
+        "a cold block read recorded more than one cache miss");
+    require(dataset.cacheMetrics().hits == 1,
+        "a warm block read did not record exactly one cache hit");
 
     amrvis::PlotfileDataset fabDataset(
         root / "Level_0" / "Cell_D_00000", amrvis::DatasetId{8}, 1024 * 1024);

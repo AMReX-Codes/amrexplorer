@@ -444,6 +444,7 @@ private:
     QActionGroup* m_variableGroup = nullptr;
     QActionGroup* m_paletteGroup = nullptr;
     QAction* m_boxesAction = nullptr;
+    QAction* m_slicePlanesAction = nullptr;
     QAction* m_fitScaleAction = nullptr;
     QAction* m_contoursAction = nullptr;
     QAction* m_datasetAction = nullptr;

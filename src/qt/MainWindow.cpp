@@ -1526,6 +1526,11 @@ void MainWindow::createMenus()
         updateGridBoxes();
         saveSettings();
     });
+    m_slicePlanesAction = new QAction(tr("&Slice Planes"), this);
+    m_slicePlanesAction->setCheckable(true);
+    m_slicePlanesAction->setEnabled(false);
+    connect(m_slicePlanesAction, &QAction::toggled, this,
+        [this](bool visible) { m_isoWidget->setSlicePlanesVisible(visible); });
 
     m_contoursAction = new QAction(tr("&Contours..."), this);
     m_contoursAction->setEnabled(false);
@@ -1548,6 +1553,7 @@ void MainWindow::createMenus()
     viewMenu->addMenu(scaleMenu);
     viewMenu->addMenu(m_levelMenu);
     viewMenu->addAction(m_boxesAction);
+    viewMenu->addAction(m_slicePlanesAction);
     viewMenu->addMenu(paletteMenu);
     viewMenu->addSeparator();
     viewMenu->addAction(m_contoursAction);
@@ -2807,13 +2813,6 @@ void MainWindow::restoreSettings()
 void MainWindow::saveSettings()
 {
     auto settings = makeSettings();
-    // Boxes and contours are no longer restored on load, but we save them so
-    // any stale keys from older versions are overwritten.
-    settings.setValue(QStringLiteral("view/boxes"), m_boxesAction->isChecked());
-    settings.setValue(QStringLiteral("contours/mode"),
-        static_cast<int>(m_displayMode));
-    settings.setValue(QStringLiteral("contours/count"), m_contourCount);
-    settings.setValue(QStringLiteral("contours/color"), m_contourColor);
     // Range mode is deliberately not persisted: the correct default (File)
     // depends on the dataset and restoring a different mode from a previous
     // session would produce unexpected color bars.
@@ -3646,6 +3645,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_rangeMode->setEnabled(false);
     m_logarithmic->setEnabled(false);
     m_boxesAction->setEnabled(false);
+    m_slicePlanesAction->setEnabled(false);
     m_rangeMinimum->setEnabled(false);
     m_rangeMaximum->setEnabled(false);
     m_slicePositionControls->setVisible(false);
@@ -3907,6 +3907,7 @@ void MainWindow::configureSliceControls()
     m_rangeMode->setEnabled(true);
     m_logarithmic->setEnabled(true);
     m_boxesAction->setEnabled(true);
+    m_slicePlanesAction->setEnabled(metadata.dimension == 3);
     const auto userRange = static_cast<RangeMode>(
         m_rangeMode->currentData().toInt()) == RangeMode::User;
     m_rangeMinimum->setEnabled(userRange);
@@ -4926,6 +4927,7 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
     m_rangeMode->setEnabled(true);
     m_logarithmic->setEnabled(true);
     m_boxesAction->setEnabled(true);
+    m_slicePlanesAction->setEnabled(metadata.dimension == 3);
     const auto userRange = static_cast<RangeMode>(
         m_rangeMode->currentData().toInt()) == RangeMode::User;
     m_rangeMinimum->setEnabled(userRange);

@@ -7,6 +7,7 @@
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
+#include <amrexplorer/pipeline/DisplayCoordinator.hpp>
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
@@ -470,18 +471,11 @@ private:
     QPointF m_panSceneDelta;
     QPointF m_panLastScheduledDelta;
     bool m_panDataRefresh = false;
-    // Full-domain range cache — kept current whenever a non-zoomed slice
-    // completes, and reused for RangeMode::Visible during zoom/pan so the
-    // color bar stays stable instead of tracking the subregion extrema.
-    std::optional<std::pair<double, double>> m_fullDomainRange;
-    // The dataset the cached range belongs to. Sequence frames each load a
-    // fresh dataset (a new DatasetId), so keying on it invalidates the cache
-    // across frames — without it a zoomed Visible color bar would keep an
-    // earlier frame's range (see sequence-frame-range-cache-goes-stale).
-    DatasetId m_fullDomainRangeDataset{};
-    FieldId m_fullDomainRangeField{};
-    int m_fullDomainRangeMaxLevel = -1;
-    CompositionPolicy m_fullDomainRangeComposition{};
+    // Owns the full-domain range cache (kept current whenever a non-zoomed
+    // slice completes, reused for RangeMode::Visible during zoom/pan so the
+    // color bar stays stable) plus the shared-range and transform-policy
+    // decisions the slice paths share. See pipeline/DisplayCoordinator.hpp.
+    amrvis::DisplayCoordinator m_displayCoordinator;
     QTreeWidget* m_metadataTree = nullptr;
     QPlainTextEdit* m_diagnostics = nullptr;
     QDockWidget* m_metadataDock = nullptr;

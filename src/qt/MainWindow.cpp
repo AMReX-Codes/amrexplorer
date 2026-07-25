@@ -3724,7 +3724,7 @@ void MainWindow::setSlicePosition(int axis, double value)
     m_isoWidget->setSlicePositions(m_slicePosition3d[0], m_slicePosition3d[1],
         m_slicePosition3d[2]);
     // The cached full-domain Visible range is now stale.
-    m_fullDomainRange.reset();
+    m_displayCoordinator.invalidateRangeCache();
     // The other two views only need their crosshair guides redrawn; the view
     // normal to the moved axis gets a fresh (debounced) slice.
     updateCrosshairs();
@@ -3947,18 +3947,18 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     // Visible-range slice; reuse it for zoomed (subregion)
                     // slices so the color bar stays stable during pan and zoom.
                     const bool isFullDomain = !state.visibleRegion.has_value();
-                    if (!isFullDomain
+                    const DisplayCoordinator::RangeKey rangeKey{
+                        result.request.dataset, result.request.field,
+                        result.request.maximumLevel,
+                        result.request.composition};
+                    const auto cachedRange = !isFullDomain
                         && rangeMode == RangeMode::Visible
-                        && m_fullDomainRange.has_value()
-                        && m_fullDomainRangeDataset == result.request.dataset
-                        && m_fullDomainRangeField.value
-                            == result.request.field.value
-                        && m_fullDomainRangeMaxLevel
-                            == result.request.maximumLevel
-                        && m_fullDomainRangeComposition
-                            == result.request.composition) {
-                        result.minimum = m_fullDomainRange->first;
-                        result.maximum = m_fullDomainRange->second;
+                            ? m_displayCoordinator.cachedFullDomainRange(
+                                rangeKey)
+                            : std::nullopt;
+                    if (cachedRange) {
+                        result.minimum = cachedRange->first;
+                        result.maximum = cachedRange->second;
                         // executeSlice/refreshCachedSlice produced the raster
                         // and contours against the subregion's own range;
                         // realign both to the reused full-domain range so they
@@ -3986,14 +3986,8 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     // union across all panels is captured.
                     if (isFullDomain && rangeMode == RangeMode::Visible
                         && state.plane.width > 0) {
-                        m_fullDomainRange = std::make_pair(
-                            state.displayMinimum, state.displayMaximum);
-                        m_fullDomainRangeDataset = result.request.dataset;
-                        m_fullDomainRangeField = result.request.field;
-                        m_fullDomainRangeMaxLevel
-                            = result.request.maximumLevel;
-                        m_fullDomainRangeComposition
-                            = result.request.composition;
+                        m_displayCoordinator.storeFullDomainRange(rangeKey,
+                            {state.displayMinimum, state.displayMaximum});
                     }
                     const auto cache = dataset->cacheMetrics();
                     m_cacheBudgetBytes = cache.budgetBytes;
@@ -4280,28 +4274,11 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
         if (!display.image.valid()) {
             throw std::runtime_error("renderer produced an invalid image");
         }
-        // A visibleRegion is physical data state, not evidence that the old
-        // raster transform is compatible with this image. Preserve the
-        // transform only for a panel-local refresh in the same dataset and
-        // orientation (rubber-band zoom or pan). If a dataset replacement
-        // overtakes such a refresh, explicitly refit when the cached and
-        // incoming rasters cover different regions: their dimensions can
-        // coincide even though their pixel-to-data mappings do not.
-        const bool samePanelRenderContext = state.hasCachedRequest
-            && state.cachedRequest.dataset == display.request.dataset
-            && state.cachedRequest.normalDirection
-                == display.request.normalDirection;
-        const bool incompatibleRasterContext = state.hasCachedRequest
-            && !samePanelRenderContext
-            && (state.cachedRequest.normalDirection
-                    != display.request.normalDirection
-                || state.cachedRequest.visibleRegion
-                    != display.request.visibleRegion);
-        const auto transformPolicy = incompatibleRasterContext
-            ? ImageTransformPolicy::Refit
-            : state.visibleRegion.has_value() && samePanelRenderContext
-            ? ImageTransformPolicy::Preserve
-            : ImageTransformPolicy::GeometryAware;
+        // Preserve/Refit/GeometryAware from the cached-vs-incoming request
+        // pair; the rationale lives with the decision in the coordinator.
+        const auto transformPolicy = DisplayCoordinator::rasterTransformPolicy(
+            state.hasCachedRequest, state.cachedRequest, display.request,
+            state.visibleRegion.has_value());
         // Preserve keeps the scene transform, which is only equivalent to
         // keeping what the user sees while the raster's pixels-per-data
         // density is unchanged. A zoomed re-slice can arrive denser: the
@@ -4388,50 +4365,23 @@ void MainWindow::syncVisibleRanges()
 
     // Use the cached full-domain range when it is current, so the shared
     // color bar stays stable during zoom and pan instead of tracking the
-    // subregion extrema of whichever panel just finished rendering.
+    // subregion extrema of whichever panel just finished rendering; fall
+    // back to the union of finite extrema across the three panels.
     const FieldId currentField{m_fieldSelector->currentData().toUInt()};
     const auto rawLevel = m_levelSelector->currentData().toInt();
     const auto [composition, maximumLevel] = decodeLevelData(
         rawLevel, m_dataset->metadata().finestLevel);
-    double globalMin = std::numeric_limits<double>::infinity();
-    double globalMax = -std::numeric_limits<double>::infinity();
-    const bool useCachedRange = m_fullDomainRange.has_value()
-        && m_fullDomainRangeDataset == m_dataset->id()
-        && m_fullDomainRangeField.value == currentField.value
-        && m_fullDomainRangeMaxLevel == maximumLevel
-        && m_fullDomainRangeComposition == composition;
-    if (useCachedRange) {
-        globalMin = m_fullDomainRange->first;
-        globalMax = m_fullDomainRange->second;
-    } else {
-        for (const auto* state : views) {
-            if (state->plane.width <= 0 || state->plane.height <= 0) {
-                continue;
-            }
-            for (std::size_t i = 0; i < state->plane.values.size(); ++i) {
-                if (state->plane.valid[i] == 0
-                    || !std::isfinite(state->plane.values[i])) {
-                    continue;
-                }
-                const auto v = static_cast<double>(state->plane.values[i]);
-                globalMin = std::min(globalMin, v);
-                globalMax = std::max(globalMax, v);
-            }
-        }
+    auto shared = m_displayCoordinator.cachedFullDomainRange(
+        {m_dataset->id(), currentField, maximumLevel, composition});
+    if (!shared) {
+        const std::array<const ScalarPlane*, 3> planes{
+            &views[0]->plane, &views[1]->plane, &views[2]->plane};
+        shared = DisplayCoordinator::sharedVisibleRange(planes, logarithmic);
     }
-    if (!std::isfinite(globalMin) || !std::isfinite(globalMax)) {
+    if (!shared) {
         return;
     }
-    if (globalMin == globalMax) {
-        if (logarithmic && globalMin > 0.0) {
-            globalMin /= 1.0 + 1.0e-6;
-            globalMax *= 1.0 + 1.0e-6;
-        } else {
-            const auto pad = std::max(std::abs(globalMin), 1.0) * 1.0e-6;
-            globalMin -= pad;
-            globalMax += pad;
-        }
-    }
+    const auto [globalMin, globalMax] = *shared;
     for (auto* state : views) {
         if (state->plane.width <= 0 || state->plane.height <= 0) {
             continue;
@@ -4894,10 +4844,7 @@ void MainWindow::resetRangeState()
 {
     m_fieldRanges.clear();
     m_trackedField = 0;
-    m_fullDomainRange.reset();
-    m_fullDomainRangeDataset = {};
-    m_fullDomainRangeField = {};
-    m_fullDomainRangeMaxLevel = -1;
+    m_displayCoordinator.invalidateRangeCache();
     const QSignalBlocker modeBlocker(m_rangeMode);
     const QSignalBlocker minBlocker(m_rangeMinimum);
     const QSignalBlocker maxBlocker(m_rangeMaximum);

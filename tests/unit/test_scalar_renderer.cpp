@@ -75,5 +75,39 @@ int main()
         threw = true;
     }
     require(threw, "renderer accepted an unrepresentable row stride");
+
+    // An extreme but finite range (±DBL_MAX) overflows the span to infinity;
+    // the renderer must reject it instead of normalizing every value to zero.
+    settings.minimum = -std::numeric_limits<double>::max();
+    settings.maximum = std::numeric_limits<double>::max();
+    threw = false;
+    try {
+        (void)amrvis::renderScalarPlane(plane, settings);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    require(threw, "renderer accepted a range whose span overflows to infinity");
+
+    // Non-finite endpoints are also rejected: ±inf where the ordering still
+    // holds fails the span check, and NaN fails the ordering check outright.
+    settings.minimum = -std::numeric_limits<double>::infinity();
+    settings.maximum = std::numeric_limits<double>::infinity();
+    threw = false;
+    try {
+        (void)amrvis::renderScalarPlane(plane, settings);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    require(threw, "renderer accepted an infinite range");
+
+    settings.minimum = std::numeric_limits<double>::quiet_NaN();
+    settings.maximum = 1.0;
+    threw = false;
+    try {
+        (void)amrvis::renderScalarPlane(plane, settings);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    require(threw, "renderer accepted a NaN range endpoint");
     return 0;
 }

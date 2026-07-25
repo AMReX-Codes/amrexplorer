@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -155,6 +156,32 @@ int main()
         threw = true;
     }
     require(threw, "contourValues accepted a non-positive logarithmic range");
+    threw = false;
+    try {
+        (void)amrvis::contourValues(
+            -std::numeric_limits<double>::max(),
+            std::numeric_limits<double>::max(), 4, false);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    require(threw, "contourValues accepted a range whose span overflows to infinity");
+    threw = false;
+    try {
+        (void)amrvis::contourValues(
+            -std::numeric_limits<double>::infinity(),
+            std::numeric_limits<double>::infinity(), 4, false);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    require(threw, "contourValues accepted an infinite range");
+    threw = false;
+    try {
+        (void)amrvis::contourValues(
+            std::numeric_limits<double>::quiet_NaN(), 1.0, 4, false);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    require(threw, "contourValues accepted a NaN range endpoint");
 
     // Cells whose value range brackets 2.5: (0,0), (1,0), (2,0), (0,1).
     const auto plane = makePlane();

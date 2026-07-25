@@ -84,6 +84,48 @@ void writeFixture(const std::filesystem::path& root,
     }
 }
 
+void writePackedGridFixture(const std::filesystem::path& root)
+{
+    const auto species = root / "Tracer";
+    std::filesystem::remove_all(species);
+    std::filesystem::create_directories(species / "Level_0");
+    constexpr std::uint64_t particlesPerGrid = 2;
+    constexpr std::uint64_t gridBytes
+        = particlesPerGrid * (2 * sizeof(std::int32_t) + 2 * sizeof(double));
+    {
+        std::ofstream header(species / "Header");
+        header << "Version_Two_Dot_Zero_double\n"
+               << "2\n0\n0\n1\n"
+               << 3 * particlesPerGrid << '\n'
+               << "1000\n0\n3\n";
+        for (std::uint64_t grid = 0; grid < 3; ++grid) {
+            header << "0 " << particlesPerGrid << ' '
+                   << grid * gridBytes << '\n';
+        }
+    }
+    std::ofstream data(
+        species / "Level_0" / "DATA_00000", std::ios::binary);
+    for (std::int32_t grid = 0; grid < 3; ++grid) {
+        for (std::int32_t particle = 0;
+             particle < static_cast<std::int32_t>(particlesPerGrid);
+             ++particle) {
+            const std::int32_t words[2]{
+                grid * static_cast<std::int32_t>(particlesPerGrid)
+                    + particle + 1,
+                7};
+            data.write(reinterpret_cast<const char*>(words), sizeof(words));
+        }
+        for (std::int32_t particle = 0;
+             particle < static_cast<std::int32_t>(particlesPerGrid);
+             ++particle) {
+            const double position[2]{
+                static_cast<double>(grid), static_cast<double>(particle)};
+            data.write(
+                reinterpret_cast<const char*>(position), sizeof(position));
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -221,6 +263,16 @@ int main(int argc, char* argv[])
         }
         require(separatedRanks,
             "sampling collapsed distinct CPUs with the same local particle ID");
+
+        writePackedGridFixture(root);
+        const auto packed = amrvis::readParticleSample(
+            root, "Tracer", 1.0);
+        require(packed.points.size() == 6,
+            "packed particle DATA file omitted grid records");
+        require(packed.io.levelDirectoriesScanned == 1,
+            "particle level directory was rescanned for packed grid records");
+        require(packed.io.dataFilesOpened == 1,
+            "packed particle DATA file was reopened for each grid record");
 
         const auto preparedRoot = root / "prepared_plotfile";
         std::filesystem::copy(argv[1], preparedRoot,

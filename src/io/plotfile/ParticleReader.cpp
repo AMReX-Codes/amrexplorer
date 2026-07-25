@@ -7,8 +7,10 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <optional>
 #include <ranges>
+#include <set>
 #include <string_view>
 #include <system_error>
 
@@ -252,45 +254,70 @@ std::optional<std::uint64_t> decodeIdCpu(
     return packed;
 }
 
-std::filesystem::path particleDataPath(
-    const std::filesystem::path& speciesPath, int level, int fileNumber)
+using DataFileKey = std::pair<int, int>;
+
+std::map<DataFileKey, std::filesystem::path> particleDataPaths(
+    const std::filesystem::path& speciesPath,
+    const std::vector<GridRecord>& grids, ParticleReadMetrics& metrics)
 {
-    const auto levelPath = speciesPath / ("Level_" + std::to_string(level));
-    std::error_code error;
-    for (const auto& entry : std::filesystem::directory_iterator(levelPath, error)) {
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-        const auto name = entry.path().filename().string();
-        constexpr std::string_view prefix = "DATA_";
-        if (!name.starts_with(prefix)) {
-            continue;
-        }
-        try {
-            std::size_t consumed = 0;
-            const auto number = std::stoi(name.substr(prefix.size()), &consumed);
-            if (consumed == name.size() - prefix.size() && number == fileNumber) {
-                return entry.path();
-            }
-        } catch (const std::exception&) {
-            continue;
+    std::set<DataFileKey> required;
+    std::set<int> levels;
+    for (const auto& grid : grids) {
+        if (grid.count != 0) {
+            required.emplace(grid.level, grid.fileNumber);
+            levels.insert(grid.level);
         }
     }
-    throw ParticleReadError("cannot find particle DATA file "
-        + std::to_string(fileNumber) + " in '" + levelPath.string() + "'");
+
+    std::map<DataFileKey, std::filesystem::path> result;
+    for (const auto level : levels) {
+        ++metrics.levelDirectoriesScanned;
+        const auto levelPath
+            = speciesPath / ("Level_" + std::to_string(level));
+        std::error_code error;
+        for (const auto& entry :
+            std::filesystem::directory_iterator(levelPath, error)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            const auto name = entry.path().filename().string();
+            constexpr std::string_view prefix = "DATA_";
+            if (!name.starts_with(prefix)) {
+                continue;
+            }
+            try {
+                std::size_t consumed = 0;
+                const auto number
+                    = std::stoi(name.substr(prefix.size()), &consumed);
+                const DataFileKey key{level, number};
+                if (consumed == name.size() - prefix.size()
+                    && required.contains(key)) {
+                    result.emplace(key, entry.path());
+                }
+            } catch (const std::exception&) {
+                continue;
+            }
+        }
+    }
+    for (const auto& [level, fileNumber] : required) {
+        if (!result.contains({level, fileNumber})) {
+            const auto levelPath
+                = speciesPath / ("Level_" + std::to_string(level));
+            throw ParticleReadError("cannot find particle DATA file "
+                + std::to_string(fileNumber) + " in '"
+                + levelPath.string() + "'");
+        }
+    }
+    return result;
 }
 
 template <typename Real>
-void readGrid(const std::filesystem::path& dataPath, const GridRecord& grid,
+void readGrid(std::istream& input, const GridRecord& grid,
     const ParsedHeader& header, double fraction, std::uint64_t seed,
     StopToken cancellation, std::vector<ParticlePoint>& output,
     ParticleReadMetrics& metrics)
 {
-    std::ifstream input(dataPath, std::ios::binary);
-    if (!input) {
-        throw ParticleReadError(
-            "cannot open particle data file '" + dataPath.string() + "'");
-    }
+    input.clear();
     input.seekg(static_cast<std::streamoff>(grid.offset));
     if (!input) {
         throw ParticleReadError("cannot seek in particle data file");
@@ -424,18 +451,30 @@ ParticleSample readParticleSample(
     result.points.reserve(static_cast<std::size_t>(std::min<long double>(
         expected + 16.0L,
         static_cast<long double>(std::numeric_limits<std::size_t>::max()))));
+    const auto dataPaths
+        = particleDataPaths(speciesPath, header.grids, result.io);
+    std::map<DataFileKey, std::vector<const GridRecord*>> gridsByFile;
     for (const auto& grid : header.grids) {
-        if (grid.count == 0) {
-            continue;
+        if (grid.count != 0) {
+            gridsByFile[{grid.level, grid.fileNumber}].push_back(&grid);
         }
-        const auto dataPath = particleDataPath(
-            speciesPath, grid.level, grid.fileNumber);
-        if (header.metadata.precision == ParticleRealPrecision::Single) {
-            readGrid<float>(dataPath, grid, header, fraction, seed,
-                cancellation, result.points, result.io);
-        } else {
-            readGrid<double>(dataPath, grid, header, fraction, seed,
-                cancellation, result.points, result.io);
+    }
+    for (const auto& [key, grids] : gridsByFile) {
+        const auto& dataPath = dataPaths.at(key);
+        std::ifstream input(dataPath, std::ios::binary);
+        if (!input) {
+            throw ParticleReadError(
+                "cannot open particle data file '" + dataPath.string() + "'");
+        }
+        ++result.io.dataFilesOpened;
+        for (const auto* grid : grids) {
+            if (header.metadata.precision == ParticleRealPrecision::Single) {
+                readGrid<float>(input, *grid, header, fraction, seed,
+                    cancellation, result.points, result.io);
+            } else {
+                readGrid<double>(input, *grid, header, fraction, seed,
+                    cancellation, result.points, result.io);
+            }
         }
     }
     return result;

@@ -35,6 +35,8 @@ struct ParticlePoint {
 struct ParticleReadMetrics {
     std::uint64_t integerBytesRead = 0;
     std::uint64_t realBytesRead = 0;
+    std::uint64_t levelDirectoriesScanned = 0;
+    std::uint64_t dataFilesOpened = 0;
 };
 
 struct ParticleSample {

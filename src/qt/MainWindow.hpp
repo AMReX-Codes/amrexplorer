@@ -246,6 +246,7 @@ public:
     void setParticleSelectionForTest(
         std::vector<std::string> species, double fraction);
     [[nodiscard]] std::size_t particleSampleCountForTest() const;
+    [[nodiscard]] std::size_t particleOverlayCountForTest();
 
 signals:
     void datasetOpenFinished(bool success);

@@ -218,6 +218,11 @@ void ImageView::setPointOverlays(const std::vector<PointOverlay>& overlays)
     }
 }
 
+std::size_t ImageView::pointOverlayCount() const noexcept
+{
+    return m_pointItems.size();
+}
+
 void ImageView::setCrosshairs(const std::optional<QLineF>& vertical,
     const std::optional<QLineF>& horizontal, const QColor& verticalColor,
     const QColor& horizontalColor)

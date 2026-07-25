@@ -90,6 +90,7 @@ public:
     void setPlaceholder(const QString& text);
     [[nodiscard]] bool hasImage() const noexcept;
     [[nodiscard]] const QImage& image() const noexcept;
+    [[nodiscard]] std::size_t pointOverlayCount() const noexcept;
     // Renders the scene (base image plus grid boxes and any other overlays)
     // to a fresh QImage for export. scaleFactor multiplies the raster's native
     // resolution so the export reflects the on-screen zoom (WYSIWYG); an

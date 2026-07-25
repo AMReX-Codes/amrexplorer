@@ -2495,6 +2495,15 @@ std::size_t MainWindow::particleSampleCountForTest() const
     return count;
 }
 
+std::size_t MainWindow::particleOverlayCountForTest()
+{
+    std::size_t count = 0;
+    for (const auto* state : currentViews()) {
+        count += state->view->pointOverlayCount();
+    }
+    return count;
+}
+
 void MainWindow::requestParticleReload()
 {
     m_particleStopSource.request_stop();
@@ -5369,11 +5378,12 @@ void MainWindow::syncVisibleRanges()
         }
         state->view->setImage(displayImageFor(image));
     }
-    // setImage clears grid boxes and vector/contour overlays; restore them.
+    // setImage clears every scene overlay; restore them from viewer state.
     for (auto* state : views) {
         if (state->plane.width > 0 && state->plane.height > 0) {
             updateGridBoxes(*state);
             updateOverlay(*state);
+            updateParticleOverlay(*state);
         }
     }
     if (m_activeView && m_activeView->plane.width > 0) {

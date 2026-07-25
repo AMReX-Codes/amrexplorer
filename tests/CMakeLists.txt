@@ -44,6 +44,13 @@ add_executable(test_vector_glyphs unit/test_vector_glyphs.cpp)
 target_link_libraries(test_vector_glyphs PRIVATE amrexplorer::render2d amrexplorer::warnings)
 add_test(NAME vector_glyphs COMMAND test_vector_glyphs)
 
+add_executable(test_slice_range_resolver unit/test_slice_range_resolver.cpp)
+target_link_libraries(
+    test_slice_range_resolver
+    PRIVATE amrexplorer::pipeline amrexplorer::warnings
+)
+add_test(NAME slice_range_resolver COMMAND test_slice_range_resolver)
+
 add_executable(test_vismf_index unit/test_vismf_index.cpp)
 target_link_libraries(test_vismf_index PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME vismf_index COMMAND test_vismf_index)

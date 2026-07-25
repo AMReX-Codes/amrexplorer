@@ -2033,6 +2033,16 @@ bool MainWindow::activeViewRasterMatchesDisplayRangeForTest()
     return displayImageFor(reference) == state.view->image();
 }
 
+void MainWindow::viewFabForTest(std::size_t index)
+{
+    viewFab(index);
+}
+
+bool MainWindow::activeViewIsZoomedForTest() const
+{
+    return m_activeView != nullptr && m_activeView->visibleRegion.has_value();
+}
+
 void MainWindow::showNumberFormatDialog()
 {
     if (m_numberFormatDialog != nullptr) {
@@ -4104,6 +4114,24 @@ void MainWindow::requestInitialSlice(
                             != viewGenerations[index]) {
                             continue;
                         }
+                        // A FAB round-trip preserved the zoom in restoredSpec and
+                        // executeFrameLoad rendered the slice against it, but
+                        // openDatasetImpl reset the view states. Restore the zoom
+                        // from the region that actually produced this plane (so it
+                        // stays in step with the slice cache key), gated on
+                        // whether the spec recorded a zoom for this view — a
+                        // full-domain view stays nullopt, without float-comparing
+                        // regions. See fab-round-trip-loses-visible-region.
+                        if (restoredSpec) {
+                            const bool wasZoomed =
+                                index < restoredSpec->visibleRegions.size()
+                                && restoredSpec->visibleRegions[index]
+                                    .has_value();
+                            views[index]->visibleRegion = wasZoomed
+                                ? std::optional<RealBox>{
+                                    result.displays[index].request.visibleRegion}
+                                : std::optional<RealBox>{};
+                        }
                         showSlice(*views[index], result.displays[index]);
                     }
                     const auto cache = m_dataset->cacheMetrics();
@@ -5370,7 +5398,6 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     spec.slicePositions = m_slicePosition3d;
     const auto views = currentViews();
     spec.visibleRegions.reserve(views.size());
-    spec.outputSizes.reserve(views.size());
     for (const auto* state : views) {
         spec.visibleRegions.push_back(state->visibleRegion);
     }

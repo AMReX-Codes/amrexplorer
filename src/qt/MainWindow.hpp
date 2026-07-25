@@ -121,7 +121,7 @@ struct InitialSliceResult {
 // sequence path builds this from the current UI state so frame switches keep
 // the user's field/level/range/log/palette/visible-region settings; empty or
 // default entries mean "fall back to the new dataset's defaults" (midpoint
-// slice positions, whole domain, 640x640 output).
+// slice positions, whole domain, finest-native output size).
 struct FrameSliceSpec {
     DisplayMode displayMode = DisplayMode::Raster;
     std::uint32_t field = 0;
@@ -137,7 +137,6 @@ struct FrameSliceSpec {
     bool defaultPositions = true;
     std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
     std::vector<std::optional<RealBox>> visibleRegions;  // per view, normal order
-    std::vector<std::array<int, 2>> outputSizes;         // per view, normal order
 };
 
 class MainWindow final : public QMainWindow {
@@ -198,6 +197,14 @@ public:
     // i.e. the raster and color bar agree. See
     // raster-colorbar-mismatch-on-2d-visible-zoom.
     [[nodiscard]] bool activeViewRasterMatchesDisplayRangeForTest();
+
+    // Test-only: drill into the FAB catalog entry at index (the same path the
+    // dock's viewRequested signal drives). Used by the FAB round-trip zoom test.
+    void viewFabForTest(std::size_t index);
+
+    // Test-only: true when the active view holds a zoom (visibleRegion set).
+    // See fab-round-trip-loses-visible-region.
+    [[nodiscard]] bool activeViewIsZoomedForTest() const;
 
 signals:
     void datasetOpenFinished(bool success);

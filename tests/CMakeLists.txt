@@ -316,6 +316,20 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_multifab_fab_mode PROPERTIES TIMEOUT 30)
+    # Regression test for fab-round-trip-loses-visible-region: zooming a MultiFab
+    # slice, drilling into a FAB, and going back must leave the restored view
+    # still zoomed (visibleRegion written back into the view state).
+    add_test(
+        NAME qt_fab_zoom_smoke_2d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_fab_zoom"
+            -DMODE=fab-zoom
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_fab_zoom_smoke_2d PROPERTIES TIMEOUT 30)
     add_test(
         NAME qt_sequence_smoke
         COMMAND "${CMAKE_COMMAND}"

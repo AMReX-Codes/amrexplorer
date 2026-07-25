@@ -476,6 +476,22 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window, [&window, first, second] {
             window.openSequence({first, second});
         });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--quit-smoke-test") {
+        // Open a dataset, then quit through the main window once the initial
+        // slice resolves (success or failure) and also mid-load. Passes if the
+        // process exits promptly; a regression that blocks quit (an uncanceled
+        // worker pinning the global pool, or a modal failure dialog) keeps it
+        // alive until the watchdog fails the test.
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window](bool) {
+                QTimer::singleShot(0, &window, [&window] { window.close(); });
+            });
+        QTimer::singleShot(300, &window, [&window] { window.close(); });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc >= 2 && !std::string_view(argv[1]).starts_with("--")) {
         // One or more plotfile paths: a single path opens a dataset, two or
         // more open a plotfile sequence (matching the GUI's Open Plotfile

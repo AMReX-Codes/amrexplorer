@@ -492,6 +492,35 @@ int main(int argc, char* argv[])
         QTimer::singleShot(15000, &application,
             [&application] { application.exit(1); });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--export-quit-smoke-test") {
+        // Open a two-frame sequence, start an animation export (bypassing the
+        // interactive color-bar/save dialogs), and quit the instant FFmpeg
+        // encoding begins. With a hung stand-in ffmpeg on PATH the encoder
+        // workers block, so shutdown stays alive unless they are cancelled and
+        // their process terminated on close; the ctest timeout fails the test
+        // if the process never exits.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        const QString outputPath = QString::fromStdString(
+            (first.parent_path() / "anim.png").string());
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, outputPath](int index) {
+                if (index == 0) {
+                    window.startAnimationExportForTest(outputPath, false);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::exportEncodingStarted,
+            &application, [&window] {
+                QTimer::singleShot(0, &window, [&window] { window.close(); });
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
     } else if (argc >= 2 && !std::string_view(argv[1]).starts_with("--")) {
         // One or more plotfile paths: a single path opens a dataset, two or
         // more open a plotfile sequence (matching the GUI's Open Plotfile

@@ -19,9 +19,9 @@
 #include <QStringList>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
-#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -154,6 +154,10 @@ public:
     // Steps the open sequence by direction frames, wrapping at the ends; the
     // same slot the sequence step buttons and the smoke test hook use.
     void stepSequence(int direction);
+    // Starts an animation export without the interactive color-bar/save
+    // dialogs, writing frames and MP4s under path's directory. Test-only entry
+    // used by the export-quit smoke test to reach the encoder deterministically.
+    void startAnimationExportForTest(const QString& path, bool includeColorBar);
 
 signals:
     void datasetOpenFinished(bool success);
@@ -162,6 +166,10 @@ signals:
     // smoke test drives frame stepping off it.
     void sequenceFrameDisplayed(int index);
     void sequenceFrameFailed();
+    // Emitted when the FFmpeg encoding phase begins (frames rendered, encoder
+    // workers about to run); the export-quit smoke test quits on it to exercise
+    // bounded encoder cancellation.
+    void exportEncodingStarted();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -233,6 +241,10 @@ private:
     MainWindow* createNewWindow();
     void exportImage();
     void exportAnimation();
+    // Shared body of exportAnimation once the output path and color-bar choice
+    // are known (from the dialogs, or from the test hook): configures the export
+    // state, progress dialog, and kicks off frame 0.
+    void beginAnimationExport(const QString& path, bool includeColorBar);
     // Animation export is signal-driven (frame rendering is async): exportAnimation
     // kicks off frame 0; onExportFrameDisplayed saves each rendered frame and
     // advances; finalizeExportAnimation encodes the MP4; endExportAnimation is the

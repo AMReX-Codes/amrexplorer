@@ -6,7 +6,7 @@
 #   SOURCE        fixture source directory (e.g. tests/data/plotfile_2d)
 #   WORK          directory the materialized copies are written into
 #   MODE          slice | sequence | missing-range | non-finite | raw-fab |
-#                 multifab-fab | quit | quit-on-failure
+#                 multifab-fab | quit | quit-on-failure | export-quit
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -63,6 +63,30 @@ elseif(MODE STREQUAL "quit-on-failure")
         file(REMOVE "${payload}")
     endforeach()
     run_or_die("${AMREXPLORER_QT}" --quit-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "export-quit")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    # Stand-in ffmpeg: answers -version so the app enables encoding, then blocks
+    # on the encode call. A quit while it is "encoding" must cancel and
+    # terminate it; if the encoder is not bounded the process never exits and
+    # the ctest TIMEOUT fails the test.
+    set(fakeBin "${WORK}/bin")
+    file(MAKE_DIRECTORY "${fakeBin}")
+    # exec so the tracked child IS the sleep, not a /bin/sh (dash) wrapper that
+    # dies on SIGTERM and orphans its sleep child for the full hour. This makes
+    # the stand-in a single process that terminate() actually kills.
+    file(WRITE "${fakeBin}/ffmpeg"
+"#!/bin/sh
+if [ \"$1\" = \"-version\" ]; then
+  echo 'ffmpeg version 0.0-fake'
+  exit 0
+fi
+exec sleep 3600
+")
+    execute_process(COMMAND chmod 755 "${fakeBin}/ffmpeg")
+    set(ENV{PATH} "${fakeBin}:$ENV{PATH}")
+    run_or_die("${AMREXPLORER_QT}" --export-quit-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
 else()
     message(FATAL_ERROR "qt_smoke_driver.cmake: unknown MODE '${MODE}'")
 endif()

@@ -10,7 +10,6 @@
 #include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QStringList>
 #include <QTabWidget>
@@ -144,12 +143,12 @@ void DatasetWindow::startLoad()
                 populateTabs();
                 m_status->setText(tr("Field: %1").arg(m_request.fieldName));
             } catch (const std::exception& error) {
-                // One message for a real failure, then the window closes; a
-                // cancelled read (close/refresh) stays silent.
+                // Report a real failure non-modally through the owner, then
+                // close; a cancelled read (close/refresh) stays silent. A modal
+                // dialog here would disable the whole app and block quitting.
                 if (!m_stopSource.stop_requested()) {
-                    QMessageBox::critical(this,
-                        tr("Cannot load dataset values"),
-                        exceptionMessage(error));
+                    emit extractionFailed(tr("Cannot load dataset values: %1")
+                        .arg(exceptionMessage(error)));
                     close();
                 }
             }

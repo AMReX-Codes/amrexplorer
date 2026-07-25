@@ -3227,6 +3227,24 @@ void MainWindow::exportAnimation()
     if (path.isEmpty()) {
         return;
     }
+    beginAnimationExport(path, includeColorBar);
+}
+
+void MainWindow::startAnimationExportForTest(const QString& path,
+    bool includeColorBar)
+{
+    if (m_exportAnim.active) {
+        return;
+    }
+    beginAnimationExport(path, includeColorBar);
+}
+
+void MainWindow::beginAnimationExport(const QString& path, bool includeColorBar)
+{
+    auto* view = m_activeView != nullptr ? m_activeView->view : nullptr;
+    if (view == nullptr || !view->hasImage() || m_sequenceFrames.empty()) {
+        return;
+    }
     const QFileInfo info(path);
     const auto total = static_cast<int>(m_sequenceFrames.size());
     const int digits =
@@ -3359,6 +3377,9 @@ void MainWindow::finalizeExportAnimation()
     // Cancellation flag shared with the encoder workers (captured by value, so
     // it outlives this window). Set by the progress Cancel and by closeEvent.
     m_exportAnim.encoderCancel = std::make_shared<std::atomic<bool>>(false);
+    // Frames are written; the FFmpeg workers are about to run. The export-quit
+    // smoke test quits here to exercise bounded encoder cancellation.
+    emit exportEncodingStarted();
 
     auto encode = [this](const QString& stem) {
         const QString inputPattern = m_exportAnim.directory + "/"
@@ -3547,6 +3568,8 @@ void MainWindow::showDatasetWindow()
             state->view->setCellHighlight(std::nullopt);
         }
     });
+    connect(window, &DatasetWindow::extractionFailed, this,
+        &MainWindow::reportBackgroundError);
     connect(window, &DatasetWindow::cellActivated, this,
         [this](const RealBox& physicalCell) {
             datasetCellActivated(physicalCell);
@@ -3777,9 +3800,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                 }
             } catch (const std::exception& error) {
                 if (generation == m_generation) {
-                    statusBar()->showMessage(tr("Dataset open failed"));
-                    QMessageBox::critical(this, tr("Cannot open dataset"),
-                        exceptionMessage(error));
+                    reportBackgroundError(
+                        tr("Cannot open dataset: %1").arg(exceptionMessage(error)));
                     emit datasetOpenFinished(false);
                 } else {
                     ++m_staleResults;
@@ -3928,8 +3950,9 @@ void MainWindow::requestInitialSlice(
                     m_cachePinnedBytes = cache.pinnedBytes;
                     m_cacheEvictions = cache.evictions;
                     if (result.cacheFallbackToLevel >= 0) {
-                        QMessageBox::warning(this, tr("Reduced level detail"),
-                            cacheFallbackMessage(result));
+                        // Non-modal: an informational cache-fallback notice must
+                        // not pop a modal dialog that would block the quit path.
+                        statusBar()->showMessage(cacheFallbackMessage(result));
                     }
                     emit initialSliceFinished(true);
                 } else {

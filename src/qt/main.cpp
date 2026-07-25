@@ -19,7 +19,11 @@
 #include <QTextStream>
 #include <QTimer>
 
+#include <amrexplorer/render2d/Contours.hpp>
+
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <string_view>
 #include <vector>
@@ -336,6 +340,73 @@ bool clearFabSelectorPointFilter(amrvis::qt::FabSelectorDock& selector)
             == static_cast<int>(selector.entries().size());
 }
 
+// Verifies the contour-sync smoke scenario after the re-slice batch settles.
+// The three 3-D panels were sliced at asymmetric positions, so each has its
+// own local range; Visible mode reconciles them into one shared range. The fix
+// requires every panel's contour levels to come from that shared range. We
+// check: all three panels agree on the (positive) shared range, and every
+// contour level shown in any panel is one of contourValues(shared range) --
+// which fails if a panel kept its local-range levels (the bug). A non-vacuous
+// guard ensures contours actually rendered.
+bool contourSyncMatches(amrvis::qt::MainWindow& window)
+{
+    const auto probes = window.contourViewProbesForTest();
+    if (probes.size() != 3) {
+        return false;
+    }
+    const auto within = [](double a, double b) {
+        const auto scale = std::max({1.0, std::fabs(a), std::fabs(b)});
+        return std::fabs(a - b) <= 1.0e-6 * scale;
+    };
+    // Log was requested and every slice is strictly positive, so log must have
+    // applied and all panels must agree on the shared, positive Visible range.
+    const auto& shared = probes.front();
+    for (const auto& probe : probes) {
+        if (!probe.logarithmic || !(probe.displayMinimum > 0.0)
+            || !(probe.displayMinimum < probe.displayMaximum)
+            || !within(probe.displayMinimum, shared.displayMinimum)
+            || !within(probe.displayMaximum, shared.displayMaximum)) {
+            return false;
+        }
+    }
+    std::vector<double> expected;
+    try {
+        expected = amrvis::contourValues(
+            shared.displayMinimum, shared.displayMaximum, 3, true);
+    } catch (const std::exception&) {
+        return false;
+    }
+    // Every level shown in any panel must be one of the shared-range levels;
+    // the bug leaves a panel showing its own local-range levels instead. Track
+    // which shared levels are actually drawn (map each shown level to its
+    // canonical expected index -- a well-defined membership, unlike dedup by an
+    // intransitive tolerance) so the pass is not vacuously met by empty
+    // overlays: require >= 2 shared levels drawn across >= 2 panels.
+    std::vector<bool> drawn(expected.size(), false);
+    std::size_t panelsWithLevels = 0;
+    for (const auto& probe : probes) {
+        for (const auto level : probe.contourLevels) {
+            std::size_t match = expected.size();
+            for (std::size_t i = 0; i < expected.size(); ++i) {
+                if (within(level, expected[i])) {
+                    match = i;
+                    break;
+                }
+            }
+            if (match == expected.size()) {
+                return false;  // a level not derived from the shared range
+            }
+            drawn[match] = true;
+        }
+        if (!probe.contourLevels.empty()) {
+            ++panelsWithLevels;
+        }
+    }
+    const auto sharedLevelsDrawn = static_cast<std::size_t>(
+        std::count(drawn.begin(), drawn.end(), true));
+    return panelsWithLevels >= 2 && sharedLevelsDrawn >= 2;
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -391,6 +462,30 @@ int main(int argc, char* argv[])
                     && rangeSelectorMatches(window, true);
                 application.exit(valid ? 0 : 1);
         });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--contour-sync-smoke-test") {
+        // Once the initial load lands, switch to contours in Visible+log mode
+        // with asymmetric per-panel slice positions (so the three panels have
+        // unequal local ranges), then verify their contour levels once the
+        // re-slice batch settles. See contourSyncMatches / the issue note.
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(contourSyncMatches(window) ? 0 : 1);
+                    });
+                // YZ(x)@i=3, XZ(y)@j=2, XY(z)@k=1 on the 4^3 cube q=(i+j+k)/9:
+                // local ranges [3/9,1], [2/9,8/9], [1/9,7/9] -> shared [1/9,1].
+                window.configureContourSyncForTest(
+                    3, true, {0.875, 0.625, 0.375});
+            });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--raw-fab-smoke-test") {

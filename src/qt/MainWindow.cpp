@@ -1037,9 +1037,9 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
         }
     }
     for (const auto& species : result.dataset->particleSpecies()) {
-        const auto enabled = spec.selectAllParticleSpecies
-            || std::find(spec.particleSpecies.begin(), spec.particleSpecies.end(),
-                species.name) != spec.particleSpecies.end();
+        const auto enabled = std::find(spec.particleSpecies.begin(),
+            spec.particleSpecies.end(), species.name)
+            != spec.particleSpecies.end();
         if (enabled) {
             result.particles.push_back(result.dataset->requestParticleSample(
                 species.name, spec.particleFraction, spec.particleSeed,
@@ -2385,8 +2385,9 @@ void MainWindow::showParticlesDialog()
     dialog.setWindowTitle(tr("Particles"));
     auto* layout = new QVBoxLayout(&dialog);
     layout->addWidget(new QLabel(
-        tr("Select particle species to draw. Sampling hashes only the particle "
-           "ID, so the same particles remain selected across plotfile frames."),
+        tr("Select particle species to draw. Sampling hashes the persistent "
+           "particle ID/CPU identity, so the same particles remain selected "
+           "across plotfile frames."),
         &dialog));
 
     std::vector<std::pair<std::string, QCheckBox*>> speciesChecks;
@@ -2396,9 +2397,10 @@ void MainWindow::showParticlesDialog()
                 .arg(QString::fromStdString(species.name))
                 .arg(species.particleCount),
             &dialog);
-        check->setChecked(std::find(m_selectedParticleSpecies.begin(),
-            m_selectedParticleSpecies.end(), species.name)
-            != m_selectedParticleSpecies.end());
+        check->setChecked(!m_particleSelectionInitialized
+            || std::find(m_selectedParticleSpecies.begin(),
+                m_selectedParticleSpecies.end(), species.name)
+                != m_selectedParticleSpecies.end());
         layout->addWidget(check);
         speciesChecks.emplace_back(species.name, check);
     }
@@ -2437,18 +2439,14 @@ void MainWindow::showParticlesDialog()
         return;
     }
 
-    m_selectedParticleSpecies.clear();
+    std::vector<std::string> selectedSpecies;
     for (const auto& [name, check] : speciesChecks) {
         if (check->isChecked()) {
-            m_selectedParticleSpecies.push_back(name);
+            selectedSpecies.push_back(name);
         }
     }
-    m_particleFraction = fraction->value() / 100.0;
-    m_particlePointSize = pointSize->value();
-    m_particleSelectionInitialized = true;
-    ++m_specGeneration;
-    discardPrefetch();
-    requestParticleReload();
+    applyParticleSelection(std::move(selectedSpecies),
+        fraction->value() / 100.0, pointSize->value());
 }
 
 void MainWindow::configureParticleControls(bool preserveSelection)
@@ -2458,14 +2456,43 @@ void MainWindow::configureParticleControls(bool preserveSelection)
         return;
     }
     const auto& species = m_dataset->particleSpecies();
-    if (!preserveSelection || !m_particleSelectionInitialized) {
+    if (!preserveSelection) {
         m_selectedParticleSpecies.clear();
-        for (const auto& entry : species) {
-            m_selectedParticleSpecies.push_back(entry.name);
-        }
-        m_particleSelectionInitialized = true;
+        m_particleSelectionInitialized = false;
     }
     m_particlesAction->setEnabled(!species.empty());
+}
+
+void MainWindow::applyParticleSelection(
+    std::vector<std::string> species, double fraction, int pointSize)
+{
+    m_selectedParticleSpecies = std::move(species);
+    m_particleFraction = fraction;
+    m_particlePointSize = pointSize;
+    m_particleSelectionInitialized = true;
+    ++m_specGeneration;
+    discardPrefetch();
+    if (m_sequenceInFlight && m_sequenceIndex >= 0) {
+        goToSequenceFrame(m_sequenceIndex, true);
+    } else {
+        requestParticleReload();
+    }
+}
+
+void MainWindow::setParticleSelectionForTest(
+    std::vector<std::string> species, double fraction)
+{
+    applyParticleSelection(
+        std::move(species), fraction, m_particlePointSize);
+}
+
+std::size_t MainWindow::particleSampleCountForTest() const
+{
+    std::size_t count = 0;
+    for (const auto& sample : m_particleSamples) {
+        count += sample.points.size();
+    }
+    return count;
 }
 
 void MainWindow::requestParticleReload()
@@ -4442,7 +4469,14 @@ void MainWindow::requestInitialSlice(
                 if (generation == m_generation) {
                     m_dataset = result.dataset;
                     m_particleSamples = std::move(result.particles);
-                    configureParticleControls(false);
+                    if (restoredSpec) {
+                        m_selectedParticleSpecies
+                            = restoredSpec->particleSpecies;
+                        m_particleFraction = restoredSpec->particleFraction;
+                        m_particleSelectionInitialized
+                            = restoredSpec->particleSelectionInitialized;
+                    }
+                    configureParticleControls(restoredSpec.has_value());
                     configureSliceControls();
                     if (restoredSpec) {
                         const QSignalBlocker fieldBlocker(m_fieldSelector);
@@ -5468,7 +5502,7 @@ void MainWindow::stepSequence(int direction)
     goToSequenceFrame(m_sequenceIndex + direction);
 }
 
-void MainWindow::goToSequenceFrame(int index)
+void MainWindow::goToSequenceFrame(int index, bool forceRestart)
 {
     if (m_sequenceFrames.empty()) {
         return;
@@ -5476,7 +5510,7 @@ void MainWindow::goToSequenceFrame(int index)
     const auto count = static_cast<int>(m_sequenceFrames.size());
     // Both steps and playback wrap around the ends of the sequence.
     index = ((index % count) + count) % count;
-    if (m_sequenceInFlight && index == m_sequenceIndex) {
+    if (!forceRestart && m_sequenceInFlight && index == m_sequenceIndex) {
         return;
     }
     // Cancel the current dataset's in-flight work, exactly like opening a
@@ -5528,6 +5562,7 @@ void MainWindow::startFrameLoad(int index, std::uint64_t generation)
 {
     auto spec = buildFrameSpec();
     const auto defaultPositions = spec.defaultPositions;
+    const auto specGeneration = m_specGeneration;
     const auto path = m_sequenceFrames[static_cast<std::size_t>(index)];
     const auto datasetId = DatasetId{
         sequenceDatasetIdBase + ++m_sequenceDatasetCounter};
@@ -5540,7 +5575,7 @@ void MainWindow::startFrameLoad(int index, std::uint64_t generation)
 
     auto* watcher = new QFutureWatcher<InitialSliceResult>(this);
     connect(watcher, &QFutureWatcher<InitialSliceResult>::finished, this,
-        [this, watcher, generation, index, defaultPositions] {
+        [this, watcher, generation, index, specGeneration, defaultPositions] {
             --m_activeRequests;
             if (m_closing) {
                 watcher->deleteLater();
@@ -5548,13 +5583,15 @@ void MainWindow::startFrameLoad(int index, std::uint64_t generation)
             }
             try {
                 auto result = watcher->result();
-                if (generation == m_generation && index == m_sequenceIndex) {
+                if (generation == m_generation && index == m_sequenceIndex
+                    && specGeneration == m_specGeneration) {
                     finishFrameLoad(std::move(result), defaultPositions);
                 } else {
                     ++m_staleResults;
                 }
             } catch (const std::exception& error) {
-                if (generation == m_generation && index == m_sequenceIndex) {
+                if (generation == m_generation && index == m_sequenceIndex
+                    && specGeneration == m_specGeneration) {
                     m_sequenceInFlight = false;
                     statusBar()->showMessage(tr("Frame load failed"));
                     // During animation export the failure is reported by the
@@ -5871,8 +5908,10 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     // starts the new dataset at its domain midpoints.
     spec.defaultPositions = m_viewDimension != 3;
     spec.slicePositions = m_slicePosition3d;
-    spec.selectAllParticleSpecies = !m_particleSelectionInitialized;
-    spec.particleSpecies = m_selectedParticleSpecies;
+    spec.particleSelectionInitialized = m_particleSelectionInitialized;
+    if (m_particleSelectionInitialized) {
+        spec.particleSpecies = m_selectedParticleSpecies;
+    }
     spec.particleFraction = m_particleFraction;
     const auto views = currentViews();
     spec.visibleRegions.reserve(views.size());

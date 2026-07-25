@@ -831,9 +831,19 @@ int main(int argc, char* argv[])
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
             &application, [&window, &application](int index) {
                 if (index == 0) {
+                    if (window.particleSampleCountForTest() != 0) {
+                        application.exit(1);
+                        return;
+                    }
+                    // Opt in, start a frame load carrying that specification,
+                    // then change it before the worker can complete. The final
+                    // frame must reflect the new empty selection.
+                    window.setParticleSelectionForTest({"Tracer"}, 1.0);
                     window.stepSequence(1);
+                    window.setParticleSelectionForTest({}, 1.0);
                 } else if (index == 1) {
-                    application.exit(0);
+                    application.exit(
+                        window.particleSampleCountForTest() == 0 ? 0 : 1);
                 }
             });
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,

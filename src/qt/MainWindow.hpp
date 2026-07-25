@@ -144,7 +144,7 @@ struct FrameSliceSpec {
     bool defaultPositions = true;
     std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
     std::vector<std::optional<RealBox>> visibleRegions;  // per view, normal order
-    bool selectAllParticleSpecies = true;
+    bool particleSelectionInitialized = false;
     std::vector<std::string> particleSpecies;
     double particleFraction = 1.0;
     std::uint64_t particleSeed = 0;
@@ -240,6 +240,12 @@ public:
     // to size that budget. See cache-budget-exceeded-hard-fails-after-load.
     void setCacheBudgetForTest(std::uint64_t bytes);
     [[nodiscard]] std::uint64_t cacheResidentBytesForTest() const;
+
+    // Test-only: apply particle settings through the same synchronization path
+    // as the dialog, and inspect how many points are currently installed.
+    void setParticleSelectionForTest(
+        std::vector<std::string> species, double fraction);
+    [[nodiscard]] std::size_t particleSampleCountForTest() const;
 
 signals:
     void datasetOpenFinished(bool success);
@@ -465,7 +471,7 @@ private:
     };
     void choosePlotfileSequence();
     void closeSequence();
-    void goToSequenceFrame(int index);
+    void goToSequenceFrame(int index, bool forceRestart = false);
     void toggleSequencePlayback();
     void stepSweep(int direction);
     void toggleSweepPlayback();
@@ -483,6 +489,8 @@ private:
     [[nodiscard]] FrameSliceSpec buildFrameSpec();
     void startPrefetch(int frameIndex);
     void discardPrefetch();
+    void applyParticleSelection(
+        std::vector<std::string> species, double fraction, int pointSize);
     // Stop timers, request stop on every async task this window can launch,
     // and clear queued thread-pool work. Wired to aboutToQuit so the process
     // exits promptly instead of blocking QThreadPool teardown on an in-flight

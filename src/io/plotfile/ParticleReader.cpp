@@ -169,14 +169,19 @@ bool selected(std::uint64_t id, double fraction, std::uint64_t seed) noexcept
     return static_cast<long double>(splitmix64(id ^ seed)) <= threshold;
 }
 
-std::optional<std::uint64_t> decodeId(
+std::optional<std::uint64_t> decodeIdCpu(
     std::int32_t first, std::int32_t second, bool expanded) noexcept
 {
+    constexpr auto validBit = std::uint64_t{1} << 63U;
+    constexpr auto cpuMask = (std::uint64_t{1} << 24U) - 1U;
     if (!expanded) {
         if (first <= 0) {
             return std::nullopt;
         }
-        return static_cast<std::uint64_t>(first);
+        return validBit | (static_cast<std::uint64_t>(first) << 24U)
+            | (static_cast<std::uint64_t>(
+                   std::bit_cast<std::uint32_t>(second))
+                & cpuMask);
     }
     const auto high = static_cast<std::uint64_t>(
         std::bit_cast<std::uint32_t>(first));
@@ -186,7 +191,7 @@ std::optional<std::uint64_t> decodeId(
     if ((packed >> 63U) == 0) {
         return std::nullopt;
     }
-    return (packed >> 24U) & ((std::uint64_t{1} << 39U) - 1U);
+    return packed;
 }
 
 std::filesystem::path particleDataPath(
@@ -253,10 +258,11 @@ void readGrid(const std::filesystem::path& dataPath, const GridRecord& grid,
         if (!input) {
             throw ParticleReadError("truncated particle integer data");
         }
-        const auto id = decodeId(idWords[0], idWords[1], header.expandedIds);
-        if (id.has_value() && selected(*id, fraction, seed)) {
+        const auto idcpu = decodeIdCpu(
+            idWords[0], idWords[1], header.expandedIds);
+        if (idcpu.has_value() && selected(*idcpu, fraction, seed)) {
             keep[static_cast<std::size_t>(index)] = 1;
-            ids[static_cast<std::size_t>(index)] = *id;
+            ids[static_cast<std::size_t>(index)] = *idcpu;
         }
         input.seekg(static_cast<std::streamoff>(
             intRecordBytes - sizeof(idWords)), std::ios::cur);
@@ -267,6 +273,9 @@ void readGrid(const std::filesystem::path& dataPath, const GridRecord& grid,
 
     std::array<Real, 3> position{};
     for (std::uint64_t index = 0; index < grid.count; ++index) {
+        if (cancellation.stop_requested()) {
+            throw ParticleReadError("particle read cancelled");
+        }
         if (keep[static_cast<std::size_t>(index)] != 0) {
             input.read(reinterpret_cast<char*>(position.data()),
                 static_cast<std::streamsize>(

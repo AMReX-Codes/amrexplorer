@@ -26,6 +26,8 @@ struct ParticleSpeciesMetadata {
 };
 
 struct ParticlePoint {
+    // Complete AMReX idcpu: validity bit, persistent particle ID, and the
+    // persistent CPU field. This is the stable sampling identity.
     std::uint64_t id = 0;
     Real3 position{};
 };
@@ -43,9 +45,9 @@ public:
 [[nodiscard]] std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
     const std::filesystem::path& plotfile);
 
-// Selection is a stable hash of the AMReX particle ID. File order, grid,
-// level, and current CPU rank do not affect it; lower fractions are nested
-// subsets of higher fractions for a fixed seed.
+// Selection is a stable hash of the complete AMReX idcpu. File order, grid,
+// level, and current file ownership do not affect it; lower fractions are
+// nested subsets of higher fractions for a fixed seed.
 [[nodiscard]] ParticleSample readParticleSample(
     const std::filesystem::path& plotfile, const std::string& species,
     double fraction, std::uint64_t seed = 0,

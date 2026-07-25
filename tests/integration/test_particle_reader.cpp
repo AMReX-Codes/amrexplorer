@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -19,31 +20,49 @@ void require(bool condition, const char* message)
     }
 }
 
+std::uint64_t idcpu(std::int32_t id, std::int32_t cpu)
+{
+    return (std::uint64_t{1} << 63U)
+        | (static_cast<std::uint64_t>(id) << 24U)
+        | static_cast<std::uint32_t>(cpu);
+}
+
 void writeFixture(const std::filesystem::path& root,
-    const std::vector<std::int32_t>& ids, double xOffset, std::int32_t cpu)
+    const std::vector<std::pair<std::int32_t, std::int32_t>>& identities,
+    double xOffset, bool expanded = false)
 {
     const auto species = root / "Tracer";
     std::filesystem::create_directories(species / "Level_0");
     {
         std::ofstream header(species / "Header");
-        header << "Version_Two_Dot_Zero_double\n"
+        header << (expanded
+                ? "Version_Two_Dot_One_double\n"
+                : "Version_Two_Dot_Zero_double\n")
                << "2\n"
                << "1\nmass\n"
                << "0\n"
                << "1\n"
-               << ids.size() << '\n'
+               << identities.size() << '\n'
                << "1000\n"
                << "0\n"
                << "1\n"
-               << "0 " << ids.size() << " 0\n";
+               << "0 " << identities.size() << " 0\n";
     }
     std::ofstream data(species / "Level_0" / "DATA_00000",
         std::ios::binary);
-    for (const auto id : ids) {
-        const std::array<std::int32_t, 2> record{id, cpu};
+    for (const auto [id, cpu] : identities) {
+        const auto packed = idcpu(id, cpu);
+        const std::array<std::int32_t, 2> record = expanded
+            ? std::array{
+                std::bit_cast<std::int32_t>(
+                    static_cast<std::uint32_t>(packed >> 32U)),
+                std::bit_cast<std::int32_t>(
+                    static_cast<std::uint32_t>(packed))}
+            : std::array{id, cpu};
         data.write(reinterpret_cast<const char*>(record.data()), sizeof(record));
     }
-    for (const auto id : ids) {
+    for (const auto [id, cpu] : identities) {
+        static_cast<void>(cpu);
         const std::array<double, 3> record{
             xOffset + static_cast<double>(id),
             2.0 * static_cast<double>(id),
@@ -63,7 +82,11 @@ int main()
         std::filesystem::create_directories(root);
         const std::vector<std::int32_t> ids{
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
-        writeFixture(root, ids, 0.0, 7);
+        std::vector<std::pair<std::int32_t, std::int32_t>> identities;
+        for (const auto id : ids) {
+            identities.emplace_back(id, 7);
+        }
+        writeFixture(root, identities, 0.0);
 
         const auto species = amrvis::discoverParticleSpecies(root);
         require(species.size() == 1, "particle species was not discovered");
@@ -73,11 +96,19 @@ int main()
 
         const auto all = amrvis::readParticleSample(root, "Tracer", 1.0);
         require(all.points.size() == ids.size(), "full sample omitted particles");
-        require(all.points[2].id == 3, "particle ID was not preserved");
+        require(all.points[2].id == idcpu(3, 7),
+            "complete particle idcpu was not preserved");
         require(all.points[2].position[0] == 3.0
                 && all.points[2].position[1] == 6.0,
             "particle position was decoded incorrectly");
 
+        writeFixture(root, identities, 0.0, true);
+        const auto expanded = amrvis::readParticleSample(root, "Tracer", 1.0);
+        require(expanded.points.size() == all.points.size()
+                && expanded.points[2].id == idcpu(3, 7),
+            "expanded particle idcpu was not preserved");
+
+        writeFixture(root, identities, 0.0);
         const auto half = amrvis::readParticleSample(root, "Tracer", 0.5);
         const auto quarter = amrvis::readParticleSample(root, "Tracer", 0.25);
         require(!half.points.empty() && half.points.size() < all.points.size(),
@@ -97,9 +128,9 @@ int main()
             return result;
         }();
         std::ranges::sort(selectedIds);
-        auto reorderedIds = ids;
-        std::ranges::reverse(reorderedIds);
-        writeFixture(root, reorderedIds, 100.0, 99);
+        auto reorderedIdentities = identities;
+        std::ranges::reverse(reorderedIdentities);
+        writeFixture(root, reorderedIdentities, 100.0);
         const auto nextFrame = amrvis::readParticleSample(root, "Tracer", 0.5);
         std::vector<std::uint64_t> nextIds;
         for (const auto& point : nextFrame.points) {
@@ -107,9 +138,24 @@ int main()
         }
         std::ranges::sort(nextIds);
         require(selectedIds == nextIds,
-            "ID sample changed with file order, CPU rank, or position");
+            "idcpu sample changed with file order or position");
         require(nextFrame.points.front().position[0] > 100.0,
             "next frame positions were not read");
+
+        // Local particle IDs are reused by MPI ranks. A sampler that drops the
+        // persistent CPU bits will always keep or reject this pair together.
+        writeFixture(root, {{1, 7}, {1, 8}}, 0.0);
+        bool separatedRanks = false;
+        for (std::uint64_t seed = 0; seed < 1024; ++seed) {
+            const auto sample = amrvis::readParticleSample(
+                root, "Tracer", 0.5, seed);
+            if (sample.points.size() == 1) {
+                separatedRanks = true;
+                break;
+            }
+        }
+        require(separatedRanks,
+            "sampling collapsed distinct CPUs with the same local particle ID");
 
         std::filesystem::remove_all(root);
         return 0;

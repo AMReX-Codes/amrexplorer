@@ -765,27 +765,27 @@ QString cacheBudgetDescription(std::uint64_t bytes)
     return QObject::tr("%1 bytes").arg(bytes);
 }
 
-QString cacheFallbackMessage(const InitialSliceResult& result)
+QString cacheFallbackMessage(
+    const PlotfileDataset& dataset, int fromLevel, int toLevel)
 {
     const auto budget = cacheBudgetDescription(
-        result.dataset->cacheMetrics().budgetBytes);
+        dataset.cacheMetrics().budgetBytes);
     return QObject::tr(
-        "The finest slice exceeded the %1 cache budget. "
-        "The plotfile was opened using levels 0 through %2 instead of "
-        "levels 0 through %3; higher-resolution levels were omitted.")
+        "The finest slice exceeded the %1 cache budget. Showing levels 0 "
+        "through %2 instead of levels 0 through %3; higher-resolution levels "
+        "were omitted.")
         .arg(budget)
-        .arg(result.cacheFallbackToLevel)
-        .arg(result.cacheFallbackFromLevel);
+        .arg(toLevel)
+        .arg(fromLevel);
 }
 
-bool selectCacheFallbackLevel(
-    QComboBox* selector, const InitialSliceResult& result)
+bool selectCacheFallbackLevel(QComboBox* selector, int toLevel)
 {
-    if (result.cacheFallbackToLevel < 0) {
+    if (toLevel < 0) {
         return false;
     }
-    const auto data = result.cacheFallbackToLevel == 0
-        ? 0 : kUpdateToLevelOffset + result.cacheFallbackToLevel;
+    const auto data = toLevel == 0
+        ? 0 : kUpdateToLevelOffset + toLevel;
     const auto index = selector->findData(data);
     if (index < 0) {
         return false;
@@ -1099,6 +1099,7 @@ MainWindow::MainWindow(QWidget* parent)
     sliceToolbar->setMovable(false);
     sliceToolbar->addWidget(new QLabel(tr("Field:"), sliceToolbar));
     m_fieldSelector = new QComboBox(sliceToolbar);
+    m_fieldSelector->setObjectName(QStringLiteral("fieldSelector"));
     m_fieldSelector->setMinimumContentsLength(10);
     m_fieldSelector->view()->setItemDelegate(new CurrentRowBulletDelegate(
         m_fieldSelector, m_fieldSelector->view()));
@@ -1106,6 +1107,7 @@ MainWindow::MainWindow(QWidget* parent)
     sliceToolbar->addSeparator();
     sliceToolbar->addWidget(new QLabel(tr("Level:"), sliceToolbar));
     m_levelSelector = new QComboBox(sliceToolbar);
+    m_levelSelector->setObjectName(QStringLiteral("levelSelector"));
     m_levelSelector->setMinimumContentsLength(8);
     m_levelSelector->view()->setItemDelegate(new CurrentRowBulletDelegate(
         m_levelSelector, m_levelSelector->view()));
@@ -2102,6 +2104,30 @@ qreal MainWindow::activeViewScaleForTest() const
     return m_activeView != nullptr ? m_activeView->view->transform().m11() : 0.0;
 }
 
+void MainWindow::viewFabForTest(std::size_t index)
+{
+    viewFab(index);
+}
+
+bool MainWindow::activeViewIsZoomedForTest() const
+{
+    return m_activeView != nullptr && m_activeView->visibleRegion.has_value();
+}
+
+void MainWindow::setCacheBudgetForTest(std::uint64_t bytes)
+{
+    if (m_dataset) {
+        // The return (whether resident already fits) is irrelevant here; the
+        // next non-cache slice re-pins and triggers the fallback.
+        static_cast<void>(m_dataset->setCacheBudget(bytes));
+    }
+}
+
+std::uint64_t MainWindow::cacheResidentBytesForTest() const
+{
+    return m_dataset ? m_dataset->cacheMetrics().residentBytes : 0;
+}
+
 void MainWindow::showNumberFormatDialog()
 {
     if (m_numberFormatDialog != nullptr) {
@@ -2887,6 +2913,20 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
                     m_lastPayloadBytesRead = result.metrics.payloadBytesRead;
                     statusBar()->showMessage(tr("Added line plot curve for %1")
                         .arg(QString::fromStdString(fieldName)));
+                }
+            } catch (const CacheBudgetExceeded&) {
+                // A line plot cannot shed resolution the way a slice can, so
+                // translate the raw pinned-budget error into actionable advice
+                // instead of degrading (see
+                // cache-budget-exceeded-hard-fails-after-load).
+                if (generation == m_generation && !cancellation.stop_requested()) {
+                    reportBackgroundError(tr(
+                        "The line plot cannot fit in the %1 cache. Choose a "
+                        "lower level or increase AMREXPLORER_CACHE_SIZE_MB.")
+                        .arg(cacheBudgetDescription(
+                            dataset->cacheMetrics().budgetBytes)));
+                } else {
+                    ++m_staleResults;
                 }
             } catch (const std::exception& error) {
                 if (generation == m_generation && !cancellation.stop_requested()) {
@@ -4200,7 +4240,8 @@ void MainWindow::requestInitialSlice(
                         configureSlicePositionControls();
                         syncMenuChecks();
                     }
-                    if (selectCacheFallbackLevel(m_levelSelector, result)) {
+                    if (selectCacheFallbackLevel(
+                            m_levelSelector, result.cacheFallbackToLevel)) {
                         configureSlicePositionControls();
                         updateRangeModeAvailability();
                         syncMenuChecks();
@@ -4214,6 +4255,24 @@ void MainWindow::requestInitialSlice(
                             != viewGenerations[index]) {
                             continue;
                         }
+                        // A FAB round-trip preserved the zoom in restoredSpec and
+                        // executeFrameLoad rendered the slice against it, but
+                        // openDatasetImpl reset the view states. Restore the zoom
+                        // from the region that actually produced this plane (so it
+                        // stays in step with the slice cache key), gated on
+                        // whether the spec recorded a zoom for this view — a
+                        // full-domain view stays nullopt, without float-comparing
+                        // regions. See fab-round-trip-loses-visible-region.
+                        if (restoredSpec) {
+                            const bool wasZoomed =
+                                index < restoredSpec->visibleRegions.size()
+                                && restoredSpec->visibleRegions[index]
+                                    .has_value();
+                            views[index]->visibleRegion = wasZoomed
+                                ? std::optional<RealBox>{
+                                    result.displays[index].request.visibleRegion}
+                                : std::optional<RealBox>{};
+                        }
                         showSlice(*views[index], result.displays[index]);
                     }
                     const auto cache = m_dataset->cacheMetrics();
@@ -4224,7 +4283,9 @@ void MainWindow::requestInitialSlice(
                     if (result.cacheFallbackToLevel >= 0) {
                         // Non-modal: an informational cache-fallback notice must
                         // not pop a modal dialog that would block the quit path.
-                        statusBar()->showMessage(cacheFallbackMessage(result));
+                        statusBar()->showMessage(cacheFallbackMessage(
+                            *result.dataset, result.cacheFallbackFromLevel,
+                            result.cacheFallbackToLevel));
                     }
                     emit initialSliceFinished(true);
                 } else {
@@ -4522,22 +4583,60 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
         future = QtConcurrent::run(
             [dataset, request, rangeMode, userRange, logarithmic, palette,
                 cancellation, displayMode, vectorUField, vectorVField,
-                contourCount] {
-            auto result = executeSlice(dataset, request, rangeMode,
-                userRange, logarithmic, palette, cancellation);
-            result.mode = displayMode;
-            result.vectorUField = vectorUField;
-            result.vectorVField = vectorVField;
-            result.contourCount = contourCount;
-            if (isContourMode(displayMode)) {
-                appendContours(dataset, request, contourCount, result.minimum,
-                    result.maximum, result.logarithmic, cancellation, result);
+                contourCount]() mutable {
+            // Graceful degradation on cache pressure, mirroring executeFrameLoad:
+            // a composite (Finest Available) slice whose multi-level working set
+            // overflows the budget is retried at a lower composite maximum
+            // level; an exact level (or level 0) cannot shed resolution and is
+            // reported instead. See cache-budget-exceeded-hard-fails-after-load.
+            int fallbackFrom = -1;
+            int fallbackTo = -1;
+            for (;;) {
+                try {
+                    auto result = executeSlice(dataset, request, rangeMode,
+                        userRange, logarithmic, palette, cancellation);
+                    result.mode = displayMode;
+                    result.vectorUField = vectorUField;
+                    result.vectorVField = vectorVField;
+                    result.contourCount = contourCount;
+                    if (isContourMode(displayMode)) {
+                        appendContours(dataset, request, contourCount,
+                            result.minimum, result.maximum, result.logarithmic,
+                            cancellation, result);
+                    }
+                    if (displayMode == DisplayMode::VelocityVectors) {
+                        appendVectorGlyphs(dataset, request,
+                            FieldId{vectorUField}, FieldId{vectorVField},
+                            contourCount, cancellation, result);
+                    }
+                    result.cacheFallbackFromLevel = fallbackFrom;
+                    result.cacheFallbackToLevel = fallbackTo;
+                    return result;
+                } catch (const CacheBudgetExceeded&) {
+                    const auto budget = cacheBudgetDescription(
+                        dataset->cacheMetrics().budgetBytes);
+                    if (request.composition
+                            != CompositionPolicy::FinestAvailable) {
+                        throw std::runtime_error(QObject::tr(
+                            "The selected slice level cannot fit in the %1 "
+                            "cache. Choose a lower level or increase "
+                            "AMREXPLORER_CACHE_SIZE_MB.").arg(budget)
+                            .toStdString());
+                    }
+                    if (request.maximumLevel == 0) {
+                        throw std::runtime_error(QObject::tr(
+                            "The slice cannot fit in the %1 cache, even at "
+                            "level 0. Try a smaller plotfile or increase "
+                            "AMREXPLORER_CACHE_SIZE_MB.").arg(budget)
+                            .toStdString());
+                    }
+                    dataset->clearUnpinnedCache();
+                    if (fallbackFrom < 0) {
+                        fallbackFrom = request.maximumLevel;
+                    }
+                    fallbackTo = --request.maximumLevel;
+                }
             }
-            if (displayMode == DisplayMode::VelocityVectors) {
-                appendVectorGlyphs(dataset, request, FieldId{vectorUField},
-                    FieldId{vectorVField}, contourCount, cancellation, result);
-            }
-            return result;
         });
     }
 
@@ -4562,6 +4661,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     if (!isFullDomain
                         && rangeMode == RangeMode::Visible
                         && m_fullDomainRange.has_value()
+                        && m_fullDomainRangeDataset == result.request.dataset
                         && m_fullDomainRangeField.value
                             == result.request.field.value
                         && m_fullDomainRangeMaxLevel
@@ -4599,6 +4699,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                         && state.plane.width > 0) {
                         m_fullDomainRange = std::make_pair(
                             state.displayMinimum, state.displayMaximum);
+                        m_fullDomainRangeDataset = result.request.dataset;
                         m_fullDomainRangeField = result.request.field;
                         m_fullDomainRangeMaxLevel
                             = result.request.maximumLevel;
@@ -4610,6 +4711,21 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     m_cacheResidentBytes = cache.residentBytes;
                     m_cachePinnedBytes = cache.pinnedBytes;
                     m_cacheEvictions = cache.evictions;
+                    // A cache-pressure fallback lowered the composite level;
+                    // reflect it in the level combo (no re-slice) and inform the
+                    // user, matching the initial-load handling.
+                    if (result.cacheFallbackToLevel >= 0) {
+                        if (selectCacheFallbackLevel(
+                                m_levelSelector,
+                                result.cacheFallbackToLevel)) {
+                            configureSlicePositionControls();
+                            updateRangeModeAvailability();
+                            syncMenuChecks();
+                        }
+                        statusBar()->showMessage(cacheFallbackMessage(
+                            *dataset, result.cacheFallbackFromLevel,
+                            result.cacheFallbackToLevel));
+                    }
                 } else {
                     ++m_staleResults;
                 }
@@ -4888,6 +5004,7 @@ void MainWindow::syncVisibleRanges()
     double globalMin = std::numeric_limits<double>::infinity();
     double globalMax = -std::numeric_limits<double>::infinity();
     const bool useCachedRange = m_fullDomainRange.has_value()
+        && m_fullDomainRangeDataset == m_dataset->id()
         && m_fullDomainRangeField.value == currentField.value
         && m_fullDomainRangeMaxLevel == maximumLevel
         && m_fullDomainRangeComposition == composition;
@@ -5245,7 +5362,7 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     showMetadata(frameMetadata, m_datasetPath);
 
     configureSequenceControls(defaultPositions);
-    if (selectCacheFallbackLevel(m_levelSelector, result)) {
+    if (selectCacheFallbackLevel(m_levelSelector, result.cacheFallbackToLevel)) {
         configureSlicePositionControls();
         updateRangeModeAvailability();
         syncMenuChecks();
@@ -5264,7 +5381,9 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     m_cacheEvictions = cache.evictions;
     validateVectorMode();
     if (result.cacheFallbackToLevel >= 0) {
-        statusBar()->showMessage(cacheFallbackMessage(result));
+        statusBar()->showMessage(cacheFallbackMessage(
+            *result.dataset, result.cacheFallbackFromLevel,
+            result.cacheFallbackToLevel));
     }
 }
 
@@ -5383,6 +5502,7 @@ void MainWindow::resetRangeState()
     m_fieldRanges.clear();
     m_trackedField = 0;
     m_fullDomainRange.reset();
+    m_fullDomainRangeDataset = {};
     m_fullDomainRangeField = {};
     m_fullDomainRangeMaxLevel = -1;
     const QSignalBlocker modeBlocker(m_rangeMode);
@@ -5479,7 +5599,6 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     spec.slicePositions = m_slicePosition3d;
     const auto views = currentViews();
     spec.visibleRegions.reserve(views.size());
-    spec.outputSizes.reserve(views.size());
     for (const auto* state : views) {
         spec.visibleRegions.push_back(state->visibleRegion);
     }

@@ -8,7 +8,8 @@
 #   MODE          slice | sequence | missing-range | non-finite | raw-fab |
 #                 multifab-fab | quit | quit-on-failure | export-quit |
 #                 contour-sync | raster-zoom | rubber-zoom-sync |
-#                 rubber-zoom-local | pan-zoom
+#                 rubber-zoom-local | pan-zoom | range-cache | fab-zoom |
+#                 cache-budget
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -60,6 +61,13 @@ elseif(MODE STREQUAL "rubber-zoom-local")
 elseif(MODE STREQUAL "pan-zoom")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --pan-zoom-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "range-cache")
+    # Two frames of the same fixture; frame 1's field is scaled 10x so its
+    # range differs, making a stale range-cache reuse observable.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "--scale" "10")
+    run_or_die("${AMREXPLORER_QT}" --range-cache-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "raw-fab")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --raw-fab-smoke-test
@@ -68,6 +76,13 @@ elseif(MODE STREQUAL "multifab-fab")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --multifab-fab-smoke-test
         "${WORK}/plt/Level_0/Cell")
+elseif(MODE STREQUAL "fab-zoom")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --fab-zoom-smoke-test
+        "${WORK}/plt/Level_0/Cell")
+elseif(MODE STREQUAL "cache-budget")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --cache-budget-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "quit")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --quit-smoke-test "${WORK}/plt")

@@ -626,6 +626,52 @@ int main(int argc, char* argv[])
                         ? 0 : 1);
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--range-cache-smoke-test") {
+        // Regression for sequence-frame-range-cache-goes-stale: cache the
+        // full-domain Visible range on frame 0, step to frame 1 (whose field is
+        // 10x-scaled), zoom, and confirm the color bar tracks frame 1 instead
+        // of reusing frame 0's cached range. Two signals interleave, sequenced
+        // by a phase held in a shared_ptr so it outlives this branch scope.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        struct RangeCacheState { int phase = 0; double frame0Max = 0.0; };
+        auto state = std::make_shared<RangeCacheState>();
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window](int index) {
+                if (index == 0) {
+                    window.enableVisibleRasterForTest();  // cache frame 0 range
+                } else {
+                    window.zoomActiveViewForTest();        // re-slice frame 1
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, &application, state] {
+                const auto probes = window.contourViewProbesForTest();
+                if (probes.empty()) {
+                    application.exit(1);
+                    return;
+                }
+                const auto displayMax = probes.front().displayMaximum;
+                if (state->phase == 0) {
+                    state->frame0Max = displayMax;   // frame 0 full-domain max
+                    state->phase = 1;
+                    window.stepSequence(1);
+                } else {
+                    // Frame 1 is scaled 10x, so its zoomed max must far exceed
+                    // frame 0's cached max. Reusing the stale cache (the bug)
+                    // would instead leave them equal.
+                    application.exit(
+                        displayMax > 2.0 * state->frame0Max ? 0 : 1);
+                }
+            });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--raw-fab-smoke-test") {
         const std::filesystem::path path(argv[2]);
@@ -690,6 +736,91 @@ int main(int argc, char* argv[])
             });
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--fab-zoom-smoke-test") {
+        // Regression for fab-round-trip-loses-visible-region: zoom the MultiFab
+        // slice, drill into a FAB, go back, and confirm the restored MultiFab
+        // view still holds the zoom. Without the fix the round-trip resets it to
+        // full domain. initialSliceFinished fires on each open (MultiFab, FAB,
+        // restored MultiFab); interactiveSlicesSettled fires once for the zoom.
+        // A shared phase sequences the two signals across this branch's scope.
+        const std::filesystem::path path(argv[2]);
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, phase](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                if (*phase == 0) {
+                    *phase = 1;
+                    window.zoomActiveViewForTest();       // zoom the MultiFab
+                } else if (*phase == 2) {
+                    *phase = 3;
+                    auto* back = window.findChild<QPushButton*>(
+                        QStringLiteral("fabBackButton"));
+                    if (back == nullptr) {
+                        application.exit(1);
+                        return;
+                    }
+                    QTimer::singleShot(0, back, &QPushButton::click);  // go back
+                } else if (*phase == 3) {
+                    application.exit(
+                        window.activeViewIsZoomedForTest() ? 0 : 1);
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, phase] {
+                if (*phase == 1) {
+                    *phase = 2;
+                    window.viewFabForTest(0);             // drill into FAB 0
+                }
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--cache-budget-smoke-test") {
+        // Regression for cache-budget-exceeded-hard-fails-after-load: load a
+        // 2-D dataset at finest, shrink the cache budget just below the finest
+        // working set, then switch field to force a non-cache finest re-slice
+        // that overflows the budget. With the fix the slice degrades to a lower
+        // composite level (the level combo drops from "Finest available", -1);
+        // without it the slice hard-fails and the level is unchanged.
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                auto* levels = window.findChild<QComboBox*>(
+                    QStringLiteral("levelSelector"));
+                auto* fields = window.findChild<QComboBox*>(
+                    QStringLiteral("fieldSelector"));
+                if (levels == nullptr || fields == nullptr
+                    || fields->count() < 2
+                    || levels->currentData().toInt() != -1) {
+                    application.exit(1);  // expected finest (-1) with >=2 fields
+                    return;
+                }
+                const auto resident = window.cacheResidentBytesForTest();
+                if (resident == 0) {
+                    application.exit(1);
+                    return;
+                }
+                window.setCacheBudgetForTest(resident - 1);
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&application, levels] {
+                        // With the fix the overflowing finest re-slice fell back
+                        // to a lower composite level, so the combo no longer
+                        // reads "Finest available" (-1).
+                        application.exit(
+                            levels->currentData().toInt() != -1 ? 0 : 1);
+                    });
+                fields->setCurrentIndex(1);  // non-cache finest re-slice
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 4
         && std::string_view(argv[1]) == "--sequence-smoke-test") {
         // Opens the two-frame sequence, waits for the first frame to display,

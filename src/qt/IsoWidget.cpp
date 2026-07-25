@@ -79,6 +79,13 @@ void IsoWidget::setGeometry(const DatasetMetadata& metadata)
             m_levels.push_back({level.level, level.domain, level.cellSize,
                 level.indexOrigin, level.boxes});
         }
+        // Default to the domain center so a caller that sets geometry but
+        // forgets setSlicePositions draws the planes mid-domain instead of
+        // clamped to the lower face by the {0,0,0} default.
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            m_slicePositions[axis] = 0.5
+                * (m_domain.lower[axis] + m_domain.upper[axis]);
+        }
     }
     update();
 }
@@ -121,6 +128,11 @@ void IsoWidget::paintEvent(QPaintEvent* event)
         }
     }
     drawBox(painter, projection, m_domain, QPen(Qt::white, 1));
+    // Translucent slice planes overlay the wireframe so the user can see where
+    // the XY/XZ/YZ slices sit in the domain.
+    for (int axis = 0; axis < 3; ++axis) {
+        drawSlicePlane(painter, projection, axis);
+    }
     drawAxisIndicator(painter);
 }
 
@@ -173,7 +185,9 @@ void IsoWidget::drawSlicePlane(QPainter& painter, const Projection& projection,
     const auto position = std::clamp(m_slicePositions[index],
         m_domain.lower[index], m_domain.upper[index]);
     QPolygonF polygon;
-    for (unsigned int corner = 0; corner < 4; ++corner) {
+    // Visit corners in perimeter order (0,1,3,2); the natural 0,1,2,3 bit
+    // order crosses the diagonals and fills a self-intersecting bowtie.
+    for (const unsigned int corner : {0U, 1U, 3U, 2U}) {
         std::array<double, 3> point{};
         point[index] = position;
         point[a] = (corner & 1U) != 0U ? m_domain.upper[a] : m_domain.lower[a];

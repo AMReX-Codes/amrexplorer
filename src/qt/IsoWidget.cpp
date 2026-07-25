@@ -96,6 +96,12 @@ void IsoWidget::setSlicePositions(double x, double y, double z)
     update();
 }
 
+void IsoWidget::setSlicePlanesVisible(bool visible)
+{
+    m_slicePlanesVisible = visible;
+    update();
+}
+
 void IsoWidget::setColorPalette(const Palette* palette)
 {
     m_palette = palette;
@@ -130,8 +136,10 @@ void IsoWidget::paintEvent(QPaintEvent* event)
     drawBox(painter, projection, m_domain, QPen(Qt::white, 1));
     // Translucent slice planes overlay the wireframe so the user can see where
     // the XY/XZ/YZ slices sit in the domain.
-    for (int axis = 0; axis < 3; ++axis) {
-        drawSlicePlane(painter, projection, axis);
+    if (m_slicePlanesVisible) {
+        for (int axis = 0; axis < 3; ++axis) {
+            drawSlicePlane(painter, projection, axis);
+        }
     }
     drawAxisIndicator(painter);
 }

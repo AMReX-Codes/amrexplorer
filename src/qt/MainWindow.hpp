@@ -7,6 +7,8 @@
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
+#include <amrexplorer/pipeline/SlicePipeline.hpp>
+#include <amrexplorer/pipeline/SliceRangeResolver.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
 #include <amrexplorer/render2d/Contours.hpp>
 #include <amrexplorer/render2d/ImageBuffer.hpp>
@@ -69,81 +71,13 @@ class LinePlotWindow;
 class ScientificDoubleSpinBox;
 class UserGuideDialog;
 
-enum class RangeMode {
-    Visible,
-    Level,
-    File,
-    User
-};
-
-struct SliceDisplayResult {
-    // The request that produced everything below; PlaneViewState keeps it as
-    // the cache key for the re-render-from-cache path (see requestSlice).
-    SliceRequest request;
-    SliceQueryResult slice;
-    ImageBuffer image;
-    std::vector<VectorSegment> vectors;
-    // Contour modes only: the piecewise plane at data resolution the
-    // contours were extracted from (the display plane itself when the data
-    // is finer than the display), its bilinear refinement, and the
-    // polylines extracted from that refinement, already mapped to
-    // display-plane pixel space (empty otherwise).
-    ScalarPlane contourPlane;
-    ScalarPlane contourFinePlane;
-    int contourFineFactor = 1;
-    std::vector<ContourPolyline> contourPolylines;
-    std::string fieldName;
-    double minimum = 0.0;
-    double maximum = 1.0;
-    bool logarithmic = false;
-    DisplayMode mode = DisplayMode::Raster;
-    std::uint32_t vectorUField = 0;
-    std::uint32_t vectorVField = 0;
-    int contourCount = 0;
-    // Set when the image was intentionally not re-rendered (contour-only
-    // refresh): showSlice keeps the view's current pixmap.
-    bool rasterUnchanged = false;
-    // Set when a composite (Finest Available) slice exceeded the cache budget
-    // and was retried at a lower composite maximum level, mirroring
-    // InitialSliceResult (see cache-budget-exceeded-hard-fails-after-load).
-    int cacheFallbackFromLevel = -1;
-    int cacheFallbackToLevel = -1;
-};
-
-struct InitialSliceResult {
-    std::shared_ptr<PlotfileDataset> dataset;
-    // One entry per displayed view, ordered by normal axis (2-D: one entry).
-    std::vector<SliceDisplayResult> displays;
-    // First line of the plotfile Header when the path is a plotfile
-    // directory; empty for standalone datasets.
-    std::string fileVersion;
-    // Set when a Finest Available load exceeded the cache budget and was
-    // retried with a lower composite maximum level.
-    int cacheFallbackFromLevel = -1;
-    int cacheFallbackToLevel = -1;
-};
-
-// Everything needed to render one frame's slice(s) off the GUI thread. The
-// sequence path builds this from the current UI state so frame switches keep
-// the user's field/level/range/log/palette/visible-region settings; empty or
-// default entries mean "fall back to the new dataset's defaults" (midpoint
-// slice positions, whole domain, finest-native output size).
-struct FrameSliceSpec {
-    DisplayMode displayMode = DisplayMode::Raster;
-    std::uint32_t field = 0;
-    int levelSelection = -1;  // level combo data: -1 = finest available
-    RangeMode rangeMode = RangeMode::File;
-    std::optional<std::pair<double, double>> userRange;
-    bool logarithmic = false;
-    Palette palette;
-    std::uint32_t vectorUField = 0;
-    std::uint32_t vectorVField = 0;
-    std::uint32_t vectorWField = 0;
-    int contourCount = 10;
-    bool defaultPositions = true;
-    std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
-    std::vector<std::optional<RealBox>> visibleRegions;  // per view, normal order
-};
+// These now live in the Qt-free pipeline layer (SlicePipeline.hpp); re-export
+// them in this namespace so amrvis::qt::X keeps resolving for callers and
+// tests. DisplayMode is re-exported by SetContoursDialog.hpp.
+using amrvis::RangeMode;
+using amrvis::SliceDisplayResult;
+using amrvis::InitialSliceResult;
+using amrvis::FrameSliceSpec;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT

@@ -160,7 +160,7 @@ JSON expression-list file, and **Export...** to save the current draft list.
 Imported expressions remain drafts until you select **Apply**.
 
 Expressions are single-line algebra using `+`, `-`, `*`, `/`, and `**`, with
-`sqrt`, `pow`, `exp`, `log`, `exp10`, and `log10`.
+`abs`, `sqrt`, `pow`, `exp`, `log`, `exp10`, and `log10`.
 For example:
 
 ```text

@@ -23,6 +23,7 @@ enum class Opcode : std::uint8_t {
     Subtract,
     Multiply,
     Divide,
+    Abs,
     Sqrt,
     Pow,
     Exp,
@@ -405,6 +406,9 @@ private:
 
     static std::optional<Opcode> unaryFunction(const std::string& name)
     {
+        if (name == "abs") {
+            return Opcode::Abs;
+        }
         if (name == "sqrt") {
             return Opcode::Sqrt;
         }
@@ -446,6 +450,7 @@ private:
                 maximum = std::max(maximum, depth);
                 break;
             case Opcode::Negate:
+            case Opcode::Abs:
             case Opcode::Sqrt:
             case Opcode::Exp:
             case Opcode::Log:
@@ -558,6 +563,9 @@ double ExpressionEvaluator::evaluate(std::span<const double> variables)
         case Opcode::Divide:
             --depth;
             m_stack[depth - 1] /= m_stack[depth];
+            break;
+        case Opcode::Abs:
+            m_stack[depth - 1] = std::abs(m_stack[depth - 1]);
             break;
         case Opcode::Sqrt:
             m_stack[depth - 1] = std::sqrt(m_stack[depth - 1]);

@@ -1850,8 +1850,8 @@ void MainWindow::showExpressionEditor()
         variables.push_back(QString::fromStdString(field.name));
     }
     auto* help = new QLabel(
-        tr("Operators: + - * / **. Functions: sqrt, pow, exp, log, exp10, "
-           "log10.\nAvailable dataset fields: %1\n"
+        tr("Operators: + - * / **. Functions: abs, sqrt, pow, exp, log, "
+           "exp10, log10.\nAvailable dataset fields: %1\n"
            "Expressions may also reference expressions above them in the list.")
             .arg(variables.join(QStringLiteral(", "))),
         &dialog);

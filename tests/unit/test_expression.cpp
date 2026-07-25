@@ -78,11 +78,22 @@ int main()
         require(close(evaluate("2**3"), evaluate("pow(2,3)")),
             "power syntaxes differ");
 
+        require(close(evaluate("abs(2.0)"), 2.0),
+            "abs changed a positive value");
+        require(close(evaluate("abs(-2.0)"), 2.0),
+            "abs failed for a negative value");
         require(close(evaluate("sqrt(9)"), 3.0), "sqrt failed");
         require(close(evaluate("exp(1)"), std::exp(1.0)), "exp failed");
         require(close(evaluate("log(exp(2))"), 2.0), "log failed");
         require(close(evaluate("exp10(3)"), 1000.0), "exp10 failed");
         require(close(evaluate("log10(1000)"), 3.0), "log10 failed");
+
+        const auto absolute =
+            amrvis::CompiledExpression::compile("abs(x)");
+        auto absoluteEvaluator = absolute.makeEvaluator();
+        const std::array negativeValue{-4.5};
+        require(close(absoluteEvaluator.evaluate(negativeValue), 4.5),
+            "abs of a variable failed");
 
         const auto expression =
             amrvis::CompiledExpression::compile("z + x*z + log");

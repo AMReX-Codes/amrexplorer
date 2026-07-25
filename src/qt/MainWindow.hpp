@@ -203,6 +203,24 @@ public:
     // raster-colorbar-mismatch-on-2d-visible-zoom.
     [[nodiscard]] bool activeViewRasterMatchesDisplayRangeForTest();
 
+    // Test-only: rubber-band the central half of the active 3-D panel through
+    // the same handler used by ImageView::rubberBandSelected.
+    void rubberBandZoomActiveViewForTest();
+
+    // Test-only: true when every current panel has a strict visible subregion.
+    // Used to lock down synchronized 3-D rubber-band zoom.
+    [[nodiscard]] bool allViewsRubberBandZoomedForTest();
+    [[nodiscard]] std::size_t rubberBandZoomedViewCountForTest();
+
+    // Test-only: apply a panel-local scale, drive the exact data-region pan
+    // handlers used by Shift+left drag, and inspect the resulting transform.
+    void setActiveViewScaleForTest(int factor);
+    void panActiveViewForTest(double sceneDeltaX, double sceneDeltaY);
+    [[nodiscard]] qreal activeViewScaleForTest() const;
+    // Test-only: compare the current transform with ImageView's own fitted
+    // transform. The check leaves the view fitted.
+    [[nodiscard]] bool activeViewIsFitToWindowForTest();
+
     // Test-only: drill into the FAB catalog entry at index (the same path the
     // dock's viewRequested signal drives). Used by the FAB round-trip zoom test.
     void viewFabForTest(std::size_t index);
@@ -371,6 +389,8 @@ private:
     [[nodiscard]] QString probeReadout(
         const PlaneViewState& state, int x, int displayY) const;
     void rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect);
+    void applyRubberBandZoom(
+        PlaneViewState& state, const QRectF& normalizedRect);
     void beginPanDrag(PlaneViewState& state);
     void updatePanDrag(PlaneViewState& state, const QPointF& totalSceneDelta,
         const QPoint& viewportDelta);
@@ -521,12 +541,14 @@ private:
     QPushButton* m_scaleButton = nullptr;
     QMenu* m_levelMenu = nullptr;
     QMenu* m_variableMenu = nullptr;
+    QActionGroup* m_scaleGroup = nullptr;
     QActionGroup* m_levelGroup = nullptr;
     QActionGroup* m_variableGroup = nullptr;
     QActionGroup* m_paletteGroup = nullptr;
     QAction* m_boxesAction = nullptr;
     QAction* m_slicePlanesAction = nullptr;
     QAction* m_fitScaleAction = nullptr;
+    QAction* m_syncRubberBandZoomAction = nullptr;
     QAction* m_contoursAction = nullptr;
     QAction* m_datasetAction = nullptr;
     QAction* m_exportAnimationAction = nullptr;

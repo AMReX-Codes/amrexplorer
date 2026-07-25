@@ -1,6 +1,7 @@
 #include "MainWindow.hpp"
 #include "FabSelectorDock.hpp"
 
+#include <QAction>
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
@@ -15,6 +16,7 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QStandardPaths>
+#include <QSignalBlocker>
 #include <QTableView>
 #include <QTextStream>
 #include <QTimer>
@@ -501,7 +503,9 @@ int main(int argc, char* argv[])
         auto phase = std::make_shared<int>(0);
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
             &application, [&window, &application](bool success) {
-                if (!success) {
+                const auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (!success || sync == nullptr || sync->isVisible()) {
                     application.exit(1);
                     return;
                 }
@@ -518,6 +522,108 @@ int main(int argc, char* argv[])
                         window.activeViewRasterMatchesDisplayRangeForTest()
                             ? 0 : 1);
                 }
+        });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--rubber-zoom-sync-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (!success || sync == nullptr || !sync->isVisible()) {
+                    application.exit(1);
+                    return;
+                }
+                const QSignalBlocker blocker(sync);
+                sync->setChecked(true);
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(
+                            window.allViewsRubberBandZoomedForTest() ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+                window.rubberBandZoomActiveViewForTest();
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--rubber-zoom-local-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (!success || sync == nullptr) {
+                    application.exit(1);
+                    return;
+                }
+                const QSignalBlocker blocker(sync);
+                sync->setChecked(false);
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(
+                            window.rubberBandZoomedViewCountForTest() == 1
+                                ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+                window.rubberBandZoomActiveViewForTest();
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--pan-zoom-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        auto phase = std::make_shared<int>(0);
+        auto immediateScale = std::make_shared<double>(0.0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, immediateScale](bool success) {
+                auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (!success || sync == nullptr) {
+                    application.exit(1);
+                    return;
+                }
+                const QSignalBlocker blocker(sync);
+                sync->setChecked(true);
+                window.rubberBandZoomActiveViewForTest();
+                *immediateScale = window.activeViewScaleForTest();
+                // Exercise the timing window: pan before the cropped slice
+                // requested by the rubber band has settled.
+                window.panActiveViewForTest(5.0, 0.0);
+                if (std::abs(window.activeViewScaleForTest() - *immediateScale)
+                    > 1.0e-12) {
+                    application.exit(1);
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, &application, phase, immediateScale] {
+                constexpr double tolerance = 1.0e-12;
+                if ((*phase)++ == 0) {
+                    if (std::abs(window.activeViewScaleForTest()
+                            - *immediateScale)
+                        > tolerance) {
+                        application.exit(1);
+                        return;
+                    }
+                    // A valid pan from the central crop must preserve the
+                    // active panel's custom transform through the re-slice.
+                    window.setActiveViewScaleForTest(4);
+                    window.panActiveViewForTest(-5.0, 0.0);
+                    return;
+                }
+                if (std::abs(window.activeViewScaleForTest() - 4.0)
+                    > tolerance) {
+                    application.exit(1);
+                    return;
+                }
+                // The first pan reached the domain edge. Panning farther is a
+                // no-op and must not refit the panel either.
+                window.setActiveViewScaleForTest(3);
+                window.panActiveViewForTest(-5.0, 0.0);
+                application.exit(
+                    std::abs(window.activeViewScaleForTest() - 3.0)
+                            <= tolerance
+                        ? 0 : 1);
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 4
@@ -728,6 +834,67 @@ int main(int argc, char* argv[])
                     window.stepSequence(1);
                 } else if (index == 1) {
                     application.exit(0);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--sequence-zoom-refit-smoke-test") {
+        // Preserve a physical crop while moving from an 8x8 frame to an 8x12
+        // frame. The incoming raster has a different geometry and must be
+        // fitted instead of inheriting the first raster's pixel transform.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        auto zoomSettled = std::make_shared<bool>(false);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, zoomSettled] {
+                if (!*zoomSettled) {
+                    *zoomSettled = true;
+                    window.stepSequence(1);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application, zoomSettled](int index) {
+                if (index == 0) {
+                    window.rubberBandZoomActiveViewForTest();
+                } else if (index == 1) {
+                    application.exit(
+                        *zoomSettled
+                            && window.activeViewIsZoomedForTest()
+                            && window.activeViewIsFitToWindowForTest()
+                        ? 0 : 1);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--sequence-equal-size-zoom-refit-smoke-test") {
+        // Exercise the timing edge directly: the first frame's full-domain
+        // raster is 8x8. Rubber-band zoom changes the view transform and queues
+        // a 4x4 crop, but stepping immediately cancels that work. The second
+        // frame is 16x16, so its central-half crop is also 8x8. A size-only
+        // transform policy mistakes that cropped raster for the cached full
+        // raster and leaves only part of the new image visible.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application](int index) {
+                if (index == 0) {
+                    window.rubberBandZoomActiveViewForTest();
+                    window.stepSequence(1);
+                } else if (index == 1) {
+                    application.exit(
+                        window.activeViewIsZoomedForTest()
+                            && window.activeViewIsFitToWindowForTest()
+                        ? 0 : 1);
                 }
             });
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,

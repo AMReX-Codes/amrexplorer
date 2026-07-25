@@ -7,8 +7,10 @@
 #   WORK          directory the materialized copies are written into
 #   MODE          slice | sequence | missing-range | non-finite | raw-fab |
 #                 multifab-fab | quit | quit-on-failure | export-quit |
-#                 contour-sync | raster-zoom | range-cache | fab-zoom |
-#                 cache-budget
+#                 contour-sync | raster-zoom | rubber-zoom-sync |
+#                 rubber-zoom-local | pan-zoom | range-cache | fab-zoom |
+#                 cache-budget | sequence-zoom-refit |
+#                 sequence-equal-size-zoom-refit
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -36,6 +38,25 @@ elseif(MODE STREQUAL "sequence")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
     run_or_die("${AMREXPLORER_QT}" --sequence-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "sequence-zoom-refit")
+    if(NOT DEFINED SECOND_SOURCE)
+        message(FATAL_ERROR
+            "sequence-zoom-refit requires -DSECOND_SOURCE=...")
+    endif()
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SECOND_SOURCE}" "${WORK}/plt00010")
+    run_or_die("${AMREXPLORER_QT}" --sequence-zoom-refit-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "sequence-equal-size-zoom-refit")
+    if(NOT DEFINED SECOND_SOURCE)
+        message(FATAL_ERROR
+            "sequence-equal-size-zoom-refit requires -DSECOND_SOURCE=...")
+    endif()
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SECOND_SOURCE}" "${WORK}/plt00010")
+    run_or_die("${AMREXPLORER_QT}"
+        --sequence-equal-size-zoom-refit-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "missing-range")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt" "--no-statistics")
     run_or_die("${AMREXPLORER_QT}" --missing-range-smoke-test
@@ -51,6 +72,15 @@ elseif(MODE STREQUAL "contour-sync")
 elseif(MODE STREQUAL "raster-zoom")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --raster-zoom-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "rubber-zoom-sync")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --rubber-zoom-sync-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "rubber-zoom-local")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --rubber-zoom-local-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "pan-zoom")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --pan-zoom-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "range-cache")
     # Two frames of the same fixture; frame 1's field is scaled 10x so its
     # range differs, making a stale range-cache reuse observable.

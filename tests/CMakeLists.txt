@@ -221,6 +221,45 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_slice_smoke_3d PROPERTIES TIMEOUT 30)
+    # A rubber-band selection in one 3-D panel synchronizes the selected
+    # normalized subregion to all three panels by default.
+    add_test(
+        NAME qt_rubber_zoom_sync_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_rubber_zoom_sync_3d"
+            -DMODE=rubber-zoom-sync
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_rubber_zoom_sync_smoke_3d PROPERTIES TIMEOUT 30)
+    # Disabling the option preserves the former panel-local rubber-band
+    # behavior; wheel zoom is independently panel-local in ImageView.
+    add_test(
+        NAME qt_rubber_zoom_local_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_rubber_zoom_local_3d"
+            -DMODE=rubber-zoom-local
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_rubber_zoom_local_smoke_3d PROPERTIES TIMEOUT 30)
+    # Shift+dragging a rubber-band-cropped panel must preserve its transform,
+    # both for a valid data-region pan and for a no-op at the domain edge.
+    add_test(
+        NAME qt_pan_zoom_preservation_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_pan_zoom_3d"
+            -DMODE=pan-zoom
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_pan_zoom_preservation_smoke_3d PROPERTIES TIMEOUT 30)
     # Regression test for contours-stale-after-visible-range-sync: switching a
     # 3-D dataset to contours in Visible+log mode must re-derive every panel's
     # contour levels from the shared range, not each panel's local range.
@@ -355,4 +394,35 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_sequence_smoke PROPERTIES TIMEOUT 30)
+    # A preserved physical crop rendered at a different raster resolution in
+    # the next sequence frame must refit instead of retaining a stale transform.
+    add_test(
+        NAME qt_sequence_zoom_refit_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DSECOND_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_nonuniform"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_zoom_refit"
+            -DMODE=sequence-zoom-refit
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_sequence_zoom_refit_smoke PROPERTIES TIMEOUT 30)
+    # Regression test for the sequence timing edge: if frame stepping cancels
+    # a rubber-band crop before its raster lands, the next frame's cropped
+    # raster can have the same pixel dimensions as the cached full-domain
+    # raster. The incompatible full-domain transform must still be discarded.
+    add_test(
+        NAME qt_sequence_equal_size_zoom_refit_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DSECOND_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_refined_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_equal_size_zoom_refit"
+            -DMODE=sequence-equal-size-zoom-refit
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(
+        qt_sequence_equal_size_zoom_refit_smoke PROPERTIES TIMEOUT 30)
 endif()

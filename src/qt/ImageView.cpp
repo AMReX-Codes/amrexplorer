@@ -59,13 +59,18 @@ ImageView::ImageView(QWidget* parent)
     setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
 }
 
-void ImageView::setImage(const QImage& image)
+void ImageView::setImage(
+    const QImage& image, ImageTransformPolicy transformPolicy)
 {
     // Refit only when the image changes size (initial open, a zoom into a new
     // region, a differently-sized dataset). When only the colors are remapped
     // at the same size -- toggling Log, or changing field, level, or range --
-    // keep the user's current zoom/pan.
-    const bool refit = m_image.isNull() || m_image.size() != image.size();
+    // keep the user's current zoom/pan. Compatible panel-local cropped-region
+    // refreshes explicitly preserve the transform even when the replacement
+    // raster dimensions differ.
+    const bool refit = transformPolicy == ImageTransformPolicy::Refit
+        || (transformPolicy == ImageTransformPolicy::GeometryAware
+            && (m_image.isNull() || m_image.size() != image.size()));
     m_scene->clear();
     m_gridItems.clear();
     m_overlayItems.clear();

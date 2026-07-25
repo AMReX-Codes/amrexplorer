@@ -72,13 +72,16 @@ elseif(MODE STREQUAL "export-quit")
     # the ctest TIMEOUT fails the test.
     set(fakeBin "${WORK}/bin")
     file(MAKE_DIRECTORY "${fakeBin}")
+    # exec so the tracked child IS the sleep, not a /bin/sh (dash) wrapper that
+    # dies on SIGTERM and orphans its sleep child for the full hour. This makes
+    # the stand-in a single process that terminate() actually kills.
     file(WRITE "${fakeBin}/ffmpeg"
 "#!/bin/sh
 if [ \"$1\" = \"-version\" ]; then
   echo 'ffmpeg version 0.0-fake'
   exit 0
 fi
-sleep 3600
+exec sleep 3600
 ")
     execute_process(COMMAND chmod 755 "${fakeBin}/ffmpeg")
     set(ENV{PATH} "${fakeBin}:$ENV{PATH}")

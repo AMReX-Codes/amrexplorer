@@ -114,7 +114,11 @@ std::vector<int> parseIntegers(const std::string& line)
 void requireContainedPath(const std::string& value, std::string_view what)
 {
     const std::filesystem::path path(value);
-    if (value.empty() || path.is_absolute()) {
+    // Reject anything with a root: a root-name (drive/UNC) or a root-directory
+    // (leading separator). is_absolute() is not enough — it is platform
+    // specific, so a POSIX-style "/etc/..." reads as relative on Windows yet
+    // still escapes to the drive root when joined to the plotfile path.
+    if (value.empty() || path.has_root_name() || path.has_root_directory()) {
         throw MetadataReadError(std::string(what)
             + " must be a relative path inside the plotfile: '" + value + "'");
     }

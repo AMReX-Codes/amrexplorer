@@ -200,30 +200,6 @@ std::uint64_t pointCount(const IntBox& box, int dimension)
     return result;
 }
 
-double decodeReal(const unsigned char* source, const RealEncoding& encoding)
-{
-    const bool nativeLittle = std::endian::native == std::endian::little;
-    if (encoding.bytes == sizeof(double)) {
-        std::array<unsigned char, sizeof(double)> bytes{};
-        std::copy_n(source, bytes.size(), bytes.begin());
-        if (nativeLittle != encoding.littleEndian) {
-            std::reverse(bytes.begin(), bytes.end());
-        }
-        double value = 0.0;
-        std::memcpy(&value, bytes.data(), sizeof(value));
-        return value;
-    }
-
-    std::array<unsigned char, sizeof(float)> bytes{};
-    std::copy_n(source, bytes.size(), bytes.begin());
-    if (nativeLittle != encoding.littleEndian) {
-        std::reverse(bytes.begin(), bytes.end());
-    }
-    float value = 0.0F;
-    std::memcpy(&value, bytes.data(), sizeof(value));
-    return static_cast<double>(value);
-}
-
 } // namespace
 
 FabValues::FabValues(std::vector<float> values) noexcept
@@ -360,41 +336,53 @@ BlockReadResult PlotfileBlockReader::readBlock(
         throw BlockReadError("FAB component extends past the end of the data file");
     }
 
-    std::vector<unsigned char> encoded(static_cast<std::size_t>(componentBytes));
-    constexpr std::size_t cancellationChunkBytes = 1024U * 1024U;
-    std::size_t bytesCompleted = 0;
-    while (bytesCompleted < encoded.size()) {
-        if (cancellation.stop_requested()) {
-            throw ReadCancelled();
+    // Read the component straight into its typed value buffer instead of
+    // staging raw bytes and decoding into a second, equally large vector: this
+    // halves peak memory. IEEE-32/64 data always matches the target type's
+    // size (see parseRealDescriptor), so on a native-endian file (the common
+    // case) the read is the whole decode; a cross-endian file only needs an
+    // in-place per-value byte swap afterward.
+    const bool nativeEndian = (std::endian::native == std::endian::little)
+        == header.encoding.littleEndian;
+    const auto readComponent = [&]<typename Value>() {
+        std::vector<Value> values(static_cast<std::size_t>(valuesPerComponent));
+        constexpr std::size_t cancellationChunkBytes = 1024U * 1024U;
+        auto* const storage = reinterpret_cast<char*>(values.data());
+        std::size_t bytesCompleted = 0;
+        const auto total = static_cast<std::size_t>(componentBytes);
+        while (bytesCompleted < total) {
+            if (cancellation.stop_requested()) {
+                throw ReadCancelled();
+            }
+            const auto chunk = std::min(
+                cancellationChunkBytes, total - bytesCompleted);
+            input.read(storage + bytesCompleted,
+                static_cast<std::streamsize>(chunk));
+            if (input.gcount() != static_cast<std::streamsize>(chunk)) {
+                throw BlockReadError("FAB component payload is truncated");
+            }
+            bytesCompleted += chunk;
         }
-        const auto chunk = std::min(
-            cancellationChunkBytes, encoded.size() - bytesCompleted);
-        input.read(reinterpret_cast<char*>(encoded.data() + bytesCompleted),
-            static_cast<std::streamsize>(chunk));
-        if (input.gcount() != static_cast<std::streamsize>(chunk)) {
-            throw BlockReadError("FAB component payload is truncated");
+        if (!nativeEndian) {
+            auto* const raw = reinterpret_cast<unsigned char*>(values.data());
+            for (std::size_t value = 0; value < values.size(); ++value) {
+                if ((value & 4095U) == 0U && cancellation.stop_requested()) {
+                    throw ReadCancelled();
+                }
+                std::reverse(raw + value * sizeof(Value),
+                    raw + (value + 1) * sizeof(Value));
+            }
         }
-        bytesCompleted += chunk;
-    }
+        return FabValues{std::move(values)};
+    };
 
     auto block = std::make_shared<FabBlock>();
     block->box = header.box;
     block->field = request.field;
     block->component = 0;
-    const auto decodeValues = [&]<typename Value>() {
-        std::vector<Value> values(static_cast<std::size_t>(valuesPerComponent));
-        for (std::size_t value = 0; value < values.size(); ++value) {
-            if ((value & 4095U) == 0U && cancellation.stop_requested()) {
-                throw ReadCancelled();
-            }
-            values[value] = static_cast<Value>(decodeReal(
-                encoded.data() + value * header.encoding.bytes, header.encoding));
-        }
-        return FabValues{std::move(values)};
-    };
     block->values = header.encoding.bytes == sizeof(float)
-        ? decodeValues.template operator()<float>()
-        : decodeValues.template operator()<double>();
+        ? readComponent.template operator()<float>()
+        : readComponent.template operator()<double>();
 
     return {
         std::shared_ptr<const FabBlock>(std::move(block)),

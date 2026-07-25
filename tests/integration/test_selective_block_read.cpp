@@ -3,12 +3,16 @@
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <span>
 #include <string>
 
 namespace {
@@ -47,6 +51,62 @@ std::string minimalHeader(const std::string& dataPath,
         "0 1 0.0\n0\n"
         "0.0 1.0\n0.0 1.0\n"
         + dataPath + "\n";
+}
+
+// Writes each value in big-endian (MSB-first) byte order, portably: on a
+// little-endian host the native bytes are reversed, on a big-endian host they
+// are already MSB-first.
+void writeBigEndianDoubles(std::ofstream& out, std::span<const double> values)
+{
+    for (const double value : values) {
+        std::array<unsigned char, sizeof(double)> bytes{};
+        std::memcpy(bytes.data(), &value, sizeof(double));
+        if constexpr (std::endian::native == std::endian::little) {
+            std::reverse(bytes.begin(), bytes.end());
+        }
+        out.write(reinterpret_cast<const char*>(bytes.data()),
+            static_cast<std::streamsize>(bytes.size()));
+    }
+}
+
+// A cross-endian (big-endian) FAB must decode to the same values a native-
+// endian one does: exercises the byte-swap path of the block decoder, which
+// every little-endian test fixture otherwise skips.
+void testBigEndianDecode(const std::filesystem::path& base)
+{
+    const auto root = base / "big_endian";
+    std::filesystem::create_directories(root / "Level_0");
+    writeText(root / "Header", minimalHeader("Level_0/Cell"));
+    // Version-1 _H: one 2x2 box, one component; the FAB header in the data
+    // file carries the (big-endian) RealDescriptor read by readFabHeader.
+    writeText(root / "Level_0" / "Cell_H",
+        "1\n1\n1\n0\n"
+        "(1 0\n((0,0) (1,1) (0,0))\n)\n"
+        "1\nFabOnDisk: Cell_D_00000 0\n\n"
+        "1,1\n1.0,\n\n1,1\n4.0,\n");
+    const std::array<double, 4> values{1.0, 2.0, 3.0, 4.0};
+    {
+        std::ofstream data(root / "Level_0" / "Cell_D_00000", std::ios::binary);
+        require(static_cast<bool>(data), "could not create big-endian payload");
+        // Ascending byte order (1 2 3 4 5 6 7 8) => big-endian in AMReX's
+        // descriptor; parseRealDescriptor maps it to littleEndian == false.
+        data << "FAB ((8, (64 11 52 0 1 12 0 1023)),"
+                "(8, (1 2 3 4 5 6 7 8)))((0,0) (1,1) (0,0)) 1\n";
+        writeBigEndianDoubles(data, values);
+    }
+
+    const auto metadata = amrvis::PlotfileMetadataReader{}.read(root);
+    amrvis::PlotfileBlockReader reader(root, metadata.metadata);
+    amrvis::BlockRequest request;
+    request.dataset.value = 1;
+    request.field.value = 0;
+    const auto result = reader.readBlock(request);
+    require(result.block->values.size() == values.size(),
+        "big-endian block value count mismatch");
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        require(result.block->values[i] == values[i],
+            "big-endian FAB value decoded incorrectly");
+    }
 }
 
 // A path that walks above the plotfile directory must be rejected at metadata
@@ -216,6 +276,7 @@ int main()
     require(multiFabAccess.handle->values[2] == 30.0,
         "standalone MultiFab selective read value mismatch");
 
+    testBigEndianDecode(root);
     testRejectsEscapingDataPath(root);
     testRejectsOversizedBox(root);
 

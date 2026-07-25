@@ -46,8 +46,9 @@ The main controls are:
 
 1. **Field and Level** select the plotted variable and AMR composition.
 2. **3D Position** selects the sample index of each orthogonal slice plane.
-3. **Scale** fits the data to a panel, uses a fixed integer zoom, and controls
-   whether rubber-band zoom is synchronized across 3-D panels.
+3. **Scale** resets the zoom to the whole domain (Reset Zoom), uses a fixed
+   integer zoom, and controls whether rubber-band zoom is synchronized across
+   3-D panels.
 4. **Range, Log, and Palette** control the mapping from values to colors.
 5. **Slice panels** display the XY, XZ, and YZ planes for a 3-D dataset.
 6. **Isometric view** shows the domain, grid boxes, and current slice planes.
@@ -95,8 +96,8 @@ MultiFab.
 6. Add grid boxes, contours, vectors, or line plots as needed.
 7. Use **File > Export Image...** to save the current view.
 
-Double-click a view, press **0**, or select **Fit** to return to the full
-domain.
+Double-click a view, press **0**, or select **Reset Zoom** to return to the
+full domain.
 
 ## Navigating and inspecting data
 
@@ -109,7 +110,7 @@ The active panel is the one most recently clicked or manipulated.
 | Shift+left drag | Pan the view |
 | Arrow keys | Pan the active panel by 5 percent |
 | Mouse wheel | Zoom only the panel under the pointer |
-| Double click | Fit the view to the window |
+| Double click | Reset the zoom to the whole domain |
 | Shift+middle click | Plot a horizontal line through the selected sample |
 | Shift+right click | Plot a vertical line through the selected sample |
 | Right drag | Plot a line; the drag direction chooses the orientation |
@@ -269,7 +270,7 @@ Independent windows have independent datasets, caches, and view state.
 | Shortcut | Action |
 | --- | --- |
 | B | Toggle AMR grid boxes |
-| 0 | Fit to the window |
+| 0 | Reset the zoom to the whole domain |
 | 1 through 6 | Use fixed scales from 1x through 32x |
 | Ctrl+0 | Composite the finest available level |
 | Ctrl+1 through Ctrl+9 | Composite levels 0 through N |

@@ -25,6 +25,7 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -485,6 +486,38 @@ int main(int argc, char* argv[])
                 // local ranges [3/9,1], [2/9,8/9], [1/9,7/9] -> shared [1/9,1].
                 window.configureContourSyncForTest(
                     3, true, {0.875, 0.625, 0.375});
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--raster-zoom-smoke-test") {
+        // 2-D Visible-range raster/color-bar consistency: after a full-domain
+        // Visible slice caches the range, a zoom must re-render the raster
+        // against that reused range (not the subregion's local range) so it
+        // matches the color bar. See raster-colorbar-mismatch-on-2d-visible-zoom.
+        // interactiveSlicesSettled fires twice: after the full-domain slice
+        // (phase 0 -> zoom) and after the zoom (phase 1 -> verify). phase is a
+        // shared_ptr so it outlives this branch's scope through exec().
+        const std::filesystem::path path(argv[2]);
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                window.enableVisibleRasterForTest();
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, &application, phase] {
+                if (*phase == 0) {
+                    *phase = 1;
+                    window.zoomActiveViewForTest();
+                } else {
+                    application.exit(
+                        window.activeViewRasterMatchesDisplayRangeForTest()
+                            ? 0 : 1);
+                }
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3

@@ -1531,7 +1531,6 @@ void MainWindow::createMenus()
     m_slicePlanesAction->setEnabled(false);
     connect(m_slicePlanesAction, &QAction::toggled, this,
         [this](bool visible) { m_isoWidget->setSlicePlanesVisible(visible); });
-    m_slicePlanesAction->setChecked(true);
 
     m_contoursAction = new QAction(tr("&Contours..."), this);
     m_contoursAction->setEnabled(false);
@@ -3908,7 +3907,7 @@ void MainWindow::configureSliceControls()
     m_rangeMode->setEnabled(true);
     m_logarithmic->setEnabled(true);
     m_boxesAction->setEnabled(true);
-    m_slicePlanesAction->setEnabled(true);
+    m_slicePlanesAction->setEnabled(metadata.dimension == 3);
     const auto userRange = static_cast<RangeMode>(
         m_rangeMode->currentData().toInt()) == RangeMode::User;
     m_rangeMinimum->setEnabled(userRange);
@@ -4928,7 +4927,7 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
     m_rangeMode->setEnabled(true);
     m_logarithmic->setEnabled(true);
     m_boxesAction->setEnabled(true);
-    m_slicePlanesAction->setEnabled(true);
+    m_slicePlanesAction->setEnabled(metadata.dimension == 3);
     const auto userRange = static_cast<RangeMode>(
         m_rangeMode->currentData().toInt()) == RangeMode::User;
     m_rangeMinimum->setEnabled(userRange);

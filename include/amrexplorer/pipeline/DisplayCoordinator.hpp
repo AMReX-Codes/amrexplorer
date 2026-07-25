@@ -3,10 +3,13 @@
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/pipeline/ImageTransformPolicy.hpp>
+#include <amrexplorer/pipeline/SlicePipeline.hpp>
 
+#include <array>
 #include <optional>
 #include <span>
 #include <utility>
+#include <vector>
 
 // Owns derived display state that the GUI's slice paths must keep mutually
 // consistent across transitions, and the pure decisions that were previously
@@ -64,6 +67,58 @@ public:
     [[nodiscard]] static ImageTransformPolicy rasterTransformPolicy(
         bool hasCachedRequest, const SliceRequest& cached,
         const SliceRequest& incoming, bool zoomed);
+
+    // Realigns an arrived result to a replacement display range (the reused
+    // full-domain range): overwrites minimum/maximum and, when
+    // realignRasterAndContours is set, re-renders the raster against it
+    // (unless the raster was intentionally left untouched) and re-extracts
+    // the contour polylines. The 3-D shared-range sync realigns every panel
+    // afterwards, so its caller passes false there to avoid rendering each
+    // panel twice; 2-D has no later sync and passes true.
+    static void realignArrivalToRange(SliceDisplayResult& result,
+        std::pair<double, double> range, const Palette& palette,
+        bool realignRasterAndContours);
+
+    // One panel's inputs to / outputs of the shared-range sync below.
+    struct PanelSyncInput {
+        const ScalarPlane* plane = nullptr;            // display plane
+        const ScalarPlane* contourFinePlane = nullptr; // contour modes only
+        int contourFineFactor = 1;
+        bool logarithmic = false;      // the panel's effective log mapping
+        std::array<int, 2> outputSize{0, 0};  // display size for contours
+    };
+    struct PanelSyncUpdate {
+        bool applies = false;          // false: empty plane, leave untouched
+        ImageBuffer image;             // rendered against the shared range
+        bool contoursRecomputed = false;
+        std::vector<ContourPolyline> contourPolylines;
+    };
+    struct SharedRangeSync {
+        std::pair<double, double> range;
+        std::vector<PanelSyncUpdate> panels;  // parallel to the input span
+    };
+
+    // The 3-D Visible-range synchronization: resolve the shared range (the
+    // cached full-domain range for `key` when current, else the union of the
+    // panels' finite extrema) and produce, per panel, the raster re-rendered
+    // against it and — in contour mode — the polylines re-extracted against
+    // it, so every panel matches the one shared color bar. Returns nullopt
+    // when there is neither a cached range nor any finite sample, in which
+    // case the caller leaves the panels untouched.
+    [[nodiscard]] std::optional<SharedRangeSync> syncPanelsToSharedRange(
+        const RangeKey& key, std::span<const PanelSyncInput> panels,
+        bool logarithmic, bool contourMode, int contourCount,
+        const Palette& palette) const;
+
+    // True when the two planes map pixels to physical units at different
+    // densities on the given in-plane axes — the condition under which
+    // preserving a scene transform would misframe the replacement raster
+    // (a capped full-domain raster replaced by a finer subregion crop, see
+    // issue #45). Degenerate planes or extents compare as not-different, so
+    // callers fall back to the plain Preserve behavior.
+    [[nodiscard]] static bool planeDensitiesDiffer(
+        const ScalarPlane& before, const ScalarPlane& after,
+        std::array<int, 2> axes);
 
 private:
     std::optional<RangeKey> m_rangeKey;

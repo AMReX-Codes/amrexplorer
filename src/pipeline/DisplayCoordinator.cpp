@@ -1,5 +1,7 @@
 #include <amrexplorer/pipeline/DisplayCoordinator.hpp>
 
+#include <amrexplorer/render2d/ScalarRenderer.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -86,6 +88,105 @@ ImageTransformPolicy DisplayCoordinator::rasterTransformPolicy(
         return ImageTransformPolicy::Preserve;
     }
     return ImageTransformPolicy::GeometryAware;
+}
+
+void DisplayCoordinator::realignArrivalToRange(SliceDisplayResult& result,
+    std::pair<double, double> range, const Palette& palette,
+    bool realignRasterAndContours)
+{
+    result.minimum = range.first;
+    result.maximum = range.second;
+    if (!realignRasterAndContours) {
+        return;
+    }
+    if (!result.rasterUnchanged) {
+        result.image = renderScalarPlane(result.slice.plane,
+            ScalarRenderSettings{
+                .minimum = result.minimum,
+                .maximum = result.maximum,
+                .logarithmic = result.logarithmic,
+                .palette = &palette
+            });
+    }
+    recomputeContourPolylines(result);
+}
+
+std::optional<DisplayCoordinator::SharedRangeSync>
+DisplayCoordinator::syncPanelsToSharedRange(
+    const RangeKey& key, std::span<const PanelSyncInput> panels,
+    bool logarithmic, bool contourMode, int contourCount,
+    const Palette& palette) const
+{
+    auto shared = cachedFullDomainRange(key);
+    if (!shared) {
+        std::vector<const ScalarPlane*> planes;
+        planes.reserve(panels.size());
+        for (const auto& panel : panels) {
+            planes.push_back(panel.plane);
+        }
+        shared = sharedVisibleRange(planes, logarithmic);
+    }
+    if (!shared) {
+        return std::nullopt;
+    }
+    SharedRangeSync sync;
+    sync.range = *shared;
+    sync.panels.resize(panels.size());
+    for (std::size_t index = 0; index < panels.size(); ++index) {
+        const auto& panel = panels[index];
+        auto& update = sync.panels[index];
+        if (panel.plane == nullptr || panel.plane->width <= 0
+            || panel.plane->height <= 0) {
+            continue;
+        }
+        update.applies = true;
+        // Contours before the raster, mirroring the original inline order.
+        if (contourMode && panel.contourFinePlane != nullptr
+            && panel.contourFinePlane->width > 0) {
+            update.contourPolylines = recomputeContourPolylines(
+                *panel.contourFinePlane, panel.contourFineFactor,
+                sync.range.first, sync.range.second, panel.logarithmic,
+                contourCount, panel.outputSize[0], panel.outputSize[1]);
+            update.contoursRecomputed = true;
+        }
+        update.image = renderScalarPlane(*panel.plane, ScalarRenderSettings{
+            .minimum = sync.range.first,
+            .maximum = sync.range.second,
+            .logarithmic = panel.logarithmic,
+            .palette = &palette
+        });
+    }
+    return sync;
+}
+
+bool DisplayCoordinator::planeDensitiesDiffer(
+    const ScalarPlane& before, const ScalarPlane& after,
+    std::array<int, 2> axes)
+{
+    if (before.width <= 0 || before.height <= 0
+        || after.width <= 0 || after.height <= 0) {
+        return false;
+    }
+    const auto xAxis = static_cast<std::size_t>(axes[0]);
+    const auto yAxis = static_cast<std::size_t>(axes[1]);
+    const auto beforeExtentX
+        = before.physicalRegion.upper[xAxis] - before.physicalRegion.lower[xAxis];
+    const auto beforeExtentY
+        = before.physicalRegion.upper[yAxis] - before.physicalRegion.lower[yAxis];
+    const auto afterExtentX
+        = after.physicalRegion.upper[xAxis] - after.physicalRegion.lower[xAxis];
+    const auto afterExtentY
+        = after.physicalRegion.upper[yAxis] - after.physicalRegion.lower[yAxis];
+    if (!(beforeExtentX > 0.0) || !(beforeExtentY > 0.0)
+        || !(afterExtentX > 0.0) || !(afterExtentY > 0.0)) {
+        return false;
+    }
+    const auto matches = [](double a, double b) {
+        return std::abs(a - b) <= 1.0e-9 * std::max(std::abs(a), std::abs(b));
+    };
+    return !matches(before.width / beforeExtentX, after.width / afterExtentX)
+        || !matches(before.height / beforeExtentY,
+            after.height / afterExtentY);
 }
 
 } // namespace amrvis

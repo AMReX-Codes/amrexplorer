@@ -2,6 +2,7 @@
 
 #include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/pipeline/DisplayCoordinator.hpp>
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
 
 #include <algorithm>
@@ -445,35 +446,17 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
             // maps all three panels consistently. Compute the union of finite extrema
             // across all three planes and re-render each display with the shared range.
             if (result.displays.size() == 3 && rangeMode == RangeMode::Visible) {
-                double globalMin = std::numeric_limits<double>::infinity();
-                double globalMax = -std::numeric_limits<double>::infinity();
-                for (const auto& d : result.displays) {
-                    const auto range = finiteRange(d.slice.plane);
-                    if (range) {
-                        globalMin = std::min(globalMin, range->first);
-                        globalMax = std::max(globalMax, range->second);
-                    }
-                }
-                const auto logarithmic = spec.logarithmic;
-                if (!std::isfinite(globalMin) || !std::isfinite(globalMax)) {
-                    if (logarithmic) {
-                        globalMin = 1.0;
-                        globalMax = 10.0;
-                    } else {
-                        globalMin = 0.0;
-                        globalMax = 1.0;
-                    }
-                }
-                if (globalMin == globalMax) {
-                    if (logarithmic && globalMin > 0.0) {
-                        globalMin /= 1.0 + 1.0e-6;
-                        globalMax *= 1.0 + 1.0e-6;
-                    } else {
-                        const auto pad = std::max(std::abs(globalMin), 1.0) * 1.0e-6;
-                        globalMin -= pad;
-                        globalMax += pad;
-                    }
-                }
+                const std::array<const ScalarPlane*, 3> planes{
+                    &result.displays[0].slice.plane,
+                    &result.displays[1].slice.plane,
+                    &result.displays[2].slice.plane};
+                const auto shared = DisplayCoordinator::sharedVisibleRange(
+                    planes, spec.logarithmic);
+                // No finite samples anywhere: fall back to a neutral range so
+                // the frame still renders.
+                const auto [globalMin, globalMax] = shared.value_or(
+                    spec.logarithmic ? std::pair{1.0, 10.0}
+                                     : std::pair{0.0, 1.0});
                 for (auto& d : result.displays) {
                     d.minimum = globalMin;
                     d.maximum = globalMax;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <amrexplorer/pipeline/ImageTransformPolicy.hpp>
+
 #include <QGraphicsView>
 #include <QColor>
 #include <QImage>
@@ -46,11 +48,10 @@ struct PointOverlay {
     float size = 3.0F;
 };
 
-enum class ImageTransformPolicy {
-    GeometryAware,
-    Preserve,
-    Refit
-};
+// ImageTransformPolicy lives in the Qt-free pipeline layer (the
+// DisplayCoordinator decides it from pure request data); re-export it here
+// so amrvis::qt::ImageTransformPolicy keeps resolving for the GUI.
+using amrvis::ImageTransformPolicy;
 
 class ImageView final : public QGraphicsView {
     Q_OBJECT

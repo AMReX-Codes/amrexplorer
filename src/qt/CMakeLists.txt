@@ -24,6 +24,8 @@ add_executable(amrexplorer_qt
     NumberFormat.hpp
     ScientificDoubleSpinBox.cpp
     ScientificDoubleSpinBox.hpp
+    SequenceController.cpp
+    SequenceController.hpp
     SetContoursDialog.cpp
     SetContoursDialog.hpp
     Theme.hpp

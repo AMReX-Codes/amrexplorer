@@ -1,5 +1,6 @@
 #include "MainWindow.hpp"
 #include "AnimationExporter.hpp"
+#include "SequenceController.hpp"
 #include "AnimationPanel.hpp"
 #include "CacheConfig.hpp"
 #include "ColorBarWidget.hpp"
@@ -103,10 +104,6 @@
 
 namespace amrvis::qt {
 namespace {
-
-// Sequence frame loads and prefetches get dataset ids from a dedicated range
-// so they never collide with the ids openDataset derives from m_generation.
-constexpr std::uint64_t sequenceDatasetIdBase = 0x4000000000000000ULL;
 
 constexpr std::array<BuiltinPalette, 7> builtinPalettes{
     BuiltinPalette::Rainbow, BuiltinPalette::Turbo, BuiltinPalette::Viridis,
@@ -617,6 +614,89 @@ MainWindow::MainWindow(QWidget* parent)
     // stops the other (see setPlaybackMode).
     m_playbackTimer = new QTimer(this);
     connect(m_playbackTimer, &QTimer::timeout, this, [this] { playbackTick(); });
+    // The sequence controller owns the frame/prefetch state machine; this
+    // window supplies the GUI-coupled hooks (spec snapshot, frame display,
+    // shutdown flag) and reacts to its signals below.
+    m_sequenceController = new SequenceController(
+        SequenceController::Hooks{
+            [this] { return buildFrameSpec(); },
+            [this](InitialSliceResult& result, bool defaultPositions) {
+                displayFrameResult(result, defaultPositions);
+            },
+            [this] { return m_closing; },
+        },
+        this);
+    connect(m_sequenceController, &SequenceController::frameSwitchStarted,
+        this, [this](int index) {
+            // Cancel the current dataset's in-flight work, exactly like
+            // opening a fresh dataset does, but keep the view state (field,
+            // level, range, log, palette, zoom, slice positions) for the
+            // next frame.
+            const std::array<PlaneViewState*, 4> states{&m_view2d,
+                &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+            for (auto* state : states) {
+                state->stopSource.request_stop();
+                ++state->sliceGeneration;
+            }
+            m_initialStopSource.request_stop();
+            m_linePlotStopSource.request_stop();
+            m_pendingAllViews = false;
+            m_pendingViews.clear();
+            m_sliceDebounce->stop();
+            // The dataset window shows the previous frame's raw values;
+            // drop it, and the line plot window whose curves are snapshots
+            // of this dataset, so neither goes stale across the switch.
+            closeDatasetWindow();
+            auto* linePlotWindow = m_linePlotWindow;
+            m_linePlotWindow = nullptr;
+            if (linePlotWindow != nullptr) {
+                linePlotWindow->close();
+            }
+            ++m_generation;
+            m_datasetPath = m_sequenceController->framePath(index);
+            m_animationPanel->setSequenceFrame(index);
+        });
+    connect(m_sequenceController, &SequenceController::loadActivityChanged,
+        this, [this](int delta) {
+            if (delta > 0) {
+                m_activeRequests += static_cast<std::uint64_t>(delta);
+            } else {
+                m_activeRequests -= static_cast<std::uint64_t>(-delta);
+            }
+            updateDiagnostics();
+        });
+    connect(m_sequenceController, &SequenceController::staleResultDropped,
+        this, [this] {
+            ++m_staleResults;
+            updateDiagnostics();
+        });
+    connect(m_sequenceController, &SequenceController::statusMessage,
+        this, [this](const QString& message) {
+            statusBar()->showMessage(message);
+        });
+    connect(m_sequenceController, &SequenceController::frameDisplayed,
+        this, [this](int index) {
+            m_animationPanel->setSequenceFrame(index);
+            m_animationPanel->setSequenceInfo(
+                QString::fromStdString(m_datasetPath.filename().string()),
+                m_openMetadata->time);
+            updateDiagnostics();
+            emit sequenceFrameDisplayed(index);
+        });
+    connect(m_sequenceController, &SequenceController::frameLoadFailed,
+        this, [this](const QString& message) {
+            statusBar()->showMessage(tr("Frame load failed"));
+            // During animation export the failure is reported by the export
+            // handler; avoid a second dialog.
+            const bool wasExporting = m_animationExporter->active();
+            emit sequenceFrameFailed();
+            if (!wasExporting) {
+                reportBackgroundError(
+                    tr("Cannot load frame: %1").arg(message));
+            }
+            updateDiagnostics();
+        });
+
     // Animation export advances one frame at a time as each renders. The
     // exporter owns the whole export state machine; this window supplies
     // frame rendering and navigation, and restores its UI on finished().
@@ -650,10 +730,11 @@ MainWindow::MainWindow(QWidget* parent)
         [this](bool success, const QString& message, int restoreIndex) {
             // Return the user to the frame they were viewing (unless we are
             // closing, which would launch a new frame load mid-shutdown).
-            if (!m_closing && !m_sequenceFrames.empty()) {
+            if (!m_closing && m_sequenceController->hasSequence()) {
                 goToSequenceFrame(restoreIndex < 0 ? 0 : restoreIndex);
             }
-            m_exportAnimationAction->setEnabled(!m_sequenceFrames.empty());
+            m_exportAnimationAction->setEnabled(
+                m_sequenceController->hasSequence());
             if (!m_closing) {
                 if (success) {
                     QMessageBox::information(
@@ -2406,7 +2487,7 @@ void MainWindow::cancelInFlight()
     }
     m_initialStopSource.request_stop();
     m_metadataStopSource.request_stop();
-    m_prefetchStopSource.request_stop();
+    m_sequenceController->cancelActiveWork();
     m_linePlotStopSource.request_stop();
     m_view2d.stopSource.request_stop();
     for (auto& state : m_planeViews) {
@@ -2820,7 +2901,7 @@ void MainWindow::exportAnimation()
     if (m_animationExporter->active()) {
         return;
     }
-    if (m_sequenceFrames.empty()) {
+    if (!m_sequenceController->hasSequence()) {
         QMessageBox::information(this, tr("No animation"),
             tr("Open a plotfile sequence before exporting an animation."));
         return;
@@ -2872,7 +2953,8 @@ void MainWindow::startAnimationExportForTest(const QString& path,
 void MainWindow::beginAnimationExport(const QString& path, bool includeColorBar)
 {
     auto* view = m_activeView != nullptr ? m_activeView->view : nullptr;
-    if (view == nullptr || !view->hasImage() || m_sequenceFrames.empty()) {
+    if (view == nullptr || !view->hasImage()
+        || !m_sequenceController->hasSequence()) {
         return;
     }
     // Freeze the export zoom from the current view so every frame renders at the
@@ -2889,7 +2971,8 @@ void MainWindow::beginAnimationExport(const QString& path, bool includeColorBar)
         suffixes = {QString()};
     }
     if (!m_animationExporter->begin(path, includeColorBar,
-            static_cast<int>(m_sequenceFrames.size()), m_sequenceIndex, scale,
+            m_sequenceController->frameCount(),
+            m_sequenceController->currentIndex(), scale,
             std::move(suffixes), this)) {
         return;
     }
@@ -3513,8 +3596,7 @@ void MainWindow::scheduleSliceRequest(bool rasterDirty)
     if (m_controlsReady && m_dataset) {
         // Any slice-affecting UI change funnels through here; a prefetched
         // frame rendered against the old spec is obsolete.
-        ++m_specGeneration;
-        discardPrefetch();
+        m_sequenceController->invalidatePrefetch();
         m_pendingRasterDirty = m_pendingRasterDirty || rasterDirty;
         m_pendingAllViews = true;
         m_sliceDebounce->start();
@@ -3524,8 +3606,7 @@ void MainWindow::scheduleSliceRequest(bool rasterDirty)
 void MainWindow::scheduleSliceRequest(PlaneViewState& state, bool rasterDirty)
 {
     if (m_controlsReady && m_dataset) {
-        ++m_specGeneration;
-        discardPrefetch();
+        m_sequenceController->invalidatePrefetch();
         m_pendingRasterDirty = m_pendingRasterDirty || rasterDirty;
         if (std::find(m_pendingViews.begin(), m_pendingViews.end(), &state)
             == m_pendingViews.end()) {
@@ -4185,9 +4266,7 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
         return;
     }
 
-    m_sequenceFrames = std::move(sorted);
-    m_animationPanel->setSequenceFrameCount(
-        static_cast<int>(m_sequenceFrames.size()));
+    m_animationPanel->setSequenceFrameCount(static_cast<int>(sorted.size()));
     m_animationPanel->setSequenceVisible(true);
     updateAnimationDockVisibility();
     // Line plot curves are snapshots of the previous dataset; drop the window.
@@ -4196,7 +4275,7 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
     if (linePlotWindow != nullptr) {
         linePlotWindow->close();
     }
-    goToSequenceFrame(0);
+    m_sequenceController->open(std::move(sorted));
 }
 
 void MainWindow::closeSequence()
@@ -4204,10 +4283,7 @@ void MainWindow::closeSequence()
     if (m_playbackMode == PlaybackMode::Sequence) {
         setPlaybackMode(PlaybackMode::None);
     }
-    discardPrefetch();
-    m_sequenceFrames.clear();
-    m_sequenceIndex = -1;
-    m_sequenceInFlight = false;
+    m_sequenceController->close();
     m_animationPanel->setSequenceVisible(false);
     updateAnimationDockVisibility();
 }
@@ -4217,7 +4293,7 @@ void MainWindow::updateAnimationDockVisibility()
     // The Animation panel hosts the 3-D slice-sweep controls and the
     // plotfile-sequence controls. Keep it visible only when one of those
     // applies; otherwise it is dead space.
-    const auto sequenceActive = !m_sequenceFrames.empty();
+    const auto sequenceActive = m_sequenceController->hasSequence();
     const auto threeD = m_dataset != nullptr
         && m_dataset->metadata().dimension == 3;
     m_animationDock->setVisible(sequenceActive || threeD);
@@ -4225,160 +4301,12 @@ void MainWindow::updateAnimationDockVisibility()
 
 void MainWindow::stepSequence(int direction)
 {
-    if (m_sequenceFrames.empty()) {
-        return;
-    }
-    goToSequenceFrame(m_sequenceIndex + direction);
+    m_sequenceController->step(direction);
 }
 
 void MainWindow::goToSequenceFrame(int index)
 {
-    if (m_sequenceFrames.empty()) {
-        return;
-    }
-    const auto count = static_cast<int>(m_sequenceFrames.size());
-    // Both steps and playback wrap around the ends of the sequence.
-    index = ((index % count) + count) % count;
-    if (m_sequenceInFlight && index == m_sequenceIndex) {
-        return;
-    }
-    // Cancel the current dataset's in-flight work, exactly like opening a
-    // fresh dataset does, but keep the view state (field, level, range,
-    // log, palette, zoom, slice positions) for the next frame.
-    const std::array<PlaneViewState*, 4> states{
-        &m_view2d, &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
-    for (auto* state : states) {
-        state->stopSource.request_stop();
-        ++state->sliceGeneration;
-    }
-    m_initialStopSource.request_stop();
-    m_linePlotStopSource.request_stop();
-    m_pendingAllViews = false;
-    m_pendingViews.clear();
-    m_sliceDebounce->stop();
-    // The dataset window shows the previous frame's raw values; drop it.
-    closeDatasetWindow();
-    // Line plot curves are snapshots of this dataset; drop the window so its
-    // title and curves do not go stale across the frame switch.
-    auto* linePlotWindow = m_linePlotWindow;
-    m_linePlotWindow = nullptr;
-    if (linePlotWindow != nullptr) {
-        linePlotWindow->close();
-    }
-    const auto generation = ++m_generation;
-    m_sequenceIndex = index;
-    m_sequenceInFlight = true;
-    m_frameTimer.start();
-    m_datasetPath = m_sequenceFrames[static_cast<std::size_t>(index)];
-    m_animationPanel->setSequenceFrame(index);
-
-    // A still-valid prefetch of this frame is consumed instead of loading
-    // again; anything else in the slot is cancelled and dropped.
-    if (m_prefetched && m_prefetched->frameIndex == index
-        && m_prefetched->specGeneration == m_specGeneration) {
-        auto prefetched = std::move(*m_prefetched);
-        m_prefetched.reset();
-        discardPrefetch();
-        finishFrameLoad(std::move(prefetched.result), prefetched.defaultPositions);
-        return;
-    }
-    discardPrefetch();
-    startFrameLoad(index, generation);
-}
-
-void MainWindow::startFrameLoad(int index, std::uint64_t generation)
-{
-    auto spec = buildFrameSpec();
-    const auto defaultPositions = spec.defaultPositions;
-    const auto path = m_sequenceFrames[static_cast<std::size_t>(index)];
-    const auto datasetId = DatasetId{
-        sequenceDatasetIdBase + ++m_sequenceDatasetCounter};
-    m_initialStopSource = StopSource{};
-    const auto cancellation = m_initialStopSource.get_token();
-    ++m_activeRequests;
-    statusBar()->showMessage(tr("Loading frame %1...").arg(
-        QString::fromStdString(path.filename().string())));
-    updateDiagnostics();
-
-    auto* watcher = new QFutureWatcher<InitialSliceResult>(this);
-    connect(watcher, &QFutureWatcher<InitialSliceResult>::finished, this,
-        [this, watcher, generation, index, defaultPositions] {
-            --m_activeRequests;
-            if (m_closing) {
-                watcher->deleteLater();
-                return;
-            }
-            try {
-                auto result = watcher->result();
-                if (generation == m_generation && index == m_sequenceIndex) {
-                    finishFrameLoad(std::move(result), defaultPositions);
-                } else {
-                    ++m_staleResults;
-                }
-            } catch (const std::exception& error) {
-                if (generation == m_generation && index == m_sequenceIndex) {
-                    m_sequenceInFlight = false;
-                    statusBar()->showMessage(tr("Frame load failed"));
-                    // During animation export the failure is reported by the
-                    // export handler (endExportAnimation); avoid a second dialog.
-                    const bool wasExporting = m_animationExporter->active();
-                    emit sequenceFrameFailed();
-                    if (!wasExporting) {
-                        reportBackgroundError(
-                            tr("Cannot load frame: %1").arg(exceptionMessage(error)));
-                    }
-                } else {
-                    ++m_staleResults;
-                }
-            }
-            updateDiagnostics();
-            watcher->deleteLater();
-        });
-    watcher->setFuture(QtConcurrent::run(
-        [path, datasetId, spec = std::move(spec), cancellation] {
-        return executeFrameLoad(path, datasetId, spec, initialCacheBudget(),
-            cancellation);
-    }));
-}
-
-void MainWindow::finishFrameLoad(InitialSliceResult result, bool defaultPositions)
-{
-    try {
-        displayFrameResult(result, defaultPositions);
-    } catch (const std::exception& error) {
-        m_sequenceInFlight = false;
-        statusBar()->showMessage(tr("Frame load failed"));
-        // During animation export the failure is reported by the export
-        // handler (endExportAnimation); avoid a second dialog.
-        const bool wasExporting = m_animationExporter->active();
-        emit sequenceFrameFailed();
-        if (!wasExporting) {
-            reportBackgroundError(
-                tr("Cannot load frame: %1").arg(exceptionMessage(error)));
-        }
-        updateDiagnostics();
-        return;
-    }
-    m_sequenceInFlight = false;
-    m_lastFrameSwitchMs = m_frameTimer.elapsed();
-    m_animationPanel->setSequenceFrame(m_sequenceIndex);
-    m_animationPanel->setSequenceInfo(
-        QString::fromStdString(m_datasetPath.filename().string()),
-        m_openMetadata->time);
-    updateDiagnostics();
-    emit sequenceFrameDisplayed(m_sequenceIndex);
-    // Bounded low-priority prefetch of the next frame: queued behind the
-    // display update, and re-validated when it runs so a frame jump in the
-    // meantime does not start obsolete I/O.
-    const auto displayedIndex = m_sequenceIndex;
-    QTimer::singleShot(0, this, [this, displayedIndex] {
-        if (m_sequenceFrames.empty() || m_sequenceInFlight
-            || m_sequenceIndex != displayedIndex) {
-            return;
-        }
-        const auto count = static_cast<int>(m_sequenceFrames.size());
-        startPrefetch((displayedIndex + 1) % count);
-    });
+    m_sequenceController->goToFrame(index);
 }
 
 void MainWindow::displayFrameResult(InitialSliceResult& result,
@@ -4637,60 +4565,6 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     return spec;
 }
 
-void MainWindow::startPrefetch(int frameIndex)
-{
-    // Single bounded slot: cancel and drop whatever prefetch came before.
-    discardPrefetch();
-    auto spec = buildFrameSpec();
-    const auto defaultPositions = spec.defaultPositions;
-    const auto specGeneration = m_specGeneration;
-    const auto generation = m_prefetchGeneration;
-    const auto path = m_sequenceFrames[static_cast<std::size_t>(frameIndex)];
-    const auto datasetId = DatasetId{
-        sequenceDatasetIdBase + ++m_sequenceDatasetCounter};
-    m_prefetchStopSource = StopSource{};
-    const auto cancellation = m_prefetchStopSource.get_token();
-    ++m_activeRequests;
-    updateDiagnostics();
-
-    auto* watcher = new QFutureWatcher<InitialSliceResult>(this);
-    connect(watcher, &QFutureWatcher<InitialSliceResult>::finished, this,
-        [this, watcher, generation, frameIndex, specGeneration,
-            defaultPositions] {
-            --m_activeRequests;
-            try {
-                auto result = watcher->result();
-                if (generation == m_prefetchGeneration
-                    && !m_sequenceFrames.empty()) {
-                    m_prefetched = PrefetchedFrame{frameIndex, specGeneration,
-                        defaultPositions, std::move(result)};
-                } else {
-                    ++m_staleResults;
-                }
-            } catch (const std::exception&) {
-                // Prefetch failures stay silent: reaching the frame loads it
-                // through the normal path and reports any error then.
-                if (generation != m_prefetchGeneration) {
-                    ++m_staleResults;
-                }
-            }
-            updateDiagnostics();
-            watcher->deleteLater();
-        });
-    watcher->setFuture(QtConcurrent::run(
-        [path, datasetId, spec = std::move(spec), cancellation] {
-        return executeFrameLoad(path, datasetId, spec, initialCacheBudget(),
-            cancellation);
-    }));
-}
-
-void MainWindow::discardPrefetch()
-{
-    m_prefetchStopSource.request_stop();
-    ++m_prefetchGeneration;
-    m_prefetched.reset();
-}
-
 void MainWindow::stepSweep(int direction)
 {
     if (!m_dataset || m_dataset->metadata().dimension != 3) {
@@ -4727,7 +4601,7 @@ void MainWindow::toggleSequencePlayback()
         setPlaybackMode(PlaybackMode::None);
         return;
     }
-    if (m_sequenceFrames.size() < 2) {
+    if (m_sequenceController->frameCount() < 2) {
         return;
     }
     setPlaybackMode(PlaybackMode::Sequence);
@@ -4765,15 +4639,15 @@ void MainWindow::playbackTick()
         return;
     }
     if (m_playbackMode == PlaybackMode::Sequence) {
-        if (m_sequenceFrames.size() < 2) {
+        if (m_sequenceController->frameCount() < 2) {
             setPlaybackMode(PlaybackMode::None);
             return;
         }
         // Skip the tick while the previous frame is still loading.
-        if (m_sequenceInFlight) {
+        if (m_sequenceController->inFlight()) {
             return;
         }
-        goToSequenceFrame(m_sequenceIndex + 1);
+        m_sequenceController->step(1);
     }
 }
 
@@ -4821,7 +4695,7 @@ void MainWindow::updateDiagnostics()
             .arg(m_cacheResidentBytes)
             .arg(m_cachePinnedBytes)
             .arg(m_cacheEvictions)
-            .arg(m_lastFrameSwitchMs);
+            .arg(m_sequenceController->lastFrameSwitchMs());
     for (const auto& line : m_probeLines) {
         text += QLatin1Char('\n');
         text += line;

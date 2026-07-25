@@ -2,11 +2,16 @@
 # copy of a metadata-only fixture (tests/fixture_materializer), then runs the
 # Qt smoke binary on it offscreen. Expected -D arguments:
 #   MATERIALIZER  path to the fixture_materializer executable
-#   AMRVIS_QT     path to the amrvis_qt executable
+#   AMREXPLORER_QT     path to the amrexplorer_qt executable
 #   SOURCE        fixture source directory (e.g. tests/data/plotfile_2d)
 #   WORK          directory the materialized copies are written into
-#   MODE          slice | sequence | missing-range
-foreach(argument MATERIALIZER AMRVIS_QT SOURCE WORK MODE)
+#   MODE          slice | sequence | missing-range | non-finite | raw-fab |
+#                 multifab-fab | quit | quit-on-failure | export-quit |
+#                 contour-sync | raster-zoom | rubber-zoom-sync |
+#                 rubber-zoom-local | pan-zoom | range-cache | fab-zoom |
+#                 cache-budget | sequence-zoom-refit |
+#                 sequence-equal-size-zoom-refit
+foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
     endif()
@@ -27,16 +32,113 @@ endmacro()
 
 if(MODE STREQUAL "slice")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
-    run_or_die("${AMRVIS_QT}" --slice-smoke-test "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --slice-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "sequence")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
-    run_or_die("${AMRVIS_QT}" --sequence-smoke-test
+    run_or_die("${AMREXPLORER_QT}" --sequence-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "sequence-zoom-refit")
+    if(NOT DEFINED SECOND_SOURCE)
+        message(FATAL_ERROR
+            "sequence-zoom-refit requires -DSECOND_SOURCE=...")
+    endif()
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SECOND_SOURCE}" "${WORK}/plt00010")
+    run_or_die("${AMREXPLORER_QT}" --sequence-zoom-refit-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "sequence-equal-size-zoom-refit")
+    if(NOT DEFINED SECOND_SOURCE)
+        message(FATAL_ERROR
+            "sequence-equal-size-zoom-refit requires -DSECOND_SOURCE=...")
+    endif()
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SECOND_SOURCE}" "${WORK}/plt00010")
+    run_or_die("${AMREXPLORER_QT}"
+        --sequence-equal-size-zoom-refit-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "missing-range")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt" "--no-statistics")
-    run_or_die("${AMRVIS_QT}" --missing-range-smoke-test
+    run_or_die("${AMREXPLORER_QT}" --missing-range-smoke-test
         "${WORK}/plt/Level_0/Cell")
+elseif(MODE STREQUAL "non-finite")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt"
+        "--no-statistics" "--non-finite")
+    run_or_die("${AMREXPLORER_QT}" --missing-range-smoke-test
+        "${WORK}/plt/Level_0/Cell")
+elseif(MODE STREQUAL "contour-sync")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --contour-sync-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "raster-zoom")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --raster-zoom-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "rubber-zoom-sync")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --rubber-zoom-sync-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "rubber-zoom-local")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --rubber-zoom-local-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "pan-zoom")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --pan-zoom-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "range-cache")
+    # Two frames of the same fixture; frame 1's field is scaled 10x so its
+    # range differs, making a stale range-cache reuse observable.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "--scale" "10")
+    run_or_die("${AMREXPLORER_QT}" --range-cache-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "raw-fab")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --raw-fab-smoke-test
+        "${WORK}/plt/Level_0/Cell_D_00000")
+elseif(MODE STREQUAL "multifab-fab")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --multifab-fab-smoke-test
+        "${WORK}/plt/Level_0/Cell")
+elseif(MODE STREQUAL "fab-zoom")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --fab-zoom-smoke-test
+        "${WORK}/plt/Level_0/Cell")
+elseif(MODE STREQUAL "cache-budget")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --cache-budget-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "quit")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --quit-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "quit-on-failure")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    # Drop the FAB payloads so the slice read fails while metadata stays valid
+    # (a non-modal background failure), then quit.
+    file(GLOB fabPayloads "${WORK}/plt/Level_*/*_D_*")
+    foreach(payload ${fabPayloads})
+        file(REMOVE "${payload}")
+    endforeach()
+    run_or_die("${AMREXPLORER_QT}" --quit-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "export-quit")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    # Stand-in ffmpeg: answers -version so the app enables encoding, then blocks
+    # on the encode call. A quit while it is "encoding" must cancel and
+    # terminate it; if the encoder is not bounded the process never exits and
+    # the ctest TIMEOUT fails the test.
+    set(fakeBin "${WORK}/bin")
+    file(MAKE_DIRECTORY "${fakeBin}")
+    # exec so the tracked child IS the sleep, not a /bin/sh (dash) wrapper that
+    # dies on SIGTERM and orphans its sleep child for the full hour. This makes
+    # the stand-in a single process that terminate() actually kills.
+    file(WRITE "${fakeBin}/ffmpeg"
+"#!/bin/sh
+if [ \"$1\" = \"-version\" ]; then
+  echo 'ffmpeg version 0.0-fake'
+  exit 0
+fi
+exec sleep 3600
+")
+    execute_process(COMMAND chmod 755 "${fakeBin}/ffmpeg")
+    set(ENV{PATH} "${fakeBin}:$ENV{PATH}")
+    run_or_die("${AMREXPLORER_QT}" --export-quit-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
 else()
     message(FATAL_ERROR "qt_smoke_driver.cmake: unknown MODE '${MODE}'")
 endif()

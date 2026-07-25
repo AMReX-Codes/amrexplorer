@@ -13,10 +13,10 @@
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "AMRVIS_ENABLE_QT": "ON",
-        "AMRVIS_ENABLE_VTK": "OFF",
-        "AMRVIS_ENABLE_MPI": "OFF",
-        "AMRVIS_BUILD_TESTS": "ON"
+        "AMREXPLORER_ENABLE_QT": "ON",
+        "AMREXPLORER_ENABLE_VTK": "OFF",
+        "AMREXPLORER_ENABLE_MPI": "OFF",
+        "AMREXPLORER_BUILD_TESTS": "ON"
       }
     },
     {
@@ -26,10 +26,10 @@
       "binaryDir": "${sourceDir}/build-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "AMRVIS_ENABLE_QT": "ON",
-        "AMRVIS_ENABLE_VTK": "OFF",
-        "AMRVIS_ENABLE_MPI": "OFF",
-        "AMRVIS_BUILD_TESTS": "ON"
+        "AMREXPLORER_ENABLE_QT": "ON",
+        "AMREXPLORER_ENABLE_VTK": "OFF",
+        "AMREXPLORER_ENABLE_MPI": "OFF",
+        "AMREXPLORER_BUILD_TESTS": "ON"
       }
     },
     {
@@ -38,7 +38,7 @@
       "displayName": "Headless core build",
       "binaryDir": "${sourceDir}/build-headless",
       "cacheVariables": {
-        "AMRVIS_ENABLE_QT": "OFF"
+        "AMREXPLORER_ENABLE_QT": "OFF"
       }
     },
     {
@@ -47,7 +47,7 @@
       "displayName": "Headless ASan and UBSan build",
       "binaryDir": "${sourceDir}/build-sanitizers",
       "cacheVariables": {
-        "AMRVIS_ENABLE_SANITIZERS": "ON"
+        "AMREXPLORER_ENABLE_SANITIZERS": "ON"
       }
     }
   ],

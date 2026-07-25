@@ -1,4 +1,4 @@
-#include <amrvis/render2d/ScalarRenderer.hpp>
+#include <amrexplorer/render2d/ScalarRenderer.hpp>
 
 #include <algorithm>
 #include <array>
@@ -58,6 +58,11 @@ ImageBuffer renderScalarPlane(
     if (!(settings.minimum < settings.maximum)) {
         throw std::invalid_argument("scalar render range must have positive extent");
     }
+    if (!std::isfinite(settings.minimum) || !std::isfinite(settings.maximum)
+        || !std::isfinite(settings.maximum - settings.minimum)) {
+        throw std::invalid_argument(
+            "scalar render range must be finite with a finite span");
+    }
     if (settings.logarithmic && !(settings.minimum > 0.0)) {
         throw std::invalid_argument("logarithmic scalar range must be positive");
     }
@@ -80,7 +85,8 @@ ImageBuffer renderScalarPlane(
             continue;
         }
         const auto value = static_cast<double>(plane.values[pixel]);
-        if (std::isnan(value) || (settings.logarithmic && !(value > 0.0))) {
+        if (!std::isfinite(value)
+            || (settings.logarithmic && !(value > 0.0))) {
             image.rgba[pixel] = settings.nanColor;
             continue;
         }

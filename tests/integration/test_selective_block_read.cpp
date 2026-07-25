@@ -1,7 +1,7 @@
-#include <amrvis/io/PlotfileBlockReader.hpp>
-#include <amrvis/io/PlotfileDataset.hpp>
-#include <amrvis/io/PlotfileMetadataReader.hpp>
-#include <amrvis/io/StandaloneMetadataReader.hpp>
+#include <amrexplorer/io/PlotfileBlockReader.hpp>
+#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/io/PlotfileMetadataReader.hpp>
+#include <amrexplorer/io/StandaloneMetadataReader.hpp>
 
 #include <array>
 #include <chrono>
@@ -34,7 +34,7 @@ int main()
 {
     const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto root = std::filesystem::temp_directory_path()
-        / ("amrvis2-selective-read-" + std::to_string(unique));
+        / ("amrexplorer-selective-read-" + std::to_string(unique));
     std::filesystem::create_directories(root / "Level_0");
 
     writeText(root / "Header",

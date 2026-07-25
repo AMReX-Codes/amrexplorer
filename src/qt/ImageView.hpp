@@ -46,13 +46,25 @@ struct PointOverlay {
     float size = 3.0F;
 };
 
+enum class ImageTransformPolicy {
+    GeometryAware,
+    Preserve,
+    Refit
+};
+
 class ImageView final : public QGraphicsView {
     Q_OBJECT
 
 public:
     explicit ImageView(QWidget* parent = nullptr);
 
-    void setImage(const QImage& image);
+    // Preserve keeps the current panel-local transform when replacing a raster
+    // after rubber-band zoom or pan. GeometryAware refits only when the raster
+    // dimensions change. Refit discards the transform even for equal-size
+    // rasters whose data regions are incompatible.
+    void setImage(const QImage& image,
+        ImageTransformPolicy transformPolicy =
+            ImageTransformPolicy::GeometryAware);
     void setGridBoxes(const std::vector<GridBoxOverlay>& boxes);
     void setOverlaySegments(const std::vector<OverlaySegment>& segments);
     // Smooth contour polylines, rendered as cosmetic-pen path items at the
@@ -90,9 +102,10 @@ public:
     // when the scene fits the window). When zoomed into a subregion, the
     // drag shifts the visible data window (see panDrag* signals).
     void panViewport(const QPoint& delta);
-    // When enabled (the 3-D slice views), a middle/right click (or drag)
-    // without Shift or Control emits sliceMoveRequested instead of
-    // linePlotRequested; with either modifier held it stays a line plot.
+    // When enabled (the 3-D slice views): a plain right click emits
+    // sliceMoveRequested; a Shift+middle/right click or drag, or a right
+    // drag, arms a line-plot request. A plain middle click or drag is a no-op.
+    // (Only Shift is honored; Control is not.)
     void setSliceMoveEnabled(bool enabled) noexcept;
     // Highlight (or clear) a coloured border indicating the active panel.
     void setActiveBorder(bool active);

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0C1D33"/>
+      <stop offset="1" stop-color="#16456E"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.40" cy="0.38" r="0.60">
+      <stop offset="0" stop-color="#43C6E8" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#43C6E8" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="lensClip">
+      <circle cx="560" cy="560" r="156"/>
+    </clipPath>
+  </defs>
+
+  <!-- app-icon tile -->
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#tile)"/>
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#glow)"/>
+
+  <!-- AMR box mosaic: 2x2 coarse grid, lower-right quadrant refined twice -->
+  <g fill="none" stroke="#DCEBF7" stroke-width="12"
+     stroke-linejoin="round" stroke-linecap="round">
+    <rect x="192" y="192" width="480" height="480"/>
+    <path d="M432 192 V672 M192 432 H672"/>
+    <path d="M432 552 H672 M552 432 V672"/>
+    <path d="M432 492 H552 M492 432 V552"/>
+  </g>
+
+  <!-- the lens magnifies the data it covers -->
+  <g clip-path="url(#lensClip)">
+    <g transform="translate(560 560) scale(1.55) translate(-560 -560)"
+       fill="none" stroke="#43C6E8" stroke-width="12"
+       stroke-linejoin="round" stroke-linecap="round">
+      <rect x="192" y="192" width="480" height="480"/>
+      <path d="M432 192 V672 M192 432 H672"/>
+      <path d="M432 552 H672 M552 432 V672"/>
+      <path d="M432 492 H552 M492 432 V552"/>
+    </g>
+  </g>
+
+  <!-- magnifier rim and handle -->
+  <circle cx="560" cy="560" r="174" fill="none" stroke="#43C6E8" stroke-width="36"/>
+  <path d="M683 683 L832 832" stroke="#43C6E8" stroke-width="60" stroke-linecap="round"/>
+</svg>

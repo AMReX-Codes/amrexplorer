@@ -1,5 +1,5 @@
-#include <amrvis/query/LineQuery.hpp>
-#include <amrvis/query/SliceQuery.hpp>
+#include <amrexplorer/query/LineQuery.hpp>
+#include <amrexplorer/query/SliceQuery.hpp>
 
 #include <chrono>
 #include <cmath>
@@ -157,6 +157,8 @@ void test2d(const std::filesystem::path& source, const std::filesystem::path& wo
     };
     require(composite.line.positions.size() == native.size(),
         "native composite sample count mismatch");
+    require(!composite.line.positionsAreIndices,
+        "plotfile line positions were incorrectly changed to indices");
     require(composite.line.values.size() == native.size()
             && composite.line.valid.size() == native.size()
             && composite.line.sourceLevel.size() == native.size(),
@@ -456,6 +458,85 @@ void testOffsetGeometry(const std::filesystem::path& source, const std::filesyst
         "offset line query hung (regression: cell-boundary round-trip stall)");
 }
 
+// Regression for the absolute end epsilon: the walk's endEpsilon used to be an
+// absolute 1e-9 in physical units, so a domain at or below that scale
+// (micro/nano-scale SI-unit geometries) was truncated -- an extent of 4e-10
+// produced an empty line. With the cell-relative epsilon the full domain is
+// sampled. Geometry: prob_lo 0, cell size 1e-10, extent 4e-10 (4 cells).
+void testTinyDomain(const std::filesystem::path& source, const std::filesystem::path& work)
+{
+    const auto root = materializeFixture(source, work / "plotfile_3d_tiny");
+    writeFab(root / "Level_0" / "Cell_D_00000", 0,
+        "((0,0,0) (3,3,3) (0,0,0))", 1, field3d());
+    {
+        std::ofstream header(root / "Header", std::ios::binary | std::ios::trunc);
+        require(static_cast<bool>(header), "could not open tiny Header for writing");
+        header <<
+            "HyperCLaw-V1.1\n"
+            "1\n"
+            "q\n"
+            "3\n"
+            "0.0\n"
+            "0\n"
+            "0.0 0.0 0.0\n"
+            "4e-10 4e-10 4e-10\n"
+            "\n"
+            "((0,0,0) (3,3,3) (0,0,0))\n"
+            "0\n"
+            "1e-10 1e-10 1e-10\n"
+            "0\n"
+            "0\n"
+            "0 1 0.0\n"
+            "0\n"
+            "0.0 4e-10\n"
+            "0.0 4e-10\n"
+            "0.0 4e-10\n"
+            "Level_0/Cell\n";
+    }
+
+    amrvis::PlotfileDataset dataset(root, amrvis::DatasetId{22}, 1024 * 1024);
+    amrvis::LineQuery lines(dataset);
+    const auto& metadata = dataset.metadata();
+    require(metadata.dimension == 3 && metadata.finestLevel == 0,
+        "tiny fixture parsed unexpected dimension or level count");
+
+    amrvis::LineRequest request;
+    request.dataset.value = 22;
+    request.field.value = 0;
+    request.axis = 0;
+    const double center = 0.5 * (metadata.physicalDomain.lower[1]
+        + metadata.physicalDomain.upper[1]);
+    request.fixedCoordinates = {center, center, center};
+    request.maximumLevel = 0;
+    request.region = amrvis::RealBox{metadata.physicalDomain.lower,
+        metadata.physicalDomain.upper};
+    const auto lineAxisIndex = static_cast<std::size_t>(request.axis);
+    const auto lineCellSize = metadata.levels[0].cellSize[lineAxisIndex];
+    const auto lineOrigin = metadata.physicalDomain.lower[lineAxisIndex];
+
+    auto ranToCompletion = runWithTimeout(
+        [&] {
+            const auto result = lines.execute(request);
+            require(result.line.positions.size() == 4,
+                "tiny-domain line query was truncated (expected one sample per cell)");
+            for (std::size_t sample = 0; sample < 4; ++sample) {
+                require(result.line.valid[sample] == 1
+                        && result.line.sourceLevel[sample] == 0,
+                    "tiny-domain line query left a hole or reported a wrong level");
+                // Cell centers: origin + (i + 0.5) * cellSize. Pins the walk's
+                // calibration, not just completeness (a half-cell or origin
+                // offset would miss by far more than 1e-6 of a cell).
+                const double expected = lineOrigin
+                    + (static_cast<double>(sample) + 0.5) * lineCellSize;
+                require(std::fabs(result.line.positions[sample] - expected)
+                        <= 1e-6 * lineCellSize,
+                    "tiny-domain sample is not at its cell center");
+            }
+        },
+        10);
+    require(ranToCompletion, "tiny-domain line query hung");
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -470,12 +551,13 @@ int main(int argc, char* argv[])
 
     const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto work = std::filesystem::temp_directory_path()
-        / ("amrvis2-line-query-" + std::to_string(unique));
+        / ("amrexplorer-line-query-" + std::to_string(unique));
     std::filesystem::create_directories(work);
 
     test2d(plotfile2d, work);
     test3d(plotfile3d, work);
     testOffsetGeometry(plotfile3d, work);
+    testTinyDomain(plotfile3d, work);
 
     std::filesystem::remove_all(work);
     return 0;

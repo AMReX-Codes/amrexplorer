@@ -1,4 +1,4 @@
-#include <amrvis/query/SliceQuery.hpp>
+#include <amrexplorer/query/SliceQuery.hpp>
 
 #include <array>
 #include <chrono>
@@ -75,7 +75,7 @@ int main()
 {
     const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto root = std::filesystem::temp_directory_path()
-        / ("amrvis2-slice-query-" + std::to_string(unique));
+        / ("amrexplorer-slice-query-" + std::to_string(unique));
     std::filesystem::create_directories(root / "Level_0");
     std::filesystem::create_directories(root / "Level_1");
 
@@ -195,7 +195,7 @@ int main()
     // phi(i, j) = (i + j) / 2 in level-0 cell indices, i.e.
     // phi(x, y) = 2(x + y) - 1/2 in physical coordinates.
     const auto linearRoot = std::filesystem::temp_directory_path()
-        / ("amrvis2-slice-linear-" + std::to_string(unique));
+        / ("amrexplorer-slice-linear-" + std::to_string(unique));
     std::filesystem::create_directories(linearRoot / "Level_0");
     writeText(linearRoot / "Header",
         "HyperCLaw-V1.1\n"
@@ -289,7 +289,7 @@ int main()
     // A 3-D linear field sliced through a cell center: q(i, j, k) =
     // (i + j + k) / 9, so the k = 1 slice is 4(x + y) / 9 physically.
     const auto linear3dRoot = std::filesystem::temp_directory_path()
-        / ("amrvis2-slice-linear3d-" + std::to_string(unique));
+        / ("amrexplorer-slice-linear3d-" + std::to_string(unique));
     std::filesystem::create_directories(linear3dRoot / "Level_0");
     writeText(linear3dRoot / "Header",
         "HyperCLaw-V1.1\n"

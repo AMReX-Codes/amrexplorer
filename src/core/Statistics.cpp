@@ -1,4 +1,4 @@
-#include <amrvis/core/Statistics.hpp>
+#include <amrexplorer/core/Statistics.hpp>
 
 #include <algorithm>
 #include <cmath>

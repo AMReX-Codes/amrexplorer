@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Amrvis2's built-in palettes.
+"""Generate AMReXplorer's built-in palettes.
 
 Outputs two artifacts:
 
@@ -267,7 +267,7 @@ def write_cpp(entries):
 // into [Palette::paletteStart, Palette::paletteEnd] = [3, 255]; the first three
 // slots are reserved (never addressed by data), matching the legacy layout.
 
-#include <amrvis/render2d/Palette.hpp>
+#include <amrexplorer/render2d/Palette.hpp>
 
 #include <array>
 

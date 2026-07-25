@@ -1,4 +1,4 @@
-#include <amrvis/query/SliceQuery.hpp>
+#include <amrexplorer/query/SliceQuery.hpp>
 
 #include <algorithm>
 #include <array>
@@ -52,20 +52,8 @@ bool contains(const IntBox& box, const Int3& point, int dimension)
 int physicalToIndex(double position, const DatasetMetadata& metadata,
     const LevelMetadata& level, int axis)
 {
-    const auto i = static_cast<std::size_t>(axis);
-    const auto relative = (position - metadata.physicalDomain.lower[i]) / level.cellSize[i];
-    const auto offset = std::floor(relative);
-    if (offset < static_cast<double>(std::numeric_limits<int>::min())
-        || offset > static_cast<double>(std::numeric_limits<int>::max())) {
-        throw std::out_of_range("slice coordinate exceeds index range");
-    }
-    const auto index = static_cast<std::int64_t>(level.domain.lower[i])
-        + static_cast<std::int64_t>(offset);
-    if (index < std::numeric_limits<int>::min()
-        || index > std::numeric_limits<int>::max()) {
-        throw std::out_of_range("slice coordinate plus domain offset exceeds index range");
-    }
-    return static_cast<int>(index);
+    (void) metadata;
+    return sampleIndex(level, axis, position);
 }
 
 // The index box a physical region covers at one level. Piecewise sampling
@@ -276,13 +264,11 @@ SliceQueryResult SliceQuery::execute(
         return std::nullopt;
     };
 
-    // Bilinear interpolation of the composed field at the four cell centers
-    // bracketing the position on its covering level (the data is
-    // cell-centered: the center of index cell i sits at physicalDomain.lower
-    // + (i - level.domain.lower + 1/2) * cellSize). Each corner is evaluated
-    // with the composed lookup, so samples blend fine and coarse values and
-    // stay smooth across AMR boundaries, and a globally linear field is
-    // reproduced exactly at interior pixels.
+    // Bilinear interpolation of the composed field at the four sample
+    // positions bracketing the position on its covering level.  Each corner
+    // is evaluated with the composed lookup, so samples blend fine and coarse
+    // values and stay smooth across AMR boundaries, and a globally linear
+    // field is reproduced exactly at interior pixels.
     const auto linearSample = [&metadata, &axes, &valueAt](const Real3& position)
         -> std::optional<std::pair<double, int>> {
         const auto own = valueAt(position);
@@ -293,28 +279,33 @@ SliceQueryResult SliceQuery::execute(
         const auto& level =
             metadata.levels[static_cast<std::size_t>(coveringLevel)];
 
-        // Bracketing center coordinates, interpolation weight, and the
-        // bracket slot of the position's own cell, per plane axis.
+        // Bracketing sample coordinates, interpolation weight, and the
+        // bracket slot containing the position, per plane axis.
         std::array<std::array<double, 2>, 2> centers{};
         std::array<double, 2> weights{};
         std::array<int, 2> ownIndex{};
         for (std::size_t planeAxis = 0; planeAxis < 2; ++planeAxis) {
             const auto axis = static_cast<std::size_t>(axes[planeAxis]);
             const auto cellSize = level.cellSize[axis];
-            const auto origin = metadata.physicalDomain.lower[axis];
-            const auto cell = std::floor((position[axis] - origin) / cellSize);
-            const auto cellCenter = origin + (cell + 0.5) * cellSize;
-            const auto low = position[axis] < cellCenter ? cell - 1.0 : cell;
-            centers[planeAxis][0] = origin + (low + 0.5) * cellSize;
-            centers[planeAxis][1] = centers[planeAxis][0] + cellSize;
-            weights[planeAxis] = (position[axis] - centers[planeAxis][0]) / cellSize;
-            ownIndex[planeAxis] = position[axis] < cellCenter ? 1 : 0;
+            const auto ownSample = sampleIndex(
+                level, static_cast<int>(axis), position[axis]);
+            const auto ownCenter = samplePosition(
+                level, static_cast<int>(axis), ownSample);
+            const auto low =
+                position[axis] < ownCenter ? ownSample - 1 : ownSample;
+            centers[planeAxis][0] = samplePosition(
+                level, static_cast<int>(axis), low);
+            centers[planeAxis][1] = samplePosition(
+                level, static_cast<int>(axis), low + 1);
+            weights[planeAxis] =
+                (position[axis] - centers[planeAxis][0]) / cellSize;
+            ownIndex[planeAxis] = position[axis] < ownCenter ? 1 : 0;
         }
 
-        // Corner samples at the bracketing centers (sharing the position's
+        // Corner samples at the bracketing positions (sharing the position's
         // normal coordinate in 3-D). A corner outside every grid takes the
         // nearest covered corner's value — x-aligned first, then y-aligned,
-        // then the position's own cell — clamping the field to the domain
+        // then the position's own sample — clamping the field to the domain
         // edge instead of inventing data.
         std::array<std::array<double, 2>, 2> corner{};
         std::array<std::array<bool, 2>, 2> covered{};

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <amrvis/core/Request.hpp>
-#include <amrvis/core/Result.hpp>
+#include <amrexplorer/core/Request.hpp>
+#include <amrexplorer/core/Result.hpp>
 
 #include <QColor>
 #include <QPoint>
@@ -16,6 +16,7 @@
 #include <vector>
 
 class QListWidget;
+class QEvent;
 class QMouseEvent;
 class QPaintEvent;
 class QRubberBand;
@@ -57,16 +58,20 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
 private:
     [[nodiscard]] QRect plotRect() const;
     [[nodiscard]] std::optional<QRectF> automaticRange() const;
     [[nodiscard]] std::optional<QRectF> displayedRange() const;
+    [[nodiscard]] QString hoverTextAt(const QPointF& position) const;
+    void hideHover();
 
     const std::vector<LinePlotCurve>* m_curves = nullptr;
     QString m_numberFormat;
     bool m_showMarkers = false;
     std::optional<QRectF> m_zoom;
+    std::optional<QRectF> m_paintedRange;
     QPoint m_pressPosition;
     QRubberBand* m_rubberBand = nullptr;
     bool m_dragging = false;

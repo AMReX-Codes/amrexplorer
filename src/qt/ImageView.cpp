@@ -96,13 +96,18 @@ ImageView::ImageView(QWidget* parent)
     setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
 }
 
-void ImageView::setImage(const QImage& image)
+void ImageView::setImage(
+    const QImage& image, ImageTransformPolicy transformPolicy)
 {
     // Refit only when the image changes size (initial open, a zoom into a new
     // region, a differently-sized dataset). When only the colors are remapped
     // at the same size -- toggling Log, or changing field, level, or range --
-    // keep the user's current zoom/pan.
-    const bool refit = m_image.isNull() || m_image.size() != image.size();
+    // keep the user's current zoom/pan. Compatible panel-local cropped-region
+    // refreshes explicitly preserve the transform even when the replacement
+    // raster dimensions differ.
+    const bool refit = transformPolicy == ImageTransformPolicy::Refit
+        || (transformPolicy == ImageTransformPolicy::GeometryAware
+            && (m_image.isNull() || m_image.size() != image.size()));
     m_scene->clear();
     m_gridItems.clear();
     m_overlayItems.clear();
@@ -418,8 +423,26 @@ QImage ImageView::composedImage(qreal scaleFactor) const
     painter.setRenderHint(QPainter::Antialiasing, true);
     // Render the whole scene (pixmap + grid boxes + overlays) from the image's
     // own pixel rect, so the export matches the on-screen composition, scaled.
+    // Transient interaction overlays (line-plot guide, cell highlight) must not
+    // be baked into the export, so hide them for this render and restore them.
+    const bool guideVisible =
+        m_lineGuide != nullptr && m_lineGuide->isVisible();
+    const bool cellVisible =
+        m_cellHighlightItem != nullptr && m_cellHighlightItem->isVisible();
+    if (m_lineGuide != nullptr) {
+        m_lineGuide->setVisible(false);
+    }
+    if (m_cellHighlightItem != nullptr) {
+        m_cellHighlightItem->setVisible(false);
+    }
     m_scene->render(&painter, QRectF(0.0, 0.0, outWidth, outHeight),
         QRectF(m_image.rect()));
+    if (m_lineGuide != nullptr) {
+        m_lineGuide->setVisible(guideVisible);
+    }
+    if (m_cellHighlightItem != nullptr) {
+        m_cellHighlightItem->setVisible(cellVisible);
+    }
     return out;
 }
 
@@ -642,8 +665,13 @@ void ImageView::wheelEvent(QWheelEvent* event)
         QGraphicsView::wheelEvent(event);
         return;
     }
+    const auto vertical = event->angleDelta().y();
+    if (vertical == 0) {
+        QGraphicsView::wheelEvent(event);
+        return;
+    }
     constexpr double zoomStep = 1.15;
-    const auto factor = event->angleDelta().y() >= 0 ? zoomStep : 1.0 / zoomStep;
+    const auto factor = vertical > 0 ? zoomStep : 1.0 / zoomStep;
     scale(factor, factor);
     m_fitOnResize = false;
     event->accept();

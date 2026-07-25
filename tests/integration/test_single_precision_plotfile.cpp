@@ -1,7 +1,7 @@
-#include <amrvis/io/PlotfileBlockReader.hpp>
-#include <amrvis/io/PlotfileDataset.hpp>
-#include <amrvis/query/LineQuery.hpp>
-#include <amrvis/query/SliceQuery.hpp>
+#include <amrexplorer/io/PlotfileBlockReader.hpp>
+#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/query/LineQuery.hpp>
+#include <amrexplorer/query/SliceQuery.hpp>
 
 #include <algorithm>
 #include <array>
@@ -80,7 +80,7 @@ int main()
 
     const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto root = std::filesystem::temp_directory_path()
-        / ("amrvis2-single-precision-" + std::to_string(unique));
+        / ("amrexplorer-single-precision-" + std::to_string(unique));
     std::filesystem::create_directories(root / "Level_0");
 
     writeText(root / "Header",

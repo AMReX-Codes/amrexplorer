@@ -1,4 +1,5 @@
-#include <amrvis/core/Geometry.hpp>
+#include <amrexplorer/core/Geometry.hpp>
+#include <amrexplorer/core/Metadata.hpp>
 
 #include <cmath>
 #include <cstdlib>
@@ -152,6 +153,32 @@ int main()
         const auto twice = amrvis::snapToNearestCellGrid(
             once, domain, cellSize, axes);
         require(once == twice, "nearest-cell snap is not idempotent");
+    }
+
+    // Mixed nodal/cell axes use sample-bin bounds as the grid anchor.  This
+    // is the panning/expand-to-snap case for an index type of (0,1,1).
+    {
+        amrvis::LevelMetadata level;
+        level.domain = {{{0, 0, 0}}, {{3, 3, 1}}, {{0, 1, 1}}};
+        level.cellSize = {{1.0, 1.0, 1.0}};
+        const auto sampleDomain = amrvis::sampleBounds(level, level.domain, 3);
+        const amrvis::RealBox selection{
+            {{0.6, -0.2, 0.0}}, {{2.2, 1.2, 0.0}}};
+        const auto expanded = amrvis::snapToCellBoundaries(
+            selection, sampleDomain, level.cellSize, axes);
+        require(expanded.lower[0] == 0.0 && expanded.upper[0] == 3.0,
+            "mixed snap did not use cell-centered x sample bins");
+        require(expanded.lower[1] == -0.5 && expanded.upper[1] == 1.5,
+            "mixed snap did not use nodal y sample bins");
+
+        const amrvis::RealBox shifted{
+            {{0.6, 0.0, 0.0}}, {{2.6, 2.0, 0.0}}};
+        const auto panned = amrvis::snapToNearestCellGrid(
+            shifted, sampleDomain, level.cellSize, axes);
+        require(panned.lower[0] == 1.0 && panned.upper[0] == 3.0,
+            "mixed pan did not snap the cell-centered x axis");
+        require(panned.lower[1] == 0.5 && panned.upper[1] == 2.5,
+            "mixed pan did not snap the nodal y axis");
     }
 
     return 0;

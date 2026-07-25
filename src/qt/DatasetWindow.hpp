@@ -2,9 +2,9 @@
 
 #include "DatasetExtract.hpp"
 
-#include <amrvis/core/Geometry.hpp>
-#include <amrvis/core/Request.hpp>
-#include <amrvis/core/StopToken.hpp>
+#include <amrexplorer/core/Geometry.hpp>
+#include <amrexplorer/core/Request.hpp>
+#include <amrexplorer/core/StopToken.hpp>
 
 #include <QString>
 #include <QWidget>
@@ -36,10 +36,10 @@ struct DatasetRequest {
     double slicePosition = 0.0;
 };
 
-// Modeless spreadsheet of the raw cell values in the active view's region
-// (the legacy Dataset window): one tab per AMR level with the i/j cell
+// Modeless spreadsheet of the raw sample values in the active view's region
+// (the legacy Dataset window): one tab per AMR level with the i/j sample
 // indices as headers and the level min/max above the table; clicking a value
-// highlights the corresponding cell in the image. Reads run off the GUI
+// highlights the corresponding sample in the image. Reads run off the GUI
 // thread and are cancelled on close or refresh.
 class DatasetWindow final : public QWidget {
     Q_OBJECT
@@ -56,11 +56,14 @@ public:
     void setNumberFormat(QString format);
 
 signals:
-    // Physical bounds of the clicked cell at its level's resolution (2-D
+    // Physical bounds of the clicked sample at its level's resolution (2-D
     // leaves axis 2 zeroed).
     void cellActivated(const amrvis::RealBox& physicalCell);
     // The Refresh button; the owner rebuilds the request from app state.
     void refreshRequested();
+    // A real (non-cancelled) extraction failure; the owner reports it through
+    // its non-modal background-error channel instead of a blocking dialog.
+    void extractionFailed(const QString& message);
 
 protected:
     void closeEvent(QCloseEvent* event) override;

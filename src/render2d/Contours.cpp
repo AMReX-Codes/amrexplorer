@@ -1,4 +1,4 @@
-#include <amrvis/render2d/Contours.hpp>
+#include <amrexplorer/render2d/Contours.hpp>
 
 #include <algorithm>
 #include <array>
@@ -22,6 +22,11 @@ std::vector<double> contourValues(
     }
     if (!(minimum < maximum)) {
         throw std::invalid_argument("contour range must have positive extent");
+    }
+    if (!std::isfinite(minimum) || !std::isfinite(maximum)
+        || !std::isfinite(maximum - minimum)) {
+        throw std::invalid_argument(
+            "contour range must be finite with a finite span");
     }
     if (logarithmic && !(minimum > 0.0)) {
         throw std::invalid_argument("logarithmic contour range must be positive");

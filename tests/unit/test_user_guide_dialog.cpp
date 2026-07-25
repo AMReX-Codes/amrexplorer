@@ -32,7 +32,7 @@ int main(int argc, char* argv[])
         "the browser should load the bundled Markdown resource");
 
     const auto text = browser->toPlainText();
-    require(text.contains(QStringLiteral("Amrvis2 User Guide")),
+    require(text.contains(QStringLiteral("AMReXplorer User Guide")),
         "the bundled guide should have its title");
     require(text.contains(QStringLiteral("A basic 2-D workflow")),
         "the bundled guide should include the basic workflow");

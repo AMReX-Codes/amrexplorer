@@ -1,12 +1,10 @@
-#include <amrvis/render2d/Palette.hpp>
+#include <amrexplorer/render2d/Palette.hpp>
 
 #include <algorithm>
 #include <cstddef>
 #include <fstream>
-#include <iterator>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 namespace amrvis {
 
@@ -66,19 +64,27 @@ Palette Palette::load(const std::filesystem::path& path)
     if (!stream) {
         throw std::runtime_error("cannot open palette file: " + path.string());
     }
-    const std::vector<char> bytes(
-        (std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+    // Bound the read so an accidentally-selected huge file cannot block the GUI
+    // thread or exhaust memory. Read at most one byte more than the largest
+    // valid size: gcount is 768 or 1024 only for an exactly-sized file, while
+    // anything larger yields 1025 (the cap) and is rejected.
     constexpr std::size_t channelBytes = slotCount;
-    if (bytes.size() != 3 * channelBytes && bytes.size() != 4 * channelBytes) {
+    constexpr std::size_t maxBytes = 4 * channelBytes + 1;
+    std::array<char, maxBytes> buffer{};
+    stream.read(buffer.data(), static_cast<std::streamsize>(maxBytes));
+    const auto byteCount = static_cast<std::size_t>(stream.gcount());
+    if (byteCount != 3 * channelBytes && byteCount != 4 * channelBytes) {
         throw std::runtime_error("palette file " + path.string()
             + " is not a legacy sequential palette (expected 768 or 1024 bytes, got "
-            + std::to_string(bytes.size()) + ")");
+            + (byteCount == maxBytes ? std::string("more than 1024")
+                                     : std::to_string(byteCount))
+            + ")");
     }
     std::array<Rgb, slotCount> slots{};
     for (std::size_t index = 0; index < channelBytes; ++index) {
-        slots[index].red = static_cast<std::uint8_t>(bytes[index]);
-        slots[index].green = static_cast<std::uint8_t>(bytes[channelBytes + index]);
-        slots[index].blue = static_cast<std::uint8_t>(bytes[2 * channelBytes + index]);
+        slots[index].red = static_cast<std::uint8_t>(buffer[index]);
+        slots[index].green = static_cast<std::uint8_t>(buffer[channelBytes + index]);
+        slots[index].blue = static_cast<std::uint8_t>(buffer[2 * channelBytes + index]);
     }
     return Palette(slots);
 }

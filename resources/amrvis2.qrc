@@ -1,9 +1,0 @@
-<RCC>
-    <qresource prefix="/">
-        <file>amrvis2-16.png</file>
-        <file>amrvis2-32.png</file>
-        <file>amrvis2-64.png</file>
-        <file>amrvis2-128.png</file>
-        <file>amrvis2-256.png</file>
-    </qresource>
-</RCC>

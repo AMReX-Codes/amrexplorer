@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0C1D33"/>
+      <stop offset="1" stop-color="#16456E"/>
+    </linearGradient>
+  </defs>
+
+  <!-- app-icon tile -->
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#tile)"/>
+
+  <!-- simplified AMR mosaic: one 2x2 level -->
+  <g fill="none" stroke="#DCEBF7" stroke-width="26"
+     stroke-linejoin="round" stroke-linecap="round">
+    <rect x="172" y="172" width="500" height="500"/>
+    <path d="M422 172 V672 M172 422 H672"/>
+  </g>
+
+  <!-- magnifier with a single magnified cross inside -->
+  <g fill="none" stroke="#43C6E8" stroke-linecap="round">
+    <path d="M485 485 H635 M560 410 V610" stroke-width="26"/>
+    <circle cx="560" cy="560" r="180" stroke-width="52"/>
+    <path d="M691 699 L840 848" stroke-width="76"/>
+  </g>
+</svg>

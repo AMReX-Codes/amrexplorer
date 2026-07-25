@@ -1,5 +1,7 @@
 #pragma once
 
+#include <amrexplorer/pipeline/DisplayMode.hpp>
+
 #include <QDialog>
 
 #include <string>
@@ -14,11 +16,9 @@ class QSpinBox;
 
 namespace amrvis::qt {
 
-enum class DisplayMode {
-    Raster,
-    RasterContours,
-    VelocityVectors
-};
+// DisplayMode lives in the Qt-free pipeline layer; re-export it here so
+// amrvis::qt::DisplayMode keeps resolving for the GUI and tests.
+using amrvis::DisplayMode;
 
 // Contour color selection: black, white, or a specific palette index.
 // Stored as an int: -1 = black (default), -2 = white, 0–255 = palette slot.

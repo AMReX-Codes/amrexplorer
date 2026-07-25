@@ -137,7 +137,8 @@ std::vector<std::vector<double>> readRealMatrix(
 } // namespace
 
 detail::VisMfIndex detail::readVisMfIndex(
-    const std::filesystem::path& headerPath, int dimension)
+    const std::filesystem::path& headerPath, int dimension,
+    StopToken cancellation)
 {
     std::error_code sizeError;
     const auto headerSize = std::filesystem::file_size(headerPath, sizeError);
@@ -184,6 +185,9 @@ detail::VisMfIndex detail::readVisMfIndex(
     const auto boxCount = static_cast<std::size_t>(boxArrayHeader.front());
     index.boxes.reserve(boxCount);
     for (std::size_t box = 0; box < boxCount; ++box) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         index.boxes.push_back(readAmrexBox(input, dimension, "VisMF BoxArray entry"));
     }
     if (readNonEmptyLine(input, "VisMF BoxArray terminator") != ")") {
@@ -197,6 +201,9 @@ detail::VisMfIndex detail::readVisMfIndex(
     index.fileNames.reserve(boxCount);
     index.fileOffsets.reserve(boxCount);
     for (std::size_t block = 0; block < boxCount; ++block) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         const auto prefix = readRequired<std::string>(input, "FabOnDisk prefix");
         if (prefix != "FabOnDisk:") {
             throw MetadataReadError("malformed FabOnDisk record");
@@ -432,7 +439,7 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
         }
         const auto dataPrefix = plotfile / level.dataPath;
         const auto indexPath = std::filesystem::path(dataPrefix.string() + "_H");
-        const auto visMf = detail::readVisMfIndex(indexPath, metadata->dimension);
+        const auto visMf = detail::readVisMfIndex(indexPath, metadata->dimension, cancellation);
         ++metrics.filesRead;
         metrics.bytesRead += visMf.bytesRead;
         if (visMf.components != componentCount) {

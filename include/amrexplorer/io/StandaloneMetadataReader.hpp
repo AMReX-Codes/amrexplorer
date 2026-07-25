@@ -13,9 +13,9 @@ class StandaloneMetadataReader {
 public:
     [[nodiscard]] PlotfileMetadataResult readFab(
         const std::filesystem::path& fabPath,
-        std::uint64_t offset = 0) const;
+        std::uint64_t offset = 0, StopToken cancellation = {}) const;
     [[nodiscard]] PlotfileMetadataResult readMultiFab(
-        const std::filesystem::path& prefixOrHeader) const;
+        const std::filesystem::path& prefixOrHeader, StopToken cancellation = {}) const;
 };
 
 [[nodiscard]] PlotfileMetadataResult makeSelectedFabMetadata(

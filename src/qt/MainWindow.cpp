@@ -3735,6 +3735,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_probeLabel->clear();
     m_colorBar->clearRange();
     const auto generation = ++m_generation;
+    m_metadataStopSource.request_stop();
     m_metadataStopSource = StopSource{};
     const auto metadataCancellation = m_metadataStopSource.get_token();
     ++m_activeRequests;

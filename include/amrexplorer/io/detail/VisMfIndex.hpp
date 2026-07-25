@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/core/Geometry.hpp>
+#include <amrexplorer/core/StopToken.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -24,6 +25,7 @@ struct VisMfIndex {
 };
 
 [[nodiscard]] VisMfIndex readVisMfIndex(
-    const std::filesystem::path& headerPath, int dimension);
+    const std::filesystem::path& headerPath, int dimension,
+    StopToken cancellation = {});
 
 } // namespace amrvis::detail

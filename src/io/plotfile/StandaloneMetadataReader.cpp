@@ -100,8 +100,12 @@ void validateStandalone(const DatasetMetadata& metadata)
 } // namespace
 
 PlotfileMetadataResult StandaloneMetadataReader::readFab(
-    const std::filesystem::path& fabPath, std::uint64_t offset) const
+    const std::filesystem::path& fabPath, std::uint64_t offset,
+    StopToken cancellation) const
 {
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
+    }
     const auto record = inspectFabRecord(fabPath, offset);
 
     auto metadata = makeSingleLevelMetadata(
@@ -180,8 +184,11 @@ PlotfileMetadataResult makeSelectedFabMetadata(
 }
 
 PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
-    const std::filesystem::path& prefixOrHeader) const
+    const std::filesystem::path& prefixOrHeader, StopToken cancellation) const
 {
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
+    }
     auto prefix = prefixOrHeader;
     if (prefix.string().ends_with("_H")) {
         auto value = prefix.string();
@@ -190,7 +197,7 @@ PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
     }
     const auto headerPath = std::filesystem::path(prefix.string() + "_H");
     const auto dimension = inferMultiFabDimension(headerPath);
-    const auto index = detail::readVisMfIndex(headerPath, dimension);
+    const auto index = detail::readVisMfIndex(headerPath, dimension, cancellation);
     if (index.boxes.empty() || index.components <= 0) {
         throw MetadataReadError("standalone MultiFab is empty");
     }
@@ -241,15 +248,12 @@ PlotfileMetadataResult readDatasetMetadata(const std::filesystem::path& path,
         && std::filesystem::is_regular_file(path / "Header")) {
         return PlotfileMetadataReader{}.read(path, cancellation);
     }
-    if (cancellation.stop_requested()) {
-        throw ReadCancelled();
-    }
     if (path.string().ends_with("_H")
         || std::filesystem::is_regular_file(
             std::filesystem::path(path.string() + "_H"))) {
-        return StandaloneMetadataReader{}.readMultiFab(path);
+        return StandaloneMetadataReader{}.readMultiFab(path, cancellation);
     }
-    return StandaloneMetadataReader{}.readFab(path);
+    return StandaloneMetadataReader{}.readFab(path, 0, cancellation);
 }
 
 } // namespace amrvis

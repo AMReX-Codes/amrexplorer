@@ -25,6 +25,7 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -1470,7 +1471,9 @@ void MainWindow::createMenus()
 
     auto* quitAction = new QAction(tr("&Quit"), this);
     quitAction->setShortcut(QKeySequence::Quit);
-    connect(quitAction, &QAction::triggered, this, &QWidget::close);
+    // Application-wide: close every main window (each runs its own close
+    // handling) rather than just this one.
+    connect(quitAction, &QAction::triggered, qApp, &QApplication::closeAllWindows);
 
     auto* fileMenu = menuBar()->addMenu(tr("&File"));
     fileMenu->addAction(newWindowAction);
@@ -2594,6 +2597,10 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
         [this, watcher, dataset, generation, cancellation, request, fieldName,
             dimension, primaryFixedAxis, maximumLevel, composition, view] {
             --m_activeRequests;
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
+            }
             try {
                 auto result = watcher->result();
                 if (generation != m_generation || cancellation.stop_requested()) {
@@ -2699,8 +2706,16 @@ void MainWindow::appendLinePlotCurve(const LineResult& line,
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    // Mark this window closing so asynchronous completion handlers that fire
+    // during or after shutdown do not pop modal dialogs or reopen windows.
+    m_closing = true;
+    // Stop resubmit timers, request cancellation on every async task, and
+    // clear queued global-pool jobs. Running tasks re-check their stop token
+    // and bail promptly; without this a task mid-read can leave the process
+    // lingering at quit. (aboutToQuit also calls this, as a fallback.)
+    cancelInFlight();
     // Secondary top-level windows are parentless or non-modal; close them with
-    // the main window so they don't linger and keep the process alive.
+    // the main window so none lingers and keeps the process alive.
     if (m_linePlotWindow != nullptr) {
         auto* linePlotWindow = m_linePlotWindow;
         m_linePlotWindow = nullptr;
@@ -2711,6 +2726,22 @@ void MainWindow::closeEvent(QCloseEvent* event)
         auto* dialog = m_contoursDialog;
         m_contoursDialog = nullptr;
         dialog->close();
+    }
+    if (m_numberFormatDialog != nullptr) {
+        auto* dialog = m_numberFormatDialog;
+        m_numberFormatDialog = nullptr;
+        dialog->close();
+    }
+    if (m_userGuideDialog != nullptr) {
+        auto* dialog = m_userGuideDialog;
+        m_userGuideDialog = nullptr;
+        dialog->close();
+    }
+    if (m_exportAnim.progress != nullptr) {
+        // Dismiss the export progress dialog and record cancel. Bounding the
+        // encoder itself is handled separately.
+        m_exportAnim.canceled = true;
+        m_exportAnim.progress->cancel();
     }
     saveSettings();
     auto settings = makeSettings();
@@ -3429,7 +3460,7 @@ void MainWindow::endExportAnimation(bool success, const QString& message)
     }
     m_exportAnimationAction->setEnabled(!m_sequenceFrames.empty());
 
-    if (wasActive) {
+    if (wasActive && !m_closing) {
         if (success) {
             QMessageBox::information(this, tr("Export Animation"), message);
         } else {
@@ -3680,6 +3711,10 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
             dataRoot = std::move(dataRoot), preserveFabSelector,
             initialSpec = std::move(initialSpec)]() mutable {
             --m_activeRequests;
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
+            }
             try {
                 auto result = watcher->result();
                 if (generation == m_generation) {
@@ -3785,6 +3820,10 @@ void MainWindow::requestInitialSlice(
         [this, watcher, generation, cancellation, views, viewGenerations,
             restoredSpec] {
             --m_activeRequests;
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
+            }
             try {
                 auto result = watcher->result();
                 if (generation == m_generation) {
@@ -4177,6 +4216,10 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
          &state, rangeMode] {
             --state.pendingRequests;
             --m_activeRequests;
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
+            }
             try {
                 auto result = watcher->result();
                 if (generation == m_generation
@@ -4752,6 +4795,10 @@ void MainWindow::startFrameLoad(int index, std::uint64_t generation)
     connect(watcher, &QFutureWatcher<InitialSliceResult>::finished, this,
         [this, watcher, generation, index, defaultPositions] {
             --m_activeRequests;
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
+            }
             try {
                 auto result = watcher->result();
                 if (generation == m_generation && index == m_sequenceIndex) {

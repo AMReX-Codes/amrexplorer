@@ -2104,6 +2104,16 @@ qreal MainWindow::activeViewScaleForTest() const
     return m_activeView != nullptr ? m_activeView->view->transform().m11() : 0.0;
 }
 
+bool MainWindow::activeViewIsFitToWindowForTest()
+{
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return false;
+    }
+    const auto before = m_activeView->view->transform();
+    m_activeView->view->fitToWindow();
+    return before == m_activeView->view->transform();
+}
+
 void MainWindow::viewFabForTest(std::size_t index)
 {
     viewFab(index);
@@ -4929,8 +4939,22 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
         if (!display.image.valid()) {
             throw std::runtime_error("renderer produced an invalid image");
         }
+        // A visibleRegion is physical data state, not evidence that the old
+        // raster transform is compatible with this image. Preserve the
+        // transform only for a panel-local refresh in the same dataset and
+        // orientation (rubber-band zoom or pan). Across sequence frames and
+        // other dataset replacements, geometry-aware installation retains the
+        // transform when the size matches and refits when it does not.
+        const bool samePanelRenderContext = state.hasCachedRequest
+            && state.cachedRequest.dataset == display.request.dataset
+            && state.cachedRequest.normalDirection
+                == display.request.normalDirection;
+        const auto transformPolicy =
+            state.visibleRegion.has_value() && samePanelRenderContext
+            ? ImageTransformPolicy::Preserve
+            : ImageTransformPolicy::GeometryAware;
         state.view->setImage(
-            displayImageFor(display.image), state.visibleRegion.has_value());
+            displayImageFor(display.image), transformPolicy);
     }
     state.plane = display.slice.plane;
     state.contourPlane = display.contourPlane;

@@ -38,16 +38,23 @@ struct OverlayPath {
     float width = 1.0F;
 };
 
+enum class ImageTransformPolicy {
+    GeometryAware,
+    Preserve
+};
+
 class ImageView final : public QGraphicsView {
     Q_OBJECT
 
 public:
     explicit ImageView(QWidget* parent = nullptr);
 
-    // preserveTransform keeps the current panel-local zoom when replacing a
-    // cropped-region raster after rubber-band zoom or pan. Full-domain loads
-    // leave it false so a differently-sized image is fitted normally.
-    void setImage(const QImage& image, bool preserveTransform = false);
+    // Preserve keeps the current panel-local transform when replacing a raster
+    // after rubber-band zoom or pan. GeometryAware refits only when the raster
+    // dimensions change.
+    void setImage(const QImage& image,
+        ImageTransformPolicy transformPolicy =
+            ImageTransformPolicy::GeometryAware);
     void setGridBoxes(const std::vector<GridBoxOverlay>& boxes);
     void setOverlaySegments(const std::vector<OverlaySegment>& segments);
     // Smooth contour polylines, rendered as cosmetic-pen path items at the

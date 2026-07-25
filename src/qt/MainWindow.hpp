@@ -217,6 +217,9 @@ public:
     void setActiveViewScaleForTest(int factor);
     void panActiveViewForTest(double sceneDeltaX, double sceneDeltaY);
     [[nodiscard]] qreal activeViewScaleForTest() const;
+    // Test-only: compare the current transform with ImageView's own fitted
+    // transform. The check leaves the view fitted.
+    [[nodiscard]] bool activeViewIsFitToWindowForTest();
 
     // Test-only: drill into the FAB catalog entry at index (the same path the
     // dock's viewRequested signal drives). Used by the FAB round-trip zoom test.

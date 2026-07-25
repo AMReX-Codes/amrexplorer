@@ -394,4 +394,18 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_sequence_smoke PROPERTIES TIMEOUT 30)
+    # A preserved physical crop rendered at a different raster resolution in
+    # the next sequence frame must refit instead of retaining a stale transform.
+    add_test(
+        NAME qt_sequence_zoom_refit_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DSECOND_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_nonuniform"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_zoom_refit"
+            -DMODE=sequence-zoom-refit
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_sequence_zoom_refit_smoke PROPERTIES TIMEOUT 30)
 endif()

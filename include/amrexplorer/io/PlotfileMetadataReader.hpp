@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/core/Metadata.hpp>
+#include <amrexplorer/core/StopToken.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -30,7 +31,7 @@ public:
 
 class PlotfileMetadataReader {
 public:
-    [[nodiscard]] PlotfileMetadataResult read(const std::filesystem::path& plotfile) const;
+    [[nodiscard]] PlotfileMetadataResult read(const std::filesystem::path& plotfile, StopToken cancellation = {}) const;
 };
 
 } // namespace amrvis

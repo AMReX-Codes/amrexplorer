@@ -236,7 +236,11 @@ LineQueryResult LineQuery::execute(
     // points. Uncovered stretches (ExactLevel outside coverage, or out of
     // domain) become invalid samples so the polyline breaks there.
     auto x = physicalStart;
-    constexpr double endEpsilon = 1e-9;
+    // Relative to the cell size (matching cellStepNudge below): an absolute
+    // 1e-9 epsilon truncates domains whose physical extent is near that scale
+    // (micro/nano-scale SI-unit geometries), dropping the tail samples or
+    // yielding an empty line with no error.
+    const double endEpsilon = 1e-9 * finestCellSize;
     while (x < physicalEnd - endEpsilon) {
         if ((result.line.positions.size() & 31U) == 0U
             && cancellation.stop_requested()) {

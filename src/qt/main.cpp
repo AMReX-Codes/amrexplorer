@@ -520,6 +520,52 @@ int main(int argc, char* argv[])
                 }
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--range-cache-smoke-test") {
+        // Regression for sequence-frame-range-cache-goes-stale: cache the
+        // full-domain Visible range on frame 0, step to frame 1 (whose field is
+        // 10x-scaled), zoom, and confirm the color bar tracks frame 1 instead
+        // of reusing frame 0's cached range. Two signals interleave, sequenced
+        // by a phase held in a shared_ptr so it outlives this branch scope.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        struct RangeCacheState { int phase = 0; double frame0Max = 0.0; };
+        auto state = std::make_shared<RangeCacheState>();
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window](int index) {
+                if (index == 0) {
+                    window.enableVisibleRasterForTest();  // cache frame 0 range
+                } else {
+                    window.zoomActiveViewForTest();        // re-slice frame 1
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, &application, state] {
+                const auto probes = window.contourViewProbesForTest();
+                if (probes.empty()) {
+                    application.exit(1);
+                    return;
+                }
+                const auto displayMax = probes.front().displayMaximum;
+                if (state->phase == 0) {
+                    state->frame0Max = displayMax;   // frame 0 full-domain max
+                    state->phase = 1;
+                    window.stepSequence(1);
+                } else {
+                    // Frame 1 is scaled 10x, so its zoomed max must far exceed
+                    // frame 0's cached max. Reusing the stale cache (the bug)
+                    // would instead leave them equal.
+                    application.exit(
+                        displayMax > 2.0 * state->frame0Max ? 0 : 1);
+                }
+            });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--raw-fab-smoke-test") {
         const std::filesystem::path path(argv[2]);

@@ -4451,6 +4451,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     if (!isFullDomain
                         && rangeMode == RangeMode::Visible
                         && m_fullDomainRange.has_value()
+                        && m_fullDomainRangeDataset == result.request.dataset
                         && m_fullDomainRangeField.value
                             == result.request.field.value
                         && m_fullDomainRangeMaxLevel
@@ -4488,6 +4489,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                         && state.plane.width > 0) {
                         m_fullDomainRange = std::make_pair(
                             state.displayMinimum, state.displayMaximum);
+                        m_fullDomainRangeDataset = result.request.dataset;
                         m_fullDomainRangeField = result.request.field;
                         m_fullDomainRangeMaxLevel
                             = result.request.maximumLevel;
@@ -4776,6 +4778,7 @@ void MainWindow::syncVisibleRanges()
     double globalMin = std::numeric_limits<double>::infinity();
     double globalMax = -std::numeric_limits<double>::infinity();
     const bool useCachedRange = m_fullDomainRange.has_value()
+        && m_fullDomainRangeDataset == m_dataset->id()
         && m_fullDomainRangeField.value == currentField.value
         && m_fullDomainRangeMaxLevel == maximumLevel
         && m_fullDomainRangeComposition == composition;
@@ -5270,6 +5273,7 @@ void MainWindow::resetRangeState()
     m_fieldRanges.clear();
     m_trackedField = 0;
     m_fullDomainRange.reset();
+    m_fullDomainRangeDataset = {};
     m_fullDomainRangeField = {};
     m_fullDomainRangeMaxLevel = -1;
     const QSignalBlocker modeBlocker(m_rangeMode);

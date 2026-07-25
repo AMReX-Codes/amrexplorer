@@ -145,6 +145,133 @@ int main()
             "a constant plane was not ratio-padded in logarithmic mode");
     }
 
+    // --- realignArrivalToRange ----------------------------------------------
+    {
+        amrvis::SliceDisplayResult result;
+        result.slice.plane = makePlane({1.0F, 3.0F});
+        result.minimum = 1.0;
+        result.maximum = 3.0;
+        result.mode = amrvis::DisplayMode::RasterContours;
+        result.contourCount = 2;
+        result.contourFinePlane = makePlane({1.0F, 3.0F});
+        result.request.outputSize = {2, 1};
+        const amrvis::Palette palette;
+
+        // Realigning replaces the range, re-renders the raster, and
+        // re-extracts the contours against the new range.
+        DisplayCoordinator::realignArrivalToRange(
+            result, {0.0, 10.0}, palette, true);
+        require(nearlyEqual(result.minimum, 0.0)
+                && nearlyEqual(result.maximum, 10.0),
+            "realign did not replace the range");
+        require(result.image.valid() && result.image.width > 0,
+            "realign did not render the raster");
+
+        // rasterUnchanged suppresses the raster render but not the range.
+        amrvis::SliceDisplayResult untouched;
+        untouched.slice.plane = makePlane({1.0F, 3.0F});
+        untouched.rasterUnchanged = true;
+        DisplayCoordinator::realignArrivalToRange(
+            untouched, {0.0, 10.0}, palette, true);
+        // A default (empty) ImageBuffer counts as valid, so probe emptiness.
+        require(untouched.image.width == 0,
+            "realign rendered a raster it promised to leave untouched");
+        require(nearlyEqual(untouched.maximum, 10.0),
+            "realign skipped the range on an unchanged raster");
+
+        // realignRasterAndContours=false (the 3-D case, where the shared
+        // sync realigns afterwards) only replaces the range.
+        amrvis::SliceDisplayResult rangeOnly;
+        rangeOnly.slice.plane = makePlane({1.0F, 3.0F});
+        DisplayCoordinator::realignArrivalToRange(
+            rangeOnly, {0.0, 10.0}, palette, false);
+        require(rangeOnly.image.width == 0 && nearlyEqual(rangeOnly.maximum, 10.0),
+            "range-only realign touched the raster");
+    }
+
+    // --- syncPanelsToSharedRange --------------------------------------------
+    {
+        DisplayCoordinator coordinator;
+        const Key key{amrvis::DatasetId{1}, amrvis::FieldId{0}, 0,
+            amrvis::CompositionPolicy::FinestAvailable};
+        const amrvis::Palette palette;
+
+        const auto a = makePlane({2.0F, 6.0F});
+        const auto b = makePlane({-4.0F, 1.0F});
+        const auto fine = makePlane({2.0F, 6.0F});
+        const amrvis::ScalarPlane empty;
+        const std::array<DisplayCoordinator::PanelSyncInput, 3> inputs{{
+            {&a, &fine, 1, false, {2, 1}},
+            {&b, nullptr, 1, false, {2, 1}},
+            {&empty, nullptr, 1, false, {0, 0}},
+        }};
+
+        // No cached range: the union across panels drives every update.
+        auto sync = coordinator.syncPanelsToSharedRange(
+            key, inputs, false, true, 3, palette);
+        require(sync.has_value(), "panel sync found no shared range");
+        require(nearlyEqual(sync->range.first, -4.0)
+                && nearlyEqual(sync->range.second, 6.0),
+            "panel sync range is not the union");
+        require(sync->panels[0].applies && sync->panels[1].applies
+                && !sync->panels[2].applies,
+            "panel sync applied to the wrong panels");
+        require(sync->panels[0].image.width > 0
+                && sync->panels[1].image.width > 0,
+            "panel sync did not render the panel rasters");
+        require(sync->panels[0].contoursRecomputed
+                && !sync->panels[1].contoursRecomputed,
+            "contours were not recomputed exactly where a fine plane exists");
+
+        // A stored full-domain range takes precedence over the union.
+        coordinator.storeFullDomainRange(key, {-100.0, 100.0});
+        sync = coordinator.syncPanelsToSharedRange(
+            key, inputs, false, false, 3, palette);
+        require(sync && nearlyEqual(sync->range.first, -100.0)
+                && nearlyEqual(sync->range.second, 100.0),
+            "the cached full-domain range did not take precedence");
+
+        // Neither cache nor finite samples: nothing to synchronize to.
+        coordinator.invalidateRangeCache();
+        const std::array<DisplayCoordinator::PanelSyncInput, 1> emptyOnly{{
+            {&empty, nullptr, 1, false, {0, 0}}}};
+        require(!coordinator.syncPanelsToSharedRange(
+                key, emptyOnly, false, false, 3, palette).has_value(),
+            "an empty panel set produced a sync");
+    }
+
+    // --- planeDensitiesDiffer -----------------------------------------------
+    {
+        const std::array<int, 2> axes{0, 1};
+        const auto plane = [](int width, double x0, double x1) {
+            amrvis::ScalarPlane p;
+            p.width = width;
+            p.height = 1;
+            p.values.assign(static_cast<std::size_t>(width), 1.0F);
+            p.valid.assign(static_cast<std::size_t>(width), 1);
+            p.physicalRegion.lower = {{x0, 0.0, 0.0}};
+            p.physicalRegion.upper = {{x1, 1.0, 1.0}};
+            return p;
+        };
+
+        // Same density: full domain vs a pan of the same-size window.
+        require(!DisplayCoordinator::planeDensitiesDiffer(
+                plane(4, 0.0, 4.0), plane(4, 4.0, 8.0), axes),
+            "a same-density pan was flagged as a density change");
+        // The issue-#45 shape: a capped full-domain raster (density 1/2)
+        // replaced by a native-resolution crop (density 1).
+        require(DisplayCoordinator::planeDensitiesDiffer(
+                plane(4, 0.0, 8.0), plane(4, 0.0, 4.0), axes),
+            "the capped-to-native density change was not detected");
+        // Degenerate planes and extents compare as not-different.
+        require(!DisplayCoordinator::planeDensitiesDiffer(
+                amrvis::ScalarPlane{}, plane(4, 0.0, 4.0), axes),
+            "an empty plane was flagged as a density change");
+        require(!DisplayCoordinator::planeDensitiesDiffer(
+                plane(4, 2.0, 2.0), plane(4, 0.0, 4.0), axes),
+            "a zero-extent region was flagged as a density change");
+    }
+
     // --- rasterTransformPolicy ----------------------------------------------
     {
         const auto cached = makeRequest(1, 1, 0.0);

@@ -3957,28 +3957,14 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                                 rangeKey)
                             : std::nullopt;
                     if (cachedRange) {
-                        result.minimum = cachedRange->first;
-                        result.maximum = cachedRange->second;
-                        // executeSlice/refreshCachedSlice produced the raster
-                        // and contours against the subregion's own range;
-                        // realign both to the reused full-domain range so they
-                        // match the colorbar. In 3-D syncVisibleRanges realigns
-                        // every panel below (m_viewDimension == 3), so only 2-D,
-                        // which it skips, needs it here — and doing it only here
-                        // avoids re-rendering each 3-D panel's raster twice.
-                        if (m_viewDimension != 3) {
-                            if (!result.rasterUnchanged) {
-                                result.image = renderScalarPlane(
-                                    result.slice.plane,
-                                    ScalarRenderSettings{
-                                        .minimum = result.minimum,
-                                        .maximum = result.maximum,
-                                        .logarithmic = result.logarithmic,
-                                        .palette = &m_palette
-                                    });
-                            }
-                            recomputeContourPolylines(result);
-                        }
+                        // The subregion result was produced against its own
+                        // range; realign it to the reused full-domain range
+                        // so it matches the colorbar. In 3-D the shared-range
+                        // sync below realigns every panel, so only 2-D (which
+                        // it skips) realigns the raster and contours here —
+                        // that also avoids rendering each 3-D panel twice.
+                        DisplayCoordinator::realignArrivalToRange(result,
+                            *cachedRange, m_palette, m_viewDimension != 3);
                     }
                     showSlice(state, result);
                     syncVisibleRanges();
@@ -4210,11 +4196,13 @@ std::optional<QRectF> MainWindow::preservedDataWindow(
     const PlaneViewState& state, const ScalarPlane& incoming) const
 {
     const auto& cached = state.plane;
-    if (cached.width <= 0 || cached.height <= 0
-        || incoming.width <= 0 || incoming.height <= 0) {
+    const auto axes = displayAxes(state.normal);
+    // Equal densities (or degenerate geometry) mean the preserved scene
+    // transform already preserves the on-screen data, so leave it alone; the
+    // coordinator owns that decision.
+    if (!DisplayCoordinator::planeDensitiesDiffer(cached, incoming, axes)) {
         return std::nullopt;
     }
-    const auto axes = displayAxes(state.normal);
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);
     const auto& oldRegion = cached.physicalRegion;
@@ -4223,23 +4211,6 @@ std::optional<QRectF> MainWindow::preservedDataWindow(
     const auto oldExtentY = oldRegion.upper[yAxis] - oldRegion.lower[yAxis];
     const auto newExtentX = newRegion.upper[xAxis] - newRegion.lower[xAxis];
     const auto newExtentY = newRegion.upper[yAxis] - newRegion.lower[yAxis];
-    if (!(oldExtentX > 0.0) || !(oldExtentY > 0.0)
-        || !(newExtentX > 0.0) || !(newExtentY > 0.0)) {
-        return std::nullopt;
-    }
-    // Pixels per physical unit; equal densities mean the preserved scene
-    // transform already preserves the on-screen data, so leave it alone.
-    const auto oldDensityX = cached.width / oldExtentX;
-    const auto oldDensityY = cached.height / oldExtentY;
-    const auto newDensityX = incoming.width / newExtentX;
-    const auto newDensityY = incoming.height / newExtentY;
-    const auto matches = [](double a, double b) {
-        return std::abs(a - b) <= 1.0e-9 * std::max(std::abs(a), std::abs(b));
-    };
-    if (matches(oldDensityX, newDensityX)
-        && matches(oldDensityY, newDensityY)) {
-        return std::nullopt;
-    }
     // Viewport -> old scene -> physical -> new scene. Scene y runs opposite
     // to physical y: plane row 0 is the bottom row and the displayed raster
     // is mirrored vertically (see displayImageFor), for both planes alike.
@@ -4363,52 +4334,43 @@ void MainWindow::syncVisibleRanges()
         &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
     const bool logarithmic = m_logarithmic->isChecked();
 
-    // Use the cached full-domain range when it is current, so the shared
-    // color bar stays stable during zoom and pan instead of tracking the
-    // subregion extrema of whichever panel just finished rendering; fall
-    // back to the union of finite extrema across the three panels.
+    // The coordinator resolves the shared range (the cached full-domain
+    // range when current, so the color bar stays stable during zoom and pan;
+    // else the union of the panels' finite extrema) and produces every
+    // panel's raster and contours realigned to it. This method only blits
+    // the updates into the views.
     const FieldId currentField{m_fieldSelector->currentData().toUInt()};
     const auto rawLevel = m_levelSelector->currentData().toInt();
     const auto [composition, maximumLevel] = decodeLevelData(
         rawLevel, m_dataset->metadata().finestLevel);
-    auto shared = m_displayCoordinator.cachedFullDomainRange(
-        {m_dataset->id(), currentField, maximumLevel, composition});
-    if (!shared) {
-        const std::array<const ScalarPlane*, 3> planes{
-            &views[0]->plane, &views[1]->plane, &views[2]->plane};
-        shared = DisplayCoordinator::sharedVisibleRange(planes, logarithmic);
+    std::array<DisplayCoordinator::PanelSyncInput, 3> inputs;
+    for (std::size_t index = 0; index < views.size(); ++index) {
+        const auto* state = views[index];
+        inputs[index] = {&state->plane, &state->contourFinePlane,
+            state->contourFineFactor, state->displayLogarithmic,
+            state->cachedRequest.outputSize};
     }
-    if (!shared) {
+    auto sync = m_displayCoordinator.syncPanelsToSharedRange(
+        {m_dataset->id(), currentField, maximumLevel, composition}, inputs,
+        logarithmic, isContourMode(m_displayMode), m_contourCount, m_palette);
+    if (!sync) {
         return;
     }
-    const auto [globalMin, globalMax] = *shared;
-    for (auto* state : views) {
-        if (state->plane.width <= 0 || state->plane.height <= 0) {
+    const auto [globalMin, globalMax] = sync->range;
+    for (std::size_t index = 0; index < views.size(); ++index) {
+        auto* state = views[index];
+        auto& update = sync->panels[index];
+        if (!update.applies) {
             continue;
         }
         state->displayMinimum = globalMin;
         state->displayMaximum = globalMax;
-        // The contour polylines were extracted against this view's own range;
-        // re-extract them against the shared range so their levels match the
-        // shared colorbar. updateOverlay below repaints from these polylines
-        // (see contours-stale-after-visible-range-sync).
-        if (isContourMode(m_displayMode) && state->contourFinePlane.width > 0) {
-            state->contourPolylines = recomputeContourPolylines(
-                state->contourFinePlane, state->contourFineFactor,
-                globalMin, globalMax, state->displayLogarithmic, m_contourCount,
-                state->cachedRequest.outputSize[0],
-                state->cachedRequest.outputSize[1]);
+        if (update.contoursRecomputed) {
+            state->contourPolylines = std::move(update.contourPolylines);
         }
-        auto image = renderScalarPlane(state->plane, ScalarRenderSettings{
-            .minimum = globalMin,
-            .maximum = globalMax,
-            .logarithmic = state->displayLogarithmic,
-            .palette = &m_palette
-        });
-        if (!image.valid()) {
-            continue;
+        if (update.image.valid()) {
+            state->view->setImage(displayImageFor(update.image));
         }
-        state->view->setImage(displayImageFor(image));
     }
     // setImage clears grid boxes and vector/contour overlays; restore them.
     for (auto* state : views) {

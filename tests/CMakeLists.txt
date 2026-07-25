@@ -64,7 +64,10 @@ add_test(NAME selective_block_read COMMAND test_selective_block_read)
 
 add_executable(test_particle_reader integration/test_particle_reader.cpp)
 target_link_libraries(test_particle_reader PRIVATE amrexplorer::io amrexplorer::warnings)
-add_test(NAME particle_reader COMMAND test_particle_reader)
+add_test(
+    NAME particle_reader
+    COMMAND test_particle_reader "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+)
 
 add_executable(test_fab_catalog integration/test_fab_catalog.cpp)
 target_link_libraries(test_fab_catalog PRIVATE amrexplorer::query amrexplorer::warnings)

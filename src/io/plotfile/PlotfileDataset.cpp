@@ -31,6 +31,16 @@ std::filesystem::path sourceDataRoot(const std::filesystem::path& path)
     return parent.empty() ? std::filesystem::path(".") : parent;
 }
 
+std::vector<ParticleSpeciesMetadata> discoverParticlesForPlotfileRoot(
+    const std::filesystem::path& root)
+{
+    if (std::filesystem::is_directory(root)
+        && std::filesystem::is_regular_file(root / "Header")) {
+        return discoverParticleSpecies(root);
+    }
+    return {};
+}
+
 } // namespace
 
 PlotfileDataset::PlotfileDataset(
@@ -54,6 +64,7 @@ PlotfileDataset::PlotfileDataset(std::filesystem::path root, DatasetId id,
     : m_plotfile(std::move(root))
     , m_id(id)
     , m_metadataResult(std::move(metadata))
+    , m_particleSpecies(discoverParticlesForPlotfileRoot(m_plotfile))
     , m_blockReader(m_plotfile, m_metadataResult.metadata)
     , m_cache(cacheBudgetBytes)
 {

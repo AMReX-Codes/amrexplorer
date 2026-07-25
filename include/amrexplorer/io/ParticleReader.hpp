@@ -32,9 +32,15 @@ struct ParticlePoint {
     Real3 position{};
 };
 
+struct ParticleReadMetrics {
+    std::uint64_t integerBytesRead = 0;
+    std::uint64_t realBytesRead = 0;
+};
+
 struct ParticleSample {
     ParticleSpeciesMetadata species;
     std::vector<ParticlePoint> points;
+    ParticleReadMetrics io;
 };
 
 class ParticleReadError : public std::runtime_error {

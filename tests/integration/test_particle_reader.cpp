@@ -1,4 +1,6 @@
 #include <amrexplorer/io/ParticleReader.hpp>
+#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/io/PlotfileMetadataReader.hpp>
 
 #include <algorithm>
 #include <array>
@@ -29,7 +31,8 @@ std::uint64_t idcpu(std::int32_t id, std::int32_t cpu)
 
 void writeFixture(const std::filesystem::path& root,
     const std::vector<std::pair<std::int32_t, std::int32_t>>& identities,
-    double xOffset, bool expanded = false)
+    double xOffset, bool expanded = false,
+    int additionalRealComponents = 0)
 {
     const auto species = root / "Tracer";
     std::filesystem::create_directories(species / "Level_0");
@@ -39,7 +42,12 @@ void writeFixture(const std::filesystem::path& root,
                 ? "Version_Two_Dot_One_double\n"
                 : "Version_Two_Dot_Zero_double\n")
                << "2\n"
-               << "1\nmass\n"
+               << 1 + additionalRealComponents << "\nmass\n";
+        for (int component = 0; component < additionalRealComponents;
+             ++component) {
+            header << "attribute_" << component << '\n';
+        }
+        header
                << "0\n"
                << "1\n"
                << identities.size() << '\n'
@@ -63,19 +71,22 @@ void writeFixture(const std::filesystem::path& root,
     }
     for (const auto [id, cpu] : identities) {
         static_cast<void>(cpu);
-        const std::array<double, 3> record{
-            xOffset + static_cast<double>(id),
-            2.0 * static_cast<double>(id),
-            0.25 * static_cast<double>(id)};
-        data.write(reinterpret_cast<const char*>(record.data()), sizeof(record));
+        std::vector<double> record(
+            static_cast<std::size_t>(3 + additionalRealComponents), 0.0);
+        record[0] = xOffset + static_cast<double>(id);
+        record[1] = 2.0 * static_cast<double>(id);
+        record[2] = 0.25 * static_cast<double>(id);
+        data.write(reinterpret_cast<const char*>(record.data()),
+            static_cast<std::streamsize>(record.size() * sizeof(double)));
     }
 }
 
 } // namespace
 
-int main()
+int main(int argc, char* argv[])
 {
     try {
+        require(argc == 2, "plotfile fixture path is required");
         const auto root = std::filesystem::temp_directory_path()
             / "amrvis2_particle_reader_test";
         std::filesystem::remove_all(root);
@@ -122,6 +133,25 @@ int main()
         require(chunked.points[43'690].position[0] == 43'691.0
                 && chunked.points[131'072].id == idcpu(131'073, 7),
             "particle data was decoded incorrectly across chunk boundaries");
+
+        std::vector<std::pair<std::int32_t, std::int32_t>> sparseIdentities;
+        sparseIdentities.reserve(20'000);
+        for (std::int32_t id = 1; id <= 20'000; ++id) {
+            sparseIdentities.emplace_back(id, 7);
+        }
+        constexpr int extraRealComponents = 128;
+        writeFixture(
+            root, sparseIdentities, 0.0, false, extraRealComponents);
+        const auto sparse
+            = amrvis::readParticleSample(root, "Tracer", 0.0002);
+        require(sparse.points.size() == 1,
+            "sparse fixture did not select the expected particle");
+        const auto fullRealPayload = static_cast<std::uint64_t>(
+            sparseIdentities.size())
+            * static_cast<std::uint64_t>(3 + extraRealComponents)
+            * sizeof(double);
+        require(sparse.io.realBytesRead < fullRealPayload / 2,
+            "sparse sampling read most of the real particle payload");
 
         writeFixture(root, identities, 0.0);
         const auto half = amrvis::readParticleSample(root, "Tracer", 0.5);
@@ -171,6 +201,19 @@ int main()
         }
         require(separatedRanks,
             "sampling collapsed distinct CPUs with the same local particle ID");
+
+        const auto preparedRoot = root / "prepared_plotfile";
+        std::filesystem::copy(argv[1], preparedRoot,
+            std::filesystem::copy_options::recursive);
+        writeFixture(preparedRoot, identities, 0.0);
+        auto preparedMetadata
+            = amrvis::PlotfileMetadataReader{}.read(preparedRoot);
+        amrvis::PlotfileDataset preparedDataset(
+            preparedRoot, amrvis::DatasetId{1}, 1024 * 1024,
+            std::move(preparedMetadata));
+        require(preparedDataset.particleSpecies().size() == 1
+                && preparedDataset.particleSpecies().front().name == "Tracer",
+            "prepared-metadata dataset did not discover particle species");
 
         std::filesystem::remove_all(root);
         return 0;

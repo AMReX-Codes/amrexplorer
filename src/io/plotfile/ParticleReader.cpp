@@ -89,6 +89,23 @@ void readChunk(std::istream& input, std::vector<char>& buffer,
     }
 }
 
+void skipChunk(std::istream& input, std::size_t recordCount,
+    std::uint64_t recordBytes, std::string_view description)
+{
+    const auto byteCount = checkedProduct(
+        static_cast<std::uint64_t>(recordCount), recordBytes, description);
+    if (byteCount > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::streamoff>::max())) {
+        throw ParticleReadError(
+            "particle " + std::string(description) + " exceeds supported size");
+    }
+    input.seekg(static_cast<std::streamoff>(byteCount), std::ios::cur);
+    if (!input) {
+        throw ParticleReadError(
+            "cannot seek past particle " + std::string(description));
+    }
+}
+
 ParsedHeader parseHeader(
     const std::filesystem::path& path, const std::string& species)
 {
@@ -261,7 +278,8 @@ std::filesystem::path particleDataPath(
 template <typename Real>
 void readGrid(const std::filesystem::path& dataPath, const GridRecord& grid,
     const ParsedHeader& header, double fraction, std::uint64_t seed,
-    StopToken cancellation, std::vector<ParticlePoint>& output)
+    StopToken cancellation, std::vector<ParticlePoint>& output,
+    ParticleReadMetrics& metrics)
 {
     std::ifstream input(dataPath, std::ios::binary);
     if (!input) {
@@ -292,6 +310,8 @@ void readGrid(const std::filesystem::path& dataPath, const GridRecord& grid,
         const auto count = chunkRecordCount(
             grid.count - firstIndex, intRecordBytes);
         readChunk(input, buffer, count, intRecordBytes, "integer data");
+        metrics.integerBytesRead += checkedProduct(
+            static_cast<std::uint64_t>(count), intRecordBytes, "integer data");
         for (std::size_t relativeIndex = 0;
              relativeIndex < count; ++relativeIndex) {
             if (cancellation.stop_requested()) {
@@ -319,8 +339,16 @@ void readGrid(const std::filesystem::path& dataPath, const GridRecord& grid,
         }
         const auto count = chunkRecordCount(
             grid.count - firstIndex, realRecordBytes);
-        readChunk(input, buffer, count, realRecordBytes, "real data");
         const auto pastLastIndex = firstIndex + count;
+        if (selectedIndex >= selectedParticles.size()
+            || selectedParticles[selectedIndex].index >= pastLastIndex) {
+            skipChunk(input, count, realRecordBytes, "real data");
+            firstIndex = pastLastIndex;
+            continue;
+        }
+        readChunk(input, buffer, count, realRecordBytes, "real data");
+        metrics.realBytesRead += checkedProduct(
+            static_cast<std::uint64_t>(count), realRecordBytes, "real data");
         while (selectedIndex < selectedParticles.size()
             && selectedParticles[selectedIndex].index < pastLastIndex) {
             const auto& selectedParticle = selectedParticles[selectedIndex];
@@ -394,10 +422,10 @@ ParticleSample readParticleSample(
             speciesPath, grid.level, grid.fileNumber);
         if (header.metadata.precision == ParticleRealPrecision::Single) {
             readGrid<float>(dataPath, grid, header, fraction, seed,
-                cancellation, result.points);
+                cancellation, result.points, result.io);
         } else {
             readGrid<double>(dataPath, grid, header, fraction, seed,
-                cancellation, result.points);
+                cancellation, result.points, result.io);
         }
     }
     return result;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
+#include <amrexplorer/core/StopToken.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +24,6 @@ public:
 
 // Inspect a plotfile directory, standalone FAB, or serialized MultiFab prefix/header.
 [[nodiscard]] PlotfileMetadataResult readDatasetMetadata(
-    const std::filesystem::path& path);
+    const std::filesystem::path& path, StopToken cancellation = {});
 
 } // namespace amrvis

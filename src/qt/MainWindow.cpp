@@ -2773,6 +2773,7 @@ void MainWindow::cancelInFlight()
         m_playbackTimer->stop();
     }
     m_initialStopSource.request_stop();
+    m_metadataStopSource.request_stop();
     m_prefetchStopSource.request_stop();
     m_linePlotStopSource.request_stop();
     m_view2d.stopSource.request_stop();
@@ -3734,6 +3735,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_probeLabel->clear();
     m_colorBar->clearRange();
     const auto generation = ++m_generation;
+    m_metadataStopSource = StopSource{};
+    const auto metadataCancellation = m_metadataStopSource.get_token();
     ++m_activeRequests;
     statusBar()->showMessage(tr("Reading metadata for %1...").arg(
         QString::fromStdString(path.string())));
@@ -3786,11 +3789,12 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
             watcher->deleteLater();
         });
     watcher->setFuture(QtConcurrent::run(
-        [path, preparedMetadata = std::move(preparedMetadata)]() mutable {
+        [path, preparedMetadata = std::move(preparedMetadata),
+            cancellation = metadataCancellation]() mutable {
         if (preparedMetadata) {
             return std::move(*preparedMetadata);
         }
-        return readDatasetMetadata(path);
+        return readDatasetMetadata(path, cancellation);
     }));
 }
 

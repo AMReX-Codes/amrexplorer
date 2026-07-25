@@ -1,4 +1,5 @@
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
+#include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/detail/VisMfIndex.hpp>
 
 #include <algorithm>
@@ -281,7 +282,7 @@ IntBox physicalBoundsToCellBox(
 } // namespace
 
 PlotfileMetadataResult PlotfileMetadataReader::read(
-    const std::filesystem::path& plotfile) const
+    const std::filesystem::path& plotfile, StopToken cancellation) const
 {
     const auto headerPath = plotfile / "Header";
     std::error_code sizeError;
@@ -294,6 +295,9 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
     std::ifstream input(headerPath, std::ios::binary);
     if (!input) {
         throw MetadataReadError("cannot open plotfile Header '" + headerPath.string() + "'");
+    }
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
     }
 
     auto metadata = std::make_shared<DatasetMetadata>();
@@ -398,6 +402,9 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
         level.step = headerStep;
         level.boxes.reserve(static_cast<std::size_t>(gridCount));
         for (int grid = 0; grid < gridCount; ++grid) {
+            if (cancellation.stop_requested()) {
+                throw ReadCancelled();
+            }
             Real3 lower;
             Real3 upper;
             for (int axis = 0; axis < metadata->dimension; ++axis) {
@@ -420,6 +427,9 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
 
     MetadataReadMetrics metrics{1, headerSize, 0, 0};
     for (auto& level : metadata->levels) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         const auto dataPrefix = plotfile / level.dataPath;
         const auto indexPath = std::filesystem::path(dataPrefix.string() + "_H");
         const auto visMf = detail::readVisMfIndex(indexPath, metadata->dimension);

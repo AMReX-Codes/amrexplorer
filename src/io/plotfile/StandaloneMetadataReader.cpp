@@ -1,5 +1,6 @@
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 #include <amrexplorer/io/FabCatalog.hpp>
+#include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/detail/VisMfIndex.hpp>
 
 #include <algorithm>
@@ -233,11 +234,15 @@ PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
     };
 }
 
-PlotfileMetadataResult readDatasetMetadata(const std::filesystem::path& path)
+PlotfileMetadataResult readDatasetMetadata(const std::filesystem::path& path,
+    StopToken cancellation)
 {
     if (std::filesystem::is_directory(path)
         && std::filesystem::is_regular_file(path / "Header")) {
-        return PlotfileMetadataReader{}.read(path);
+        return PlotfileMetadataReader{}.read(path, cancellation);
+    }
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
     }
     if (path.string().ends_with("_H")
         || std::filesystem::is_regular_file(

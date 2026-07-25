@@ -3873,59 +3873,12 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             [dataset, request, rangeMode, userRange, logarithmic, palette,
                 cancellation, displayMode, vectorUField, vectorVField,
                 contourCount]() mutable {
-            // Graceful degradation on cache pressure, mirroring executeFrameLoad:
-            // a composite (Finest Available) slice whose multi-level working set
-            // overflows the budget is retried at a lower composite maximum
-            // level; an exact level (or level 0) cannot shed resolution and is
-            // reported instead. See cache-budget-exceeded-hard-fails-after-load.
-            int fallbackFrom = -1;
-            int fallbackTo = -1;
-            for (;;) {
-                try {
-                    auto result = executeSlice(dataset, request, rangeMode,
-                        userRange, logarithmic, palette, cancellation);
-                    result.mode = displayMode;
-                    result.vectorUField = vectorUField;
-                    result.vectorVField = vectorVField;
-                    result.contourCount = contourCount;
-                    if (isContourMode(displayMode)) {
-                        appendContours(dataset, request, contourCount,
-                            result.minimum, result.maximum, result.logarithmic,
-                            cancellation, result);
-                    }
-                    if (displayMode == DisplayMode::VelocityVectors) {
-                        appendVectorGlyphs(dataset, request,
-                            FieldId{vectorUField}, FieldId{vectorVField},
-                            contourCount, cancellation, result);
-                    }
-                    result.cacheFallbackFromLevel = fallbackFrom;
-                    result.cacheFallbackToLevel = fallbackTo;
-                    return result;
-                } catch (const CacheBudgetExceeded&) {
-                    const auto budget = cacheBudgetDescription(
-                        dataset->cacheMetrics().budgetBytes);
-                    if (request.composition
-                            != CompositionPolicy::FinestAvailable) {
-                        throw std::runtime_error(QObject::tr(
-                            "The selected slice level cannot fit in the %1 "
-                            "cache. Choose a lower level or increase "
-                            "AMREXPLORER_CACHE_SIZE_MB.").arg(budget)
-                            .toStdString());
-                    }
-                    if (request.maximumLevel == 0) {
-                        throw std::runtime_error(QObject::tr(
-                            "The slice cannot fit in the %1 cache, even at "
-                            "level 0. Try a smaller plotfile or increase "
-                            "AMREXPLORER_CACHE_SIZE_MB.").arg(budget)
-                            .toStdString());
-                    }
-                    dataset->clearUnpinnedCache();
-                    if (fallbackFrom < 0) {
-                        fallbackFrom = request.maximumLevel;
-                    }
-                    fallbackTo = --request.maximumLevel;
-                }
-            }
+            // The pipeline owns the whole non-cached slice worker, including
+            // the cache-pressure level fallback (see
+            // cache-budget-exceeded-hard-fails-after-load).
+            return executeSliceWithFallback(dataset, request, rangeMode,
+                userRange, logarithmic, palette, displayMode, vectorUField,
+                vectorVField, contourCount, cancellation);
         });
     }
 

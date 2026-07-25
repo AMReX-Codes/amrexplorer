@@ -171,6 +171,22 @@ void appendVectorGlyphs(const std::shared_ptr<PlotfileDataset>& dataset,
     SliceRequest request, FieldId uField, FieldId vField, int count,
     StopToken cancellation, SliceDisplayResult& result);
 
+// The whole non-cached slice worker: executeSlice plus the display-mode
+// extras (contours or vector glyphs), with the same cache-pressure level
+// fallback as executeFrameLoad — a composite (Finest Available) request
+// whose multi-level working set overflows the budget is retried at a lower
+// composite maximum level, with the fallback recorded on the result; an
+// exact level (or level 0) cannot shed resolution and reports an actionable
+// error instead (plain untranslated text; the GUI wraps failures in its own
+// translated message).
+[[nodiscard]] SliceDisplayResult executeSliceWithFallback(
+    const std::shared_ptr<PlotfileDataset>& dataset, SliceRequest request,
+    RangeMode rangeMode,
+    const std::optional<std::pair<double, double>>& userRange,
+    bool logarithmic, const Palette& palette, DisplayMode displayMode,
+    std::uint32_t vectorUField, std::uint32_t vectorVField, int contourCount,
+    StopToken cancellation);
+
 // Extracts contour polylines for the request at data resolution and maps
 // them to display-plane pixel space; caches the fine plane on the result so
 // range and contour-count changes can re-extract without a new SliceQuery.

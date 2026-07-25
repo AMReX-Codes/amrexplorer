@@ -159,9 +159,35 @@ public:
     // used by the export-quit smoke test to reach the encoder deterministically.
     void startAnimationExportForTest(const QString& path, bool includeColorBar);
 
+    // Test-only: move each 3-D plane to slicePositions (per axis, so the three
+    // panels sample different data with different local ranges), switch to
+    // contour display (count levels) with the Visible range mode and optional
+    // logarithmic mapping, then re-slice every view once. This is the exact
+    // shape that exposed the stale-contour bug: three unequal local ranges
+    // reconciled into one shared Visible range. interactiveSlicesSettled fires
+    // when that batch finishes.
+    void configureContourSyncForTest(
+        int count, bool logarithmic, std::array<double, 3> slicePositions);
+
+    // Test-only: for each current view (ordered by normal axis; 2-D has one),
+    // the display range and the distinct contour levels present in its overlay
+    // polylines. The contour-sync smoke test checks these levels are re-derived
+    // from the shared Visible range rather than each view's local range.
+    struct ContourViewProbe {
+        double displayMinimum = 0.0;
+        double displayMaximum = 0.0;
+        bool logarithmic = false;
+        std::vector<double> contourLevels;
+    };
+    [[nodiscard]] std::vector<ContourViewProbe> contourViewProbesForTest();
+
 signals:
     void datasetOpenFinished(bool success);
     void initialSliceFinished(bool success);
+    // Emitted when an interactive re-slice batch (a mode/range/log/field
+    // change, pan, or zoom) finishes with no slice work left in flight. The
+    // contour-sync smoke test waits on it. Not emitted for the initial load.
+    void interactiveSlicesSettled();
     // Emitted once a sequence frame's slice(s) are on screen; the offscreen
     // smoke test drives frame stepping off it.
     void sequenceFrameDisplayed(int index);

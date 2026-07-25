@@ -675,6 +675,45 @@ SliceDisplayResult refreshCachedSlice(
     return result;
 }
 
+// Re-extract contour polylines from an already-populated fine plane after the
+// display range is replaced downstream of appendContours/refreshCachedSlice —
+// full-domain-range reuse, the 3-D shared Visible range, or syncVisibleRanges.
+// Cheap: the fine plane is cached, so no SliceQuery runs. Returns empty when
+// the range is unusable (non-positive log range, zero extent), matching
+// updateOverlay's guard, so a bad range clears rather than throws. See the
+// contours-stale-after-visible-range-sync issue.
+std::vector<ContourPolyline> recomputeContourPolylines(
+    const ScalarPlane& finePlane, int fineFactor, double minimum,
+    double maximum, bool logarithmic, int contourCount,
+    int displayWidth, int displayHeight)
+{
+    if (finePlane.width <= 0 || finePlane.height <= 0 || contourCount < 1
+        || !(minimum < maximum) || (logarithmic && !(minimum > 0.0))) {
+        return {};
+    }
+    try {
+        const auto values = contourValues(
+            minimum, maximum, contourCount, logarithmic);
+        return contourPolylinesForDisplay(
+            finePlane, fineFactor, values, displayWidth, displayHeight);
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+
+// SliceDisplayResult overload: regenerate the polylines to match the result's
+// current (possibly replaced) minimum/maximum. No-op outside contour modes.
+void recomputeContourPolylines(SliceDisplayResult& result)
+{
+    if (!isContourMode(result.mode)) {
+        return;
+    }
+    result.contourPolylines = recomputeContourPolylines(
+        result.contourFinePlane, result.contourFineFactor, result.minimum,
+        result.maximum, result.logarithmic, result.contourCount,
+        result.request.outputSize[0], result.request.outputSize[1]);
+}
+
 // Combo data sentinel for "Update to Level N" entries, which composite
 // levels 0..N with FinestAvailable. The selected level N is data - 1000.
 constexpr int kUpdateToLevelOffset = 1000;
@@ -953,6 +992,10 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
                             .logarithmic = d.logarithmic,
                             .palette = &spec.palette
                         });
+                    // Contours were extracted per view before the shared range
+                    // was known; re-extract them so their levels match the
+                    // shared colorbar (see contours-stale-after-visible-range).
+                    recomputeContourPolylines(d);
                 }
             }
             break;
@@ -1869,6 +1912,53 @@ void MainWindow::applyContourSettings(
     } else {
         updateOverlays();
     }
+}
+
+void MainWindow::configureContourSyncForTest(
+    int count, bool logarithmic, std::array<double, 3> slicePositions)
+{
+    if (!m_dataset) {
+        return;
+    }
+    m_slicePosition3d = slicePositions;
+    // Set range/log through the widgets (requestSlice reads them) but block
+    // their signals so only the single scheduleSliceRequest below re-slices.
+    {
+        const QSignalBlocker rangeBlocker(m_rangeMode);
+        const auto index = m_rangeMode->findData(
+            static_cast<int>(RangeMode::Visible));
+        if (index >= 0) {
+            m_rangeMode->setCurrentIndex(index);
+        }
+    }
+    {
+        const QSignalBlocker logBlocker(m_logarithmic);
+        m_logarithmic->setChecked(logarithmic);
+    }
+    m_displayMode = DisplayMode::RasterContours;
+    m_contourCount = count;
+    scheduleSliceRequest(false);
+}
+
+std::vector<MainWindow::ContourViewProbe>
+MainWindow::contourViewProbesForTest()
+{
+    std::vector<ContourViewProbe> probes;
+    for (const auto* state : currentViews()) {
+        ContourViewProbe probe;
+        probe.displayMinimum = state->displayMinimum;
+        probe.displayMaximum = state->displayMaximum;
+        probe.logarithmic = state->displayLogarithmic;
+        for (const auto& polyline : state->contourPolylines) {
+            probe.contourLevels.push_back(polyline.value);
+        }
+        std::sort(probe.contourLevels.begin(), probe.contourLevels.end());
+        probe.contourLevels.erase(
+            std::unique(probe.contourLevels.begin(), probe.contourLevels.end()),
+            probe.contourLevels.end());
+        probes.push_back(std::move(probe));
+    }
+    return probes;
 }
 
 void MainWindow::showNumberFormatDialog()
@@ -4297,6 +4387,12 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                             == result.request.composition) {
                         result.minimum = m_fullDomainRange->first;
                         result.maximum = m_fullDomainRange->second;
+                        // The polylines were extracted from the subregion's
+                        // own range; re-extract them against the reused
+                        // full-domain range so they match the colorbar. In
+                        // 3-D syncVisibleRanges re-extracts again below, but
+                        // in 2-D this is the only place it happens.
+                        recomputeContourPolylines(result);
                     }
                     showSlice(state, result);
                     syncVisibleRanges();
@@ -4332,6 +4428,11 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             }
             updateDiagnostics();
             watcher->deleteLater();
+            // The interactive re-slice batch has drained once no view has work
+            // in flight; the smoke test waits on this to read settled state.
+            if (m_activeRequests == 0) {
+                emit interactiveSlicesSettled();
+            }
         });
     watcher->setFuture(future);
 }
@@ -4635,6 +4736,17 @@ void MainWindow::syncVisibleRanges()
         }
         state->displayMinimum = globalMin;
         state->displayMaximum = globalMax;
+        // The contour polylines were extracted against this view's own range;
+        // re-extract them against the shared range so their levels match the
+        // shared colorbar. updateOverlay below repaints from these polylines
+        // (see contours-stale-after-visible-range-sync).
+        if (isContourMode(m_displayMode) && state->contourFinePlane.width > 0) {
+            state->contourPolylines = recomputeContourPolylines(
+                state->contourFinePlane, state->contourFineFactor,
+                globalMin, globalMax, state->displayLogarithmic, m_contourCount,
+                state->cachedRequest.outputSize[0],
+                state->cachedRequest.outputSize[1]);
+        }
         auto image = renderScalarPlane(state->plane, ScalarRenderSettings{
             .minimum = globalMin,
             .maximum = globalMax,

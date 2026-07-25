@@ -192,6 +192,20 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_slice_smoke_3d PROPERTIES TIMEOUT 30)
+    # Regression test for contours-stale-after-visible-range-sync: switching a
+    # 3-D dataset to contours in Visible+log mode must re-derive every panel's
+    # contour levels from the shared range, not each panel's local range.
+    add_test(
+        NAME qt_contour_sync_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_contour_sync_3d"
+            -DMODE=contour-sync
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_contour_sync_smoke_3d PROPERTIES TIMEOUT 30)
     add_test(
         NAME qt_quit_smoke_3d
         COMMAND "${CMAKE_COMMAND}"

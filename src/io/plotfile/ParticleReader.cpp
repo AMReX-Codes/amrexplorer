@@ -30,6 +30,7 @@ struct GridRecord {
 struct ParsedHeader {
     ParticleSpeciesMetadata metadata;
     bool expandedIds = false;
+    bool checkpoint = false;
     int finestLevel = 0;
     std::vector<GridRecord> grids;
 };
@@ -159,7 +160,11 @@ ParsedHeader parseHeader(
     for (int i = 0; i < result.metadata.intComponentCount; ++i) {
         (void)readRequired<std::string>(input, "integer component name");
     }
-    (void)readRequired<int>(input, "checkpoint flag");
+    const auto checkpointFlag = readRequired<int>(input, "checkpoint flag");
+    if (checkpointFlag != 0 && checkpointFlag != 1) {
+        throw ParticleReadError("particle checkpoint flag must be zero or one");
+    }
+    result.checkpoint = checkpointFlag == 1;
     result.metadata.particleCount
         = readRequired<std::uint64_t>(input, "particle count");
     (void)readRequired<std::uint64_t>(input, "next particle id");
@@ -404,6 +409,11 @@ ParticleSample readParticleSample(
     }
     const auto speciesPath = plotfile / species;
     const auto header = parseHeader(speciesPath / "Header", species);
+    if (!header.checkpoint) {
+        throw ParticleReadError(
+            "non-checkpoint particle data is unsupported because it has no "
+            "ID/CPU identity words");
+    }
     ParticleSample result;
     result.species = header.metadata;
     if (fraction == 0.0 || header.metadata.particleCount == 0) {

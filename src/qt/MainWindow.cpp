@@ -2537,8 +2537,9 @@ void MainWindow::requestParticleReload()
                 if (generation == m_generation
                     && particleGeneration == m_particleGeneration
                     && !cancellation.stop_requested()) {
-                    QMessageBox::critical(this, tr("Cannot load particles"),
-                        exceptionMessage(error));
+                    reportBackgroundError(
+                        tr("Particles were not loaded: %1")
+                            .arg(exceptionMessage(error)));
                 }
             }
             updateDiagnostics();

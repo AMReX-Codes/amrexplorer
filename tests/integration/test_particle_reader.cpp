@@ -32,7 +32,7 @@ std::uint64_t idcpu(std::int32_t id, std::int32_t cpu)
 void writeFixture(const std::filesystem::path& root,
     const std::vector<std::pair<std::int32_t, std::int32_t>>& identities,
     double xOffset, bool expanded = false,
-    int additionalRealComponents = 0)
+    int additionalRealComponents = 0, bool checkpoint = true)
 {
     const auto species = root / "Tracer";
     std::filesystem::create_directories(species / "Level_0");
@@ -49,7 +49,7 @@ void writeFixture(const std::filesystem::path& root,
         }
         header
                << "0\n"
-               << "1\n"
+               << (checkpoint ? "1\n" : "0\n")
                << identities.size() << '\n'
                << "1000\n"
                << "0\n"
@@ -58,16 +58,19 @@ void writeFixture(const std::filesystem::path& root,
     }
     std::ofstream data(species / "Level_0" / "DATA_00000",
         std::ios::binary);
-    for (const auto [id, cpu] : identities) {
-        const auto packed = idcpu(id, cpu);
-        const std::array<std::int32_t, 2> record = expanded
-            ? std::array{
-                std::bit_cast<std::int32_t>(
-                    static_cast<std::uint32_t>(packed >> 32U)),
-                std::bit_cast<std::int32_t>(
-                    static_cast<std::uint32_t>(packed))}
-            : std::array{id, cpu};
-        data.write(reinterpret_cast<const char*>(record.data()), sizeof(record));
+    if (checkpoint) {
+        for (const auto [id, cpu] : identities) {
+            const auto packed = idcpu(id, cpu);
+            const std::array<std::int32_t, 2> record = expanded
+                ? std::array{
+                    std::bit_cast<std::int32_t>(
+                        static_cast<std::uint32_t>(packed >> 32U)),
+                    std::bit_cast<std::int32_t>(
+                        static_cast<std::uint32_t>(packed))}
+                : std::array{id, cpu};
+            data.write(
+                reinterpret_cast<const char*>(record.data()), sizeof(record));
+        }
     }
     for (const auto [id, cpu] : identities) {
         static_cast<void>(cpu);
@@ -112,6 +115,23 @@ int main(int argc, char* argv[])
         require(all.points[2].position[0] == 3.0
                 && all.points[2].position[1] == 6.0,
             "particle position was decoded incorrectly");
+
+        writeFixture(root, identities, 0.0, false, 0, false);
+        const auto nonCheckpointSpecies
+            = amrvis::discoverParticleSpecies(root);
+        require(nonCheckpointSpecies.size() == 1,
+            "non-checkpoint species metadata was not discovered");
+        bool rejectedNonCheckpoint = false;
+        try {
+            static_cast<void>(
+                amrvis::readParticleSample(root, "Tracer", 1.0));
+        } catch (const amrvis::ParticleReadError& error) {
+            rejectedNonCheckpoint = std::string(error.what()).find(
+                "non-checkpoint particle data is unsupported")
+                != std::string::npos;
+        }
+        require(rejectedNonCheckpoint,
+            "non-checkpoint particle data was not rejected explicitly");
 
         writeFixture(root, identities, 0.0, true);
         const auto expanded = amrvis::readParticleSample(root, "Tracer", 1.0);

@@ -507,6 +507,7 @@ private:
     bool m_controlsReady = false;
     std::uint64_t m_generation = 0;
     std::uint64_t m_activeRequests = 0;
+    bool m_closing = false;
     std::uint64_t m_staleResults = 0;
     std::uint64_t m_lastFilesRead = 0;
     std::uint64_t m_lastBytesRead = 0;

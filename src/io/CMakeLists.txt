@@ -1,4 +1,5 @@
 add_library(amrexplorer_io
+    ../expression/Expression.cpp
     plotfile/FabCatalog.cpp
     plotfile/PlotfileBlockReader.cpp
     plotfile/PlotfileDataset.cpp

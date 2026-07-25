@@ -2,6 +2,19 @@ add_executable(test_core_metadata unit/test_core_metadata.cpp)
 target_link_libraries(test_core_metadata PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME core_metadata COMMAND test_core_metadata)
 
+add_executable(
+    test_expression
+    unit/test_expression.cpp
+    "${PROJECT_SOURCE_DIR}/src/expression/Expression.cpp"
+)
+target_include_directories(
+    test_expression PRIVATE "${PROJECT_SOURCE_DIR}/include"
+)
+target_link_libraries(
+    test_expression PRIVATE amrexplorer::warnings Threads::Threads
+)
+add_test(NAME expression COMMAND test_expression)
+
 add_executable(test_geometry unit/test_geometry.cpp)
 target_link_libraries(test_geometry PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME geometry COMMAND test_geometry)
@@ -95,6 +108,17 @@ add_test(
         "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
 )
 
+add_executable(test_viewer_session integration/test_viewer_session.cpp)
+target_link_libraries(
+    test_viewer_session
+    PRIVATE amrexplorer::viewer amrexplorer::warnings
+)
+add_test(
+    NAME viewer_session
+    COMMAND test_viewer_session
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+)
+
 # Writes FAB payloads into copies of the metadata-only fixtures; Qt-free so
 # the headless build can compile it too.
 add_executable(fixture_materializer fixture_materializer/main.cpp)
@@ -181,6 +205,28 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_slice_smoke_2d PROPERTIES TIMEOUT 30)
+    add_test(
+        NAME qt_expression_editor_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_expression_editor"
+            -DMODE=expression-editor
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_expression_editor_smoke PROPERTIES TIMEOUT 30)
+    add_test(
+        NAME qt_expression_range_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_expression_range_3d"
+            -DMODE=expression-range
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_expression_range_smoke_3d PROPERTIES TIMEOUT 30)
     add_test(
         NAME qt_slice_smoke_3d
         COMMAND "${CMAKE_COMMAND}"

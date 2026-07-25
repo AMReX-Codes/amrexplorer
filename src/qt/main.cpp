@@ -1,26 +1,37 @@
 #include "MainWindow.hpp"
+#include "AnimationPanel.hpp"
 #include "FabSelectorDock.hpp"
 
+#include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QDialog>
 #include <QDir>
+#include <QDoubleSpinBox>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QInputDialog>
+#include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QLoggingCategory>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QTableView>
 #include <QTextStream>
+#include <QTemporaryDir>
 #include <QTimer>
 
 #include <array>
+#include <cmath>
 #include <filesystem>
+#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -159,6 +170,408 @@ bool rangeSelectorMatches(
     return selector->currentData().toInt() == static_cast<int>(expectedMode)
         && static_cast<bool>(fileEnabled) == metadataRangesAvailable
         && static_cast<bool>(levelEnabled) == metadataRangesAvailable;
+}
+
+bool exerciseExpressionEditor(amrvis::qt::MainWindow& window)
+{
+    auto* fieldSelector = window.findChild<QComboBox*>(
+        QStringLiteral("fieldSelector"));
+    if (fieldSelector == nullptr) {
+        return false;
+    }
+    const auto nativeFieldIndex =
+        fieldSelector->findText(QStringLiteral("temperature"));
+    if (nativeFieldIndex < 0) {
+        return false;
+    }
+    fieldSelector->setCurrentIndex(nativeFieldIndex);
+    const auto selectedNativeField = fieldSelector->currentText();
+
+    const auto edit = [&](const auto& interaction) {
+        auto* action = window.findChild<QAction*>(
+            QStringLiteral("expressionEditorAction"));
+        if (action == nullptr) {
+            return false;
+        }
+        bool completed = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(
+                QStringLiteral("expressionEditor"));
+            if (dialog == nullptr) {
+                return;
+            }
+            completed = interaction(*dialog);
+            if (!completed) {
+                dialog->reject();
+            }
+        });
+        action->trigger();
+        return completed;
+    };
+
+    QTemporaryDir temporary;
+    if (!temporary.isValid()) {
+        return false;
+    }
+    const auto expressionListPath = temporary.filePath(QStringLiteral("expressions.json"));
+
+    const auto created = edit([&expressionListPath](QDialog& dialog) {
+        auto* add = dialog.findChild<QPushButton*>(
+            QStringLiteral("newExpressionButton"));
+        auto* remove = dialog.findChild<QPushButton*>(
+            QStringLiteral("deleteExpressionButton"));
+        auto* importDefinitions =
+            dialog.findChild<QPushButton*>(QStringLiteral("importExpressionsButton"));
+        auto* exportDefinitions =
+            dialog.findChild<QPushButton*>(QStringLiteral("exportExpressionsButton"));
+        auto* list = dialog.findChild<QListWidget*>(
+            QStringLiteral("expressionList"));
+        auto* name = dialog.findChild<QLineEdit*>(
+            QStringLiteral("expressionName"));
+        auto* source = dialog.findChild<QPlainTextEdit*>(
+            QStringLiteral("expressionSource"));
+        auto* apply = dialog.findChild<QPushButton*>(
+            QStringLiteral("applyExpressionsButton"));
+        if (add == nullptr || remove == nullptr || importDefinitions == nullptr ||
+            exportDefinitions == nullptr || list == nullptr || name == nullptr ||
+            source == nullptr || apply == nullptr) {
+            return false;
+        }
+        add->click();
+        name->setText(QStringLiteral("twice-density"));
+        source->setPlainText(QStringLiteral("2*density"));
+
+        bool exportCompleted = false;
+        QTimer::singleShot(0, &dialog, [&] {
+            auto* picker = qobject_cast<QFileDialog*>(QApplication::activeModalWidget());
+            if (picker == nullptr) {
+                return;
+            }
+            picker->selectFile(expressionListPath);
+            exportCompleted = true;
+            static_cast<QDialog*>(picker)->accept();
+        });
+        exportDefinitions->click();
+        if (!exportCompleted || !QFileInfo::exists(expressionListPath)) {
+            return false;
+        }
+
+        remove->click();
+        if (list->count() != 0) {
+            return false;
+        }
+        bool importCompleted = false;
+        QTimer::singleShot(0, &dialog, [&] {
+            auto* picker = qobject_cast<QFileDialog*>(QApplication::activeModalWidget());
+            if (picker == nullptr) {
+                return;
+            }
+            picker->selectFile(expressionListPath);
+            importCompleted = true;
+            static_cast<QDialog*>(picker)->accept();
+        });
+        importDefinitions->click();
+        if (!importCompleted || list->count() != 1 ||
+            name->text() != QStringLiteral("twice-density") ||
+            source->toPlainText() != QStringLiteral("2*density")) {
+            return false;
+        }
+
+        apply->click();
+        return true;
+    });
+    if (!created || fieldSelector->findText(
+            QStringLiteral("twice-density")) < 0
+        || fieldSelector->currentText() != selectedNativeField) {
+        return false;
+    }
+
+    fieldSelector->setCurrentIndex(
+        fieldSelector->findText(QStringLiteral("twice-density")));
+    const auto edited = edit([](QDialog& dialog) {
+        auto* list = dialog.findChild<QListWidget*>(
+            QStringLiteral("expressionList"));
+        auto* name = dialog.findChild<QLineEdit*>(
+            QStringLiteral("expressionName"));
+        auto* source = dialog.findChild<QPlainTextEdit*>(
+            QStringLiteral("expressionSource"));
+        auto* apply = dialog.findChild<QPushButton*>(
+            QStringLiteral("applyExpressionsButton"));
+        if (list == nullptr || list->count() != 1 || name == nullptr
+            || source == nullptr || apply == nullptr) {
+            return false;
+        }
+        list->setCurrentRow(0);
+        name->setText(QStringLiteral("triple-density"));
+        source->setPlainText(QStringLiteral("3*density"));
+        apply->click();
+        return true;
+    });
+    if (!edited || fieldSelector->findText(
+            QStringLiteral("twice-density")) >= 0
+        || fieldSelector->findText(QStringLiteral("triple-density")) < 0
+        || fieldSelector->currentText() != QStringLiteral("triple-density")) {
+        return false;
+    }
+
+    const auto addedUnrelated = edit([](QDialog& dialog) {
+        auto* add = dialog.findChild<QPushButton*>(
+            QStringLiteral("newExpressionButton"));
+        auto* name = dialog.findChild<QLineEdit*>(
+            QStringLiteral("expressionName"));
+        auto* source = dialog.findChild<QPlainTextEdit*>(
+            QStringLiteral("expressionSource"));
+        auto* apply = dialog.findChild<QPushButton*>(
+            QStringLiteral("applyExpressionsButton"));
+        if (add == nullptr || name == nullptr || source == nullptr
+            || apply == nullptr) {
+            return false;
+        }
+        add->click();
+        name->setText(QStringLiteral("four-density"));
+        source->setPlainText(QStringLiteral("4*density"));
+        apply->click();
+        return true;
+    });
+    if (!addedUnrelated
+        || fieldSelector->findText(QStringLiteral("four-density")) < 0
+        || fieldSelector->currentText() != QStringLiteral("triple-density")) {
+        return false;
+    }
+
+    const auto editedUnrelated = edit([](QDialog& dialog) {
+        auto* list = dialog.findChild<QListWidget*>(
+            QStringLiteral("expressionList"));
+        auto* source = dialog.findChild<QPlainTextEdit*>(
+            QStringLiteral("expressionSource"));
+        auto* apply = dialog.findChild<QPushButton*>(
+            QStringLiteral("applyExpressionsButton"));
+        if (list == nullptr || list->count() != 2 || source == nullptr
+            || apply == nullptr) {
+            return false;
+        }
+        list->setCurrentRow(1);
+        source->setPlainText(QStringLiteral("5*density"));
+        apply->click();
+        return true;
+    });
+    if (!editedUnrelated
+        || fieldSelector->currentText() != QStringLiteral("triple-density")) {
+        return false;
+    }
+
+    const auto deleted = edit([](QDialog& dialog) {
+        auto* list = dialog.findChild<QListWidget*>(
+            QStringLiteral("expressionList"));
+        auto* remove = dialog.findChild<QPushButton*>(
+            QStringLiteral("deleteExpressionButton"));
+        auto* apply = dialog.findChild<QPushButton*>(
+            QStringLiteral("applyExpressionsButton"));
+        if (list == nullptr || list->count() != 2 || remove == nullptr
+            || apply == nullptr) {
+            return false;
+        }
+        list->setCurrentRow(1);
+        remove->click();
+        list->setCurrentRow(0);
+        remove->click();
+        apply->click();
+        return true;
+    });
+    return deleted
+        && fieldSelector->findText(QStringLiteral("triple-density")) < 0
+        && fieldSelector->findText(QStringLiteral("four-density")) < 0;
+}
+
+bool applyExpressionDefinition(amrvis::qt::MainWindow& window,
+    const QString& fieldName, const QString& parserExpression,
+    bool expectPlaybackPaused = false)
+{
+    auto* action = window.findChild<QAction*>(
+        QStringLiteral("expressionEditorAction"));
+    if (action == nullptr) {
+        return false;
+    }
+    bool completed = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(
+            QStringLiteral("expressionEditor"));
+        if (dialog == nullptr) {
+            return;
+        }
+        auto* add = dialog->findChild<QPushButton*>(
+            QStringLiteral("newExpressionButton"));
+        auto* list = dialog->findChild<QListWidget*>(
+            QStringLiteral("expressionList"));
+        auto* name = dialog->findChild<QLineEdit*>(
+            QStringLiteral("expressionName"));
+        auto* source = dialog->findChild<QPlainTextEdit*>(
+            QStringLiteral("expressionSource"));
+        auto* apply = dialog->findChild<QPushButton*>(
+            QStringLiteral("applyExpressionsButton"));
+        auto* playbackTimer = window.findChild<QTimer*>(
+            QStringLiteral("playbackTimer"));
+        if (add == nullptr || list == nullptr || name == nullptr
+            || source == nullptr || apply == nullptr
+            || (expectPlaybackPaused
+                && (playbackTimer == nullptr || playbackTimer->isActive()))) {
+            dialog->reject();
+            return;
+        }
+        if (list->count() == 0) {
+            add->click();
+        } else {
+            list->setCurrentRow(0);
+        }
+        name->setText(fieldName);
+        source->setPlainText(parserExpression);
+        completed = true;
+        apply->click();
+    });
+    action->trigger();
+    return completed;
+}
+
+bool applyExpressionDefinitions(amrvis::qt::MainWindow& window,
+    const std::vector<std::pair<QString, QString>>& definitions)
+{
+    auto* action = window.findChild<QAction*>(
+        QStringLiteral("expressionEditorAction"));
+    if (action == nullptr) {
+        return false;
+    }
+    bool completed = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(
+            QStringLiteral("expressionEditor"));
+        if (dialog == nullptr) {
+            return;
+        }
+        auto* add = dialog->findChild<QPushButton*>(
+            QStringLiteral("newExpressionButton"));
+        auto* list = dialog->findChild<QListWidget*>(
+            QStringLiteral("expressionList"));
+        auto* name = dialog->findChild<QLineEdit*>(
+            QStringLiteral("expressionName"));
+        auto* source = dialog->findChild<QPlainTextEdit*>(
+            QStringLiteral("expressionSource"));
+        auto* apply = dialog->findChild<QPushButton*>(
+            QStringLiteral("applyExpressionsButton"));
+        if (add == nullptr || list == nullptr || name == nullptr
+            || source == nullptr || apply == nullptr || list->count() != 0) {
+            dialog->reject();
+            return;
+        }
+        for (const auto& [fieldName, parserExpression] : definitions) {
+            add->click();
+            name->setText(fieldName);
+            source->setPlainText(parserExpression);
+        }
+        completed = true;
+        apply->click();
+    });
+    action->trigger();
+    return completed;
+}
+
+bool expressionDefinitionMatches(amrvis::qt::MainWindow& window,
+    const QString& fieldName, const QString& parserExpression)
+{
+    auto* action = window.findChild<QAction*>(
+        QStringLiteral("expressionEditorAction"));
+    if (action == nullptr) {
+        return false;
+    }
+    bool matches = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(
+            QStringLiteral("expressionEditor"));
+        if (dialog == nullptr) {
+            return;
+        }
+        auto* list = dialog->findChild<QListWidget*>(
+            QStringLiteral("expressionList"));
+        auto* name = dialog->findChild<QLineEdit*>(
+            QStringLiteral("expressionName"));
+        auto* source = dialog->findChild<QPlainTextEdit*>(
+            QStringLiteral("expressionSource"));
+        if (list != nullptr && list->count() == 1
+            && name != nullptr && source != nullptr) {
+            list->setCurrentRow(0);
+            matches = name->text() == fieldName
+                && source->toPlainText() == parserExpression;
+        }
+        dialog->reject();
+    });
+    action->trigger();
+    return matches;
+}
+
+bool expressionEditorPreservesDesiredCatalog(amrvis::qt::MainWindow& window)
+{
+    auto* action = window.findChild<QAction*>(
+        QStringLiteral("expressionEditorAction"));
+    if (action == nullptr) {
+        return false;
+    }
+    bool matches = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(
+            QStringLiteral("expressionEditor"));
+        if (dialog == nullptr) {
+            return;
+        }
+        const auto* list = dialog->findChild<QListWidget*>(
+            QStringLiteral("expressionList"));
+        const auto* help = dialog->findChild<QLabel*>(
+            QStringLiteral("expressionHelp"));
+        matches = list != nullptr && list->count() == 3
+            && list->item(0)->text() == QStringLiteral("derived-a")
+            && !list->item(0)->toolTip().isEmpty()
+            && list->item(1)->text() == QStringLiteral("derived-b")
+            && list->item(2)->text() == QStringLiteral("derived-c")
+            && help != nullptr
+            && help->text().contains(QStringLiteral("temperature"));
+        dialog->reject();
+    });
+    action->trigger();
+    return matches;
+}
+
+bool setUserRange(amrvis::qt::MainWindow& window,
+    double minimum, double maximum)
+{
+    auto* mode = window.findChild<QComboBox*>(
+        QStringLiteral("rangeModeSelector"));
+    auto* lower = window.findChild<QDoubleSpinBox*>(
+        QStringLiteral("rangeMinimum"));
+    auto* upper = window.findChild<QDoubleSpinBox*>(
+        QStringLiteral("rangeMaximum"));
+    if (mode == nullptr || lower == nullptr || upper == nullptr) {
+        return false;
+    }
+    const auto userIndex = mode->findData(
+        static_cast<int>(amrvis::qt::RangeMode::User));
+    if (userIndex < 0) {
+        return false;
+    }
+    mode->setCurrentIndex(userIndex);
+    lower->setValue(minimum);
+    upper->setValue(maximum);
+    return true;
+}
+
+bool visibleRangeMatches(
+    const amrvis::qt::MainWindow& window, double minimum, double maximum)
+{
+    const auto* lower = window.findChild<QDoubleSpinBox*>(
+        QStringLiteral("rangeMinimum"));
+    const auto* upper = window.findChild<QDoubleSpinBox*>(
+        QStringLiteral("rangeMaximum"));
+    constexpr auto tolerance = 1.0e-6;
+    return lower != nullptr && upper != nullptr
+        && std::abs(lower->value() - minimum) < tolerance
+        && std::abs(upper->value() - maximum) < tolerance;
 }
 
 bool fabRangeSelectorMatches(const amrvis::qt::MainWindow& window)
@@ -393,6 +806,86 @@ int main(int argc, char* argv[])
         });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
+        && std::string_view(argv[1]) == "--expression-editor-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                const auto valid = success && exerciseExpressionEditor(window);
+                application.exit(valid ? 0 : 1);
+            });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--expression-range-smoke-test") {
+        struct SmokeState {
+            int phase = 0;
+            int completedSlices = 0;
+        };
+        const auto state = std::make_shared<SmokeState>();
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, state](bool success) {
+                auto* animationPanel =
+                    window.findChild<amrvis::qt::AnimationPanel*>();
+                auto* playbackTimer = window.findChild<QTimer*>(
+                    QStringLiteral("playbackTimer"));
+                if (!success || animationPanel == nullptr
+                    || playbackTimer == nullptr) {
+                    application.exit(1);
+                    return;
+                }
+                animationPanel->setSpeedValue(600);
+                animationPanel->sweepPlayToggled();
+                if (!playbackTimer->isActive()
+                    || !applyExpressionDefinition(window,
+                        QStringLiteral("scaled-q"),
+                        QStringLiteral("2*q"), true)
+                    || !playbackTimer->isActive()) {
+                    application.exit(1);
+                    return;
+                }
+                auto* fieldSelector = window.findChild<QComboBox*>(
+                    QStringLiteral("fieldSelector"));
+                const auto scaledIndex = fieldSelector == nullptr
+                    ? -1
+                    : fieldSelector->findText(QStringLiteral("scaled-q"));
+                if (scaledIndex < 0) {
+                    application.exit(1);
+                    return;
+                }
+                fieldSelector->setCurrentIndex(scaledIndex);
+                animationPanel->sweepPlayToggled();
+                if (playbackTimer->isActive()) {
+                    application.exit(1);
+                    return;
+                }
+                state->phase = 1;
+                state->completedSlices = 0;
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sliceRequestFinished,
+            &application, [&window, &application, state] {
+                if (state->phase == 0 || ++state->completedSlices < 3) {
+                    return;
+                }
+                if (state->phase == 1) {
+                    state->phase = 2;
+                    state->completedSlices = 0;
+                    if (!applyExpressionDefinition(window,
+                            QStringLiteral("scaled-q"),
+                            QStringLiteral("3*q"))) {
+                        application.exit(1);
+                    }
+                    return;
+                }
+                const auto valid = visibleRangeMatches(
+                    window, 2.0 / 3.0, 8.0 / 3.0);
+                application.exit(valid ? 0 : 1);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--raw-fab-smoke-test") {
         const std::filesystem::path path(argv[2]);
         int phase = 0;
@@ -428,19 +921,30 @@ int main(int argc, char* argv[])
                 if (!success || selector == nullptr
                     || selector->entries().size() < 2
                     || !fabSelectorIsAscending(*selector)
-                    || !fabSelectorColumnsMatch(*selector, true)
-                    || !fabSelectorPointFilterMatches(
-                        *selector, phase == 0)) {
+                    || !fabSelectorColumnsMatch(*selector, true)) {
                     application.exit(1);
                     return;
                 }
                 if (phase == 0) {
+                    if (!applyExpressionDefinition(window,
+                            QStringLiteral("scaled"),
+                            QStringLiteral("2*MultiFab_0"))
+                        || !fabSelectorPointFilterMatches(*selector, true)) {
+                        application.exit(1);
+                        return;
+                    }
                     ++phase;
                 } else if (phase == 1) {
                     auto* back = selector->findChild<QPushButton*>(
                         QStringLiteral("fabBackButton"));
                     if (back == nullptr || !back->isVisible()
                         || !fabRangeSelectorMatches(window)
+                        || !expressionDefinitionMatches(window,
+                            QStringLiteral("scaled"),
+                            QStringLiteral("2*MultiFab_0"))
+                        || !applyExpressionDefinition(window,
+                            QStringLiteral("scaled"),
+                            QStringLiteral("3*MultiFab_0"))
                         || !clearFabSelectorPointFilter(*selector)) {
                         application.exit(1);
                         return;
@@ -451,24 +955,72 @@ int main(int argc, char* argv[])
                     const auto* back = selector->findChild<QPushButton*>(
                         QStringLiteral("fabBackButton"));
                     application.exit(
-                        back != nullptr && !back->isVisible() ? 0 : 1);
+                        back != nullptr && !back->isVisible()
+                            && expressionDefinitionMatches(window,
+                                QStringLiteral("scaled"),
+                                QStringLiteral("3*MultiFab_0"))
+                            ? 0 : 1);
                 }
             });
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path); });
     } else if (argc == 4
         && std::string_view(argv[1]) == "--sequence-smoke-test") {
-        // Opens the two-frame sequence, waits for the first frame to display,
-        // steps to frame 1 through the same slot the step button uses, and
-        // exits 0 once frame 1 is on screen.
+        // The second fixture renames density, so the first derived definition
+        // is skipped there. The selected later definition must still be
+        // restored by name after the remaining derived IDs compact.
         const std::filesystem::path first(argv[2]);
         const std::filesystem::path second(argv[3]);
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
             &application, [&window, &application](int index) {
                 if (index == 0) {
+                    auto* fieldSelector = window.findChild<QComboBox*>(
+                        QStringLiteral("fieldSelector"));
+                    if (fieldSelector == nullptr
+                        || !applyExpressionDefinitions(window, {
+                            {QStringLiteral("derived-a"),
+                                QStringLiteral("2*density")},
+                            {QStringLiteral("derived-b"),
+                                QStringLiteral("3*temperature")},
+                            {QStringLiteral("derived-c"),
+                                QStringLiteral("4*temperature")}})
+                        || fieldSelector->findText(
+                            QStringLiteral("derived-b")) < 0) {
+                        application.exit(1);
+                        return;
+                    }
+                    fieldSelector->setCurrentIndex(fieldSelector->findText(
+                        QStringLiteral("derived-b")));
+                    if (!setUserRange(window, 10.0, 20.0)) {
+                        application.exit(1);
+                        return;
+                    }
+                    fieldSelector->setCurrentIndex(fieldSelector->findText(
+                        QStringLiteral("derived-c")));
+                    if (!setUserRange(window, 30.0, 40.0)) {
+                        application.exit(1);
+                        return;
+                    }
+                    fieldSelector->setCurrentIndex(fieldSelector->findText(
+                        QStringLiteral("derived-b")));
                     window.stepSequence(1);
                 } else if (index == 1) {
-                    application.exit(0);
+                    auto* fieldSelector = window.findChild<QComboBox*>(
+                        QStringLiteral("fieldSelector"));
+                    const auto selectedRangeMatches = fieldSelector != nullptr
+                        && fieldSelector->currentText()
+                            == QStringLiteral("derived-b")
+                        && visibleRangeMatches(window, 10.0, 20.0);
+                    if (!selectedRangeMatches) {
+                        application.exit(1);
+                        return;
+                    }
+                    fieldSelector->setCurrentIndex(fieldSelector->findText(
+                        QStringLiteral("derived-c")));
+                    application.exit(
+                        visibleRangeMatches(window, 30.0, 40.0)
+                            && expressionEditorPreservesDesiredCatalog(window)
+                        ? 0 : 1);
                 }
             });
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,

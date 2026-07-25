@@ -145,6 +145,25 @@ int main()
         "repeated slice did not reuse both blocks");
     require(cached.metrics.payloadBytesRead == 0, "cached slice performed payload I/O");
 
+    const auto doubledField = dataset.addDerivedField({
+        .name = "double_phi",
+        .expression = "2*phi"
+    });
+    auto derivedRequest = request;
+    derivedRequest.field = doubledField;
+    const auto derived = query.execute(derivedRequest);
+    for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            const auto offset = static_cast<std::size_t>(x + 4 * y);
+            const bool coveredByFine = x >= 1 && x <= 2 && y >= 1 && y <= 2;
+            require(derived.plane.valid[offset] == 1,
+                "derived slice left a covered cell invalid");
+            require(derived.plane.values[offset]
+                    == (coveredByFine ? 4.0F : 2.0F),
+                "derived field did not flow through the slice query");
+        }
+    }
+
     request.composition = amrvis::CompositionPolicy::ExactLevel;
     const auto exact = query.execute(request);
     require(exact.plane.valid[0] == 0, "exact-level slice filled a fine-level hole");
@@ -350,4 +369,3 @@ int main()
     std::filesystem::remove_all(linear3dRoot);
     return 0;
 }
-

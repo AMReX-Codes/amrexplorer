@@ -83,6 +83,10 @@ add_test(
     COMMAND test_particle_reader "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
 )
 
+add_executable(test_dataset_extract integration/test_dataset_extract.cpp)
+target_link_libraries(test_dataset_extract PRIVATE amrexplorer::io amrexplorer::warnings)
+add_test(NAME dataset_extract COMMAND test_dataset_extract)
+
 add_executable(test_fab_catalog integration/test_fab_catalog.cpp)
 target_link_libraries(test_fab_catalog PRIVATE amrexplorer::query amrexplorer::warnings)
 add_test(NAME fab_catalog COMMAND test_fab_catalog)

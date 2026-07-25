@@ -6,7 +6,7 @@
 #   SOURCE        fixture source directory (e.g. tests/data/plotfile_2d)
 #   WORK          directory the materialized copies are written into
 #   MODE          slice | sequence | missing-range | non-finite | raw-fab |
-#                 multifab-fab
+#                 multifab-fab | quit | quit-on-failure
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -51,6 +51,18 @@ elseif(MODE STREQUAL "multifab-fab")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --multifab-fab-smoke-test
         "${WORK}/plt/Level_0/Cell")
+elseif(MODE STREQUAL "quit")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --quit-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "quit-on-failure")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    # Drop the FAB payloads so the slice read fails while metadata stays valid
+    # (a non-modal background failure), then quit.
+    file(GLOB fabPayloads "${WORK}/plt/Level_*/*_D_*")
+    foreach(payload ${fabPayloads})
+        file(REMOVE "${payload}")
+    endforeach()
+    run_or_die("${AMREXPLORER_QT}" --quit-smoke-test "${WORK}/plt")
 else()
     message(FATAL_ERROR "qt_smoke_driver.cmake: unknown MODE '${MODE}'")
 endif()

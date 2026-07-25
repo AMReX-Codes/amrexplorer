@@ -46,7 +46,8 @@ The main controls are:
 
 1. **Field and Level** select the plotted variable and AMR composition.
 2. **3D Position** selects the sample index of each orthogonal slice plane.
-3. **Scale** fits the data to a panel or uses a fixed integer zoom.
+3. **Scale** fits the data to a panel, uses a fixed integer zoom, and controls
+   whether rubber-band zoom is synchronized across 3-D panels.
 4. **Range, Log, and Palette** control the mapping from values to colors.
 5. **Slice panels** display the XY, XZ, and YZ planes for a 3-D dataset.
 6. **Isometric view** shows the domain, grid boxes, and current slice planes.
@@ -85,8 +86,9 @@ MultiFab.
    **Variable** menu.
 2. Choose **Finest available** to composite AMR levels, or choose an exact
    level when you need to inspect that level alone.
-3. Left-drag around a region to zoom into it. Use the mouse wheel for
-   additional display zoom.
+3. Left-drag around a region to zoom into it. **Scale > Sync Rubber-band
+   Zoom** applies that normalized region to every 3-D panel and is enabled by
+   default. Use the mouse wheel for additional panel-local display zoom.
 4. Left-click a sample to inspect its coordinates, indices, level, and value in
    the status area.
 5. Select an appropriate **Range** mode and palette.
@@ -103,10 +105,10 @@ The active panel is the one most recently clicked or manipulated.
 | Input | Action |
 | --- | --- |
 | Left click | Probe the value under the cursor |
-| Left drag | Zoom to a rectangular subregion |
+| Left drag | Zoom to a rectangular subregion; optionally sync all 3-D panels |
 | Shift+left drag | Pan the view |
 | Arrow keys | Pan the active panel by 5 percent |
-| Mouse wheel | Zoom in or out |
+| Mouse wheel | Zoom only the panel under the pointer |
 | Double click | Fit the view to the window |
 | Shift+middle click | Plot a horizontal line through the selected sample |
 | Shift+right click | Plot a vertical line through the selected sample |

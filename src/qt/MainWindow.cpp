@@ -1146,7 +1146,8 @@ MainWindow::MainWindow(QWidget* parent)
     m_slicePositionControls->setVisible(false);
 
     m_scaleButton = new QPushButton(tr("Fit"), sliceToolbar);
-    m_scaleButton->setToolTip(tr("Zoom scale for all panels"));
+    m_scaleButton->setToolTip(
+        tr("Zoom scale and rubber-band synchronization for panels"));
     m_scaleButton->setFocusPolicy(Qt::NoFocus);
     auto* scaleMenu = new QMenu(m_scaleButton);
     auto* fitAction = scaleMenu->addAction(tr("Fit"));
@@ -1164,6 +1165,19 @@ MainWindow::MainWindow(QWidget* parent)
             }
         });
     }
+    m_syncRubberBandZoomAction =
+        new QAction(tr("Sync Rubber-band Zoom"), this);
+    m_syncRubberBandZoomAction->setObjectName(
+        QStringLiteral("syncRubberBandZoomAction"));
+    m_syncRubberBandZoomAction->setCheckable(true);
+    m_syncRubberBandZoomAction->setChecked(true);
+    m_syncRubberBandZoomAction->setStatusTip(
+        tr("Apply rubber-band selections to every 3-D panel; "
+           "mouse-wheel zoom remains panel-specific"));
+    connect(m_syncRubberBandZoomAction, &QAction::toggled,
+        this, [this](bool) { saveSettings(); });
+    scaleMenu->addSeparator();
+    scaleMenu->addAction(m_syncRubberBandZoomAction);
     m_scaleButton->setMenu(scaleMenu);
     sliceToolbar->addWidget(m_scaleButton);
 
@@ -1546,11 +1560,11 @@ void MainWindow::createMenus()
     fileMenu->addSeparator();
     fileMenu->addAction(quitAction);
 
-    auto* scaleGroup = new QActionGroup(this);
+    m_scaleGroup = new QActionGroup(this);
     auto* scaleMenu = new QMenu(tr("&Scale"), this);
     m_fitScaleAction = new QAction(tr("&Fit to Window"), scaleMenu);
     m_fitScaleAction->setCheckable(true);
-    m_fitScaleAction->setActionGroup(scaleGroup);
+    m_fitScaleAction->setActionGroup(m_scaleGroup);
     m_fitScaleAction->setChecked(true);
     m_fitScaleAction->setShortcut(QKeySequence(Qt::Key_0));
     connect(m_fitScaleAction, &QAction::triggered,
@@ -1561,7 +1575,7 @@ void MainWindow::createMenus()
         const auto factor = fixedScales[index];
         auto* action = new QAction(tr("%1x").arg(factor), scaleMenu);
         action->setCheckable(true);
-        action->setActionGroup(scaleGroup);
+        action->setActionGroup(m_scaleGroup);
         action->setShortcut(QKeySequence(Qt::Key_1 + static_cast<int>(index)));
         connect(action, &QAction::triggered, this, [this, factor] {
             if (m_scaleButton != nullptr) {
@@ -1573,6 +1587,8 @@ void MainWindow::createMenus()
         });
         scaleMenu->addAction(action);
     }
+    scaleMenu->addSeparator();
+    scaleMenu->addAction(m_syncRubberBandZoomAction);
 
     m_levelMenu = new QMenu(tr("&Level"), this);
     m_levelGroup = new QActionGroup(this);
@@ -2033,6 +2049,34 @@ bool MainWindow::activeViewRasterMatchesDisplayRangeForTest()
     return displayImageFor(reference) == state.view->image();
 }
 
+void MainWindow::rubberBandZoomActiveViewForTest()
+{
+    if (m_activeView == nullptr || m_activeView->plane.width <= 0
+        || m_activeView->plane.height <= 0) {
+        return;
+    }
+    const auto width = static_cast<double>(m_activeView->plane.width);
+    const auto height = static_cast<double>(m_activeView->plane.height);
+    rubberBandZoom(*m_activeView,
+        QRectF(0.25 * width, 0.25 * height, 0.5 * width, 0.5 * height));
+}
+
+bool MainWindow::allViewsRubberBandZoomedForTest()
+{
+    const auto views = currentViews();
+    return views.size() > 1
+        && rubberBandZoomedViewCountForTest() == views.size();
+}
+
+std::size_t MainWindow::rubberBandZoomedViewCountForTest()
+{
+    const auto views = currentViews();
+    return static_cast<std::size_t>(
+        std::count_if(views.begin(), views.end(), [](const auto* state) {
+            return state->visibleRegion.has_value();
+        }));
+}
+
 void MainWindow::showNumberFormatDialog()
 {
     if (m_numberFormatDialog != nullptr) {
@@ -2264,7 +2308,8 @@ void MainWindow::showKeyboardMouseReference()
             "<td>%2</td></tr>").arg(action, description);
     };
     add(tr("Left click"), tr("Probe the value under the cursor"));
-    add(tr("Left drag"), tr("Zoom to the rubber-band subregion"));
+    add(tr("Left drag"),
+        tr("Zoom to the rubber-band subregion; Scale controls panel sync"));
     add(tr("Shift+left drag"), tr("Pan the view"));
     add(tr("Arrow keys"), tr("Pan the active panel (5% of the view per step)"));
     add(tr("Shift+middle click"), tr("Line plot along the horizontal axis"));
@@ -2272,7 +2317,8 @@ void MainWindow::showKeyboardMouseReference()
     add(tr("Right drag"), tr("Line plot (drag direction picks orientation)"));
     add(tr("Right click (3-D)"),
         tr("Move both slice planes to intersect at the clicked point"));
-    add(tr("Wheel / double click"), tr("Zoom in or out / refit to the window"));
+    add(tr("Wheel / double click"),
+        tr("Zoom this panel in or out / refit to the window"));
     add(tr("B"), tr("Toggle AMR grid boxes"));
     add(tr("0"), tr("Fit to the window"));
     add(tr("1-6"), tr("Fixed zoom scales (1x-32x)"));
@@ -2491,12 +2537,54 @@ void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
     if (clamped.width() < 1.0 || clamped.height() < 1.0) {
         return;
     }
+    const QRectF normalizedRect(
+        clamped.left() / static_cast<double>(plane.width),
+        clamped.top() / static_cast<double>(plane.height),
+        clamped.width() / static_cast<double>(plane.width),
+        clamped.height() / static_cast<double>(plane.height));
+    const auto views = currentViews();
+    const bool synchronize = m_syncRubberBandZoomAction != nullptr
+        && m_syncRubberBandZoomAction->isChecked()
+        && views.size() > 1;
+    if (synchronize) {
+        for (auto* target : views) {
+            applyRubberBandZoom(*target, normalizedRect);
+        }
+    } else {
+        applyRubberBandZoom(state, normalizedRect);
+    }
+    if (m_scaleGroup != nullptr) {
+        if (auto* checked = m_scaleGroup->checkedAction()) {
+            checked->setChecked(false);
+        }
+    }
+    if (m_scaleButton != nullptr) {
+        m_scaleButton->setText(
+            views.size() > 1 && !synchronize ? tr("Mixed") : tr("Custom"));
+    }
+}
+
+void MainWindow::applyRubberBandZoom(
+    PlaneViewState& state, const QRectF& normalizedRect)
+{
+    const auto& plane = state.plane;
+    if (!m_dataset || plane.width <= 0 || plane.height <= 0) {
+        return;
+    }
+    const auto normalized = normalizedRect.normalized().intersected(
+        QRectF(0.0, 0.0, 1.0, 1.0));
+    if (normalized.isEmpty()) {
+        return;
+    }
+    const auto width = static_cast<double>(plane.width);
+    const auto height = static_cast<double>(plane.height);
+    const QRectF clamped(
+        normalized.left() * width, normalized.top() * height,
+        normalized.width() * width, normalized.height() * height);
     const auto axes = displayAxes(state.normal);
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);
     const auto& region = plane.physicalRegion;
-    const auto width = static_cast<double>(plane.width);
-    const auto height = static_cast<double>(plane.height);
     const auto xExtent = region.upper[xAxis] - region.lower[xAxis];
     const auto yExtent = region.upper[yAxis] - region.lower[yAxis];
     auto visible = region;
@@ -3000,6 +3088,11 @@ void MainWindow::restoreSettings()
     }
     m_animationPanel->setSpeedValue(
         settings.value(QStringLiteral("animation/speed"), 300).toInt());
+    {
+        const QSignalBlocker syncZoomBlocker(m_syncRubberBandZoomAction);
+        m_syncRubberBandZoomAction->setChecked(
+            settings.value(QStringLiteral("zoom/syncRubberBand"), true).toBool());
+    }
     applySpeed();
     const auto geometry = settings.value(QStringLiteral("geometry")).toByteArray();
     if (!geometry.isEmpty()) {
@@ -3021,6 +3114,8 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("numberFormat"), m_numberFormat);
     settings.setValue(QStringLiteral("animation/speed"),
         m_animationPanel->speedValue());
+    settings.setValue(QStringLiteral("zoom/syncRubberBand"),
+        m_syncRubberBandZoomAction->isChecked());
 }
 
 void MainWindow::updateWindowTitle()

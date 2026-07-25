@@ -1,6 +1,7 @@
 #include "MainWindow.hpp"
 #include "FabSelectorDock.hpp"
 
+#include <QAction>
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
@@ -15,6 +16,7 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QStandardPaths>
+#include <QSignalBlocker>
 #include <QTableView>
 #include <QTextStream>
 #include <QTimer>
@@ -518,6 +520,51 @@ int main(int argc, char* argv[])
                         window.activeViewRasterMatchesDisplayRangeForTest()
                             ? 0 : 1);
                 }
+        });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--rubber-zoom-sync-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (!success || sync == nullptr) {
+                    application.exit(1);
+                    return;
+                }
+                const QSignalBlocker blocker(sync);
+                sync->setChecked(true);
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(
+                            window.allViewsRubberBandZoomedForTest() ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+                window.rubberBandZoomActiveViewForTest();
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--rubber-zoom-local-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (!success || sync == nullptr) {
+                    application.exit(1);
+                    return;
+                }
+                const QSignalBlocker blocker(sync);
+                sync->setChecked(false);
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(
+                            window.rubberBandZoomedViewCountForTest() == 1
+                                ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+                window.rubberBandZoomActiveViewForTest();
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3

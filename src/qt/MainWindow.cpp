@@ -4004,6 +4004,10 @@ void MainWindow::scheduleSliceRequest(bool rasterDirty)
         // frame rendered against the old spec is obsolete.
         ++m_specGeneration;
         discardPrefetch();
+        if (m_sequenceInFlight && m_sequenceIndex >= 0) {
+            goToSequenceFrame(m_sequenceIndex, true);
+            return;
+        }
         m_pendingRasterDirty = m_pendingRasterDirty || rasterDirty;
         m_pendingAllViews = true;
         m_sliceDebounce->start();
@@ -4015,6 +4019,10 @@ void MainWindow::scheduleSliceRequest(PlaneViewState& state, bool rasterDirty)
     if (m_controlsReady && m_dataset) {
         ++m_specGeneration;
         discardPrefetch();
+        if (m_sequenceInFlight && m_sequenceIndex >= 0) {
+            goToSequenceFrame(m_sequenceIndex, true);
+            return;
+        }
         m_pendingRasterDirty = m_pendingRasterDirty || rasterDirty;
         if (std::find(m_pendingViews.begin(), m_pendingViews.end(), &state)
             == m_pendingViews.end()) {

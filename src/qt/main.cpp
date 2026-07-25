@@ -928,6 +928,29 @@ int main(int argc, char* argv[])
             window.openSequence({first, second});
         });
     } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--sequence-spec-change-smoke-test") {
+        // Start frame 1, then immediately drive an ordinary slice-affecting
+        // control through scheduleSliceRequest while its worker is in flight.
+        // The queued completion for the obsolete specification must not strand
+        // the sequence in its in-flight state.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application](int index) {
+                if (index == 0) {
+                    window.stepSequence(1);
+                    window.enableVisibleRasterForTest();
+                } else if (index == 1) {
+                    application.exit(0);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
         && std::string_view(argv[1]) == "--sequence-zoom-refit-smoke-test") {
         // Preserve a physical crop while moving from an 8x8 frame to an 8x12
         // frame. The incoming raster has a different geometry and must be

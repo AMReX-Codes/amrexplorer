@@ -313,16 +313,10 @@ std::map<DataFileKey, std::filesystem::path> particleDataPaths(
 
 template <typename Real>
 void readGrid(std::istream& input, const GridRecord& grid,
-    const ParsedHeader& header, double fraction, std::uint64_t seed,
-    StopToken cancellation, std::vector<ParticlePoint>& output,
-    ParticleReadMetrics& metrics)
+    std::uint64_t dataFileSize, const ParsedHeader& header, double fraction,
+    std::uint64_t seed, StopToken cancellation,
+    std::vector<ParticlePoint>& output, ParticleReadMetrics& metrics)
 {
-    input.clear();
-    input.seekg(static_cast<std::streamoff>(grid.offset));
-    if (!input) {
-        throw ParticleReadError("cannot seek in particle data file");
-    }
-
     const auto intValues = static_cast<std::uint64_t>(
         2 + header.metadata.intComponentCount);
     const auto intRecordBytes = checkedProduct(
@@ -331,6 +325,22 @@ void readGrid(std::istream& input, const GridRecord& grid,
         header.metadata.dimension + header.metadata.realComponentCount);
     const auto realRecordBytes = checkedProduct(
         realValues, sizeof(Real), "real record");
+
+    const auto integerBytes
+        = checkedProduct(grid.count, intRecordBytes, "integer data");
+    const auto realBytes
+        = checkedProduct(grid.count, realRecordBytes, "real data");
+    if (grid.offset > dataFileSize
+        || integerBytes > dataFileSize - grid.offset
+        || realBytes > dataFileSize - grid.offset - integerBytes) {
+        throw ParticleReadError("truncated particle grid data");
+    }
+
+    input.clear();
+    input.seekg(static_cast<std::streamoff>(grid.offset));
+    if (!input) {
+        throw ParticleReadError("cannot seek in particle data file");
+    }
 
     std::vector<SelectedParticle> selectedParticles;
     std::vector<char> buffer;
@@ -470,14 +480,24 @@ ParticleSample readParticleSample(
             throw ParticleReadError(
                 "cannot open particle data file '" + dataPath.string() + "'");
         }
+        std::error_code sizeError;
+        const auto dataFileSize = std::filesystem::file_size(dataPath, sizeError);
+        if (sizeError
+            || dataFileSize > std::numeric_limits<std::uint64_t>::max()) {
+            throw ParticleReadError(
+                "cannot determine particle data file size for '"
+                + dataPath.string() + "'");
+        }
         ++result.io.dataFilesOpened;
         for (const auto* grid : grids) {
             if (header.metadata.precision == ParticleRealPrecision::Single) {
-                readGrid<float>(input, *grid, header, fraction, seed,
-                    cancellation, result.points, result.io);
+                readGrid<float>(input, *grid,
+                    static_cast<std::uint64_t>(dataFileSize), header, fraction,
+                    seed, cancellation, result.points, result.io);
             } else {
-                readGrid<double>(input, *grid, header, fraction, seed,
-                    cancellation, result.points, result.io);
+                readGrid<double>(input, *grid,
+                    static_cast<std::uint64_t>(dataFileSize), header, fraction,
+                    seed, cancellation, result.points, result.io);
             }
         }
     }

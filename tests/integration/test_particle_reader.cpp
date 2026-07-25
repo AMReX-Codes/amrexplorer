@@ -215,6 +215,30 @@ int main(int argc, char* argv[])
         require(sparse.io.realBytesRead < fullRealPayload / 2,
             "sparse sampling read most of the real particle payload");
 
+        // Put the sole selected particle first so every trailing real-data
+        // chunk is skipped, then truncate the final skipped record. A seek
+        // beyond EOF can appear successful unless the skipped extent is
+        // validated explicitly.
+        const auto selectedId = sparse.points.front().id;
+        std::ranges::stable_sort(sparseIdentities,
+            [selectedId](const auto& lhs, const auto& rhs) {
+                return (idcpu(lhs.first, lhs.second) == selectedId)
+                    > (idcpu(rhs.first, rhs.second) == selectedId);
+            });
+        writeFixture(
+            root, sparseIdentities, 0.0, false, extraRealComponents);
+        const auto sparseData = root / "Tracer" / "Level_0" / "DATA_00000";
+        std::filesystem::resize_file(
+            sparseData, std::filesystem::file_size(sparseData) - sizeof(double));
+        bool sparseTruncationRejected = false;
+        try {
+            (void)amrvis::readParticleSample(root, "Tracer", 0.0002);
+        } catch (const amrvis::ParticleReadError&) {
+            sparseTruncationRejected = true;
+        }
+        require(sparseTruncationRejected,
+            "sparse particle read accepted truncated skipped real data");
+
         writeFixture(root, identities, 0.0);
         const auto half = amrvis::readParticleSample(root, "Tracer", 0.5);
         const auto quarter = amrvis::readParticleSample(root, "Tracer", 0.25);

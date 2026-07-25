@@ -435,6 +435,20 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_sequence_smoke PROPERTIES TIMEOUT 30)
+    # A normal slice-affecting control change while a foreground frame is
+    # loading invalidates that frame specification. The replacement load must
+    # complete instead of leaving sequence playback latched in-flight.
+    add_test(
+        NAME qt_sequence_spec_change_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_spec_change"
+            -DMODE=sequence-spec-change
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_sequence_spec_change_smoke PROPERTIES TIMEOUT 30)
     # A preserved physical crop rendered at a different raster resolution in
     # the next sequence frame must refit instead of retaining a stale transform.
     add_test(

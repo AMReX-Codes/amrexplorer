@@ -8,6 +8,7 @@
 #include <iostream>
 #include <iterator>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -82,6 +83,45 @@ int main(int argc, char** argv)
         threw = true;
     }
     require(threw, "Palette::load accepted a missing palette file");
+
+    // load() accepts a 768-byte (3-channel) palette: the rainbow bytes minus
+    // the unused fourth channel round-trip to the same colors.
+    const auto palette768Path = std::filesystem::temp_directory_path()
+        / "amrexplorer_test_palette_768.pal";
+    {
+        std::ofstream stream(palette768Path, std::ios::binary);
+        stream.write(fileBytes.data(), 3 * amrvis::Palette::slotCount);
+    }
+    const auto loaded768 = amrvis::Palette::load(palette768Path);
+    bool roundTrip768 = true;
+    for (int index = 0; index < amrvis::Palette::slotCount; ++index) {
+        roundTrip768 = roundTrip768
+            && loaded768.slotArgb(index) == rainbow.slotArgb(index);
+    }
+    require(roundTrip768, "Palette::load did not round-trip a 768-byte palette");
+    std::filesystem::remove(palette768Path);
+
+    // load() rejects a file larger than 1024 bytes (the bounded read caps it).
+    const auto oversizedPath = std::filesystem::temp_directory_path()
+        / "amrexplorer_test_palette_oversized.pal";
+    {
+        const std::vector<char> bytesOver(static_cast<std::size_t>(2000), 0);
+        std::ofstream stream(oversizedPath, std::ios::binary);
+        stream.write(bytesOver.data(),
+            static_cast<std::streamsize>(bytesOver.size()));
+    }
+    threw = false;
+    std::string overMessage;
+    try {
+        (void)amrvis::Palette::load(oversizedPath);
+    } catch (const std::runtime_error& error) {
+        threw = true;
+        overMessage = error.what();
+    }
+    std::filesystem::remove(oversizedPath);
+    require(threw, "Palette::load accepted an oversized palette file");
+    require(overMessage.find("more than 1024") != std::string::npos,
+        "oversized palette rejection did not report the size");
 
     // The normalized endpoints map to distinct colors and out-of-range t clamps.
     require(rainbow.argb(0.0) != rainbow.argb(1.0),

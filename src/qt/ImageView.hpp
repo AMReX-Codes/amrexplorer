@@ -44,7 +44,10 @@ class ImageView final : public QGraphicsView {
 public:
     explicit ImageView(QWidget* parent = nullptr);
 
-    void setImage(const QImage& image);
+    // preserveTransform keeps the current panel-local zoom when replacing a
+    // cropped-region raster after rubber-band zoom or pan. Full-domain loads
+    // leave it false so a differently-sized image is fitted normally.
+    void setImage(const QImage& image, bool preserveTransform = false);
     void setGridBoxes(const std::vector<GridBoxOverlay>& boxes);
     void setOverlaySegments(const std::vector<OverlaySegment>& segments);
     // Smooth contour polylines, rendered as cosmetic-pen path items at the

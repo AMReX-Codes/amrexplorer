@@ -2077,6 +2077,30 @@ std::size_t MainWindow::rubberBandZoomedViewCountForTest()
         }));
 }
 
+void MainWindow::setActiveViewScaleForTest(int factor)
+{
+    if (m_activeView != nullptr) {
+        m_activeView->view->setFixedScale(factor);
+    }
+}
+
+void MainWindow::panActiveViewForTest(
+    double sceneDeltaX, double sceneDeltaY)
+{
+    if (m_activeView == nullptr) {
+        return;
+    }
+    const QPointF delta(sceneDeltaX, sceneDeltaY);
+    beginPanDrag(*m_activeView);
+    updatePanDrag(*m_activeView, delta, QPoint());
+    endPanDrag(*m_activeView, delta);
+}
+
+qreal MainWindow::activeViewScaleForTest() const
+{
+    return m_activeView != nullptr ? m_activeView->view->transform().m11() : 0.0;
+}
+
 void MainWindow::showNumberFormatDialog()
 {
     if (m_numberFormatDialog != nullptr) {
@@ -2680,20 +2704,10 @@ void MainWindow::flushPanDrag(bool finalize)
     const auto region = shiftedPanRegion(*m_panView, m_panStartRegion,
         m_panPlaneWidth, m_panPlaneHeight, m_panSceneDelta);
     if (!region.has_value()) {
-        if (finalize) {
-            m_panView->view->fitToWindow();
-        }
         return;
     }
     m_panView->visibleRegion = *region;
     m_panLastScheduledDelta = m_panSceneDelta;
-    if (finalize) {
-        m_panView->view->fitToWindow();
-        m_fitScaleAction->setChecked(true);
-        if (m_scaleButton != nullptr) {
-            m_scaleButton->setText(tr("Fit"));
-        }
-    }
     scheduleSliceRequest(*m_panView, false);
 }
 
@@ -4797,7 +4811,8 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
         if (!display.image.valid()) {
             throw std::runtime_error("renderer produced an invalid image");
         }
-        state.view->setImage(displayImageFor(display.image));
+        state.view->setImage(
+            displayImageFor(display.image), state.visibleRegion.has_value());
     }
     state.plane = display.slice.plane;
     state.contourPlane = display.contourPlane;

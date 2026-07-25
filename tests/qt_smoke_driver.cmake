@@ -8,7 +8,7 @@
 #   MODE          slice | sequence | missing-range | non-finite | raw-fab |
 #                 multifab-fab | quit | quit-on-failure | export-quit |
 #                 contour-sync | raster-zoom | rubber-zoom-sync |
-#                 rubber-zoom-local
+#                 rubber-zoom-local | pan-zoom
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -57,6 +57,9 @@ elseif(MODE STREQUAL "rubber-zoom-sync")
 elseif(MODE STREQUAL "rubber-zoom-local")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --rubber-zoom-local-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "pan-zoom")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --pan-zoom-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "raw-fab")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --raw-fab-smoke-test

@@ -208,6 +208,12 @@ public:
     [[nodiscard]] bool allViewsRubberBandZoomedForTest();
     [[nodiscard]] std::size_t rubberBandZoomedViewCountForTest();
 
+    // Test-only: apply a panel-local scale, drive the exact data-region pan
+    // handlers used by Shift+left drag, and inspect the resulting transform.
+    void setActiveViewScaleForTest(int factor);
+    void panActiveViewForTest(double sceneDeltaX, double sceneDeltaY);
+    [[nodiscard]] qreal activeViewScaleForTest() const;
+
 signals:
     void datasetOpenFinished(bool success);
     void initialSliceFinished(bool success);

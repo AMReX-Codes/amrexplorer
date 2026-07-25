@@ -568,6 +568,63 @@ int main(int argc, char* argv[])
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
+        && std::string_view(argv[1]) == "--pan-zoom-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        auto phase = std::make_shared<int>(0);
+        auto immediateScale = std::make_shared<double>(0.0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, immediateScale](bool success) {
+                auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (!success || sync == nullptr) {
+                    application.exit(1);
+                    return;
+                }
+                const QSignalBlocker blocker(sync);
+                sync->setChecked(true);
+                window.rubberBandZoomActiveViewForTest();
+                *immediateScale = window.activeViewScaleForTest();
+                // Exercise the timing window: pan before the cropped slice
+                // requested by the rubber band has settled.
+                window.panActiveViewForTest(5.0, 0.0);
+                if (std::abs(window.activeViewScaleForTest() - *immediateScale)
+                    > 1.0e-12) {
+                    application.exit(1);
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, &application, phase, immediateScale] {
+                constexpr double tolerance = 1.0e-12;
+                if ((*phase)++ == 0) {
+                    if (std::abs(window.activeViewScaleForTest()
+                            - *immediateScale)
+                        > tolerance) {
+                        application.exit(1);
+                        return;
+                    }
+                    // A valid pan from the central crop must preserve the
+                    // active panel's custom transform through the re-slice.
+                    window.setActiveViewScaleForTest(4);
+                    window.panActiveViewForTest(-5.0, 0.0);
+                    return;
+                }
+                if (std::abs(window.activeViewScaleForTest() - 4.0)
+                    > tolerance) {
+                    application.exit(1);
+                    return;
+                }
+                // The first pan reached the domain edge. Panning farther is a
+                // no-op and must not refit the panel either.
+                window.setActiveViewScaleForTest(3);
+                window.panActiveViewForTest(-5.0, 0.0);
+                application.exit(
+                    std::abs(window.activeViewScaleForTest() - 3.0)
+                            <= tolerance
+                        ? 0 : 1);
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--raw-fab-smoke-test") {
         const std::filesystem::path path(argv[2]);
         int phase = 0;

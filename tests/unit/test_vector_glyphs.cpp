@@ -1,4 +1,4 @@
-#include <amrvis/render2d/VectorGlyphs.hpp>
+#include <amrexplorer/render2d/VectorGlyphs.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -92,6 +92,16 @@ int main()
     const auto zeroV = makePlane(20, 10, 0.0F);
     const auto zero = amrvis::generateVectorGlyphs(zeroU, zeroV, 10);
     require(zero.empty(), "zero field produced segments");
+
+    // count > longestSide used to give sight = 0 (integer division) and thus
+    // zero glyphs; floating-point division keeps sight nonzero. stride is
+    // floor(8/10) clamped to 1, so every one of the 8x8 = 64 cells draws an
+    // arrow of 3 segments -> 192 total (pins both the zero-glyph regression
+    // and the stride=1 density).
+    const auto smallU = makePlane(8, 8, 1.0F);
+    const auto smallV = makePlane(8, 8, 0.0F);
+    const auto dense = amrvis::generateVectorGlyphs(smallU, smallV, 10);
+    require(dense.size() == 192, "count > longestSide produced wrong glyph count");
 
     const auto mismatched = makePlane(10, 10, 0.0F);
     bool threw = false;

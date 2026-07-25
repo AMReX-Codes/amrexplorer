@@ -3,7 +3,7 @@
 // axes) and runs LineQuery under a watchdog so a hang is caught instead of
 // looping forever. Prints the geometry first (incl. |prob_lo|/cellSize, the
 // floating-point-cancellation danger ratio) so a stuck run still reports data.
-#include <amrvis/query/LineQuery.hpp>
+#include <amrexplorer/query/LineQuery.hpp>
 
 #include <algorithm>
 #include <array>
@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -22,29 +23,34 @@ namespace {
 
 // Run fn() on a worker; if it does not finish within timeoutSeconds, report a
 // hang and return false (the worker is abandoned; process exit reclaims it).
+// Shared state is heap-allocated and captured by value (shared_ptr) so a
+// detached worker never touches stack locals that have gone out of scope.
 template <typename Fn>
 bool runWithTimeout(Fn fn, int timeoutSeconds)
 {
-    std::mutex m;
-    std::condition_variable cv;
-    bool done = false;
+    struct State {
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool done = false;
+    };
+    const auto state = std::make_shared<State>();
 
-    std::thread worker([&] {
+    std::thread worker([state, fn = std::move(fn)] {
         try {
             fn();
         } catch (const std::exception& error) {
             std::cerr << "  worker threw: " << error.what() << '\n';
         }
         {
-            std::lock_guard<std::mutex> lock(m);
-            done = true;
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->done = true;
         }
-        cv.notify_one();
+        state->cv.notify_one();
     });
 
-    std::unique_lock<std::mutex> lock(m);
-    const bool ok = cv.wait_for(lock, std::chrono::seconds(timeoutSeconds),
-        [&] { return done; });
+    std::unique_lock<std::mutex> lock(state->mutex);
+    const bool ok = state->cv.wait_for(lock, std::chrono::seconds(timeoutSeconds),
+        [&] { return state->done; });
     if (ok) {
         lock.unlock();
         worker.join();

@@ -1,6 +1,6 @@
-# Building Amrvis2
+# Building AMReXplorer
 
-Amrvis2 requires a C++20 compiler, CMake 3.25 or newer, and Ninja for the
+AMReXplorer requires a C++20 compiler, CMake 3.25 or newer, and Ninja for the
 provided presets. Qt 6.4 or newer is required only by the desktop target.
 There is no build-time dataset dimension: one executable reads 2-D and 3-D
 data, and the same runtime metadata representation accepts 1-D data.
@@ -27,20 +27,20 @@ ctest --preset sanitizers
 
 The sanitizer preset enables AddressSanitizer and UndefinedBehaviorSanitizer.
 
-On macOS, Qt builds produce `build/src/qt/Amrvis2.app` by default. The bundle
-contains its executable at `Contents/MacOS/Amrvis2` and can be installed into a
+On macOS, Qt builds produce `build/src/qt/amrexplorer.app` by default. The bundle
+contains its executable at `Contents/MacOS/amrexplorer` and can be installed into a
 user application directory with:
 
 ```bash
 cmake --install build --prefix "$HOME/Applications"
 ```
 
-Configure with `-DAMRVIS_BUILD_MACOS_APP_BUNDLE=OFF` to retain the plain
-`build/src/qt/amrvis2` executable layout.
+Configure with `-DAMREXPLORER_BUILD_MACOS_APP_BUNDLE=OFF` to retain the plain
+`build/src/qt/amrexplorer` executable layout.
 
 ## Building an AppImage
 
-From the repository root on Linux, build Amrvis2 and install it into an
+From the repository root on Linux, build AMReXplorer and install it into an
 AppDir:
 
 ```bash
@@ -59,23 +59,24 @@ wget -O linuxdeploy-plugin-qt.AppImage \
 chmod +x linuxdeploy.AppImage linuxdeploy-plugin-qt.AppImage
 ```
 
-Bundle the application. Amrvis2 uses Qt Widgets but no QML, so QML scanning is
+Bundle the application. AMReXplorer uses Qt Widgets but no QML, so QML scanning is
 disabled:
 
 ```bash
 export QMAKE=/usr/bin/qmake6
-QML_SOURCES_PATHS=. ./linuxdeploy.AppImage --appdir appdir \
-  --executable appdir/usr/bin/amrvis2 \
-  --desktop-file resources/amrvis2.desktop \
-  --icon-file resources/amrvis2.png \
+OUTPUT=amrexplorer.AppImage QML_SOURCES_PATHS=. \
+./linuxdeploy.AppImage --appdir appdir \
+  --executable appdir/usr/bin/amrexplorer \
+  --desktop-file resources/amrexplorer.desktop \
+  --icon-file resources/amrexplorer.png \
   --output appimage \
   --plugin qt
 ```
 
 ## Optional VTK module
 
-`AMRVIS_ENABLE_VTK` is currently deliberately unavailable. It remains off
-until Amrvis2 has both a Qt 6-compatible VTK configuration and a bounded
+`AMREXPLORER_ENABLE_VTK` is currently deliberately unavailable. It remains off
+until AMReXplorer has both a Qt 6-compatible VTK configuration and a bounded
 volume-query contract. Enabling the option causes CMake to stop with an
 explanation instead of linking a Qt 5-based system VTK into the Qt 6
 application.

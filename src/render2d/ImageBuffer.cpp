@@ -1,4 +1,4 @@
-#include <amrvis/render2d/ImageBuffer.hpp>
+#include <amrexplorer/render2d/ImageBuffer.hpp>
 
 #include <cstddef>
 #include <limits>

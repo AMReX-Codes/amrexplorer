@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111F"/>
+      <stop offset="1" stop-color="#0E2742"/>
+    </linearGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0C1D33"/>
+      <stop offset="1" stop-color="#16456E"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.40" cy="0.38" r="0.60">
+      <stop offset="0" stop-color="#43C6E8" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#43C6E8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="ambient" cx="0.5" cy="0.30" r="0.40">
+      <stop offset="0" stop-color="#43C6E8" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#43C6E8" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="lensClip">
+      <circle cx="560" cy="560" r="156"/>
+    </clipPath>
+  </defs>
+
+  <!-- backdrop -->
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#ambient)"/>
+
+  <!-- icon -->
+  <g transform="translate(512 56) scale(0.25)">
+    <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#tile)"
+          stroke="#43C6E8" stroke-opacity="0.35" stroke-width="8"/>
+    <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#glow)"/>
+  </g>
+  <g transform="translate(512 56) scale(0.25)" fill="none"
+     stroke-linejoin="round" stroke-linecap="round">
+    <g stroke="#DCEBF7" stroke-width="34">
+      <rect x="192" y="192" width="480" height="480"/>
+      <path d="M432 192 V672 M192 432 H672"/>
+      <path d="M432 552 H672 M552 432 V672"/>
+      <path d="M432 492 H552 M492 432 V552"/>
+    </g>
+    <g clip-path="url(#lensClip)">
+      <g transform="translate(560 560) scale(1.55) translate(-560 -560)"
+         stroke="#43C6E8" stroke-width="34">
+        <rect x="192" y="192" width="480" height="480"/>
+        <path d="M432 192 V672 M192 432 H672"/>
+        <path d="M432 552 H672 M552 432 V672"/>
+        <path d="M432 492 H552 M492 432 V552"/>
+      </g>
+    </g>
+    <circle cx="560" cy="560" r="174" stroke="#43C6E8" stroke-width="56"/>
+    <path d="M683 683 L832 832" stroke="#43C6E8" stroke-width="84"/>
+  </g>
+
+  <!-- wordmark + tagline -->
+  <text x="640" y="455" text-anchor="middle" font-family="DejaVu Sans, sans-serif"
+        font-size="100" font-weight="bold"
+        fill="#EAF3FB">AMR<tspan fill="#43C6E8">eX</tspan>plorer</text>
+  <text x="640" y="530" text-anchor="middle" font-family="DejaVu Sans, sans-serif"
+        font-size="36" fill="#9FC0D8">Interactive visualization of AMReX data</text>
+</svg>

@@ -1,4 +1,4 @@
-#include <amrvis/core/StopToken.hpp>
+#include <amrexplorer/core/StopToken.hpp>
 
 #include <cstdlib>
 #include <iostream>

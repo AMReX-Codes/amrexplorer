@@ -1,8 +1,8 @@
 #include "DatasetWindow.hpp"
 #include "NumberFormat.hpp"
 
-#include <amrvis/io/PlotfileBlockReader.hpp>
-#include <amrvis/io/PlotfileDataset.hpp>
+#include <amrexplorer/io/PlotfileBlockReader.hpp>
+#include <amrexplorer/io/PlotfileDataset.hpp>
 
 #include <QCloseEvent>
 #include <QColor>
@@ -172,11 +172,17 @@ void DatasetWindow::populateTabs()
 
         auto* page = new QWidget(m_tabs);
         auto* info = new QLabel(page);
-        info->setText(tr("min=%1 max=%2  (%3 x %4 cells)")
-            .arg(formatNumber(extract.minimum, m_numberFormat))
-            .arg(formatNumber(extract.maximum, m_numberFormat))
-            .arg(extract.nx)
-            .arg(extract.ny));
+        if (extract.hasFiniteValues) {
+            info->setText(tr("min=%1 max=%2  (%3 x %4 samples)")
+                .arg(formatNumber(extract.minimum, m_numberFormat))
+                .arg(formatNumber(extract.maximum, m_numberFormat))
+                .arg(extract.nx)
+                .arg(extract.ny));
+        } else {
+            info->setText(tr("no finite values  (%1 x %2 samples)")
+                .arg(extract.nx)
+                .arg(extract.ny));
+        }
         auto* table = new QTableWidget(extract.ny, extract.nx, page);
         table->setEditTriggers(QAbstractItemView::NoEditTriggers);
         QStringList columnLabels;
@@ -248,34 +254,23 @@ void DatasetWindow::cellClicked(std::size_t levelEntry, int row, int column)
 
     const auto& metadata = m_request.dataset->metadata();
     const auto& level = metadata.levels[static_cast<std::size_t>(levelData.level)];
-    const auto& domain = metadata.physicalDomain;
     const auto axes = dataset_extract_detail::inPlaneAxes(
         metadata.dimension, m_request.normalAxis);
-    // The cell's physical rectangle at this level's resolution (the same
-    // box-to-physical mapping the grid-box overlay uses).
-    const std::array<int, 2> cell{extract.lower[0] + column, j};
-    RealBox physicalCell;
+    // The sample's physical bin at this level's resolution. On nodal axes
+    // this is centered on the node rather than shifted to the next cell.
+    const std::array<int, 2> sample{extract.lower[0] + column, j};
+    auto pointBox = level.domain;
     for (std::size_t entry = 0; entry < 2; ++entry) {
         const auto axis = static_cast<std::size_t>(axes[entry]);
-        const auto index = static_cast<std::int64_t>(cell[entry]);
-        physicalCell.lower[axis] = domain.lower[axis]
-            + static_cast<double>(index - level.domain.lower[axis])
-                * level.cellSize[axis];
-        physicalCell.upper[axis] = domain.lower[axis]
-            + static_cast<double>(index + 1 - level.domain.lower[axis])
-                * level.cellSize[axis];
+        pointBox.lower[axis] = sample[entry];
+        pointBox.upper[axis] = sample[entry];
     }
     if (metadata.dimension == 3) {
         const auto normal = static_cast<std::size_t>(m_request.normalAxis);
-        const auto index = static_cast<std::int64_t>(extract.sliceIndex);
-        physicalCell.lower[normal] = domain.lower[normal]
-            + static_cast<double>(index - level.domain.lower[normal])
-                * level.cellSize[normal];
-        physicalCell.upper[normal] = domain.lower[normal]
-            + static_cast<double>(index + 1 - level.domain.lower[normal])
-                * level.cellSize[normal];
+        pointBox.lower[normal] = extract.sliceIndex;
+        pointBox.upper[normal] = extract.sliceIndex;
     }
-    emit cellActivated(physicalCell);
+    emit cellActivated(sampleBounds(level, pointBox, metadata.dimension));
 }
 
 } // namespace amrvis::qt

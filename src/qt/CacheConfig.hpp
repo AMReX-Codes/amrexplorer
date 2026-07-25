@@ -13,7 +13,7 @@ namespace amrvis::qt {
 inline constexpr std::uint64_t defaultInitialCacheBudget
     = 1ULL * 1024ULL * 1024ULL * 1024ULL;
 inline constexpr std::string_view cacheSizeEnvironmentVariable
-    = "AMRVIS_CACHE_SIZE_MB";
+    = "AMREXPLORER_CACHE_SIZE_MB";
 inline constexpr std::uint64_t bytesPerMegabyte = 1024ULL * 1024ULL;
 
 inline std::uint64_t initialCacheBudget(const char* configuredValue) noexcept

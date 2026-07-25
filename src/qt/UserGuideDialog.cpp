@@ -11,7 +11,7 @@ namespace amrvis::qt {
 UserGuideDialog::UserGuideDialog(QWidget* parent)
     : QDialog(parent)
 {
-    setWindowTitle(tr("Amrvis2 User Guide"));
+    setWindowTitle(tr("AMReXplorer User Guide"));
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
     resize(1000, 760);
 

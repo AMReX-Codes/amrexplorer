@@ -1,8 +1,9 @@
-#include <amrvis/core/Metadata.hpp>
-#include <amrvis/core/Request.hpp>
-#include <amrvis/core/Statistics.hpp>
+#include <amrexplorer/core/Metadata.hpp>
+#include <amrexplorer/core/Request.hpp>
+#include <amrexplorer/core/Statistics.hpp>
 
 #include <cstdlib>
+#include <cmath>
 #include <iostream>
 
 namespace {
@@ -56,6 +57,30 @@ int main()
 
     metadata.fields.push_back(metadata.fields.front());
     require(!amrvis::validateMetadata(metadata).empty(), "duplicate field names were accepted");
+
+    amrvis::LevelMetadata mixed;
+    mixed.domain = {{{0, 0, 0}}, {{3, 3, 1}}, {{0, 1, 1}}};
+    mixed.indexOrigin = {{0.0, 0.0, 0.0}};
+    mixed.cellSize = {{1.0, 2.0, 4.0}};
+    require(amrvis::samplePosition(mixed, 0, 0) == 0.5,
+        "cell-centered x sample position is wrong");
+    require(amrvis::samplePosition(mixed, 1, 0) == 0.0,
+        "nodal y sample position is wrong");
+    require(amrvis::samplePosition(mixed, 2, 0) == 0.0,
+        "nodal z sample position is wrong");
+    const auto mixedBounds = amrvis::sampleBounds(mixed, mixed.domain, 3);
+    require(mixedBounds.lower[0] == 0.0 && mixedBounds.upper[0] == 4.0,
+        "cell-centered sample bounds are wrong");
+    require(mixedBounds.lower[1] == -1.0 && mixedBounds.upper[1] == 7.0,
+        "nodal y sample bounds are wrong");
+    require(mixedBounds.lower[2] == -2.0 && mixedBounds.upper[2] == 6.0,
+        "nodal z sample bounds are wrong");
+    require(amrvis::sampleIndex(mixed, 0, 0.5) == 0
+        && amrvis::sampleIndex(mixed, 1, 0.0) == 0,
+        "mixed-centering physical-to-index mapping is wrong");
+    require(amrvis::centeringFromIndexType({{0, 1, 1}}, 3)
+            == amrvis::Centering::EdgeX,
+        "mixed index type was not classified as an x edge");
 
     amrvis::BlockRequest block;
     require(!amrvis::validateBlockRequest(block).empty(), "invalid block request was accepted");

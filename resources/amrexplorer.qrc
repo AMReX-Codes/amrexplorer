@@ -1,0 +1,9 @@
+<RCC>
+    <qresource prefix="/">
+        <file>amrexplorer-16.png</file>
+        <file>amrexplorer-32.png</file>
+        <file>amrexplorer-64.png</file>
+        <file>amrexplorer-128.png</file>
+        <file>amrexplorer-256.png</file>
+    </qresource>
+</RCC>

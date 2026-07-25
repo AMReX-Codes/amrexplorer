@@ -1,7 +1,7 @@
 #pragma once
 
-#include <amrvis/core/Request.hpp>
-#include <amrvis/core/Result.hpp>
+#include <amrexplorer/core/Request.hpp>
+#include <amrexplorer/core/Result.hpp>
 
 #include <array>
 #include <cstddef>

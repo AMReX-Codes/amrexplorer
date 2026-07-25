@@ -6,7 +6,7 @@
 //
 // Usage:
 //   fixture_materializer <sourceFixtureDir> <destDir>
-//       [newTime] [--no-statistics]
+//       [newTime] [--no-statistics] [--non-finite]
 //
 // Copies the fixture into destDir and writes each level's Cell_D_* payloads
 // at the FabOnDisk offsets its Cell_H records. An optional time value replaces
@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -140,7 +141,8 @@ std::vector<BlockRecord> readCellHeader(
 // density, 3-D q(i, j, k) = (i + j + k) / 9, where i/j/k are cell indices at
 // the level storing the grid.
 std::vector<double> blockValues(
-    const BlockRecord& block, int dimension, int fieldCount)
+    const BlockRecord& block, int dimension, int fieldCount,
+    bool nonFiniteValues)
 {
     const auto lower = [&block](int axis) {
         return block.indices[static_cast<std::size_t>(axis)];
@@ -157,7 +159,25 @@ std::vector<double> blockValues(
                     const auto base = dimension == 2
                         ? 0.5 * static_cast<double>(i + j)
                         : static_cast<double>(i + j + k) / 9.0;
-                    values.push_back(component == 0 ? base : 100.0 + base);
+                    if (nonFiniteValues) {
+                        switch (values.size() % 3) {
+                        case 0:
+                            values.push_back(
+                                std::numeric_limits<double>::quiet_NaN());
+                            break;
+                        case 1:
+                            values.push_back(
+                                std::numeric_limits<double>::infinity());
+                            break;
+                        default:
+                            values.push_back(
+                                -std::numeric_limits<double>::infinity());
+                            break;
+                        }
+                    } else {
+                        values.push_back(
+                            component == 0 ? base : 100.0 + base);
+                    }
                 }
             }
         }
@@ -169,7 +189,7 @@ std::vector<double> blockValues(
 // test_line_query.cpp's writeFab: an ASCII header line followed by
 // little-endian doubles.
 void writeFab(const std::filesystem::path& path, BlockRecord& block,
-    int dimension, int fieldCount)
+    int dimension, int fieldCount, bool nonFiniteValues)
 {
     if (block.offset == 0) {
         std::ofstream create(path, std::ios::binary | std::ios::trunc);
@@ -182,7 +202,8 @@ void writeFab(const std::filesystem::path& path, BlockRecord& block,
         + block.boxText + " " + std::to_string(fieldCount) + "\n";
     output << header;
     block.payloadOffset = block.offset + header.size();
-    const auto values = blockValues(block, dimension, fieldCount);
+    const auto values = blockValues(
+        block, dimension, fieldCount, nonFiniteValues);
     output.write(reinterpret_cast<const char*>(values.data()),
         static_cast<std::streamsize>(values.size() * sizeof(double)));
     require(static_cast<bool>(output), "could not write a fixture FAB payload");
@@ -213,19 +234,24 @@ void writeHeaderWithoutStatistics(const std::filesystem::path& path,
 
 int main(int argc, char* argv[])
 {
-    require(argc >= 3 && argc <= 5,
+    require(argc >= 3 && argc <= 6,
         "usage: fixture_materializer <sourceFixtureDir> <destDir> "
-        "[newTime] [--no-statistics]");
+        "[newTime] [--no-statistics] [--non-finite]");
     const std::filesystem::path source(argv[1]);
     const std::filesystem::path destination(argv[2]);
     std::optional<std::string> newTime;
     bool omitStatistics = false;
+    bool nonFiniteValues = false;
     for (int argument = 3; argument < argc; ++argument) {
         const std::string value(argv[argument]);
         if (value == "--no-statistics") {
             require(!omitStatistics,
                 "--no-statistics was specified more than once");
             omitStatistics = true;
+        } else if (value == "--non-finite") {
+            require(!nonFiniteValues,
+                "--non-finite was specified more than once");
+            nonFiniteValues = true;
         } else {
             require(!newTime.has_value(), "more than one new time was specified");
             newTime = value;
@@ -265,7 +291,7 @@ int main(int argc, char* argv[])
         auto blocks = readCellHeader(levelDir / "Cell_H", header.dimension);
         for (auto& block : blocks) {
             writeFab(levelDir / block.fileName, block,
-                header.dimension, header.fieldCount);
+                header.dimension, header.fieldCount, nonFiniteValues);
         }
         if (omitStatistics) {
             writeHeaderWithoutStatistics(

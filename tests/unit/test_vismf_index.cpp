@@ -3,7 +3,8 @@
 // and 3 (a trailing '\n' after the FabOnDisk list, and after each per-block
 // min/max matrix). The reader must skip those blanks and still find the
 // descriptor; otherwise v2/v3 plotfiles are unopenable.
-#include <amrvis/io/detail/VisMfIndex.hpp>
+#include <amrexplorer/io/detail/VisMfIndex.hpp>
+#include <amrexplorer/io/StandaloneMetadataReader.hpp>
 
 #include <cstdlib>
 #include <filesystem>
@@ -104,6 +105,9 @@ void testVersion2(const std::filesystem::path& path)
         "v2 RealDescriptor not parsed across the blank separator");
     require(index.boxes.size() == 2, "v2 box count mismatch");
     require(!index.hasPerBlockStatistics, "v2 should not carry per-block statistics");
+    const auto metadata = amrvis::StandaloneMetadataReader{}.readMultiFab(path);
+    require(!metadata.metadata->hasPhysicalGeometry,
+        "standalone MultiFab incorrectly claims physical geometry");
 }
 
 void testVersion3(const std::filesystem::path& path)
@@ -147,7 +151,7 @@ void testVersion3(const std::filesystem::path& path)
 int main()
 {
     const auto scratch = std::filesystem::temp_directory_path()
-        / "amrvis2_vismf_index_test";
+        / "amrexplorer_vismf_index_test";
     std::filesystem::create_directories(scratch);
 
     testVersion1(scratch / "v1_H");

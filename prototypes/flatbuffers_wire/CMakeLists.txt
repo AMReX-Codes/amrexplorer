@@ -14,7 +14,7 @@ add_custom_command(
         -o "${amrvis_wire_generated_dir}"
         "${amrvis_wire_schema}"
     DEPENDS flatc "${amrvis_wire_schema}"
-    COMMENT "Generating the Amrvis2 FlatBuffers wire prototype"
+    COMMENT "Generating the AMReXplorer FlatBuffers wire prototype"
     VERBATIM
 )
 
@@ -30,7 +30,7 @@ target_include_directories(amrvis_wire_prototype
 )
 target_link_libraries(amrvis_wire_prototype
     PUBLIC FlatBuffers::FlatBuffers
-    PRIVATE Amrvis::warnings
+    PRIVATE amrexplorer::warnings
 )
 target_compile_features(amrvis_wire_prototype PUBLIC cxx_std_20)
 
@@ -38,13 +38,13 @@ add_executable(amrvis_wire_server server.cpp)
 target_link_libraries(amrvis_wire_server
     PRIVATE
         amrvis_wire_prototype
-        Amrvis::query
-        Amrvis::warnings
+        amrexplorer::query
+        amrexplorer::warnings
 )
 target_compile_features(amrvis_wire_server PRIVATE cxx_std_20)
 
 add_executable(amrvis_wire_client client.cpp)
 target_link_libraries(amrvis_wire_client
-    PRIVATE amrvis_wire_prototype Amrvis::warnings
+    PRIVATE amrvis_wire_prototype amrexplorer::warnings
 )
 target_compile_features(amrvis_wire_client PRIVATE cxx_std_20)

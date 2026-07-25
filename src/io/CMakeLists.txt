@@ -1,18 +1,19 @@
-add_library(amrvis_io
+add_library(amrexplorer_io
+    plotfile/FabCatalog.cpp
     plotfile/PlotfileBlockReader.cpp
     plotfile/PlotfileDataset.cpp
     plotfile/PlotfileMetadataReader.cpp
     plotfile/StandaloneMetadataReader.cpp
 )
-add_library(Amrvis::io ALIAS amrvis_io)
+add_library(amrexplorer::io ALIAS amrexplorer_io)
 
-target_include_directories(amrvis_io
+target_include_directories(amrexplorer_io
     PUBLIC
         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(amrvis_io
-    PUBLIC Amrvis::cache Amrvis::core
-    PRIVATE Amrvis::warnings
+target_link_libraries(amrexplorer_io
+    PUBLIC amrexplorer::cache amrexplorer::core
+    PRIVATE amrexplorer::warnings
 )
-target_compile_features(amrvis_io PUBLIC cxx_std_20)
+target_compile_features(amrexplorer_io PUBLIC cxx_std_20)

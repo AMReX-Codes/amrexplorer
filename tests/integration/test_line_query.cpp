@@ -1,5 +1,5 @@
-#include <amrvis/query/LineQuery.hpp>
-#include <amrvis/query/SliceQuery.hpp>
+#include <amrexplorer/query/LineQuery.hpp>
+#include <amrexplorer/query/SliceQuery.hpp>
 
 #include <chrono>
 #include <cmath>
@@ -157,6 +157,8 @@ void test2d(const std::filesystem::path& source, const std::filesystem::path& wo
     };
     require(composite.line.positions.size() == native.size(),
         "native composite sample count mismatch");
+    require(!composite.line.positionsAreIndices,
+        "plotfile line positions were incorrectly changed to indices");
     require(composite.line.values.size() == native.size()
             && composite.line.valid.size() == native.size()
             && composite.line.sourceLevel.size() == native.size(),
@@ -470,7 +472,7 @@ int main(int argc, char* argv[])
 
     const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto work = std::filesystem::temp_directory_path()
-        / ("amrvis2-line-query-" + std::to_string(unique));
+        / ("amrexplorer-line-query-" + std::to_string(unique));
     std::filesystem::create_directories(work);
 
     test2d(plotfile2d, work);

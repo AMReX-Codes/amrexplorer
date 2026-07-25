@@ -1,8 +1,8 @@
 #include "Frame.hpp"
 #include "amrvis_wire_generated.h"
 
-#include <amrvis/io/PlotfileDataset.hpp>
-#include <amrvis/query/SliceQuery.hpp>
+#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/query/SliceQuery.hpp>
 
 #include <flatbuffers/flatbuffers.h>
 #include <flatbuffers/verifier.h>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <amrvis/core/Metadata.hpp>
+#include <amrexplorer/core/Metadata.hpp>
 
 #include <QColor>
 #include <QPoint>
@@ -50,6 +50,7 @@ private:
         int level = 0;
         IntBox domain;
         Real3 cellSize;
+        Real3 indexOrigin;
         std::vector<IntBox> boxes;
     };
     struct Projection {

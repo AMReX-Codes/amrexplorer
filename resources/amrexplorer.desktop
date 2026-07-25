@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AMReXplorer
+GenericName=AMR Visualization
+Comment=Demand-driven AMR visualization
+Exec=amrexplorer %F
+Icon=amrexplorer
+StartupWMClass=amrexplorer
+Terminal=false
+Categories=Science;DataVisualization;

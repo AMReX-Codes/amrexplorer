@@ -81,9 +81,10 @@ public:
     // when the scene fits the window). When zoomed into a subregion, the
     // drag shifts the visible data window (see panDrag* signals).
     void panViewport(const QPoint& delta);
-    // When enabled (the 3-D slice views), a middle/right click (or drag)
-    // without Shift or Control emits sliceMoveRequested instead of
-    // linePlotRequested; with either modifier held it stays a line plot.
+    // When enabled (the 3-D slice views): a plain right click emits
+    // sliceMoveRequested; a Shift+middle/right click or drag, or a right
+    // drag, arms a line-plot request. A plain middle click or drag is a no-op.
+    // (Only Shift is honored; Control is not.)
     void setSliceMoveEnabled(bool enabled) noexcept;
     // Highlight (or clear) a coloured border indicating the active panel.
     void setActiveBorder(bool active);

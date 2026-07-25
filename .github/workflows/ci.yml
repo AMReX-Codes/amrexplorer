@@ -36,7 +36,7 @@ jobs:
       CXX: ${{ matrix.cxx }}
     steps:
       - name: Check out source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install dependencies
         run: |
@@ -44,7 +44,7 @@ jobs:
           sudo apt-get install --yes cmake ninja-build qt6-base-dev ${{ matrix.package }}
 
       - name: Configure
-        run: cmake --preset default -DAMRVIS_WARNINGS_AS_ERRORS=ON
+        run: cmake --preset default -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
 
       - name: Build
         run: cmake --build --preset default --parallel 4
@@ -58,7 +58,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install dependencies
         run: brew install cmake ninja qt
@@ -67,7 +67,7 @@ jobs:
         run: echo "CMAKE_PREFIX_PATH=$(brew --prefix qt)" >> "$GITHUB_ENV"
 
       - name: Configure
-        run: cmake --preset default -DAMRVIS_WARNINGS_AS_ERRORS=ON
+        run: cmake --preset default -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
 
       - name: Build
         run: cmake --build --preset default --parallel 4
@@ -81,7 +81,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Qt
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
@@ -95,11 +95,11 @@ jobs:
           cmake -S . -B build-windows `
             -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
-            -DAMRVIS_ENABLE_QT=ON `
-            -DAMRVIS_ENABLE_VTK=OFF `
-            -DAMRVIS_ENABLE_MPI=OFF `
-            -DAMRVIS_BUILD_TESTS=ON `
-            -DAMRVIS_WARNINGS_AS_ERRORS=ON
+            -DAMREXPLORER_ENABLE_QT=ON `
+            -DAMREXPLORER_ENABLE_VTK=OFF `
+            -DAMREXPLORER_ENABLE_MPI=OFF `
+            -DAMREXPLORER_BUILD_TESTS=ON `
+            -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
 
       - name: Build
         run: cmake --build build-windows --config Release --parallel 4
@@ -113,7 +113,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install dependencies
         run: |
@@ -121,7 +121,7 @@ jobs:
           sudo apt-get install --yes cmake g++ ninja-build
 
       - name: Configure
-        run: cmake --preset sanitizers -DAMRVIS_WARNINGS_AS_ERRORS=ON
+        run: cmake --preset sanitizers -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
 
       - name: Build
         run: cmake --build --preset sanitizers --parallel 4

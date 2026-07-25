@@ -1,4 +1,4 @@
-#include <amrvis/query/LineQuery.hpp>
+#include <amrexplorer/query/LineQuery.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -51,20 +51,8 @@ bool contains(const IntBox& box, const Int3& point, int dimension)
 int physicalToIndex(double position, const DatasetMetadata& metadata,
     const LevelMetadata& level, int axis)
 {
-    const auto i = static_cast<std::size_t>(axis);
-    const auto relative = (position - metadata.physicalDomain.lower[i]) / level.cellSize[i];
-    const auto offset = std::floor(relative);
-    if (offset < static_cast<double>(std::numeric_limits<int>::min())
-        || offset > static_cast<double>(std::numeric_limits<int>::max())) {
-        throw std::out_of_range("line coordinate exceeds index range");
-    }
-    const auto index = static_cast<std::int64_t>(level.domain.lower[i])
-        + static_cast<std::int64_t>(offset);
-    if (index < std::numeric_limits<int>::min()
-        || index > std::numeric_limits<int>::max()) {
-        throw std::out_of_range("line coordinate plus domain offset exceeds index range");
-    }
-    return static_cast<int>(index);
+    (void) metadata;
+    return sampleIndex(level, axis, position);
 }
 
 std::size_t valueOffset(const IntBox& box, const Int3& point, int dimension)
@@ -152,9 +140,10 @@ LineQueryResult LineQuery::execute(
             > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
         throw std::overflow_error("line sample count exceeds addressable memory");
     }
-    const auto domainStart = metadata.physicalDomain.lower[lineAxis];
-    const auto domainEnd = domainStart
-        + static_cast<double>(domainExtent) * samplingLevel.cellSize[lineAxis];
+    const auto bounds = sampleBounds(
+        samplingLevel, samplingLevel.domain, metadata.dimension);
+    const auto domainStart = bounds.lower[lineAxis];
+    const auto domainEnd = bounds.upper[lineAxis];
     const auto physicalStart = request.region.has_value()
         ? request.region->lower[lineAxis] : domainStart;
     const auto physicalEnd = request.region.has_value()
@@ -163,6 +152,7 @@ LineQueryResult LineQuery::execute(
 
     LineQueryResult result;
     result.line.axis = request.axis;
+    result.line.positionsAreIndices = !metadata.hasPhysicalGeometry;
     const auto maxSamples = static_cast<std::size_t>(domainExtent);
     result.line.positions.reserve(maxSamples);
     result.line.values.reserve(maxSamples);
@@ -255,12 +245,12 @@ LineQueryResult LineQuery::execute(
         Cover cover;
         if (findCovering(x, cover)) {
             const auto& level = metadata.levels[static_cast<std::size_t>(cover.level)];
-            const auto relative = static_cast<double>(
-                cover.point[lineAxis] - level.domain.lower[lineAxis]);
-            const auto center = metadata.physicalDomain.lower[lineAxis]
-                + (relative + 0.5) * level.cellSize[lineAxis];
+            const auto center = samplePosition(
+                level, request.axis, cover.point[lineAxis]);
             if (center >= physicalStart - endEpsilon && center <= physicalEnd + endEpsilon) {
-                result.line.positions.push_back(center);
+                result.line.positions.push_back(metadata.hasPhysicalGeometry
+                    ? center
+                    : static_cast<double>(cover.point[lineAxis]));
                 result.line.values.push_back(cover.value);
                 result.line.valid.push_back(1);
                 result.line.sourceLevel.push_back(static_cast<std::int16_t>(cover.level));
@@ -275,8 +265,7 @@ LineQueryResult LineQuery::execute(
             // The nudge is far below a cell, so it never skips one (including a
             // finer cell across a coarse/fine boundary in a composite).
             constexpr double cellStepNudge = 1e-9;
-            x = metadata.physicalDomain.lower[lineAxis]
-                + (relative + 1.0) * level.cellSize[lineAxis]
+            x = center + 0.5 * level.cellSize[lineAxis]
                 + cellStepNudge * level.cellSize[lineAxis];
         } else {
             Int3 point{};
@@ -287,12 +276,12 @@ LineQueryResult LineQuery::execute(
                         : request.fixedCoordinates[static_cast<std::size_t>(axis)],
                     metadata, samplingLevel, axis);
             }
-            const auto relative = static_cast<double>(
-                point[lineAxis] - samplingLevel.domain.lower[lineAxis]);
-            const auto center = metadata.physicalDomain.lower[lineAxis]
-                + (relative + 0.5) * finestCellSize;
+            const auto center = samplePosition(
+                samplingLevel, request.axis, point[lineAxis]);
             if (center >= physicalStart - endEpsilon && center <= physicalEnd + endEpsilon) {
-                result.line.positions.push_back(center);
+                result.line.positions.push_back(metadata.hasPhysicalGeometry
+                    ? center
+                    : static_cast<double>(point[lineAxis]));
                 result.line.values.push_back(0.0F);
                 result.line.valid.push_back(0);
                 result.line.sourceLevel.push_back(-1);
@@ -300,8 +289,7 @@ LineQueryResult LineQuery::execute(
             // Advance past the far boundary into the next cell; see the covered
             // branch above for why a bare boundary advance can stall the walk.
             constexpr double cellStepNudge = 1e-9;
-            x = metadata.physicalDomain.lower[lineAxis]
-                + (relative + 1.0) * finestCellSize
+            x = center + 0.5 * finestCellSize
                 + cellStepNudge * finestCellSize;
         }
     }

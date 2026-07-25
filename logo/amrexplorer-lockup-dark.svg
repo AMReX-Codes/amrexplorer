@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="320" viewBox="0 0 1480 320">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0C1D33"/>
+      <stop offset="1" stop-color="#16456E"/>
+    </linearGradient>
+    <clipPath id="lensClip">
+      <circle cx="560" cy="560" r="156"/>
+    </clipPath>
+  </defs>
+
+  <!-- icon -->
+  <g transform="translate(16 16) scale(0.28125)">
+    <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#tile)"/>
+  </g>
+  <g transform="translate(16 16) scale(0.28125)" fill="none"
+     stroke-linejoin="round" stroke-linecap="round">
+    <g stroke="#DCEBF7" stroke-width="34">
+      <rect x="192" y="192" width="480" height="480"/>
+      <path d="M432 192 V672 M192 432 H672"/>
+      <path d="M432 552 H672 M552 432 V672"/>
+      <path d="M432 492 H552 M492 432 V552"/>
+    </g>
+    <g clip-path="url(#lensClip)" transform="translate(0 0)">
+      <g transform="translate(560 560) scale(1.55) translate(-560 -560)"
+         stroke="#43C6E8" stroke-width="34">
+        <rect x="192" y="192" width="480" height="480"/>
+        <path d="M432 192 V672 M192 432 H672"/>
+        <path d="M432 552 H672 M552 432 V672"/>
+        <path d="M432 492 H552 M492 432 V552"/>
+      </g>
+    </g>
+    <circle cx="560" cy="560" r="174" stroke="#43C6E8" stroke-width="56"/>
+    <path d="M683 683 L832 832" stroke="#43C6E8" stroke-width="84"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="356" y="205" font-family="DejaVu Sans, sans-serif" font-size="118"
+        font-weight="bold" fill="#EAF3FB">AMR<tspan fill="#43C6E8">eX</tspan>plorer</text>
+</svg>

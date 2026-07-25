@@ -3,6 +3,7 @@
 #include "Theme.hpp"
 
 #include <QCheckBox>
+#include <QEvent>
 #include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -15,6 +16,7 @@
 #include <QPushButton>
 #include <QRect>
 #include <QRubberBand>
+#include <QToolTip>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -42,6 +44,24 @@ std::size_t sampleCount(const LinePlotCurve& curve)
         curve.line.valid.size()});
 }
 
+bool usesIndexPositions(const std::vector<LinePlotCurve>* curves)
+{
+    if (curves == nullptr) {
+        return false;
+    }
+    auto foundVisible = false;
+    for (const auto& curve : *curves) {
+        if (!curve.visible) {
+            continue;
+        }
+        foundVisible = true;
+        if (!curve.line.positionsAreIndices) {
+            return false;
+        }
+    }
+    return foundVisible;
+}
+
 } // namespace
 
 LinePlotWidget::LinePlotWidget(QWidget* parent)
@@ -49,6 +69,7 @@ LinePlotWidget::LinePlotWidget(QWidget* parent)
     , m_numberFormat(defaultNumberFormat())
 {
     setMinimumSize(420, 300);
+    setMouseTracking(true);
 }
 
 void LinePlotWidget::setCurves(const std::vector<LinePlotCurve>* curves)
@@ -105,13 +126,14 @@ std::optional<QRectF> LinePlotWidget::automaticRange() const
             if (curve.line.valid[sample] == 0) {
                 continue;
             }
+            const auto position = curve.line.positions[sample];
             const auto value = static_cast<double>(curve.line.values[sample]);
-            if (!std::isfinite(value)) {
+            if (!std::isfinite(position) || !std::isfinite(value)) {
                 continue;
             }
             any = true;
-            xMinimum = std::min(xMinimum, curve.line.positions[sample]);
-            xMaximum = std::max(xMaximum, curve.line.positions[sample]);
+            xMinimum = std::min(xMinimum, position);
+            xMaximum = std::max(xMaximum, position);
             yMinimum = std::min(yMinimum, value);
             yMaximum = std::max(yMaximum, value);
         }
@@ -119,7 +141,12 @@ std::optional<QRectF> LinePlotWidget::automaticRange() const
     if (!any) {
         return std::nullopt;
     }
-    if (xMinimum == xMaximum) {
+    if (usesIndexPositions(m_curves)) {
+        // Integer samples describe points, not cell edges. Half-index padding
+        // centers the first and last points while leaving room for markers.
+        xMinimum -= 0.5;
+        xMaximum += 0.5;
+    } else if (xMinimum == xMaximum) {
         const auto padding = std::max(std::abs(xMinimum), 1.0) * 1.0e-6;
         xMinimum -= padding;
         xMaximum += padding;
@@ -129,12 +156,14 @@ std::optional<QRectF> LinePlotWidget::automaticRange() const
         yMinimum -= padding;
         yMaximum += padding;
     }
-    // Pad each axis so the data is not flush against the boundary.
+    // Pad each physical/value axis so the data is not flush against the boundary.
     constexpr double padFraction = 0.05;
-    const auto xSpan = xMaximum - xMinimum;
     const auto ySpan = yMaximum - yMinimum;
-    xMinimum -= padFraction * xSpan;
-    xMaximum += padFraction * xSpan;
+    if (!usesIndexPositions(m_curves)) {
+        const auto xSpan = xMaximum - xMinimum;
+        xMinimum -= padFraction * xSpan;
+        xMaximum += padFraction * xSpan;
+    }
     yMinimum -= padFraction * ySpan;
     yMaximum += padFraction * ySpan;
     return QRectF(QPointF(xMinimum, yMinimum), QPointF(xMaximum, yMaximum));
@@ -148,12 +177,100 @@ std::optional<QRectF> LinePlotWidget::displayedRange() const
     return automaticRange();
 }
 
+QString LinePlotWidget::hoverTextAt(const QPointF& position) const
+{
+    constexpr double hoverRadius = 10.0;
+    const auto plot = plotRect();
+    if (m_curves == nullptr || !m_paintedRange
+        || !plot.contains(position.toPoint())) {
+        return {};
+    }
+    const auto& range = *m_paintedRange;
+
+    const auto mapX = [&](double value) {
+        return plot.left()
+            + (value - range.left()) / range.width() * plot.width();
+    };
+    const auto mapY = [&](double value) {
+        return plot.bottom()
+            - (value - range.top()) / range.height() * plot.height();
+    };
+    const auto cursorX = range.left()
+        + (position.x() - plot.left()) / plot.width() * range.width();
+    const auto dataRadius = hoverRadius * range.width() / plot.width();
+
+    const LinePlotCurve* nearestCurve = nullptr;
+    std::size_t nearestSample = 0;
+    auto nearestDistanceSquared = hoverRadius * hoverRadius;
+    constexpr std::size_t candidateRadius = 8;
+    for (const auto& curve : *m_curves) {
+        if (!curve.visible) {
+            continue;
+        }
+        const auto count = sampleCount(curve);
+        const auto begin = curve.line.positions.begin();
+        const auto end = begin + static_cast<std::ptrdiff_t>(count);
+        const auto insertion = static_cast<std::size_t>(std::distance(
+            begin, std::lower_bound(begin, end, cursorX)));
+        const auto first = insertion > candidateRadius
+            ? insertion - candidateRadius : std::size_t{0};
+        const auto last = insertion
+            + std::min(count - insertion, candidateRadius + 1);
+        for (auto sample = first; sample < last; ++sample) {
+            const auto samplePosition = curve.line.positions[sample];
+            const auto value = static_cast<double>(curve.line.values[sample]);
+            if (curve.line.valid[sample] == 0
+                || !std::isfinite(samplePosition) || !std::isfinite(value)) {
+                continue;
+            }
+            const auto dx = mapX(samplePosition) - position.x();
+            if (std::abs(dx) > hoverRadius
+                || std::abs(samplePosition - cursorX) > dataRadius) {
+                continue;
+            }
+            const auto dy = mapY(value) - position.y();
+            const auto distanceSquared = dx * dx + dy * dy;
+            if (distanceSquared <= nearestDistanceSquared) {
+                nearestCurve = &curve;
+                nearestSample = sample;
+                nearestDistanceSquared = distanceSquared;
+            }
+        }
+    }
+    if (nearestCurve == nullptr) {
+        return {};
+    }
+
+    const auto coordinate = nearestCurve->line.positions[nearestSample];
+    const auto value = static_cast<double>(
+        nearestCurve->line.values[nearestSample]);
+    const auto coordinateText = nearestCurve->line.positionsAreIndices
+        ? QString::number(static_cast<long long>(std::llround(coordinate)))
+        : formatNumber(coordinate, m_numberFormat);
+    const auto axis = nearestCurve->lineAxis >= 0
+            && nearestCurve->lineAxis < static_cast<int>(axisLetters.size())
+        ? QLatin1String(
+              axisLetters[static_cast<std::size_t>(nearestCurve->lineAxis)])
+        : QStringLiteral("x");
+    return tr("%1\n%2 = %3\nvalue = %4")
+        .arg(QString::fromStdString(nearestCurve->fieldName))
+        .arg(axis)
+        .arg(coordinateText)
+        .arg(formatNumber(value, m_numberFormat));
+}
+
+void LinePlotWidget::hideHover()
+{
+    QToolTip::hideText();
+}
+
 void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
 {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.fillRect(rect(), viewportBackground());
     const auto range = displayedRange();
+    m_paintedRange = range;
     if (!range.has_value()) {
         painter.setPen(Qt::white);
         painter.drawText(rect(), Qt::AlignCenter,
@@ -176,18 +293,41 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
 
     const QPen gridPen(QColor(96, 96, 96));
     constexpr int tickCount = 5;
-    for (int tick = 0; tick < tickCount; ++tick) {
-        const auto fraction = static_cast<double>(tick) / (tickCount - 1);
-        const auto xValue = xMinimum + fraction * (xMaximum - xMinimum);
-        const auto yValue = yMinimum + fraction * (yMaximum - yMinimum);
-        const auto x = mapX(xValue);
-        const auto y = mapY(yValue);
+    const auto drawXTick = [&](double value, const QString& label) {
+        const auto x = mapX(value);
         painter.setPen(gridPen);
         painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
-        painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
         painter.setPen(Qt::white);
         painter.drawText(QRectF(x - 40.0, plot.bottom() + 4.0, 80.0, 16.0),
-            Qt::AlignHCenter | Qt::AlignTop, formatNumber(xValue, m_numberFormat));
+            Qt::AlignHCenter | Qt::AlignTop, label);
+    };
+    if (usesIndexPositions(m_curves)) {
+        const auto first = static_cast<long long>(std::ceil(xMinimum));
+        const auto last = static_cast<long long>(std::floor(xMaximum));
+        const auto span = std::max(last - first, 0LL);
+        const auto step = std::max((span + tickCount - 2) / (tickCount - 1), 1LL);
+        auto tick = first;
+        while (tick <= last) {
+            drawXTick(static_cast<double>(tick), QString::number(tick));
+            if (tick > last - step) {
+                break;
+            }
+            tick += step;
+        }
+    } else {
+        for (int tick = 0; tick < tickCount; ++tick) {
+            const auto fraction = static_cast<double>(tick) / (tickCount - 1);
+            const auto xValue = xMinimum + fraction * (xMaximum - xMinimum);
+            drawXTick(xValue, formatNumber(xValue, m_numberFormat));
+        }
+    }
+    for (int tick = 0; tick < tickCount; ++tick) {
+        const auto fraction = static_cast<double>(tick) / (tickCount - 1);
+        const auto yValue = yMinimum + fraction * (yMaximum - yMinimum);
+        const auto y = mapY(yValue);
+        painter.setPen(gridPen);
+        painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
+        painter.setPen(Qt::white);
         painter.drawText(QRectF(0.0, y - 8.0, plot.left() - 6.0, 16.0),
             Qt::AlignRight | Qt::AlignVCenter,
             formatNumber(yValue, m_numberFormat));
@@ -216,12 +356,14 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
             run.clear();
         };
         for (std::size_t sample = 0; sample < count; ++sample) {
-            if (curve.line.valid[sample] == 0) {
+            const auto position = curve.line.positions[sample];
+            const auto value = static_cast<double>(curve.line.values[sample]);
+            if (curve.line.valid[sample] == 0
+                || !std::isfinite(position) || !std::isfinite(value)) {
                 flushRun();
                 continue;
             }
-            run.append(QPointF(mapX(curve.line.positions[sample]),
-                mapY(static_cast<double>(curve.line.values[sample]))));
+            run.append(QPointF(mapX(position), mapY(value)));
         }
         flushRun();
         if (m_showMarkers) {
@@ -236,12 +378,15 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
             markerPen.setCapStyle(Qt::RoundCap);
             painter.setPen(markerPen);
             for (std::size_t sample = 0; sample < count; ++sample) {
-                if (curve.line.valid[sample] == 0) {
+                const auto position = curve.line.positions[sample];
+                const auto value
+                    = static_cast<double>(curve.line.values[sample]);
+                if (curve.line.valid[sample] == 0
+                    || !std::isfinite(position) || !std::isfinite(value)) {
                     continue;
                 }
-                painter.drawPoint(QPointF(mapX(curve.line.positions[sample]),
-                    mapY(static_cast<double>(curve.line.values[sample]))
-                        - markerLift));
+                painter.drawPoint(
+                    QPointF(mapX(position), mapY(value) - markerLift));
             }
         }
     }
@@ -250,6 +395,7 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
 
 void LinePlotWidget::mousePressEvent(QMouseEvent* event)
 {
+    hideHover();
     if (event->button() == Qt::LeftButton
         && plotRect().contains(event->position().toPoint())) {
         m_pressPosition = event->position().toPoint();
@@ -268,6 +414,7 @@ void LinePlotWidget::mousePressEvent(QMouseEvent* event)
 void LinePlotWidget::mouseMoveEvent(QMouseEvent* event)
 {
     if (m_dragging) {
+        hideHover();
         if (m_rubberBand == nullptr) {
             m_rubberBand = new QRubberBand(QRubberBand::Rectangle, this);
         }
@@ -276,6 +423,14 @@ void LinePlotWidget::mouseMoveEvent(QMouseEvent* event)
         m_rubberBand->show();
         event->accept();
         return;
+    }
+    const auto text = hoverTextAt(event->position());
+    if (text.isEmpty()) {
+        hideHover();
+    } else {
+        QToolTip::showText(event->globalPosition().toPoint()
+                + QPoint(12, 16),
+            text, this, plotRect());
     }
     QWidget::mouseMoveEvent(event);
 }
@@ -314,6 +469,12 @@ void LinePlotWidget::mouseReleaseEvent(QMouseEvent* event)
         return;
     }
     QWidget::mouseReleaseEvent(event);
+}
+
+void LinePlotWidget::leaveEvent(QEvent* event)
+{
+    hideHover();
+    QWidget::leaveEvent(event);
 }
 
 LinePlotWindow::LinePlotWindow(const QString& datasetName, QWidget* parent)

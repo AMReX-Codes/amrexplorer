@@ -1,5 +1,5 @@
-#include <amrvis/io/PlotfileDataset.hpp>
-#include <amrvis/io/StandaloneMetadataReader.hpp>
+#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/io/StandaloneMetadataReader.hpp>
 
 #include <cstddef>
 #include <mutex>
@@ -21,7 +21,7 @@ std::uint64_t residentBytes(const FabBlock& block)
         + block.values.residentBytes();
 }
 
-std::filesystem::path dataRoot(const std::filesystem::path& path)
+std::filesystem::path sourceDataRoot(const std::filesystem::path& path)
 {
     if (std::filesystem::is_directory(path)
         && std::filesystem::is_regular_file(path / "Header")) {
@@ -35,7 +35,7 @@ std::filesystem::path dataRoot(const std::filesystem::path& path)
 
 PlotfileDataset::PlotfileDataset(
     std::filesystem::path plotfile, DatasetId id, std::uint64_t cacheBudgetBytes)
-    : m_plotfile(dataRoot(plotfile))
+    : m_plotfile(sourceDataRoot(plotfile))
     , m_id(id)
     , m_metadataResult(readDatasetMetadata(plotfile))
     , m_blockReader(m_plotfile, m_metadataResult.metadata)
@@ -43,6 +43,19 @@ PlotfileDataset::PlotfileDataset(
 {
     if (m_id.value == 0) {
         throw std::invalid_argument("PlotfileDataset id must be nonzero");
+    }
+}
+
+PlotfileDataset::PlotfileDataset(std::filesystem::path root, DatasetId id,
+    std::uint64_t cacheBudgetBytes, PlotfileMetadataResult metadata)
+    : m_plotfile(std::move(root))
+    , m_id(id)
+    , m_metadataResult(std::move(metadata))
+    , m_blockReader(m_plotfile, m_metadataResult.metadata)
+    , m_cache(cacheBudgetBytes)
+{
+    if (m_id.value == 0 || !m_metadataResult.metadata) {
+        throw std::invalid_argument("selected FAB dataset requires metadata and an id");
     }
 }
 
@@ -59,6 +72,11 @@ const MetadataReadMetrics& PlotfileDataset::metadataReadMetrics() const noexcept
 DatasetId PlotfileDataset::id() const noexcept
 {
     return m_id;
+}
+
+const std::filesystem::path& PlotfileDataset::dataRoot() const noexcept
+{
+    return m_plotfile;
 }
 
 PlotfileDataset::BlockAccess PlotfileDataset::requestBlock(

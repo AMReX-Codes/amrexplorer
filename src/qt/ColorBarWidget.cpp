@@ -2,7 +2,7 @@
 #include "NumberFormat.hpp"
 #include "Theme.hpp"
 
-#include <amrvis/render2d/Palette.hpp>
+#include <amrexplorer/render2d/Palette.hpp>
 
 #include <QFontMetrics>
 #include <QPainter>

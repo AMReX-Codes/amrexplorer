@@ -1,4 +1,5 @@
 #include "MainWindow.hpp"
+#include "FabSelectorDock.hpp"
 
 #include <QApplication>
 #include <QComboBox>
@@ -7,12 +8,18 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QIcon>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QLoggingCategory>
+#include <QMouseEvent>
 #include <QProcess>
+#include <QPushButton>
 #include <QStandardPaths>
+#include <QTableView>
 #include <QTextStream>
 #include <QTimer>
 
+#include <array>
 #include <filesystem>
 #include <string_view>
 #include <vector>
@@ -25,25 +32,31 @@ namespace {
 // the bundled (qrc) icons, with Exec pointing at this running binary's path,
 // which makes the dock work wherever the executable is copied. Idempotent: it
 // only writes when the entry is missing or the binary moved. User-local
-// (~/.local/share); delete ~/.local/share/applications/amrvis2.desktop and the
-// amrvis2.png files under ~/.local/share/icons/hicolor to undo. The standalone
+// (~/.local/share); delete ~/.local/share/applications/amrexplorer.desktop and the
+// amrexplorer.png files under ~/.local/share/icons/hicolor to undo. The standalone
 // resources/install-desktop-entry.sh does the same thing by hand.
 void ensureDesktopEntry()
 {
+#ifndef Q_OS_LINUX
+    // Desktop entry + hicolor icons are a GNOME/KDE (Linux) mechanism. On
+    // other platforms the writes land in nonsensical locations and the
+    // cache-refresh helpers do not exist, so do nothing.
+    return;
+#endif
     static constexpr int kSizes[] = {16, 32, 64, 128, 256};
     const QString dataDir =
         QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
     if (dataDir.isEmpty()) {
         return;
     }
-    const QString desktopPath = dataDir + "/applications/amrvis2.desktop";
+    const QString desktopPath = dataDir + "/applications/amrexplorer.desktop";
     const QString execPath = QCoreApplication::applicationFilePath();
 
     const auto iconInstalled = [&]() {
         for (int size : kSizes) {
             const QString path = QDir(
                 dataDir + QString("/icons/hicolor/%1x%1/apps").arg(size))
-                .filePath("amrvis2.png");
+                .filePath("amrexplorer.png");
             if (!QFileInfo::exists(path)) {
                 return false;
             }
@@ -63,26 +76,37 @@ void ensureDesktopEntry()
 
     for (int size : kSizes) {
         const QString dir = dataDir + QString("/icons/hicolor/%1x%1/apps").arg(size);
+        const QString path = QDir(dir).filePath("amrexplorer.png");
+        if (QFileInfo::exists(path)) {
+            // Already installed: skip the no-op rewrite. Conscious trade-off
+            // -- this also means a changed bundled icon won't reach an existing
+            // install; delete the file to force a refresh.
+            continue;
+        }
         QDir().mkpath(dir);
-        QFile in(QStringLiteral(":/amrvis2-%1.png").arg(size));
-        QFile out(QDir(dir).filePath("amrvis2.png"));
+        QFile in(QStringLiteral(":/amrexplorer-%1.png").arg(size));
+        QFile out(path);
         if (in.open(QIODevice::ReadOnly)
             && out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
             out.write(in.readAll());
         }
     }
     QDir().mkpath(dataDir + "/applications");
+    // Rewritten wholesale when the binary moved (the Exec line must track the
+    // running binary), which discards user edits to the other fields. That is
+    // intentional for this install-on-startup helper; a surgical Exec-only
+    // patch would preserve edits but is out of scope.
     QFile desktop(desktopPath);
     if (desktop.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
         QTextStream out(&desktop);
         out << "[Desktop Entry]\n"
             << "Type=Application\n"
-            << "Name=Amrvis2\n"
+            << "Name=AMReXplorer\n"
             << "GenericName=AMR Visualization\n"
             << "Comment=Demand-driven AMR visualization\n"
             << "Exec=\"" << execPath << "\" %F\n"
-            << "Icon=amrvis2\n"
-            << "StartupWMClass=amrvis2\n"
+            << "Icon=amrexplorer\n"
+            << "StartupWMClass=amrexplorer\n"
             << "Terminal=false\n"
             << "Categories=Science;DataVisualization;\n";
     }
@@ -137,6 +161,181 @@ bool rangeSelectorMatches(
         && static_cast<bool>(levelEnabled) == metadataRangesAvailable;
 }
 
+bool fabRangeSelectorMatches(const amrvis::qt::MainWindow& window)
+{
+    const auto* selector = window.findChild<QComboBox*>(
+        QStringLiteral("rangeModeSelector"));
+    if (selector == nullptr) {
+        return false;
+    }
+    const auto fileIndex = selector->findData(
+        static_cast<int>(amrvis::qt::RangeMode::File));
+    const auto levelIndex = selector->findData(
+        static_cast<int>(amrvis::qt::RangeMode::Level));
+    if (fileIndex < 0 || levelIndex < 0) {
+        return false;
+    }
+    const auto fileEnabled = selector->model()->flags(
+        selector->model()->index(fileIndex, 0)) & Qt::ItemIsEnabled;
+    const auto levelEnabled = selector->model()->flags(
+        selector->model()->index(levelIndex, 0)) & Qt::ItemIsEnabled;
+    return selector->currentData().toInt()
+            == static_cast<int>(amrvis::qt::RangeMode::File)
+        && static_cast<bool>(fileEnabled)
+        && !static_cast<bool>(levelEnabled);
+}
+
+bool fabSelectorIsAscending(const amrvis::qt::FabSelectorDock& selector)
+{
+    const auto* table = selector.findChild<QTableView*>(
+        QStringLiteral("fabSelectorTable"));
+    if (table == nullptr || table->model() == nullptr) {
+        return false;
+    }
+    qulonglong previous = 0;
+    for (int row = 0; row < table->model()->rowCount(); ++row) {
+        const auto grid = table->model()->index(row, 0).data().toULongLong();
+        if (row != 0 && grid < previous) {
+            return false;
+        }
+        previous = grid;
+    }
+    return true;
+}
+
+bool fabSelectorColumnsMatch(
+    const amrvis::qt::FabSelectorDock& selector, bool viewingMultiFab)
+{
+    const auto* table = selector.findChild<QTableView*>(
+        QStringLiteral("fabSelectorTable"));
+    if (table == nullptr || table->model() == nullptr
+        || table->model()->columnCount() != 7) {
+        return false;
+    }
+    const std::array<QString, 7> expected{
+        QStringLiteral("Grid"),
+        QStringLiteral("Valid box"),
+        QStringLiteral("FAB Box"),
+        QStringLiteral("Components"),
+        QStringLiteral("File"),
+        QStringLiteral("Offset"),
+        QStringLiteral("Precision")
+    };
+    for (int column = 0; column < table->model()->columnCount(); ++column) {
+        if (table->model()->headerData(
+                column, Qt::Horizontal, Qt::DisplayRole).toString()
+            != expected[static_cast<std::size_t>(column)]) {
+            return false;
+        }
+    }
+    return table->isColumnHidden(1) != viewingMultiFab;
+}
+
+bool fabSelectorPointFilterMatches(
+    amrvis::qt::FabSelectorDock& selector, bool exercisePrompt)
+{
+    auto* filter = selector.findChild<QLineEdit*>(
+        QStringLiteral("fabSelectorFilter"));
+    auto* clear = selector.findChild<QPushButton*>(
+        QStringLiteral("fabSelectorClearFilter"));
+    const auto* table = selector.findChild<QTableView*>(
+        QStringLiteral("fabSelectorTable"));
+    const auto& entries = selector.entries();
+    if (filter == nullptr || clear == nullptr || table == nullptr
+        || table->model() == nullptr || entries.empty()) {
+        return false;
+    }
+
+    const auto dimension = entries.front().dimension;
+    const auto expectedExample = dimension == 1
+        ? QStringLiteral("(34)")
+        : dimension == 2
+            ? QStringLiteral("(34,24)")
+            : QStringLiteral("(34,24,0)");
+    if (!filter->isReadOnly()
+        || filter->placeholderText()
+            != QStringLiteral("Filter int tuple (e.g., %1)")
+                .arg(expectedExample)) {
+        return false;
+    }
+    if (!exercisePrompt) {
+        return true;
+    }
+
+    const auto& first = entries.front();
+    const auto& targetBox = first.storedBox;
+    QString tuple = QStringLiteral("(");
+    for (int axis = 0; axis < dimension; ++axis) {
+        if (axis != 0) {
+            tuple += QLatin1Char(',');
+        }
+        tuple += QString::number(
+            targetBox.lower[static_cast<std::size_t>(axis)]);
+    }
+    tuple += QLatin1Char(')');
+
+    int expectedRows = 0;
+    for (const auto& entry : entries) {
+        const auto& box = entry.storedBox;
+        bool contains = true;
+        for (int axis = 0; axis < dimension; ++axis) {
+            const auto index = static_cast<std::size_t>(axis);
+            contains = contains
+                && targetBox.lower[index] >= box.lower[index]
+                && targetBox.lower[index] <= box.upper[index];
+        }
+        expectedRows += contains ? 1 : 0;
+    }
+
+    if (expectedRows != 1) {
+        return false;
+    }
+
+    bool promptOpened = false;
+    QTimer::singleShot(0, &selector, [&promptOpened, tuple] {
+        auto* dialog = qobject_cast<QInputDialog*>(
+            QApplication::activeModalWidget());
+        if (dialog != nullptr) {
+            promptOpened = true;
+            dialog->setTextValue(tuple);
+            dialog->accept();
+        }
+    });
+    QTimer::singleShot(100, [] {
+        if (auto* dialog = QApplication::activeModalWidget()) {
+            dialog->close();
+        }
+    });
+    const QPointF localPosition(1.0, 1.0);
+    QMouseEvent click(
+        QEvent::MouseButtonRelease, localPosition,
+        filter->mapToGlobal(localPosition.toPoint()),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(filter, &click);
+    return
+        promptOpened && filter->text() == tuple
+        && table->model()->rowCount() == expectedRows && !clear->isHidden();
+}
+
+bool clearFabSelectorPointFilter(amrvis::qt::FabSelectorDock& selector)
+{
+    auto* filter = selector.findChild<QLineEdit*>(
+        QStringLiteral("fabSelectorFilter"));
+    auto* clear = selector.findChild<QPushButton*>(
+        QStringLiteral("fabSelectorClearFilter"));
+    const auto* table = selector.findChild<QTableView*>(
+        QStringLiteral("fabSelectorTable"));
+    if (filter == nullptr || clear == nullptr || table == nullptr
+        || table->model() == nullptr || filter->text().isEmpty()
+        || clear->isHidden()) {
+        return false;
+    }
+    clear->click();
+    return filter->text().isEmpty() && clear->isHidden()
+        && table->model()->rowCount()
+            == static_cast<int>(selector.entries().size());
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -145,21 +344,21 @@ int main(int argc, char* argv[])
     QLoggingCategory::setFilterRules(QStringLiteral("qt.qpa.wayland.textinput=false"));
 
     QApplication application(argc, argv);
-    // Advertise the desktop entry name and WM class as "amrvis2" so Linux
-    // docks/taskbars can match the running window to amrvis2.desktop and
+    // Advertise the desktop entry name and WM class as "amrexplorer" so Linux
+    // docks/taskbars can match the running window to amrexplorer.desktop and
     // resolve its icon from the icon theme (setWindowIcon alone only sets the
-    // title-bar icon). QSettings keeps its own hardcoded "Amrvis2" names, so
-    // saved preferences are unaffected.
-    application.setApplicationName(QStringLiteral("amrvis2"));
-    // QGuiApplication::setDesktopFileName(QStringLiteral("amrvis2"));
+    // title-bar icon).
+    application.setApplicationName(QStringLiteral("amrexplorer"));
+    application.setApplicationDisplayName(QStringLiteral("AMReXplorer"));
+    QGuiApplication::setDesktopFileName(QStringLiteral("amrexplorer"));
     // Bundle the logo (rounded-square heatmap) at several sizes so it stays
     // crisp from the 16 px title bar up to the 256 px taskbar/dock.
     QIcon icon;
-    icon.addFile(QStringLiteral(":/amrvis2-16.png"));
-    icon.addFile(QStringLiteral(":/amrvis2-32.png"));
-    icon.addFile(QStringLiteral(":/amrvis2-64.png"));
-    icon.addFile(QStringLiteral(":/amrvis2-128.png"));
-    icon.addFile(QStringLiteral(":/amrvis2-256.png"));
+    icon.addFile(QStringLiteral(":/amrexplorer-16.png"));
+    icon.addFile(QStringLiteral(":/amrexplorer-32.png"));
+    icon.addFile(QStringLiteral(":/amrexplorer-64.png"));
+    icon.addFile(QStringLiteral(":/amrexplorer-128.png"));
+    icon.addFile(QStringLiteral(":/amrexplorer-256.png"));
     application.setWindowIcon(icon);
     ensureDesktopEntry();
     amrvis::qt::MainWindow window;
@@ -191,8 +390,72 @@ int main(int argc, char* argv[])
                 const auto valid = success
                     && rangeSelectorMatches(window, true);
                 application.exit(valid ? 0 : 1);
-            });
+        });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--raw-fab-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        int phase = 0;
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, &phase](bool success) {
+                auto* selector =
+                    window.findChild<amrvis::qt::FabSelectorDock*>();
+                const auto valid = success && selector != nullptr
+                    && selector->isVisible() && selector->entries().size() >= 2
+                    && fabSelectorIsAscending(*selector)
+                    && fabSelectorColumnsMatch(*selector, false)
+                    && fabSelectorPointFilterMatches(*selector, phase == 0)
+                    && fabRangeSelectorMatches(window);
+                if (!valid) {
+                    application.exit(1);
+                } else if (phase++ == 0) {
+                    // The unique point match starts the FAB load.
+                } else {
+                    application.exit(
+                        clearFabSelectorPointFilter(*selector) ? 0 : 1);
+                }
+            });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--multifab-fab-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        int phase = 0;
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, &phase](bool success) {
+                auto* selector =
+                    window.findChild<amrvis::qt::FabSelectorDock*>();
+                if (!success || selector == nullptr
+                    || selector->entries().size() < 2
+                    || !fabSelectorIsAscending(*selector)
+                    || !fabSelectorColumnsMatch(*selector, true)
+                    || !fabSelectorPointFilterMatches(
+                        *selector, phase == 0)) {
+                    application.exit(1);
+                    return;
+                }
+                if (phase == 0) {
+                    ++phase;
+                } else if (phase == 1) {
+                    auto* back = selector->findChild<QPushButton*>(
+                        QStringLiteral("fabBackButton"));
+                    if (back == nullptr || !back->isVisible()
+                        || !fabRangeSelectorMatches(window)
+                        || !clearFabSelectorPointFilter(*selector)) {
+                        application.exit(1);
+                        return;
+                    }
+                    ++phase;
+                    QTimer::singleShot(0, back, &QPushButton::click);
+                } else {
+                    const auto* back = selector->findChild<QPushButton*>(
+                        QStringLiteral("fabBackButton"));
+                    application.exit(
+                        back != nullptr && !back->isVisible() ? 0 : 1);
+                }
+            });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
     } else if (argc == 4
         && std::string_view(argv[1]) == "--sequence-smoke-test") {
         // Opens the two-frame sequence, waits for the first frame to display,

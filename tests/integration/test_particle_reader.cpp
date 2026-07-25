@@ -59,7 +59,7 @@ void writeFixture(const std::filesystem::path& root,
     std::ofstream data(species / "Level_0" / "DATA_00000",
         std::ios::binary);
     if (checkpoint) {
-        for (const auto [id, cpu] : identities) {
+        for (const auto& [id, cpu] : identities) {
             const auto packed = idcpu(id, cpu);
             const std::array<std::int32_t, 2> record = expanded
                 ? std::array{
@@ -72,7 +72,7 @@ void writeFixture(const std::filesystem::path& root,
                 reinterpret_cast<const char*>(record.data()), sizeof(record));
         }
     }
-    for (const auto [id, cpu] : identities) {
+    for (const auto& [id, cpu] : identities) {
         static_cast<void>(cpu);
         std::vector<double> record(
             static_cast<std::size_t>(3 + additionalRealComponents), 0.0);

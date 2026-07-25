@@ -16,6 +16,7 @@
 #include <QElapsedTimer>
 #include <QImage>
 #include <QMainWindow>
+#include <QRectF>
 #include <QStringList>
 
 #include <array>
@@ -221,6 +222,12 @@ public:
     // transform. The check leaves the view fitted.
     [[nodiscard]] bool activeViewIsFitToWindowForTest();
 
+    // Test-only: true when the active view's whole raster lies inside the
+    // viewport — i.e. the displayed image is fully visible, however it got
+    // framed. A cropped-region arrival that over-zooms (issue #45) leaves part
+    // of the raster outside the viewport and fails this.
+    [[nodiscard]] bool activeViewShowsWholeImageForTest() const;
+
     // Test-only: drill into the FAB catalog entry at index (the same path the
     // dock's viewRequested signal drives). Used by the FAB round-trip zoom test.
     void viewFabForTest(std::size_t index);
@@ -411,6 +418,14 @@ private:
     // raster without touching the visible region.
     void resetViewZoom(PlaneViewState& state);
     void resetZoomAllViews();
+    // When a Preserve-policy raster arrives with a different pixels-per-data
+    // density than the plane it replaces (a zoomed re-slice on a dataset whose
+    // full-domain raster hit the output cap), returns the currently visible
+    // physical window mapped into the incoming plane's scene coordinates, for
+    // re-framing after the swap; nullopt when the plain Preserve is already
+    // correct. See issue #45.
+    [[nodiscard]] std::optional<QRectF> preservedDataWindow(
+        const PlaneViewState& state, const ScalarPlane& incoming) const;
     void showSlice(PlaneViewState& state, const SliceDisplayResult& display);
     void updateOverlay(PlaneViewState& state);
     void updateOverlays();

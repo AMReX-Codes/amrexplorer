@@ -570,6 +570,40 @@ int main(int argc, char* argv[])
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
+        && std::string_view(argv[1]) == "--rubber-overzoom-smoke-test") {
+        // Regression for issue #45 (over-zoom after rubber-band): on a dataset
+        // whose full-domain raster is capped at maxSliceOutputDimension, the
+        // cropped re-slice arrives at a finer pixels-per-cell density than the
+        // raster it replaces. Preserving the scene transform then shows the
+        // crop over-zoomed with part of it outside the viewport. Rubber-band
+        // the central half and require the arrived crop to be fully visible.
+        const std::filesystem::path path(argv[2]);
+        // Distinct exit codes so a failure pinpoints its stage: 2 = the load
+        // itself failed, 3 = the initial fitted raster was not fully visible,
+        // 1 = the regression (arrived crop not fully framed).
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                // Sanity: the fitted full-domain raster starts fully visible.
+                if (!window.activeViewShowsWholeImageForTest()) {
+                    application.exit(3);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(
+                            window.activeViewIsZoomedForTest()
+                                && window.activeViewShowsWholeImageForTest()
+                            ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+                window.rubberBandZoomActiveViewForTest();
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--pan-zoom-smoke-test") {
         const std::filesystem::path path(argv[2]);
         auto phase = std::make_shared<int>(0);

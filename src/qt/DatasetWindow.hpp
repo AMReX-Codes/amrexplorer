@@ -61,6 +61,9 @@ signals:
     void cellActivated(const amrvis::RealBox& physicalCell);
     // The Refresh button; the owner rebuilds the request from app state.
     void refreshRequested();
+    // A real (non-cancelled) extraction failure; the owner reports it through
+    // its non-modal background-error channel instead of a blocking dialog.
+    void extractionFailed(const QString& message);
 
 protected:
     void closeEvent(QCloseEvent* event) override;

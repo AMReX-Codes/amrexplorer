@@ -123,6 +123,20 @@ QImage verticallyFlippedCopy(const QImage& image)
 #endif
 }
 
+// The single conversion from a rendered ImageBuffer to the QImage the views
+// display: ARGB32 over the buffer's rgba, mirrored vertically because plane
+// row 0 is the bottom row. Returns a detached copy (verticallyFlippedCopy
+// copies), so it outlives the buffer. Every setImage caller goes through here
+// so the transform has one definition (see showSlice, syncVisibleRanges, and
+// activeViewRasterMatchesDisplayRangeForTest).
+QImage displayImageFor(const ImageBuffer& image)
+{
+    const QImage wrapped(
+        reinterpret_cast<const uchar*>(image.rgba.data()),
+        image.width, image.height, image.strideBytes, QImage::Format_ARGB32);
+    return verticallyFlippedCopy(wrapped);
+}
+
 // Marks the active row in the palette dropdown with a bullet. The bullet lives
 // in a reserved left column that every row's sizeHint accounts for, so names
 // align and the indented text is never clipped. Installed only on the combo's
@@ -1959,6 +1973,64 @@ MainWindow::contourViewProbesForTest()
         probes.push_back(std::move(probe));
     }
     return probes;
+}
+
+void MainWindow::enableVisibleRasterForTest()
+{
+    if (!m_dataset) {
+        return;
+    }
+    {
+        const QSignalBlocker rangeBlocker(m_rangeMode);
+        const auto index = m_rangeMode->findData(
+            static_cast<int>(RangeMode::Visible));
+        if (index >= 0) {
+            m_rangeMode->setCurrentIndex(index);
+        }
+    }
+    m_displayMode = DisplayMode::Raster;
+    scheduleSliceRequest(false);
+}
+
+void MainWindow::zoomActiveViewForTest()
+{
+    if (!m_dataset || m_activeView == nullptr) {
+        return;
+    }
+    const auto bounds = datasetSampleBounds(m_dataset->metadata());
+    auto subregion = bounds;
+    const auto axes = displayAxes(m_activeView->normal);
+    for (std::size_t k = 0; k < 2; ++k) {
+        const auto axis = static_cast<std::size_t>(axes[k]);
+        subregion.lower[axis] = 0.5 * (bounds.lower[axis] + bounds.upper[axis]);
+        subregion.upper[axis] = bounds.upper[axis];
+    }
+    m_activeView->visibleRegion = subregion;
+    scheduleSliceRequest(*m_activeView, true);
+}
+
+bool MainWindow::activeViewRasterMatchesDisplayRangeForTest()
+{
+    if (m_activeView == nullptr) {
+        return false;
+    }
+    const auto& state = *m_activeView;
+    if (state.plane.width <= 0 || state.plane.height <= 0
+        || !state.view->hasImage()) {
+        return false;
+    }
+    const auto reference = renderScalarPlane(state.plane, ScalarRenderSettings{
+        .minimum = state.displayMinimum,
+        .maximum = state.displayMaximum,
+        .logarithmic = state.displayLogarithmic,
+        .palette = &m_palette
+    });
+    if (!reference.valid()) {
+        return false;
+    }
+    // Same buffer->view transform showSlice uses, so this stays in lockstep
+    // with however the raster is actually displayed.
+    return displayImageFor(reference) == state.view->image();
 }
 
 void MainWindow::showNumberFormatDialog()
@@ -4387,12 +4459,26 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                             == result.request.composition) {
                         result.minimum = m_fullDomainRange->first;
                         result.maximum = m_fullDomainRange->second;
-                        // The polylines were extracted from the subregion's
-                        // own range; re-extract them against the reused
-                        // full-domain range so they match the colorbar. In
-                        // 3-D syncVisibleRanges re-extracts again below, but
-                        // in 2-D this is the only place it happens.
-                        recomputeContourPolylines(result);
+                        // executeSlice/refreshCachedSlice produced the raster
+                        // and contours against the subregion's own range;
+                        // realign both to the reused full-domain range so they
+                        // match the colorbar. In 3-D syncVisibleRanges realigns
+                        // every panel below (m_viewDimension == 3), so only 2-D,
+                        // which it skips, needs it here — and doing it only here
+                        // avoids re-rendering each 3-D panel's raster twice.
+                        if (m_viewDimension != 3) {
+                            if (!result.rasterUnchanged) {
+                                result.image = renderScalarPlane(
+                                    result.slice.plane,
+                                    ScalarRenderSettings{
+                                        .minimum = result.minimum,
+                                        .maximum = result.maximum,
+                                        .logarithmic = result.logarithmic,
+                                        .palette = &m_palette
+                                    });
+                            }
+                            recomputeContourPolylines(result);
+                        }
                     }
                     showSlice(state, result);
                     syncVisibleRanges();
@@ -4616,12 +4702,7 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
         if (!display.image.valid()) {
             throw std::runtime_error("renderer produced an invalid image");
         }
-        const QImage wrapped(
-            reinterpret_cast<const uchar*>(display.image.rgba.data()),
-            display.image.width, display.image.height, display.image.strideBytes,
-            QImage::Format_ARGB32);
-        const auto displayImage = verticallyFlippedCopy(wrapped);
-        state.view->setImage(displayImage);
+        state.view->setImage(displayImageFor(display.image));
     }
     state.plane = display.slice.plane;
     state.contourPlane = display.contourPlane;
@@ -4756,11 +4837,7 @@ void MainWindow::syncVisibleRanges()
         if (!image.valid()) {
             continue;
         }
-        const QImage wrapped(
-            reinterpret_cast<const uchar*>(image.rgba.data()),
-            image.width, image.height, image.strideBytes,
-            QImage::Format_ARGB32);
-        state->view->setImage(verticallyFlippedCopy(wrapped));
+        state->view->setImage(displayImageFor(image));
     }
     // setImage clears grid boxes and vector/contour overlays; restore them.
     for (auto* state : views) {

@@ -7,7 +7,7 @@
 #   WORK          directory the materialized copies are written into
 #   MODE          slice | sequence | missing-range | non-finite | raw-fab |
 #                 multifab-fab | quit | quit-on-failure | export-quit |
-#                 contour-sync
+#                 contour-sync | raster-zoom
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -47,6 +47,9 @@ elseif(MODE STREQUAL "non-finite")
 elseif(MODE STREQUAL "contour-sync")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --contour-sync-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "raster-zoom")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --raster-zoom-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "raw-fab")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --raw-fab-smoke-test

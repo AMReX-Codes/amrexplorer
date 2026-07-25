@@ -181,6 +181,24 @@ public:
     };
     [[nodiscard]] std::vector<ContourViewProbe> contourViewProbesForTest();
 
+    // Test-only: select Visible range + Raster display and re-slice the full
+    // domain, so the full-domain range is cached. Pair with zoomActiveViewForTest
+    // to drive the 2-D range-reuse raster path. interactiveSlicesSettled fires
+    // when the re-slice completes.
+    void enableVisibleRasterForTest();
+
+    // Test-only: zoom the active view to the upper-value quadrant — a strict
+    // subregion whose local range differs from the full domain — and re-slice.
+    // With Visible mode active and the full-domain range cached, this exercises
+    // the reuse path that must re-render the raster to match the color bar.
+    void zoomActiveViewForTest();
+
+    // Test-only: true when the active view's displayed raster is byte-identical
+    // to its plane re-rendered against the current display (color-bar) range —
+    // i.e. the raster and color bar agree. See
+    // raster-colorbar-mismatch-on-2d-visible-zoom.
+    [[nodiscard]] bool activeViewRasterMatchesDisplayRangeForTest();
+
 signals:
     void datasetOpenFinished(bool success);
     void initialSliceFinished(bool success);

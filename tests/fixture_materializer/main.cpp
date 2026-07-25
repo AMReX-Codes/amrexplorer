@@ -251,7 +251,7 @@ void writeParticles(const std::filesystem::path& root, int dimension)
     require(static_cast<bool>(data),
         "could not write the fixture particle data");
 }
- 
+
 void writeHeaderWithoutStatistics(const std::filesystem::path& path,
     const std::vector<BlockRecord>& blocks, int fieldCount)
 {

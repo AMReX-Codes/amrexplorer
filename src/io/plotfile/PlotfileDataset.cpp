@@ -122,7 +122,10 @@ PlotfileDataset::BlockAccess PlotfileDataset::requestBlock(
     if (cancellation.stop_requested()) {
         throw ReadCancelled();
     }
-    if (auto cached = m_cache.findAndPin(key)) {
+    // The logical lookup's miss was already recorded by the findAndPin above;
+    // this second, in-lock check only catches a block a racing thread inserted
+    // while we waited for the IO lock, so it must not count again.
+    if (auto cached = m_cache.peekAndPin(key)) {
         return {std::move(cached), true, {}};
     }
 

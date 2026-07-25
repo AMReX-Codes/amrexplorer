@@ -1152,10 +1152,14 @@ MainWindow::MainWindow(QWidget* parent)
         tr("Zoom scale and rubber-band synchronization for panels"));
     m_scaleButton->setFocusPolicy(Qt::NoFocus);
     auto* scaleMenu = new QMenu(m_scaleButton);
-    auto* fitAction = scaleMenu->addAction(tr("Fit"));
-    connect(fitAction, &QAction::triggered, this, [this] {
+    // "Reset Zoom" restores the whole domain and refits (issue #45 renamed it
+    // from "Fit", which read as fit-the-current-region). The button label
+    // stays "Fit" as the *scale state*: auto-fit also holds for a panned
+    // crop (applyPanStep), where the region is not the whole domain.
+    auto* resetZoomAction = scaleMenu->addAction(tr("Reset Zoom"));
+    connect(resetZoomAction, &QAction::triggered, this, [this] {
         m_scaleButton->setText(tr("Fit"));
-        fitViewToWindow();
+        resetZoomAllViews();
     });
     constexpr std::array<int, 6> scaleFactors{1, 2, 4, 8, 16, 32};
     for (const auto factor : scaleFactors) {
@@ -1435,7 +1439,7 @@ void MainWindow::wireView(PlaneViewState& state)
             sliceMoveRequested(state, x, y, button);
         });
     connect(view, &ImageView::fitRequested, this,
-        [this, &state] { fitView(state); });
+        [this, &state] { resetViewZoom(state); });
 }
 
 std::vector<MainWindow::PlaneViewState*> MainWindow::currentViews()
@@ -1565,14 +1569,14 @@ void MainWindow::createMenus()
 
     m_scaleGroup = new QActionGroup(this);
     auto* scaleMenu = new QMenu(tr("&Scale"), this);
-    m_fitScaleAction = new QAction(tr("&Fit to Window"), scaleMenu);
-    m_fitScaleAction->setCheckable(true);
-    m_fitScaleAction->setActionGroup(m_scaleGroup);
-    m_fitScaleAction->setChecked(true);
-    m_fitScaleAction->setShortcut(QKeySequence(Qt::Key_0));
-    connect(m_fitScaleAction, &QAction::triggered,
-        this, [this] { fitViewToWindow(); });
-    scaleMenu->addAction(m_fitScaleAction);
+    m_resetZoomAction = new QAction(tr("&Reset Zoom"), scaleMenu);
+    m_resetZoomAction->setCheckable(true);
+    m_resetZoomAction->setActionGroup(m_scaleGroup);
+    m_resetZoomAction->setChecked(true);
+    m_resetZoomAction->setShortcut(QKeySequence(Qt::Key_0));
+    connect(m_resetZoomAction, &QAction::triggered,
+        this, [this] { resetZoomAllViews(); });
+    scaleMenu->addAction(m_resetZoomAction);
     constexpr std::array<int, 6> fixedScales{1, 2, 4, 8, 16, 32};
     for (std::size_t index = 0; index < fixedScales.size(); ++index) {
         const auto factor = fixedScales[index];
@@ -2393,9 +2397,9 @@ void MainWindow::showKeyboardMouseReference()
     add(tr("Right click (3-D)"),
         tr("Move both slice planes to intersect at the clicked point"));
     add(tr("Wheel / double click"),
-        tr("Zoom this panel in or out / refit to the window"));
+        tr("Zoom this panel in or out / reset the zoom"));
     add(tr("B"), tr("Toggle AMR grid boxes"));
-    add(tr("0"), tr("Fit to the window"));
+    add(tr("0"), tr("Reset the zoom to the whole domain"));
     add(tr("1-6"), tr("Fixed zoom scales (1x-32x)"));
     add(tr("Ctrl+0"), tr("Composite the finest available level"));
     add(tr("Ctrl+1-9"), tr("Composite levels 0 through N (Levs 0-N)"));
@@ -2433,21 +2437,21 @@ void MainWindow::showAboutDialog()
             .arg(QStringLiteral(AMREXPLORER_VERSION)));
 }
 
-void MainWindow::fitView(PlaneViewState& state)
+void MainWindow::resetViewZoom(PlaneViewState& state)
 {
     state.visibleRegion.reset();
     state.view->fitToWindow();
-    m_fitScaleAction->setChecked(true);
+    m_resetZoomAction->setChecked(true);
     if (m_scaleButton != nullptr) {
         m_scaleButton->setText(tr("Fit"));
     }
     scheduleSliceRequest(state);
 }
 
-void MainWindow::fitViewToWindow()
+void MainWindow::resetZoomAllViews()
 {
     for (auto* state : currentViews()) {
-        fitView(*state);
+        resetViewZoom(*state);
     }
 }
 
@@ -2798,7 +2802,7 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
         }
         state.visibleRegion = *region;
         state.view->fitToWindow();
-        m_fitScaleAction->setChecked(true);
+        m_resetZoomAction->setChecked(true);
         if (m_scaleButton != nullptr) {
             m_scaleButton->setText(tr("Fit"));
         }

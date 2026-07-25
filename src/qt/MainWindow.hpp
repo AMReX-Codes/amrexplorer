@@ -412,8 +412,12 @@ private:
         Qt::MouseButton button);
     void sliceMoveRequested(PlaneViewState& state, int imageX, int imageY,
         Qt::MouseButton button);
-    void fitView(PlaneViewState& state);
-    void fitViewToWindow();
+    // Reset a view (or all views) to the whole domain and refit: the Scale
+    // menu's "Reset Zoom", the 0 shortcut, and double-click all land here.
+    // Distinct from ImageView::fitToWindow, which only refits the current
+    // raster without touching the visible region.
+    void resetViewZoom(PlaneViewState& state);
+    void resetZoomAllViews();
     // When a Preserve-policy raster arrives with a different pixels-per-data
     // density than the plane it replaces (a zoomed re-slice on a dataset whose
     // full-domain raster hit the output cap), returns the currently visible
@@ -562,7 +566,7 @@ private:
     QActionGroup* m_paletteGroup = nullptr;
     QAction* m_boxesAction = nullptr;
     QAction* m_slicePlanesAction = nullptr;
-    QAction* m_fitScaleAction = nullptr;
+    QAction* m_resetZoomAction = nullptr;
     QAction* m_syncRubberBandZoomAction = nullptr;
     QAction* m_contoursAction = nullptr;
     QAction* m_datasetAction = nullptr;

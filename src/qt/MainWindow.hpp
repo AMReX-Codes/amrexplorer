@@ -383,7 +383,12 @@ private:
     void setSlicePosition(int axis, double value);
     [[nodiscard]] int sliceIndexLevel() const;
     // Visible-range mode in 3-D: recompute the min/max from all three panels'
-    // planes so the single color bar maps them consistently.
+    // planes so the single color bar maps them consistently. The heavy part
+    // (extrema scans, contour re-extraction, up to three full raster renders)
+    // runs on a worker over the panels' immutable plane snapshots;
+    // completions apply per panel only while its snapshot is still the
+    // displayed one (pointer identity). Coalesced single-flight: a call while
+    // a sync worker is in flight marks a rerun instead of stacking workers.
     void syncVisibleRanges();
 
     // Slice requests: the debounce timer coalesces into per-view requests.
@@ -478,6 +483,14 @@ private:
     // color bar stays stable) plus the shared-range and transform-policy
     // decisions the slice paths share. See pipeline/DisplayCoordinator.hpp.
     amrvis::DisplayCoordinator m_displayCoordinator;
+    // Single-flight state of the async 3-D shared-range sync: one worker at a
+    // time; a request while one is in flight coalesces into a rerun. The
+    // pending range-store key carries the "cache the full-domain union after
+    // the sync" step (see the slice-arrival completion) into the sync
+    // completion, where the union is actually known.
+    bool m_visibleSyncInFlight = false;
+    bool m_visibleSyncRerun = false;
+    std::optional<amrvis::DisplayCoordinator::RangeKey> m_pendingRangeStore;
     QTreeWidget* m_metadataTree = nullptr;
     QPlainTextEdit* m_diagnostics = nullptr;
     QDockWidget* m_metadataDock = nullptr;

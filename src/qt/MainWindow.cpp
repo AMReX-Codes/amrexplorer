@@ -3907,8 +3907,10 @@ void MainWindow::setSlicePosition(int axis, double value)
     }
     m_isoWidget->setSlicePositions(m_slicePosition3d[0], m_slicePosition3d[1],
         m_slicePosition3d[2]);
-    // The cached full-domain Visible range is now stale.
+    // The cached full-domain Visible range is now stale — and so is any
+    // pending deferred store, whose union was computed from pre-move planes.
     m_displayCoordinator.invalidateRangeCache();
+    m_pendingRangeStore.reset();
     // The other two views only need their crosshair guides redrawn; the view
     // normal to the moved axis gets a fresh (debounced) slice.
     updateCrosshairs();
@@ -4122,12 +4124,18 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     }
                     showSlice(state, result);
                     syncVisibleRanges();
-                    // Refresh the cache after syncVisibleRanges so the 3-D
-                    // union across all panels is captured.
+                    // Cache the full-domain range. In 3-D the store defers to
+                    // the (async) shared-range sync's completion so the union
+                    // across all panels is captured; 2-D has no later sync
+                    // and stores the panel's own range immediately.
                     if (isFullDomain && rangeMode == RangeMode::Visible
                         && state.plane->width > 0) {
-                        m_displayCoordinator.storeFullDomainRange(rangeKey,
-                            {state.displayMinimum, state.displayMaximum});
+                        if (m_viewDimension == 3) {
+                            m_pendingRangeStore = rangeKey;
+                        } else {
+                            m_displayCoordinator.storeFullDomainRange(rangeKey,
+                                {state.displayMinimum, state.displayMaximum});
+                        }
                     }
                     const auto cache = dataset->cacheMetrics();
                     m_cacheBudgetBytes = cache.budgetBytes;
@@ -4489,69 +4497,159 @@ void MainWindow::syncVisibleRanges()
     if (rangeMode != RangeMode::Visible) {
         return;
     }
-    std::array<PlaneViewState*, 3> views{
-        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
-    const bool logarithmic = m_logarithmic->isChecked();
+    if (m_visibleSyncInFlight) {
+        // Coalesce: rerun with fresh state once the in-flight worker lands
+        // instead of stacking a worker per arrival.
+        m_visibleSyncRerun = true;
+        return;
+    }
 
     // The coordinator resolves the shared range (the cached full-domain
     // range when current, so the color bar stays stable during zoom and pan;
     // else the union of the panels' finite extrema) and produces every
-    // panel's raster and contours realigned to it. This method only blits
-    // the updates into the views.
+    // panel's raster and contours realigned to it. Only the cheap cached-
+    // range lookup runs here — the coordinator stays confined to the GUI
+    // thread; the heavy half (extrema scans, contour re-extraction, up to
+    // three 16 Mpx renders, and the QImage flips) runs on a worker over the
+    // panels' immutable plane snapshots.
     const FieldId currentField{m_fieldSelector->currentData().toUInt()};
     const auto rawLevel = m_levelSelector->currentData().toInt();
     const auto [composition, maximumLevel] = decodeLevelData(
         rawLevel, m_dataset->metadata().finestLevel);
-    std::array<DisplayCoordinator::PanelSyncInput, 3> inputs;
+    const auto cachedRange = m_displayCoordinator.cachedFullDomainRange(
+        {m_dataset->id(), currentField, maximumLevel, composition});
+
+    struct PanelSnapshot {
+        std::shared_ptr<const ScalarPlane> plane;
+        std::shared_ptr<const ScalarPlane> contourFinePlane;
+        int contourFineFactor = 1;
+        bool logarithmic = false;
+        std::array<int, 2> outputSize{0, 0};
+    };
+    std::array<PlaneViewState*, 3> views{
+        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+    std::array<PanelSnapshot, 3> snapshots;
     for (std::size_t index = 0; index < views.size(); ++index) {
         const auto* state = views[index];
-        inputs[index] = {state->plane.get(), state->contourFinePlane.get(),
+        snapshots[index] = {state->plane, state->contourFinePlane,
             state->contourFineFactor, state->displayLogarithmic,
             state->cachedRequest.outputSize};
     }
-    auto sync = m_displayCoordinator.syncPanelsToSharedRange(
-        {m_dataset->id(), currentField, maximumLevel, composition}, inputs,
-        logarithmic, isContourMode(m_displayMode), m_contourCount, m_palette);
-    if (!sync) {
-        return;
-    }
-    const auto [globalMin, globalMax] = sync->range;
-    for (std::size_t index = 0; index < views.size(); ++index) {
-        auto* state = views[index];
-        auto& update = sync->panels[index];
-        if (!update.applies) {
-            continue;
+
+    struct SyncOutcome {
+        std::optional<DisplayCoordinator::SharedRangeSync> sync;
+        std::array<QImage, 3> images;   // display-ready (flipped) rasters
+    };
+
+    m_visibleSyncInFlight = true;
+    // The sync participates in the interactive batch: the settled signal
+    // (which the smoke tests use to read synchronized state) must not fire
+    // until its results are applied.
+    ++m_activeRequests;
+    const auto generation = m_generation;
+    auto* watcher = new QFutureWatcher<SyncOutcome>(this);
+    connect(watcher, &QFutureWatcher<SyncOutcome>::finished, this,
+        [this, watcher, generation, snapshots, views] {
+            m_visibleSyncInFlight = false;
+            --m_activeRequests;
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
+            }
+            auto outcome = watcher->result();
+            const auto nowMode = static_cast<RangeMode>(
+                m_rangeMode->currentData().toInt());
+            const bool current = generation == m_generation
+                && m_viewDimension == 3 && m_dataset
+                && nowMode == RangeMode::Visible;
+            if (current && outcome.sync) {
+                const auto [globalMin, globalMax] = outcome.sync->range;
+                bool activeApplied = false;
+                for (std::size_t index = 0; index < views.size(); ++index) {
+                    auto* state = views[index];
+                    auto& update = outcome.sync->panels[index];
+                    // Apply only while the snapshot this update was computed
+                    // from is still the displayed plane (pointer identity);
+                    // a superseded panel's own arrival re-syncs.
+                    if (!update.applies
+                        || state->plane != snapshots[index].plane) {
+                        continue;
+                    }
+                    state->displayMinimum = globalMin;
+                    state->displayMaximum = globalMax;
+                    if (update.contoursRecomputed) {
+                        state->contourPolylines
+                            = std::move(update.contourPolylines);
+                    }
+                    if (!outcome.images[index].isNull()) {
+                        state->view->setImage(outcome.images[index]);
+                        // setImage clears the scene overlays; restore them.
+                        updateGridBoxes(*state);
+                        updateOverlay(*state);
+                        updateParticleOverlay(*state);
+                    }
+                    activeApplied = activeApplied || state == m_activeView;
+                }
+                if (activeApplied && m_activeView->plane->width > 0) {
+                    const auto fieldName = m_fieldSelector->currentText();
+                    const auto label = m_activeView->displayLogarithmic
+                        ? fieldName + tr(" (log)") : fieldName;
+                    m_colorBar->setLogarithmic(
+                        m_activeView->displayLogarithmic);
+                    m_colorBar->setFieldRange(label, globalMin, globalMax);
+                    const QSignalBlocker minBlocker(m_rangeMinimum);
+                    const QSignalBlocker maxBlocker(m_rangeMaximum);
+                    m_rangeMinimum->setValue(globalMin);
+                    m_rangeMaximum->setValue(globalMax);
+                }
+                // The deferred full-domain range store (see the slice-arrival
+                // completion): the union is only known here. When a rerun is
+                // queued the union is about to be recomputed with newer
+                // planes — leave the store for the rerun's completion.
+                if (m_pendingRangeStore && !m_visibleSyncRerun) {
+                    m_displayCoordinator.storeFullDomainRange(
+                        *m_pendingRangeStore, outcome.sync->range);
+                    m_pendingRangeStore.reset();
+                }
+            } else if (generation != m_generation) {
+                m_pendingRangeStore.reset();
+                m_visibleSyncRerun = false;
+            }
+            updateDiagnostics();
+            watcher->deleteLater();
+            if (m_visibleSyncRerun) {
+                m_visibleSyncRerun = false;
+                syncVisibleRanges();
+            }
+            if (m_activeRequests == 0) {
+                emit interactiveSlicesSettled();
+            }
+        });
+    watcher->setFuture(QtConcurrent::run([cachedRange, snapshots,
+        logarithmic = m_logarithmic->isChecked(),
+        contourMode = isContourMode(m_displayMode),
+        contourCount = m_contourCount, palette = m_palette] {
+        std::array<DisplayCoordinator::PanelSyncInput, 3> inputs;
+        for (std::size_t index = 0; index < snapshots.size(); ++index) {
+            const auto& snapshot = snapshots[index];
+            inputs[index] = {snapshot.plane.get(),
+                snapshot.contourFinePlane.get(), snapshot.contourFineFactor,
+                snapshot.logarithmic, snapshot.outputSize};
         }
-        state->displayMinimum = globalMin;
-        state->displayMaximum = globalMax;
-        if (update.contoursRecomputed) {
-            state->contourPolylines = std::move(update.contourPolylines);
+        SyncOutcome outcome;
+        outcome.sync = DisplayCoordinator::renderPanelsToSharedRange(
+            cachedRange, inputs, logarithmic, contourMode, contourCount,
+            palette);
+        if (outcome.sync) {
+            for (std::size_t index = 0; index < inputs.size(); ++index) {
+                const auto& image = outcome.sync->panels[index].image;
+                if (image.valid() && image.width > 0) {
+                    outcome.images[index] = displayImageFor(image);
+                }
+            }
         }
-        if (update.image.valid()) {
-            state->view->setImage(displayImageFor(update.image));
-        }
-    }
-    // setImage clears every scene overlay; restore them from viewer state.
-    for (auto* state : views) {
-        if (state->plane->width > 0 && state->plane->height > 0) {
-            updateGridBoxes(*state);
-            updateOverlay(*state);
-            updateParticleOverlay(*state);
-        }
-    }
-    if (m_activeView && m_activeView->plane->width > 0) {
-        const auto fieldName = m_fieldSelector->currentText();
-        const auto label = m_activeView->displayLogarithmic
-            ? fieldName + tr(" (log)") : fieldName;
-        m_colorBar->setLogarithmic(m_activeView->displayLogarithmic);
-        m_colorBar->setFieldRange(label, globalMin, globalMax);
-        if (rangeMode != RangeMode::User) {
-            const QSignalBlocker minBlocker(m_rangeMinimum);
-            const QSignalBlocker maxBlocker(m_rangeMaximum);
-            m_rangeMinimum->setValue(globalMin);
-            m_rangeMaximum->setValue(globalMax);
-        }
-    }
+        return outcome;
+    }));
 }
 
 void MainWindow::choosePlotfileSequence()
@@ -4821,6 +4919,7 @@ void MainWindow::resetRangeState()
     m_fieldRanges.clear();
     m_trackedField = 0;
     m_displayCoordinator.invalidateRangeCache();
+    m_pendingRangeStore.reset();
     const QSignalBlocker modeBlocker(m_rangeMode);
     const QSignalBlocker minBlocker(m_rangeMinimum);
     const QSignalBlocker maxBlocker(m_rangeMaximum);

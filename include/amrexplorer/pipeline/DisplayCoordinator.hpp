@@ -110,6 +110,19 @@ public:
         bool logarithmic, bool contourMode, int contourCount,
         const Palette& palette) const;
 
+    // The pure, coordinator-state-free half of syncPanelsToSharedRange: takes
+    // the already-resolved cached range (or nullopt to fall back to the
+    // panels' finite-extrema union) and does the heavy work — extrema scans,
+    // contour re-extraction, and up to one full raster render per panel.
+    // Static so the GUI can run it on a worker thread over immutable plane
+    // snapshots while the coordinator itself stays confined to the GUI
+    // thread (see heavy-work-on-gui-thread, part D).
+    [[nodiscard]] static std::optional<SharedRangeSync>
+    renderPanelsToSharedRange(
+        std::optional<std::pair<double, double>> sharedRange,
+        std::span<const PanelSyncInput> panels, bool logarithmic,
+        bool contourMode, int contourCount, const Palette& palette);
+
     // True when the two planes map pixels to physical units at different
     // densities on the given in-plane axes — the condition under which
     // preserving a scene transform would misframe the replacement raster

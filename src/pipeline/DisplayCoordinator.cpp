@@ -117,7 +117,17 @@ DisplayCoordinator::syncPanelsToSharedRange(
     bool logarithmic, bool contourMode, int contourCount,
     const Palette& palette) const
 {
-    auto shared = cachedFullDomainRange(key);
+    return renderPanelsToSharedRange(cachedFullDomainRange(key), panels,
+        logarithmic, contourMode, contourCount, palette);
+}
+
+std::optional<DisplayCoordinator::SharedRangeSync>
+DisplayCoordinator::renderPanelsToSharedRange(
+    std::optional<std::pair<double, double>> sharedRange,
+    std::span<const PanelSyncInput> panels, bool logarithmic,
+    bool contourMode, int contourCount, const Palette& palette)
+{
+    auto shared = std::move(sharedRange);
     if (!shared) {
         std::vector<const ScalarPlane*> planes;
         planes.reserve(panels.size());

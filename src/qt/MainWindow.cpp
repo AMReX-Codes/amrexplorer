@@ -2884,7 +2884,22 @@ void MainWindow::chooseDataset()
     if (directory.isEmpty()) {
         return;
     }
-    openDataset(directory.toStdString());
+    // Directory pickers descend into a plotfile on double-click instead of
+    // selecting it, so the choice easily lands on an inner directory
+    // (Level_1, a particle species, ...). Such a selection resolves up to
+    // the enclosing plotfile rather than failing on the subdirectory.
+    auto path = std::filesystem::path(directory.toStdString());
+    for (auto candidate = path; !candidate.empty();
+        candidate = candidate.parent_path()) {
+        if (isAmrexPlotfile(candidate)) {
+            path = candidate;
+            break;
+        }
+        if (candidate.parent_path() == candidate) {
+            break;
+        }
+    }
+    openDataset(path);
 }
 
 void MainWindow::chooseStandaloneDataset(const QString& caption, bool rawFab)

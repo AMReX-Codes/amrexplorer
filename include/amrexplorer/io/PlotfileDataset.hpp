@@ -54,11 +54,17 @@ private:
     BlockCache m_cache;
     // Serializes this dataset's block reads so concurrent misses of the same
     // block read it once (see the double-checked lookup in requestBlock).
-    // Per-dataset, not global: unrelated datasets read in parallel. A timed
-    // mutex lets a waiter poll its StopToken instead of blocking a whole block
-    // read long. (This makes PlotfileDataset non-movable, which is fine — it
-    // is only ever a stack local or held via shared_ptr.)
-    std::timed_mutex m_ioMutex;
+    // Per-dataset, not global: unrelated datasets read in parallel. Acquired
+    // with a try_lock/sleep poll loop so a waiter can observe its StopToken
+    // instead of blocking a whole block read long. A plain mutex, not
+    // std::timed_mutex: libstdc++ implements try_lock_for via
+    // pthread_mutex_clocklock, which older ThreadSanitizer runtimes (e.g.
+    // GCC 13 on ubuntu-24.04 CI) do not intercept — TSan then misses the
+    // lock and reports the destructor's unlock as "unlock of an unlocked
+    // mutex". try_lock is intercepted everywhere. (The mutex member makes
+    // PlotfileDataset non-movable, which is fine — it is only ever a stack
+    // local or held via shared_ptr.)
+    std::mutex m_ioMutex;
 };
 
 } // namespace amrvis

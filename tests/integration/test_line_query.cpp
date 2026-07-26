@@ -185,6 +185,23 @@ void test2d(const std::filesystem::path& source, const std::filesystem::path& wo
         "repeated line query did not reuse all three blocks");
     require(cached.metrics.payloadBytesRead == 0, "cached line query performed payload I/O");
 
+    // A strict subregion along the line axis clips the line to the cells whose
+    // centers fall inside it: region x in [0.25, 0.75] keeps only the four
+    // fine-level samples, dropping the coarse end cells at 0.125 and 0.875.
+    {
+        auto clipped = request;
+        clipped.region = amrvis::RealBox{{{0.25, 0.0, 0.0}}, {{0.75, 1.0, 0.0}}};
+        const auto sub = lines.execute(clipped);
+        require(sub.line.positions.size() == 4,
+            "a subregion line did not clip to the region's four fine cells");
+        for (std::size_t i = 0; i < sub.line.positions.size(); ++i) {
+            require(sub.line.positions[i] > 0.25 && sub.line.positions[i] < 0.75,
+                "a subregion line sample fell outside the region");
+            require(sub.line.valid[i] == 1 && sub.line.sourceLevel[i] == 1,
+                "a subregion line sample is not the expected fine-level coverage");
+        }
+    }
+
     // Cross-check against a slice whose single pixel row covers the same cells.
     // The slice composites on a uniform 8-pixel grid, so each native line
     // sample must agree with the slice cell that contains its position.

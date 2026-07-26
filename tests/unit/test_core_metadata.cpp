@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -21,6 +22,21 @@ bool hasIssue(const std::vector<amrvis::MetadataIssue>& issues,
 {
     for (const auto& issue : issues) {
         if (issue.path.rfind(pathPrefix, 0) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Exact-path variant for the negative-path battery: a perturbation may
+// cascade a second, derived issue (e.g. an out-of-domain box once its level
+// domain is corrupted), so matching the precise path keeps each case pinned
+// to the check it targets rather than to a prefix a neighbour also shares.
+bool hasExactIssue(const std::vector<amrvis::MetadataIssue>& issues,
+    const char* path)
+{
+    for (const auto& issue : issues) {
+        if (issue.path == path) {
             return true;
         }
     }
@@ -149,6 +165,138 @@ int main()
         bad.levels.push_back(std::move(badLevel));
         require(hasIssue(amrvis::validateMetadata(bad), "levels[0].blocks"),
             "a blocks/boxes size mismatch was not reported");
+    }
+
+    // Negative-path battery: a known-good baseline perturbed one way per case.
+    // Every check in validateMetadata that lacked a negative test above is
+    // exercised here. The baseline must validate clean first, or the cases
+    // below prove nothing.
+    auto makeValid = [] {
+        amrvis::DatasetMetadata m;
+        m.dimension = 2;
+        m.finestLevel = 0;
+        m.physicalDomain = {{{0.0, 0.0, 0.0}}, {{1.0, 1.0, 0.0}}};
+        m.fields.push_back({"density", amrvis::Centering::Cell, {"density"}});
+        amrvis::LevelMetadata baseLevel;
+        baseLevel.level = 0;
+        baseLevel.domain = {{{0, 0, 0}}, {{3, 3, 0}}, {{0, 0, 0}}};
+        baseLevel.cellSize = {{0.25, 0.25, 1.0}};
+        baseLevel.storedComponents = 1;
+        baseLevel.boxes.push_back(baseLevel.domain);
+        baseLevel.blocks.push_back({baseLevel.domain, "Cell_D_00000", 0,
+            amrvis::BlockStatistics{{-2.0}, {7.0}}});
+        baseLevel.dataPath = "Level_0/Cell";
+        m.levels.push_back(std::move(baseLevel));
+        return m;
+    };
+    require(amrvis::validateMetadata(makeValid()).empty(),
+        "the negative-path baseline was itself rejected");
+
+    {
+        auto m = makeValid();
+        m.finestLevel = -1;
+        require(hasExactIssue(amrvis::validateMetadata(m), "finestLevel"),
+            "a negative finestLevel was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.physicalDomain.upper[0] = 0.0;  // zero extent in x
+        require(hasExactIssue(amrvis::validateMetadata(m), "physicalDomain"),
+            "a degenerate physical domain was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.finestLevel = 1;  // now expects two levels, only one present
+        require(hasExactIssue(amrvis::validateMetadata(m), "levels"),
+            "a levels-size mismatch was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.fields[0].name.clear();
+        require(hasExactIssue(amrvis::validateMetadata(m), "fields[0].name"),
+            "an empty field name was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.fields[0].componentNames = {"a", "b"};
+        require(hasExactIssue(
+                    amrvis::validateMetadata(m), "fields[0].componentNames"),
+            "a multi-entry componentNames was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.levels[0].level = 5;  // disagrees with its position
+        require(hasExactIssue(amrvis::validateMetadata(m), "levels[0].level"),
+            "a level index/position mismatch was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.levels[0].domain.lower[0] = 5;  // lower > upper
+        require(hasExactIssue(amrvis::validateMetadata(m), "levels[0].domain"),
+            "an invalid level domain was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.levels[0].domain.centering[0] = 2;  // neither cell (0) nor node (1)
+        require(hasExactIssue(
+                    amrvis::validateMetadata(m), "levels[0].domain.centering"),
+            "an invalid domain index type was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.levels[0].cellSize[0] = 0.0;
+        require(hasExactIssue(amrvis::validateMetadata(m), "levels[0].cellSize"),
+            "a non-positive cell size was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.levels[0].indexOrigin[0] = std::numeric_limits<double>::quiet_NaN();
+        require(hasExactIssue(amrvis::validateMetadata(m), "levels[0].indexOrigin"),
+            "a non-finite index origin was not reported");
+    }
+    {
+        auto m = makeValid();
+        // Keep the block box in step so only the box itself is faulted.
+        m.levels[0].boxes[0].lower[0] = 5;  // lower > upper
+        m.levels[0].blocks[0].box = m.levels[0].boxes[0];
+        require(hasExactIssue(amrvis::validateMetadata(m), "levels[0].boxes[0]"),
+            "an invalid level box was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.levels[0].boxes[0].upper[0] = 5;  // reaches outside the domain (0..3)
+        m.levels[0].blocks[0].box = m.levels[0].boxes[0];
+        require(hasExactIssue(amrvis::validateMetadata(m), "levels[0].boxes[0]"),
+            "a box reaching outside the level domain was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.levels[0].boxes[0].centering[0] = 1;  // domain is cell-centered (0)
+        m.levels[0].blocks[0].box = m.levels[0].boxes[0];
+        require(hasExactIssue(
+                    amrvis::validateMetadata(m), "levels[0].boxes[0].centering"),
+            "a box/domain centering mismatch was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.levels[0].blocks[0].box.upper[0] = 2;  // no longer equals boxes[0]
+        require(hasExactIssue(
+                    amrvis::validateMetadata(m), "levels[0].blocks[0].box"),
+            "a block box disagreeing with its level box was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.levels[0].blocks[0].filePath.clear();
+        require(hasExactIssue(
+                    amrvis::validateMetadata(m), "levels[0].blocks[0].filePath"),
+            "an empty block file path was not reported");
+    }
+    {
+        auto m = makeValid();
+        m.levels[0].blocks[0].statistics->minimum = {0.0, 1.0};  // 2 != 1 stored
+        require(hasExactIssue(
+                    amrvis::validateMetadata(m), "levels[0].blocks[0].statistics"),
+            "a statistics component-count mismatch was not reported");
     }
 
     return 0;

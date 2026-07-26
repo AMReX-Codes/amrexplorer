@@ -403,17 +403,27 @@ MainWindow::MainWindow(QWidget* parent)
             });
     }
     sliceToolbar->addWidget(m_slicePositionControls);
-    m_slicePositionControls->setVisible(false);
+    // Separator between the Position group and Scale. It tracks the Position
+    // group's visibility (see setSlicePositionControlsVisible) so it does not
+    // dangle beside the Level separator when no dataset is loaded.
+    m_positionSeparator = sliceToolbar->addSeparator();
+    setSlicePositionControlsVisible(false);
 
+    // A static "Scale:" label plus a state button, matching the Field:/Level:/
+    // Range: label-and-widget pairs elsewhere on this toolbar (and the
+    // View -> Scale menu name).
+    sliceToolbar->addWidget(new QLabel(tr("Scale:"), sliceToolbar));
     m_scaleButton = new QPushButton(tr("Fit"), sliceToolbar);
     m_scaleButton->setToolTip(
         tr("Zoom scale and rubber-band synchronization for panels"));
     m_scaleButton->setFocusPolicy(Qt::NoFocus);
     auto* scaleMenu = new QMenu(m_scaleButton);
-    // "Reset Zoom" restores the whole domain and refits (issue #45 renamed it
-    // from "Fit", which read as fit-the-current-region). The button label
-    // stays "Fit" as the *scale state*: auto-fit also holds for a panned
-    // crop (applyPanStep), where the region is not the whole domain.
+    // The clicked item stays "Reset Zoom" (the action verb): it restores the
+    // whole domain and refits (issue #45 renamed it from "Fit", which read as
+    // fit-the-current-region). The button shows just the *scale state* ("Fit"
+    // for auto-fit, which also holds for a panned crop in applyPanStep where
+    // the region is not the whole domain); the adjacent "Scale:" label names
+    // the control.
     auto* resetZoomAction = scaleMenu->addAction(tr("Reset Zoom"));
     connect(resetZoomAction, &QAction::triggered, this, [this] {
         m_scaleButton->setText(tr("Fit"));
@@ -470,12 +480,13 @@ MainWindow::MainWindow(QWidget* parent)
     m_rangeMinimum->setPrefix(tr("min "));
     m_rangeMaximum->setPrefix(tr("max "));
     m_rangeMaximum->setValue(1.0);
+    // Separate the Range group (mode + min/max) from Log and Palette, matching
+    // the per-group separators on the Slice Controls toolbar.
+    rangeToolbar->addSeparator();
     m_logarithmic = new QCheckBox(tr("Log"), rangeToolbar);
     m_logarithmic->setLayoutDirection(Qt::RightToLeft);
     rangeToolbar->addWidget(m_logarithmic);
-    auto* paletteSpacer = new QWidget(rangeToolbar);
-    paletteSpacer->setFixedWidth(12);
-    rangeToolbar->addWidget(paletteSpacer);
+    rangeToolbar->addSeparator();
     rangeToolbar->addWidget(new QLabel(tr("Palette:"), rangeToolbar));
     m_paletteSelector = new QComboBox(rangeToolbar);
     const QFontMetrics paletteFm(m_paletteSelector->font());
@@ -3496,7 +3507,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_slicePlanesAction->setEnabled(false);
     m_rangeMinimum->setEnabled(false);
     m_rangeMaximum->setEnabled(false);
-    m_slicePositionControls->setVisible(false);
+    setSlicePositionControlsVisible(false);
     m_animationPanel->setSweepVisible(false);
     m_levelMenu->setEnabled(false);
     m_contoursAction->setEnabled(false);
@@ -3860,13 +3871,21 @@ void MainWindow::configureSliceControls()
     ensureVectorFieldDefaults();
 }
 
+void MainWindow::setSlicePositionControlsVisible(bool visible)
+{
+    m_slicePositionControls->setVisible(visible);
+    if (m_positionSeparator != nullptr) {
+        m_positionSeparator->setVisible(visible);
+    }
+}
+
 void MainWindow::configureSlicePositionControls()
 {
     if (!m_dataset) {
-        m_slicePositionControls->setVisible(false);
+        setSlicePositionControlsVisible(false);
         return;
     }
-    m_slicePositionControls->setVisible(true);
+    setSlicePositionControlsVisible(true);
     const auto& md = m_dataset->metadata();
 
     if (md.dimension != 3) {

@@ -380,6 +380,9 @@ private:
 
     // Shared 3-D slice positions (physical coordinates per axis).
     void configureSlicePositionControls();
+    // Show or hide the Position group together with its trailing toolbar
+    // separator, so the separator never dangles when no dataset is loaded.
+    void setSlicePositionControlsVisible(bool visible);
     void setSlicePosition(int axis, double value);
     [[nodiscard]] int sliceIndexLevel() const;
     // Visible-range mode in 3-D: recompute the min/max from all three panels'
@@ -468,6 +471,7 @@ private:
     std::unordered_map<std::uint32_t, FieldRange> m_fieldRanges;
     std::uint32_t m_trackedField = 0;
     QWidget* m_slicePositionControls = nullptr;
+    QAction* m_positionSeparator = nullptr;
     std::array<QSpinBox*, 3> m_sliceSpinboxes{nullptr, nullptr, nullptr};
     QTimer* m_sliceDebounce = nullptr;
     QTimer* m_panDebounce = nullptr;

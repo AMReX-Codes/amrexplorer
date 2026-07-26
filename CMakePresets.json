@@ -15,7 +15,6 @@
         "CMAKE_BUILD_TYPE": "Release",
         "AMREXPLORER_ENABLE_QT": "ON",
         "AMREXPLORER_ENABLE_VTK": "OFF",
-        "AMREXPLORER_ENABLE_MPI": "OFF",
         "AMREXPLORER_BUILD_TESTS": "ON"
       }
     },
@@ -39,7 +38,6 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "AMREXPLORER_ENABLE_QT": "ON",
         "AMREXPLORER_ENABLE_VTK": "OFF",
-        "AMREXPLORER_ENABLE_MPI": "OFF",
         "AMREXPLORER_BUILD_TESTS": "ON"
       }
     },
@@ -69,6 +67,33 @@
       "cacheVariables": {
         "AMREXPLORER_ENABLE_TSAN": "ON"
       }
+    },
+    {
+      "name": "qt-sanitizers",
+      "inherits": "debug",
+      "displayName": "Qt + ASan and UBSan build (offscreen smoke tests)",
+      "binaryDir": "${sourceDir}/build-qt-sanitizers",
+      "cacheVariables": {
+        "AMREXPLORER_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "windows",
+      "displayName": "Windows MSVC build (mirrors the CI job)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": { "value": "x64" },
+      "binaryDir": "${sourceDir}/build-windows",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QT_ROOT_DIR}",
+        "AMREXPLORER_ENABLE_QT": "ON",
+        "AMREXPLORER_ENABLE_VTK": "OFF",
+        "AMREXPLORER_BUILD_TESTS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -95,6 +120,15 @@
     {
       "name": "tsan",
       "configurePreset": "tsan"
+    },
+    {
+      "name": "qt-sanitizers",
+      "configurePreset": "qt-sanitizers"
+    },
+    {
+      "name": "windows",
+      "configurePreset": "windows",
+      "configuration": "Release"
     }
   ],
   "testPresets": [
@@ -143,6 +177,25 @@
       "environment": {
         "TSAN_OPTIONS": "halt_on_error=1 second_deadlock_stack=1"
       },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "qt-sanitizers",
+      "configurePreset": "qt-sanitizers",
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows",
+      "configurePreset": "windows",
+      "configuration": "Release",
       "output": {
         "outputOnFailure": true
       }

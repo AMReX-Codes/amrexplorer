@@ -9,7 +9,6 @@ project(
 
 option(AMREXPLORER_ENABLE_QT "Build the Qt 6 desktop application" ON)
 option(AMREXPLORER_ENABLE_VTK "Build the optional VTK volume module" OFF)
-option(AMREXPLORER_ENABLE_MPI "Enable MPI-aware backends" OFF)
 option(AMREXPLORER_BUILD_TESTS "Build unit and integration tests" ON)
 option(AMREXPLORER_BUILD_MACOS_APP_BUNDLE
     "Build the Qt application as a macOS .app bundle" ${APPLE})
@@ -65,10 +64,6 @@ endif()
 if(AMREXPLORER_ENABLE_TSAN)
     include(amrexplorer_sanitizers)
     amrexplorer_enable_tsan()
-endif()
-
-if(AMREXPLORER_ENABLE_MPI)
-    find_package(MPI REQUIRED COMPONENTS CXX)
 endif()
 
 add_subdirectory(src/core)

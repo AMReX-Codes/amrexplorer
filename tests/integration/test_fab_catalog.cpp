@@ -201,6 +201,70 @@ int main()
     require(missingCompanionRejected,
         "headerless FAB without a companion header lacked a clear error");
 
+    // A raw FAB whose inline header promises a two-point payload but the file
+    // supplies only one value: the size guard must reject it as truncated
+    // rather than let the block reader run past end-of-file.
+    const auto truncatedPath = root / "truncated_fab";
+    {
+        std::ofstream output(truncatedPath, std::ios::binary);
+        output.write(doubleHeader.data(),
+            static_cast<std::streamsize>(doubleHeader.size()));
+        const double onlyValue = 1.25;  // header declares two points; write one
+        output.write(reinterpret_cast<const char*>(&onlyValue),
+            static_cast<std::streamsize>(sizeof(onlyValue)));
+    }
+    auto truncatedRejected = false;
+    try {
+        [[maybe_unused]] const auto records = amrvis::scanFabFile(truncatedPath);
+    } catch (const amrvis::MetadataReadError& error) {
+        truncatedRejected =
+            std::string(error.what()).find("truncated FAB payload")
+            != std::string::npos;
+    }
+    require(truncatedRejected,
+        "a raw FAB with a short payload was not rejected as truncated");
+
+    // The same guard on the headerless (companion-header) path: the _H places a
+    // second FAB at byte 160, but the _D file stops there, so that record's
+    // payload runs off the end.
+    const auto truncatedHeaderlessPath = root / "trunc_headerless_D_00001";
+    const auto truncatedHeaderlessHeader = root / "trunc_headerless_H";
+    {
+        std::ofstream output(truncatedHeaderlessPath, std::ios::binary);
+        std::vector<double> values(20);  // only the first record's 160 bytes
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            values[index] = static_cast<double>(index);
+        }
+        output.write(reinterpret_cast<const char*>(values.data()),
+            static_cast<std::streamsize>(values.size() * sizeof(double)));
+    }
+    {
+        std::ofstream output(truncatedHeaderlessHeader, std::ios::binary);
+        output <<
+            "2\n1\n1\n(1,2)\n"
+            "(2 0\n"
+            "((0,0) (1,0) (0,0))\n"
+            "((4,0) (5,0) (0,0))\n"
+            ")\n"
+            "2\n"
+            "FabOnDisk: trunc_headerless_D_00001 0\n"
+            "FabOnDisk: trunc_headerless_D_00001 160\n"
+            "\n"
+            "((8, (64 11 52 0 1 12 0 1023)),"
+                "(8, (8 7 6 5 4 3 2 1)))\n";
+    }
+    auto truncatedHeaderlessRejected = false;
+    try {
+        [[maybe_unused]] const auto records =
+            amrvis::scanFabFile(truncatedHeaderlessPath);
+    } catch (const amrvis::MetadataReadError& error) {
+        truncatedHeaderlessRejected =
+            std::string(error.what()).find("truncated headerless FAB payload")
+            != std::string::npos;
+    }
+    require(truncatedHeaderlessRejected,
+        "a headerless FAB whose companion places data past EOF was not rejected");
+
     amrvis::DatasetMetadata source;
     source.dimension = 2;
     source.finestLevel = 0;

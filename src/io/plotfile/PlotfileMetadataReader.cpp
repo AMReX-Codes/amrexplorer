@@ -342,7 +342,7 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
     metadata->fields.reserve(static_cast<std::size_t>(componentCount));
     for (int component = 0; component < componentCount; ++component) {
         auto name = readNonEmptyLine(input, "component name");
-        metadata->fields.push_back({name, 1, Centering::Cell, {std::move(name)}});
+        metadata->fields.push_back({name, Centering::Cell, {std::move(name)}});
     }
 
     metadata->dimension = readRequired<int>(input, "space dimension");
@@ -379,26 +379,6 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
         levelMetadata.level = static_cast<int>(level);
         levelMetadata.domain = readAmrexBox(
             input, metadata->dimension, "level domain");
-        levelMetadata.refinementRatioToNext = {{1, 1, 1}};
-    }
-    for (std::size_t level = 0; level + 1 < levelCount; ++level) {
-        for (int axis = 0; axis < metadata->dimension; ++axis) {
-            const auto i = static_cast<std::size_t>(axis);
-            const auto coarseLength =
-                static_cast<std::int64_t>(metadata->levels[level].domain.upper[i])
-                - metadata->levels[level].domain.lower[i] + 1;
-            const auto fineLength =
-                static_cast<std::int64_t>(metadata->levels[level + 1].domain.upper[i])
-                - metadata->levels[level + 1].domain.lower[i] + 1;
-            if (coarseLength <= 0 || fineLength <= 0
-                || fineLength % coarseLength != 0
-                || fineLength / coarseLength > std::numeric_limits<int>::max()) {
-                throw MetadataReadError(
-                    "level domains do not define an integral refinement ratio");
-            }
-            metadata->levels[level].refinementRatioToNext[i] =
-                static_cast<int>(fineLength / coarseLength);
-        }
     }
 
     for (auto& level : metadata->levels) {

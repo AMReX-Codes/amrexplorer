@@ -205,7 +205,7 @@ int main()
     source.dimension = 2;
     source.finestLevel = 0;
     source.fields.push_back(
-        {"value", 1, amrvis::Centering::Cell, {"value"}});
+        {"value", amrvis::Centering::Cell, {"value"}});
     source.levels.resize(1);
     auto& level = source.levels.front();
     level.domain = {{{0, 0, 0}}, {{1, 1, 0}}, {{0, 0, 0}}};

@@ -112,12 +112,10 @@ std::vector<MetadataIssue> validateMetadata(const DatasetMetadata& metadata)
         } else if (!fieldNames.insert(field.name).second) {
             add(path + ".name", "must be unique");
         }
-        if (field.componentCount <= 0) {
-            add(path + ".componentCount", "must be positive");
-        }
-        if (!field.componentNames.empty()
-            && field.componentNames.size() != static_cast<std::size_t>(field.componentCount)) {
-            add(path + ".componentNames", "size must equal componentCount when provided");
+        // Each field is a single stored component, so componentNames carries at
+        // most one entry when provided.
+        if (field.componentNames.size() > 1) {
+            add(path + ".componentNames", "must not exceed one entry per field");
         }
     }
 
@@ -157,12 +155,6 @@ std::vector<MetadataIssue> validateMetadata(const DatasetMetadata& metadata)
             if (!std::isfinite(level.indexOrigin[i])) {
                 add(path + ".indexOrigin",
                     "must be finite in every active direction");
-                break;
-            }
-            if (levelIndex + 1 < metadata.levels.size()
-                && level.refinementRatioToNext[i] <= 0) {
-                add(path + ".refinementRatioToNext",
-                    "must be positive in every active direction");
                 break;
             }
         }

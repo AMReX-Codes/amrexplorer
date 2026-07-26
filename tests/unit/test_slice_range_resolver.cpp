@@ -40,7 +40,7 @@ amrvis::DatasetMetadata makeMetadata(
     amrvis::DatasetMetadata metadata;
     metadata.dimension = 2;
     metadata.finestLevel = 1;
-    metadata.fields.push_back({"density", 1, amrvis::Centering::Cell, {}});
+    metadata.fields.push_back({"density", amrvis::Centering::Cell, {}});
     for (const auto& range : {level0, level1}) {
         amrvis::LevelMetadata level;
         level.level = static_cast<int>(metadata.levels.size());

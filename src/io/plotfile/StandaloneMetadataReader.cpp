@@ -67,7 +67,7 @@ std::shared_ptr<DatasetMetadata> makeSingleLevelMetadata(
     for (int component = 0; component < components; ++component) {
         auto name = std::string(fieldPrefix) + std::to_string(component);
         metadata->fields.push_back({
-            name, 1, centeringFromIndexType(domain.centering, dimension), {name}});
+            name, centeringFromIndexType(domain.centering, dimension), {name}});
     }
     metadata->levels.resize(1);
     metadata->levels.front().domain = domain;

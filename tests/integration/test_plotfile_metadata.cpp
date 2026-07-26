@@ -1,6 +1,8 @@
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -13,6 +15,11 @@ void require(bool condition, const char* message)
         std::cerr << "FAILED: " << message << '\n';
         std::exit(1);
     }
+}
+
+bool nearlyEqual(double a, double b)
+{
+    return std::fabs(a - b) <= 1.0e-9 * std::max({1.0, std::fabs(a), std::fabs(b)});
 }
 
 } // namespace
@@ -54,10 +61,18 @@ int main(int argc, char* argv[])
     require(amrvis::validateMetadata(metadata).empty(), "parsed metadata is invalid");
 
     const auto nonuniform = amrvis::PlotfileMetadataReader{}.read(argv[2]);
-    require(nonuniform.metadata->levels[0].refinementRatioToNext.values[0] == 2,
-        "x refinement ratio mismatch");
-    require(nonuniform.metadata->levels[0].refinementRatioToNext.values[1] == 3,
-        "y refinement ratio mismatch");
+    // Anisotropic 2:3 refinement between levels 0 and 1. Visualization relates
+    // levels through per-level cell geometry (see SliceQuery), so the finer
+    // level's cell size is the coarser's divided by the per-axis ratio; that
+    // is what the reader must get right.
+    require(nonuniform.metadata->levels.size() == 2,
+        "nonuniform plotfile should have two levels");
+    const auto& coarse = nonuniform.metadata->levels[0];
+    const auto& fine = nonuniform.metadata->levels[1];
+    require(nearlyEqual(coarse.cellSize.values[0], 2.0 * fine.cellSize.values[0]),
+        "x refinement (cell-size ratio) mismatch");
+    require(nearlyEqual(coarse.cellSize.values[1], 3.0 * fine.cellSize.values[1]),
+        "y refinement (cell-size ratio) mismatch");
     require(nonuniform.metrics.payloadFilesRead == 0,
         "nonuniform metadata read a FAB payload file");
 

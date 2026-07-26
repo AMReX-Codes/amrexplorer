@@ -17,6 +17,7 @@
 
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/io/FabCatalog.hpp>
+#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 #include <amrexplorer/core/Statistics.hpp>
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
@@ -2976,12 +2977,10 @@ FabSelectorBuild buildFabSelector(
         build.entries.reserve(level.blocks.size());
         for (std::size_t index = 0; index < level.blocks.size(); ++index) {
             const auto& block = level.blocks[index];
-            auto storedBox = block.box;
-            for (int axis = 0; axis < metadata.dimension; ++axis) {
-                const auto coordinate = static_cast<std::size_t>(axis);
-                storedBox.lower[coordinate] -= level.ghostWidth[coordinate];
-                storedBox.upper[coordinate] += level.ghostWidth[coordinate];
-            }
+            // Overflow-guarded shared grow (this copy previously used
+            // plain int).
+            auto storedBox = amrvis::detail::grownBox<MetadataReadError>(
+                block.box, level.ghostWidth, metadata.dimension);
             auto precision = FabRealPrecision::Double;
             if (level.visMfHeaderVersion == 1) {
                 const auto record = inspectFabRecord(

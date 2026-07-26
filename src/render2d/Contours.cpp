@@ -1,4 +1,5 @@
 #include <amrexplorer/render2d/Contours.hpp>
+#include <amrexplorer/render2d/detail/PlaneValidation.hpp>
 
 #include <algorithm>
 #include <array>
@@ -47,14 +48,7 @@ std::vector<double> contourValues(
 std::vector<ContourSegment> generateContours(
     const ScalarPlane& plane, const std::vector<double>& values)
 {
-    if (plane.width < 0 || plane.height < 0) {
-        throw std::invalid_argument("scalar plane dimensions must not be negative");
-    }
-    const auto pixelCount = static_cast<std::size_t>(plane.width)
-        * static_cast<std::size_t>(plane.height);
-    if (plane.values.size() != pixelCount || plane.valid.size() != pixelCount) {
-        throw std::invalid_argument("scalar plane storage does not match its dimensions");
-    }
+    detail::validatePlaneStorage(plane, detail::PlaneExtent::AllowEmpty);
 
     std::vector<ContourSegment> segments;
     if (plane.width < 2 || plane.height < 2) {

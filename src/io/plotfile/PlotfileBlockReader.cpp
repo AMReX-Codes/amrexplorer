@@ -1,4 +1,5 @@
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
+#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 
 #include <algorithm>
 #include <array>
@@ -17,104 +18,23 @@
 namespace amrvis {
 namespace {
 
-struct RealEncoding {
-    std::size_t bytes = 0;
-    bool littleEndian = false;
-};
-
-std::vector<int> parseIntegers(const std::string& text)
-{
-    std::string numbers = text;
-    std::replace_if(numbers.begin(), numbers.end(), [](char character) {
-        return !(character >= '0' && character <= '9')
-            && character != '-' && character != '+';
-    }, ' ');
-    std::istringstream input(numbers);
-    std::vector<int> values;
-    int value = 0;
-    while (input >> value) {
-        values.push_back(value);
-    }
-    return values;
-}
+// Shared strict parsers from FabHeaderParsing.hpp, bound to this reader's
+// error type.
+using RealEncoding = detail::ParsedRealDescriptor;
 
 IntBox parseAmrexBox(const std::string& text, int dimension)
 {
-    const auto values = parseIntegers(text);
-    if (values.size() != static_cast<std::size_t>(dimension * 3)) {
-        throw BlockReadError("malformed AMReX Box in FAB header");
-    }
-    IntBox box;
-    for (int axis = 0; axis < dimension; ++axis) {
-        const auto i = static_cast<std::size_t>(axis);
-        box.lower[i] = values[i];
-        box.upper[i] = values[static_cast<std::size_t>(dimension + axis)];
-        box.centering[i] = values[static_cast<std::size_t>(2 * dimension + axis)];
-    }
-    return box;
+    return detail::parseAmrexBox<BlockReadError>(text, dimension);
 }
 
 std::size_t balancedExpressionEnd(const std::string& text, std::size_t start)
 {
-    if (start >= text.size() || text[start] != '(') {
-        throw BlockReadError("expected a parenthesized FAB header expression");
-    }
-    int depth = 0;
-    for (std::size_t i = start; i < text.size(); ++i) {
-        if (text[i] == '(') {
-            ++depth;
-        } else if (text[i] == ')') {
-            --depth;
-            if (depth == 0) {
-                return i + 1;
-            }
-        }
-    }
-    throw BlockReadError("unterminated FAB header expression");
+    return detail::balancedExpressionEnd<BlockReadError>(text, start);
 }
 
 RealEncoding parseRealDescriptor(const std::string& descriptor)
 {
-    const auto values = parseIntegers(descriptor);
-    constexpr std::size_t formatCountIndex = 0;
-    constexpr std::size_t formatStartIndex = 1;
-    constexpr std::size_t formatEntries = 8;
-    constexpr std::size_t orderCountIndex = formatStartIndex + formatEntries;
-    if (values.size() <= orderCountIndex
-        || values[formatCountIndex] != static_cast<int>(formatEntries)) {
-        throw BlockReadError("malformed FAB RealDescriptor");
-    }
-
-    constexpr std::array<int, formatEntries> ieee32{
-        32, 8, 23, 0, 1, 9, 0, 127};
-    constexpr std::array<int, formatEntries> ieee64{
-        64, 11, 52, 0, 1, 12, 0, 1023};
-    const auto matchesFormat = [&values](const auto& expected) {
-        return std::equal(expected.begin(), expected.end(),
-            values.begin() + static_cast<std::ptrdiff_t>(formatStartIndex));
-    };
-    const auto bytes = matchesFormat(ieee32) ? 4
-        : matchesFormat(ieee64) ? 8 : 0;
-    if (bytes == 0) {
-        throw BlockReadError("only IEEE-32 and IEEE-64 FAB data are supported");
-    }
-
-    if (values[orderCountIndex] != bytes
-        || values.size() < orderCountIndex + 1 + static_cast<std::size_t>(bytes)) {
-        throw BlockReadError("malformed FAB byte-order descriptor");
-    }
-
-    bool ascending = true;
-    bool descending = true;
-    for (int byte = 0; byte < bytes; ++byte) {
-        const auto value = values[orderCountIndex + 1 + static_cast<std::size_t>(byte)];
-        ascending = ascending && value == byte + 1;
-        descending = descending && value == bytes - byte;
-    }
-    if (!ascending && !descending) {
-        throw BlockReadError("unsupported non-contiguous FAB byte order");
-    }
-    return {static_cast<std::size_t>(bytes), descending};
+    return detail::parseRealDescriptor<BlockReadError>(descriptor);
 }
 
 struct FabHeader {
@@ -164,21 +84,7 @@ FabHeader readFabHeader(
 
 IntBox grownBox(const IntBox& source, const Int3& ghost, int dimension)
 {
-    auto result = source;
-    for (int axis = 0; axis < dimension; ++axis) {
-        const auto i = static_cast<std::size_t>(axis);
-        const auto lower = static_cast<std::int64_t>(source.lower[i]) - ghost[i];
-        const auto upper = static_cast<std::int64_t>(source.upper[i]) + ghost[i];
-        if (lower < std::numeric_limits<int>::min()
-            || lower > std::numeric_limits<int>::max()
-            || upper < std::numeric_limits<int>::min()
-            || upper > std::numeric_limits<int>::max()) {
-            throw BlockReadError("ghost-grown FAB box exceeds supported integer range");
-        }
-        result.lower[i] = static_cast<int>(lower);
-        result.upper[i] = static_cast<int>(upper);
-    }
-    return result;
+    return detail::grownBox<BlockReadError>(source, ghost, dimension);
 }
 
 std::uint64_t pointCount(const IntBox& box, int dimension)

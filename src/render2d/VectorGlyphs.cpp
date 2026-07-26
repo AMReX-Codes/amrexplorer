@@ -1,4 +1,5 @@
 #include <amrexplorer/render2d/VectorGlyphs.hpp>
+#include <amrexplorer/render2d/detail/PlaneValidation.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -16,11 +17,10 @@ constexpr double headSide = 0.125;
 
 void validatePlane(const ScalarPlane& plane)
 {
-    const auto pixelCount = static_cast<std::size_t>(plane.width)
-        * static_cast<std::size_t>(plane.height);
-    if (plane.values.size() != pixelCount || plane.valid.size() != pixelCount) {
-        throw std::invalid_argument("scalar plane storage does not match its dimensions");
-    }
+    // AllowEmpty keeps the caller's own positive-extent check authoritative;
+    // the shared validator adds the negative-dimension rejection this copy
+    // previously lacked.
+    detail::validatePlaneStorage(plane, detail::PlaneExtent::AllowEmpty);
 }
 
 } // namespace

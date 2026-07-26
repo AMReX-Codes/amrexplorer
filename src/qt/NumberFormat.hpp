@@ -17,6 +17,13 @@ QString defaultNumberFormat();
 // specifier).
 bool isValidNumberFormat(const QString& format);
 
+// The '%...X' conversion-specifier substring of a format that passes
+// isValidNumberFormat (flags, width, precision, and one eEfgG conversion).
+// Unlike the scanner this consolidates (ScientificDoubleSpinBox's), it also
+// checks the conversion character, so an unvalidated input cannot yield a
+// non-float specifier: anything invalid returns defaultNumberFormat().
+QString conversionSpecifier(const QString& format);
+
 // snprintf()s value through the validated format into a 128-byte buffer
 // (C locale; Qt never installs another one). An invalid format or a result
 // that does not fit falls back to 'g' with 7 significant digits.

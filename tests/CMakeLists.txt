@@ -17,7 +17,10 @@ target_link_libraries(
 add_test(NAME stop_token_fallback COMMAND test_stop_token)
 
 add_executable(test_byte_lru_cache unit/test_byte_lru_cache.cpp)
-target_link_libraries(test_byte_lru_cache PRIVATE amrexplorer::cache amrexplorer::warnings)
+target_link_libraries(
+    test_byte_lru_cache
+    PRIVATE amrexplorer::cache amrexplorer::warnings Threads::Threads
+)
 add_test(NAME byte_lru_cache COMMAND test_byte_lru_cache)
 
 add_executable(test_cache_config unit/test_cache_config.cpp)

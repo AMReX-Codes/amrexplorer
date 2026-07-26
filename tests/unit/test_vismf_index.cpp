@@ -1,8 +1,10 @@
-// Regression test for VisMF _H header parsing across header versions 1-3.
+// Regression test for VisMF _H header parsing across header versions 1-4.
 // AMReX writes a blank separator line before the RealDescriptor in versions 2
 // and 3 (a trailing '\n' after the FabOnDisk list, and after each per-block
 // min/max matrix). The reader must skip those blanks and still find the
-// descriptor; otherwise v2/v3 plotfiles are unopenable.
+// descriptor; otherwise v2/v3 plotfiles are unopenable. Version 4
+// (NoFabHeaderFAMinMax) instead stores one FabArray-wide min/max per component
+// and writes no separator before the descriptor.
 #include <amrexplorer/io/detail/VisMfIndex.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
@@ -147,6 +149,45 @@ void testVersion3(const std::filesystem::path& path)
         "v3 per-block statistics count mismatch");
 }
 
+void testVersion4(const std::filesystem::path& path)
+{
+    // NoFabHeaderFAMinMax: one FabArray-wide min/max per component (each value
+    // comma-terminated) replaces the per-block matrices, and — unlike v2/v3 —
+    // no blank separator precedes the RealDescriptor. This branch had no test.
+    writeHeader(path,
+        "4\n"
+        "1\n"
+        "2\n"                                    // ncomp
+        "0\n"
+        "(2 0\n"
+        "((0,0) (1,3) (0,0))\n"
+        "((2,0) (3,3) (0,0))\n"
+        ")\n"
+        "2\n"
+        "FabOnDisk: Cell_D_00000 0\n"
+        "FabOnDisk: Cell_D_00000 4096\n"
+        "0.00000000000000000e+00,1.00000000000000000e+02,\n"  // FA minima, 2 comps
+        "1.00000000000000000e+00,1.01000000000000000e+02,\n"  // FA maxima, 2 comps
+        "((8, (64 11 52 0 1 12 0 1023)),(8, (8 7 6 5 4 3 2 1)))\n");
+    const auto index = readHeader(path, 2, "4");
+    require(index.version == 4, "v4 version mismatch");
+    require(index.realDescriptor == kRealDescriptor,
+        "v4 RealDescriptor not parsed (no separator precedes it)");
+    require(index.boxes.size() == 2, "v4 box count mismatch");
+    require(!index.hasPerBlockStatistics,
+        "v4 carries FabArray-wide, not per-block, statistics");
+    require(index.minimum.size() == 1 && index.maximum.size() == 1,
+        "v4 should hold a single FabArray-wide min/max entry");
+    require(index.minimum.front().size() == 2
+            && index.minimum.front()[0] == 0.0
+            && index.minimum.front()[1] == 100.0,
+        "v4 FabArray minima parsed wrong");
+    require(index.maximum.front().size() == 2
+            && index.maximum.front()[0] == 1.0
+            && index.maximum.front()[1] == 101.0,
+        "v4 FabArray maxima parsed wrong");
+}
+
 // A crafted header must be rejected with MetadataReadError specifically (not
 // std::bad_alloc from over-allocating, and not some other exception). When
 // expectedMessage is set, the error text must contain it — this pins the
@@ -247,6 +288,27 @@ void testRejectsAbsolutePath(const std::filesystem::path& path)
         "relative path");
 }
 
+void testRejectsV4MissingComma(const std::filesystem::path& path)
+{
+    // A v4 FabArray minimum not terminated by a comma is malformed; the reader
+    // must fault it rather than silently accept a truncated min/max list.
+    expectRejected(path,
+        "4\n1\n2\n0\n"
+        "(2 0\n"
+        "((0,0) (1,3) (0,0))\n"
+        "((2,0) (3,3) (0,0))\n"
+        ")\n"
+        "2\n"
+        "FabOnDisk: Cell_D_00000 0\n"
+        "FabOnDisk: Cell_D_00000 4096\n"
+        "0.0 100.0,\n"                          // missing comma after first min
+        "1.0,101.0,\n"
+        "((8, (64 11 52 0 1 12 0 1023)),(8, (8 7 6 5 4 3 2 1)))\n",
+        2,
+        "a v4 body with a missing min separator was not rejected",
+        "malformed FabArray minima");
+}
+
 } // namespace
 
 int main()
@@ -258,10 +320,12 @@ int main()
     testVersion1(scratch / "v1_H");
     testVersion2(scratch / "v2_H");
     testVersion3(scratch / "v3_H");
+    testVersion4(scratch / "v4_H");
     testRejectsOversizedMatrix(scratch / "bad_matrix_H");
     testRejectsMatrixShapeMismatch(scratch / "bad_shape_H");
     testRejectsRelativeTraversal(scratch / "traversal_H");
     testRejectsAbsolutePath(scratch / "absolute_H");
+    testRejectsV4MissingComma(scratch / "bad_v4_H");
 
     std::error_code removeError;
     std::filesystem::remove_all(scratch, removeError);

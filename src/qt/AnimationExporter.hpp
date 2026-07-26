@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QFuture>
 #include <QImage>
 #include <QObject>
 #include <QString>
@@ -74,7 +75,11 @@ signals:
 
 private:
     void endExport(bool success, const QString& message);
+    // finalizeEncoding waits for the (already-running) ffmpeg probe off the
+    // GUI thread, then finalizeEncodingWithProbe does the PNG-only vs. MP4
+    // decision and launches the encoders.
     void finalizeEncoding();
+    void finalizeEncodingWithProbe();
     [[nodiscard]] static bool probeFfmpeg();
 
     FrameRenderer m_renderFrames;
@@ -85,6 +90,10 @@ private:
     bool m_framesDone = false;
     bool m_includeColorBar = false;
     bool m_hasFfmpeg = false;
+    // Launched off the GUI thread at begin() (probing ffmpeg can block up to
+    // ~4 s); consumed at finalize, by which point rendering has usually
+    // already let it finish.
+    QFuture<bool> m_ffmpegProbe;
     qreal m_scale = 1.0;   // frozen export zoom so every frame matches
     int m_totalFrames = 0;
     int m_restoreIndex = -1;

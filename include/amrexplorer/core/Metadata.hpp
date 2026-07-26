@@ -18,13 +18,14 @@ enum class Centering : std::uint8_t {
     EdgeX,
     EdgeY,
     EdgeZ,
-    Mixed,
-    Unknown
+    // Defensive fallback for an index type the classifier does not recognize.
+    // Not produced today (centeringFromIndexType covers all cases), kept as an
+    // escape hatch if that logic ever changes.
+    Mixed
 };
 
 struct FieldMetadata {
     std::string name;
-    int componentCount = 1;
     Centering centering = Centering::Cell;
     std::vector<std::string> componentNames;
 };
@@ -45,7 +46,6 @@ struct LevelMetadata {
     int level = 0;
     int step = 0;
     IntBox domain;
-    Int3 refinementRatioToNext{{1, 1, 1}};
     Real3 cellSize{{1.0, 1.0, 1.0}};
     // Physical coordinate of nodal index zero on each axis. A sample at
     // integer index i is located at indexOrigin+i*dx on nodal axes and at

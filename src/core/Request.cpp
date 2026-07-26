@@ -20,9 +20,6 @@ std::vector<std::string> validateBlockRequest(const BlockRequest& request)
     if (request.componentCount <= 0) {
         errors.emplace_back("component count must be positive");
     }
-    if (request.ghostWidth < 0) {
-        errors.emplace_back("ghost width must be non-negative");
-    }
     return errors;
 }
 

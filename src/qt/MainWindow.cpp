@@ -4326,9 +4326,21 @@ void MainWindow::showMetadata(
     auto* fields = new QTreeWidgetItem(
         m_metadataTree, {tr("Fields"), QString::number(metadata.fields.size())});
     for (const auto& field : metadata.fields) {
+        const char* centering = "cell";
+        switch (field.centering) {
+        case amrvis::Centering::Node: centering = "node"; break;
+        case amrvis::Centering::FaceX: centering = "face-x"; break;
+        case amrvis::Centering::FaceY: centering = "face-y"; break;
+        case amrvis::Centering::FaceZ: centering = "face-z"; break;
+        case amrvis::Centering::EdgeX: centering = "edge-x"; break;
+        case amrvis::Centering::EdgeY: centering = "edge-y"; break;
+        case amrvis::Centering::EdgeZ: centering = "edge-z"; break;
+        case amrvis::Centering::Mixed: centering = "mixed"; break;
+        case amrvis::Centering::Cell: break;
+        }
         new QTreeWidgetItem(fields, {
             QString::fromStdString(field.name),
-            tr("%1 component(s)").arg(field.componentCount)
+            QString::fromLatin1(centering)
         });
     }
 

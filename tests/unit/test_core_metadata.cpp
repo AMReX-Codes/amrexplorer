@@ -35,10 +35,9 @@ int main()
     metadata.dimension = 2;
     metadata.finestLevel = 0;
     metadata.physicalDomain = {{{0.0, 0.0, 0.0}}, {{1.0, 1.0, 0.0}}};
-    metadata.fields.push_back({"density", 1, amrvis::Centering::Cell, {"density"}});
+    metadata.fields.push_back({"density", amrvis::Centering::Cell, {"density"}});
     amrvis::LevelMetadata level;
     level.domain = {{{0, 0, 0}}, {{3, 3, 0}}, {{0, 0, 0}}};
-    level.refinementRatioToNext = {{1, 1, 1}};
     level.cellSize = {{0.25, 0.25, 1.0}};
     level.boxes.push_back(level.domain);
     level.storedComponents = 1;
@@ -115,7 +114,7 @@ int main()
         bad.dimension = 5;
         bad.finestLevel = 0;
         bad.physicalDomain = {{{0.0, 0.0, 0.0}}, {{1.0, 1.0, 1.0}}};
-        bad.fields.push_back({"phi", 1, amrvis::Centering::Cell, {"phi"}});
+        bad.fields.push_back({"phi", amrvis::Centering::Cell, {"phi"}});
         amrvis::LevelMetadata badLevel;
         badLevel.domain = {{{0, 0, 0}}, {{3, 3, 3}}, {{0, 0, 0}}};
         badLevel.cellSize = {{0.25, 0.25, 0.25}};
@@ -136,7 +135,7 @@ int main()
         bad.dimension = 2;
         bad.finestLevel = 0;
         bad.physicalDomain = {{{0.0, 0.0, 0.0}}, {{1.0, 1.0, 0.0}}};
-        bad.fields.push_back({"phi", 1, amrvis::Centering::Cell, {"phi"}});
+        bad.fields.push_back({"phi", amrvis::Centering::Cell, {"phi"}});
         amrvis::LevelMetadata badLevel;
         badLevel.domain = {{{0, 0, 0}}, {{3, 3, 0}}, {{0, 0, 0}}};
         badLevel.cellSize = {{0.25, 0.25, 1.0}};

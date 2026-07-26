@@ -38,6 +38,12 @@ You can also start without a path and use the File menu:
 AMReXplorer displays 2-D and 3-D data whose FAB payloads use IEEE 32-bit or IEEE
 64-bit floating-point storage.
 
+Plotfiles written for non-Cartesian coordinate systems (cylindrical RZ,
+spherical) open normally, but their data is displayed on a Cartesian grid:
+an RZ dataset appears as its r-z plane with no axisymmetric weighting or
+revolution. The coordinate system recorded in the plotfile Header is not
+otherwise interpreted.
+
 ## User interface overview
 
 ![AMReXplorer displaying a three-dimensional plotfile](images/user-guide-overview.png)

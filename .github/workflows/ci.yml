@@ -125,3 +125,25 @@ jobs:
 
       - name: Test
         run: ctest --preset sanitizers --parallel 4
+
+  tsan:
+    name: Linux / TSan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes cmake g++ ninja-build
+
+      - name: Configure
+        run: cmake --preset tsan -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build --preset tsan --parallel 4
+
+      - name: Test
+        run: ctest --preset tsan --parallel 4

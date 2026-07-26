@@ -866,6 +866,11 @@ void MainWindow::setActiveView(PlaneViewState& state)
     if (state.plane->width <= 0 || state.plane->height <= 0) {
         return;
     }
+    syncActiveViewColorControls(state);
+}
+
+void MainWindow::syncActiveViewColorControls(const PlaneViewState& state)
+{
     // The color scale and range boxes track the active view.
     m_colorBar->setLogarithmic(state.displayLogarithmic);
     m_colorBar->setFieldRange(state.displayLogarithmic
@@ -3816,6 +3821,25 @@ void MainWindow::requestInitialSlice(
     }));
 }
 
+void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
+{
+    m_controlsReady = true;
+    m_fieldSelector->setEnabled(true);
+    m_levelSelector->setEnabled(true);
+    m_rangeMode->setEnabled(true);
+    m_logarithmic->setEnabled(true);
+    m_boxesAction->setEnabled(true);
+    m_slicePlanesAction->setEnabled(metadata.dimension == 3);
+    const auto userRange = static_cast<RangeMode>(
+        m_rangeMode->currentData().toInt()) == RangeMode::User;
+    m_rangeMinimum->setEnabled(userRange);
+    m_rangeMaximum->setEnabled(userRange);
+    rebuildLevelMenu();
+    m_levelMenu->setEnabled(true);
+    m_contoursAction->setEnabled(true);
+    m_datasetAction->setEnabled(true);
+}
+
 void MainWindow::configureSliceControls()
 {
     if (!m_dataset) {
@@ -3835,21 +3859,7 @@ void MainWindow::configureSliceControls()
     populateLevelCombo(m_levelSelector, metadata.finestLevel);
     m_levelSelector->setCurrentIndex(0);
 
-    m_controlsReady = true;
-    m_fieldSelector->setEnabled(true);
-    m_levelSelector->setEnabled(true);
-    m_rangeMode->setEnabled(true);
-    m_logarithmic->setEnabled(true);
-    m_boxesAction->setEnabled(true);
-    m_slicePlanesAction->setEnabled(metadata.dimension == 3);
-    const auto userRange = static_cast<RangeMode>(
-        m_rangeMode->currentData().toInt()) == RangeMode::User;
-    m_rangeMinimum->setEnabled(userRange);
-    m_rangeMaximum->setEnabled(userRange);
-    rebuildLevelMenu();
-    m_levelMenu->setEnabled(true);
-    m_contoursAction->setEnabled(true);
-    m_datasetAction->setEnabled(true);
+    enableDatasetControls(metadata);
 
     rebuildVariableMenu();
     updateRangeModeAvailability();
@@ -4525,23 +4535,9 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     state.cachedVectorVField = display.vectorVField;
     state.cachedContourCount = display.contourCount;
     if (m_activeView == &state) {
-        m_colorBar->setLogarithmic(display.logarithmic);
-        m_colorBar->setFieldRange(
-            display.logarithmic ? fieldName + tr(" (log)") : fieldName,
-            display.minimum, display.maximum);
-        // If log was requested but fell back to linear, reflect that in the
-        // checkbox so the user sees log did not apply.
-        if (m_logarithmic->isChecked() != display.logarithmic) {
-            const QSignalBlocker logarithmicBlocker(m_logarithmic);
-            m_logarithmic->setChecked(display.logarithmic);
-        }
-        if (static_cast<RangeMode>(m_rangeMode->currentData().toInt())
-            != RangeMode::User) {
-            const QSignalBlocker minimumBlocker(m_rangeMinimum);
-            const QSignalBlocker maximumBlocker(m_rangeMaximum);
-            m_rangeMinimum->setValue(display.minimum);
-            m_rangeMaximum->setValue(display.maximum);
-        }
+        // Tracks the active view; if log was requested but fell back to linear,
+        // the checkbox reflects that log did not apply.
+        syncActiveViewColorControls(state);
     }
     updateGridBoxes(state);
     updateOverlay(state);
@@ -4931,21 +4927,7 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
         setActiveView(isThreeDimensional ? m_planeViews[2] : m_view2d);
     }
 
-    m_controlsReady = true;
-    m_fieldSelector->setEnabled(true);
-    m_levelSelector->setEnabled(true);
-    m_rangeMode->setEnabled(true);
-    m_logarithmic->setEnabled(true);
-    m_boxesAction->setEnabled(true);
-    m_slicePlanesAction->setEnabled(metadata.dimension == 3);
-    const auto userRange = static_cast<RangeMode>(
-        m_rangeMode->currentData().toInt()) == RangeMode::User;
-    m_rangeMinimum->setEnabled(userRange);
-    m_rangeMaximum->setEnabled(userRange);
-    rebuildLevelMenu();
-    m_levelMenu->setEnabled(true);
-    m_contoursAction->setEnabled(true);
-    m_datasetAction->setEnabled(true);
+    enableDatasetControls(metadata);
     m_exportAnimationAction->setEnabled(true);
     rebuildVariableMenu();
     ensureVectorFieldDefaults();

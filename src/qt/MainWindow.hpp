@@ -330,6 +330,9 @@ private:
     void wireView(PlaneViewState& state);
     [[nodiscard]] std::vector<PlaneViewState*> currentViews();
     void setActiveView(PlaneViewState& state);
+    // Point the color scale and range spin boxes at the active view's display
+    // state. Shared by setActiveView and showSlice's active-view branch.
+    void syncActiveViewColorControls(const PlaneViewState& state);
     [[nodiscard]] std::array<int, 2> displayAxes(int normal) const;
     void probeMoved(PlaneViewState& state, int x, int displayY);
     void probeClicked(PlaneViewState& state, int x, int displayY);
@@ -407,6 +410,11 @@ private:
         std::filesystem::path dataRoot = {},
         std::optional<FrameSliceSpec> initialSpec = std::nullopt);
     void configureSliceControls();
+    // Enable the dataset-dependent field/level/range/menu controls once a
+    // dataset (single or sequence frame) is loaded. Shared by
+    // configureSliceControls and configureSequenceControls; the export-animation
+    // action is sequence-only and stays at that call site.
+    void enableDatasetControls(const DatasetMetadata& metadata);
     void appendLinePlotCurve(const LineResult& line, const std::string& fieldName,
         int dimension, int primaryFixedAxis, int lineAxis,
         const std::array<double, 3>& fixedCoordinates, int maximumLevel,

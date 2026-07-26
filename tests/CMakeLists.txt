@@ -47,6 +47,10 @@ add_executable(test_vector_glyphs unit/test_vector_glyphs.cpp)
 target_link_libraries(test_vector_glyphs PRIVATE amrexplorer::render2d amrexplorer::warnings)
 add_test(NAME vector_glyphs COMMAND test_vector_glyphs)
 
+add_executable(test_image_buffer unit/test_image_buffer.cpp)
+target_link_libraries(test_image_buffer PRIVATE amrexplorer::render2d amrexplorer::warnings)
+add_test(NAME image_buffer COMMAND test_image_buffer)
+
 add_executable(test_display_coordinator unit/test_display_coordinator.cpp)
 target_link_libraries(
     test_display_coordinator

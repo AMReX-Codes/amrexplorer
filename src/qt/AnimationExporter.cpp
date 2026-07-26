@@ -33,7 +33,10 @@ bool AnimationExporter::begin(const QString& path, bool includeColorBar,
     m_canceled = false;
     m_framesDone = false;
     m_includeColorBar = includeColorBar;
-    m_hasFfmpeg = probeFfmpeg();
+    // Probe ffmpeg off the GUI thread (waitForStarted/Finished can block up to
+    // ~4 s); the result is only needed at finalize, after every frame renders.
+    m_hasFfmpeg = false;
+    m_ffmpegProbe = QtConcurrent::run([] { return probeFfmpeg(); });
     m_scale = scale;
     m_totalFrames = totalFrames;
     m_restoreIndex = restoreIndex;
@@ -122,7 +125,27 @@ void AnimationExporter::onFrameFailed()
 void AnimationExporter::finalizeEncoding()
 {
     m_framesDone = true;
+    // Continue once the probe launched at begin() resolves. Rendering has
+    // usually already let it finish, so the watcher typically fires
+    // immediately; either way the GUI thread never blocks on it.
+    auto* watcher = new QFutureWatcher<bool>(this);
+    connect(watcher, &QFutureWatcher<bool>::finished, this, [this, watcher] {
+        m_hasFfmpeg = watcher->result();
+        watcher->deleteLater();
+        finalizeEncodingWithProbe();
+    });
+    watcher->setFuture(m_ffmpegProbe);
+}
 
+void AnimationExporter::finalizeEncodingWithProbe()
+{
+    if (!m_active) {
+        return;
+    }
+    if (m_canceled) {
+        endExport(false, tr("Animation export cancelled."));
+        return;
+    }
     if (!m_hasFfmpeg) {
         endExport(true, tr("Exported %1 PNG frames "
             "(FFmpeg not found; skipped MP4).").arg(m_totalFrames));

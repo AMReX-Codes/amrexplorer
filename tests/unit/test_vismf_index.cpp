@@ -288,6 +288,71 @@ void testRejectsAbsolutePath(const std::filesystem::path& path)
         "relative path");
 }
 
+void testRejectsTruncatedAfterVersion(const std::filesystem::path& path)
+{
+    // A header cut off right after the version cannot yield a file layout.
+    expectRejected(path, "2\n", 2,
+        "a header truncated after the version was not rejected",
+        "file layout");
+}
+
+void testRejectsTruncatedBoxArray(const std::filesystem::path& path)
+{
+    // Declares two boxes but supplies one; the second box read hits the
+    // terminator instead of a box.
+    expectRejected(path,
+        "2\n1\n2\n0\n"
+        "(2 0\n"
+        "((0,0) (1,3) (0,0))\n"
+        ")\n",
+        2,
+        "a BoxArray shorter than its declared count was not rejected",
+        "AMReX Box");
+}
+
+void testRejectsMissingDescriptor(const std::filesystem::path& path)
+{
+    // A v2 header ends after the FabOnDisk list; the RealDescriptor (required
+    // for versions >= 2) never arrives.
+    expectRejected(path,
+        "2\n1\n2\n0\n"
+        "(2 0\n"
+        "((0,0) (1,3) (0,0))\n"
+        "((2,0) (3,3) (0,0))\n"
+        ")\n"
+        "2\n"
+        "FabOnDisk: Cell_D_00000 0\n"
+        "FabOnDisk: Cell_D_00000 4096\n",
+        2,
+        "a v2 header missing its RealDescriptor was not rejected",
+        "RealDescriptor");
+}
+
+void testAcceptsTrailingContent(const std::filesystem::path& path)
+{
+    // Forward compatibility: content past the RealDescriptor (fields a newer
+    // AMReX writer may append) must be ignored, not faulted. A strict
+    // end-of-file check would regress this.
+    writeHeader(path,
+        "2\n1\n2\n0\n"
+        "(2 0\n"
+        "((0,0) (1,3) (0,0))\n"
+        "((2,0) (3,3) (0,0))\n"
+        ")\n"
+        "2\n"
+        "FabOnDisk: Cell_D_00000 0\n"
+        "FabOnDisk: Cell_D_00000 4096\n"
+        "\n"
+        "((8, (64 11 52 0 1 12 0 1023)),(8, (8 7 6 5 4 3 2 1)))\n"
+        "a future section this reader does not consume\n"
+        "999\n");
+    const auto index = readHeader(path, 2, "2+trailing");
+    require(index.version == 2, "trailing-content version mismatch");
+    require(index.realDescriptor == kRealDescriptor,
+        "trailing content disturbed the RealDescriptor parse");
+    require(index.boxes.size() == 2, "trailing-content box count mismatch");
+}
+
 void testRejectsV4MissingComma(const std::filesystem::path& path)
 {
     // A v4 FabArray minimum not terminated by a comma is malformed; the reader
@@ -326,6 +391,10 @@ int main()
     testRejectsRelativeTraversal(scratch / "traversal_H");
     testRejectsAbsolutePath(scratch / "absolute_H");
     testRejectsV4MissingComma(scratch / "bad_v4_H");
+    testRejectsTruncatedAfterVersion(scratch / "trunc_version_H");
+    testRejectsTruncatedBoxArray(scratch / "trunc_boxarray_H");
+    testRejectsMissingDescriptor(scratch / "missing_descriptor_H");
+    testAcceptsTrailingContent(scratch / "trailing_H");
 
     std::error_code removeError;
     std::filesystem::remove_all(scratch, removeError);

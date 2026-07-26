@@ -65,6 +65,10 @@ add_executable(test_vismf_index unit/test_vismf_index.cpp)
 target_link_libraries(test_vismf_index PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME vismf_index COMMAND test_vismf_index)
 
+add_executable(test_plotfile_header unit/test_plotfile_header.cpp)
+target_link_libraries(test_plotfile_header PRIVATE amrexplorer::io amrexplorer::warnings)
+add_test(NAME plotfile_header COMMAND test_plotfile_header)
+
 add_executable(test_plotfile_metadata integration/test_plotfile_metadata.cpp)
 target_link_libraries(test_plotfile_metadata PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(

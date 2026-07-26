@@ -58,6 +58,42 @@ bool isValidNumberFormat(const QString& format)
     return specifiers == 1;
 }
 
+QString conversionSpecifier(const QString& format)
+{
+    const auto bytes = format.toUtf8();
+    const auto size = bytes.size();
+    for (qsizetype index = 0; index < size; ++index) {
+        if (bytes[index] != '%') {
+            continue;
+        }
+        const auto start = index++;
+        if (index >= size || bytes[index] == '%') {
+            continue;
+        }
+        while (index < size && (bytes[index] == '-' || bytes[index] == '+'
+                || bytes[index] == '0' || bytes[index] == ' '
+                || bytes[index] == '#')) {
+            ++index;
+        }
+        while (index < size && bytes[index] >= '0' && bytes[index] <= '9') {
+            ++index;
+        }
+        if (index < size && bytes[index] == '.') {
+            ++index;
+            while (index < size && bytes[index] >= '0' && bytes[index] <= '9') {
+                ++index;
+            }
+        }
+        if (index < size && (bytes[index] == 'e' || bytes[index] == 'E'
+                || bytes[index] == 'f' || bytes[index] == 'g'
+                || bytes[index] == 'G')) {
+            return QString::fromLatin1(
+                bytes.constData() + start, index - start + 1);
+        }
+    }
+    return defaultNumberFormat();
+}
+
 QString formatNumber(double value, const QString& format)
 {
     if (!isValidNumberFormat(format)) {

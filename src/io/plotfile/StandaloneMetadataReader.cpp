@@ -1,4 +1,5 @@
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
+#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/FabCatalog.hpp>
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/detail/VisMfIndex.hpp>
@@ -17,21 +18,7 @@
 namespace amrvis {
 namespace {
 
-std::vector<int> parseIntegers(const std::string& text)
-{
-    std::string numbers = text;
-    std::replace_if(numbers.begin(), numbers.end(), [](char character) {
-        return !(character >= '0' && character <= '9')
-            && character != '-' && character != '+';
-    }, ' ');
-    std::istringstream input(numbers);
-    std::vector<int> result;
-    int value = 0;
-    while (input >> value) {
-        result.push_back(value);
-    }
-    return result;
-}
+using detail::parseIntegers;
 
 int inferBoxDimension(const std::string& boxText)
 {
@@ -143,12 +130,9 @@ PlotfileMetadataResult makeSelectedFabMetadata(
         throw MetadataReadError("selected FAB index is unavailable");
     }
     const auto& sourceBlock = sourceLevel.blocks[blockIndex];
-    auto storedBox = sourceBlock.box;
-    for (int axis = 0; axis < source.dimension; ++axis) {
-        const auto i = static_cast<std::size_t>(axis);
-        storedBox.lower[i] -= sourceLevel.ghostWidth[i];
-        storedBox.upper[i] += sourceLevel.ghostWidth[i];
-    }
+    // Overflow-guarded shared grow (this copy previously used plain int).
+    auto storedBox = detail::grownBox<MetadataReadError>(
+        sourceBlock.box, sourceLevel.ghostWidth, source.dimension);
     if (sourceLevel.visMfHeaderVersion == 1) {
         storedBox = inspectFabRecord(
             dataRoot / sourceBlock.filePath, sourceBlock.fileOffset).storedBox;

@@ -9,6 +9,7 @@
 #include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/query/detail/BlockLookup.hpp>
 
 #include <algorithm>
 #include <array>
@@ -61,43 +62,14 @@ inline std::array<int, 2> inPlaneAxes(int dimension, int normalAxis) noexcept
     return axes;
 }
 
-inline bool intersects(const IntBox& left, const IntBox& right,
-    int dimension) noexcept
-{
-    for (int axis = 0; axis < dimension; ++axis) {
-        const auto i = static_cast<std::size_t>(axis);
-        if (left.upper[i] < right.lower[i] || right.upper[i] < left.lower[i]) {
-            return false;
-        }
-    }
-    return true;
-}
+// The shared overflow-checked helpers (this header previously carried its
+// own unchecked fabValueOffset variant — the drift the consolidation fixed).
+using amrvis::detail::intersects;
 
-// Offset into a FAB's component-major values (first axis fastest); the point
-// must lie inside box. Mirrors SliceQuery's valueOffset without the overflow
-// checks: the caller only passes points of the intersected valid box.
 inline std::size_t fabValueOffset(const IntBox& box, int i, int j, int k,
-    int dimension) noexcept
+    int dimension)
 {
-    const auto extent = [&box](std::size_t axis) {
-        return static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(box.upper[axis]) - box.lower[axis] + 1);
-    };
-    const auto nx = extent(0);
-    const auto x = static_cast<std::uint64_t>(
-        static_cast<std::int64_t>(i) - box.lower[0]);
-    if (dimension == 1) {
-        return static_cast<std::size_t>(x);
-    }
-    const auto ny = extent(1);
-    const auto y = static_cast<std::uint64_t>(
-        static_cast<std::int64_t>(j) - box.lower[1]);
-    if (dimension == 2) {
-        return static_cast<std::size_t>(x + nx * y);
-    }
-    const auto z = static_cast<std::uint64_t>(
-        static_cast<std::int64_t>(k) - box.lower[2]);
-    return static_cast<std::size_t>(x + nx * (y + ny * z));
+    return amrvis::detail::valueOffset(box, Int3{{i, j, k}}, dimension);
 }
 
 } // namespace dataset_extract_detail

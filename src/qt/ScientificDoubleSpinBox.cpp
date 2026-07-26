@@ -19,41 +19,6 @@ QLocale cNumberLocale()
     return result;
 }
 
-QString conversionSpecifier(const QString& format)
-{
-    const auto bytes = format.toUtf8();
-    for (qsizetype index = 0; index < bytes.size(); ++index) {
-        if (bytes[index] != '%') {
-            continue;
-        }
-        const auto start = index++;
-        if (index >= bytes.size() || bytes[index] == '%') {
-            continue;
-        }
-        while (index < bytes.size() && (bytes[index] == '-'
-                || bytes[index] == '+' || bytes[index] == '0'
-                || bytes[index] == ' ' || bytes[index] == '#')) {
-            ++index;
-        }
-        while (index < bytes.size()
-            && bytes[index] >= '0' && bytes[index] <= '9') {
-            ++index;
-        }
-        if (index < bytes.size() && bytes[index] == '.') {
-            ++index;
-            while (index < bytes.size()
-                && bytes[index] >= '0' && bytes[index] <= '9') {
-                ++index;
-            }
-        }
-        if (index < bytes.size()) {
-            return QString::fromLatin1(
-                bytes.constData() + start, index - start + 1);
-        }
-    }
-    return defaultNumberFormat();
-}
-
 QValidator::State validateNumber(const QString& text, int position,
     double minimum, double maximum, const QLocale& locale)
 {

@@ -1,4 +1,5 @@
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
+#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/detail/VisMfIndex.hpp>
 
@@ -90,21 +91,7 @@ IntBox readAmrexBox(std::istream& input, int dimension, std::string_view descrip
     return box;
 }
 
-std::vector<int> parseIntegers(const std::string& line)
-{
-    std::string numbers = line;
-    std::replace_if(numbers.begin(), numbers.end(), [](char character) {
-        return !(character >= '0' && character <= '9')
-            && character != '-' && character != '+';
-    }, ' ');
-    std::istringstream input(numbers);
-    std::vector<int> values;
-    int value = 0;
-    while (input >> value) {
-        values.push_back(value);
-    }
-    return values;
-}
+using detail::parseIntegers;
 
 // Rejects a metadata-derived path that could redirect reads outside the
 // plotfile directory when joined to the plotfile root: an absolute path

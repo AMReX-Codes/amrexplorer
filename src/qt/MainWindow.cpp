@@ -484,7 +484,6 @@ MainWindow::MainWindow(QWidget* parent)
     // the per-group separators on the Slice Controls toolbar.
     rangeToolbar->addSeparator();
     m_logarithmic = new QCheckBox(tr("Log"), rangeToolbar);
-    m_logarithmic->setLayoutDirection(Qt::RightToLeft);
     rangeToolbar->addWidget(m_logarithmic);
     rangeToolbar->addSeparator();
     rangeToolbar->addWidget(new QLabel(tr("Palette:"), rangeToolbar));

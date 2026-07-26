@@ -27,9 +27,15 @@ ctest --preset headless
 cmake --preset sanitizers  # Headless + ASan + UBSan → build-sanitizers/
 cmake --build --preset sanitizers
 ctest --preset sanitizers
+
+cmake --preset tsan        # Headless + ThreadSanitizer → build-tsan/
+cmake --build --preset tsan
+ctest --preset tsan
 ```
 
 The sanitizer preset enables AddressSanitizer and UndefinedBehaviorSanitizer.
+The tsan preset enables ThreadSanitizer (mutually exclusive with the ASan
+build), covering the concurrent block-read, cache, and stop-token paths.
 
 The clang preset mirrors the CI clang job (which builds with
 `-DAMREXPLORER_WARNINGS_AS_ERRORS=ON`): run it before pushing to catch

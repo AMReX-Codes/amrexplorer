@@ -10,7 +10,10 @@ add_executable(test_stop_token unit/test_stop_token.cpp)
 target_compile_definitions(
     test_stop_token PRIVATE AMREXPLORER_TEST_FORCE_FALLBACK_STOP_TOKEN
 )
-target_link_libraries(test_stop_token PRIVATE amrexplorer::core amrexplorer::warnings)
+target_link_libraries(
+    test_stop_token PRIVATE amrexplorer::core amrexplorer::warnings
+    Threads::Threads
+)
 add_test(NAME stop_token_fallback COMMAND test_stop_token)
 
 add_executable(test_byte_lru_cache unit/test_byte_lru_cache.cpp)

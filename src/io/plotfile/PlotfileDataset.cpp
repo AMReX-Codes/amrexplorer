@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 namespace amrvis {
@@ -120,12 +121,17 @@ PlotfileDataset::BlockAccess PlotfileDataset::requestBlock(
 
     // Acquire the per-dataset IO lock, polling the cancellation token while we
     // wait so a request can bail promptly instead of being stuck behind a
-    // long in-progress read on this dataset.
-    std::unique_lock<std::timed_mutex> ioLock(m_ioMutex, std::defer_lock);
-    while (!ioLock.try_lock_for(ioLockPollInterval)) {
+    // long in-progress read on this dataset. try_lock + sleep rather than a
+    // timed lock: see the m_ioMutex comment (uninstrumented
+    // pthread_mutex_clocklock under older TSan runtimes). The uncontended
+    // path acquires on the first try_lock with no sleep; under contention
+    // acquisition lands within one poll interval of the holder finishing.
+    std::unique_lock<std::mutex> ioLock(m_ioMutex, std::defer_lock);
+    while (!ioLock.try_lock()) {
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
         }
+        std::this_thread::sleep_for(ioLockPollInterval);
     }
     if (cancellation.stop_requested()) {
         throw ReadCancelled();

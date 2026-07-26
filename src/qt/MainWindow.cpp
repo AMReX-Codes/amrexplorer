@@ -2907,20 +2907,52 @@ void MainWindow::chooseStandaloneDataset(const QString& caption, bool rawFab)
     }
 }
 
-void MainWindow::configureFabSelector(
+namespace {
+
+// Everything the FAB selector dock needs for a source, computed off the GUI
+// thread (see buildFabSelector) so its header scans / per-block preads never
+// block the event loop. `matched` distinguishes a recognized FAB or
+// single-level-VisMF source (whose m_fabMode/source state should be applied)
+// from anything else (leave that state untouched, just hide the dock).
+struct FabSelectorBuild {
+    bool matched = false;
+    bool fabMode = false;
+    bool hasSourceMetadata = false;
+    std::vector<FabSelectorEntry> entries;
+    std::filesystem::path root;
+};
+
+// The result of a dataset open worker: the metadata plus, when the caller did
+// not ask to preserve the existing selector, the FAB selector contents built
+// alongside it (so the GUI-thread completion only blits, never reads files).
+struct OpenedDataset {
+    PlotfileMetadataResult metadata;
+    std::optional<FabSelectorBuild> fabSelector;
+};
+
+// Reads FAB/MultiFab record headers and builds the selector entries. Runs on a
+// worker thread; QCoreApplication::translate is thread-safe, and it touches no
+// widgets or member state.
+FabSelectorBuild buildFabSelector(
     const PlotfileMetadataResult& result, const std::filesystem::path& path)
 {
-    std::vector<FabSelectorEntry> entries;
-    auto root = path.parent_path();
-    if (root.empty()) {
-        root = ".";
+    const auto precisionLabel = [](FabRealPrecision precision) {
+        return precision == FabRealPrecision::Single
+            ? QCoreApplication::translate("MainWindow", "IEEE-32")
+            : QCoreApplication::translate("MainWindow", "IEEE-64");
+    };
+
+    FabSelectorBuild build;
+    build.root = path.parent_path();
+    if (build.root.empty()) {
+        build.root = ".";
     }
 
     if (result.fileVersion == "FAB") {
         const auto records = scanFabFile(path);
-        entries.reserve(records.size());
+        build.entries.reserve(records.size());
         for (const auto& record : records) {
-            entries.push_back({
+            build.entries.push_back({
                 .ordinal = record.ordinal,
                 .level = 0,
                 .blockIndex = record.ordinal,
@@ -2930,18 +2962,18 @@ void MainWindow::configureFabSelector(
                 .storedBox = record.storedBox,
                 .dimension = record.dimension,
                 .components = record.components,
-                .precision = record.precision == FabRealPrecision::Single
-                    ? tr("IEEE-32") : tr("IEEE-64"),
+                .precision = precisionLabel(record.precision),
                 .rawRecord = true
             });
         }
-        m_fabMode = true;
-        m_fabSourceMetadata.reset();
+        build.matched = true;
+        build.fabMode = true;
+        build.hasSourceMetadata = false;
     } else if (result.fileVersion.starts_with("VisMF-")
         && result.metadata->levels.size() == 1) {
         const auto& metadata = *result.metadata;
         const auto& level = metadata.levels.front();
-        entries.reserve(level.blocks.size());
+        build.entries.reserve(level.blocks.size());
         for (std::size_t index = 0; index < level.blocks.size(); ++index) {
             const auto& block = level.blocks[index];
             auto storedBox = block.box;
@@ -2953,43 +2985,34 @@ void MainWindow::configureFabSelector(
             auto precision = FabRealPrecision::Double;
             if (level.visMfHeaderVersion == 1) {
                 const auto record = inspectFabRecord(
-                    root / block.filePath, block.fileOffset);
+                    build.root / block.filePath, block.fileOffset);
                 storedBox = record.storedBox;
                 precision = record.precision;
             } else {
                 precision = fabPrecisionFromDescriptor(level.realDescriptor);
             }
-            entries.push_back({
+            build.entries.push_back({
                 .ordinal = index,
                 .level = level.level,
                 .blockIndex = index,
-                .filePath = root / block.filePath,
+                .filePath = build.root / block.filePath,
                 .fileOffset = block.fileOffset,
                 .validBox = block.box,
                 .storedBox = storedBox,
                 .dimension = metadata.dimension,
                 .components = level.storedComponents,
-                .precision = precision == FabRealPrecision::Single
-                    ? tr("IEEE-32") : tr("IEEE-64"),
+                .precision = precisionLabel(precision),
                 .rawRecord = false
             });
         }
-        m_fabMode = false;
-        m_fabSourceMetadata = result;
+        build.matched = true;
+        build.fabMode = false;
+        build.hasSourceMetadata = true;
     }
-
-    if (entries.empty()) {
-        m_fabSelectorDock->setVisible(false);
-        return;
-    }
-    m_fabSourcePath = path;
-    m_fabDataRoot = root;
-    m_fabSelectorDock->setEntries(std::move(entries));
-    m_fabSelectorDock->setBackAvailable(false);
-    m_fabSelectorDock->setVisible(true);
-    m_fabSelectorDock->raise();
-    updateWindowTitle();
+    return build;
 }
+
+} // namespace
 
 void MainWindow::viewFab(std::size_t entryIndex)
 {
@@ -3484,10 +3507,10 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         QString::fromStdString(path.string())));
     updateDiagnostics();
 
-    auto* watcher = new QFutureWatcher<PlotfileMetadataResult>(this);
-    connect(watcher, &QFutureWatcher<PlotfileMetadataResult>::finished, this,
+    auto* watcher = new QFutureWatcher<OpenedDataset>(this);
+    connect(watcher, &QFutureWatcher<OpenedDataset>::finished, this,
         [this, watcher, generation, path, metadataOnly,
-            dataRoot = std::move(dataRoot), preserveFabSelector,
+            dataRoot = std::move(dataRoot),
             initialSpec = std::move(initialSpec)]() mutable {
             --m_activeRequests;
             if (m_closing) {
@@ -3497,9 +3520,31 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
             try {
                 auto result = watcher->result();
                 if (generation == m_generation) {
-                    showMetadata(result, path);
-                    if (!preserveFabSelector) {
-                        configureFabSelector(result, path);
+                    showMetadata(result.metadata, path);
+                    // The FAB selector contents were built off-thread with the
+                    // metadata (when not preserving the existing selector);
+                    // here we only apply them, no file I/O on the GUI thread.
+                    if (result.fabSelector) {
+                        auto& fab = *result.fabSelector;
+                        if (fab.matched) {
+                            m_fabMode = fab.fabMode;
+                            if (fab.hasSourceMetadata) {
+                                m_fabSourceMetadata = result.metadata;
+                            } else {
+                                m_fabSourceMetadata.reset();
+                            }
+                        }
+                        if (fab.entries.empty()) {
+                            m_fabSelectorDock->setVisible(false);
+                        } else {
+                            m_fabSourcePath = path;
+                            m_fabDataRoot = fab.root;
+                            m_fabSelectorDock->setEntries(std::move(fab.entries));
+                            m_fabSelectorDock->setBackAvailable(false);
+                            m_fabSelectorDock->setVisible(true);
+                            m_fabSelectorDock->raise();
+                            updateWindowTitle();
+                        }
                     }
                     emit datasetOpenFinished(true);
                     if (!metadataOnly) {
@@ -3511,8 +3556,9 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                                 root = ".";
                             }
                         }
-                        requestInitialSlice(path, generation, result,
-                            std::move(root), std::move(initialSpec));
+                        requestInitialSlice(path, generation,
+                            std::move(result.metadata), std::move(root),
+                            std::move(initialSpec));
                     }
                 } else {
                     ++m_staleResults;
@@ -3531,11 +3577,18 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         });
     watcher->setFuture(QtConcurrent::run(
         [path, preparedMetadata = std::move(preparedMetadata),
-            cancellation = metadataCancellation]() mutable {
-        if (preparedMetadata) {
-            return std::move(*preparedMetadata);
+            cancellation = metadataCancellation, preserveFabSelector]() mutable {
+        OpenedDataset opened;
+        opened.metadata = preparedMetadata
+            ? std::move(*preparedMetadata)
+            : readDatasetMetadata(path, cancellation);
+        // Build the FAB selector entries here, off the GUI thread, so the
+        // header scans / per-block preads it needs never freeze the event
+        // loop. Skipped when the caller preserves the existing selector.
+        if (!preserveFabSelector) {
+            opened.fabSelector = buildFabSelector(opened.metadata, path);
         }
-        return readDatasetMetadata(path, cancellation);
+        return opened;
     }));
 }
 

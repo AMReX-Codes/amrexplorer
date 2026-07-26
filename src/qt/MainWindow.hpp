@@ -254,8 +254,6 @@ private:
         std::optional<PlotfileMetadataResult> preparedMetadata,
         std::filesystem::path dataRoot, bool preserveFabSelector,
         std::optional<FrameSliceSpec> initialSpec);
-    void configureFabSelector(const PlotfileMetadataResult& result,
-        const std::filesystem::path& path);
     void viewFab(std::size_t entry);
     void backToMultiFab();
     // A fresh independent top-level window (WA_DeleteOnClose) for the

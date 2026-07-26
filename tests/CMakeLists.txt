@@ -161,6 +161,40 @@ add_test(
 add_executable(fixture_materializer fixture_materializer/main.cpp)
 target_link_libraries(fixture_materializer PRIVATE amrexplorer::warnings)
 
+# Smoke tests for the standalone tools (tools/), previously built but never run
+# by ctest. dataset_inspect reads metadata only, so it runs on the metadata-only
+# fixture directly; the output regex pins the run to a real parse, not just a
+# clean exit. query_benchmark and line_repro read FAB payloads, so each
+# materializes a fixture copy first (see tools_smoke_driver.cmake).
+add_test(NAME tool_dataset_inspect
+    COMMAND dataset_inspect "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d")
+set_tests_properties(tool_dataset_inspect PROPERTIES
+    PASS_REGULAR_EXPRESSION "dimension: 2")
+add_test(NAME tool_dataset_inspect_json
+    COMMAND dataset_inspect --json "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d")
+set_tests_properties(tool_dataset_inspect_json PROPERTIES
+    PASS_REGULAR_EXPRESSION "\"dimension\": 2")
+
+add_test(NAME tool_query_benchmark
+    COMMAND "${CMAKE_COMMAND}"
+        "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+        "-DTOOL=$<TARGET_FILE:query_benchmark>"
+        "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+        "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_tool_query_benchmark"
+        -DMODE=query-benchmark
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tools_smoke_driver.cmake")
+set_tests_properties(tool_query_benchmark PROPERTIES TIMEOUT 30)
+
+add_test(NAME tool_line_repro
+    COMMAND "${CMAKE_COMMAND}"
+        "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+        "-DTOOL=$<TARGET_FILE:line_repro>"
+        "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+        "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_tool_line_repro"
+        -DMODE=line-repro
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tools_smoke_driver.cmake")
+set_tests_properties(tool_line_repro PROPERTIES TIMEOUT 60)
+
 if(TARGET amrexplorer_qt)
     add_executable(test_user_guide_dialog
         unit/test_user_guide_dialog.cpp

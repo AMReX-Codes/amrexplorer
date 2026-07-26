@@ -100,6 +100,56 @@ amrvis::RealBox box2d(double lo, double hi)
     return box;
 }
 
+// Single-level 3-D plotfile, domain (0,0,0)-(3,3,3), unit cells, split into
+// two grids along x: grid 0 = (0,0,0)-(1,3,3), grid 1 = (2,0,0)-(3,3,3).
+// Grid 1 is OFF-ORIGIN on x (lower = {2,0,0}) — the shape a finer AMR level's
+// patch has, and the case that exposed the wrong-axis offset bug in the
+// Dataset window: a yz slice iterates y/z but the offset used them as x/y.
+// q = 100*x + 10*y + z everywhere.
+void writeSplitXPlotfile3d(const std::filesystem::path& root)
+{
+    std::filesystem::create_directories(root / "Level_0");
+    writeText(root / "Header",
+        "HyperCLaw-V1.1\n"
+        "1\nq\n"
+        "3\n0.0\n0\n"
+        "0.0 0.0 0.0\n4.0 4.0 4.0\n\n"
+        "((0,0,0) (3,3,3) (0,0,0))\n"
+        "0\n1.0 1.0 1.0\n0\n0\n"
+        "0 2 0.0\n0\n"
+        "0.0 2.0\n0.0 4.0\n0.0 4.0\n"
+        "2.0 4.0\n0.0 4.0\n0.0 4.0\n"
+        "Level_0/Cell\n");
+    writeText(root / "Level_0" / "Cell_H",
+        "1\n1\n1\n0\n"
+        "(2 0\n"
+        "((0,0,0) (1,3,3) (0,0,0))\n"
+        "((2,0,0) (3,3,3) (0,0,0))\n"
+        ")\n"
+        "2\n"
+        "FabOnDisk: Cell_D_00000 0\n"
+        "FabOnDisk: Cell_D_00001 0\n"
+        "\n"
+        "2,1\n0.0,\n200.0,\n\n2,1\n133.0,\n333.0,\n");
+    const auto blockValues = [](int xLo, int xHi) {
+        std::vector<double> values;  // axis-0 (x) fastest, then y, then z
+        for (int z = 0; z <= 3; ++z) {
+            for (int y = 0; y <= 3; ++y) {
+                for (int x = xLo; x <= xHi; ++x) {
+                    values.push_back(100.0 * x + 10.0 * y + z);
+                }
+            }
+        }
+        return values;
+    };
+    const auto gridA = blockValues(0, 1);
+    const auto gridB = blockValues(2, 3);
+    writeFab(root / "Level_0" / "Cell_D_00000",
+        "((0,0,0) (1,3,3) (0,0,0))", gridA);
+    writeFab(root / "Level_0" / "Cell_D_00001",
+        "((2,0,0) (3,3,3) (0,0,0))", gridB);
+}
+
 } // namespace
 
 int main()
@@ -198,6 +248,42 @@ int main()
             box2d(10.0, 12.0), 1, 0.0, datasetExtractMaxExtent);
         require(extract.nx == 0 && extract.ny == 0,
             "a region outside the domain should extract nothing");
+    }
+
+    // --- 3-D yz slice through an off-origin grid ---------------------------
+    // Regression: extraction offsets must map the in-plane and slice indices
+    // to their real axes using the FAB box. When a grid is off-origin (a
+    // finer level's patch; here grid 1 at x in [2,3]), a yz slice previously
+    // used the y coordinate as x and read the wrong cell — with the checked
+    // offset that surfaced as "FAB point precedes its indexed box".
+    {
+        const auto root3d = std::filesystem::temp_directory_path()
+            / ("amrexplorer-dataset-extract-3d-" + std::to_string(unique));
+        writeSplitXPlotfile3d(root3d);
+        PlotfileDataset dataset3d(root3d, DatasetId{2}, 1ULL << 20);
+
+        RealBox full;
+        full.lower = {{0.0, 0.0, 0.0}};
+        full.upper = {{4.0, 4.0, 4.0}};
+        // normal = 0 (yz plane), slice at the x=3 cell center (3.5).
+        const auto yz = extractDatasetLevel(dataset3d, FieldId{0}, 0, full,
+            /*normalAxis=*/0, /*slicePosition=*/3.5, datasetExtractMaxExtent);
+        require(yz.nx == 4 && yz.ny == 4, "yz-slice extent is wrong");
+        require(yz.sliceIndex == 3, "yz slice did not land on the x=3 cell");
+        // In-plane axis 0 is y, axis 1 is z; value at (y, z) for x=3 is
+        // 300 + 10*y + z. Grid 1 (x in [2,3]) covers the whole slice.
+        const auto at = [&](int y, int z) {
+            return yz.values[static_cast<std::size_t>(y)
+                + static_cast<std::size_t>(yz.nx)
+                    * static_cast<std::size_t>(z)];
+        };
+        require(yz.covered[0] != 0, "yz slice cell (0,0) is uncovered");
+        require(at(0, 0) == 300.0, "yz slice corner value is wrong");
+        require(at(1, 2) == 312.0, "yz slice value maps the wrong axes");
+        require(at(3, 3) == 333.0, "yz slice far value is wrong");
+
+        std::error_code cleanup3d;
+        std::filesystem::remove_all(root3d, cleanup3d);
     }
 
     std::error_code cleanupError;

@@ -2212,14 +2212,19 @@ QString MainWindow::probeReadout(
         boxText = tr("box=none");
     }
 
-    return tr("%1=%2 %3=%4 value=%5 level=%6 %7=(%8) %9")
+    // Standalone FABs and MultiFabs have no AMR hierarchy, so their readout
+    // omits the level.
+    const auto levelText = metadata.hasPhysicalGeometry
+        ? tr(" level=%1").arg(level)
+        : QString();
+    return tr("%1=%2 %3=%4 value=%5%6 %7=(%8) %9")
         .arg(QString::fromLatin1(axisNames[xAxis]))
         .arg(formatNumber(position[xAxis], m_numberFormat))
         .arg(QString::fromLatin1(axisNames[yAxis]))
         .arg(formatNumber(position[yAxis], m_numberFormat))
         .arg(formatNumber(static_cast<double>(plane.values[offset]),
             m_numberFormat))
-        .arg(level)
+        .arg(levelText)
         .arg(QString::fromLatin1(indexKind))
         .arg(join(cell))
         .arg(boxText);
@@ -2847,10 +2852,12 @@ void MainWindow::updateWindowTitle()
     if (name.isEmpty()) {
         name = QString::fromStdString(m_datasetPath.string());
     }
+    // Standalone FABs and MultiFabs carry neither a simulation time nor an
+    // AMR hierarchy, so their titles show just the format name.
     if (m_fabMode) {
-        setWindowTitle(tr("AMReXplorer — %1 — FAB  T = %2")
-            .arg(name)
-            .arg(metadata.time, 0, 'g', 12));
+        setWindowTitle(tr("AMReXplorer — %1 — FAB").arg(name));
+    } else if (!metadata.hasPhysicalGeometry) {
+        setWindowTitle(tr("AMReXplorer — %1 — MultiFab").arg(name));
     } else {
         setWindowTitle(
             tr("AMReXplorer — %1  T = %2  Levels: 0..%3  Finest Level: %3")
@@ -4317,11 +4324,17 @@ void MainWindow::showMetadata(
         new QTreeWidgetItem(m_metadataTree, {name, value});
     };
 
+    // Standalone FABs and MultiFabs carry neither a simulation time nor an
+    // AMR hierarchy, so those rows (and the per-level listing below) would
+    // show invented values; they are skipped for such data.
+    const bool standalone = !metadata.hasPhysicalGeometry;
     addValue(tr("Dataset"), QString::fromStdString(path.string()));
     addValue(tr("Format"), QString::fromStdString(result.fileVersion));
     addValue(tr("Dimension"), QString::number(metadata.dimension));
-    addValue(tr("Time"), QString::number(metadata.time, 'g', 17));
-    addValue(tr("Finest level"), QString::number(metadata.finestLevel));
+    if (!standalone) {
+        addValue(tr("Time"), QString::number(metadata.time, 'g', 17));
+        addValue(tr("Finest level"), QString::number(metadata.finestLevel));
+    }
 
     auto* fields = new QTreeWidgetItem(
         m_metadataTree, {tr("Fields"), QString::number(metadata.fields.size())});
@@ -4344,14 +4357,20 @@ void MainWindow::showMetadata(
         });
     }
 
-    auto* levels = new QTreeWidgetItem(
-        m_metadataTree, {tr("Levels"), QString::number(metadata.levels.size())});
-    for (const auto& level : metadata.levels) {
-        new QTreeWidgetItem(levels, {
-            tr("Level %1").arg(level.level),
-            tr("%1 grid(s), %2").arg(level.boxes.size()).arg(
-                QString::fromStdString(level.dataPath))
-        });
+    if (standalone) {
+        const auto& level = metadata.levels.front();
+        addValue(tr("Grids"), tr("%1 grid(s), %2").arg(level.boxes.size()).arg(
+            QString::fromStdString(level.dataPath)));
+    } else {
+        auto* levels = new QTreeWidgetItem(m_metadataTree,
+            {tr("Levels"), QString::number(metadata.levels.size())});
+        for (const auto& level : metadata.levels) {
+            new QTreeWidgetItem(levels, {
+                tr("Level %1").arg(level.level),
+                tr("%1 grid(s), %2").arg(level.boxes.size()).arg(
+                    QString::fromStdString(level.dataPath))
+            });
+        }
     }
     m_metadataTree->expandAll();
 
@@ -4361,8 +4380,13 @@ void MainWindow::showMetadata(
 
     m_lastFilesRead = result.metrics.filesRead;
     m_lastBytesRead = result.metrics.bytesRead;
-    statusBar()->showMessage(tr("Metadata loaded: %1 field(s), %2 level(s)")
-        .arg(metadata.fields.size()).arg(metadata.levels.size()));
+    statusBar()->showMessage(standalone
+        ? tr("Metadata loaded: %1 field(s), %2 grid(s)")
+              .arg(metadata.fields.size())
+              .arg(metadata.levels.front().boxes.size())
+        : tr("Metadata loaded: %1 field(s), %2 level(s)")
+              .arg(metadata.fields.size())
+              .arg(metadata.levels.size()));
 }
 
 std::optional<QRectF> MainWindow::preservedDataWindow(

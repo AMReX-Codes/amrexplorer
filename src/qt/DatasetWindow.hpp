@@ -37,8 +37,10 @@ struct DatasetRequest {
 };
 
 // Modeless spreadsheet of the raw sample values in the active view's region
-// (the legacy Dataset window): one tab per AMR level with the i/j sample
-// indices as headers and the level min/max above the table; clicking a value
+// (the legacy Dataset window): one tab per AMR level (for standalone
+// MultiFabs and FABs, which have no AMR hierarchy, the single tab is named
+// after the format instead) with the i/j sample indices as headers and the
+// level min/max above the table; clicking a value
 // highlights the corresponding sample in the image. Reads run off the GUI
 // thread and are cancelled on close or refresh.
 class DatasetWindow final : public QWidget {

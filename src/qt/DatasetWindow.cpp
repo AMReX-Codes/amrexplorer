@@ -279,7 +279,13 @@ void DatasetWindow::populateTabs()
         auto* pageLayout = new QVBoxLayout(page);
         pageLayout->addWidget(info);
         pageLayout->addWidget(table, 1);
-        auto label = tr("Level %1").arg(levelData.level);
+        // Standalone MultiFabs and FABs have no AMR hierarchy, so a
+        // "Level 0" tab would suggest a concept those formats lack; their
+        // single tab is named after the format instead.
+        const auto& metadata = m_request.dataset->metadata();
+        auto label = metadata.hasPhysicalGeometry
+            ? tr("Level %1").arg(levelData.level)
+            : metadata.isFab ? tr("FAB") : tr("MultiFab");
         if (extract.truncatedX || extract.truncatedY) {
             label += tr(" (truncated)");
         }

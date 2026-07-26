@@ -252,6 +252,27 @@ void testRejectsMatrixShapeMismatch(const std::filesystem::path& path)
         "do not match");
 }
 
+void testRejectsMalformedMatrixDimensions(const std::filesystem::path& path)
+{
+    // The statistics matrix dimension line must be "rows,columns"; a separator
+    // that is not a comma is rejected before the dimensions are even compared
+    // (and thus before any allocation).
+    expectRejected(path, std::string(kV1Prefix) + "2;2\n", 2,
+        "a matrix dimension line without a comma separator was not rejected",
+        "malformed VisMF matrix dimensions");
+}
+
+void testRejectsMalformedMatrixValues(const std::filesystem::path& path)
+{
+    // Every matrix entry is comma-terminated; an entry followed by anything
+    // else is malformed. The dimensions here match the 2x2 BoxArray/component
+    // shape, so the reject can only come from the third value's missing comma.
+    expectRejected(path,
+        std::string(kV1Prefix) + "2,2\n1.0,2.0,\n3.0 4.0,\n", 2,
+        "a matrix value missing its comma terminator was not rejected",
+        "malformed comma-separated VisMF matrix");
+}
+
 // A well-formed version-2 (NoFabHeader, no statistics matrix) body, whose only
 // defect is the crafted first FAB filename: without the path guard it parses
 // cleanly, so these tests fail loudly if the guard is removed rather than
@@ -388,6 +409,8 @@ int main()
     testVersion4(scratch / "v4_H");
     testRejectsOversizedMatrix(scratch / "bad_matrix_H");
     testRejectsMatrixShapeMismatch(scratch / "bad_shape_H");
+    testRejectsMalformedMatrixDimensions(scratch / "bad_dims_H");
+    testRejectsMalformedMatrixValues(scratch / "bad_values_H");
     testRejectsRelativeTraversal(scratch / "traversal_H");
     testRejectsAbsolutePath(scratch / "absolute_H");
     testRejectsV4MissingComma(scratch / "bad_v4_H");

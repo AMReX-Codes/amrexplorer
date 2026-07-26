@@ -4,6 +4,8 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -129,6 +131,99 @@ int main()
     } else {
         require(false, "the pinned tail entry was wrongly evicted");
     }
+
+    // --- erase(): false for an absent or pinned key, true (and one clear) for
+    // an unpinned one; a failed erase changes nothing.
+    amrvis::ByteLruCache<int, std::string> eraser(100);
+    require(!eraser.erase(99), "erase reported success for an absent key");
+    auto held = eraser.insertAndPin(1, make("held"), 40);
+    require(!eraser.erase(1), "erase removed a pinned entry");
+    require(eraser.metrics().residentBytes == 40, "a failed erase changed residency");
+    require(eraser.metrics().clears == 0, "a failed erase counted a clear");
+    held = {};
+    const auto beforeErase = eraser.metrics();
+    require(eraser.erase(1), "erase failed on an unpinned entry");
+    require(eraser.metrics().residentBytes == 0, "erase left the entry resident");
+    require(eraser.metrics().clears == beforeErase.clears + 1,
+        "a successful erase did not count a clear");
+    require(eraser.metrics().evictions == beforeErase.evictions,
+        "erase inflated the eviction count");
+    require(!eraser.findAndPin(1), "the erased entry was still present");
+
+    // --- hitRate(): 0 with no accesses, hits/(hits+misses) otherwise.
+    amrvis::ByteLruCache<int, std::string> rate(100);
+    require(rate.metrics().hitRate() == 0.0, "the empty-cache hit rate is not zero");
+    require(!rate.findAndPin(1), "find on an absent key returned a value");
+    require(!rate.findAndPin(2), "find on an absent key returned a value");
+    require(rate.metrics().hitRate() == 0.0, "the all-miss hit rate is not zero");
+    auto rateHeld = rate.insertAndPin(1, make("x"), 10);  // a new key: no hit/miss
+    (void)rate.findAndPin(1);
+    (void)rate.findAndPin(1);
+    require(rate.metrics().hits == 2 && rate.metrics().misses == 2,
+        "the hit/miss tally for the ratio is wrong");
+    require(rate.metrics().hitRate() == 0.5,
+        "the hit rate is not hits / (hits + misses)");
+    rateHeld = {};
+
+    // --- LRU ordering with more than two entries: touching an entry moves it
+    // to the front, so a later eviction drops the genuinely-oldest untouched
+    // entry, not the touched one. Order after inserts (tail->head): 1, 2, 3.
+    amrvis::ByteLruCache<int, std::string> order(100);
+    auto a = order.insertAndPin(1, make("a"), 30);
+    auto b = order.insertAndPin(2, make("b"), 30);
+    auto c = order.insertAndPin(3, make("c"), 30);
+    a = {};
+    b = {};
+    c = {};
+    { auto touched = order.findAndPin(1); }  // 1 -> front, so 2 is now the tail
+    auto d = order.insertAndPin(4, make("d"), 30);  // 90 + 30 > 100: evict tail (2)
+    require(!order.findAndPin(2), "the least-recently-used entry was not evicted");
+    require(bool(order.findAndPin(1)), "a recently-touched entry was wrongly evicted");
+    require(bool(order.findAndPin(3)), "a mid-list entry was wrongly evicted");
+    d = {};
+
+    // --- concurrent stress: many threads insert/find/erase against one cache.
+    // The mutex must keep every operation consistent (this is the case the TSan
+    // build watches); afterward no pins remain and the budget still holds.
+    {
+        amrvis::ByteLruCache<int, std::string> shared(4000);
+        constexpr int threadCount = 8;
+        constexpr int iterations = 5000;
+        std::vector<std::thread> workers;
+        workers.reserve(threadCount);
+        for (int t = 0; t < threadCount; ++t) {
+            workers.emplace_back([&shared, t] {
+                for (int i = 0; i < iterations; ++i) {
+                    const int key = (t * 31 + i) % 128;
+                    if (i % 4 == 0) {
+                        (void)shared.erase(key);
+                    } else if (auto found = shared.findAndPin(key)) {
+                        (void)found;  // hold the pin to end of iteration
+                    } else {
+                        try {
+                            auto handle = shared.insertAndPin(key,
+                                std::make_shared<const std::string>(
+                                    std::to_string(key)), 100);
+                            (void)handle;
+                        } catch (const amrvis::CacheBudgetExceeded&) {
+                            // Transient pin pressure is an acceptable outcome.
+                        }
+                    }
+                }
+            });
+        }
+        for (auto& worker : workers) {
+            worker.join();
+        }
+        const auto snapshot = shared.metrics();
+        require(snapshot.pinnedBytes == 0,
+            "a handle outlived its scope in the stress test");
+        require(snapshot.withinBudget(),
+            "the cache exceeded its budget under concurrency");
+        require(snapshot.hits + snapshot.misses > 0,
+            "the stress test recorded no cache accesses");
+    }
+
     return 0;
 }
 

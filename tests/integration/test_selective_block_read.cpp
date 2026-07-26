@@ -166,6 +166,51 @@ void testRejectsOversizedBox(const std::filesystem::path& base)
     require(threw, "an oversized FAB box was not rejected before allocation");
 }
 
+// In version 1 each FAB's own inline header carries the component count, which
+// the block reader cross-checks against the VisMF _H metadata. When they
+// disagree the read must be rejected rather than strided with the wrong
+// component count. (For version >= 2 the header is filled from the metadata, so
+// this reconciliation is a no-op there and only bites on v1.)
+void testRejectsV1FabComponentDisagreement(const std::filesystem::path& base)
+{
+    const auto root = base / "v1_component_disagreement";
+    std::filesystem::create_directories(root / "Level_0");
+    writeText(root / "Header", minimalHeader("Level_0/Cell"));
+    // Version-1 _H: one box, one component (matching the plotfile Header).
+    writeText(root / "Level_0" / "Cell_H",
+        "1\n1\n1\n0\n"
+        "(1 0\n((0,0) (1,1) (0,0))\n)\n"
+        "1\nFabOnDisk: Cell_D_00000 0\n\n"
+        "1,1\n1.0,\n\n1,1\n4.0,\n");
+    {
+        std::ofstream data(root / "Level_0" / "Cell_D_00000", std::ios::binary);
+        require(static_cast<bool>(data), "could not create v1 disagreement payload");
+        // The FAB inline header claims two components; the _H declared one.
+        data << "FAB ((8, (64 11 52 0 1 12 0 1023)),"
+                "(8, (8 7 6 5 4 3 2 1)))((0,0) (1,1) (0,0)) 2\n";
+        const std::array<double, 4> values{1.0, 2.0, 3.0, 4.0};
+        data.write(reinterpret_cast<const char*>(values.data()),
+            static_cast<std::streamsize>(sizeof(values)));
+    }
+
+    const auto metadata = amrvis::PlotfileMetadataReader{}.read(root);
+    amrvis::PlotfileBlockReader reader(root, metadata.metadata);
+    amrvis::BlockRequest request;
+    request.dataset.value = 1;
+    request.field.value = 0;
+    bool threw = false;
+    try {
+        (void)reader.readBlock(request);
+    } catch (const amrvis::BlockReadError& error) {
+        // Pin to the reconciliation message so an incidental failure (e.g. a
+        // payload-size guard) cannot pass this in its place.
+        threw = std::string(error.what()).find("component counts disagree")
+            != std::string::npos;
+    }
+    require(threw,
+        "a v1 FAB header disagreeing with the VisMF component count was not rejected");
+}
+
 } // namespace
 
 int main()
@@ -279,6 +324,7 @@ int main()
     testBigEndianDecode(root);
     testRejectsEscapingDataPath(root);
     testRejectsOversizedBox(root);
+    testRejectsV1FabComponentDisagreement(root);
 
     std::filesystem::remove_all(root);
     return 0;

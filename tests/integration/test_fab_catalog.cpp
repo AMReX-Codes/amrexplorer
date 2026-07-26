@@ -289,6 +289,35 @@ int main()
         && fab.metadata->levels[0].domain.upper[1] == 3,
         "MultiFab ghost points were not included in selected FAB mode");
 
+    // makeSelectedFabMetadata's version-1 branch takes the selected FAB's box
+    // from its own inline header (via inspectFabRecord) instead of growing the
+    // source box by the level ghost width (the v2 path checked above). Point a
+    // v1 source at the raw FAB written at the top of this test — inline box
+    // ((0,0) (1,0)) — but give it a ghost width that would grow to a *different*
+    // box, so this can only pass if the inline header supplied the domain.
+    amrvis::DatasetMetadata v1Source;
+    v1Source.dimension = 2;
+    v1Source.finestLevel = 0;
+    v1Source.fields.push_back(
+        {"value", amrvis::Centering::Cell, {"value"}});
+    v1Source.levels.resize(1);
+    auto& v1Level = v1Source.levels.front();
+    v1Level.domain = {{{0, 0, 0}}, {{1, 1, 0}}, {{0, 0, 0}}};
+    v1Level.boxes.push_back(v1Level.domain);
+    v1Level.blocks.push_back({v1Level.domain, "raw_fabs", 0, std::nullopt});
+    v1Level.ghostWidth = {{1, 2, 0}};   // v2 would grow this to ((-1,-2) (2,3))
+    v1Level.storedComponents = 1;
+    v1Level.visMfHeaderVersion = 1;
+    const auto v1Fab = amrvis::makeSelectedFabMetadata(v1Source, 0, 0, root);
+    require(v1Fab.metadata->levels[0].domain.lower[0] == 0
+        && v1Fab.metadata->levels[0].domain.upper[0] == 1
+        && v1Fab.metadata->levels[0].domain.lower[1] == 0
+        && v1Fab.metadata->levels[0].domain.upper[1] == 0,
+        "v1 selected FAB did not take its box from the inline FAB header");
+    require(v1Fab.metadata->levels[0].blocks[0].box
+                == v1Fab.metadata->levels[0].domain,
+        "v1 selected FAB block box disagrees with its domain");
+
     std::filesystem::remove_all(root);
     return 0;
 }

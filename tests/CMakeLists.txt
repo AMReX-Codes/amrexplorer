@@ -65,6 +65,13 @@ target_link_libraries(
 )
 add_test(NAME slice_range_resolver COMMAND test_slice_range_resolver)
 
+add_executable(test_slice_pipeline unit/test_slice_pipeline.cpp)
+target_link_libraries(
+    test_slice_pipeline
+    PRIVATE amrexplorer::pipeline amrexplorer::warnings
+)
+add_test(NAME slice_pipeline COMMAND test_slice_pipeline)
+
 add_executable(test_vismf_index unit/test_vismf_index.cpp)
 target_link_libraries(test_vismf_index PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME vismf_index COMMAND test_vismf_index)
@@ -186,6 +193,19 @@ if(TARGET amrexplorer_qt)
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_scientific_double_spin_box>"
     )
+
+    # NumberFormat needs only QString (QtCore), no widgets or QApplication.
+    add_executable(test_number_format
+        unit/test_number_format.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp"
+    )
+    target_include_directories(test_number_format
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
+    )
+    target_link_libraries(test_number_format
+        PRIVATE amrexplorer::warnings Qt6::Core
+    )
+    add_test(NAME number_format COMMAND test_number_format)
 
     add_executable(test_line_plot_hover
         unit/test_line_plot_hover.cpp

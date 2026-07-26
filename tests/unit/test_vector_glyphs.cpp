@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 namespace {
@@ -118,6 +119,34 @@ int main()
         threw = true;
     }
     require(threw, "a zero glyph count was accepted");
+
+    // A non-finite sample is skipped like an invalid one -- and, crucially, it
+    // must not poison maxSpeed (an unguarded max would go NaN/Inf and collapse
+    // every other arrow to zero length). A NaN u at a stride cell drops only
+    // that arrow; the other 49 render normally (150 - 3 = 147).
+    {
+        auto nanU = makePlane(20, 10, 1.0F);
+        const auto flatV = makePlane(20, 10, 0.0F);
+        nanU.values[0] = std::numeric_limits<float>::quiet_NaN();
+        const auto withNaN = amrvis::generateVectorGlyphs(nanU, flatV, 10);
+        require(withNaN.size() == 147, "a NaN sample was not skipped");
+
+        auto infV = makePlane(20, 10, 0.0F);
+        const auto flatU = makePlane(20, 10, 1.0F);
+        infV.values[0] = std::numeric_limits<float>::infinity();
+        const auto withInf = amrvis::generateVectorGlyphs(flatU, infV, 10);
+        require(withInf.size() == 147, "an infinite sample was not skipped");
+
+        // A non-finite sample away from any stride cell (column 1 with stride 2)
+        // is seen only by the maxSpeed scan; skipping it there leaves all 50
+        // arrows intact, proving the scan's finiteness guard.
+        auto offGrid = makePlane(20, 10, 1.0F);
+        const auto offGridV = makePlane(20, 10, 0.0F);
+        offGrid.values[1] = std::numeric_limits<float>::quiet_NaN();
+        const auto intact = amrvis::generateVectorGlyphs(offGrid, offGridV, 10);
+        require(intact.size() == 150,
+            "a non-finite off-grid sample corrupted the glyph field");
+    }
 
     return 0;
 }

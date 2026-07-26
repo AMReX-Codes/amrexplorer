@@ -395,5 +395,32 @@ int main()
             || (nearPoint(firstPoint, 335.5, 559.5) && nearPoint(lastPoint, 559.5, 335.5)),
         "display contour endpoints miss the expected display pixels");
 
+    // (n) One-pixel-thick planes have no complete 2x2 marching-squares cell
+    // (the cell loop runs to width-1 and height-1), so a 1xN or Nx1 plane
+    // yields nothing even though its values straddle the requested level.
+    {
+        amrvis::ScalarPlane column;   // 1 x 5
+        column.width = 1;
+        column.height = 5;
+        column.values = {0.0F, 1.0F, 2.0F, 3.0F, 4.0F};
+        column.valid.assign(5, 1);
+        column.sourceLevel.assign(5, 0);
+        require(amrvis::generateContours(column, {2.5}).empty(),
+            "a 1xN plane produced contour segments");
+        require(amrvis::generateContourPolylines(column, {2.5}, 0).empty(),
+            "a 1xN plane produced contour polylines");
+
+        amrvis::ScalarPlane row;      // 5 x 1
+        row.width = 5;
+        row.height = 1;
+        row.values = {0.0F, 1.0F, 2.0F, 3.0F, 4.0F};
+        row.valid.assign(5, 1);
+        row.sourceLevel.assign(5, 0);
+        require(amrvis::generateContours(row, {2.5}).empty(),
+            "an Nx1 plane produced contour segments");
+        require(amrvis::generateContourPolylines(row, {2.5}, 0).empty(),
+            "an Nx1 plane produced contour polylines");
+    }
+
     return 0;
 }

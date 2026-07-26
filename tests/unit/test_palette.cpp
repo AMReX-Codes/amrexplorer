@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -128,6 +129,21 @@ int main(int argc, char** argv)
         "normalized endpoints mapped to one color");
     require(rainbow.argb(-0.5) == rainbow.argb(0.0), "argb did not clamp below zero");
     require(rainbow.argb(1.5) == rainbow.argb(1.0), "argb did not clamp above one");
+
+    // Non-finite inputs follow the same legacy clipping. NaN fails both the
+    // t > 0 and t < 1 tests and maps to the first data slot (paletteStart) --
+    // the documented behavior that had no coverage. -inf lands there too, while
+    // +inf maps to the last data slot (paletteEnd).
+    const auto nan = std::numeric_limits<double>::quiet_NaN();
+    const auto infinity = std::numeric_limits<double>::infinity();
+    require(rainbow.argb(nan) == rainbow.slotArgb(amrvis::Palette::paletteStart),
+        "argb(NaN) did not map to the first data slot");
+    require(rainbow.argb(nan) == rainbow.argb(0.0),
+        "argb(NaN) disagreed with the clamped-below-zero color");
+    require(rainbow.argb(-infinity) == rainbow.slotArgb(amrvis::Palette::paletteStart),
+        "argb(-inf) did not map to the first data slot");
+    require(rainbow.argb(infinity) == rainbow.slotArgb(amrvis::Palette::paletteEnd),
+        "argb(+inf) did not map to the last data slot");
 
     // The coarsest drawn level is white-ish, finer levels use palette colors.
     const auto coarseColor = rainbow.levelColor(0, 3);

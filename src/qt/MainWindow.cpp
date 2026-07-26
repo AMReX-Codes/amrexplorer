@@ -852,7 +852,7 @@ void MainWindow::setActiveView(PlaneViewState& state)
     if (m_viewDimension == 3) {
         state.view->setActiveBorder(true);
     }
-    if (state.plane.width <= 0 || state.plane.height <= 0) {
+    if (state.plane->width <= 0 || state.plane->height <= 0) {
         return;
     }
     // The color scale and range boxes track the active view.
@@ -1431,11 +1431,11 @@ bool MainWindow::activeViewRasterMatchesDisplayRangeForTest()
         return false;
     }
     const auto& state = *m_activeView;
-    if (state.plane.width <= 0 || state.plane.height <= 0
+    if (state.plane->width <= 0 || state.plane->height <= 0
         || !state.view->hasImage()) {
         return false;
     }
-    const auto reference = renderScalarPlane(state.plane, ScalarRenderSettings{
+    const auto reference = renderScalarPlane(*state.plane, ScalarRenderSettings{
         .minimum = state.displayMinimum,
         .maximum = state.displayMaximum,
         .logarithmic = state.displayLogarithmic,
@@ -1451,12 +1451,12 @@ bool MainWindow::activeViewRasterMatchesDisplayRangeForTest()
 
 void MainWindow::rubberBandZoomActiveViewForTest()
 {
-    if (m_activeView == nullptr || m_activeView->plane.width <= 0
-        || m_activeView->plane.height <= 0) {
+    if (m_activeView == nullptr || m_activeView->plane->width <= 0
+        || m_activeView->plane->height <= 0) {
         return;
     }
-    const auto width = static_cast<double>(m_activeView->plane.width);
-    const auto height = static_cast<double>(m_activeView->plane.height);
+    const auto width = static_cast<double>(m_activeView->plane->width);
+    const auto height = static_cast<double>(m_activeView->plane->height);
     rubberBandZoom(*m_activeView,
         QRectF(0.25 * width, 0.25 * height, 0.5 * width, 0.5 * height));
 }
@@ -1673,7 +1673,7 @@ QLineF MainWindow::planeSegmentToScene(const PlaneViewState& state,
 {
     // Plane row 0 is the bottom row; the displayed image is mirrored
     // vertically, so scene y runs opposite to plane y (see showSlice).
-    const auto top = static_cast<double>(state.plane.height) - 1.0;
+    const auto top = static_cast<double>(state.plane->height) - 1.0;
     return QLineF(QPointF(x0, top - y0), QPointF(x1, top - y1));
 }
 
@@ -1702,7 +1702,7 @@ void MainWindow::updateOverlay(PlaneViewState& state)
 {
     std::vector<OverlaySegment> overlays;
     std::vector<OverlayPath> paths;
-    const auto planeReady = state.plane.width > 1 && state.plane.height > 1;
+    const auto planeReady = state.plane->width > 1 && state.plane->height > 1;
     if (!planeReady || m_displayMode == DisplayMode::Raster) {
         state.view->setOverlaySegments(overlays);
         state.view->setOverlayPaths(paths);
@@ -1735,7 +1735,7 @@ void MainWindow::updateOverlay(PlaneViewState& state)
         // image is mirrored vertically, so scene y runs opposite to plane y
         // (see showSlice).
         const auto contourColor = overlayColor();
-        const auto top = static_cast<double>(state.plane.height) - 1.0;
+        const auto top = static_cast<double>(state.plane->height) - 1.0;
         std::map<double, QPainterPath> pathsByValue;
         for (const auto& polyline : state.contourPolylines) {
             if (polyline.points.empty()) {
@@ -1970,7 +1970,7 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
 {
     std::vector<PointOverlay> overlays;
     if (!m_dataset || !state.view->hasImage()
-        || state.plane.width <= 0 || state.plane.height <= 0) {
+        || state.plane->width <= 0 || state.plane->height <= 0) {
         state.view->setPointOverlays(overlays);
         return;
     }
@@ -1980,7 +1980,7 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
     const auto axes = displayAxes(state.normal);
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);
-    const auto& region = state.plane.physicalRegion;
+    const auto& region = state.plane->physicalRegion;
     const auto xExtent = region.upper[xAxis] - region.lower[xAxis];
     const auto yExtent = region.upper[yAxis] - region.lower[yAxis];
     if (!(xExtent > 0.0) || !(yExtent > 0.0)) {
@@ -2001,9 +2001,9 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
                 continue;
             }
             overlay.points.emplace_back(
-                (x - region.lower[xAxis]) / xExtent * state.plane.width,
-                state.plane.height
-                    - (y - region.lower[yAxis]) / yExtent * state.plane.height);
+                (x - region.lower[xAxis]) / xExtent * state.plane->width,
+                state.plane->height
+                    - (y - region.lower[yAxis]) / yExtent * state.plane->height);
         }
         overlays.push_back(std::move(overlay));
     }
@@ -2097,7 +2097,7 @@ void MainWindow::resetZoomAllViews()
 QString MainWindow::probeReadout(
     const PlaneViewState& state, int x, int displayY) const
 {
-    const auto& plane = state.plane;
+    const auto& plane = *state.plane;
     if (!m_dataset || plane.width <= 0 || plane.height <= 0) {
         return tr("no data");
     }
@@ -2245,7 +2245,7 @@ void MainWindow::probeClicked(PlaneViewState& state, int x, int displayY)
 void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
 {
     setActiveView(state);
-    const auto& plane = state.plane;
+    const auto& plane = *state.plane;
     if (!m_dataset || plane.width <= 0 || plane.height <= 0) {
         return;
     }
@@ -2285,7 +2285,7 @@ void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
 void MainWindow::applyRubberBandZoom(
     PlaneViewState& state, const QRectF& normalizedRect)
 {
-    const auto& plane = state.plane;
+    const auto& plane = *state.plane;
     if (!m_dataset || plane.width <= 0 || plane.height <= 0) {
         return;
     }
@@ -2343,8 +2343,8 @@ void MainWindow::beginPanDrag(PlaneViewState& state)
     m_panDataRefresh = state.visibleRegion.has_value();
     if (m_panDataRefresh) {
         m_panStartRegion = *state.visibleRegion;
-        m_panPlaneWidth = state.plane.width;
-        m_panPlaneHeight = state.plane.height;
+        m_panPlaneWidth = state.plane->width;
+        m_panPlaneHeight = state.plane->height;
     }
 }
 
@@ -2425,17 +2425,17 @@ void MainWindow::setupPanShortcuts()
 
 void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
 {
-    if (!state.view->hasImage() || state.plane.width <= 0 || state.plane.height <= 0) {
+    if (!state.view->hasImage() || state.plane->width <= 0 || state.plane->height <= 0) {
         return;
     }
     setActiveView(state);
-    const auto stepX = std::max(1.0, static_cast<double>(state.plane.width) * 0.05);
-    const auto stepY = std::max(1.0, static_cast<double>(state.plane.height) * 0.05);
+    const auto stepX = std::max(1.0, static_cast<double>(state.plane->width) * 0.05);
+    const auto stepY = std::max(1.0, static_cast<double>(state.plane->height) * 0.05);
     const QPointF sceneDelta(direction.x() * stepX, direction.y() * stepY);
 
     if (state.visibleRegion.has_value() && m_dataset) {
         const auto region = shiftedPanRegion(state, *state.visibleRegion,
-            state.plane.width, state.plane.height, sceneDelta);
+            state.plane->width, state.plane->height, sceneDelta);
         if (!region.has_value()) {
             return;
         }
@@ -2515,7 +2515,7 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
     Qt::MouseButton button)
 {
     setActiveView(state);
-    const auto& plane = state.plane;
+    const auto& plane = *state.plane;
     if (!m_controlsReady || !m_dataset || plane.width <= 0 || plane.height <= 0) {
         return;
     }
@@ -2617,21 +2617,21 @@ void MainWindow::sliceMoveRequested(PlaneViewState& state, int imageX, int image
 {
     setActiveView(state);
     if (!m_dataset || m_dataset->metadata().dimension != 3
-        || state.plane.width <= 0 || state.plane.height <= 0) {
+        || state.plane->width <= 0 || state.plane->height <= 0) {
         return;
     }
     // Move both in-plane axes so the three slices intersect at the clicked
     // point. A single right-click replaces the old middle=x / right=y split,
     // which was inaccessible on Mac (no middle button).
     const auto axes = displayAxes(state.normal);
-    const auto& region = state.plane.physicalRegion;
+    const auto& region = state.plane->physicalRegion;
     for (std::size_t i = 0; i < 2; ++i) {
         const auto axis = axes[i];
         const auto fraction = (i == 0)
             ? (static_cast<double>(imageX) + 0.5)
-                / static_cast<double>(state.plane.width)
-            : (static_cast<double>(state.plane.height - 1 - imageY) + 0.5)
-                / static_cast<double>(state.plane.height);
+                / static_cast<double>(state.plane->width)
+            : (static_cast<double>(state.plane->height - 1 - imageY) + 0.5)
+                / static_cast<double>(state.plane->height);
         const auto index = static_cast<std::size_t>(axis);
         setSlicePosition(axis, region.lower[index]
             + fraction * (region.upper[index] - region.lower[index]));
@@ -3263,7 +3263,7 @@ void MainWindow::beginAnimationExport(const QString& path, bool includeColorBar)
 std::optional<DatasetRequest> MainWindow::buildDatasetRequest() const
 {
     if (!m_dataset || m_activeView == nullptr
-        || m_activeView->plane.width <= 0 || m_activeView->plane.height <= 0
+        || m_activeView->plane->width <= 0 || m_activeView->plane->height <= 0
         || m_fieldSelector->currentIndex() < 0) {
         return std::nullopt;
     }
@@ -3276,7 +3276,7 @@ std::optional<DatasetRequest> MainWindow::buildDatasetRequest() const
             metadata.fields[request.field.value].name));
     // The "selected region" is the active view's visible region: the
     // rubber-band zoom, or the whole domain when fitted.
-    request.region = m_activeView->plane.physicalRegion;
+    request.region = m_activeView->plane->physicalRegion;
     request.normalAxis = m_activeView->normal;
     if (metadata.dimension == 3) {
         request.slicePosition
@@ -3344,7 +3344,7 @@ void MainWindow::datasetCellActivated(const RealBox& physicalCell)
     if (m_activeView == nullptr) {
         return;
     }
-    const auto& plane = m_activeView->plane;
+    const auto& plane = *m_activeView->plane;
     if (plane.width <= 0 || plane.height <= 0) {
         return;
     }
@@ -3411,9 +3411,11 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         state->stopSource.request_stop();
         ++state->sliceGeneration;
         state->view->setPlaceholder(tr("Loading dataset..."));
-        state->plane = {};
-        state->contourPlane = {};
-        state->contourFinePlane = {};
+        // Fresh empty snapshots — the pointers must stay non-null (see
+        // PlaneViewState).
+        state->plane = std::make_shared<const ScalarPlane>();
+        state->contourPlane = std::make_shared<const ScalarPlane>();
+        state->contourFinePlane = std::make_shared<const ScalarPlane>();
         state->contourFineFactor = 1;
         state->contourPolylines.clear();
         state->fieldName.clear();
@@ -4021,12 +4023,12 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     const auto contourCount = m_contourCount;
 
     const auto fromCache = state.hasCachedRequest
-        && state.plane.width > 0
+        && state.plane->width > 0
         && sameSliceSpec(state.cachedRequest, request)
         && state.cachedVectorVField == vectorVField
         && state.cachedVectorUField == vectorUField
         && displayMode == state.cachedMode
-        && (!isContourMode(displayMode) || state.contourFinePlane.width > 0)
+        && (!isContourMode(displayMode) || state.contourFinePlane->width > 0)
         && (displayMode != DisplayMode::VelocityVectors
             || (!state.vectorSegments.empty()
                 && contourCount == state.cachedContourCount));
@@ -4047,7 +4049,12 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     QFuture<SliceDisplayResult> future;
     if (fromCache) {
         // Cheap path: re-range, re-render, and re-contour the cached planes
-        // on a worker; no SliceQuery runs at all.
+        // on a worker; no SliceQuery runs at all. The captures are shared_ptr
+        // snapshots — refcount bumps, not the former ~110 MB plane deep copy
+        // on the GUI thread. A newer arrival can safely replace the view's
+        // pointers meanwhile; this worker keeps reading its own snapshots.
+        // (refreshCachedSlice's by-value parameters still copy the planes,
+        // but on the worker thread.)
         future = QtConcurrent::run([dataset, request,
             displayPlane = state.plane,
             contourPlane = state.contourPlane,
@@ -4056,8 +4063,8 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             vectors = state.vectorSegments,
             rangeMode, userRange, logarithmic, palette, displayMode,
             vectorUField, vectorVField, contourCount, rasterDirty]() mutable {
-            return refreshCachedSlice(dataset, request, std::move(displayPlane),
-                std::move(contourPlane), std::move(contourFinePlane),
+            return refreshCachedSlice(dataset, request, *displayPlane,
+                *contourPlane, *contourFinePlane,
                 contourFineFactor, std::move(vectors), rangeMode, userRange,
                 logarithmic, palette, displayMode, vectorUField, vectorVField,
                 contourCount, rasterDirty);
@@ -4118,7 +4125,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     // Refresh the cache after syncVisibleRanges so the 3-D
                     // union across all panels is captured.
                     if (isFullDomain && rangeMode == RangeMode::Visible
-                        && state.plane.width > 0) {
+                        && state.plane->width > 0) {
                         m_displayCoordinator.storeFullDomainRange(rangeKey,
                             {state.displayMinimum, state.displayMaximum});
                     }
@@ -4170,13 +4177,13 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
 {
     std::vector<GridBoxOverlay> overlays;
     if (!m_boxesAction->isChecked() || !m_dataset || !state.view->hasImage()
-        || state.plane.width <= 0 || state.plane.height <= 0) {
+        || state.plane->width <= 0 || state.plane->height <= 0) {
         state.view->setGridBoxes(overlays);
         return;
     }
 
     const auto& metadata = m_dataset->metadata();
-    const auto& plane = state.plane;
+    const auto& plane = *state.plane;
     const auto normal = metadata.dimension == 3 ? state.normal : -1;
     const auto axes = displayAxes(state.normal);
     const auto rawLevel = m_levelSelector->currentData().toInt();
@@ -4257,13 +4264,13 @@ void MainWindow::updateCrosshairs(PlaneViewState& state)
     QColor verticalColor;
     QColor horizontalColor;
     if (m_dataset && m_dataset->metadata().dimension == 3
-        && state.plane.width > 0 && state.plane.height > 0) {
+        && state.plane->width > 0 && state.plane->height > 0) {
         const auto axes = displayAxes(state.normal);
         const auto xAxis = static_cast<std::size_t>(axes[0]);
         const auto yAxis = static_cast<std::size_t>(axes[1]);
-        const auto& region = state.plane.physicalRegion;
-        const auto width = static_cast<double>(state.plane.width);
-        const auto height = static_cast<double>(state.plane.height);
+        const auto& region = state.plane->physicalRegion;
+        const auto width = static_cast<double>(state.plane->width);
+        const auto height = static_cast<double>(state.plane->height);
         // The vertical guide marks the slice position of the axis pointing
         // horizontally in this view, and vice versa; each guide takes that
         // axis' legacy palette color and hides outside the displayed region.
@@ -4342,7 +4349,7 @@ void MainWindow::showMetadata(
 std::optional<QRectF> MainWindow::preservedDataWindow(
     const PlaneViewState& state, const ScalarPlane& incoming) const
 {
-    const auto& cached = state.plane;
+    const auto& cached = *state.plane;
     const auto axes = displayAxes(state.normal);
     // Equal densities (or degenerate geometry) mean the preserved scene
     // transform already preserves the on-screen data, so leave it alone; the
@@ -4419,9 +4426,13 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
             state.view->zoomToRect(*dataWindowInNewScene);
         }
     }
-    state.plane = display.slice.plane;
-    state.contourPlane = display.contourPlane;
-    state.contourFinePlane = display.contourFinePlane;
+    // Fresh immutable snapshots: replace the pointers, never mutate the
+    // pointees a cached-planes refresh worker may still be reading.
+    state.plane = std::make_shared<const ScalarPlane>(display.slice.plane);
+    state.contourPlane
+        = std::make_shared<const ScalarPlane>(display.contourPlane);
+    state.contourFinePlane
+        = std::make_shared<const ScalarPlane>(display.contourFinePlane);
     state.contourFineFactor = display.contourFineFactor;
     state.contourPolylines = display.contourPolylines;
     const auto fieldName = QString::fromStdString(display.fieldName);
@@ -4494,7 +4505,7 @@ void MainWindow::syncVisibleRanges()
     std::array<DisplayCoordinator::PanelSyncInput, 3> inputs;
     for (std::size_t index = 0; index < views.size(); ++index) {
         const auto* state = views[index];
-        inputs[index] = {&state->plane, &state->contourFinePlane,
+        inputs[index] = {state->plane.get(), state->contourFinePlane.get(),
             state->contourFineFactor, state->displayLogarithmic,
             state->cachedRequest.outputSize};
     }
@@ -4522,13 +4533,13 @@ void MainWindow::syncVisibleRanges()
     }
     // setImage clears every scene overlay; restore them from viewer state.
     for (auto* state : views) {
-        if (state->plane.width > 0 && state->plane.height > 0) {
+        if (state->plane->width > 0 && state->plane->height > 0) {
             updateGridBoxes(*state);
             updateOverlay(*state);
             updateParticleOverlay(*state);
         }
     }
-    if (m_activeView && m_activeView->plane.width > 0) {
+    if (m_activeView && m_activeView->plane->width > 0) {
         const auto fieldName = m_fieldSelector->currentText();
         const auto label = m_activeView->displayLogarithmic
             ? fieldName + tr(" (log)") : fieldName;

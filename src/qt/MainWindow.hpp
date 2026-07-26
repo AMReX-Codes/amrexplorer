@@ -215,14 +215,24 @@ private:
         ImageView* view = nullptr;
         int normal = 1;
         QString label;      // "2-D" / "YZ" / "XZ" / "XY"
-        ScalarPlane plane;
+        // The displayed plane and its contour-mode companions are immutable
+        // shared snapshots, never null (empty planes when nothing is shown):
+        // arrivals REPLACE the pointer and never mutate the pointee. The
+        // cached-planes refresh worker (requestSlice's fromCache path)
+        // captures these shared_ptrs — a refcount bump instead of the former
+        // ~110 MB deep copy on the GUI thread — and can keep reading its
+        // snapshots safely while a newer arrival swaps the view's pointers.
+        std::shared_ptr<const ScalarPlane> plane
+            = std::make_shared<const ScalarPlane>();
         // Contour-mode companions of plane: the data-resolution plane the
         // contours were extracted from, its bilinear refinement, and the
         // display-space polylines. Cleared and updated exactly where plane
         // is; together with the cache key below they let range, palette,
         // and contour-count changes refresh without a new SliceQuery.
-        ScalarPlane contourPlane;
-        ScalarPlane contourFinePlane;
+        std::shared_ptr<const ScalarPlane> contourPlane
+            = std::make_shared<const ScalarPlane>();
+        std::shared_ptr<const ScalarPlane> contourFinePlane
+            = std::make_shared<const ScalarPlane>();
         int contourFineFactor = 1;
         std::vector<ContourPolyline> contourPolylines;
         QString fieldName;

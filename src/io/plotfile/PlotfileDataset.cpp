@@ -1,6 +1,7 @@
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 
+#include <chrono>
 #include <cstddef>
 #include <mutex>
 #include <stdexcept>
@@ -9,11 +10,10 @@
 namespace amrvis {
 namespace {
 
-std::mutex& globalAmrexIoMutex()
-{
-    static std::mutex mutex;
-    return mutex;
-}
+// How often a thread waiting for the per-dataset IO lock wakes to re-check its
+// cancellation token, so cancellation latency is bounded by this interval
+// rather than by the in-progress block read (potentially seconds for ~1 GB).
+constexpr auto ioLockPollInterval = std::chrono::milliseconds(25);
 
 std::uint64_t residentBytes(const FabBlock& block)
 {
@@ -118,7 +118,15 @@ PlotfileDataset::BlockAccess PlotfileDataset::requestBlock(
         return {std::move(cached), true, {}};
     }
 
-    std::scoped_lock ioLock(globalAmrexIoMutex());
+    // Acquire the per-dataset IO lock, polling the cancellation token while we
+    // wait so a request can bail promptly instead of being stuck behind a
+    // long in-progress read on this dataset.
+    std::unique_lock<std::timed_mutex> ioLock(m_ioMutex, std::defer_lock);
+    while (!ioLock.try_lock_for(ioLockPollInterval)) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
+    }
     if (cancellation.stop_requested()) {
         throw ReadCancelled();
     }

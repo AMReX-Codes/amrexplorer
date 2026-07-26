@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <mutex>
 
 namespace amrvis {
 
@@ -51,6 +52,13 @@ private:
     std::vector<ParticleSpeciesMetadata> m_particleSpecies;
     PlotfileBlockReader m_blockReader;
     BlockCache m_cache;
+    // Serializes this dataset's block reads so concurrent misses of the same
+    // block read it once (see the double-checked lookup in requestBlock).
+    // Per-dataset, not global: unrelated datasets read in parallel. A timed
+    // mutex lets a waiter poll its StopToken instead of blocking a whole block
+    // read long. (This makes PlotfileDataset non-movable, which is fine — it
+    // is only ever a stack local or held via shared_ptr.)
+    std::timed_mutex m_ioMutex;
 };
 
 } // namespace amrvis

@@ -87,6 +87,14 @@ add_executable(test_dataset_extract integration/test_dataset_extract.cpp)
 target_link_libraries(test_dataset_extract PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME dataset_extract COMMAND test_dataset_extract)
 
+add_executable(test_dataset_concurrency integration/test_dataset_concurrency.cpp)
+target_link_libraries(
+    test_dataset_concurrency PRIVATE amrexplorer::io amrexplorer::warnings
+    Threads::Threads
+)
+add_test(NAME dataset_concurrency COMMAND test_dataset_concurrency)
+set_tests_properties(dataset_concurrency PROPERTIES TIMEOUT 60)
+
 add_executable(test_fab_catalog integration/test_fab_catalog.cpp)
 target_link_libraries(test_fab_catalog PRIVATE amrexplorer::query amrexplorer::warnings)
 add_test(NAME fab_catalog COMMAND test_fab_catalog)

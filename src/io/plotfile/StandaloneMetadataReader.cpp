@@ -11,7 +11,6 @@
 #include <optional>
 #include <sstream>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -52,7 +51,7 @@ int inferMultiFabDimension(const std::filesystem::path& headerPath)
 }
 
 std::shared_ptr<DatasetMetadata> makeSingleLevelMetadata(
-    int dimension, const IntBox& domain, int components, std::string_view fieldPrefix)
+    int dimension, const IntBox& domain, int components)
 {
     auto metadata = std::make_shared<DatasetMetadata>();
     metadata->dimension = dimension;
@@ -65,7 +64,8 @@ std::shared_ptr<DatasetMetadata> makeSingleLevelMetadata(
     }
     metadata->fields.reserve(static_cast<std::size_t>(components));
     for (int component = 0; component < components; ++component) {
-        auto name = std::string(fieldPrefix) + std::to_string(component);
+        // Neither format stores field names; components are numbered.
+        auto name = "Field_" + std::to_string(component);
         metadata->fields.push_back({
             name, centeringFromIndexType(domain.centering, dimension), {name}});
     }
@@ -96,7 +96,7 @@ PlotfileMetadataResult StandaloneMetadataReader::readFab(
     const auto record = inspectFabRecord(fabPath, offset);
 
     auto metadata = makeSingleLevelMetadata(
-        record.dimension, record.storedBox, record.components, "Fab_");
+        record.dimension, record.storedBox, record.components);
     metadata->isFab = true;
     auto& level = metadata->levels.front();
     level.boxes.push_back(record.storedBox);
@@ -195,7 +195,7 @@ PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
         }
     }
     auto metadata = makeSingleLevelMetadata(
-        dimension, domain, index.components, "MultiFab_");
+        dimension, domain, index.components);
     auto& level = metadata->levels.front();
     level.boxes = index.boxes;
     level.ghostWidth = index.ghostWidth;

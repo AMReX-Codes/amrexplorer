@@ -41,7 +41,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes cmake ninja-build qt6-base-dev ${{ matrix.package }}
+          sudo apt-get install --yes cmake desktop-file-utils ninja-build qt6-base-dev ${{ matrix.package }}
 
       - name: Configure
         run: cmake --preset default -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
@@ -51,6 +51,13 @@ jobs:
 
       - name: Test
         run: ctest --preset default --parallel 4
+
+      - name: Install check
+        run: |
+          cmake --install build --prefix "${RUNNER_TEMP}/install-test"
+          test -x "${RUNNER_TEMP}/install-test/bin/amrexplorer"
+          desktop-file-validate \
+            "${RUNNER_TEMP}/install-test/share/applications/amrexplorer.desktop"
 
   macos:
     name: macOS / AppleClang
@@ -72,6 +79,11 @@ jobs:
       - name: Test
         run: ctest --preset default --parallel 4
 
+      - name: Install check
+        run: |
+          cmake --install build --prefix "${RUNNER_TEMP}/install-test"
+          test -x "${RUNNER_TEMP}/install-test/amrexplorer.app/Contents/MacOS/amrexplorer"
+
   windows:
     name: Windows / MSVC
     runs-on: windows-2022
@@ -88,21 +100,13 @@ jobs:
           cache: true
 
       - name: Configure
-        run: |
-          cmake -S . -B build-windows `
-            -G "Visual Studio 17 2022" -A x64 `
-            -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
-            -DAMREXPLORER_ENABLE_QT=ON `
-            -DAMREXPLORER_ENABLE_VTK=OFF `
-            -DAMREXPLORER_ENABLE_MPI=OFF `
-            -DAMREXPLORER_BUILD_TESTS=ON `
-            -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
+        run: cmake --preset windows -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
 
       - name: Build
-        run: cmake --build build-windows --config Release --parallel 4
+        run: cmake --build --preset windows --parallel 4
 
       - name: Test
-        run: ctest --test-dir build-windows --build-config Release --parallel 4 --output-on-failure
+        run: ctest --preset windows --parallel 4
 
   sanitizers:
     name: Linux / ASan + UBSan
@@ -125,6 +129,28 @@ jobs:
 
       - name: Test
         run: ctest --preset sanitizers --parallel 4
+
+  qt-sanitizers:
+    name: Linux / Qt + ASan + UBSan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes cmake g++ ninja-build qt6-base-dev
+
+      - name: Configure
+        run: cmake --preset qt-sanitizers -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build --preset qt-sanitizers --parallel 4
+
+      - name: Test
+        run: ctest --preset qt-sanitizers --parallel 4
 
   tsan:
     name: Linux / TSan

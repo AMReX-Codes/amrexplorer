@@ -751,20 +751,24 @@ int main(int argc, char* argv[])
     } else if (argc == 3
         && std::string_view(argv[1]) == "--raw-fab-smoke-test") {
         const std::filesystem::path path(argv[2]);
-        int phase = 0;
+        // Shared, not a block-scoped local captured by reference: the
+        // connection outlives this else-if block, and a by-reference phase
+        // is a stack-use-after-scope once main moves on (caught by the
+        // Qt-enabled ASan build).
+        auto phase = std::make_shared<int>(0);
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-            &application, [&window, &application, &phase](bool success) {
+            &application, [&window, &application, phase](bool success) {
                 auto* selector =
                     window.findChild<amrvis::qt::FabSelectorDock*>();
                 const auto valid = success && selector != nullptr
                     && selector->isVisible() && selector->entries().size() >= 2
                     && fabSelectorIsAscending(*selector)
                     && fabSelectorColumnsMatch(*selector, false)
-                    && fabSelectorPointFilterMatches(*selector, phase == 0)
+                    && fabSelectorPointFilterMatches(*selector, *phase == 0)
                     && fabRangeSelectorMatches(window);
                 if (!valid) {
                     application.exit(1);
-                } else if (phase++ == 0) {
+                } else if ((*phase)++ == 0) {
                     // The unique point match starts the FAB load.
                 } else {
                     application.exit(
@@ -776,9 +780,10 @@ int main(int argc, char* argv[])
     } else if (argc == 3
         && std::string_view(argv[1]) == "--multifab-fab-smoke-test") {
         const std::filesystem::path path(argv[2]);
-        int phase = 0;
+        // Shared for the same lifetime reason as the raw-fab branch above.
+        auto phase = std::make_shared<int>(0);
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-            &application, [&window, &application, &phase](bool success) {
+            &application, [&window, &application, phase](bool success) {
                 auto* selector =
                     window.findChild<amrvis::qt::FabSelectorDock*>();
                 if (!success || selector == nullptr
@@ -786,13 +791,13 @@ int main(int argc, char* argv[])
                     || !fabSelectorIsAscending(*selector)
                     || !fabSelectorColumnsMatch(*selector, true)
                     || !fabSelectorPointFilterMatches(
-                        *selector, phase == 0)) {
+                        *selector, *phase == 0)) {
                     application.exit(1);
                     return;
                 }
-                if (phase == 0) {
-                    ++phase;
-                } else if (phase == 1) {
+                if (*phase == 0) {
+                    ++*phase;
+                } else if (*phase == 1) {
                     auto* back = selector->findChild<QPushButton*>(
                         QStringLiteral("fabBackButton"));
                     if (back == nullptr || !back->isVisible()
@@ -801,7 +806,7 @@ int main(int argc, char* argv[])
                         application.exit(1);
                         return;
                     }
-                    ++phase;
+                    ++*phase;
                     QTimer::singleShot(0, back, &QPushButton::click);
                 } else {
                     const auto* back = selector->findChild<QPushButton*>(

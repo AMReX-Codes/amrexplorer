@@ -31,11 +31,18 @@ ctest --preset sanitizers
 cmake --preset tsan        # Headless + ThreadSanitizer → build-tsan/
 cmake --build --preset tsan
 ctest --preset tsan
+
+cmake --preset qt-sanitizers  # Qt + ASan + UBSan → build-qt-sanitizers/
+cmake --build --preset qt-sanitizers
+ctest --preset qt-sanitizers
 ```
 
 The sanitizer preset enables AddressSanitizer and UndefinedBehaviorSanitizer.
 The tsan preset enables ThreadSanitizer (mutually exclusive with the ASan
 build), covering the concurrent block-read, cache, and stop-token paths.
+The qt-sanitizers preset runs the full suite — including the offscreen Qt
+smoke tests — under ASan/UBSan with leak detection. A `windows` preset
+(usable only on Windows hosts) mirrors the CI MSVC job.
 
 The clang preset mirrors the CI clang job (which builds with
 `-DAMREXPLORER_WARNINGS_AS_ERRORS=ON`): run it before pushing to catch

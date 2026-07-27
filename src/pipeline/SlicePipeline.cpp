@@ -276,8 +276,10 @@ void appendContours(const std::shared_ptr<PlotfileDataset>& dataset,
     result.slice.metrics.cacheHits += contour.metrics.cacheHits;
     result.slice.metrics.payloadBytesRead += contour.metrics.payloadBytesRead;
 
-    // No supersampling: the linear plane is already smooth.  Store it as
-    // the fine plane too so refreshCachedSlice can reuse it.
+    // No supersampling (#8 removed it): the linear plane is already smooth, so
+    // store it as the fine plane too (factor 1) for refreshCachedSlice to
+    // reuse. The copy and the factor retire together when the "stop
+    // round-tripping planes through SliceDisplayResult" cleanup lands.
     result.contourFinePlane = result.contourPlane;
     result.contourFineFactor = 1;
     const auto values = contourValues(

@@ -39,6 +39,17 @@ elseif(MODE STREQUAL "sequence")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
     run_or_die("${AMREXPLORER_QT}" --sequence-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "viewer-state")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --viewer-state-smoke-test
+        "${WORK}/plt" "${WORK}/saved.amrexplorer-state.json"
+        "${WORK}/invalid.amrexplorer-state.json")
+elseif(MODE STREQUAL "viewer-state-sequence")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --viewer-state-sequence-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010"
+        "${WORK}/sequence.amrexplorer-state.json")
 elseif(MODE STREQUAL "sequence-spec-change")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")

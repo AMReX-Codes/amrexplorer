@@ -31,6 +31,8 @@ add_executable(amrexplorer_qt
     Theme.hpp
     UserGuideDialog.cpp
     UserGuideDialog.hpp
+    ViewerState.cpp
+    ViewerState.hpp
     main.cpp
     ${CMAKE_SOURCE_DIR}/resources/amrexplorer.qrc
     ${CMAKE_SOURCE_DIR}/resources/user-guide.qrc

@@ -14,6 +14,7 @@
 #include "SetContoursDialog.hpp"
 #include "Theme.hpp"
 #include "UserGuideDialog.hpp"
+#include "ViewerState.hpp"
 
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/io/FabCatalog.hpp>
@@ -558,7 +559,8 @@ MainWindow::MainWindow(QWidget* parent)
             // animation blocks signals and preserves the index, so the range
             // stays constant across frames.
             if (m_controlsReady && index >= 0) {
-                const auto newField = m_fieldSelector->itemData(index).toUInt();
+                const auto newField =
+                    m_fieldSelector->itemText(index).toStdString();
                 if (newField != m_trackedField) {
                     commitFieldRange(m_trackedField);
                     m_trackedField = newField;
@@ -968,6 +970,16 @@ void MainWindow::createMenus()
     auto* exportAction = new QAction(tr("&Export Image..."), this);
     connect(exportAction, &QAction::triggered, this, [this] { exportImage(); });
 
+    auto* importViewerStateAction =
+        new QAction(tr("&Import Viewer State..."), this);
+    connect(importViewerStateAction, &QAction::triggered,
+        this, &MainWindow::chooseViewerStateImport);
+    m_exportViewerStateAction =
+        new QAction(tr("Export Viewer &State..."), this);
+    m_exportViewerStateAction->setEnabled(false);
+    connect(m_exportViewerStateAction, &QAction::triggered,
+        this, &MainWindow::chooseViewerStateExport);
+
     m_exportAnimationAction = new QAction(tr("Export &Animation..."), this);
     m_exportAnimationAction->setEnabled(false);
     connect(m_exportAnimationAction, &QAction::triggered,
@@ -986,6 +998,9 @@ void MainWindow::createMenus()
     fileMenu->addAction(openSequenceAction);
     fileMenu->addAction(openFabAction);
     fileMenu->addAction(openMultiFabAction);
+    fileMenu->addSeparator();
+    fileMenu->addAction(importViewerStateAction);
+    fileMenu->addAction(m_exportViewerStateAction);
     fileMenu->addSeparator();
     fileMenu->addAction(exportAction);
     fileMenu->addAction(m_exportAnimationAction);
@@ -1561,6 +1576,17 @@ bool MainWindow::activeViewShowsWholeImageForTest() const
     // Half-a-scene-pixel slack absorbs fitInView rounding at the borders.
     const QRectF imageRect(QPointF(0.0, 0.0), QSizeF(image.size()));
     return visible.adjusted(-0.5, -0.5, 0.5, 0.5).contains(imageRect);
+}
+
+void MainWindow::configureDistinctPanelCamerasForTest()
+{
+    const auto views = currentViews();
+    for (std::size_t index = 0; index < views.size(); ++index) {
+        views[index]->view->setFixedScale(static_cast<int>(index) + 2);
+        views[index]->view->panViewport(
+            QPoint(static_cast<int>(index) * 7 + 3,
+                static_cast<int>(index) * 5 + 2));
+    }
 }
 
 void MainWindow::viewFabForTest(std::size_t index)
@@ -2875,6 +2901,7 @@ void MainWindow::cancelInFlight()
     }
     m_initialStopSource.request_stop();
     m_metadataStopSource.request_stop();
+    m_viewerStateImportStopSource.request_stop();
     m_sequenceController->cancelActiveWork();
     m_linePlotStopSource.request_stop();
     m_particleStopSource.request_stop();
@@ -3005,6 +3032,199 @@ MainWindow* MainWindow::createNewWindow()
     return window;
 }
 
+ViewerStateDocument MainWindow::captureViewerState(
+    const std::filesystem::path& statePath)
+{
+    (void)statePath;
+    if (!m_dataset || !m_openMetadata
+        || m_fieldSelector->currentIndex() < 0) {
+        throw std::runtime_error("no dataset is loaded");
+    }
+    if (!m_trackedField.empty()) {
+        commitFieldRange(m_trackedField);
+    }
+
+    ViewerStateDocument document;
+    if (m_sequenceController->hasSequence()) {
+        document.source.kind = ViewerSourceKind::PlotfileSequence;
+        document.source.frames = m_sequenceController->frames();
+        document.source.currentFrame = m_sequenceController->currentIndex();
+    } else {
+        document.source.path =
+            !m_fabSourcePath.empty() ? m_fabSourcePath : m_datasetPath;
+        document.source.selectedFab = m_selectedFab;
+        if (m_fileVersion == "FAB") {
+            document.source.kind = ViewerSourceKind::Fab;
+        } else if (m_fabSourceMetadata.has_value()) {
+            document.source.kind = ViewerSourceKind::MultiFab;
+        } else {
+            document.source.kind = ViewerSourceKind::Plotfile;
+        }
+    }
+
+    document.display.field = m_fieldSelector->currentText().toStdString();
+    const auto levelData = m_levelSelector->currentData().toInt();
+    if (levelData >= kUpdateToLevelOffset) {
+        document.display.level = {
+            LevelSelectionMode::CompositeThroughLevel,
+            levelData - kUpdateToLevelOffset};
+    } else if (levelData >= 0) {
+        document.display.level = {
+            LevelSelectionMode::ExactLevel, levelData};
+    }
+    document.display.logarithmic = m_logarithmic->isChecked();
+    for (const auto& [name, range] : m_fieldRanges) {
+        document.display.ranges.emplace(name,
+            FieldRangeState{range.mode, range.userRange});
+    }
+    if (m_viewDimension == 3) {
+        document.display.slicePositions.assign(
+            m_slicePosition3d.begin(), m_slicePosition3d.end());
+    }
+    if (m_activeView == &m_view2d) {
+        document.display.activePanel = "2d";
+    } else if (m_activeView != nullptr) {
+        document.display.activePanel =
+            std::string(1, "xyz"[m_activeView->normal]);
+    }
+    const auto addPanel = [&](const std::string& name,
+                              const PlaneViewState& state) {
+        if (!state.view->hasImage()) return;
+        PanelViewState panel;
+        panel.visibleRegion = state.visibleRegion.value_or(
+            state.plane->physicalRegion);
+        panel.camera = state.view->cameraState();
+        document.panels.emplace(name, std::move(panel));
+    };
+    if (m_viewDimension == 3) {
+        addPanel("x", m_planeViews[0]);
+        addPanel("y", m_planeViews[1]);
+        addPanel("z", m_planeViews[2]);
+    } else {
+        addPanel("2d", m_view2d);
+    }
+    document.isoCamera = m_isoWidget->cameraState();
+
+    if (m_paletteFromFile) {
+        document.rendering.palette.kind = ViewerPaletteKind::Embedded;
+        for (int index = 0; index < Palette::slotCount; ++index) {
+            document.rendering.palette.paletteSlots[
+                static_cast<std::size_t>(index)] = m_palette.slot(index);
+        }
+        document.rendering.palette.provenancePath =
+            m_paletteFilePath.toStdString();
+    } else {
+        document.rendering.palette.kind = ViewerPaletteKind::Builtin;
+        document.rendering.palette.name =
+            std::string(builtinPaletteName(
+                builtinPalettes[static_cast<std::size_t>(m_builtinIndex)]));
+    }
+    switch (m_displayMode) {
+    case DisplayMode::Raster:
+        document.rendering.mode = ViewerDisplayMode::Raster;
+        break;
+    case DisplayMode::RasterContours:
+        document.rendering.mode = ViewerDisplayMode::RasterContours;
+        break;
+    case DisplayMode::VelocityVectors:
+        document.rendering.mode = ViewerDisplayMode::VelocityVectors;
+        break;
+    }
+    document.rendering.contourCount = m_contourCount;
+    document.rendering.contourColor =
+        m_contourColor == contourColorBlack ? QColor(Qt::black)
+        : m_contourColor == contourColorWhite ? QColor(Qt::white)
+        : QColor::fromRgba(m_palette.slotArgb(m_contourColor));
+    const auto fieldName = [this](int field) {
+        if (field < 0 || !m_openMetadata
+            || field >= static_cast<int>(m_openMetadata->fields.size())) {
+            return std::string{};
+        }
+        return m_openMetadata->fields[static_cast<std::size_t>(field)].name;
+    };
+    document.rendering.vectorFields = {
+        fieldName(m_vectorUField), fieldName(m_vectorVField),
+        fieldName(m_vectorWField)};
+    document.rendering.boxes = m_boxesAction->isChecked();
+    document.rendering.slicePlanes = m_slicePlanesAction->isChecked();
+    document.rendering.numberFormat = m_numberFormat;
+
+    document.particles.initialized = m_particleSelectionInitialized;
+    document.particles.species = m_selectedParticleSpecies;
+    document.particles.fraction = m_particleFraction;
+    document.particles.seed = m_particleSeed;
+    document.particles.pointSize = m_particlePointSize;
+    document.particles.colors.insert(
+        m_particleColors.begin(), m_particleColors.end());
+    document.animation.sweepAxis = m_animationPanel->sweepAxis();
+    document.animation.speed = m_animationPanel->speedValue();
+    document.synchronizeRubberBand =
+        m_syncRubberBandZoomAction->isChecked();
+    return document;
+}
+
+bool MainWindow::exportViewerStateForTest(
+    const std::filesystem::path& statePath)
+{
+    try {
+        const auto error = writeViewerState(
+            captureViewerState(statePath), statePath);
+        if (!error.isEmpty()) {
+            reportBackgroundError(
+                tr("Cannot export viewer state: %1").arg(error));
+            return false;
+        }
+        return true;
+    } catch (const std::exception& error) {
+        reportBackgroundError(
+            tr("Cannot export viewer state: %1").arg(exceptionMessage(error)));
+        return false;
+    }
+}
+
+void MainWindow::chooseViewerStateExport()
+{
+    const auto settings = makeSettings();
+    auto filename = QFileDialog::getSaveFileName(this,
+        tr("Export Viewer State"),
+        settings.value(QStringLiteral("lastViewerStateDirectory")).toString(),
+        tr("AMReXplorer Viewer State (*.amrexplorer-state.json)"));
+    if (filename.isEmpty()) return;
+    if (!filename.endsWith(QStringLiteral(".amrexplorer-state.json"),
+            Qt::CaseInsensitive)) {
+        filename += QStringLiteral(".amrexplorer-state.json");
+    }
+    if (!exportViewerStateForTest(filename.toStdString())) {
+        QMessageBox::critical(this, tr("Cannot export viewer state"),
+            m_backgroundErrors.isEmpty() ? tr("Unknown export error.")
+                                         : m_backgroundErrors.back());
+        return;
+    }
+    auto writableSettings = makeSettings();
+    writableSettings.setValue(QStringLiteral("lastViewerStateDirectory"),
+        QFileInfo(filename).absolutePath());
+}
+
+void MainWindow::chooseViewerStateImport()
+{
+    const auto settings = makeSettings();
+    const auto filename = QFileDialog::getOpenFileName(this,
+        tr("Import Viewer State"),
+        settings.value(QStringLiteral("lastViewerStateDirectory")).toString(),
+        tr("AMReXplorer Viewer State (*.amrexplorer-state.json)"));
+    if (filename.isEmpty()) return;
+    auto writableSettings = makeSettings();
+    writableSettings.setValue(QStringLiteral("lastViewerStateDirectory"),
+        QFileInfo(filename).absolutePath());
+    importViewerState(filename.toStdString(), true);
+}
+
+void MainWindow::importViewerStateForTest(
+    const std::filesystem::path& statePath)
+{
+    importViewerState(statePath, false);
+}
+
 void MainWindow::chooseDataset()
 {
     const auto settings = makeSettings();
@@ -3081,6 +3301,18 @@ struct FabSelectorBuild {
 struct OpenedDataset {
     PlotfileMetadataResult metadata;
     std::optional<FabSelectorBuild> fabSelector;
+};
+
+struct PreparedViewerState {
+    ViewerStateDocument document;
+    std::filesystem::path displayedPath;
+    std::filesystem::path dataRoot;
+    PlotfileMetadataResult sourceMetadata;
+    PlotfileMetadataResult displayedMetadata;
+    FabSelectorBuild fabSelector;
+    FrameSliceSpec spec;
+    InitialSliceResult frame;
+    QStringList warnings;
 };
 
 // Reads FAB/MultiFab record headers and builds the selector entries. Runs on a
@@ -3163,7 +3395,600 @@ FabSelectorBuild buildFabSelector(
     return build;
 }
 
+[[nodiscard]] const Palette& viewerBuiltinPalette(const std::string& name)
+{
+    const auto found = std::find_if(builtinPalettes.begin(),
+        builtinPalettes.end(), [&](BuiltinPalette palette) {
+            return builtinPaletteName(palette) == name;
+        });
+    if (found == builtinPalettes.end()) {
+        throw std::runtime_error("unknown built-in palette");
+    }
+    return builtinPalette(*found);
+}
+
+[[nodiscard]] int fieldIndexByName(
+    const DatasetMetadata& metadata, const std::string& name)
+{
+    const auto found = std::find_if(metadata.fields.begin(),
+        metadata.fields.end(), [&](const auto& field) {
+            return field.name == name;
+        });
+    return found == metadata.fields.end() ? -1
+        : static_cast<int>(std::distance(metadata.fields.begin(), found));
+}
+
+[[nodiscard]] FrameSliceSpec viewerFrameSpec(
+    const ViewerStateDocument& document, const DatasetMetadata& metadata,
+    QStringList& warnings)
+{
+    FrameSliceSpec spec;
+    spec.fieldName = document.display.field;
+    const auto fieldIndex = fieldIndexByName(metadata, document.display.field);
+    if (fieldIndex >= 0) {
+        spec.field = static_cast<std::uint32_t>(fieldIndex);
+    }
+    switch (document.display.level.mode) {
+    case LevelSelectionMode::FinestAvailable:
+        spec.levelSelection = -1;
+        break;
+    case LevelSelectionMode::ExactLevel:
+        spec.levelSelection =
+            std::min(document.display.level.level, metadata.finestLevel);
+        if (document.display.level.level > metadata.finestLevel) {
+            warnings.push_back(QObject::tr(
+                "Level %1 is unavailable; clamped to level %2.")
+                .arg(document.display.level.level)
+                .arg(metadata.finestLevel));
+        }
+        break;
+    case LevelSelectionMode::CompositeThroughLevel:
+        spec.levelSelection = kUpdateToLevelOffset
+            + std::min(document.display.level.level, metadata.finestLevel);
+        if (document.display.level.level > metadata.finestLevel) {
+            warnings.push_back(QObject::tr(
+                "Composite level %1 is unavailable; clamped to level %2.")
+                .arg(document.display.level.level)
+                .arg(metadata.finestLevel));
+        }
+        break;
+    }
+    const auto range = document.display.ranges.find(document.display.field);
+    if (range != document.display.ranges.end()) {
+        spec.rangeMode = range->second.mode;
+        spec.userRange = range->second.userRange;
+    }
+    spec.logarithmic = document.display.logarithmic;
+    spec.defaultPositions = document.display.slicePositions.size() != 3;
+    if (!spec.defaultPositions) {
+        std::copy(document.display.slicePositions.begin(),
+            document.display.slicePositions.end(), spec.slicePositions.begin());
+        const auto bounds = datasetSampleBounds(metadata);
+        for (int axis = 0; axis < metadata.dimension; ++axis) {
+            const auto index = static_cast<std::size_t>(axis);
+            const auto clamped = std::clamp(spec.slicePositions[index],
+                bounds.lower[index],
+                std::nextafter(bounds.upper[index], bounds.lower[index]));
+            if (clamped != spec.slicePositions[index]) {
+                warnings.push_back(QObject::tr(
+                    "Slice position on axis %1 was clamped to the dataset.")
+                    .arg(axis));
+                spec.slicePositions[index] = clamped;
+            }
+        }
+    }
+    spec.palette = document.rendering.palette.kind
+            == ViewerPaletteKind::Builtin
+        ? viewerBuiltinPalette(document.rendering.palette.name)
+        : Palette(document.rendering.palette.paletteSlots);
+    switch (document.rendering.mode) {
+    case ViewerDisplayMode::Raster:
+        spec.displayMode = DisplayMode::Raster;
+        break;
+    case ViewerDisplayMode::Contours:
+    case ViewerDisplayMode::RasterContours:
+        spec.displayMode = DisplayMode::RasterContours;
+        break;
+    case ViewerDisplayMode::VelocityVectors:
+        spec.displayMode = DisplayMode::VelocityVectors;
+        break;
+    }
+    spec.contourCount = document.rendering.contourCount;
+    spec.vectorFieldNames = document.rendering.vectorFields;
+    std::array<std::uint32_t*, 3> vectorIds{
+        &spec.vectorUField, &spec.vectorVField, &spec.vectorWField};
+    for (std::size_t index = 0; index < spec.vectorFieldNames.size(); ++index) {
+        const auto field =
+            fieldIndexByName(metadata, spec.vectorFieldNames[index]);
+        if (field >= 0) {
+            *vectorIds[index] = static_cast<std::uint32_t>(field);
+        }
+    }
+    const auto bounds = datasetSampleBounds(metadata);
+    const auto addRegion = [&](std::string_view panelName) {
+        const auto panel = document.panels.find(std::string(panelName));
+        if (panel == document.panels.end()) {
+            spec.visibleRegions.push_back(std::nullopt);
+            return;
+        }
+        auto region = panel->second.visibleRegion;
+        bool clipped = false;
+        for (int axis = 0; axis < metadata.dimension; ++axis) {
+            const auto index = static_cast<std::size_t>(axis);
+            const auto previousLower = region.lower[index];
+            const auto previousUpper = region.upper[index];
+            region.lower[index] =
+                std::max(region.lower[index], bounds.lower[index]);
+            region.upper[index] =
+                std::min(region.upper[index], bounds.upper[index]);
+            clipped = clipped || previousLower != region.lower[index]
+                || previousUpper != region.upper[index];
+            if (!(region.lower[index] < region.upper[index])) {
+                throw std::runtime_error(
+                    "a panel visibleRegion does not intersect the dataset");
+            }
+        }
+        if (clipped) {
+            warnings.push_back(QObject::tr(
+                "Panel %1 visible region was clipped to the dataset.")
+                .arg(QString::fromLatin1(
+                    panelName.data(),
+                    static_cast<qsizetype>(panelName.size()))));
+        }
+        spec.visibleRegions.push_back(region);
+    };
+    if (metadata.dimension == 3) {
+        addRegion("x");
+        addRegion("y");
+        addRegion("z");
+        if (document.panels.contains("2d")
+            || document.display.activePanel == "2d") {
+            warnings.push_back(QObject::tr(
+                "Ignored 2-D panel state for a 3-D dataset."));
+        }
+    } else {
+        addRegion("2d");
+        if (document.panels.contains("x") || document.panels.contains("y")
+            || document.panels.contains("z")
+            || !document.display.slicePositions.empty()) {
+            warnings.push_back(QObject::tr(
+                "Ignored 3-D panel and slice state for a 2-D dataset."));
+        }
+    }
+    spec.particleSelectionInitialized = document.particles.initialized;
+    spec.particleSpecies = document.particles.species;
+    spec.particleFraction = document.particles.fraction;
+    spec.particleSeed = document.particles.seed;
+    return spec;
+}
+
 } // namespace
+
+void MainWindow::importViewerState(
+    const std::filesystem::path& statePath, bool showFailureDialog)
+{
+    const auto parsed = readViewerState(statePath);
+    if (!parsed) {
+        const auto message =
+            tr("Cannot import viewer state: %1").arg(parsed.error);
+        reportBackgroundError(message);
+        if (showFailureDialog) {
+            QMessageBox::critical(
+                this, tr("Cannot import viewer state"), message);
+        }
+        emit viewerStateImportFinished(false);
+        return;
+    }
+    const auto importGeneration = ++m_viewerStateImportGeneration;
+    m_viewerStateImportStopSource.request_stop();
+    m_viewerStateImportStopSource = StopSource{};
+    const auto importCancellation =
+        m_viewerStateImportStopSource.get_token();
+    ++m_activeRequests;
+    statusBar()->showMessage(tr("Preparing viewer state..."));
+    updateDiagnostics();
+    auto* watcher = new QFutureWatcher<PreparedViewerState>(this);
+    connect(watcher, &QFutureWatcher<PreparedViewerState>::finished, this,
+        [this, watcher, importGeneration, showFailureDialog] {
+            --m_activeRequests;
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
+            }
+            try {
+                auto prepared = watcher->result();
+                if (importGeneration != m_viewerStateImportGeneration) {
+                    ++m_staleResults;
+                    watcher->deleteLater();
+                    updateDiagnostics();
+                    return;
+                }
+
+                // The expensive and failure-prone work is complete. Only now
+                // invalidate the currently displayed session and commit the
+                // prepared dataset in one GUI-thread transition.
+                setPlaybackMode(PlaybackMode::None);
+                ++m_generation;
+                m_initialStopSource.request_stop();
+                m_metadataStopSource.request_stop();
+                m_linePlotStopSource.request_stop();
+                m_particleStopSource.request_stop();
+                for (auto* state : std::array<PlaneViewState*, 4>{
+                         &m_view2d, &m_planeViews[0], &m_planeViews[1],
+                         &m_planeViews[2]}) {
+                    state->stopSource.request_stop();
+                    ++state->sliceGeneration;
+                    state->visibleRegion.reset();
+                    state->hasCachedRequest = false;
+                }
+                m_pendingViews.clear();
+                m_pendingAllViews = false;
+                m_sliceDebounce->stop();
+                closeDatasetWindow();
+                if (m_linePlotWindow != nullptr) {
+                    m_linePlotWindow->close();
+                    m_linePlotWindow = nullptr;
+                }
+                resetRangeState();
+
+                const auto& document = prepared.document;
+                m_displayMode = prepared.spec.displayMode;
+                m_contourCount = document.rendering.contourCount;
+                if (document.rendering.palette.kind
+                    == ViewerPaletteKind::Builtin) {
+                    const auto found = std::find_if(
+                        builtinPalettes.begin(), builtinPalettes.end(),
+                        [&](BuiltinPalette palette) {
+                            return builtinPaletteName(palette)
+                                == document.rendering.palette.name;
+                        });
+                    m_builtinIndex = static_cast<int>(
+                        std::distance(builtinPalettes.begin(), found));
+                    m_palette = builtinPalette(*found);
+                    m_paletteFromFile = false;
+                    m_paletteFilePath.clear();
+                } else {
+                    m_palette = Palette(
+                        document.rendering.palette.paletteSlots);
+                    m_paletteFromFile = true;
+                    m_paletteFilePath = QString::fromStdString(
+                        document.rendering.palette.provenancePath.string());
+                }
+                m_colorBar->setPalette(&m_palette);
+                m_isoWidget->setColorPalette(&m_palette);
+                m_numberFormat = document.rendering.numberFormat;
+                m_particleSelectionInitialized =
+                    document.particles.initialized;
+                m_selectedParticleSpecies.clear();
+                for (const auto& selected : document.particles.species) {
+                    const auto available = std::find_if(
+                        prepared.frame.dataset->particleSpecies().begin(),
+                        prepared.frame.dataset->particleSpecies().end(),
+                        [&](const auto& species) {
+                            return species.name == selected;
+                        });
+                    if (available
+                        != prepared.frame.dataset->particleSpecies().end()) {
+                        m_selectedParticleSpecies.push_back(selected);
+                    }
+                }
+                m_particleFraction = document.particles.fraction;
+                m_particleSeed = document.particles.seed;
+                m_particlePointSize = document.particles.pointSize;
+                m_particleColors.clear();
+                m_particleColors.insert(document.particles.colors.begin(),
+                    document.particles.colors.end());
+                for (const auto& warning : prepared.frame.warnings) {
+                    prepared.warnings.push_back(
+                        QString::fromStdString(warning));
+                }
+                prepared.frame.warnings.clear();
+
+                m_fabMode =
+                    document.source.kind == ViewerSourceKind::Fab
+                    || document.source.selectedFab.has_value();
+                m_selectedFab = document.source.selectedFab;
+                m_multifabReturn.reset();
+                m_fabSourceMetadata.reset();
+                m_fabSourcePath.clear();
+                m_fabDataRoot.clear();
+                m_fabSelectorDock->setEntries({});
+                m_fabSelectorDock->setBackAvailable(false);
+                m_fabSelectorDock->setVisible(false);
+
+                if (document.source.kind
+                    == ViewerSourceKind::PlotfileSequence) {
+                    m_sequenceController->close();
+                    m_sequenceController->adoptPrepared(
+                        document.source.frames,
+                        document.source.currentFrame,
+                        std::move(prepared.frame),
+                        prepared.spec.defaultPositions);
+                } else {
+                    m_sequenceController->close();
+                    m_datasetPath = prepared.displayedPath;
+                    m_dataset = prepared.frame.dataset;
+                    m_particleSamples =
+                        std::move(prepared.frame.particles);
+                    showMetadata(prepared.displayedMetadata,
+                        prepared.displayedPath);
+                    m_viewDimension = m_dataset->metadata().dimension;
+                    const auto bounds =
+                        datasetSampleBounds(m_dataset->metadata());
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        m_slicePosition3d[axis] =
+                            prepared.spec.defaultPositions
+                            ? bounds.lower[axis]
+                                + 0.5 * (bounds.upper[axis]
+                                    - bounds.lower[axis])
+                            : std::clamp(prepared.spec.slicePositions[axis],
+                                bounds.lower[axis],
+                                std::nextafter(
+                                    bounds.upper[axis], bounds.lower[axis]));
+                    }
+                    configureParticleControls(true);
+                    configureSliceControls();
+                    const auto views = currentViews();
+                    if (views.size() != prepared.frame.displays.size()) {
+                        throw std::runtime_error(
+                            "prepared slice count does not match the view set");
+                    }
+                    for (std::size_t index = 0;
+                        index < views.size(); ++index) {
+                        views[index]->visibleRegion =
+                            index < prepared.spec.visibleRegions.size()
+                                ? prepared.spec.visibleRegions[index]
+                                : std::nullopt;
+                        showSlice(*views[index],
+                            prepared.frame.displays[index]);
+                    }
+                    if (prepared.fabSelector.matched) {
+                        m_fabSourcePath = document.source.path;
+                        m_fabDataRoot = prepared.fabSelector.root;
+                        m_fabSourceMetadata = prepared.sourceMetadata;
+                        m_fabSelectorDock->setEntries(
+                            std::move(prepared.fabSelector.entries));
+                        m_fabSelectorDock->setBackAvailable(
+                            document.source.selectedFab.has_value());
+                        if (document.source.selectedFab) {
+                            if (document.source.kind
+                                == ViewerSourceKind::MultiFab) {
+                                m_multifabReturn = MultiFabReturnState{
+                                    document.source.path,
+                                    prepared.fabSelector.root,
+                                    prepared.sourceMetadata,
+                                    prepared.spec};
+                            }
+                            m_fabSelectorDock->selectEntry(
+                                *document.source.selectedFab);
+                        }
+                        m_fabSelectorDock->setVisible(true);
+                    }
+                }
+
+                const auto& metadata = m_dataset->metadata();
+                {
+                    const QSignalBlocker fieldBlocker(m_fieldSelector);
+                    const QSignalBlocker levelBlocker(m_levelSelector);
+                    const QSignalBlocker rangeBlocker(m_rangeMode);
+                    const QSignalBlocker logBlocker(m_logarithmic);
+                    auto fieldIndex = m_fieldSelector->findText(
+                        QString::fromStdString(document.display.field));
+                    if (fieldIndex < 0) fieldIndex = 0;
+                    m_fieldSelector->setCurrentIndex(fieldIndex);
+                    const auto levelIndex =
+                        m_levelSelector->findData(prepared.spec.levelSelection);
+                    m_levelSelector->setCurrentIndex(
+                        levelIndex >= 0 ? levelIndex : 0);
+                    m_logarithmic->setChecked(
+                        document.display.logarithmic);
+                    m_fieldRanges.clear();
+                    for (const auto& [name, range] :
+                        document.display.ranges) {
+                        if (fieldIndexByName(metadata, name) >= 0) {
+                            m_fieldRanges.emplace(
+                                name, FieldRange{
+                                    range.mode, range.userRange});
+                        }
+                    }
+                    m_trackedField =
+                        m_fieldSelector->currentText().toStdString();
+                    applyFieldRange(m_trackedField);
+                }
+                std::array<int*, 3> vectorIds{
+                    &m_vectorUField, &m_vectorVField, &m_vectorWField};
+                for (std::size_t axis = 0;
+                    axis < document.rendering.vectorFields.size(); ++axis) {
+                    const auto index = fieldIndexByName(metadata,
+                        document.rendering.vectorFields[axis]);
+                    *vectorIds[axis] = index;
+                }
+                ensureVectorFieldDefaults();
+                const auto targetColor = document.rendering.contourColor.rgba();
+                m_contourColor =
+                    targetColor == QColor(Qt::black).rgba()
+                    ? contourColorBlack
+                    : targetColor == QColor(Qt::white).rgba()
+                    ? contourColorWhite : contourColorBlack;
+                if (m_contourColor == contourColorBlack
+                    && targetColor != QColor(Qt::black).rgba()) {
+                    for (int index = 0; index < Palette::slotCount; ++index) {
+                        if (m_palette.slotArgb(index) == targetColor) {
+                            m_contourColor = index;
+                            break;
+                        }
+                    }
+                }
+                {
+                    const QSignalBlocker boxesBlocker(m_boxesAction);
+                    const QSignalBlocker planesBlocker(m_slicePlanesAction);
+                    const QSignalBlocker syncBlocker(
+                        m_syncRubberBandZoomAction);
+                    m_boxesAction->setChecked(document.rendering.boxes);
+                    m_slicePlanesAction->setChecked(
+                        metadata.dimension == 3
+                        && document.rendering.slicePlanes);
+                    m_syncRubberBandZoomAction->setChecked(
+                        document.synchronizeRubberBand);
+                }
+                m_animationPanel->setSweepAxis(
+                    document.animation.sweepAxis);
+                m_animationPanel->setSpeedValue(document.animation.speed);
+                applySpeed();
+                configureSlicePositionControls();
+                syncPaletteChecks();
+                syncPaletteSelector();
+                syncMenuChecks();
+                updateOverlays();
+                m_isoWidget->setSlicePlanesVisible(
+                    m_slicePlanesAction->isChecked());
+                m_isoWidget->restoreCameraState(document.isoCamera);
+
+                const auto views = currentViews();
+                constexpr std::array<const char*, 3> names{"x", "y", "z"};
+                for (std::size_t index = 0; index < views.size(); ++index) {
+                    const auto name = metadata.dimension == 3
+                        ? std::string(names[index]) : std::string("2d");
+                    const auto panel = document.panels.find(name);
+                    if (panel != document.panels.end()) {
+                        views[index]->view->restoreCameraState(
+                            panel->second.camera);
+                    }
+                }
+                PlaneViewState* active = metadata.dimension == 3
+                    ? &m_planeViews[2] : &m_view2d;
+                if (metadata.dimension == 3
+                    && document.display.activePanel.size() == 1) {
+                    const auto position = std::string("xyz").find(
+                        document.display.activePanel);
+                    if (position != std::string::npos) {
+                        active = &m_planeViews[position];
+                    }
+                }
+                setActiveView(*active);
+                m_exportViewerStateAction->setEnabled(true);
+                setPlaybackMode(PlaybackMode::None);
+
+                if (!prepared.warnings.empty()) {
+                    const auto summary = prepared.warnings.join(
+                        QStringLiteral("\n"));
+                    m_backgroundErrors.push_back(
+                        tr("Viewer-state compatibility warnings:\n%1")
+                            .arg(summary));
+                    statusBar()->showMessage(
+                        tr("Viewer state imported with %1 warning(s).")
+                            .arg(prepared.warnings.size()));
+                } else {
+                    statusBar()->showMessage(
+                        tr("Viewer state imported."));
+                }
+                updateDiagnostics();
+                emit viewerStateImportFinished(true);
+            } catch (const std::exception& error) {
+                const auto message = tr("Cannot import viewer state: %1")
+                    .arg(exceptionMessage(error));
+                reportBackgroundError(message);
+                if (showFailureDialog) {
+                    QMessageBox::critical(this,
+                        tr("Cannot import viewer state"), message);
+                }
+                emit viewerStateImportFinished(false);
+            }
+            watcher->deleteLater();
+        });
+    watcher->setFuture(QtConcurrent::run(
+        [document = *parsed.document, importCancellation]() mutable {
+            PreparedViewerState prepared;
+            prepared.document = std::move(document);
+            const auto& source = prepared.document.source;
+            if (source.kind == ViewerSourceKind::PlotfileSequence) {
+                for (const auto& frame : source.frames) {
+                    if (!isAmrexPlotfile(frame)) {
+                        throw std::runtime_error(
+                            "a required sequence frame is missing or invalid: "
+                            + frame.string());
+                    }
+                    // Structural validation above catches missing paths; a
+                    // full metadata read applies the same validation as a
+                    // normal open to every required frame before commit.
+                    (void)readDatasetMetadata(frame, importCancellation);
+                }
+                prepared.displayedPath =
+                    source.frames[static_cast<std::size_t>(
+                        source.currentFrame)];
+            } else {
+                std::error_code ec;
+                if (!std::filesystem::exists(source.path, ec)) {
+                    throw std::runtime_error(
+                        "source path does not exist: "
+                        + source.path.string());
+                }
+                prepared.displayedPath = source.path;
+            }
+            if (source.kind == ViewerSourceKind::Fab) {
+                prepared.sourceMetadata =
+                    StandaloneMetadataReader{}.readFab(
+                        source.path, 0, importCancellation);
+            } else {
+                prepared.sourceMetadata =
+                    readDatasetMetadata(
+                        prepared.displayedPath, importCancellation);
+            }
+            prepared.displayedMetadata = prepared.sourceMetadata;
+            prepared.fabSelector = buildFabSelector(
+                prepared.sourceMetadata,
+                source.kind == ViewerSourceKind::PlotfileSequence
+                    ? prepared.displayedPath : source.path);
+            prepared.dataRoot =
+                std::filesystem::is_directory(prepared.displayedPath)
+                ? prepared.displayedPath
+                : prepared.displayedPath.parent_path();
+            if (prepared.dataRoot.empty()) prepared.dataRoot = ".";
+            if (source.selectedFab) {
+                const auto entry = std::find_if(
+                    prepared.fabSelector.entries.begin(),
+                    prepared.fabSelector.entries.end(),
+                    [&](const auto& candidate) {
+                        return candidate.ordinal == *source.selectedFab;
+                    });
+                if (entry == prepared.fabSelector.entries.end()) {
+                    throw std::runtime_error(
+                        "selected FAB is not present in the source");
+                }
+                prepared.displayedMetadata = entry->rawRecord
+                    ? StandaloneMetadataReader{}.readFab(
+                        entry->filePath, entry->fileOffset,
+                        importCancellation)
+                    : makeSelectedFabMetadata(
+                        *prepared.sourceMetadata.metadata,
+                        entry->level, entry->blockIndex,
+                        prepared.fabSelector.root);
+                prepared.dataRoot = prepared.fabSelector.root;
+            }
+            prepared.spec = viewerFrameSpec(prepared.document,
+                *prepared.displayedMetadata.metadata, prepared.warnings);
+            prepared.frame = executeFrameLoad(prepared.displayedPath,
+                DatasetId{0x6000000000000000ULL}, prepared.spec,
+                initialCacheBudget(), importCancellation,
+                prepared.displayedMetadata, prepared.dataRoot);
+            for (const auto& requested :
+                prepared.document.particles.species) {
+                const auto found = std::find_if(
+                    prepared.frame.dataset->particleSpecies().begin(),
+                    prepared.frame.dataset->particleSpecies().end(),
+                    [&](const auto& species) {
+                        return species.name == requested;
+                    });
+                if (found
+                    == prepared.frame.dataset->particleSpecies().end()) {
+                    prepared.warnings.push_back(QObject::tr(
+                        "Particle species '%1' is unavailable and was ignored.")
+                        .arg(QString::fromStdString(requested)));
+                }
+            }
+            return prepared;
+        }));
+}
 
 void MainWindow::viewFab(std::size_t entryIndex)
 {
@@ -3199,6 +4024,7 @@ void MainWindow::viewFab(std::size_t entryIndex)
                 entry.level, entry.blockIndex, m_fabDataRoot);
         }
         m_fabMode = true;
+        m_selectedFab = entry.ordinal;
         m_fabSelectorDock->setBackAvailable(m_multifabReturn.has_value());
         m_fabSelectorDock->selectEntry(entry.ordinal);
         openDatasetImpl(m_fabSourcePath, false, std::move(selected),
@@ -3216,6 +4042,7 @@ void MainWindow::backToMultiFab()
     }
     auto state = std::move(*m_multifabReturn);
     m_multifabReturn.reset();
+    m_selectedFab.reset();
     m_fabMode = false;
     m_fabSelectorDock->setBackAvailable(false);
     openDatasetImpl(state.path, false, std::move(state.metadata),
@@ -3540,9 +4367,12 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     std::filesystem::path dataRoot, bool preserveFabSelector,
     std::optional<FrameSliceSpec> initialSpec)
 {
+    ++m_viewerStateImportGeneration;
+    m_viewerStateImportStopSource.request_stop();
     if (!preserveFabSelector) {
         m_fabMode = false;
         m_multifabReturn.reset();
+        m_selectedFab.reset();
         m_fabSourceMetadata.reset();
         m_fabSourcePath.clear();
         m_fabDataRoot.clear();
@@ -3633,6 +4463,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_particlesAction->setEnabled(false);
     m_datasetAction->setEnabled(false);
     m_exportAnimationAction->setEnabled(false);
+    m_exportViewerStateAction->setEnabled(false);
     m_openMetadata.reset();
     m_fileVersion.clear();
     m_probeLines.clear();
@@ -3845,7 +4676,7 @@ void MainWindow::requestInitialSlice(
                                 static_cast<int>(restoredSpec->rangeMode)));
                         m_logarithmic->setChecked(restoredSpec->logarithmic);
                         m_trackedField =
-                            m_fieldSelector->currentData().toUInt();
+                            m_fieldSelector->currentText().toStdString();
                         m_fieldRanges[m_trackedField] = {
                             restoredSpec->rangeMode, restoredSpec->userRange};
                         if (restoredSpec->userRange) {
@@ -3954,6 +4785,7 @@ void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
     m_levelMenu->setEnabled(true);
     m_contoursAction->setEnabled(true);
     m_datasetAction->setEnabled(true);
+    m_exportViewerStateAction->setEnabled(true);
 }
 
 void MainWindow::configureSliceControls()
@@ -4872,6 +5704,8 @@ void MainWindow::choosePlotfileSequence()
 
 void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
 {
+    ++m_viewerStateImportGeneration;
+    m_viewerStateImportStopSource.request_stop();
     // Sweep and sequence playback are mutually exclusive.
     setPlaybackMode(PlaybackMode::None);
     closeSequence();
@@ -4977,6 +5811,19 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     m_cachePinnedBytes = cache.pinnedBytes;
     m_cacheEvictions = cache.evictions;
     validateVectorMode();
+    if (!result.warnings.empty()) {
+        QStringList warnings;
+        for (const auto& warning : result.warnings) {
+            warnings.push_back(QString::fromStdString(warning));
+        }
+        m_backgroundErrors.push_back(
+            tr("Sequence compatibility warnings:\n%1")
+                .arg(warnings.join(QStringLiteral("\n"))));
+        statusBar()->showMessage(
+            tr("Frame displayed with %1 compatibility warning(s).")
+                .arg(warnings.size()));
+        updateDiagnostics();
+    }
     if (result.cacheFallbackToLevel >= 0) {
         statusBar()->showMessage(cacheFallbackMessage(
             *result.dataset, result.cacheFallbackFromLevel,
@@ -4994,7 +5841,7 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
     // still exists, the level by its combo data (falling back to finest
     // available when this frame has fewer levels).
     const auto previousField = m_controlsReady && m_fieldSelector->count() > 0
-        ? m_fieldSelector->currentIndex() : 0;
+        ? m_fieldSelector->currentText() : QString();
     const auto previousLevel = m_controlsReady
         && m_levelSelector->currentIndex() >= 0
             ? m_levelSelector->currentData().toInt() : -1;
@@ -5007,13 +5854,16 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
                 QString::fromStdString(metadata.fields[field].name),
                 static_cast<unsigned int>(field));
         }
+        const auto previousFieldIndex =
+            m_fieldSelector->findText(previousField);
         m_fieldSelector->setCurrentIndex(
-            std::clamp(previousField, 0, m_fieldSelector->count() - 1));
+            previousFieldIndex >= 0 ? previousFieldIndex : 0);
         m_levelSelector->clear();
         populateLevelCombo(m_levelSelector, metadata.finestLevel);
         const auto levelIndex = m_levelSelector->findData(previousLevel);
         m_levelSelector->setCurrentIndex(levelIndex >= 0 ? levelIndex : 0);
     }
+    m_trackedField = m_fieldSelector->currentText().toStdString();
 
     // 3-D keeps the user's slice positions (clamped into the new domain);
     // the first 3-D frame of a session starts at the domain midpoints.
@@ -5045,12 +5895,13 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
 
     enableDatasetControls(metadata);
     m_exportAnimationAction->setEnabled(true);
+    m_exportViewerStateAction->setEnabled(true);
     rebuildVariableMenu();
     ensureVectorFieldDefaults();
     updateRangeModeAvailability();
 }
 
-void MainWindow::commitFieldRange(std::uint32_t field)
+void MainWindow::commitFieldRange(const std::string& field)
 {
     FieldRange range;
     range.mode = static_cast<RangeMode>(m_rangeMode->currentData().toInt());
@@ -5060,7 +5911,7 @@ void MainWindow::commitFieldRange(std::uint32_t field)
     m_fieldRanges[field] = std::move(range);
 }
 
-void MainWindow::applyFieldRange(std::uint32_t field)
+void MainWindow::applyFieldRange(const std::string& field)
 {
     const auto it = m_fieldRanges.find(field);
     const auto range = (it != m_fieldRanges.end()) ? it->second : FieldRange{};
@@ -5083,7 +5934,7 @@ void MainWindow::applyFieldRange(std::uint32_t field)
 void MainWindow::resetRangeState()
 {
     m_fieldRanges.clear();
-    m_trackedField = 0;
+    m_trackedField.clear();
     m_displayCoordinator.invalidateRangeCache();
     m_pendingRangeStore.reset();
     const QSignalBlocker modeBlocker(m_rangeMode);
@@ -5149,7 +6000,7 @@ void MainWindow::updateRangeModeAvailability()
     }
     m_rangeMinimum->setEnabled(false);
     m_rangeMaximum->setEnabled(false);
-    auto& fieldRange = m_fieldRanges[field.value];
+    auto& fieldRange = m_fieldRanges[metadata.fields[field.value].name];
     fieldRange.mode = RangeMode::Visible;
     statusBar()->showMessage(
         tr("Metadata range unavailable; using the visible-data range."));
@@ -5169,11 +6020,24 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     }
     spec.field = m_controlsReady && m_fieldSelector->currentIndex() >= 0
         ? m_fieldSelector->currentData().toUInt() : 0U;
+    if (m_controlsReady && m_fieldSelector->currentIndex() >= 0) {
+        spec.fieldName = m_fieldSelector->currentText().toStdString();
+    }
     spec.levelSelection = m_controlsReady && m_levelSelector->currentIndex() >= 0
         ? m_levelSelector->currentData().toInt() : -1;
     spec.vectorUField = static_cast<std::uint32_t>(std::max(m_vectorUField, 0));
     spec.vectorVField = static_cast<std::uint32_t>(std::max(m_vectorVField, 0));
     spec.vectorWField = static_cast<std::uint32_t>(std::max(m_vectorWField, 0));
+    const auto fieldName = [this](int field) {
+        if (!m_openMetadata || field < 0
+            || field >= static_cast<int>(m_openMetadata->fields.size())) {
+            return std::string{};
+        }
+        return m_openMetadata->fields[static_cast<std::size_t>(field)].name;
+    };
+    spec.vectorFieldNames = {
+        fieldName(m_vectorUField), fieldName(m_vectorVField),
+        fieldName(m_vectorWField)};
     // Slice positions only carry over between 3-D frames; anything else
     // starts the new dataset at its domain midpoints.
     spec.defaultPositions = m_viewDimension != 3;

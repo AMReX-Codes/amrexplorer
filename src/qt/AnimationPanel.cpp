@@ -171,6 +171,14 @@ int AnimationPanel::sweepAxis() const
     return m_sweepAxisCombo->currentData().toInt();
 }
 
+void AnimationPanel::setSweepAxis(int axis)
+{
+    const auto index = m_sweepAxisCombo->findData(std::clamp(axis, 0, 2));
+    if (index >= 0) {
+        m_sweepAxisCombo->setCurrentIndex(index);
+    }
+}
+
 void AnimationPanel::setSweepPlaying(bool playing)
 {
     m_sweepPlay->setIcon(style()->standardIcon(

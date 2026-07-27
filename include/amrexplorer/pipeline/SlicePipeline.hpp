@@ -82,6 +82,9 @@ struct InitialSliceResult {
     // retried with a lower composite maximum level.
     int cacheFallbackFromLevel = -1;
     int cacheFallbackToLevel = -1;
+    // Compatibility fallbacks made while resolving stable names from an
+    // imported state or across heterogeneous sequence frames.
+    std::vector<std::string> warnings;
 };
 
 // Everything needed to render one frame's slice(s) off the GUI thread. The
@@ -92,6 +95,7 @@ struct InitialSliceResult {
 struct FrameSliceSpec {
     DisplayMode displayMode = DisplayMode::Raster;
     std::uint32_t field = 0;
+    std::string fieldName;
     int levelSelection = -1;  // level combo data: -1 = finest available
     RangeMode rangeMode = RangeMode::File;
     std::optional<std::pair<double, double>> userRange;
@@ -100,6 +104,7 @@ struct FrameSliceSpec {
     std::uint32_t vectorUField = 0;
     std::uint32_t vectorVField = 0;
     std::uint32_t vectorWField = 0;
+    std::array<std::string, 3> vectorFieldNames;
     int contourCount = 10;
     bool defaultPositions = true;
     std::array<double, 3> slicePositions{0.0, 0.0, 0.0};

@@ -26,6 +26,7 @@ public:
 
     // Sweep axis as a dataset axis index: 0 = X, 1 = Y, 2 = Z.
     [[nodiscard]] int sweepAxis() const;
+    void setSweepAxis(int axis);
     void setSweepPlaying(bool playing);
     void setSequencePlaying(bool playing);
 

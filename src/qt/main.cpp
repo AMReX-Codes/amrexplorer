@@ -466,6 +466,122 @@ int main(int argc, char* argv[])
                 application.exit(valid ? 0 : 1);
         });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 5
+        && std::string_view(argv[1]) == "--viewer-state-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        const std::filesystem::path statePath(argv[3]);
+        const std::filesystem::path invalidPath(argv[4]);
+        struct ViewerStateSmoke {
+            int phase = 0;
+            amrvis::qt::ViewerStateDocument expected;
+        };
+        auto state = std::make_shared<ViewerStateSmoke>();
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application,
+            [&window, &application, state, statePath, invalidPath](bool success) {
+                if (!success || state->phase != 0) {
+                    application.exit(1);
+                    return;
+                }
+                window.configureDistinctPanelCamerasForTest();
+                state->expected = window.captureViewerState(statePath);
+                if (!window.exportViewerStateForTest(statePath)) {
+                    application.exit(1);
+                    return;
+                }
+                QFile invalid(QString::fromStdString(invalidPath.string()));
+                if (!invalid.open(QIODevice::WriteOnly)
+                    || invalid.write("{ broken") < 0) {
+                    application.exit(1);
+                    return;
+                }
+                invalid.close();
+                // Leave ordinary slice work in flight while import prepares.
+                auto* fields = window.findChild<QComboBox*>(
+                    QStringLiteral("fieldSelector"));
+                if (fields != nullptr && fields->count() > 1) {
+                    fields->setCurrentIndex(1);
+                }
+                state->phase = 1;
+                window.importViewerStateForTest(statePath);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::viewerStateImportFinished,
+            &application,
+            [&window, &application, state, statePath, invalidPath](bool success) {
+                if (state->phase == 1) {
+                    if (!success) {
+                        application.exit(1);
+                        return;
+                    }
+                    const auto actual = window.captureViewerState(statePath);
+                    auto same =
+                        actual.source.path == state->expected.source.path
+                        && actual.display.field == state->expected.display.field
+                        && actual.display.level.mode
+                            == state->expected.display.level.mode
+                        && actual.rendering.mode
+                            == state->expected.rendering.mode
+                        && actual.panels.size() == state->expected.panels.size();
+                    for (const auto& [name, expectedPanel] :
+                        state->expected.panels) {
+                        const auto found = actual.panels.find(name);
+                        if (found == actual.panels.end()) {
+                            same = false;
+                            continue;
+                        }
+                        const auto& expectedCamera = expectedPanel.camera;
+                        const auto& actualCamera = found->second.camera;
+                        same = same
+                            && actualCamera.mode == expectedCamera.mode
+                            && std::abs(actualCamera.zoom
+                                - expectedCamera.zoom) < 1.0e-6
+                            && std::abs(actualCamera.center[0]
+                                - expectedCamera.center[0]) < 0.02
+                            && std::abs(actualCamera.center[1]
+                                - expectedCamera.center[1]) < 0.02;
+                    }
+                    if (!same) {
+                        QTextStream error(stderr);
+                        error << "viewer-state logical/camera mismatch\n";
+                        for (const auto& [name, expectedPanel] :
+                            state->expected.panels) {
+                            const auto found = actual.panels.find(name);
+                            error << QString::fromStdString(name)
+                                  << " expected zoom "
+                                  << expectedPanel.camera.zoom << " center "
+                                  << expectedPanel.camera.center[0] << ","
+                                  << expectedPanel.camera.center[1];
+                            if (found != actual.panels.end()) {
+                                error << " actual zoom "
+                                      << found->second.camera.zoom << " center "
+                                      << found->second.camera.center[0] << ","
+                                      << found->second.camera.center[1];
+                            }
+                            error << "\n";
+                        }
+                        application.exit(1);
+                        return;
+                    }
+                    state->expected = actual;
+                    state->phase = 2;
+                    window.importViewerStateForTest(invalidPath);
+                    return;
+                }
+                if (state->phase == 2) {
+                    const auto actual = window.captureViewerState(statePath);
+                    application.exit(!success
+                            && actual.source.path == state->expected.source.path
+                            && actual.display.field
+                                == state->expected.display.field
+                        ? 0 : 1);
+                }
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--contour-sync-smoke-test") {
         // Once the initial load lands, switch to contours in Visible+log mode
@@ -941,6 +1057,70 @@ int main(int argc, char* argv[])
             });
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
             &application, [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 5
+        && std::string_view(argv[1])
+            == "--viewer-state-sequence-smoke-test") {
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        const std::filesystem::path statePath(argv[4]);
+        struct SequenceImportState {
+            int phase = 0;
+            bool displayedFrameZeroDuringImport = false;
+        };
+        auto state = std::make_shared<SequenceImportState>();
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application,
+            [&window, &application, state, statePath](int index) {
+                if (state->phase == 0 && index == 0) {
+                    window.stepSequence(1);
+                    return;
+                }
+                if (state->phase == 0 && index == 1) {
+                    if (!window.exportViewerStateForTest(statePath)) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 1;
+                    window.openDataset(
+                        window.captureViewerState(statePath).source.frames[0]);
+                    return;
+                }
+                if (state->phase == 2 && index == 0) {
+                    state->displayedFrameZeroDuringImport = true;
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application,
+            [&window, &application, state, statePath](bool success) {
+                if (!success || state->phase != 1) {
+                    if (!success) application.exit(1);
+                    return;
+                }
+                state->phase = 2;
+                window.importViewerStateForTest(statePath);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::viewerStateImportFinished,
+            &application,
+            [&window, &application, state, statePath](bool success) {
+                const auto actual = window.captureViewerState(statePath);
+                application.exit(success
+                        && !state->displayedFrameZeroDuringImport
+                        && actual.source.kind
+                            == amrvis::qt::ViewerSourceKind::PlotfileSequence
+                        && actual.source.currentFrame == 1
+                    ? 0 : 1);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
         QTimer::singleShot(0, &window, [&window, first, second] {
             window.openSequence({first, second});
         });

@@ -46,6 +46,10 @@ public:
     // navigates to frame 0. The host performs validation and its own UI
     // setup before calling.
     void open(std::vector<std::filesystem::path> frames);
+    // Adopts a frame that was fully loaded outside the controller. This is the
+    // transactional viewer-state import seam: no frame-zero load occurs.
+    void adoptPrepared(std::vector<std::filesystem::path> frames, int index,
+        InitialSliceResult result, bool defaultPositions);
     // Drops the sequence and cancels the in-flight load and prefetch. The
     // host hides its sequence UI itself.
     void close();
@@ -79,6 +83,10 @@ public:
     [[nodiscard]] const std::filesystem::path& framePath(int index) const
     {
         return m_frames[static_cast<std::size_t>(index)];
+    }
+    [[nodiscard]] const std::vector<std::filesystem::path>& frames() const noexcept
+    {
+        return m_frames;
     }
 
 signals:

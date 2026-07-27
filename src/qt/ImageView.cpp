@@ -487,6 +487,71 @@ void ImageView::zoomToRect(const QRectF& sceneRect)
     fitInView(sceneRect, Qt::KeepAspectRatio);
 }
 
+ImageCameraState ImageView::cameraState() const
+{
+    ImageCameraState state;
+    if (!hasImage() || m_fitOnResize) {
+        return state;
+    }
+    const auto imageRect = m_item->sceneBoundingRect();
+    if (imageRect.isEmpty()) {
+        return state;
+    }
+    QTransform fitted;
+    const auto viewportRect = viewport()->rect();
+    if (!viewportRect.isEmpty()) {
+        // QGraphicsView::fitInView keeps a two-pixel margin on each edge.
+        // Mirror that effective viewport so capture and restoration use the
+        // same fitted transform rather than accumulating a small zoom drift.
+        const auto effectiveWidth = std::max(viewportRect.width() - 4, 1);
+        const auto effectiveHeight = std::max(viewportRect.height() - 4, 1);
+        const auto xScale = static_cast<double>(effectiveWidth)
+            / imageRect.width();
+        const auto yScale = static_cast<double>(effectiveHeight)
+            / imageRect.height();
+        const auto scale = std::min(xScale, yScale);
+        fitted.scale(scale, scale);
+    }
+    const auto fittedScale = fitted.m11();
+    const auto currentScale = transform().m11();
+    if (!std::isfinite(fittedScale) || fittedScale <= 0.0
+        || !std::isfinite(currentScale) || currentScale <= 0.0) {
+        return state;
+    }
+    const auto center = mapToScene(viewport()->rect().center());
+    state.mode = CameraMode::Manual;
+    state.zoom = std::clamp(currentScale / fittedScale, 1.0e-6, 1.0e6);
+    state.center = {
+        std::clamp((center.x() - imageRect.left()) / imageRect.width(),
+            0.0, 1.0),
+        std::clamp((center.y() - imageRect.top()) / imageRect.height(),
+            0.0, 1.0)};
+    return state;
+}
+
+void ImageView::restoreCameraState(const ImageCameraState& state)
+{
+    if (!hasImage()) {
+        return;
+    }
+    if (state.mode == CameraMode::Fit) {
+        fitToWindow();
+        return;
+    }
+    const auto zoom = std::clamp(
+        std::isfinite(state.zoom) ? state.zoom : 1.0, 1.0e-6, 1.0e6);
+    const auto centerX = std::clamp(
+        std::isfinite(state.center[0]) ? state.center[0] : 0.5, 0.0, 1.0);
+    const auto centerY = std::clamp(
+        std::isfinite(state.center[1]) ? state.center[1] : 0.5, 0.0, 1.0);
+    fitImage();
+    scale(zoom, zoom);
+    const auto rect = m_item->sceneBoundingRect();
+    centerOn(rect.left() + centerX * rect.width(),
+        rect.top() + centerY * rect.height());
+    m_fitOnResize = false;
+}
+
 void ImageView::panViewport(const QPoint& delta)
 {
     if (!hasImage() || (delta.x() == 0 && delta.y() == 0)) {

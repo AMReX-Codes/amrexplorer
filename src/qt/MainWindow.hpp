@@ -3,6 +3,7 @@
 #include "DatasetWindow.hpp"
 #include "NumberFormat.hpp"
 #include "SetContoursDialog.hpp"
+#include "ViewerState.hpp"
 
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/StopToken.hpp>
@@ -100,6 +101,11 @@ public:
     // dialogs, writing frames and MP4s under path's directory. Test-only entry
     // used by the export-quit smoke test to reach the encoder deterministically.
     void startAnimationExportForTest(const QString& path, bool includeColorBar);
+    [[nodiscard]] ViewerStateDocument captureViewerState(
+        const std::filesystem::path& statePath);
+    [[nodiscard]] bool exportViewerStateForTest(
+        const std::filesystem::path& statePath);
+    void importViewerStateForTest(const std::filesystem::path& statePath);
 
     // Test-only: move each 3-D plane to slicePositions (per axis, so the three
     // panels sample different data with different local ranges), switch to
@@ -164,6 +170,9 @@ public:
     // framed. A cropped-region arrival that over-zooms (issue #45) leaves part
     // of the raster outside the viewport and fails this.
     [[nodiscard]] bool activeViewShowsWholeImageForTest() const;
+    // Install distinct manual camera transforms in every displayed panel so
+    // viewer-state smoke tests verify per-panel zoom and center restoration.
+    void configureDistinctPanelCamerasForTest();
 
     // Test-only: drill into the FAB catalog entry at index (the same path the
     // dock's viewRequested signal drives). Used by the FAB round-trip zoom test.
@@ -207,6 +216,7 @@ signals:
     // workers about to run); the export-quit smoke test quits on it to exercise
     // bounded encoder cancellation.
     void exportEncodingStarted();
+    void viewerStateImportFinished(bool success);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -277,6 +287,10 @@ private:
     MainWindow* createNewWindow();
     void exportImage();
     void exportAnimation();
+    void chooseViewerStateImport();
+    void chooseViewerStateExport();
+    void importViewerState(const std::filesystem::path& statePath,
+        bool showFailureDialog);
     // Shared body of exportAnimation once the output path and color-bar choice
     // are known (from the dialogs, or from the test hook): freezes the export
     // zoom, starts the AnimationExporter (which owns the export state machine),
@@ -300,8 +314,8 @@ private:
     // field, applyFieldRange loads a field's snapshot (or the Visible default)
     // back into the widgets, and resetRangeState clears everything for a fresh
     // dataset.
-    void commitFieldRange(std::uint32_t field);
-    void applyFieldRange(std::uint32_t field);
+    void commitFieldRange(const std::string& field);
+    void applyFieldRange(const std::string& field);
     void resetRangeState();
     void updateRangeModeAvailability();
     void showContoursDialog();
@@ -483,8 +497,8 @@ private:
         RangeMode mode = RangeMode::File;
         std::optional<std::pair<double, double>> userRange;
     };
-    std::unordered_map<std::uint32_t, FieldRange> m_fieldRanges;
-    std::uint32_t m_trackedField = 0;
+    std::unordered_map<std::string, FieldRange> m_fieldRanges;
+    std::string m_trackedField;
     QWidget* m_slicePositionControls = nullptr;
     QAction* m_positionSeparator = nullptr;
     std::array<QSpinBox*, 3> m_sliceSpinboxes{nullptr, nullptr, nullptr};
@@ -534,6 +548,7 @@ private:
     QAction* m_particlesAction = nullptr;
     QAction* m_datasetAction = nullptr;
     QAction* m_exportAnimationAction = nullptr;
+    QAction* m_exportViewerStateAction = nullptr;
 
     // Drives File -> Export Animation...: owns the whole export state machine
     // (progress, cancellation, FFmpeg encoding). This window supplies frame
@@ -553,6 +568,7 @@ private:
     bool m_pendingRasterDirty = false;
     StopSource m_initialStopSource;
     StopSource m_metadataStopSource;
+    StopSource m_viewerStateImportStopSource;
     DisplayMode m_displayMode = DisplayMode::Raster;
     int m_contourCount = 15;
     int m_contourColor = contourColorBlack;
@@ -576,6 +592,7 @@ private:
         FrameSliceSpec spec;
     };
     std::optional<MultiFabReturnState> m_multifabReturn;
+    std::optional<std::size_t> m_selectedFab;
     std::optional<PlotfileMetadataResult> m_fabSourceMetadata;
     std::filesystem::path m_fabSourcePath;
     std::filesystem::path m_fabDataRoot;
@@ -589,6 +606,7 @@ private:
     QStringList m_backgroundErrors;
     bool m_controlsReady = false;
     std::uint64_t m_generation = 0;
+    std::uint64_t m_viewerStateImportGeneration = 0;
     std::uint64_t m_activeRequests = 0;
     bool m_closing = false;
     std::uint64_t m_staleResults = 0;

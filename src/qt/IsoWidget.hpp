@@ -2,6 +2,8 @@
 
 #include <amrexplorer/core/Metadata.hpp>
 
+#include "ViewerState.hpp"
+
 #include <QColor>
 #include <QPoint>
 #include <QWidget>
@@ -37,6 +39,8 @@ public:
     void setSlicePositions(double x, double y, double z);
     void setSlicePlanesVisible(bool visible);
     void setColorPalette(const Palette* palette);
+    [[nodiscard]] IsoCameraState cameraState() const noexcept;
+    void restoreCameraState(const IsoCameraState& state);
 
 protected:
     void paintEvent(QPaintEvent* event) override;

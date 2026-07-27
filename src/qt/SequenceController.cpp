@@ -30,6 +30,25 @@ void SequenceController::open(std::vector<std::filesystem::path> frames)
     goToFrame(0);
 }
 
+void SequenceController::adoptPrepared(
+    std::vector<std::filesystem::path> frames, int index,
+    InitialSliceResult result, bool defaultPositions)
+{
+    close();
+    m_frames = std::move(frames);
+    if (m_frames.empty()) {
+        throw std::runtime_error("cannot adopt an empty sequence");
+    }
+    if (index < 0 || index >= static_cast<int>(m_frames.size())) {
+        throw std::runtime_error("prepared sequence index is out of range");
+    }
+    emit frameSwitchStarted(index);
+    m_index = index;
+    m_inFlight = true;
+    m_frameTimer.start();
+    finishLoad(std::move(result), defaultPositions);
+}
+
 void SequenceController::close()
 {
     discardPrefetch();

@@ -2,6 +2,8 @@
 
 #include <amrexplorer/pipeline/ImageTransformPolicy.hpp>
 
+#include "ViewerState.hpp"
+
 #include <QGraphicsView>
 #include <QColor>
 #include <QImage>
@@ -101,6 +103,8 @@ public:
     void fitToWindow();
     void setFixedScale(int factor);
     void zoomToRect(const QRectF& sceneRect);
+    [[nodiscard]] ImageCameraState cameraState() const;
+    void restoreCameraState(const ImageCameraState& state);
     // Shift+left-drag pans the viewport (scroll bars, or the view transform
     // when the scene fits the window). When zoomed into a subregion, the
     // drag shifts the visible data window (see panDrag* signals).

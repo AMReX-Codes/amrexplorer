@@ -1,6 +1,7 @@
 #include <amrexplorer/io/ParticleReader.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
+#include <amrexplorer/pipeline/SlicePipeline.hpp>
 
 #include <algorithm>
 #include <array>
@@ -302,6 +303,8 @@ int main(int argc, char* argv[])
         std::filesystem::copy(argv[1], preparedRoot,
             std::filesystem::copy_options::recursive);
         writeFixture(preparedRoot, identities, 0.0);
+        std::filesystem::copy(preparedRoot / "Tracer",
+            preparedRoot / "Sink", std::filesystem::copy_options::recursive);
         const auto unsupportedSpecies = preparedRoot / "Unsupported";
         std::filesystem::create_directories(unsupportedSpecies);
         {
@@ -313,9 +316,47 @@ int main(int argc, char* argv[])
         amrvis::PlotfileDataset preparedDataset(
             preparedRoot, amrvis::DatasetId{1}, 1024 * 1024,
             std::move(preparedMetadata));
-        require(preparedDataset.particleSpecies().size() == 1
-                && preparedDataset.particleSpecies().front().name == "Tracer",
+        require(preparedDataset.particleSpecies().size() == 2,
             "prepared-metadata dataset did not discover particle species");
+
+        const std::vector<std::string> selectedSpecies{
+            "Tracer", "missing", "Sink"};
+        const auto batch = amrvis::loadParticleSamples(
+            preparedDataset, selectedSpecies, 0.5, 19);
+        require(batch.size() == 2,
+            "batch sampling did not select both supported species");
+        for (std::size_t index = 0; index < batch.size(); ++index) {
+            const auto& expectedSpecies
+                = preparedDataset.particleSpecies()[index];
+            require(batch[index].species.name == expectedSpecies.name,
+                "batch sampling did not preserve dataset species order");
+            const auto expected = preparedDataset.requestParticleSample(
+                expectedSpecies.name, 0.5, 19);
+            require(batch[index].points.size() == expected.points.size(),
+                "batch sampling did not forward fraction and seed");
+            for (std::size_t point = 0; point < expected.points.size(); ++point) {
+                require(batch[index].points[point].id
+                        == expected.points[point].id,
+                    "batch sampling selected different particle identities");
+            }
+        }
+        require(amrvis::loadParticleSamples(preparedDataset, {}, 1.0, 0)
+                    .empty(),
+            "empty batch selection loaded particles");
+
+        amrvis::StopSource stopped;
+        stopped.request_stop();
+        bool batchCancellationObserved = false;
+        try {
+            static_cast<void>(amrvis::loadParticleSamples(preparedDataset,
+                selectedSpecies, 1.0, 0, stopped.get_token()));
+        } catch (const amrvis::ParticleReadError& error) {
+            batchCancellationObserved
+                = std::string(error.what()).find("cancelled")
+                != std::string::npos;
+        }
+        require(batchCancellationObserved,
+            "batch sampling did not forward cancellation");
 
         std::filesystem::remove_all(root);
         return 0;

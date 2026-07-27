@@ -1,4 +1,4 @@
-git # AMReXplorer User Guide
+# AMReXplorer User Guide
 
 AMReXplorer is an interactive viewer for two- and three-dimensional AMReX
 plotfiles. It also opens standalone FAB and MultiFab data. This guide assumes

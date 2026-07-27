@@ -13,6 +13,7 @@
 
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/pipeline/DisplayCoordinator.hpp>
+#include <amrexplorer/pipeline/ParticleProjection.hpp>
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
 
@@ -334,6 +335,38 @@ int main()
             "a non-intersecting zoom did not fall back to the whole domain");
         requireDisplayInvariants(result.dataset->metadata(), d, palette,
             "region fallback");
+    }
+    {
+        // Particle projection follows the displayed plane's physical region:
+        // a zoom both clips the full-domain endpoints and remaps its midpoint.
+        amrvis::FrameSliceSpec spec;
+        const auto full = load2d(spec);
+        const std::vector particles{
+            amrvis::ParticlePoint{.id = 0, .position = {{0.0, 0.0, 0.0}}},
+            amrvis::ParticlePoint{
+                .id = 0, .position = {{0.625, 0.625, 0.0}}},
+            amrvis::ParticlePoint{.id = 0, .position = {{1.0, 1.0, 0.0}}}
+        };
+        const auto fullProjection = amrvis::projectParticlePoints(
+            particles, full.displays.front().slice.plane, 2, 1);
+        require(fullProjection.size() == 3,
+            "full-domain particle projection clipped an in-bounds point");
+
+        amrvis::RealBox zoom;
+        zoom.lower = {{0.5, 0.5, 0.0}};
+        zoom.upper = {{0.75, 0.75, 0.0}};
+        spec.visibleRegions = {zoom};
+        const auto zoomed = load2d(spec);
+        const auto& zoomedPlane = zoomed.displays.front().slice.plane;
+        const auto zoomedProjection = amrvis::projectParticlePoints(
+            particles, zoomedPlane, 2, 1);
+        require(zoomedProjection.size() == 1,
+            "zoomed particle projection did not clip the full-domain endpoints");
+        require(nearlyEqual(zoomedProjection.front().x,
+                    0.5 * zoomedPlane.width)
+                && nearlyEqual(zoomedProjection.front().y,
+                    0.5 * zoomedPlane.height),
+            "zoomed particle projection did not remap the physical midpoint");
     }
     {
         // An out-of-range exact level falls back to finest available.

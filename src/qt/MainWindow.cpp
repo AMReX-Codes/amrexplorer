@@ -20,6 +20,7 @@
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 #include <amrexplorer/core/Statistics.hpp>
+#include <amrexplorer/pipeline/ParticleProjection.hpp>
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
 #include <amrexplorer/query/LineQuery.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
@@ -1993,33 +1994,18 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
     constexpr std::array<Qt::GlobalColor, 7> colors{
         Qt::white, Qt::yellow, Qt::cyan, Qt::magenta,
         Qt::green, Qt::red, Qt::lightGray};
-    const auto axes = displayAxes(state.normal);
-    const auto xAxis = static_cast<std::size_t>(axes[0]);
-    const auto yAxis = static_cast<std::size_t>(axes[1]);
-    const auto& region = state.plane->physicalRegion;
-    const auto xExtent = region.upper[xAxis] - region.lower[xAxis];
-    const auto yExtent = region.upper[yAxis] - region.lower[yAxis];
-    if (!(xExtent > 0.0) || !(yExtent > 0.0)) {
-        state.view->setPointOverlays(overlays);
-        return;
-    }
     overlays.reserve(m_particleSamples.size());
     for (std::size_t sampleIndex = 0;
          sampleIndex < m_particleSamples.size(); ++sampleIndex) {
         PointOverlay overlay;
         overlay.color = QColor(colors[sampleIndex % colors.size()]);
         overlay.size = static_cast<float>(m_particlePointSize);
-        for (const auto& particle : m_particleSamples[sampleIndex].points) {
-            const auto x = particle.position[xAxis];
-            const auto y = particle.position[yAxis];
-            if (x < region.lower[xAxis] || x > region.upper[xAxis]
-                || y < region.lower[yAxis] || y > region.upper[yAxis]) {
-                continue;
-            }
-            overlay.points.emplace_back(
-                (x - region.lower[xAxis]) / xExtent * state.plane->width,
-                state.plane->height
-                    - (y - region.lower[yAxis]) / yExtent * state.plane->height);
+        const auto projected = projectParticlePoints(
+            m_particleSamples[sampleIndex].points, *state.plane,
+            m_dataset->metadata().dimension, state.normal);
+        overlay.points.reserve(projected.size());
+        for (const auto& point : projected) {
+            overlay.points.emplace_back(point.x, point.y);
         }
         overlays.push_back(std::move(overlay));
     }

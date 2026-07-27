@@ -61,6 +61,13 @@ target_link_libraries(
 )
 add_test(NAME display_coordinator COMMAND test_display_coordinator)
 
+add_executable(test_particle_projection unit/test_particle_projection.cpp)
+target_link_libraries(
+    test_particle_projection
+    PRIVATE amrexplorer::pipeline amrexplorer::warnings
+)
+add_test(NAME particle_projection COMMAND test_particle_projection)
+
 add_executable(test_slice_range_resolver unit/test_slice_range_resolver.cpp)
 target_link_libraries(
     test_slice_range_resolver

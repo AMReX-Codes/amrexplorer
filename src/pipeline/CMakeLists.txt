@@ -1,5 +1,6 @@
 add_library(amrexplorer_pipeline
     DisplayCoordinator.cpp
+    ParticleProjection.cpp
     SlicePipeline.cpp
     SliceRangeResolver.cpp
 )

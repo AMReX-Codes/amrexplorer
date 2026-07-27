@@ -367,6 +367,25 @@ void recomputeContourPolylines(SliceDisplayResult& result)
         result.request.outputSize[0], result.request.outputSize[1]);
 }
 
+std::vector<ParticleSample> loadParticleSamples(
+    const PlotfileDataset& dataset,
+    std::span<const std::string> selectedSpecies, double fraction,
+    std::uint64_t seed, StopToken cancellation)
+{
+    std::vector<ParticleSample> samples;
+    samples.reserve(std::min(
+        dataset.particleSpecies().size(), selectedSpecies.size()));
+    for (const auto& species : dataset.particleSpecies()) {
+        if (std::find(selectedSpecies.begin(), selectedSpecies.end(),
+                species.name) == selectedSpecies.end()) {
+            continue;
+        }
+        samples.push_back(dataset.requestParticleSample(
+            species.name, fraction, seed, cancellation));
+    }
+    return samples;
+}
+
 InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
     DatasetId datasetId, const FrameSliceSpec& spec,
     std::uint64_t cacheBudgetBytes, StopToken cancellation,
@@ -548,16 +567,9 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
             result.cacheFallbackToLevel = --attemptMaximumLevel;
         }
     }
-    for (const auto& species : result.dataset->particleSpecies()) {
-        const auto enabled = std::find(spec.particleSpecies.begin(),
-            spec.particleSpecies.end(), species.name)
-            != spec.particleSpecies.end();
-        if (enabled) {
-            result.particles.push_back(result.dataset->requestParticleSample(
-                species.name, spec.particleFraction, spec.particleSeed,
-                cancellation));
-        }
-    }
+    result.particles = loadParticleSamples(*result.dataset,
+        spec.particleSpecies, spec.particleFraction, spec.particleSeed,
+        cancellation);
     return result;
 }
 

@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -233,6 +234,14 @@ void appendContours(const std::shared_ptr<PlotfileDataset>& dataset,
 // SliceDisplayResult overload: regenerate the polylines to match the result's
 // current (possibly replaced) minimum/maximum. No-op outside contour modes.
 void recomputeContourPolylines(SliceDisplayResult& result);
+
+// Loads the selected particle species in dataset discovery order. Unknown
+// names are ignored, matching the behavior needed when a plotfile sequence
+// frame does not contain every species selected on another frame.
+[[nodiscard]] std::vector<ParticleSample> loadParticleSamples(
+    const PlotfileDataset& dataset,
+    std::span<const std::string> selectedSpecies, double fraction,
+    std::uint64_t seed, StopToken cancellation = {});
 
 // Opens one plotfile on a worker thread and renders the slice(s) described
 // by spec — one per ortho view for 3-D, the single y-normal view for 2-D.

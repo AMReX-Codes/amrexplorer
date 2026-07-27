@@ -2075,16 +2075,8 @@ void MainWindow::requestParticleReload()
         });
     watcher->setFuture(QtConcurrent::run(
         [dataset, selectedSpecies, fraction, cancellation] {
-            std::vector<ParticleSample> samples;
-            for (const auto& species : dataset->particleSpecies()) {
-                if (std::find(selectedSpecies.begin(), selectedSpecies.end(),
-                        species.name) == selectedSpecies.end()) {
-                    continue;
-                }
-                samples.push_back(dataset->requestParticleSample(
-                    species.name, fraction, 0, cancellation));
-            }
-            return samples;
+            return loadParticleSamples(
+                *dataset, selectedSpecies, fraction, 0, cancellation);
         }));
 }
 

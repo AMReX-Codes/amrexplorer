@@ -64,6 +64,7 @@
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QRect>
+#include <QRegularExpressionValidator>
 #include <QSettings>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -1894,6 +1895,17 @@ void MainWindow::showParticlesDialog()
     fractionRow->addStretch(1);
     layout->addLayout(fractionRow);
 
+    auto* seedRow = new QHBoxLayout;
+    seedRow->addWidget(new QLabel(tr("Sampling seed:"), &dialog));
+    auto* seed = new QLineEdit(QString::number(m_particleSeed), &dialog);
+    seed->setValidator(new QRegularExpressionValidator(
+        QRegularExpression(QStringLiteral("[0-9]{1,20}")), seed));
+    seed->setToolTip(tr(
+        "Change the seed to select a different stable particle subset."));
+    seedRow->addWidget(seed);
+    seedRow->addStretch(1);
+    layout->addLayout(seedRow);
+
     auto* sizeRow = new QHBoxLayout;
     sizeRow->addWidget(new QLabel(tr("Point size:"), &dialog));
     auto* pointSize = new QSpinBox(&dialog);
@@ -1910,7 +1922,18 @@ void MainWindow::showParticlesDialog()
     }
     auto* buttons = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, seed] {
+        bool valid = false;
+        static_cast<void>(seed->text().toULongLong(&valid));
+        if (valid) {
+            dialog.accept();
+        } else {
+            QMessageBox::warning(&dialog, QObject::tr("Invalid seed"),
+                QObject::tr(
+                    "The sampling seed must be an integer from 0 through "
+                    "18446744073709551615."));
+        }
+    });
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
     if (dialog.exec() != QDialog::Accepted) {
@@ -1926,8 +1949,9 @@ void MainWindow::showParticlesDialog()
             static_cast<float>(controls.alpha->value()) / 100.0F);
         m_particleColors[controls.name] = controls.color;
     }
+    const auto seedValue = seed->text().toULongLong();
     applyParticleSelection(std::move(selectedSpecies),
-        fraction->value() / 100.0, pointSize->value());
+        fraction->value() / 100.0, pointSize->value(), seedValue);
 }
 
 void MainWindow::configureParticleControls(bool preserveSelection)
@@ -1940,6 +1964,7 @@ void MainWindow::configureParticleControls(bool preserveSelection)
     if (!preserveSelection) {
         m_selectedParticleSpecies.clear();
         m_particleColors.clear();
+        m_particleSeed = 0;
         m_particleSelectionInitialized = false;
     }
     for (std::size_t speciesIndex = 0; speciesIndex < species.size();
@@ -1951,13 +1976,16 @@ void MainWindow::configureParticleControls(bool preserveSelection)
 }
 
 void MainWindow::applyParticleSelection(
-    std::vector<std::string> species, double fraction, int pointSize)
+    std::vector<std::string> species, double fraction, int pointSize,
+    std::uint64_t seed)
 {
     const bool sampleChanged = !m_particleSelectionInitialized
         || species != m_selectedParticleSpecies
-        || fraction != m_particleFraction;
+        || fraction != m_particleFraction
+        || seed != m_particleSeed;
     m_selectedParticleSpecies = std::move(species);
     m_particleFraction = fraction;
+    m_particleSeed = seed;
     m_particlePointSize = pointSize;
     m_particleSelectionInitialized = true;
     if (!sampleChanged) {
@@ -1978,10 +2006,15 @@ void MainWindow::applyParticleSelection(
 }
 
 void MainWindow::setParticleSelectionForTest(
-    std::vector<std::string> species, double fraction)
+    std::vector<std::string> species, double fraction, std::uint64_t seed)
 {
     applyParticleSelection(
-        std::move(species), fraction, m_particlePointSize);
+        std::move(species), fraction, m_particlePointSize, seed);
+}
+
+std::uint64_t MainWindow::particleSeedForTest() const noexcept
+{
+    return m_particleSeed;
 }
 
 void MainWindow::setParticleColorForTest(
@@ -2031,6 +2064,7 @@ void MainWindow::requestParticleReload()
     const auto dataset = m_dataset;
     const auto selectedSpecies = m_selectedParticleSpecies;
     const auto fraction = m_particleFraction;
+    const auto seed = m_particleSeed;
     const auto generation = m_generation;
     const auto particleGeneration = ++m_particleGeneration;
     m_particleSamples.clear();
@@ -2074,9 +2108,9 @@ void MainWindow::requestParticleReload()
             watcher->deleteLater();
         });
     watcher->setFuture(QtConcurrent::run(
-        [dataset, selectedSpecies, fraction, cancellation] {
+        [dataset, selectedSpecies, fraction, seed, cancellation] {
             return loadParticleSamples(
-                *dataset, selectedSpecies, fraction, 0, cancellation);
+                *dataset, selectedSpecies, fraction, seed, cancellation);
         }));
 }
 
@@ -3785,6 +3819,7 @@ void MainWindow::requestInitialSlice(
                         m_selectedParticleSpecies
                             = restoredSpec->particleSpecies;
                         m_particleFraction = restoredSpec->particleFraction;
+                        m_particleSeed = restoredSpec->particleSeed;
                         m_particleSelectionInitialized
                             = restoredSpec->particleSelectionInitialized;
                     }
@@ -5148,6 +5183,7 @@ FrameSliceSpec MainWindow::buildFrameSpec()
         spec.particleSpecies = m_selectedParticleSpecies;
     }
     spec.particleFraction = m_particleFraction;
+    spec.particleSeed = m_particleSeed;
     const auto views = currentViews();
     spec.visibleRegions.reserve(views.size());
     for (const auto* state : views) {

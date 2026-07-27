@@ -16,6 +16,7 @@
 #include <amrexplorer/render2d/Palette.hpp>
 #include <amrexplorer/render2d/VectorGlyphs.hpp>
 
+#include <QColor>
 #include <QElapsedTimer>
 #include <QImage>
 #include <QMainWindow>
@@ -37,7 +38,6 @@ class QAction;
 class QActionGroup;
 class QCheckBox;
 class QCloseEvent;
-class QColor;
 class QComboBox;
 class QDockWidget;
 class QLabel;
@@ -183,6 +183,10 @@ public:
     // as the dialog, and inspect how many points are currently installed.
     void setParticleSelectionForTest(
         std::vector<std::string> species, double fraction);
+    void setParticleColorForTest(
+        const std::string& species, const QColor& color);
+    [[nodiscard]] bool particleOverlaysUseColorForTest(
+        const QColor& color);
     [[nodiscard]] std::size_t particleSampleCountForTest() const;
     [[nodiscard]] std::size_t particleOverlayCountForTest();
 
@@ -554,6 +558,7 @@ private:
     int m_vectorWField = -1;
     std::vector<std::string> m_selectedParticleSpecies;
     std::vector<ParticleSample> m_particleSamples;
+    std::unordered_map<std::string, QColor> m_particleColors;
     double m_particleFraction = 1.0;
     int m_particlePointSize = 3;
     bool m_particleSelectionInitialized = false;

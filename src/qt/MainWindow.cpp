@@ -33,6 +33,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialog>
@@ -56,6 +57,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPainter>
+#include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QProcess>
@@ -114,6 +116,24 @@ constexpr std::array<BuiltinPalette, 7> builtinPalettes{
 // Menu labels and QSettings keys; kept in sync with builtinPaletteName().
 constexpr std::array<const char*, 7> builtinPaletteNames{
     "rainbow", "turbo", "viridis", "plasma", "parula", "coolwarm", "blackbody"};
+
+constexpr std::array<Qt::GlobalColor, 7> particleDefaultColors{
+    Qt::white, Qt::yellow, Qt::cyan, Qt::magenta,
+    Qt::green, Qt::red, Qt::lightGray};
+
+QColor defaultParticleColor(std::size_t speciesIndex)
+{
+    return QColor(
+        particleDefaultColors[speciesIndex % particleDefaultColors.size()]);
+}
+
+void updateColorButton(QPushButton& button, const QColor& color)
+{
+    QPixmap swatch(18, 18);
+    swatch.fill(color);
+    button.setIcon(QIcon(swatch));
+    button.setText(color.name(QColor::HexRgb).toUpper());
+}
 
 QImage verticallyFlippedCopy(const QImage& image)
 {
@@ -1802,20 +1822,66 @@ void MainWindow::showParticlesDialog()
            "across plotfile frames."),
         &dialog));
 
-    std::vector<std::pair<std::string, QCheckBox*>> speciesChecks;
-    for (const auto& species : m_dataset->particleSpecies()) {
-        auto* check = new QCheckBox(
-            tr("%1 (%2 particles)")
-                .arg(QString::fromStdString(species.name))
-                .arg(species.particleCount),
-            &dialog);
+    struct SpeciesControls {
+        std::string name;
+        QCheckBox* enabled = nullptr;
+        QPushButton* colorButton = nullptr;
+        QSpinBox* alpha = nullptr;
+        QColor color;
+    };
+    std::vector<SpeciesControls> speciesControls;
+    speciesControls.reserve(m_dataset->particleSpecies().size());
+    auto* speciesGrid = new QGridLayout;
+    speciesGrid->addWidget(new QLabel(tr("Show"), &dialog), 0, 0);
+    speciesGrid->addWidget(new QLabel(tr("Species"), &dialog), 0, 1);
+    speciesGrid->addWidget(new QLabel(tr("Color"), &dialog), 0, 2);
+    speciesGrid->addWidget(new QLabel(tr("Alpha"), &dialog), 0, 3);
+    for (std::size_t speciesIndex = 0;
+         speciesIndex < m_dataset->particleSpecies().size(); ++speciesIndex) {
+        const auto& species = m_dataset->particleSpecies()[speciesIndex];
+        auto* check = new QCheckBox(&dialog);
         check->setChecked(!m_particleSelectionInitialized
             || std::find(m_selectedParticleSpecies.begin(),
                 m_selectedParticleSpecies.end(), species.name)
                 != m_selectedParticleSpecies.end());
-        layout->addWidget(check);
-        speciesChecks.emplace_back(species.name, check);
+        auto* name = new QLabel(
+            tr("%1 (%2 particles)")
+                .arg(QString::fromStdString(species.name))
+                .arg(species.particleCount),
+            &dialog);
+        auto color = m_particleColors.contains(species.name)
+            ? m_particleColors.at(species.name)
+            : defaultParticleColor(speciesIndex);
+        auto* colorButton = new QPushButton(&dialog);
+        updateColorButton(*colorButton, color);
+        auto* alpha = new QSpinBox(&dialog);
+        alpha->setRange(0, 100);
+        alpha->setSuffix(tr("%"));
+        alpha->setValue(qRound(color.alphaF() * 100.0));
+        const auto row = static_cast<int>(speciesIndex + 1);
+        speciesGrid->addWidget(check, row, 0, Qt::AlignHCenter);
+        speciesGrid->addWidget(name, row, 1);
+        speciesGrid->addWidget(colorButton, row, 2);
+        speciesGrid->addWidget(alpha, row, 3);
+        speciesControls.push_back(
+            {species.name, check, colorButton, alpha, color});
     }
+    for (auto& controls : speciesControls) {
+        auto* controlsPtr = &controls;
+        connect(controls.colorButton, &QPushButton::clicked, &dialog,
+            [&dialog, controlsPtr] {
+                auto chosen = QColorDialog::getColor(controlsPtr->color, &dialog,
+                    QObject::tr("Particle color"));
+                if (!chosen.isValid()) {
+                    return;
+                }
+                chosen.setAlpha(controlsPtr->color.alpha());
+                controlsPtr->color = chosen;
+                updateColorButton(
+                    *controlsPtr->colorButton, controlsPtr->color);
+            });
+    }
+    layout->addLayout(speciesGrid);
 
     auto* fractionRow = new QHBoxLayout;
     fractionRow->addWidget(new QLabel(tr("Visible subset:"), &dialog));
@@ -1852,10 +1918,13 @@ void MainWindow::showParticlesDialog()
     }
 
     std::vector<std::string> selectedSpecies;
-    for (const auto& [name, check] : speciesChecks) {
-        if (check->isChecked()) {
-            selectedSpecies.push_back(name);
+    for (auto& controls : speciesControls) {
+        if (controls.enabled->isChecked()) {
+            selectedSpecies.push_back(controls.name);
         }
+        controls.color.setAlphaF(
+            static_cast<float>(controls.alpha->value()) / 100.0F);
+        m_particleColors[controls.name] = controls.color;
     }
     applyParticleSelection(std::move(selectedSpecies),
         fraction->value() / 100.0, pointSize->value());
@@ -1870,7 +1939,13 @@ void MainWindow::configureParticleControls(bool preserveSelection)
     const auto& species = m_dataset->particleSpecies();
     if (!preserveSelection) {
         m_selectedParticleSpecies.clear();
+        m_particleColors.clear();
         m_particleSelectionInitialized = false;
+    }
+    for (std::size_t speciesIndex = 0; speciesIndex < species.size();
+         ++speciesIndex) {
+        m_particleColors.try_emplace(
+            species[speciesIndex].name, defaultParticleColor(speciesIndex));
     }
     m_particlesAction->setEnabled(!species.empty());
 }
@@ -1878,10 +1953,19 @@ void MainWindow::configureParticleControls(bool preserveSelection)
 void MainWindow::applyParticleSelection(
     std::vector<std::string> species, double fraction, int pointSize)
 {
+    const bool sampleChanged = !m_particleSelectionInitialized
+        || species != m_selectedParticleSpecies
+        || fraction != m_particleFraction;
     m_selectedParticleSpecies = std::move(species);
     m_particleFraction = fraction;
     m_particlePointSize = pointSize;
     m_particleSelectionInitialized = true;
+    if (!sampleChanged) {
+        // Color, alpha, and point size only affect the installed point batches;
+        // do not reread particle files when the sampled identities are unchanged.
+        updateParticleOverlays();
+        return;
+    }
     m_sequenceController->invalidatePrefetch();
     // Mid-sequence-load, restart the frame so the new particle selection is
     // baked into the frame spec; otherwise reload the particle overlay alone.
@@ -1898,6 +1982,27 @@ void MainWindow::setParticleSelectionForTest(
 {
     applyParticleSelection(
         std::move(species), fraction, m_particlePointSize);
+}
+
+void MainWindow::setParticleColorForTest(
+    const std::string& species, const QColor& color)
+{
+    m_particleColors[species] = color;
+    updateParticleOverlays();
+}
+
+bool MainWindow::particleOverlaysUseColorForTest(const QColor& color)
+{
+    bool found = false;
+    for (const auto* state : currentViews()) {
+        for (const auto& overlayColor : state->view->pointOverlayColors()) {
+            found = true;
+            if (overlayColor != color) {
+                return false;
+            }
+        }
+    }
+    return found;
 }
 
 std::size_t MainWindow::particleSampleCountForTest() const
@@ -1991,17 +2096,15 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
         state.view->setPointOverlays(overlays);
         return;
     }
-    constexpr std::array<Qt::GlobalColor, 7> colors{
-        Qt::white, Qt::yellow, Qt::cyan, Qt::magenta,
-        Qt::green, Qt::red, Qt::lightGray};
     overlays.reserve(m_particleSamples.size());
-    for (std::size_t sampleIndex = 0;
-         sampleIndex < m_particleSamples.size(); ++sampleIndex) {
+    for (const auto& sample : m_particleSamples) {
         PointOverlay overlay;
-        overlay.color = QColor(colors[sampleIndex % colors.size()]);
+        const auto color = m_particleColors.find(sample.species.name);
+        overlay.color = color != m_particleColors.end()
+            ? color->second : QColor(Qt::white);
         overlay.size = static_cast<float>(m_particlePointSize);
         const auto projected = projectParticlePoints(
-            m_particleSamples[sampleIndex].points, *state.plane,
+            sample.points, *state.plane,
             m_dataset->metadata().dimension, state.normal);
         overlay.points.reserve(projected.size());
         for (const auto& point : projected) {

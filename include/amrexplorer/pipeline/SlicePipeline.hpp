@@ -42,11 +42,14 @@ struct SliceDisplayResult {
     std::vector<VectorSegment> vectors;
     // Contour modes only: the piecewise plane at data resolution the
     // contours were extracted from (the display plane itself when the data
-    // is finer than the display), its bilinear refinement, and the
-    // polylines extracted from that refinement, already mapped to
-    // display-plane pixel space (empty otherwise).
+    // is finer than the display), the plane the contours were traced on, and
+    // the polylines extracted from it, already mapped to display-plane pixel
+    // space (empty otherwise).
     ScalarPlane contourPlane;
     ScalarPlane contourFinePlane;
+    // Always 1: #8 removed contour supersampling, so contourFinePlane above is
+    // just a copy of contourPlane. Both retire together when the "stop
+    // round-tripping planes through SliceDisplayResult" cleanup lands.
     int contourFineFactor = 1;
     std::vector<ContourPolyline> contourPolylines;
     std::string fieldName;

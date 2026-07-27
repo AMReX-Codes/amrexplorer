@@ -182,7 +182,9 @@ public:
     // Test-only: apply particle settings through the same synchronization path
     // as the dialog, and inspect how many points are currently installed.
     void setParticleSelectionForTest(
-        std::vector<std::string> species, double fraction);
+        std::vector<std::string> species, double fraction,
+        std::uint64_t seed = 0);
+    [[nodiscard]] std::uint64_t particleSeedForTest() const noexcept;
     void setParticleColorForTest(
         const std::string& species, const QColor& color);
     [[nodiscard]] bool particleOverlaysUseColorForTest(
@@ -447,7 +449,8 @@ private:
     void configureSequenceControls(bool defaultPositions);
     [[nodiscard]] FrameSliceSpec buildFrameSpec();
     void applyParticleSelection(
-        std::vector<std::string> species, double fraction, int pointSize);
+        std::vector<std::string> species, double fraction, int pointSize,
+        std::uint64_t seed);
     // Stop timers, request stop on every async task this window can launch,
     // and clear queued thread-pool work. Wired to aboutToQuit so the process
     // exits promptly instead of blocking QThreadPool teardown on an in-flight
@@ -560,6 +563,7 @@ private:
     std::vector<ParticleSample> m_particleSamples;
     std::unordered_map<std::string, QColor> m_particleColors;
     double m_particleFraction = 1.0;
+    std::uint64_t m_particleSeed = 0;
     int m_particlePointSize = 3;
     bool m_particleSelectionInitialized = false;
     StopSource m_particleStopSource;

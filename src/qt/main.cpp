@@ -505,7 +505,7 @@ int main(int argc, char* argv[])
                     application.exit(1);
                     return;
                 }
-                window.setParticleSelectionForTest({"Tracer"}, 1.0);
+                window.setParticleSelectionForTest({"Tracer"}, 1.0, 37);
                 poll->start();
             });
         QObject::connect(poll, &QTimer::timeout, &application,
@@ -515,7 +515,8 @@ int main(int argc, char* argv[])
                     return;
                 }
                 if (window.particleSampleCountForTest() == 0
-                    || window.particleOverlayCountForTest() == 0) {
+                    || window.particleOverlayCountForTest() == 0
+                    || window.particleSeedForTest() != 37) {
                     return;
                 }
                 poll->stop();
@@ -531,6 +532,7 @@ int main(int argc, char* argv[])
                         application.exit(
                             window.particleSampleCountForTest() > 0
                                 && window.particleOverlayCountForTest() > 0
+                                && window.particleSeedForTest() == 37
                                 && window.particleOverlaysUseColorForTest(
                                     particleColor)
                             ? 0 : 1);
@@ -927,12 +929,14 @@ int main(int argc, char* argv[])
                     // Opt in, start a frame load carrying that specification,
                     // then change it before the worker can complete. The final
                     // frame must reflect the new empty selection.
-                    window.setParticleSelectionForTest({"Tracer"}, 1.0);
+                    window.setParticleSelectionForTest({"Tracer"}, 1.0, 37);
                     window.stepSequence(1);
-                    window.setParticleSelectionForTest({}, 1.0);
+                    window.setParticleSelectionForTest({}, 1.0, 41);
                 } else if (index == 1) {
                     application.exit(
-                        window.particleSampleCountForTest() == 0 ? 0 : 1);
+                        window.particleSampleCountForTest() == 0
+                                && window.particleSeedForTest() == 41
+                            ? 0 : 1);
                 }
             });
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,

@@ -519,12 +519,20 @@ int main(int argc, char* argv[])
                     return;
                 }
                 poll->stop();
+                const QColor particleColor(12, 34, 56, 77);
+                window.setParticleColorForTest("Tracer", particleColor);
+                if (!window.particleOverlaysUseColorForTest(particleColor)) {
+                    application.exit(1);
+                    return;
+                }
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application, [&window, &application] {
+                    &application, [&window, &application, particleColor] {
                         application.exit(
                             window.particleSampleCountForTest() > 0
                                 && window.particleOverlayCountForTest() > 0
+                                && window.particleOverlaysUseColorForTest(
+                                    particleColor)
                             ? 0 : 1);
                     }, Qt::SingleShotConnection);
                 window.enableVisibleRasterForTest();

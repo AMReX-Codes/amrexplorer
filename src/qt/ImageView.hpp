@@ -92,6 +92,7 @@ public:
     [[nodiscard]] bool hasImage() const noexcept;
     [[nodiscard]] const QImage& image() const noexcept;
     [[nodiscard]] std::size_t pointOverlayCount() const noexcept;
+    [[nodiscard]] const std::vector<QColor>& pointOverlayColors() const noexcept;
     // Renders the scene (base image plus grid boxes and any other overlays)
     // to a fresh QImage for export. scaleFactor multiplies the raster's native
     // resolution so the export reflects the on-screen zoom (WYSIWYG); an
@@ -150,6 +151,7 @@ private:
     std::vector<QGraphicsLineItem*> m_overlayItems;
     std::vector<QGraphicsPathItem*> m_pathItems;
     std::vector<QGraphicsItem*> m_pointItems;
+    std::vector<QColor> m_pointOverlayColors;
     std::optional<QLineF> m_crosshairVertical;
     std::optional<QLineF> m_crosshairHorizontal;
     QColor m_crosshairVerticalColor;

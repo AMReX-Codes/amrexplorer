@@ -511,6 +511,7 @@ MainWindow::MainWindow(QWidget* parent)
     // the per-group separators on the Slice Controls toolbar.
     rangeToolbar->addSeparator();
     m_logarithmic = new QCheckBox(tr("Log"), rangeToolbar);
+    m_logarithmic->setObjectName(QStringLiteral("logarithmicCheckBox"));
     rangeToolbar->addWidget(m_logarithmic);
     rangeToolbar->addSeparator();
     rangeToolbar->addWidget(new QLabel(tr("Palette:"), rangeToolbar));
@@ -1113,6 +1114,7 @@ void MainWindow::createMenus()
 
     // Variable menu: lists all fields with a bullet on the active one.
     m_variableMenu = menuBar()->addMenu(tr("&Variable"));
+    m_variableMenu->setObjectName(QStringLiteral("variableMenu"));
     m_variableGroup = new QActionGroup(this);
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
@@ -3905,6 +3907,8 @@ void MainWindow::importViewerState(
                         QString::fromStdString(document.display.field));
                     if (fieldIndex < 0) fieldIndex = 0;
                     m_fieldSelector->setCurrentIndex(fieldIndex);
+                    m_logarithmic->setChecked(
+                        document.display.logarithmic);
                     const auto levelIndex =
                         m_levelSelector->findData(prepared.spec.levelSelection);
                     m_levelSelector->setCurrentIndex(
@@ -3923,6 +3927,7 @@ void MainWindow::importViewerState(
                         m_fieldSelector->currentText().toStdString();
                     applyFieldRange(m_trackedField);
                 }
+                syncVariableMenu();
                 std::array<int*, 3> vectorIds{
                     &m_vectorUField, &m_vectorVField, &m_vectorWField};
                 for (std::size_t axis = 0;

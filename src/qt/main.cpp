@@ -3,6 +3,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
@@ -12,6 +13,7 @@
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QLoggingCategory>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QProcess>
 #include <QPushButton>
@@ -536,6 +538,9 @@ int main(int argc, char* argv[])
             &application,
             [&window, &application, state, statePath, invalidPath](bool success) {
                 if (!success || state->phase != 0) {
+                    QTextStream(stderr)
+                        << "unexpected initial-slice signal: success "
+                        << success << " phase " << state->phase << "\n";
                     application.exit(1);
                     return;
                 }
@@ -555,8 +560,23 @@ int main(int argc, char* argv[])
                 // Leave ordinary slice work in flight while import prepares.
                 auto* fields = window.findChild<QComboBox*>(
                     QStringLiteral("fieldSelector"));
+                auto* logarithmic = window.findChild<QCheckBox*>(
+                    QStringLiteral("logarithmicCheckBox"));
                 if (fields != nullptr && fields->count() > 1) {
                     fields->setCurrentIndex(1);
+                }
+                if (logarithmic == nullptr
+                    || logarithmic->isChecked()
+                        == state->expected.display.logarithmic) {
+                    if (logarithmic == nullptr) {
+                        QTextStream(stderr)
+                            << "logarithmic checkbox not found\n";
+                        application.exit(1);
+                        return;
+                    }
+                    const QSignalBlocker blocker(logarithmic);
+                    logarithmic->setChecked(
+                        !state->expected.display.logarithmic);
                 }
                 state->phase = 1;
                 window.importViewerStateForTest(statePath);
@@ -567,13 +587,34 @@ int main(int argc, char* argv[])
             [&window, &application, state, statePath, invalidPath](bool success) {
                 if (state->phase == 1) {
                     if (!success) {
+                        QTextStream(stderr)
+                            << "initial viewer-state import failed\n";
                         application.exit(1);
                         return;
                     }
                     const auto actual = window.captureViewerState(statePath);
+                    const auto* variableMenu = window.findChild<QMenu*>(
+                        QStringLiteral("variableMenu"));
+                    int checkedVariableCount = 0;
+                    bool checkedVariableMatches = false;
+                    if (variableMenu != nullptr) {
+                        for (const auto* action : variableMenu->actions()) {
+                            if (action->isChecked()) {
+                                ++checkedVariableCount;
+                                checkedVariableMatches =
+                                    action->text()
+                                    == QString::fromStdString(
+                                        actual.display.field);
+                            }
+                        }
+                    }
                     auto same =
                         actual.source.path == state->expected.source.path
                         && actual.display.field == state->expected.display.field
+                        && actual.display.logarithmic
+                            == state->expected.display.logarithmic
+                        && checkedVariableCount == 1
+                        && checkedVariableMatches
                         && actual.display.level.mode
                             == state->expected.display.level.mode
                         && actual.rendering.mode
@@ -600,6 +641,17 @@ int main(int argc, char* argv[])
                     if (!same) {
                         QTextStream error(stderr);
                         error << "viewer-state logical/camera mismatch\n";
+                        error << "field expected "
+                              << QString::fromStdString(
+                                  state->expected.display.field)
+                              << " actual "
+                              << QString::fromStdString(actual.display.field)
+                              << " log expected "
+                              << state->expected.display.logarithmic
+                              << " actual " << actual.display.logarithmic
+                              << " checked variables "
+                              << checkedVariableCount << " match "
+                              << checkedVariableMatches << "\n";
                         for (const auto& [name, expectedPanel] :
                             state->expected.panels) {
                             const auto found = actual.panels.find(name);
@@ -652,6 +704,8 @@ int main(int argc, char* argv[])
                 }
                 if (state->phase == 2) {
                     if (!success) {
+                        QTextStream(stderr)
+                            << "preference viewer-state import failed\n";
                         application.exit(1);
                         return;
                     }
@@ -662,6 +716,8 @@ int main(int argc, char* argv[])
                         || imported.display.logarithmic
                         || !window.numberFormatConsumersMatchForTest(
                             state->importedNumberFormat)) {
+                        QTextStream(stderr)
+                            << "imported preference mismatch\n";
                         application.exit(1);
                         return;
                     }

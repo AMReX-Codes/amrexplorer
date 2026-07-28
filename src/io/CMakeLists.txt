@@ -3,6 +3,7 @@ add_library(amrexplorer_io
     plotfile/PlotfileBlockReader.cpp
     plotfile/PlotfileDataset.cpp
     plotfile/PlotfileMetadataReader.cpp
+    plotfile/ParticleReader.cpp
     plotfile/StandaloneMetadataReader.cpp
 )
 add_library(amrexplorer::io ALIAS amrexplorer_io)

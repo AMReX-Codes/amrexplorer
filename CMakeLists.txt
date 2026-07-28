@@ -17,6 +17,7 @@ option(AMREXPLORER_BUILD_MACOS_APP_BUNDLE
     "Build the Qt application as a macOS .app bundle" ${APPLE})
 option(AMREXPLORER_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(AMREXPLORER_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+option(AMREXPLORER_ENABLE_TSAN "Enable ThreadSanitizer (mutually exclusive with AMREXPLORER_ENABLE_SANITIZERS)" OFF)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -53,9 +54,19 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(amrexplorer_warnings)
 
+if(AMREXPLORER_ENABLE_SANITIZERS AND AMREXPLORER_ENABLE_TSAN)
+    message(FATAL_ERROR
+        "AMREXPLORER_ENABLE_SANITIZERS and AMREXPLORER_ENABLE_TSAN are mutually exclusive")
+endif()
+
 if(AMREXPLORER_ENABLE_SANITIZERS)
     include(amrexplorer_sanitizers)
     amrexplorer_enable_sanitizers()
+endif()
+
+if(AMREXPLORER_ENABLE_TSAN)
+    include(amrexplorer_sanitizers)
+    amrexplorer_enable_tsan()
 endif()
 
 if(AMREXPLORER_ENABLE_MPI)
@@ -67,6 +78,7 @@ add_subdirectory(src/cache)
 add_subdirectory(src/io)
 add_subdirectory(src/query)
 add_subdirectory(src/render2d)
+add_subdirectory(src/pipeline)
 
 if(AMREXPLORER_ENABLE_QT)
     find_package(Qt6 6.4 REQUIRED COMPONENTS Concurrent Core Gui Widgets)

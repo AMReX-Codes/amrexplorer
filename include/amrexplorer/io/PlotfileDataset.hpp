@@ -5,9 +5,11 @@
 #include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
+#include <amrexplorer/io/ParticleReader.hpp>
 
 #include <cstdint>
 #include <filesystem>
+#include <mutex>
 
 namespace amrvis {
 
@@ -29,6 +31,11 @@ public:
     [[nodiscard]] const DatasetMetadata& metadata() const noexcept;
     [[nodiscard]] const MetadataReadMetrics& metadataReadMetrics() const noexcept;
     [[nodiscard]] DatasetId id() const noexcept;
+    [[nodiscard]] const std::vector<ParticleSpeciesMetadata>& particleSpecies()
+        const noexcept;
+    [[nodiscard]] ParticleSample requestParticleSample(
+        const std::string& species, double fraction, std::uint64_t seed = 0,
+        StopToken cancellation = {}) const;
     [[nodiscard]] const std::filesystem::path& dataRoot() const noexcept;
 
     [[nodiscard]] BlockAccess requestBlock(
@@ -42,8 +49,22 @@ private:
     std::filesystem::path m_plotfile;
     DatasetId m_id;
     PlotfileMetadataResult m_metadataResult;
+    std::vector<ParticleSpeciesMetadata> m_particleSpecies;
     PlotfileBlockReader m_blockReader;
     BlockCache m_cache;
+    // Serializes this dataset's block reads so concurrent misses of the same
+    // block read it once (see the double-checked lookup in requestBlock).
+    // Per-dataset, not global: unrelated datasets read in parallel. Acquired
+    // with a try_lock/sleep poll loop so a waiter can observe its StopToken
+    // instead of blocking a whole block read long. A plain mutex, not
+    // std::timed_mutex: libstdc++ implements try_lock_for via
+    // pthread_mutex_clocklock, which older ThreadSanitizer runtimes (e.g.
+    // GCC 13 on ubuntu-24.04 CI) do not intercept — TSan then misses the
+    // lock and reports the destructor's unlock as "unlock of an unlocked
+    // mutex". try_lock is intercepted everywhere. (The mutex member makes
+    // PlotfileDataset non-movable, which is fine — it is only ever a stack
+    // local or held via shared_ptr.)
+    std::mutex m_ioMutex;
 };
 
 } // namespace amrvis

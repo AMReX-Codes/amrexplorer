@@ -1,4 +1,6 @@
 #include "MainWindow.hpp"
+#include "AnimationExporter.hpp"
+#include "SequenceController.hpp"
 #include "AnimationPanel.hpp"
 #include "CacheConfig.hpp"
 #include "ColorBarWidget.hpp"
@@ -15,8 +17,11 @@
 
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/io/FabCatalog.hpp>
+#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 #include <amrexplorer/core/Statistics.hpp>
+#include <amrexplorer/pipeline/ParticleProjection.hpp>
+#include <amrexplorer/pipeline/SliceRangeResolver.hpp>
 #include <amrexplorer/query/LineQuery.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
 #include <amrexplorer/render2d/Contours.hpp>
@@ -25,8 +30,10 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialog>
@@ -50,12 +57,14 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPainter>
+#include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QProcess>
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QRect>
+#include <QRegularExpressionValidator>
 #include <QSettings>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -78,6 +87,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <exception>
 #include <filesystem>
@@ -100,10 +110,6 @@
 namespace amrvis::qt {
 namespace {
 
-// Sequence frame loads and prefetches get dataset ids from a dedicated range
-// so they never collide with the ids openDataset derives from m_generation.
-constexpr std::uint64_t sequenceDatasetIdBase = 0x4000000000000000ULL;
-
 constexpr std::array<BuiltinPalette, 7> builtinPalettes{
     BuiltinPalette::Rainbow, BuiltinPalette::Turbo, BuiltinPalette::Viridis,
     BuiltinPalette::Plasma, BuiltinPalette::Parula, BuiltinPalette::Coolwarm,
@@ -112,6 +118,24 @@ constexpr std::array<BuiltinPalette, 7> builtinPalettes{
 constexpr std::array<const char*, 7> builtinPaletteNames{
     "rainbow", "turbo", "viridis", "plasma", "parula", "coolwarm", "blackbody"};
 
+constexpr std::array<Qt::GlobalColor, 7> particleDefaultColors{
+    Qt::white, Qt::yellow, Qt::cyan, Qt::magenta,
+    Qt::green, Qt::red, Qt::lightGray};
+
+QColor defaultParticleColor(std::size_t speciesIndex)
+{
+    return QColor(
+        particleDefaultColors[speciesIndex % particleDefaultColors.size()]);
+}
+
+void updateColorButton(QPushButton& button, const QColor& color)
+{
+    QPixmap swatch(18, 18);
+    swatch.fill(color);
+    button.setIcon(QIcon(swatch));
+    button.setText(color.name(QColor::HexRgb).toUpper());
+}
+
 QImage verticallyFlippedCopy(const QImage& image)
 {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
@@ -119,6 +143,20 @@ QImage verticallyFlippedCopy(const QImage& image)
 #else
     return image.mirrored(false, true).copy();
 #endif
+}
+
+// The single conversion from a rendered ImageBuffer to the QImage the views
+// display: ARGB32 over the buffer's rgba, mirrored vertically because plane
+// row 0 is the bottom row. Returns a detached copy (verticallyFlippedCopy
+// copies), so it outlives the buffer. Every setImage caller goes through here
+// so the transform has one definition (see showSlice, syncVisibleRanges, and
+// activeViewRasterMatchesDisplayRangeForTest).
+QImage displayImageFor(const ImageBuffer& image)
+{
+    const QImage wrapped(
+        reinterpret_cast<const uchar*>(image.rgba.data()),
+        image.width, image.height, image.strideBytes, QImage::Format_ARGB32);
+    return verticallyFlippedCopy(wrapped);
 }
 
 // Marks the active row in the palette dropdown with a bullet. The bullet lives
@@ -223,514 +261,34 @@ QString exceptionMessage(const std::exception& error)
     return QString::fromUtf8(error.what());
 }
 
-std::optional<std::pair<double, double>> finiteRange(
-    const ScalarPlane& plane)
-{
-    auto minimum = std::numeric_limits<double>::infinity();
-    auto maximum = -std::numeric_limits<double>::infinity();
-    for (std::size_t pixel = 0; pixel < plane.values.size(); ++pixel) {
-        if (plane.valid[pixel] == 0) {
-            continue;
-        }
-        const auto value = static_cast<double>(plane.values[pixel]);
-        if (!std::isfinite(value)) {
-            continue;
-        }
-        minimum = std::min(minimum, value);
-        maximum = std::max(maximum, value);
-    }
-    if (!std::isfinite(minimum) || !std::isfinite(maximum)) {
-        return std::nullopt;
-    }
-    if (minimum == maximum) {
-        const auto padding = std::max(std::abs(minimum), 1.0) * 1.0e-6;
-        minimum -= padding;
-        maximum += padding;
-    }
-    return std::pair{minimum, maximum};
-}
-
-std::optional<ValueRange> selectedMetadataRange(
-    const DatasetMetadata& metadata, FieldId field, int maximumLevel,
-    CompositionPolicy composition, RangeMode rangeMode)
-{
-    if (rangeMode == RangeMode::File) {
-        return metadataValueRange(metadata, field, std::nullopt);
-    }
-    if (rangeMode != RangeMode::Level) {
-        return std::nullopt;
-    }
-    if (composition == CompositionPolicy::ExactLevel) {
-        return metadataValueRange(metadata, field, maximumLevel);
-    }
-
-    auto minimum = std::numeric_limits<double>::infinity();
-    auto maximum = -std::numeric_limits<double>::infinity();
-    for (int level = 0; level <= maximumLevel; ++level) {
-        const auto range = metadataValueRange(metadata, field, level);
-        if (!range) {
-            return std::nullopt;
-        }
-        minimum = std::min(minimum, range->minimum);
-        maximum = std::max(maximum, range->maximum);
-    }
-    if (!std::isfinite(minimum) || !std::isfinite(maximum)) {
-        return std::nullopt;
-    }
-    return ValueRange{minimum, maximum};
-}
-
-RangeMode effectiveRangeMode(
-    const DatasetMetadata& metadata, FieldId field, int maximumLevel,
-    CompositionPolicy composition, RangeMode requested)
-{
-    if (metadata.isFab && requested == RangeMode::File) {
-        return requested;
-    }
-    if ((requested == RangeMode::File || requested == RangeMode::Level)
-        && !selectedMetadataRange(
-            metadata, field, maximumLevel, composition, requested)) {
-        return RangeMode::Visible;
-    }
-    return requested;
-}
-
-std::optional<std::pair<double, double>> fabDataRange(
-    const std::shared_ptr<PlotfileDataset>& dataset, FieldId field)
-{
-    if (!dataset->metadata().isFab) {
-        return std::nullopt;
-    }
-    BlockRequest request;
-    request.dataset = dataset->id();
-    request.field = field;
-    const auto access = dataset->requestBlock(request);
-    const auto& values = access.handle->values;
-    auto minimum = std::numeric_limits<double>::infinity();
-    auto maximum = -std::numeric_limits<double>::infinity();
-    for (std::size_t index = 0; index < values.size(); ++index) {
-        const auto value = values[index];
-        if (!std::isfinite(value)) {
-            continue;
-        }
-        minimum = std::min(minimum, value);
-        maximum = std::max(maximum, value);
-    }
-    if (!std::isfinite(minimum) || !std::isfinite(maximum)) {
-        return std::nullopt;
-    }
-    return std::pair{minimum, maximum};
-}
-
-// The display range for a slice: the user's explicit range, the level/file
-// metadata range, or the finite extrema of the plane itself, padded so
-// minimum < maximum always holds. A logarithmic request whose range is not
-// strictly positive throws, so the caller can fall back to linear. Shared by
-// executeSlice and the re-render-from-cache path, which must agree exactly.
-std::pair<double, double> resolveRange(
-    const std::shared_ptr<PlotfileDataset>& dataset, FieldId field,
-    int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
-    const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const ScalarPlane& plane)
-{
-    auto selectedRange = userRange;
-    if (rangeMode == RangeMode::Level || rangeMode == RangeMode::File) {
-        if (rangeMode == RangeMode::File) {
-            selectedRange = fabDataRange(dataset, field);
-        }
-        if (!selectedRange) {
-            const auto statistics = selectedMetadataRange(dataset->metadata(),
-                field, maximumLevel, composition, rangeMode);
-            if (statistics) {
-                selectedRange = std::pair{
-                    statistics->minimum, statistics->maximum};
-            }
-        }
-    }
-    auto [minimum, maximum] = selectedRange
-        ? *selectedRange
-        : finiteRange(plane).value_or(logarithmic
-              ? std::pair{1.0, 10.0}
-              : std::pair{0.0, 1.0});
-    if (minimum == maximum) {
-        if (logarithmic && minimum > 0.0) {
-            minimum /= 1.0 + 1.0e-6;
-            maximum *= 1.0 + 1.0e-6;
-        } else {
-            const auto padding = std::max(std::abs(minimum), 1.0) * 1.0e-6;
-            minimum -= padding;
-            maximum += padding;
-        }
-    }
-    if (!(minimum < maximum)) {
-        throw std::runtime_error("user scalar range must have positive extent");
-    }
-    if (logarithmic && !(minimum > 0.0)) {
-        throw std::runtime_error("logarithmic scalar range must be positive");
-    }
-    return {minimum, maximum};
-}
-
-// Upper bound on slice output dimensions. One pixel per finest cell is the
-// ideal, but a plane costs on the order of 10 bytes per pixel (float value,
-// validity mask, source level, RGBA image), so uncapped native resolution on
-// huge domains could allocate gigabytes. Once the region edges are snapped
-// to cell boundaries (snapToCellBoundaries) the extent is an exact multiple
-// of the cell size, so when this cap does engage the sampling pitch only
-// ever exceeds the cell size — honest downsampling — and never produces
-// duplicated or skipped cells.
-constexpr int maxSliceOutputDimension = 4096;
-
-// Native render resolution for a slice: the count of finest-level cells the
-// visible region spans along each in-plane axis. At the 1x fixed scale this is
-// the resolution legacy Amrvis drew (one pixel per finest cell); the larger
-// fixed scales magnify it through the view zoom.
-std::array<int, 2> finestNativeOutputSize(
-    const amrvis::DatasetMetadata& metadata, const amrvis::RealBox& region,
-    int normal)
-{
-    const auto& finest = metadata.levels[static_cast<std::size_t>(
-        std::max(0, metadata.finestLevel))];
-    std::array<int, 2> axes{0, 1};
-    if (metadata.dimension == 3) {
-        std::size_t next = 0;
-        for (int axis = 0; axis < 3; ++axis) {
-            if (axis != normal) {
-                axes[next++] = axis;
-            }
-        }
-    }
-    const auto cells = [&](int axis) {
-        const auto i = static_cast<std::size_t>(axis);
-        const auto extent = region.upper[i] - region.lower[i];
-        return std::clamp(
-            static_cast<int>(std::round(extent / finest.cellSize[i])),
-            1, maxSliceOutputDimension);
-    };
-    return {cells(axes[0]), cells(axes[1])};
-}
-
-// Like resolveRange, but if a logarithmic scale is requested and the range
-// is not strictly positive (a Visible/Level/File/User minimum <= 0), it falls
-// back to a linear range and reports logarithmic=false so the caller renders
-// linearly instead of failing the whole slice. A slice with no finite values
-// uses a neutral positive range and can therefore remain logarithmic.
-struct ResolvedRange {
-    double minimum;
-    double maximum;
-    bool logarithmic;
-};
-
-ResolvedRange resolveDisplayRange(
-    const std::shared_ptr<PlotfileDataset>& dataset, FieldId field,
-    int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
-    const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const ScalarPlane& plane)
-{
-    if (logarithmic) {
-        try {
-            const auto [minimum, maximum] = resolveRange(dataset, field,
-                maximumLevel, composition, rangeMode, userRange, true, plane);
-            return {minimum, maximum, true};
-        } catch (const std::exception&) {
-            // Log is not viable for this range; fall back to linear below.
-        }
-    }
-    const auto [minimum, maximum] = resolveRange(dataset, field, maximumLevel,
-        composition, rangeMode, userRange, false, plane);
-    return {minimum, maximum, false};
-}
-
-SliceDisplayResult executeSlice(const std::shared_ptr<PlotfileDataset>& dataset,
-    const SliceRequest& request,
-    RangeMode rangeMode,
-    const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const Palette& palette, StopToken cancellation)
-{
-    SliceDisplayResult result;
-    result.request = request;
-    result.slice = SliceQuery(*dataset).execute(request, cancellation);
-    const auto range = resolveDisplayRange(dataset, request.field,
-        request.maximumLevel, request.composition, rangeMode, userRange,
-        logarithmic, result.slice.plane);
-    result.minimum = range.minimum;
-    result.maximum = range.maximum;
-    result.logarithmic = range.logarithmic;
-    result.fieldName = dataset->metadata().fields[request.field.value].name;
-    result.image = renderScalarPlane(result.slice.plane,
-        ScalarRenderSettings{
-            .minimum = range.minimum,
-            .maximum = range.maximum,
-            .logarithmic = range.logarithmic,
-            .palette = &palette
-        });
-    return result;
-}
-
-// Vector mode queries the U- and V-component planes independently and
-// derives arrow glyphs from them. Both slices share the raster request's
-// region, level, and output size so the planes line up sample for sample.
-void appendVectorGlyphs(const std::shared_ptr<PlotfileDataset>& dataset,
-    SliceRequest request, FieldId uField, FieldId vField, int count,
-    StopToken cancellation, SliceDisplayResult& result)
-{
-    request.field = uField;
-    auto uSlice = SliceQuery(*dataset).execute(request, cancellation);
-    request.field = vField;
-    auto vSlice = SliceQuery(*dataset).execute(request, cancellation);
-    result.vectors = generateVectorGlyphs(uSlice.plane, vSlice.plane, count);
-    result.slice.metrics.candidateBlocks += uSlice.metrics.candidateBlocks
-        + vSlice.metrics.candidateBlocks;
-    result.slice.metrics.blocksRead += uSlice.metrics.blocksRead
-        + vSlice.metrics.blocksRead;
-    result.slice.metrics.cacheHits += uSlice.metrics.cacheHits
-        + vSlice.metrics.cacheHits;
-    result.slice.metrics.payloadBytesRead += uSlice.metrics.payloadBytesRead
-        + vSlice.metrics.payloadBytesRead;
-}
-
-[[nodiscard]] bool isContourMode(DisplayMode mode)
-{
-    return mode == DisplayMode::RasterContours;
-}
-
-// The cache-key comparison for PlaneViewState: everything a cached slice
-// depends on. Range, log scale, palette, and contour count are deliberately
-// absent — those are recomputed from the cached planes on the cheap path.
-[[nodiscard]] bool sameSliceSpec(const SliceRequest& lhs, const SliceRequest& rhs)
-{
-    return lhs.dataset == rhs.dataset && lhs.field == rhs.field
-        && lhs.component == rhs.component
-        && lhs.normalDirection == rhs.normalDirection
-        && lhs.physicalPosition == rhs.physicalPosition
-        && lhs.visibleRegion == rhs.visibleRegion
-        && lhs.maximumLevel == rhs.maximumLevel
-        && lhs.outputSize == rhs.outputSize
-        && lhs.sampling == rhs.sampling
-        && lhs.composition == rhs.composition;
-}
-
-// The two in-plane axes of a slice, mirroring SliceQuery's plane axes.
-[[nodiscard]] std::array<int, 2> slicePlaneAxes(int dimension, int normalDirection)
-{
-    if (dimension == 2) {
-        return {0, 1};
-    }
-    std::array<int, 2> axes{};
-    std::size_t next = 0;
-    for (int axis = 0; axis < 3; ++axis) {
-        if (axis != normalDirection) {
-            axes[next++] = axis;
-        }
-    }
-    return axes;
-}
-
-// The number of cells of `level` covering [lower, upper] on `axis`, clipped
-// to the level's index domain: the data resolution of a slice request.
-[[nodiscard]] int coveredCells(const DatasetMetadata& metadata, int level,
-    int axis, double lower, double upper)
-{
-    const auto& levelMetadata = metadata.levels[static_cast<std::size_t>(level)];
-    const auto index = static_cast<std::size_t>(axis);
-    const auto bounds = sampleBounds(
-        levelMetadata, levelMetadata.domain, metadata.dimension);
-    const auto lo = std::max(lower, bounds.lower[index]);
-    const auto hi = std::min(upper, bounds.upper[index]);
-    if (!(lo < hi)) {
-        return 1;
-    }
-    const auto domainCells = static_cast<std::int64_t>(
-        levelMetadata.domain.upper[index]) - levelMetadata.domain.lower[index];
-    const auto first = std::clamp<std::int64_t>(
-        static_cast<std::int64_t>(sampleIndex(levelMetadata, axis, lo))
-            - levelMetadata.domain.lower[index],
-        0, domainCells);
-    const auto last = std::clamp<std::int64_t>(
-        static_cast<std::int64_t>(sampleIndex(
-            levelMetadata, axis, std::nextafter(hi, lo)))
-            - levelMetadata.domain.lower[index],
-        0, domainCells);
-    return static_cast<int>(last - first + 1);
-}
-
-// Contour overlays are extracted from a piecewise-constant slice at DATA
-// resolution: one sample per cell of the finest participating level covering
-// the visible region, capped at 1024 samples per axis (for coarse data this
-// plane is tiny — 4x4 on the test fixture). When the data is finer than the
-// display on both axes the display plane doubles as the contour plane,
-// because the cell-scale staircase is sub-pixel there. The contour plane is
-// then bilinearly refined so one fine cell spans at most a few display
-// pixels; marching squares on the refinement converges to the exact
-// iso-curve of the bilinear interpolant (no new extrema, no ringing), and a
-// single Chaikin pass finishes the polyline. This replaces the old second
-// SliceQuery with linear sampling at display resolution, which cost about as
-// much as the display query itself. Extraction runs here, off the GUI
-// thread, with the output mapped to display-plane pixel space; the GUI
-// thread only converts the polylines to painter paths in updateOverlay. The
-// planes and the refinement are cached in PlaneViewState, so range and
-// contour-count changes re-run only this cheap extraction (see
-// refreshCachedSlice).
-void appendContours(const std::shared_ptr<PlotfileDataset>& dataset,
-    const SliceRequest& request, int contourCount, double minimum, double maximum,
-    bool logarithmic, StopToken cancellation, SliceDisplayResult& result)
-{
-    const auto& metadata = dataset->metadata();
-    const auto level = std::min(request.maximumLevel, metadata.finestLevel);
-    const auto axes = slicePlaneAxes(metadata.dimension, request.normalDirection);
-    const auto xAxis = static_cast<std::size_t>(axes[0]);
-    const auto yAxis = static_cast<std::size_t>(axes[1]);
-    const auto dataWidth = coveredCells(metadata, level, axes[0],
-        request.visibleRegion.lower[xAxis], request.visibleRegion.upper[xAxis]);
-    const auto dataHeight = coveredCells(metadata, level, axes[1],
-        request.visibleRegion.lower[yAxis], request.visibleRegion.upper[yAxis]);
-    const auto displayWidth = request.outputSize[0];
-    const auto displayHeight = request.outputSize[1];
-
-    // Legacy Amrvis draws contours at each FAB's native grid resolution,
-    // producing smooth curves at any display scale. We match that by
-    // querying a linearly interpolated plane at a resolution fine enough
-    // that contour staircases are invisible — at least 512 samples on the
-    // shorter axis, capped at 1024. Two Chaikin passes finish the polylines.
-    auto contourRequest = request;
-    contourRequest.outputSize = {
-        std::min(std::max(dataWidth, 512), 1024),
-        std::min(std::max(dataHeight, 512), 1024)};
-    contourRequest.sampling = SamplingPolicy::Linear;
-    auto contour = SliceQuery(*dataset).execute(contourRequest, cancellation);
-    result.contourPlane = std::move(contour.plane);
-    result.slice.metrics.candidateBlocks += contour.metrics.candidateBlocks;
-    result.slice.metrics.blocksRead += contour.metrics.blocksRead;
-    result.slice.metrics.cacheHits += contour.metrics.cacheHits;
-    result.slice.metrics.payloadBytesRead += contour.metrics.payloadBytesRead;
-
-    // No supersampling: the linear plane is already smooth.  Store it as
-    // the fine plane too so refreshCachedSlice can reuse it.
-    result.contourFinePlane = result.contourPlane;
-    result.contourFineFactor = 1;
-    const auto values = contourValues(
-        minimum, maximum, contourCount, logarithmic);
-    result.contourPolylines = contourPolylinesForDisplay(
-        result.contourFinePlane, 1, values, displayWidth, displayHeight);
-}
-
-// Re-render-from-cache: only palette/log/range/contour-count cosmetics
-// changed (the request still matches the view's cache key), so the cached
-// planes are re-ranged, re-rendered, and re-contoured without any SliceQuery.
-// With rasterDirty false the raster is known unchanged and the image is not
-// re-rendered; SliceDisplayResult::rasterUnchanged tells showSlice to keep
-// the view's pixmap. Vector glyphs are reused from the cache: they do not
-// depend on palette/log/range. Runs on a worker; delivery uses the same
-// watcher and generation flow as a full slice request.
-SliceDisplayResult refreshCachedSlice(
-    const std::shared_ptr<PlotfileDataset>& dataset,
-    const SliceRequest& request, ScalarPlane displayPlane,
-    ScalarPlane contourPlane, ScalarPlane contourFinePlane, int contourFineFactor,
-    std::vector<VectorSegment> vectors,
-    RangeMode rangeMode,
-    const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const Palette& palette, DisplayMode displayMode,
-    std::uint32_t vectorUField, std::uint32_t vectorVField,
-    int contourCount, bool rasterDirty)
-{
-    SliceDisplayResult result;
-    result.request = request;
-    result.mode = displayMode;
-    result.vectorUField = vectorUField;
-    result.vectorVField = vectorVField;
-    result.contourCount = contourCount;
-    result.slice.plane = std::move(displayPlane);
-    const auto range = resolveDisplayRange(dataset, request.field,
-        request.maximumLevel, request.composition, rangeMode, userRange,
-        logarithmic, result.slice.plane);
-    result.minimum = range.minimum;
-    result.maximum = range.maximum;
-    result.logarithmic = range.logarithmic;
-    result.fieldName = dataset->metadata().fields[request.field.value].name;
-    result.rasterUnchanged = !rasterDirty;
-    if (rasterDirty) {
-        result.image = renderScalarPlane(result.slice.plane,
-            ScalarRenderSettings{
-                .minimum = range.minimum,
-                .maximum = range.maximum,
-                .logarithmic = range.logarithmic,
-                .palette = &palette
-            });
-    }
-    if (isContourMode(displayMode)) {
-        result.contourPlane = std::move(contourPlane);
-        result.contourFinePlane = std::move(contourFinePlane);
-        result.contourFineFactor = contourFineFactor;
-        const auto values = contourValues(
-            range.minimum, range.maximum, contourCount, range.logarithmic);
-        result.contourPolylines = contourPolylinesForDisplay(
-            result.contourFinePlane, contourFineFactor, values,
-            request.outputSize[0], request.outputSize[1]);
-    }
-    if (displayMode == DisplayMode::VelocityVectors) {
-        result.vectors = std::move(vectors);
-    }
-    return result;
-}
-
-// Combo data sentinel for "Update to Level N" entries, which composite
-// levels 0..N with FinestAvailable. The selected level N is data - 1000.
-constexpr int kUpdateToLevelOffset = 1000;
-
-struct LevelSelection {
-    CompositionPolicy composition = CompositionPolicy::FinestAvailable;
-    int maximumLevel = 0;
-};
-
-LevelSelection decodeLevelData(int data, int finestLevel)
-{
-    if (data >= kUpdateToLevelOffset) {
-        return {CompositionPolicy::FinestAvailable, data - kUpdateToLevelOffset};
-    }
-    if (data < 0) {
-        return {CompositionPolicy::FinestAvailable, finestLevel};
-    }
-    return {CompositionPolicy::ExactLevel, data};
-}
-
+// QString face of the pipeline's formatter, for the GUI-side messages; hides
+// amrvis::cacheBudgetDescription for unqualified calls in this namespace.
 QString cacheBudgetDescription(std::uint64_t bytes)
 {
-    constexpr std::uint64_t kibibyte = 1024;
-    constexpr std::uint64_t mebibyte = 1024 * kibibyte;
-    constexpr std::uint64_t gibibyte = 1024 * mebibyte;
-    if (bytes % gibibyte == 0) {
-        return QObject::tr("%1 GiB").arg(bytes / gibibyte);
-    }
-    if (bytes % mebibyte == 0) {
-        return QObject::tr("%1 MiB").arg(bytes / mebibyte);
-    }
-    if (bytes % kibibyte == 0) {
-        return QObject::tr("%1 KiB").arg(bytes / kibibyte);
-    }
-    return QObject::tr("%1 bytes").arg(bytes);
+    return QString::fromStdString(amrvis::cacheBudgetDescription(bytes));
 }
 
-QString cacheFallbackMessage(const InitialSliceResult& result)
+QString cacheFallbackMessage(
+    const PlotfileDataset& dataset, int fromLevel, int toLevel)
 {
     const auto budget = cacheBudgetDescription(
-        result.dataset->cacheMetrics().budgetBytes);
+        dataset.cacheMetrics().budgetBytes);
     return QObject::tr(
-        "The finest slice exceeded the %1 cache budget. "
-        "The plotfile was opened using levels 0 through %2 instead of "
-        "levels 0 through %3; higher-resolution levels were omitted.")
+        "The finest slice exceeded the %1 cache budget. Showing levels 0 "
+        "through %2 instead of levels 0 through %3; higher-resolution levels "
+        "were omitted.")
         .arg(budget)
-        .arg(result.cacheFallbackToLevel)
-        .arg(result.cacheFallbackFromLevel);
+        .arg(toLevel)
+        .arg(fromLevel);
 }
 
-bool selectCacheFallbackLevel(
-    QComboBox* selector, const InitialSliceResult& result)
+bool selectCacheFallbackLevel(QComboBox* selector, int toLevel)
 {
-    if (result.cacheFallbackToLevel < 0) {
+    if (toLevel < 0) {
         return false;
     }
-    const auto data = result.cacheFallbackToLevel == 0
-        ? 0 : kUpdateToLevelOffset + result.cacheFallbackToLevel;
+    const auto data = toLevel == 0
+        ? 0 : kUpdateToLevelOffset + toLevel;
     const auto index = selector->findData(data);
     if (index < 0) {
         return false;
@@ -759,225 +317,6 @@ void populateLevelCombo(QComboBox* combo, int finestLevel)
     for (int level = 0; level <= finestLevel; ++level) {
         combo->addItem(QObject::tr("Level %1 only").arg(level), level);
     }
-}
-
-// How a slice-plane index maps to a physical coordinate. Indices use the
-// level's integer box space (domain.lower .. domain.upper), which can be
-// negative. Cell-centered data places the value at the center of each cell
-// (index i → prob_lo + (i - domain.lower + 0.5)*dx); nodal data places it
-// at the node (index i → prob_lo + (i - domain.lower)*dx).
-int sliceIndexForPosition(const DatasetMetadata& md, int level, int axis,
-    double position)
-{
-    const auto& levelMd = md.levels[static_cast<std::size_t>(level)];
-    return sampleIndex(levelMd, axis, position);
-}
-
-double positionForSliceIndex(const DatasetMetadata& md, int level, int axis,
-    int index)
-{
-    const auto& levelMd = md.levels[static_cast<std::size_t>(level)];
-    return samplePosition(levelMd, axis, index);
-}
-
-// Opens one plotfile on a worker thread and renders the slice(s) described
-// by spec — one per ortho view for 3-D, the single y-normal view for 2-D.
-// Shared by the initial open path (default spec) and the sequence path
-// (spec preserving the user's UI state across frames).
-InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
-    DatasetId datasetId, const FrameSliceSpec& spec, StopToken cancellation,
-    std::optional<PlotfileMetadataResult> preparedMetadata = std::nullopt,
-    std::filesystem::path dataRoot = {})
-{
-    InitialSliceResult result;
-    const auto cacheBudget = initialCacheBudget();
-    if (preparedMetadata) {
-        result.fileVersion = preparedMetadata->fileVersion;
-        result.dataset = std::make_shared<PlotfileDataset>(
-            std::move(dataRoot), datasetId, cacheBudget,
-            std::move(*preparedMetadata));
-    } else {
-        result.dataset = std::make_shared<PlotfileDataset>(
-            path, datasetId, cacheBudget);
-    }
-    const auto& metadata = result.dataset->metadata();
-    if (metadata.fields.empty()) {
-        throw std::runtime_error("dataset has no scalar fields to display");
-    }
-    if (result.fileVersion.empty()) {
-        std::ifstream header(path / "Header");
-        std::getline(header, result.fileVersion);
-        while (!result.fileVersion.empty() && result.fileVersion.back() == '\r') {
-            result.fileVersion.pop_back();
-        }
-    }
-
-    const auto fieldCount = static_cast<std::uint32_t>(metadata.fields.size());
-    const auto field = std::min(spec.field, fieldCount - 1);
-    // An out-of-range exact level falls back to finest-available, matching
-    // the level combo's behavior when a frame has fewer levels.
-    // Combo data encoding: -1=finest, N=level N only, 1000+N=update to N.
-    const auto levelSelection = spec.levelSelection >= -1
-        && spec.levelSelection <= metadata.finestLevel
-            ? spec.levelSelection
-            : (spec.levelSelection >= kUpdateToLevelOffset
-                && spec.levelSelection - kUpdateToLevelOffset
-                    <= metadata.finestLevel)
-            ? spec.levelSelection
-            : -1;
-    const auto selectedLevel = decodeLevelData(
-        levelSelection, metadata.finestLevel);
-    auto attemptMaximumLevel = selectedLevel.maximumLevel;
-    const auto rangeMode = effectiveRangeMode(metadata, FieldId{field},
-        attemptMaximumLevel, selectedLevel.composition, spec.rangeMode);
-    std::array<double, 3> positions{0.0, 0.0, 0.0};
-    const auto dataBounds = datasetSampleBounds(metadata);
-    for (std::size_t axis = 0; axis < 3; ++axis) {
-        const auto lower = dataBounds.lower[axis];
-        const auto upper = dataBounds.upper[axis];
-        positions[axis] = spec.defaultPositions
-            ? lower + 0.5 * (upper - lower)
-            : std::clamp(spec.slicePositions[axis], lower,
-                std::nextafter(upper, lower));
-    }
-
-    // 3-D datasets display all three orthogonal planes at once; the slices
-    // share the dataset cache, so the sequential queries are bounded. 2-D
-    // keeps its single y-normal display plane.
-    const std::vector<int> normals = metadata.dimension == 3
-        ? std::vector<int>{0, 1, 2} : std::vector<int>{1};
-    for (;;) {
-        try {
-            result.displays.clear();
-            result.displays.reserve(normals.size());
-            for (std::size_t entry = 0; entry < normals.size(); ++entry) {
-                const auto normal = normals[entry];
-                SliceRequest request;
-                request.dataset = datasetId;
-                request.field = FieldId{field};
-                request.normalDirection = normal;
-                // A preserved zoom region is clipped to the new frame's domain; if
-                // it no longer intersects at all, fall back to the whole domain.
-                auto region = entry < spec.visibleRegions.size()
-                    && spec.visibleRegions[entry].has_value()
-                        ? *spec.visibleRegions[entry] : dataBounds;
-                for (int axis = 0; axis < metadata.dimension; ++axis) {
-                    const auto index = static_cast<std::size_t>(axis);
-                    auto lower = std::max(region.lower[index],
-                        dataBounds.lower[index]);
-                    auto upper = std::min(region.upper[index],
-                        dataBounds.upper[index]);
-                    if (!(lower < upper)) {
-                        lower = dataBounds.lower[index];
-                        upper = dataBounds.upper[index];
-                    }
-                    region.lower[index] = lower;
-                    region.upper[index] = upper;
-                }
-                request.visibleRegion = region;
-                request.outputSize = finestNativeOutputSize(
-                    metadata, request.visibleRegion, request.normalDirection);
-                request.composition = selectedLevel.composition;
-                request.maximumLevel = attemptMaximumLevel;
-                if (metadata.dimension == 3) {
-                    request.physicalPosition = positions[static_cast<std::size_t>(normal)];
-                }
-                auto display = executeSlice(result.dataset, request, rangeMode,
-                    spec.userRange, spec.logarithmic, spec.palette, cancellation);
-                display.mode = spec.displayMode;
-                display.contourCount = spec.contourCount;
-                if (isContourMode(spec.displayMode)) {
-                    appendContours(result.dataset, request, spec.contourCount,
-                        display.minimum, display.maximum, display.logarithmic,
-                        cancellation, display);
-                }
-                if (spec.displayMode == DisplayMode::VelocityVectors) {
-                    const auto u = std::min(spec.vectorUField, fieldCount - 1);
-                    const auto v = std::min(spec.vectorVField, fieldCount - 1);
-                    const auto w = std::min(spec.vectorWField, fieldCount - 1);
-                    auto [f1, f2] = (metadata.dimension == 3)
-                        ? (normal == 0 ? std::pair{v, w}
-                           : normal == 1 ? std::pair{u, w}
-                           : std::pair{u, v})
-                        : std::pair{u, v};
-                    display.vectorUField = f1;
-                    display.vectorVField = f2;
-                    appendVectorGlyphs(result.dataset, request,
-                        FieldId{f1}, FieldId{f2},
-                        spec.contourCount, cancellation, display);
-                }
-                result.displays.push_back(std::move(display));
-            }
-            // In 3-D, every views' "Visible" range must agree so the single color bar
-            // maps all three panels consistently. Compute the union of finite extrema
-            // across all three planes and re-render each display with the shared range.
-            if (result.displays.size() == 3 && rangeMode == RangeMode::Visible) {
-                double globalMin = std::numeric_limits<double>::infinity();
-                double globalMax = -std::numeric_limits<double>::infinity();
-                for (const auto& d : result.displays) {
-                    const auto range = finiteRange(d.slice.plane);
-                    if (range) {
-                        globalMin = std::min(globalMin, range->first);
-                        globalMax = std::max(globalMax, range->second);
-                    }
-                }
-                const auto logarithmic = spec.logarithmic;
-                if (!std::isfinite(globalMin) || !std::isfinite(globalMax)) {
-                    if (logarithmic) {
-                        globalMin = 1.0;
-                        globalMax = 10.0;
-                    } else {
-                        globalMin = 0.0;
-                        globalMax = 1.0;
-                    }
-                }
-                if (globalMin == globalMax) {
-                    if (logarithmic && globalMin > 0.0) {
-                        globalMin /= 1.0 + 1.0e-6;
-                        globalMax *= 1.0 + 1.0e-6;
-                    } else {
-                        const auto pad = std::max(std::abs(globalMin), 1.0) * 1.0e-6;
-                        globalMin -= pad;
-                        globalMax += pad;
-                    }
-                }
-                for (auto& d : result.displays) {
-                    d.minimum = globalMin;
-                    d.maximum = globalMax;
-                    d.image = renderScalarPlane(d.slice.plane,
-                        ScalarRenderSettings{
-                            .minimum = globalMin,
-                            .maximum = globalMax,
-                            .logarithmic = d.logarithmic,
-                            .palette = &spec.palette
-                        });
-                }
-            }
-            break;
-        } catch (const CacheBudgetExceeded&) {
-            result.displays.clear();
-            result.dataset->clearUnpinnedCache();
-            if (selectedLevel.composition != CompositionPolicy::FinestAvailable) {
-                throw std::runtime_error(QObject::tr(
-                    "The selected slice level cannot fit in the %1 cache. "
-                    "Choose a lower level or increase AMREXPLORER_CACHE_SIZE_MB.")
-                        .arg(cacheBudgetDescription(cacheBudget))
-                        .toStdString());
-            }
-            if (attemptMaximumLevel == 0) {
-                throw std::runtime_error(QObject::tr(
-                    "The slice cannot fit in the %1 cache, even at level 0. "
-                    "Try a smaller plotfile or increase AMREXPLORER_CACHE_SIZE_MB.")
-                        .arg(cacheBudgetDescription(cacheBudget))
-                        .toStdString());
-            }
-            if (result.cacheFallbackFromLevel < 0) {
-                result.cacheFallbackFromLevel = attemptMaximumLevel;
-            }
-            result.cacheFallbackToLevel = --attemptMaximumLevel;
-        }
-    }
-    return result;
 }
 
 } // namespace
@@ -1040,6 +379,7 @@ MainWindow::MainWindow(QWidget* parent)
     sliceToolbar->setMovable(false);
     sliceToolbar->addWidget(new QLabel(tr("Field:"), sliceToolbar));
     m_fieldSelector = new QComboBox(sliceToolbar);
+    m_fieldSelector->setObjectName(QStringLiteral("fieldSelector"));
     m_fieldSelector->setMinimumContentsLength(10);
     m_fieldSelector->view()->setItemDelegate(new CurrentRowBulletDelegate(
         m_fieldSelector, m_fieldSelector->view()));
@@ -1047,6 +387,7 @@ MainWindow::MainWindow(QWidget* parent)
     sliceToolbar->addSeparator();
     sliceToolbar->addWidget(new QLabel(tr("Level:"), sliceToolbar));
     m_levelSelector = new QComboBox(sliceToolbar);
+    m_levelSelector->setObjectName(QStringLiteral("levelSelector"));
     m_levelSelector->setMinimumContentsLength(8);
     m_levelSelector->view()->setItemDelegate(new CurrentRowBulletDelegate(
         m_levelSelector, m_levelSelector->view()));
@@ -1084,16 +425,31 @@ MainWindow::MainWindow(QWidget* parent)
             });
     }
     sliceToolbar->addWidget(m_slicePositionControls);
-    m_slicePositionControls->setVisible(false);
+    // Separator between the Position group and Scale. It tracks the Position
+    // group's visibility (see setSlicePositionControlsVisible) so it does not
+    // dangle beside the Level separator when no dataset is loaded.
+    m_positionSeparator = sliceToolbar->addSeparator();
+    setSlicePositionControlsVisible(false);
 
+    // A static "Scale:" label plus a state button, matching the Field:/Level:/
+    // Range: label-and-widget pairs elsewhere on this toolbar (and the
+    // View -> Scale menu name).
+    sliceToolbar->addWidget(new QLabel(tr("Scale:"), sliceToolbar));
     m_scaleButton = new QPushButton(tr("Fit"), sliceToolbar);
-    m_scaleButton->setToolTip(tr("Zoom scale for all panels"));
+    m_scaleButton->setToolTip(
+        tr("Zoom scale and rubber-band synchronization for panels"));
     m_scaleButton->setFocusPolicy(Qt::NoFocus);
     auto* scaleMenu = new QMenu(m_scaleButton);
-    auto* fitAction = scaleMenu->addAction(tr("Fit"));
-    connect(fitAction, &QAction::triggered, this, [this] {
+    // The clicked item stays "Reset Zoom" (the action verb): it restores the
+    // whole domain and refits (issue #45 renamed it from "Fit", which read as
+    // fit-the-current-region). The button shows just the *scale state* ("Fit"
+    // for auto-fit, which also holds for a panned crop in applyPanStep where
+    // the region is not the whole domain); the adjacent "Scale:" label names
+    // the control.
+    auto* resetZoomAction = scaleMenu->addAction(tr("Reset Zoom"));
+    connect(resetZoomAction, &QAction::triggered, this, [this] {
         m_scaleButton->setText(tr("Fit"));
-        fitViewToWindow();
+        resetZoomAllViews();
     });
     constexpr std::array<int, 6> scaleFactors{1, 2, 4, 8, 16, 32};
     for (const auto factor : scaleFactors) {
@@ -1105,6 +461,20 @@ MainWindow::MainWindow(QWidget* parent)
             }
         });
     }
+    m_syncRubberBandZoomAction =
+        new QAction(tr("Sync Rubber-band Zoom"), this);
+    m_syncRubberBandZoomAction->setObjectName(
+        QStringLiteral("syncRubberBandZoomAction"));
+    m_syncRubberBandZoomAction->setCheckable(true);
+    m_syncRubberBandZoomAction->setChecked(true);
+    m_syncRubberBandZoomAction->setVisible(false);
+    m_syncRubberBandZoomAction->setStatusTip(
+        tr("Apply rubber-band selections to every 3-D panel; "
+           "mouse-wheel zoom remains panel-specific"));
+    connect(m_syncRubberBandZoomAction, &QAction::toggled,
+        this, [this](bool) { saveSettings(); });
+    scaleMenu->addSeparator();
+    scaleMenu->addAction(m_syncRubberBandZoomAction);
     m_scaleButton->setMenu(scaleMenu);
     sliceToolbar->addWidget(m_scaleButton);
 
@@ -1132,12 +502,12 @@ MainWindow::MainWindow(QWidget* parent)
     m_rangeMinimum->setPrefix(tr("min "));
     m_rangeMaximum->setPrefix(tr("max "));
     m_rangeMaximum->setValue(1.0);
+    // Separate the Range group (mode + min/max) from Log and Palette, matching
+    // the per-group separators on the Slice Controls toolbar.
+    rangeToolbar->addSeparator();
     m_logarithmic = new QCheckBox(tr("Log"), rangeToolbar);
-    m_logarithmic->setLayoutDirection(Qt::RightToLeft);
     rangeToolbar->addWidget(m_logarithmic);
-    auto* paletteSpacer = new QWidget(rangeToolbar);
-    paletteSpacer->setFixedWidth(12);
-    rangeToolbar->addWidget(paletteSpacer);
+    rangeToolbar->addSeparator();
     rangeToolbar->addWidget(new QLabel(tr("Palette:"), rangeToolbar));
     m_paletteSelector = new QComboBox(rangeToolbar);
     const QFontMetrics paletteFm(m_paletteSelector->font());
@@ -1276,11 +646,141 @@ MainWindow::MainWindow(QWidget* parent)
     // stops the other (see setPlaybackMode).
     m_playbackTimer = new QTimer(this);
     connect(m_playbackTimer, &QTimer::timeout, this, [this] { playbackTick(); });
-    // Animation export advances one frame at a time as each renders.
+    // The sequence controller owns the frame/prefetch state machine; this
+    // window supplies the GUI-coupled hooks (spec snapshot, frame display,
+    // shutdown flag) and reacts to its signals below.
+    m_sequenceController = new SequenceController(
+        SequenceController::Hooks{
+            [this] { return buildFrameSpec(); },
+            [this](InitialSliceResult& result, bool defaultPositions) {
+                displayFrameResult(result, defaultPositions);
+            },
+            [this] { return m_closing; },
+        },
+        this);
+    connect(m_sequenceController, &SequenceController::frameSwitchStarted,
+        this, [this](int index) {
+            // Cancel the current dataset's in-flight work, exactly like
+            // opening a fresh dataset does, but keep the view state (field,
+            // level, range, log, palette, zoom, slice positions) for the
+            // next frame.
+            const std::array<PlaneViewState*, 4> states{&m_view2d,
+                &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+            for (auto* state : states) {
+                state->stopSource.request_stop();
+                ++state->sliceGeneration;
+            }
+            m_initialStopSource.request_stop();
+            m_linePlotStopSource.request_stop();
+            m_particleStopSource.request_stop();
+            m_pendingAllViews = false;
+            m_pendingViews.clear();
+            m_sliceDebounce->stop();
+            // The dataset window shows the previous frame's raw values;
+            // drop it, and the line plot window whose curves are snapshots
+            // of this dataset, so neither goes stale across the switch.
+            closeDatasetWindow();
+            auto* linePlotWindow = m_linePlotWindow;
+            m_linePlotWindow = nullptr;
+            if (linePlotWindow != nullptr) {
+                linePlotWindow->close();
+            }
+            ++m_generation;
+            m_datasetPath = m_sequenceController->framePath(index);
+            m_animationPanel->setSequenceFrame(index);
+        });
+    connect(m_sequenceController, &SequenceController::loadActivityChanged,
+        this, [this](int delta) {
+            if (delta > 0) {
+                m_activeRequests += static_cast<std::uint64_t>(delta);
+            } else {
+                m_activeRequests -= static_cast<std::uint64_t>(-delta);
+            }
+            updateDiagnostics();
+        });
+    connect(m_sequenceController, &SequenceController::staleResultDropped,
+        this, [this] {
+            ++m_staleResults;
+            updateDiagnostics();
+        });
+    connect(m_sequenceController, &SequenceController::statusMessage,
+        this, [this](const QString& message) {
+            statusBar()->showMessage(message);
+        });
+    connect(m_sequenceController, &SequenceController::frameDisplayed,
+        this, [this](int index) {
+            m_animationPanel->setSequenceFrame(index);
+            m_animationPanel->setSequenceInfo(
+                QString::fromStdString(m_datasetPath.filename().string()),
+                m_openMetadata->time);
+            updateDiagnostics();
+            emit sequenceFrameDisplayed(index);
+        });
+    connect(m_sequenceController, &SequenceController::frameLoadFailed,
+        this, [this](const QString& message) {
+            statusBar()->showMessage(tr("Frame load failed"));
+            // During animation export the failure is reported by the export
+            // handler; avoid a second dialog.
+            const bool wasExporting = m_animationExporter->active();
+            emit sequenceFrameFailed();
+            if (!wasExporting) {
+                reportBackgroundError(
+                    tr("Cannot load frame: %1").arg(message));
+            }
+            updateDiagnostics();
+        });
+
+    // Animation export advances one frame at a time as each renders. The
+    // exporter owns the whole export state machine; this window supplies
+    // frame rendering and navigation, and restores its UI on finished().
+    m_animationExporter = new AnimationExporter(
+        [this](bool includeColorBar, qreal scale) {
+            std::vector<std::pair<QString, QImage>> frames;
+            if (m_viewDimension == 3) {
+                constexpr std::array<const char*, 3> suffixes{
+                    "_yz", "_xz", "_xy"};
+                for (int normal = 0; normal < 3; ++normal) {
+                    const auto idx = static_cast<std::size_t>(normal);
+                    auto* panelView = m_planeViews[idx].view;
+                    if (panelView == nullptr || !panelView->hasImage()) {
+                        continue;
+                    }
+                    frames.emplace_back(QString::fromLatin1(suffixes[idx]),
+                        composeExportFrame(panelView, includeColorBar, scale));
+                }
+            } else {
+                frames.emplace_back(QString(), composeExportFrame(
+                    m_activeView != nullptr ? m_activeView->view : nullptr,
+                    includeColorBar, scale));
+            }
+            return frames;
+        },
+        [this](int index) { goToSequenceFrame(index); },
+        this);
+    connect(m_animationExporter, &AnimationExporter::encodingStarted,
+        this, &MainWindow::exportEncodingStarted);
+    connect(m_animationExporter, &AnimationExporter::finished, this,
+        [this](bool success, const QString& message, int restoreIndex) {
+            // Return the user to the frame they were viewing (unless we are
+            // closing, which would launch a new frame load mid-shutdown).
+            if (!m_closing && m_sequenceController->hasSequence()) {
+                goToSequenceFrame(restoreIndex < 0 ? 0 : restoreIndex);
+            }
+            m_exportAnimationAction->setEnabled(
+                m_sequenceController->hasSequence());
+            if (!m_closing) {
+                if (success) {
+                    QMessageBox::information(
+                        this, tr("Export Animation"), message);
+                } else {
+                    reportBackgroundError(message);
+                }
+            }
+        });
     connect(this, &MainWindow::sequenceFrameDisplayed,
-        this, [this](int index) { onExportFrameDisplayed(index); });
+        m_animationExporter, &AnimationExporter::onFrameDisplayed);
     connect(this, &MainWindow::sequenceFrameFailed,
-        this, [this] { onExportFrameFailed(); });
+        m_animationExporter, &AnimationExporter::onFrameFailed);
     applySpeed();
     connect(m_animationPanel, &AnimationPanel::sweepStepRequested, this,
         [this](int direction) { stepSweep(direction); });
@@ -1359,7 +859,7 @@ void MainWindow::wireView(PlaneViewState& state)
             sliceMoveRequested(state, x, y, button);
         });
     connect(view, &ImageView::fitRequested, this,
-        [this, &state] { fitView(state); });
+        [this, &state] { resetViewZoom(state); });
 }
 
 std::vector<MainWindow::PlaneViewState*> MainWindow::currentViews()
@@ -1385,9 +885,14 @@ void MainWindow::setActiveView(PlaneViewState& state)
     if (m_viewDimension == 3) {
         state.view->setActiveBorder(true);
     }
-    if (state.plane.width <= 0 || state.plane.height <= 0) {
+    if (state.plane->width <= 0 || state.plane->height <= 0) {
         return;
     }
+    syncActiveViewColorControls(state);
+}
+
+void MainWindow::syncActiveViewColorControls(const PlaneViewState& state)
+{
     // The color scale and range boxes track the active view.
     m_colorBar->setLogarithmic(state.displayLogarithmic);
     m_colorBar->setFieldRange(state.displayLogarithmic
@@ -1470,7 +975,9 @@ void MainWindow::createMenus()
 
     auto* quitAction = new QAction(tr("&Quit"), this);
     quitAction->setShortcut(QKeySequence::Quit);
-    connect(quitAction, &QAction::triggered, this, &QWidget::close);
+    // Application-wide: close every main window (each runs its own close
+    // handling) rather than just this one.
+    connect(quitAction, &QAction::triggered, qApp, &QApplication::closeAllWindows);
 
     auto* fileMenu = menuBar()->addMenu(tr("&File"));
     fileMenu->addAction(newWindowAction);
@@ -1485,22 +992,22 @@ void MainWindow::createMenus()
     fileMenu->addSeparator();
     fileMenu->addAction(quitAction);
 
-    auto* scaleGroup = new QActionGroup(this);
+    m_scaleGroup = new QActionGroup(this);
     auto* scaleMenu = new QMenu(tr("&Scale"), this);
-    m_fitScaleAction = new QAction(tr("&Fit to Window"), scaleMenu);
-    m_fitScaleAction->setCheckable(true);
-    m_fitScaleAction->setActionGroup(scaleGroup);
-    m_fitScaleAction->setChecked(true);
-    m_fitScaleAction->setShortcut(QKeySequence(Qt::Key_0));
-    connect(m_fitScaleAction, &QAction::triggered,
-        this, [this] { fitViewToWindow(); });
-    scaleMenu->addAction(m_fitScaleAction);
+    m_resetZoomAction = new QAction(tr("&Reset Zoom"), scaleMenu);
+    m_resetZoomAction->setCheckable(true);
+    m_resetZoomAction->setActionGroup(m_scaleGroup);
+    m_resetZoomAction->setChecked(true);
+    m_resetZoomAction->setShortcut(QKeySequence(Qt::Key_0));
+    connect(m_resetZoomAction, &QAction::triggered,
+        this, [this] { resetZoomAllViews(); });
+    scaleMenu->addAction(m_resetZoomAction);
     constexpr std::array<int, 6> fixedScales{1, 2, 4, 8, 16, 32};
     for (std::size_t index = 0; index < fixedScales.size(); ++index) {
         const auto factor = fixedScales[index];
         auto* action = new QAction(tr("%1x").arg(factor), scaleMenu);
         action->setCheckable(true);
-        action->setActionGroup(scaleGroup);
+        action->setActionGroup(m_scaleGroup);
         action->setShortcut(QKeySequence(Qt::Key_1 + static_cast<int>(index)));
         connect(action, &QAction::triggered, this, [this, factor] {
             if (m_scaleButton != nullptr) {
@@ -1512,6 +1019,8 @@ void MainWindow::createMenus()
         });
         scaleMenu->addAction(action);
     }
+    scaleMenu->addSeparator();
+    scaleMenu->addAction(m_syncRubberBandZoomAction);
 
     m_levelMenu = new QMenu(tr("&Level"), this);
     m_levelGroup = new QActionGroup(this);
@@ -1526,11 +1035,21 @@ void MainWindow::createMenus()
         updateGridBoxes();
         saveSettings();
     });
+    m_slicePlanesAction = new QAction(tr("&Slice Planes"), this);
+    m_slicePlanesAction->setCheckable(true);
+    m_slicePlanesAction->setEnabled(false);
+    connect(m_slicePlanesAction, &QAction::toggled, this,
+        [this](bool visible) { m_isoWidget->setSlicePlanesVisible(visible); });
 
     m_contoursAction = new QAction(tr("&Contours..."), this);
     m_contoursAction->setEnabled(false);
     connect(m_contoursAction, &QAction::triggered,
         this, [this] { showContoursDialog(); });
+
+    m_particlesAction = new QAction(tr("&Particles..."), this);
+    m_particlesAction->setEnabled(false);
+    connect(m_particlesAction, &QAction::triggered,
+        this, [this] { showParticlesDialog(); });
 
     m_datasetAction = new QAction(tr("&Dataset..."), this);
     m_datasetAction->setEnabled(false);
@@ -1548,9 +1067,11 @@ void MainWindow::createMenus()
     viewMenu->addMenu(scaleMenu);
     viewMenu->addMenu(m_levelMenu);
     viewMenu->addAction(m_boxesAction);
+    viewMenu->addAction(m_slicePlanesAction);
     viewMenu->addMenu(paletteMenu);
     viewMenu->addSeparator();
     viewMenu->addAction(m_contoursAction);
+    viewMenu->addAction(m_particlesAction);
     viewMenu->addAction(m_datasetAction);
     viewMenu->addAction(numberFormatAction);
     viewMenu->addSeparator();
@@ -1861,6 +1382,211 @@ void MainWindow::applyContourSettings(
     }
 }
 
+void MainWindow::configureContourSyncForTest(
+    int count, bool logarithmic, std::array<double, 3> slicePositions)
+{
+    if (!m_dataset) {
+        return;
+    }
+    m_slicePosition3d = slicePositions;
+    // Set range/log through the widgets (requestSlice reads them) but block
+    // their signals so only the single scheduleSliceRequest below re-slices.
+    {
+        const QSignalBlocker rangeBlocker(m_rangeMode);
+        const auto index = m_rangeMode->findData(
+            static_cast<int>(RangeMode::Visible));
+        if (index >= 0) {
+            m_rangeMode->setCurrentIndex(index);
+        }
+    }
+    {
+        const QSignalBlocker logBlocker(m_logarithmic);
+        m_logarithmic->setChecked(logarithmic);
+    }
+    m_displayMode = DisplayMode::RasterContours;
+    m_contourCount = count;
+    scheduleSliceRequest(false);
+}
+
+std::vector<MainWindow::ContourViewProbe>
+MainWindow::contourViewProbesForTest()
+{
+    std::vector<ContourViewProbe> probes;
+    for (const auto* state : currentViews()) {
+        ContourViewProbe probe;
+        probe.displayMinimum = state->displayMinimum;
+        probe.displayMaximum = state->displayMaximum;
+        probe.logarithmic = state->displayLogarithmic;
+        for (const auto& polyline : state->contourPolylines) {
+            probe.contourLevels.push_back(polyline.value);
+        }
+        std::sort(probe.contourLevels.begin(), probe.contourLevels.end());
+        probe.contourLevels.erase(
+            std::unique(probe.contourLevels.begin(), probe.contourLevels.end()),
+            probe.contourLevels.end());
+        probes.push_back(std::move(probe));
+    }
+    return probes;
+}
+
+void MainWindow::enableVisibleRasterForTest()
+{
+    if (!m_dataset) {
+        return;
+    }
+    {
+        const QSignalBlocker rangeBlocker(m_rangeMode);
+        const auto index = m_rangeMode->findData(
+            static_cast<int>(RangeMode::Visible));
+        if (index >= 0) {
+            m_rangeMode->setCurrentIndex(index);
+        }
+    }
+    m_displayMode = DisplayMode::Raster;
+    scheduleSliceRequest(false);
+}
+
+void MainWindow::zoomActiveViewForTest()
+{
+    if (!m_dataset || m_activeView == nullptr) {
+        return;
+    }
+    const auto bounds = datasetSampleBounds(m_dataset->metadata());
+    auto subregion = bounds;
+    const auto axes = displayAxes(m_activeView->normal);
+    for (std::size_t k = 0; k < 2; ++k) {
+        const auto axis = static_cast<std::size_t>(axes[k]);
+        subregion.lower[axis] = 0.5 * (bounds.lower[axis] + bounds.upper[axis]);
+        subregion.upper[axis] = bounds.upper[axis];
+    }
+    m_activeView->visibleRegion = subregion;
+    scheduleSliceRequest(*m_activeView, true);
+}
+
+bool MainWindow::activeViewRasterMatchesDisplayRangeForTest()
+{
+    if (m_activeView == nullptr) {
+        return false;
+    }
+    const auto& state = *m_activeView;
+    if (state.plane->width <= 0 || state.plane->height <= 0
+        || !state.view->hasImage()) {
+        return false;
+    }
+    const auto reference = renderScalarPlane(*state.plane, ScalarRenderSettings{
+        .minimum = state.displayMinimum,
+        .maximum = state.displayMaximum,
+        .logarithmic = state.displayLogarithmic,
+        .palette = &m_palette
+    });
+    if (!reference.valid()) {
+        return false;
+    }
+    // Same buffer->view transform showSlice uses, so this stays in lockstep
+    // with however the raster is actually displayed.
+    return displayImageFor(reference) == state.view->image();
+}
+
+void MainWindow::rubberBandZoomActiveViewForTest()
+{
+    if (m_activeView == nullptr || m_activeView->plane->width <= 0
+        || m_activeView->plane->height <= 0) {
+        return;
+    }
+    const auto width = static_cast<double>(m_activeView->plane->width);
+    const auto height = static_cast<double>(m_activeView->plane->height);
+    rubberBandZoom(*m_activeView,
+        QRectF(0.25 * width, 0.25 * height, 0.5 * width, 0.5 * height));
+}
+
+bool MainWindow::allViewsRubberBandZoomedForTest()
+{
+    const auto views = currentViews();
+    return views.size() > 1
+        && rubberBandZoomedViewCountForTest() == views.size();
+}
+
+std::size_t MainWindow::rubberBandZoomedViewCountForTest()
+{
+    const auto views = currentViews();
+    return static_cast<std::size_t>(
+        std::count_if(views.begin(), views.end(), [](const auto* state) {
+            return state->visibleRegion.has_value();
+        }));
+}
+
+void MainWindow::setActiveViewScaleForTest(int factor)
+{
+    if (m_activeView != nullptr) {
+        m_activeView->view->setFixedScale(factor);
+    }
+}
+
+void MainWindow::panActiveViewForTest(
+    double sceneDeltaX, double sceneDeltaY)
+{
+    if (m_activeView == nullptr) {
+        return;
+    }
+    const QPointF delta(sceneDeltaX, sceneDeltaY);
+    beginPanDrag(*m_activeView);
+    updatePanDrag(*m_activeView, delta, QPoint());
+    endPanDrag(*m_activeView, delta);
+}
+
+qreal MainWindow::activeViewScaleForTest() const
+{
+    return m_activeView != nullptr ? m_activeView->view->transform().m11() : 0.0;
+}
+
+bool MainWindow::activeViewIsFitToWindowForTest()
+{
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return false;
+    }
+    const auto before = m_activeView->view->transform();
+    m_activeView->view->fitToWindow();
+    return before == m_activeView->view->transform();
+}
+
+bool MainWindow::activeViewShowsWholeImageForTest() const
+{
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return false;
+    }
+    auto* view = m_activeView->view;
+    const auto visible = view->mapToScene(
+        view->viewport()->rect()).boundingRect();
+    const auto image = view->image();
+    // Half-a-scene-pixel slack absorbs fitInView rounding at the borders.
+    const QRectF imageRect(QPointF(0.0, 0.0), QSizeF(image.size()));
+    return visible.adjusted(-0.5, -0.5, 0.5, 0.5).contains(imageRect);
+}
+
+void MainWindow::viewFabForTest(std::size_t index)
+{
+    viewFab(index);
+}
+
+bool MainWindow::activeViewIsZoomedForTest() const
+{
+    return m_activeView != nullptr && m_activeView->visibleRegion.has_value();
+}
+
+void MainWindow::setCacheBudgetForTest(std::uint64_t bytes)
+{
+    if (m_dataset) {
+        // The return (whether resident already fits) is irrelevant here; the
+        // next non-cache slice re-pins and triggers the fallback.
+        static_cast<void>(m_dataset->setCacheBudget(bytes));
+    }
+}
+
+std::uint64_t MainWindow::cacheResidentBytesForTest() const
+{
+    return m_dataset ? m_dataset->cacheMetrics().residentBytes : 0;
+}
+
 void MainWindow::showNumberFormatDialog()
 {
     if (m_numberFormatDialog != nullptr) {
@@ -1985,7 +1711,7 @@ QLineF MainWindow::planeSegmentToScene(const PlaneViewState& state,
 {
     // Plane row 0 is the bottom row; the displayed image is mirrored
     // vertically, so scene y runs opposite to plane y (see showSlice).
-    const auto top = static_cast<double>(state.plane.height) - 1.0;
+    const auto top = static_cast<double>(state.plane->height) - 1.0;
     return QLineF(QPointF(x0, top - y0), QPointF(x1, top - y1));
 }
 
@@ -2014,7 +1740,7 @@ void MainWindow::updateOverlay(PlaneViewState& state)
 {
     std::vector<OverlaySegment> overlays;
     std::vector<OverlayPath> paths;
-    const auto planeReady = state.plane.width > 1 && state.plane.height > 1;
+    const auto planeReady = state.plane->width > 1 && state.plane->height > 1;
     if (!planeReady || m_displayMode == DisplayMode::Raster) {
         state.view->setOverlaySegments(overlays);
         state.view->setOverlayPaths(paths);
@@ -2047,7 +1773,7 @@ void MainWindow::updateOverlay(PlaneViewState& state)
         // image is mirrored vertically, so scene y runs opposite to plane y
         // (see showSlice).
         const auto contourColor = overlayColor();
-        const auto top = static_cast<double>(state.plane.height) - 1.0;
+        const auto top = static_cast<double>(state.plane->height) - 1.0;
         std::map<double, QPainterPath> pathsByValue;
         for (const auto& polyline : state.contourPolylines) {
             if (polyline.points.empty()) {
@@ -2083,6 +1809,345 @@ void MainWindow::updateOverlays()
     }
 }
 
+void MainWindow::showParticlesDialog()
+{
+    if (!m_dataset || m_dataset->particleSpecies().empty()) {
+        return;
+    }
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Particles"));
+    auto* layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(
+        tr("Select particle species to draw. Sampling hashes the persistent "
+           "particle ID/CPU identity, so the same particles remain selected "
+           "across plotfile frames."),
+        &dialog));
+
+    struct SpeciesControls {
+        std::string name;
+        QCheckBox* enabled = nullptr;
+        QPushButton* colorButton = nullptr;
+        QSpinBox* alpha = nullptr;
+        QColor color;
+    };
+    std::vector<SpeciesControls> speciesControls;
+    speciesControls.reserve(m_dataset->particleSpecies().size());
+    auto* speciesGrid = new QGridLayout;
+    speciesGrid->addWidget(new QLabel(tr("Show"), &dialog), 0, 0);
+    speciesGrid->addWidget(new QLabel(tr("Species"), &dialog), 0, 1);
+    speciesGrid->addWidget(new QLabel(tr("Color"), &dialog), 0, 2);
+    speciesGrid->addWidget(new QLabel(tr("Alpha"), &dialog), 0, 3);
+    for (std::size_t speciesIndex = 0;
+         speciesIndex < m_dataset->particleSpecies().size(); ++speciesIndex) {
+        const auto& species = m_dataset->particleSpecies()[speciesIndex];
+        auto* check = new QCheckBox(&dialog);
+        check->setChecked(!m_particleSelectionInitialized
+            || std::find(m_selectedParticleSpecies.begin(),
+                m_selectedParticleSpecies.end(), species.name)
+                != m_selectedParticleSpecies.end());
+        auto* name = new QLabel(
+            tr("%1 (%2 particles)")
+                .arg(QString::fromStdString(species.name))
+                .arg(species.particleCount),
+            &dialog);
+        auto color = m_particleColors.contains(species.name)
+            ? m_particleColors.at(species.name)
+            : defaultParticleColor(speciesIndex);
+        auto* colorButton = new QPushButton(&dialog);
+        updateColorButton(*colorButton, color);
+        auto* alpha = new QSpinBox(&dialog);
+        alpha->setRange(0, 100);
+        alpha->setSuffix(tr("%"));
+        alpha->setValue(qRound(color.alphaF() * 100.0));
+        const auto row = static_cast<int>(speciesIndex + 1);
+        speciesGrid->addWidget(check, row, 0, Qt::AlignHCenter);
+        speciesGrid->addWidget(name, row, 1);
+        speciesGrid->addWidget(colorButton, row, 2);
+        speciesGrid->addWidget(alpha, row, 3);
+        speciesControls.push_back(
+            {species.name, check, colorButton, alpha, color});
+    }
+    for (auto& controls : speciesControls) {
+        auto* controlsPtr = &controls;
+        connect(controls.colorButton, &QPushButton::clicked, &dialog,
+            [&dialog, controlsPtr] {
+                auto chosen = QColorDialog::getColor(controlsPtr->color, &dialog,
+                    QObject::tr("Particle color"));
+                if (!chosen.isValid()) {
+                    return;
+                }
+                chosen.setAlpha(controlsPtr->color.alpha());
+                controlsPtr->color = chosen;
+                updateColorButton(
+                    *controlsPtr->colorButton, controlsPtr->color);
+            });
+    }
+    layout->addLayout(speciesGrid);
+
+    auto* fractionRow = new QHBoxLayout;
+    fractionRow->addWidget(new QLabel(tr("Visible subset:"), &dialog));
+    auto* fraction = new QDoubleSpinBox(&dialog);
+    fraction->setRange(0.01, 100.0);
+    fraction->setDecimals(2);
+    fraction->setSuffix(tr("%"));
+    fraction->setValue(m_particleFraction * 100.0);
+    fractionRow->addWidget(fraction);
+    fractionRow->addStretch(1);
+    layout->addLayout(fractionRow);
+
+    auto* seedRow = new QHBoxLayout;
+    seedRow->addWidget(new QLabel(tr("Sampling seed:"), &dialog));
+    auto* seed = new QLineEdit(QString::number(m_particleSeed), &dialog);
+    seed->setValidator(new QRegularExpressionValidator(
+        QRegularExpression(QStringLiteral("[0-9]{1,20}")), seed));
+    seed->setToolTip(tr(
+        "Change the seed to select a different stable particle subset."));
+    seedRow->addWidget(seed);
+    seedRow->addStretch(1);
+    layout->addLayout(seedRow);
+
+    auto* sizeRow = new QHBoxLayout;
+    sizeRow->addWidget(new QLabel(tr("Point size:"), &dialog));
+    auto* pointSize = new QSpinBox(&dialog);
+    pointSize->setRange(1, 12);
+    pointSize->setValue(m_particlePointSize);
+    sizeRow->addWidget(pointSize);
+    sizeRow->addStretch(1);
+    layout->addLayout(sizeRow);
+
+    if (m_dataset->metadata().dimension == 3) {
+        layout->addWidget(new QLabel(
+            tr("In 3-D, points are projected onto each orthogonal view."),
+            &dialog));
+    }
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, seed] {
+        bool valid = false;
+        static_cast<void>(seed->text().toULongLong(&valid));
+        if (valid) {
+            dialog.accept();
+        } else {
+            QMessageBox::warning(&dialog, QObject::tr("Invalid seed"),
+                QObject::tr(
+                    "The sampling seed must be an integer from 0 through "
+                    "18446744073709551615."));
+        }
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    std::vector<std::string> selectedSpecies;
+    for (auto& controls : speciesControls) {
+        if (controls.enabled->isChecked()) {
+            selectedSpecies.push_back(controls.name);
+        }
+        controls.color.setAlphaF(
+            static_cast<float>(controls.alpha->value()) / 100.0F);
+        m_particleColors[controls.name] = controls.color;
+    }
+    const auto seedValue = seed->text().toULongLong();
+    applyParticleSelection(std::move(selectedSpecies),
+        fraction->value() / 100.0, pointSize->value(), seedValue);
+}
+
+void MainWindow::configureParticleControls(bool preserveSelection)
+{
+    if (!m_dataset) {
+        m_particlesAction->setEnabled(false);
+        return;
+    }
+    const auto& species = m_dataset->particleSpecies();
+    if (!preserveSelection) {
+        m_selectedParticleSpecies.clear();
+        m_particleColors.clear();
+        m_particleSeed = 0;
+        m_particleSelectionInitialized = false;
+    }
+    for (std::size_t speciesIndex = 0; speciesIndex < species.size();
+         ++speciesIndex) {
+        m_particleColors.try_emplace(
+            species[speciesIndex].name, defaultParticleColor(speciesIndex));
+    }
+    m_particlesAction->setEnabled(!species.empty());
+}
+
+void MainWindow::applyParticleSelection(
+    std::vector<std::string> species, double fraction, int pointSize,
+    std::uint64_t seed)
+{
+    const bool sampleChanged = !m_particleSelectionInitialized
+        || species != m_selectedParticleSpecies
+        || fraction != m_particleFraction
+        || seed != m_particleSeed;
+    m_selectedParticleSpecies = std::move(species);
+    m_particleFraction = fraction;
+    m_particleSeed = seed;
+    m_particlePointSize = pointSize;
+    m_particleSelectionInitialized = true;
+    if (!sampleChanged) {
+        // Color, alpha, and point size only affect the installed point batches;
+        // do not reread particle files when the sampled identities are unchanged.
+        updateParticleOverlays();
+        return;
+    }
+    m_sequenceController->invalidatePrefetch();
+    // Mid-sequence-load, restart the frame so the new particle selection is
+    // baked into the frame spec; otherwise reload the particle overlay alone.
+    if (m_sequenceController->inFlight()
+        && m_sequenceController->currentIndex() >= 0) {
+        goToSequenceFrame(m_sequenceController->currentIndex(), true);
+    } else {
+        requestParticleReload();
+    }
+}
+
+void MainWindow::setParticleSelectionForTest(
+    std::vector<std::string> species, double fraction, std::uint64_t seed)
+{
+    applyParticleSelection(
+        std::move(species), fraction, m_particlePointSize, seed);
+}
+
+std::uint64_t MainWindow::particleSeedForTest() const noexcept
+{
+    return m_particleSeed;
+}
+
+void MainWindow::setParticleColorForTest(
+    const std::string& species, const QColor& color)
+{
+    m_particleColors[species] = color;
+    updateParticleOverlays();
+}
+
+bool MainWindow::particleOverlaysUseColorForTest(const QColor& color)
+{
+    bool found = false;
+    for (const auto* state : currentViews()) {
+        for (const auto& overlayColor : state->view->pointOverlayColors()) {
+            found = true;
+            if (overlayColor != color) {
+                return false;
+            }
+        }
+    }
+    return found;
+}
+
+std::size_t MainWindow::particleSampleCountForTest() const
+{
+    std::size_t count = 0;
+    for (const auto& sample : m_particleSamples) {
+        count += sample.points.size();
+    }
+    return count;
+}
+
+std::size_t MainWindow::particleOverlayCountForTest()
+{
+    std::size_t count = 0;
+    for (const auto* state : currentViews()) {
+        count += state->view->pointOverlayCount();
+    }
+    return count;
+}
+
+void MainWindow::requestParticleReload()
+{
+    m_particleStopSource.request_stop();
+    m_particleStopSource = StopSource{};
+    const auto cancellation = m_particleStopSource.get_token();
+    const auto dataset = m_dataset;
+    const auto selectedSpecies = m_selectedParticleSpecies;
+    const auto fraction = m_particleFraction;
+    const auto seed = m_particleSeed;
+    const auto generation = m_generation;
+    const auto particleGeneration = ++m_particleGeneration;
+    m_particleSamples.clear();
+    updateParticleOverlays();
+    if (!dataset || selectedSpecies.empty()) {
+        return;
+    }
+
+    ++m_activeRequests;
+    statusBar()->showMessage(tr("Loading particle sample..."));
+    updateDiagnostics();
+    auto* watcher = new QFutureWatcher<std::vector<ParticleSample>>(this);
+    connect(watcher, &QFutureWatcher<std::vector<ParticleSample>>::finished,
+        this, [this, watcher, generation, particleGeneration, cancellation] {
+            --m_activeRequests;
+            try {
+                auto samples = watcher->result();
+                if (generation == m_generation
+                    && particleGeneration == m_particleGeneration) {
+                    m_particleSamples = std::move(samples);
+                    updateParticleOverlays();
+                    std::uint64_t count = 0;
+                    for (const auto& sample : m_particleSamples) {
+                        count += sample.points.size();
+                    }
+                    statusBar()->showMessage(
+                        tr("Showing %1 sampled particles").arg(count), 3000);
+                } else {
+                    ++m_staleResults;
+                }
+            } catch (const std::exception& error) {
+                if (generation == m_generation
+                    && particleGeneration == m_particleGeneration
+                    && !cancellation.stop_requested()) {
+                    reportBackgroundError(
+                        tr("Particles were not loaded: %1")
+                            .arg(exceptionMessage(error)));
+                }
+            }
+            updateDiagnostics();
+            watcher->deleteLater();
+        });
+    watcher->setFuture(QtConcurrent::run(
+        [dataset, selectedSpecies, fraction, seed, cancellation] {
+            return loadParticleSamples(
+                *dataset, selectedSpecies, fraction, seed, cancellation);
+        }));
+}
+
+void MainWindow::updateParticleOverlay(PlaneViewState& state)
+{
+    std::vector<PointOverlay> overlays;
+    if (!m_dataset || !state.view->hasImage()
+        || state.plane->width <= 0 || state.plane->height <= 0) {
+        state.view->setPointOverlays(overlays);
+        return;
+    }
+    overlays.reserve(m_particleSamples.size());
+    for (const auto& sample : m_particleSamples) {
+        PointOverlay overlay;
+        const auto color = m_particleColors.find(sample.species.name);
+        overlay.color = color != m_particleColors.end()
+            ? color->second : QColor(Qt::white);
+        overlay.size = static_cast<float>(m_particlePointSize);
+        const auto projected = projectParticlePoints(
+            sample.points, *state.plane,
+            m_dataset->metadata().dimension, state.normal);
+        overlay.points.reserve(projected.size());
+        for (const auto& point : projected) {
+            overlay.points.emplace_back(point.x, point.y);
+        }
+        overlays.push_back(std::move(overlay));
+    }
+    state.view->setPointOverlays(overlays);
+}
+
+void MainWindow::updateParticleOverlays()
+{
+    for (auto* state : currentViews()) {
+        updateParticleOverlay(*state);
+    }
+}
+
 void MainWindow::showKeyboardMouseReference()
 {
     QString rows;
@@ -2092,7 +2157,8 @@ void MainWindow::showKeyboardMouseReference()
             "<td>%2</td></tr>").arg(action, description);
     };
     add(tr("Left click"), tr("Probe the value under the cursor"));
-    add(tr("Left drag"), tr("Zoom to the rubber-band subregion"));
+    add(tr("Left drag"),
+        tr("Zoom to the rubber-band subregion; Scale controls panel sync"));
     add(tr("Shift+left drag"), tr("Pan the view"));
     add(tr("Arrow keys"), tr("Pan the active panel (5% of the view per step)"));
     add(tr("Shift+middle click"), tr("Line plot along the horizontal axis"));
@@ -2100,9 +2166,10 @@ void MainWindow::showKeyboardMouseReference()
     add(tr("Right drag"), tr("Line plot (drag direction picks orientation)"));
     add(tr("Right click (3-D)"),
         tr("Move both slice planes to intersect at the clicked point"));
-    add(tr("Wheel / double click"), tr("Zoom in or out / refit to the window"));
+    add(tr("Wheel / double click"),
+        tr("Zoom this panel in or out / reset the zoom"));
     add(tr("B"), tr("Toggle AMR grid boxes"));
-    add(tr("0"), tr("Fit to the window"));
+    add(tr("0"), tr("Reset the zoom to the whole domain"));
     add(tr("1-6"), tr("Fixed zoom scales (1x-32x)"));
     add(tr("Ctrl+0"), tr("Composite the finest available level"));
     add(tr("Ctrl+1-9"), tr("Composite levels 0 through N (Levs 0-N)"));
@@ -2140,28 +2207,28 @@ void MainWindow::showAboutDialog()
             .arg(QStringLiteral(AMREXPLORER_VERSION)));
 }
 
-void MainWindow::fitView(PlaneViewState& state)
+void MainWindow::resetViewZoom(PlaneViewState& state)
 {
     state.visibleRegion.reset();
     state.view->fitToWindow();
-    m_fitScaleAction->setChecked(true);
+    m_resetZoomAction->setChecked(true);
     if (m_scaleButton != nullptr) {
         m_scaleButton->setText(tr("Fit"));
     }
     scheduleSliceRequest(state);
 }
 
-void MainWindow::fitViewToWindow()
+void MainWindow::resetZoomAllViews()
 {
     for (auto* state : currentViews()) {
-        fitView(*state);
+        resetViewZoom(*state);
     }
 }
 
 QString MainWindow::probeReadout(
     const PlaneViewState& state, int x, int displayY) const
 {
-    const auto& plane = state.plane;
+    const auto& plane = *state.plane;
     if (!m_dataset || plane.width <= 0 || plane.height <= 0) {
         return tr("no data");
     }
@@ -2275,14 +2342,19 @@ QString MainWindow::probeReadout(
         boxText = tr("box=none");
     }
 
-    return tr("%1=%2 %3=%4 value=%5 level=%6 %7=(%8) %9")
+    // Standalone FABs and MultiFabs have no AMR hierarchy, so their readout
+    // omits the level.
+    const auto levelText = metadata.hasPhysicalGeometry
+        ? tr(" level=%1").arg(level)
+        : QString();
+    return tr("%1=%2 %3=%4 value=%5%6 %7=(%8) %9")
         .arg(QString::fromLatin1(axisNames[xAxis]))
         .arg(formatNumber(position[xAxis], m_numberFormat))
         .arg(QString::fromLatin1(axisNames[yAxis]))
         .arg(formatNumber(position[yAxis], m_numberFormat))
         .arg(formatNumber(static_cast<double>(plane.values[offset]),
             m_numberFormat))
-        .arg(level)
+        .arg(levelText)
         .arg(QString::fromLatin1(indexKind))
         .arg(join(cell))
         .arg(boxText);
@@ -2309,7 +2381,7 @@ void MainWindow::probeClicked(PlaneViewState& state, int x, int displayY)
 void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
 {
     setActiveView(state);
-    const auto& plane = state.plane;
+    const auto& plane = *state.plane;
     if (!m_dataset || plane.width <= 0 || plane.height <= 0) {
         return;
     }
@@ -2319,12 +2391,54 @@ void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
     if (clamped.width() < 1.0 || clamped.height() < 1.0) {
         return;
     }
+    const QRectF normalizedRect(
+        clamped.left() / static_cast<double>(plane.width),
+        clamped.top() / static_cast<double>(plane.height),
+        clamped.width() / static_cast<double>(plane.width),
+        clamped.height() / static_cast<double>(plane.height));
+    const auto views = currentViews();
+    const bool synchronize = m_syncRubberBandZoomAction != nullptr
+        && m_syncRubberBandZoomAction->isChecked()
+        && views.size() > 1;
+    if (synchronize) {
+        for (auto* target : views) {
+            applyRubberBandZoom(*target, normalizedRect);
+        }
+    } else {
+        applyRubberBandZoom(state, normalizedRect);
+    }
+    if (m_scaleGroup != nullptr) {
+        if (auto* checked = m_scaleGroup->checkedAction()) {
+            checked->setChecked(false);
+        }
+    }
+    if (m_scaleButton != nullptr) {
+        m_scaleButton->setText(
+            views.size() > 1 && !synchronize ? tr("Mixed") : tr("Custom"));
+    }
+}
+
+void MainWindow::applyRubberBandZoom(
+    PlaneViewState& state, const QRectF& normalizedRect)
+{
+    const auto& plane = *state.plane;
+    if (!m_dataset || plane.width <= 0 || plane.height <= 0) {
+        return;
+    }
+    const auto normalized = normalizedRect.normalized().intersected(
+        QRectF(0.0, 0.0, 1.0, 1.0));
+    if (normalized.isEmpty()) {
+        return;
+    }
+    const auto width = static_cast<double>(plane.width);
+    const auto height = static_cast<double>(plane.height);
+    const QRectF clamped(
+        normalized.left() * width, normalized.top() * height,
+        normalized.width() * width, normalized.height() * height);
     const auto axes = displayAxes(state.normal);
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);
     const auto& region = plane.physicalRegion;
-    const auto width = static_cast<double>(plane.width);
-    const auto height = static_cast<double>(plane.height);
     const auto xExtent = region.upper[xAxis] - region.lower[xAxis];
     const auto yExtent = region.upper[yAxis] - region.lower[yAxis];
     auto visible = region;
@@ -2365,8 +2479,8 @@ void MainWindow::beginPanDrag(PlaneViewState& state)
     m_panDataRefresh = state.visibleRegion.has_value();
     if (m_panDataRefresh) {
         m_panStartRegion = *state.visibleRegion;
-        m_panPlaneWidth = state.plane.width;
-        m_panPlaneHeight = state.plane.height;
+        m_panPlaneWidth = state.plane->width;
+        m_panPlaneHeight = state.plane->height;
     }
 }
 
@@ -2420,20 +2534,10 @@ void MainWindow::flushPanDrag(bool finalize)
     const auto region = shiftedPanRegion(*m_panView, m_panStartRegion,
         m_panPlaneWidth, m_panPlaneHeight, m_panSceneDelta);
     if (!region.has_value()) {
-        if (finalize) {
-            m_panView->view->fitToWindow();
-        }
         return;
     }
     m_panView->visibleRegion = *region;
     m_panLastScheduledDelta = m_panSceneDelta;
-    if (finalize) {
-        m_panView->view->fitToWindow();
-        m_fitScaleAction->setChecked(true);
-        if (m_scaleButton != nullptr) {
-            m_scaleButton->setText(tr("Fit"));
-        }
-    }
     scheduleSliceRequest(*m_panView, false);
 }
 
@@ -2457,23 +2561,23 @@ void MainWindow::setupPanShortcuts()
 
 void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
 {
-    if (!state.view->hasImage() || state.plane.width <= 0 || state.plane.height <= 0) {
+    if (!state.view->hasImage() || state.plane->width <= 0 || state.plane->height <= 0) {
         return;
     }
     setActiveView(state);
-    const auto stepX = std::max(1.0, static_cast<double>(state.plane.width) * 0.05);
-    const auto stepY = std::max(1.0, static_cast<double>(state.plane.height) * 0.05);
+    const auto stepX = std::max(1.0, static_cast<double>(state.plane->width) * 0.05);
+    const auto stepY = std::max(1.0, static_cast<double>(state.plane->height) * 0.05);
     const QPointF sceneDelta(direction.x() * stepX, direction.y() * stepY);
 
     if (state.visibleRegion.has_value() && m_dataset) {
         const auto region = shiftedPanRegion(state, *state.visibleRegion,
-            state.plane.width, state.plane.height, sceneDelta);
+            state.plane->width, state.plane->height, sceneDelta);
         if (!region.has_value()) {
             return;
         }
         state.visibleRegion = *region;
         state.view->fitToWindow();
-        m_fitScaleAction->setChecked(true);
+        m_resetZoomAction->setChecked(true);
         if (m_scaleButton != nullptr) {
             m_scaleButton->setText(tr("Fit"));
         }
@@ -2547,7 +2651,7 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
     Qt::MouseButton button)
 {
     setActiveView(state);
-    const auto& plane = state.plane;
+    const auto& plane = *state.plane;
     if (!m_controlsReady || !m_dataset || plane.width <= 0 || plane.height <= 0) {
         return;
     }
@@ -2588,6 +2692,10 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
         [this, watcher, dataset, generation, cancellation, request, fieldName,
             dimension, primaryFixedAxis, maximumLevel, composition, view] {
             --m_activeRequests;
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
+            }
             try {
                 auto result = watcher->result();
                 if (generation != m_generation || cancellation.stop_requested()) {
@@ -2609,11 +2717,24 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
                     statusBar()->showMessage(tr("Added line plot curve for %1")
                         .arg(QString::fromStdString(fieldName)));
                 }
+            } catch (const CacheBudgetExceeded&) {
+                // A line plot cannot shed resolution the way a slice can, so
+                // translate the raw pinned-budget error into actionable advice
+                // instead of degrading (see
+                // cache-budget-exceeded-hard-fails-after-load).
+                if (generation == m_generation && !cancellation.stop_requested()) {
+                    reportBackgroundError(tr(
+                        "The line plot cannot fit in the %1 cache. Choose a "
+                        "lower level or increase AMREXPLORER_CACHE_SIZE_MB.")
+                        .arg(cacheBudgetDescription(
+                            dataset->cacheMetrics().budgetBytes)));
+                } else {
+                    ++m_staleResults;
+                }
             } catch (const std::exception& error) {
                 if (generation == m_generation && !cancellation.stop_requested()) {
-                    statusBar()->showMessage(tr("Line plot request failed"));
-                    QMessageBox::critical(this, tr("Cannot load line plot"),
-                        exceptionMessage(error));
+                    reportBackgroundError(
+                        tr("Cannot load line plot: %1").arg(exceptionMessage(error)));
                 } else {
                     ++m_staleResults;
                 }
@@ -2632,21 +2753,21 @@ void MainWindow::sliceMoveRequested(PlaneViewState& state, int imageX, int image
 {
     setActiveView(state);
     if (!m_dataset || m_dataset->metadata().dimension != 3
-        || state.plane.width <= 0 || state.plane.height <= 0) {
+        || state.plane->width <= 0 || state.plane->height <= 0) {
         return;
     }
     // Move both in-plane axes so the three slices intersect at the clicked
     // point. A single right-click replaces the old middle=x / right=y split,
     // which was inaccessible on Mac (no middle button).
     const auto axes = displayAxes(state.normal);
-    const auto& region = state.plane.physicalRegion;
+    const auto& region = state.plane->physicalRegion;
     for (std::size_t i = 0; i < 2; ++i) {
         const auto axis = axes[i];
         const auto fraction = (i == 0)
             ? (static_cast<double>(imageX) + 0.5)
-                / static_cast<double>(state.plane.width)
-            : (static_cast<double>(state.plane.height - 1 - imageY) + 0.5)
-                / static_cast<double>(state.plane.height);
+                / static_cast<double>(state.plane->width)
+            : (static_cast<double>(state.plane->height - 1 - imageY) + 0.5)
+                / static_cast<double>(state.plane->height);
         const auto index = static_cast<std::size_t>(axis);
         setSlicePosition(axis, region.lower[index]
             + fraction * (region.upper[index] - region.lower[index]));
@@ -2693,8 +2814,16 @@ void MainWindow::appendLinePlotCurve(const LineResult& line,
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    // Mark this window closing so asynchronous completion handlers that fire
+    // during or after shutdown do not pop modal dialogs or reopen windows.
+    m_closing = true;
+    // Stop resubmit timers, request cancellation on every async task, and
+    // clear queued global-pool jobs. Running tasks re-check their stop token
+    // and bail promptly; without this a task mid-read can leave the process
+    // lingering at quit. (aboutToQuit also calls this, as a fallback.)
+    cancelInFlight();
     // Secondary top-level windows are parentless or non-modal; close them with
-    // the main window so they don't linger and keep the process alive.
+    // the main window so none lingers and keeps the process alive.
     if (m_linePlotWindow != nullptr) {
         auto* linePlotWindow = m_linePlotWindow;
         m_linePlotWindow = nullptr;
@@ -2706,6 +2835,19 @@ void MainWindow::closeEvent(QCloseEvent* event)
         m_contoursDialog = nullptr;
         dialog->close();
     }
+    if (m_numberFormatDialog != nullptr) {
+        auto* dialog = m_numberFormatDialog;
+        m_numberFormatDialog = nullptr;
+        dialog->close();
+    }
+    if (m_userGuideDialog != nullptr) {
+        auto* dialog = m_userGuideDialog;
+        m_userGuideDialog = nullptr;
+        dialog->close();
+    }
+    // Dismiss any export progress dialog and signal the encoder workers to
+    // terminate their FFmpeg processes (see AnimationExporter).
+    m_animationExporter->cancelForShutdown();
     saveSettings();
     auto settings = makeSettings();
     settings.setValue(QStringLiteral("geometry"), saveGeometry());
@@ -2732,8 +2874,10 @@ void MainWindow::cancelInFlight()
         m_playbackTimer->stop();
     }
     m_initialStopSource.request_stop();
-    m_prefetchStopSource.request_stop();
+    m_metadataStopSource.request_stop();
+    m_sequenceController->cancelActiveWork();
     m_linePlotStopSource.request_stop();
+    m_particleStopSource.request_stop();
     m_view2d.stopSource.request_stop();
     for (auto& state : m_planeViews) {
         state.stopSource.request_stop();
@@ -2797,6 +2941,11 @@ void MainWindow::restoreSettings()
     }
     m_animationPanel->setSpeedValue(
         settings.value(QStringLiteral("animation/speed"), 300).toInt());
+    {
+        const QSignalBlocker syncZoomBlocker(m_syncRubberBandZoomAction);
+        m_syncRubberBandZoomAction->setChecked(
+            settings.value(QStringLiteral("zoom/syncRubberBand"), true).toBool());
+    }
     applySpeed();
     const auto geometry = settings.value(QStringLiteral("geometry")).toByteArray();
     if (!geometry.isEmpty()) {
@@ -2807,13 +2956,6 @@ void MainWindow::restoreSettings()
 void MainWindow::saveSettings()
 {
     auto settings = makeSettings();
-    // Boxes and contours are no longer restored on load, but we save them so
-    // any stale keys from older versions are overwritten.
-    settings.setValue(QStringLiteral("view/boxes"), m_boxesAction->isChecked());
-    settings.setValue(QStringLiteral("contours/mode"),
-        static_cast<int>(m_displayMode));
-    settings.setValue(QStringLiteral("contours/count"), m_contourCount);
-    settings.setValue(QStringLiteral("contours/color"), m_contourColor);
     // Range mode is deliberately not persisted: the correct default (File)
     // depends on the dataset and restoring a different mode from a previous
     // session would produce unexpected color bars.
@@ -2825,6 +2967,8 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("numberFormat"), m_numberFormat);
     settings.setValue(QStringLiteral("animation/speed"),
         m_animationPanel->speedValue());
+    settings.setValue(QStringLiteral("zoom/syncRubberBand"),
+        m_syncRubberBandZoomAction->isChecked());
 }
 
 void MainWindow::updateWindowTitle()
@@ -2838,10 +2982,12 @@ void MainWindow::updateWindowTitle()
     if (name.isEmpty()) {
         name = QString::fromStdString(m_datasetPath.string());
     }
+    // Standalone FABs and MultiFabs carry neither a simulation time nor an
+    // AMR hierarchy, so their titles show just the format name.
     if (m_fabMode) {
-        setWindowTitle(tr("AMReXplorer — %1 — FAB  T = %2")
-            .arg(name)
-            .arg(metadata.time, 0, 'g', 12));
+        setWindowTitle(tr("AMReXplorer — %1 — FAB").arg(name));
+    } else if (!metadata.hasPhysicalGeometry) {
+        setWindowTitle(tr("AMReXplorer — %1 — MultiFab").arg(name));
     } else {
         setWindowTitle(
             tr("AMReXplorer — %1  T = %2  Levels: 0..%3  Finest Level: %3")
@@ -2868,7 +3014,22 @@ void MainWindow::chooseDataset()
     if (directory.isEmpty()) {
         return;
     }
-    openDataset(directory.toStdString());
+    // Directory pickers descend into a plotfile on double-click instead of
+    // selecting it, so the choice easily lands on an inner directory
+    // (Level_1, a particle species, ...). Such a selection resolves up to
+    // the enclosing plotfile rather than failing on the subdirectory.
+    auto path = std::filesystem::path(directory.toStdString());
+    for (auto candidate = path; !candidate.empty();
+        candidate = candidate.parent_path()) {
+        if (isAmrexPlotfile(candidate)) {
+            path = candidate;
+            break;
+        }
+        if (candidate.parent_path() == candidate) {
+            break;
+        }
+    }
+    openDataset(path);
 }
 
 void MainWindow::chooseStandaloneDataset(const QString& caption, bool rawFab)
@@ -2899,20 +3060,52 @@ void MainWindow::chooseStandaloneDataset(const QString& caption, bool rawFab)
     }
 }
 
-void MainWindow::configureFabSelector(
+namespace {
+
+// Everything the FAB selector dock needs for a source, computed off the GUI
+// thread (see buildFabSelector) so its header scans / per-block preads never
+// block the event loop. `matched` distinguishes a recognized FAB or
+// single-level-VisMF source (whose m_fabMode/source state should be applied)
+// from anything else (leave that state untouched, just hide the dock).
+struct FabSelectorBuild {
+    bool matched = false;
+    bool fabMode = false;
+    bool hasSourceMetadata = false;
+    std::vector<FabSelectorEntry> entries;
+    std::filesystem::path root;
+};
+
+// The result of a dataset open worker: the metadata plus, when the caller did
+// not ask to preserve the existing selector, the FAB selector contents built
+// alongside it (so the GUI-thread completion only blits, never reads files).
+struct OpenedDataset {
+    PlotfileMetadataResult metadata;
+    std::optional<FabSelectorBuild> fabSelector;
+};
+
+// Reads FAB/MultiFab record headers and builds the selector entries. Runs on a
+// worker thread; QCoreApplication::translate is thread-safe, and it touches no
+// widgets or member state.
+FabSelectorBuild buildFabSelector(
     const PlotfileMetadataResult& result, const std::filesystem::path& path)
 {
-    std::vector<FabSelectorEntry> entries;
-    auto root = path.parent_path();
-    if (root.empty()) {
-        root = ".";
+    const auto precisionLabel = [](FabRealPrecision precision) {
+        return precision == FabRealPrecision::Single
+            ? QCoreApplication::translate("MainWindow", "IEEE-32")
+            : QCoreApplication::translate("MainWindow", "IEEE-64");
+    };
+
+    FabSelectorBuild build;
+    build.root = path.parent_path();
+    if (build.root.empty()) {
+        build.root = ".";
     }
 
     if (result.fileVersion == "FAB") {
         const auto records = scanFabFile(path);
-        entries.reserve(records.size());
+        build.entries.reserve(records.size());
         for (const auto& record : records) {
-            entries.push_back({
+            build.entries.push_back({
                 .ordinal = record.ordinal,
                 .level = 0,
                 .blockIndex = record.ordinal,
@@ -2922,66 +3115,55 @@ void MainWindow::configureFabSelector(
                 .storedBox = record.storedBox,
                 .dimension = record.dimension,
                 .components = record.components,
-                .precision = record.precision == FabRealPrecision::Single
-                    ? tr("IEEE-32") : tr("IEEE-64"),
+                .precision = precisionLabel(record.precision),
                 .rawRecord = true
             });
         }
-        m_fabMode = true;
-        m_fabSourceMetadata.reset();
+        build.matched = true;
+        build.fabMode = true;
+        build.hasSourceMetadata = false;
     } else if (result.fileVersion.starts_with("VisMF-")
         && result.metadata->levels.size() == 1) {
         const auto& metadata = *result.metadata;
         const auto& level = metadata.levels.front();
-        entries.reserve(level.blocks.size());
+        build.entries.reserve(level.blocks.size());
         for (std::size_t index = 0; index < level.blocks.size(); ++index) {
             const auto& block = level.blocks[index];
-            auto storedBox = block.box;
-            for (int axis = 0; axis < metadata.dimension; ++axis) {
-                const auto coordinate = static_cast<std::size_t>(axis);
-                storedBox.lower[coordinate] -= level.ghostWidth[coordinate];
-                storedBox.upper[coordinate] += level.ghostWidth[coordinate];
-            }
+            // Overflow-guarded shared grow (this copy previously used
+            // plain int).
+            auto storedBox = amrvis::detail::grownBox<MetadataReadError>(
+                block.box, level.ghostWidth, metadata.dimension);
             auto precision = FabRealPrecision::Double;
             if (level.visMfHeaderVersion == 1) {
                 const auto record = inspectFabRecord(
-                    root / block.filePath, block.fileOffset);
+                    build.root / block.filePath, block.fileOffset);
                 storedBox = record.storedBox;
                 precision = record.precision;
             } else {
                 precision = fabPrecisionFromDescriptor(level.realDescriptor);
             }
-            entries.push_back({
+            build.entries.push_back({
                 .ordinal = index,
                 .level = level.level,
                 .blockIndex = index,
-                .filePath = root / block.filePath,
+                .filePath = build.root / block.filePath,
                 .fileOffset = block.fileOffset,
                 .validBox = block.box,
                 .storedBox = storedBox,
                 .dimension = metadata.dimension,
                 .components = level.storedComponents,
-                .precision = precision == FabRealPrecision::Single
-                    ? tr("IEEE-32") : tr("IEEE-64"),
+                .precision = precisionLabel(precision),
                 .rawRecord = false
             });
         }
-        m_fabMode = false;
-        m_fabSourceMetadata = result;
+        build.matched = true;
+        build.fabMode = false;
+        build.hasSourceMetadata = true;
     }
-
-    if (entries.empty()) {
-        m_fabSelectorDock->setVisible(false);
-        return;
-    }
-    m_fabSourcePath = path;
-    m_fabDataRoot = root;
-    m_fabSelectorDock->setEntries(std::move(entries));
-    m_fabSelectorDock->setBackAvailable(false);
-    m_fabSelectorDock->setVisible(true);
-    m_fabSelectorDock->raise();
-    updateWindowTitle();
+    return build;
 }
+
+} // namespace
 
 void MainWindow::viewFab(std::size_t entryIndex)
 {
@@ -3141,22 +3323,12 @@ QImage MainWindow::composeExportFrame(const ImageView* view,
     return composite;
 }
 
-bool MainWindow::probeFfmpeg() const
-{
-    QProcess proc;
-    proc.start("ffmpeg", {"-version"});
-    if (!proc.waitForStarted(2000) || !proc.waitForFinished(2000)) {
-        return false;
-    }
-    return proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0;
-}
-
 void MainWindow::exportAnimation()
 {
-    if (m_exportAnim.active) {
+    if (m_animationExporter->active()) {
         return;
     }
-    if (m_sequenceFrames.empty()) {
+    if (!m_sequenceController->hasSequence()) {
         QMessageBox::information(this, tr("No animation"),
             tr("Open a plotfile sequence before exporting an animation."));
         return;
@@ -3193,35 +3365,44 @@ void MainWindow::exportAnimation()
     if (path.isEmpty()) {
         return;
     }
-    const QFileInfo info(path);
-    const auto total = static_cast<int>(m_sequenceFrames.size());
-    const int digits =
-        std::max(5, static_cast<int>(QString::number(total - 1).length()));
+    beginAnimationExport(path, includeColorBar);
+}
 
-    m_exportAnim = ExportAnimationState{};
-    m_exportAnim.active = true;
-    m_exportAnim.includeColorBar = includeColorBar;
+void MainWindow::startAnimationExportForTest(const QString& path,
+    bool includeColorBar)
+{
+    if (m_animationExporter->active()) {
+        return;
+    }
+    beginAnimationExport(path, includeColorBar);
+}
+
+void MainWindow::beginAnimationExport(const QString& path, bool includeColorBar)
+{
+    auto* view = m_activeView != nullptr ? m_activeView->view : nullptr;
+    if (view == nullptr || !view->hasImage()
+        || !m_sequenceController->hasSequence()) {
+        return;
+    }
     // Freeze the export zoom from the current view so every frame renders at the
     // same dimensions even if a frame's image size changes and refits the view.
     // In 3-D this single scale is shared by all three panels, so a panel whose
     // fitted zoom differs from the active view exports at the active view's
     // scale -- constant across frames, which is the goal.
-    m_exportAnim.scale = std::max(1.0, view->transform().m11());
-    m_exportAnim.hasFfmpeg = probeFfmpeg();
-    m_exportAnim.totalFrames = total;
-    m_exportAnim.restoreIndex = m_sequenceIndex;
-    m_exportAnim.digitWidth = digits;
-    m_exportAnim.directory = info.absolutePath();
-    m_exportAnim.stem = info.completeBaseName();
-
-    m_exportAnim.progress = new QProgressDialog(
-        tr("Rendering frame 1 of %1...").arg(total), tr("Cancel"), 0, total, this);
-    m_exportAnim.progress->setWindowTitle(tr("Export Animation"));
-    m_exportAnim.progress->setWindowModality(Qt::WindowModal);
-    m_exportAnim.progress->setMinimumDuration(0);
-    m_exportAnim.progress->setValue(0);
-    connect(m_exportAnim.progress, &QProgressDialog::canceled,
-        this, [this] { m_exportAnim.canceled = true; });
+    const auto scale = std::max(1.0, view->transform().m11());
+    std::vector<QString> suffixes;
+    if (m_viewDimension == 3) {
+        suffixes = {QStringLiteral("_yz"), QStringLiteral("_xz"),
+            QStringLiteral("_xy")};
+    } else {
+        suffixes = {QString()};
+    }
+    if (!m_animationExporter->begin(path, includeColorBar,
+            m_sequenceController->frameCount(),
+            m_sequenceController->currentIndex(), scale,
+            std::move(suffixes), this)) {
+        return;
+    }
 
     // Freeze the action and stop playback while exporting.
     m_exportAnimationAction->setEnabled(false);
@@ -3230,219 +3411,10 @@ void MainWindow::exportAnimation()
     goToSequenceFrame(0);
 }
 
-void MainWindow::onExportFrameDisplayed(int index)
-{
-    if (!m_exportAnim.active || m_exportAnim.framesDone) {
-        return;
-    }
-    if (m_exportAnim.canceled) {
-        endExportAnimation(false, tr("Animation export cancelled."));
-        return;
-    }
-
-    const QString padded = QString("%1").arg(index,
-        m_exportAnim.digitWidth, 10, QChar('0'));
-
-    if (m_viewDimension == 3) {
-        constexpr std::array<const char*, 3> suffixes{"_yz", "_xz", "_xy"};
-        for (int normal = 0; normal < 3; ++normal) {
-            const auto idx = static_cast<std::size_t>(normal);
-            auto* panelView = m_planeViews[idx].view;
-            if (panelView == nullptr || !panelView->hasImage()) {
-                continue;
-            }
-            const QImage frame = composeExportFrame(
-                panelView, m_exportAnim.includeColorBar, m_exportAnim.scale);
-            if (frame.isNull()) {
-                endExportAnimation(false,
-                    tr("A frame could not be rendered."));
-                return;
-            }
-            const QString filePath = QDir(m_exportAnim.directory)
-                .absoluteFilePath(m_exportAnim.stem
-                    + QString::fromLatin1(suffixes[idx])
-                    + "_" + padded + ".png");
-            if (!frame.save(filePath, "PNG")) {
-                endExportAnimation(false,
-                    tr("Could not write %1.").arg(filePath));
-                return;
-            }
-        }
-    } else {
-        const QImage frame = composeExportFrame(
-            m_activeView != nullptr ? m_activeView->view : nullptr,
-            m_exportAnim.includeColorBar, m_exportAnim.scale);
-        if (frame.isNull()) {
-            endExportAnimation(false,
-                tr("A frame could not be rendered."));
-            return;
-        }
-        const QString filePath = QDir(m_exportAnim.directory)
-            .absoluteFilePath(m_exportAnim.stem + "_" + padded + ".png");
-        if (!frame.save(filePath, "PNG")) {
-            endExportAnimation(false,
-                tr("Could not write %1.").arg(filePath));
-            return;
-        }
-    }
-
-    m_exportAnim.progress->setValue(index + 1);
-    m_exportAnim.progress->setLabelText(tr("Rendering frame %1 of %2...")
-        .arg(index + 2).arg(m_exportAnim.totalFrames));
-
-    if (index + 1 < m_exportAnim.totalFrames) {
-        goToSequenceFrame(index + 1);
-    } else {
-        finalizeExportAnimation();
-    }
-}
-
-void MainWindow::onExportFrameFailed()
-{
-    if (!m_exportAnim.active) {
-        return;
-    }
-    endExportAnimation(false, tr("A frame failed to load; animation export aborted."));
-}
-
-void MainWindow::finalizeExportAnimation()
-{
-    m_exportAnim.framesDone = true;
-
-    if (!m_exportAnim.hasFfmpeg) {
-        endExportAnimation(true, tr("Exported %1 PNG frames "
-            "(FFmpeg not found; skipped MP4).").arg(m_exportAnim.totalFrames));
-        return;
-    }
-
-    m_exportAnim.progress->setLabelText(tr("Encoding MP4..."));
-    m_exportAnim.progress->setRange(0, 0);
-
-    auto encode = [this](const QString& stem) {
-        const QString inputPattern = m_exportAnim.directory + "/"
-            + stem + "_%0" + QString::number(m_exportAnim.digitWidth)
-            + "d.png";
-        const QString outputPath = QDir(m_exportAnim.directory)
-            .absoluteFilePath(stem + ".mp4");
-        const QStringList args{
-            "-y", "-framerate", "24", "-i", inputPattern,
-            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-            "-pix_fmt", "yuv420p", "-crf", "14", outputPath,
-        };
-        return QtConcurrent::run([args]() -> QPair<int, QString> {
-            QProcess proc;
-            proc.setProcessChannelMode(QProcess::MergedChannels);
-            proc.start("ffmpeg", args);
-            if (!proc.waitForStarted(3000)) {
-                return { -2,
-                    QString::fromLocal8Bit(proc.readAllStandardOutput()) };
-            }
-            proc.waitForFinished(-1);
-            const int code = proc.exitStatus() == QProcess::NormalExit
-                ? proc.exitCode() : -1;
-            QString log = QString::fromLocal8Bit(
-                proc.readAllStandardOutput());
-            if (log.length() > 800) {
-                log = QStringLiteral("...") + log.right(800);
-            }
-            return { code, log.trimmed() };
-        });
-    };
-
-    if (m_viewDimension == 3) {
-        const QStringList stems{
-            m_exportAnim.stem + "_yz",
-            m_exportAnim.stem + "_xz",
-            m_exportAnim.stem + "_xy",
-        };
-        int* remaining = new int(3);
-        bool* failed = new bool(false);
-        QString* failMsg = new QString();
-        for (const auto& stem : stems) {
-            auto* watcher = new QFutureWatcher<QPair<int, QString>>(this);
-            connect(watcher,
-                &QFutureWatcher<QPair<int, QString>>::finished,
-                this, [this, watcher, remaining, failed, failMsg, stems] {
-                    const auto result = watcher->result();
-                    watcher->deleteLater();
-                    if (result.first != 0) {
-                        *failed = true;
-                        *failMsg = result.second;
-                    }
-                    if (--(*remaining) == 0) {
-                        delete remaining;
-                        if (*failed) {
-                            endExportAnimation(false,
-                                tr("FFmpeg failed. PNG frames were "
-                                "still written.\n\n%1").arg(*failMsg));
-                        } else {
-                            endExportAnimation(true,
-                                tr("Exported %1 frames and %2, %3, %4.")
-                                .arg(m_exportAnim.totalFrames)
-                                .arg(stems[0] + ".mp4")
-                                .arg(stems[1] + ".mp4")
-                                .arg(stems[2] + ".mp4"));
-                        }
-                        delete failed;
-                        delete failMsg;
-                    }
-                });
-            watcher->setFuture(encode(stem));
-        }
-    } else {
-        const QString stem = m_exportAnim.stem;
-        auto* watcher = new QFutureWatcher<QPair<int, QString>>(this);
-        connect(watcher, &QFutureWatcher<QPair<int, QString>>::finished,
-            this, [this, watcher, stem] {
-                const auto result = watcher->result();
-                watcher->deleteLater();
-                const QString outputPath = QDir(m_exportAnim.directory)
-                    .absoluteFilePath(stem + ".mp4");
-                if (result.first == 0) {
-                    endExportAnimation(true,
-                        tr("Exported %1 frames and %2.")
-                        .arg(m_exportAnim.totalFrames).arg(outputPath));
-                } else {
-                    endExportAnimation(false,
-                        tr("FFmpeg failed (exit %1). "
-                        "PNG frames were still written.\n\n%2")
-                        .arg(result.first).arg(result.second));
-                }
-            });
-        watcher->setFuture(encode(stem));
-    }
-}
-
-void MainWindow::endExportAnimation(bool success, const QString& message)
-{
-    const bool wasActive = m_exportAnim.active;
-    const int restoreIndex = m_exportAnim.restoreIndex;
-
-    if (m_exportAnim.progress != nullptr) {
-        m_exportAnim.progress->hide();
-        m_exportAnim.progress->deleteLater();
-    }
-    m_exportAnim = ExportAnimationState{};
-
-    // Return the user to the frame they were viewing.
-    if (wasActive && !m_sequenceFrames.empty()) {
-        goToSequenceFrame(restoreIndex < 0 ? 0 : restoreIndex);
-    }
-    m_exportAnimationAction->setEnabled(!m_sequenceFrames.empty());
-
-    if (wasActive) {
-        if (success) {
-            QMessageBox::information(this, tr("Export Animation"), message);
-        } else {
-            QMessageBox::warning(this, tr("Export Animation"), message);
-        }
-    }
-}
-
 std::optional<DatasetRequest> MainWindow::buildDatasetRequest() const
 {
     if (!m_dataset || m_activeView == nullptr
-        || m_activeView->plane.width <= 0 || m_activeView->plane.height <= 0
+        || m_activeView->plane->width <= 0 || m_activeView->plane->height <= 0
         || m_fieldSelector->currentIndex() < 0) {
         return std::nullopt;
     }
@@ -3455,7 +3427,7 @@ std::optional<DatasetRequest> MainWindow::buildDatasetRequest() const
             metadata.fields[request.field.value].name));
     // The "selected region" is the active view's visible region: the
     // rubber-band zoom, or the whole domain when fitted.
-    request.region = m_activeView->plane.physicalRegion;
+    request.region = m_activeView->plane->physicalRegion;
     request.normalAxis = m_activeView->normal;
     if (metadata.dimension == 3) {
         request.slicePosition
@@ -3483,6 +3455,8 @@ void MainWindow::showDatasetWindow()
             state->view->setCellHighlight(std::nullopt);
         }
     });
+    connect(window, &DatasetWindow::extractionFailed, this,
+        &MainWindow::reportBackgroundError);
     connect(window, &DatasetWindow::cellActivated, this,
         [this](const RealBox& physicalCell) {
             datasetCellActivated(physicalCell);
@@ -3521,7 +3495,7 @@ void MainWindow::datasetCellActivated(const RealBox& physicalCell)
     if (m_activeView == nullptr) {
         return;
     }
-    const auto& plane = m_activeView->plane;
+    const auto& plane = *m_activeView->plane;
     if (plane.width <= 0 || plane.height <= 0) {
         return;
     }
@@ -3588,9 +3562,11 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         state->stopSource.request_stop();
         ++state->sliceGeneration;
         state->view->setPlaceholder(tr("Loading dataset..."));
-        state->plane = {};
-        state->contourPlane = {};
-        state->contourFinePlane = {};
+        // Fresh empty snapshots — the pointers must stay non-null (see
+        // PlaneViewState).
+        state->plane = std::make_shared<const ScalarPlane>();
+        state->contourPlane = std::make_shared<const ScalarPlane>();
+        state->contourFinePlane = std::make_shared<const ScalarPlane>();
         state->contourFineFactor = 1;
         state->contourPolylines.clear();
         state->fieldName.clear();
@@ -3605,6 +3581,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     }
     m_initialStopSource.request_stop();
     m_linePlotStopSource.request_stop();
+    m_particleStopSource.request_stop();
     m_pendingAllViews = false;
     m_pendingViews.clear();
     m_sliceDebounce->stop();
@@ -3646,12 +3623,14 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_rangeMode->setEnabled(false);
     m_logarithmic->setEnabled(false);
     m_boxesAction->setEnabled(false);
+    m_slicePlanesAction->setEnabled(false);
     m_rangeMinimum->setEnabled(false);
     m_rangeMaximum->setEnabled(false);
-    m_slicePositionControls->setVisible(false);
+    setSlicePositionControlsVisible(false);
     m_animationPanel->setSweepVisible(false);
     m_levelMenu->setEnabled(false);
     m_contoursAction->setEnabled(false);
+    m_particlesAction->setEnabled(false);
     m_datasetAction->setEnabled(false);
     m_exportAnimationAction->setEnabled(false);
     m_openMetadata.reset();
@@ -3660,6 +3639,10 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_vectorUField = -1;
     m_vectorVField = -1;
     m_vectorWField = -1;
+    m_particleSamples.clear();
+    m_selectedParticleSpecies.clear();
+    m_particleSelectionInitialized = false;
+    ++m_particleGeneration;
     setWindowTitle(tr("AMReXplorer"));
     {
         auto settings = makeSettings();
@@ -3669,23 +3652,52 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_probeLabel->clear();
     m_colorBar->clearRange();
     const auto generation = ++m_generation;
+    m_metadataStopSource.request_stop();
+    m_metadataStopSource = StopSource{};
+    const auto metadataCancellation = m_metadataStopSource.get_token();
     ++m_activeRequests;
     statusBar()->showMessage(tr("Reading metadata for %1...").arg(
         QString::fromStdString(path.string())));
     updateDiagnostics();
 
-    auto* watcher = new QFutureWatcher<PlotfileMetadataResult>(this);
-    connect(watcher, &QFutureWatcher<PlotfileMetadataResult>::finished, this,
+    auto* watcher = new QFutureWatcher<OpenedDataset>(this);
+    connect(watcher, &QFutureWatcher<OpenedDataset>::finished, this,
         [this, watcher, generation, path, metadataOnly,
-            dataRoot = std::move(dataRoot), preserveFabSelector,
+            dataRoot = std::move(dataRoot),
             initialSpec = std::move(initialSpec)]() mutable {
             --m_activeRequests;
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
+            }
             try {
                 auto result = watcher->result();
                 if (generation == m_generation) {
-                    showMetadata(result, path);
-                    if (!preserveFabSelector) {
-                        configureFabSelector(result, path);
+                    showMetadata(result.metadata, path);
+                    // The FAB selector contents were built off-thread with the
+                    // metadata (when not preserving the existing selector);
+                    // here we only apply them, no file I/O on the GUI thread.
+                    if (result.fabSelector) {
+                        auto& fab = *result.fabSelector;
+                        if (fab.matched) {
+                            m_fabMode = fab.fabMode;
+                            if (fab.hasSourceMetadata) {
+                                m_fabSourceMetadata = result.metadata;
+                            } else {
+                                m_fabSourceMetadata.reset();
+                            }
+                        }
+                        if (fab.entries.empty()) {
+                            m_fabSelectorDock->setVisible(false);
+                        } else {
+                            m_fabSourcePath = path;
+                            m_fabDataRoot = fab.root;
+                            m_fabSelectorDock->setEntries(std::move(fab.entries));
+                            m_fabSelectorDock->setBackAvailable(false);
+                            m_fabSelectorDock->setVisible(true);
+                            m_fabSelectorDock->raise();
+                            updateWindowTitle();
+                        }
                     }
                     emit datasetOpenFinished(true);
                     if (!metadataOnly) {
@@ -3697,17 +3709,17 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                                 root = ".";
                             }
                         }
-                        requestInitialSlice(path, generation, result,
-                            std::move(root), std::move(initialSpec));
+                        requestInitialSlice(path, generation,
+                            std::move(result.metadata), std::move(root),
+                            std::move(initialSpec));
                     }
                 } else {
                     ++m_staleResults;
                 }
             } catch (const std::exception& error) {
                 if (generation == m_generation) {
-                    statusBar()->showMessage(tr("Dataset open failed"));
-                    QMessageBox::critical(this, tr("Cannot open dataset"),
-                        exceptionMessage(error));
+                    reportBackgroundError(
+                        tr("Cannot open dataset: %1").arg(exceptionMessage(error)));
                     emit datasetOpenFinished(false);
                 } else {
                     ++m_staleResults;
@@ -3717,11 +3729,19 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
             watcher->deleteLater();
         });
     watcher->setFuture(QtConcurrent::run(
-        [path, preparedMetadata = std::move(preparedMetadata)]() mutable {
-        if (preparedMetadata) {
-            return std::move(*preparedMetadata);
+        [path, preparedMetadata = std::move(preparedMetadata),
+            cancellation = metadataCancellation, preserveFabSelector]() mutable {
+        OpenedDataset opened;
+        opened.metadata = preparedMetadata
+            ? std::move(*preparedMetadata)
+            : readDatasetMetadata(path, cancellation);
+        // Build the FAB selector entries here, off the GUI thread, so the
+        // header scans / per-block preads it needs never freeze the event
+        // loop. Skipped when the caller preserves the existing selector.
+        if (!preserveFabSelector) {
+            opened.fabSelector = buildFabSelector(opened.metadata, path);
         }
-        return readDatasetMetadata(path);
+        return opened;
     }));
 }
 
@@ -3751,6 +3771,7 @@ void MainWindow::requestInitialSlice(
     }
     m_initialStopSource.request_stop();
     m_linePlotStopSource.request_stop();
+    m_particleStopSource.request_stop();
     m_initialStopSource = StopSource{};
     const auto cancellation = m_initialStopSource.get_token();
     // The initial open uses default slice state: field 0, finest available,
@@ -3785,10 +3806,24 @@ void MainWindow::requestInitialSlice(
         [this, watcher, generation, cancellation, views, viewGenerations,
             restoredSpec] {
             --m_activeRequests;
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
+            }
             try {
                 auto result = watcher->result();
                 if (generation == m_generation) {
                     m_dataset = result.dataset;
+                    m_particleSamples = std::move(result.particles);
+                    if (restoredSpec) {
+                        m_selectedParticleSpecies
+                            = restoredSpec->particleSpecies;
+                        m_particleFraction = restoredSpec->particleFraction;
+                        m_particleSeed = restoredSpec->particleSeed;
+                        m_particleSelectionInitialized
+                            = restoredSpec->particleSelectionInitialized;
+                    }
+                    configureParticleControls(restoredSpec.has_value());
                     configureSliceControls();
                     if (restoredSpec) {
                         const QSignalBlocker fieldBlocker(m_fieldSelector);
@@ -3829,7 +3864,8 @@ void MainWindow::requestInitialSlice(
                         configureSlicePositionControls();
                         syncMenuChecks();
                     }
-                    if (selectCacheFallbackLevel(m_levelSelector, result)) {
+                    if (selectCacheFallbackLevel(
+                            m_levelSelector, result.cacheFallbackToLevel)) {
                         configureSlicePositionControls();
                         updateRangeModeAvailability();
                         syncMenuChecks();
@@ -3843,6 +3879,24 @@ void MainWindow::requestInitialSlice(
                             != viewGenerations[index]) {
                             continue;
                         }
+                        // A FAB round-trip preserved the zoom in restoredSpec and
+                        // executeFrameLoad rendered the slice against it, but
+                        // openDatasetImpl reset the view states. Restore the zoom
+                        // from the region that actually produced this plane (so it
+                        // stays in step with the slice cache key), gated on
+                        // whether the spec recorded a zoom for this view — a
+                        // full-domain view stays nullopt, without float-comparing
+                        // regions. See fab-round-trip-loses-visible-region.
+                        if (restoredSpec) {
+                            const bool wasZoomed =
+                                index < restoredSpec->visibleRegions.size()
+                                && restoredSpec->visibleRegions[index]
+                                    .has_value();
+                            views[index]->visibleRegion = wasZoomed
+                                ? std::optional<RealBox>{
+                                    result.displays[index].request.visibleRegion}
+                                : std::optional<RealBox>{};
+                        }
                         showSlice(*views[index], result.displays[index]);
                     }
                     const auto cache = m_dataset->cacheMetrics();
@@ -3851,8 +3905,11 @@ void MainWindow::requestInitialSlice(
                     m_cachePinnedBytes = cache.pinnedBytes;
                     m_cacheEvictions = cache.evictions;
                     if (result.cacheFallbackToLevel >= 0) {
-                        QMessageBox::warning(this, tr("Reduced level detail"),
-                            cacheFallbackMessage(result));
+                        // Non-modal: an informational cache-fallback notice must
+                        // not pop a modal dialog that would block the quit path.
+                        statusBar()->showMessage(cacheFallbackMessage(
+                            *result.dataset, result.cacheFallbackFromLevel,
+                            result.cacheFallbackToLevel));
                     }
                     emit initialSliceFinished(true);
                 } else {
@@ -3860,11 +3917,8 @@ void MainWindow::requestInitialSlice(
                 }
             } catch (const std::exception& error) {
                 if (generation == m_generation && !cancellation.stop_requested()) {
-                    statusBar()->showMessage(tr("Initial slice failed"));
-                    qWarning("initial slice failed: %s",
-                        qUtf8Printable(exceptionMessage(error)));
-                    QMessageBox::critical(this, tr("Cannot load slice"),
-                        exceptionMessage(error));
+                    reportBackgroundError(
+                        tr("Cannot load slice: %1").arg(exceptionMessage(error)));
                     emit initialSliceFinished(false);
                 } else {
                     ++m_staleResults;
@@ -3877,9 +3931,29 @@ void MainWindow::requestInitialSlice(
         [path, generation, spec = std::move(spec), cancellation,
             preparedMetadata = std::move(preparedMetadata),
             dataRoot = std::move(dataRoot)]() mutable {
-        return executeFrameLoad(path, DatasetId{generation}, spec, cancellation,
+        return executeFrameLoad(path, DatasetId{generation}, spec,
+            initialCacheBudget(), cancellation,
             std::move(preparedMetadata), std::move(dataRoot));
     }));
+}
+
+void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
+{
+    m_controlsReady = true;
+    m_fieldSelector->setEnabled(true);
+    m_levelSelector->setEnabled(true);
+    m_rangeMode->setEnabled(true);
+    m_logarithmic->setEnabled(true);
+    m_boxesAction->setEnabled(true);
+    m_slicePlanesAction->setEnabled(metadata.dimension == 3);
+    const auto userRange = static_cast<RangeMode>(
+        m_rangeMode->currentData().toInt()) == RangeMode::User;
+    m_rangeMinimum->setEnabled(userRange);
+    m_rangeMaximum->setEnabled(userRange);
+    rebuildLevelMenu();
+    m_levelMenu->setEnabled(true);
+    m_contoursAction->setEnabled(true);
+    m_datasetAction->setEnabled(true);
 }
 
 void MainWindow::configureSliceControls()
@@ -3901,20 +3975,7 @@ void MainWindow::configureSliceControls()
     populateLevelCombo(m_levelSelector, metadata.finestLevel);
     m_levelSelector->setCurrentIndex(0);
 
-    m_controlsReady = true;
-    m_fieldSelector->setEnabled(true);
-    m_levelSelector->setEnabled(true);
-    m_rangeMode->setEnabled(true);
-    m_logarithmic->setEnabled(true);
-    m_boxesAction->setEnabled(true);
-    const auto userRange = static_cast<RangeMode>(
-        m_rangeMode->currentData().toInt()) == RangeMode::User;
-    m_rangeMinimum->setEnabled(userRange);
-    m_rangeMaximum->setEnabled(userRange);
-    rebuildLevelMenu();
-    m_levelMenu->setEnabled(true);
-    m_contoursAction->setEnabled(true);
-    m_datasetAction->setEnabled(true);
+    enableDatasetControls(metadata);
 
     rebuildVariableMenu();
     updateRangeModeAvailability();
@@ -3922,6 +3983,7 @@ void MainWindow::configureSliceControls()
     // Switch the stacked page to match the dataset dimension and, for 3-D,
     // reveal the shared slice position controls and the iso wireframe.
     const auto isThreeDimensional = metadata.dimension == 3;
+    m_syncRubberBandZoomAction->setVisible(isThreeDimensional);
     m_stack->setCurrentIndex(isThreeDimensional ? 1 : 0);
     m_animationPanel->setSweepVisible(isThreeDimensional);
     updateAnimationDockVisibility();
@@ -3934,13 +3996,21 @@ void MainWindow::configureSliceControls()
     ensureVectorFieldDefaults();
 }
 
+void MainWindow::setSlicePositionControlsVisible(bool visible)
+{
+    m_slicePositionControls->setVisible(visible);
+    if (m_positionSeparator != nullptr) {
+        m_positionSeparator->setVisible(visible);
+    }
+}
+
 void MainWindow::configureSlicePositionControls()
 {
     if (!m_dataset) {
-        m_slicePositionControls->setVisible(false);
+        setSlicePositionControlsVisible(false);
         return;
     }
-    m_slicePositionControls->setVisible(true);
+    setSlicePositionControlsVisible(true);
     const auto& md = m_dataset->metadata();
 
     if (md.dimension != 3) {
@@ -4002,8 +4072,10 @@ void MainWindow::setSlicePosition(int axis, double value)
     }
     m_isoWidget->setSlicePositions(m_slicePosition3d[0], m_slicePosition3d[1],
         m_slicePosition3d[2]);
-    // The cached full-domain Visible range is now stale.
-    m_fullDomainRange.reset();
+    // The cached full-domain Visible range is now stale — and so is any
+    // pending deferred store, whose union was computed from pre-move planes.
+    m_displayCoordinator.invalidateRangeCache();
+    m_pendingRangeStore.reset();
     // The other two views only need their crosshair guides redrawn; the view
     // normal to the moved axis gets a fresh (debounced) slice.
     updateCrosshairs();
@@ -4015,8 +4087,14 @@ void MainWindow::scheduleSliceRequest(bool rasterDirty)
     if (m_controlsReady && m_dataset) {
         // Any slice-affecting UI change funnels through here; a prefetched
         // frame rendered against the old spec is obsolete.
-        ++m_specGeneration;
-        discardPrefetch();
+        m_sequenceController->invalidatePrefetch();
+        // If a sequence frame is still loading, restart it so the in-flight
+        // load is rebuilt from the new spec instead of finishing stale.
+        if (m_sequenceController->inFlight()
+            && m_sequenceController->currentIndex() >= 0) {
+            goToSequenceFrame(m_sequenceController->currentIndex(), true);
+            return;
+        }
         m_pendingRasterDirty = m_pendingRasterDirty || rasterDirty;
         m_pendingAllViews = true;
         m_sliceDebounce->start();
@@ -4026,8 +4104,14 @@ void MainWindow::scheduleSliceRequest(bool rasterDirty)
 void MainWindow::scheduleSliceRequest(PlaneViewState& state, bool rasterDirty)
 {
     if (m_controlsReady && m_dataset) {
-        ++m_specGeneration;
-        discardPrefetch();
+        m_sequenceController->invalidatePrefetch();
+        // If a sequence frame is still loading, restart it so the in-flight
+        // load is rebuilt from the new spec instead of finishing stale.
+        if (m_sequenceController->inFlight()
+            && m_sequenceController->currentIndex() >= 0) {
+            goToSequenceFrame(m_sequenceController->currentIndex(), true);
+            return;
+        }
         m_pendingRasterDirty = m_pendingRasterDirty || rasterDirty;
         if (std::find(m_pendingViews.begin(), m_pendingViews.end(), &state)
             == m_pendingViews.end()) {
@@ -4106,12 +4190,12 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     const auto contourCount = m_contourCount;
 
     const auto fromCache = state.hasCachedRequest
-        && state.plane.width > 0
+        && state.plane->width > 0
         && sameSliceSpec(state.cachedRequest, request)
         && state.cachedVectorVField == vectorVField
         && state.cachedVectorUField == vectorUField
         && displayMode == state.cachedMode
-        && (!isContourMode(displayMode) || state.contourFinePlane.width > 0)
+        && (!isContourMode(displayMode) || state.contourFinePlane->width > 0)
         && (displayMode != DisplayMode::VelocityVectors
             || (!state.vectorSegments.empty()
                 && contourCount == state.cachedContourCount));
@@ -4132,7 +4216,12 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     QFuture<SliceDisplayResult> future;
     if (fromCache) {
         // Cheap path: re-range, re-render, and re-contour the cached planes
-        // on a worker; no SliceQuery runs at all.
+        // on a worker; no SliceQuery runs at all. The captures are shared_ptr
+        // snapshots — refcount bumps, not the former ~110 MB plane deep copy
+        // on the GUI thread. A newer arrival can safely replace the view's
+        // pointers meanwhile; this worker keeps reading its own snapshots.
+        // (refreshCachedSlice's by-value parameters still copy the planes,
+        // but on the worker thread.)
         future = QtConcurrent::run([dataset, request,
             displayPlane = state.plane,
             contourPlane = state.contourPlane,
@@ -4141,8 +4230,8 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             vectors = state.vectorSegments,
             rangeMode, userRange, logarithmic, palette, displayMode,
             vectorUField, vectorVField, contourCount, rasterDirty]() mutable {
-            return refreshCachedSlice(dataset, request, std::move(displayPlane),
-                std::move(contourPlane), std::move(contourFinePlane),
+            return refreshCachedSlice(dataset, request, *displayPlane,
+                *contourPlane, *contourFinePlane,
                 contourFineFactor, std::move(vectors), rangeMode, userRange,
                 logarithmic, palette, displayMode, vectorUField, vectorVField,
                 contourCount, rasterDirty);
@@ -4151,22 +4240,13 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
         future = QtConcurrent::run(
             [dataset, request, rangeMode, userRange, logarithmic, palette,
                 cancellation, displayMode, vectorUField, vectorVField,
-                contourCount] {
-            auto result = executeSlice(dataset, request, rangeMode,
-                userRange, logarithmic, palette, cancellation);
-            result.mode = displayMode;
-            result.vectorUField = vectorUField;
-            result.vectorVField = vectorVField;
-            result.contourCount = contourCount;
-            if (isContourMode(displayMode)) {
-                appendContours(dataset, request, contourCount, result.minimum,
-                    result.maximum, result.logarithmic, cancellation, result);
-            }
-            if (displayMode == DisplayMode::VelocityVectors) {
-                appendVectorGlyphs(dataset, request, FieldId{vectorUField},
-                    FieldId{vectorVField}, contourCount, cancellation, result);
-            }
-            return result;
+                contourCount]() mutable {
+            // The pipeline owns the whole non-cached slice worker, including
+            // the cache-pressure level fallback (see
+            // cache-budget-exceeded-hard-fails-after-load).
+            return executeSliceWithFallback(dataset, request, rangeMode,
+                userRange, logarithmic, palette, displayMode, vectorUField,
+                vectorVField, contourCount, cancellation);
         });
     }
 
@@ -4176,6 +4256,10 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
          &state, rangeMode] {
             --state.pendingRequests;
             --m_activeRequests;
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
+            }
             try {
                 auto result = watcher->result();
                 if (generation == m_generation
@@ -4184,37 +4268,60 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     // Visible-range slice; reuse it for zoomed (subregion)
                     // slices so the color bar stays stable during pan and zoom.
                     const bool isFullDomain = !state.visibleRegion.has_value();
-                    if (!isFullDomain
+                    const DisplayCoordinator::RangeKey rangeKey{
+                        result.request.dataset, result.request.field,
+                        result.request.maximumLevel,
+                        result.request.composition};
+                    const auto cachedRange = !isFullDomain
                         && rangeMode == RangeMode::Visible
-                        && m_fullDomainRange.has_value()
-                        && m_fullDomainRangeField.value
-                            == result.request.field.value
-                        && m_fullDomainRangeMaxLevel
-                            == result.request.maximumLevel
-                        && m_fullDomainRangeComposition
-                            == result.request.composition) {
-                        result.minimum = m_fullDomainRange->first;
-                        result.maximum = m_fullDomainRange->second;
+                            ? m_displayCoordinator.cachedFullDomainRange(
+                                rangeKey)
+                            : std::nullopt;
+                    if (cachedRange) {
+                        // The subregion result was produced against its own
+                        // range; realign it to the reused full-domain range
+                        // so it matches the colorbar. In 3-D the shared-range
+                        // sync below realigns every panel, so only 2-D (which
+                        // it skips) realigns the raster and contours here —
+                        // that also avoids rendering each 3-D panel twice.
+                        DisplayCoordinator::realignArrivalToRange(result,
+                            *cachedRange, m_palette, m_viewDimension != 3);
                     }
                     showSlice(state, result);
                     syncVisibleRanges();
-                    // Refresh the cache after syncVisibleRanges so the 3-D
-                    // union across all panels is captured.
+                    // Cache the full-domain range. In 3-D the store defers to
+                    // the (async) shared-range sync's completion so the union
+                    // across all panels is captured; 2-D has no later sync
+                    // and stores the panel's own range immediately.
                     if (isFullDomain && rangeMode == RangeMode::Visible
-                        && state.plane.width > 0) {
-                        m_fullDomainRange = std::make_pair(
-                            state.displayMinimum, state.displayMaximum);
-                        m_fullDomainRangeField = result.request.field;
-                        m_fullDomainRangeMaxLevel
-                            = result.request.maximumLevel;
-                        m_fullDomainRangeComposition
-                            = result.request.composition;
+                        && state.plane->width > 0) {
+                        if (m_viewDimension == 3) {
+                            m_pendingRangeStore = rangeKey;
+                        } else {
+                            m_displayCoordinator.storeFullDomainRange(rangeKey,
+                                {state.displayMinimum, state.displayMaximum});
+                        }
                     }
                     const auto cache = dataset->cacheMetrics();
                     m_cacheBudgetBytes = cache.budgetBytes;
                     m_cacheResidentBytes = cache.residentBytes;
                     m_cachePinnedBytes = cache.pinnedBytes;
                     m_cacheEvictions = cache.evictions;
+                    // A cache-pressure fallback lowered the composite level;
+                    // reflect it in the level combo (no re-slice) and inform the
+                    // user, matching the initial-load handling.
+                    if (result.cacheFallbackToLevel >= 0) {
+                        if (selectCacheFallbackLevel(
+                                m_levelSelector,
+                                result.cacheFallbackToLevel)) {
+                            configureSlicePositionControls();
+                            updateRangeModeAvailability();
+                            syncMenuChecks();
+                        }
+                        statusBar()->showMessage(cacheFallbackMessage(
+                            *dataset, result.cacheFallbackFromLevel,
+                            result.cacheFallbackToLevel));
+                    }
                 } else {
                     ++m_staleResults;
                 }
@@ -4222,15 +4329,19 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                 if (generation == m_generation
                     && sliceGeneration == state.sliceGeneration
                     && !cancellation.stop_requested()) {
-                    statusBar()->showMessage(tr("Slice request failed"));
-                    QMessageBox::critical(this, tr("Cannot load slice"),
-                        exceptionMessage(error));
+                    reportBackgroundError(
+                        tr("Cannot load slice: %1").arg(exceptionMessage(error)));
                 } else {
                     ++m_staleResults;
                 }
             }
             updateDiagnostics();
             watcher->deleteLater();
+            // The interactive re-slice batch has drained once no view has work
+            // in flight; the smoke test waits on this to read settled state.
+            if (m_activeRequests == 0) {
+                emit interactiveSlicesSettled();
+            }
         });
     watcher->setFuture(future);
 }
@@ -4239,13 +4350,13 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
 {
     std::vector<GridBoxOverlay> overlays;
     if (!m_boxesAction->isChecked() || !m_dataset || !state.view->hasImage()
-        || state.plane.width <= 0 || state.plane.height <= 0) {
+        || state.plane->width <= 0 || state.plane->height <= 0) {
         state.view->setGridBoxes(overlays);
         return;
     }
 
     const auto& metadata = m_dataset->metadata();
-    const auto& plane = state.plane;
+    const auto& plane = *state.plane;
     const auto normal = metadata.dimension == 3 ? state.normal : -1;
     const auto axes = displayAxes(state.normal);
     const auto rawLevel = m_levelSelector->currentData().toInt();
@@ -4326,13 +4437,13 @@ void MainWindow::updateCrosshairs(PlaneViewState& state)
     QColor verticalColor;
     QColor horizontalColor;
     if (m_dataset && m_dataset->metadata().dimension == 3
-        && state.plane.width > 0 && state.plane.height > 0) {
+        && state.plane->width > 0 && state.plane->height > 0) {
         const auto axes = displayAxes(state.normal);
         const auto xAxis = static_cast<std::size_t>(axes[0]);
         const auto yAxis = static_cast<std::size_t>(axes[1]);
-        const auto& region = state.plane.physicalRegion;
-        const auto width = static_cast<double>(state.plane.width);
-        const auto height = static_cast<double>(state.plane.height);
+        const auto& region = state.plane->physicalRegion;
+        const auto width = static_cast<double>(state.plane->width);
+        const auto height = static_cast<double>(state.plane->height);
         // The vertical guide marks the slice position of the axis pointing
         // horizontally in this view, and vice versa; each guide takes that
         // axis' legacy palette color and hides outside the displayed region.
@@ -4372,29 +4483,53 @@ void MainWindow::showMetadata(
         new QTreeWidgetItem(m_metadataTree, {name, value});
     };
 
+    // Standalone FABs and MultiFabs carry neither a simulation time nor an
+    // AMR hierarchy, so those rows (and the per-level listing below) would
+    // show invented values; they are skipped for such data.
+    const bool standalone = !metadata.hasPhysicalGeometry;
     addValue(tr("Dataset"), QString::fromStdString(path.string()));
     addValue(tr("Format"), QString::fromStdString(result.fileVersion));
     addValue(tr("Dimension"), QString::number(metadata.dimension));
-    addValue(tr("Time"), QString::number(metadata.time, 'g', 17));
-    addValue(tr("Finest level"), QString::number(metadata.finestLevel));
+    if (!standalone) {
+        addValue(tr("Time"), QString::number(metadata.time, 'g', 17));
+        addValue(tr("Finest level"), QString::number(metadata.finestLevel));
+    }
 
     auto* fields = new QTreeWidgetItem(
         m_metadataTree, {tr("Fields"), QString::number(metadata.fields.size())});
     for (const auto& field : metadata.fields) {
+        const char* centering = "cell";
+        switch (field.centering) {
+        case amrvis::Centering::Node: centering = "node"; break;
+        case amrvis::Centering::FaceX: centering = "face-x"; break;
+        case amrvis::Centering::FaceY: centering = "face-y"; break;
+        case amrvis::Centering::FaceZ: centering = "face-z"; break;
+        case amrvis::Centering::EdgeX: centering = "edge-x"; break;
+        case amrvis::Centering::EdgeY: centering = "edge-y"; break;
+        case amrvis::Centering::EdgeZ: centering = "edge-z"; break;
+        case amrvis::Centering::Mixed: centering = "mixed"; break;
+        case amrvis::Centering::Cell: break;
+        }
         new QTreeWidgetItem(fields, {
             QString::fromStdString(field.name),
-            tr("%1 component(s)").arg(field.componentCount)
+            QString::fromLatin1(centering)
         });
     }
 
-    auto* levels = new QTreeWidgetItem(
-        m_metadataTree, {tr("Levels"), QString::number(metadata.levels.size())});
-    for (const auto& level : metadata.levels) {
-        new QTreeWidgetItem(levels, {
-            tr("Level %1").arg(level.level),
-            tr("%1 grid(s), %2").arg(level.boxes.size()).arg(
-                QString::fromStdString(level.dataPath))
-        });
+    if (standalone) {
+        const auto& level = metadata.levels.front();
+        addValue(tr("Grids"), tr("%1 grid(s), %2").arg(level.boxes.size()).arg(
+            QString::fromStdString(level.dataPath)));
+    } else {
+        auto* levels = new QTreeWidgetItem(m_metadataTree,
+            {tr("Levels"), QString::number(metadata.levels.size())});
+        for (const auto& level : metadata.levels) {
+            new QTreeWidgetItem(levels, {
+                tr("Level %1").arg(level.level),
+                tr("%1 grid(s), %2").arg(level.boxes.size()).arg(
+                    QString::fromStdString(level.dataPath))
+            });
+        }
     }
     m_metadataTree->expandAll();
 
@@ -4404,8 +4539,60 @@ void MainWindow::showMetadata(
 
     m_lastFilesRead = result.metrics.filesRead;
     m_lastBytesRead = result.metrics.bytesRead;
-    statusBar()->showMessage(tr("Metadata loaded: %1 field(s), %2 level(s)")
-        .arg(metadata.fields.size()).arg(metadata.levels.size()));
+    statusBar()->showMessage(standalone
+        ? tr("Metadata loaded: %1 field(s), %2 grid(s)")
+              .arg(metadata.fields.size())
+              .arg(metadata.levels.front().boxes.size())
+        : tr("Metadata loaded: %1 field(s), %2 level(s)")
+              .arg(metadata.fields.size())
+              .arg(metadata.levels.size()));
+}
+
+std::optional<QRectF> MainWindow::preservedDataWindow(
+    const PlaneViewState& state, const ScalarPlane& incoming) const
+{
+    const auto& cached = *state.plane;
+    const auto axes = displayAxes(state.normal);
+    // Equal densities (or degenerate geometry) mean the preserved scene
+    // transform already preserves the on-screen data, so leave it alone; the
+    // coordinator owns that decision.
+    if (!DisplayCoordinator::planeDensitiesDiffer(cached, incoming, axes)) {
+        return std::nullopt;
+    }
+    const auto xAxis = static_cast<std::size_t>(axes[0]);
+    const auto yAxis = static_cast<std::size_t>(axes[1]);
+    const auto& oldRegion = cached.physicalRegion;
+    const auto& newRegion = incoming.physicalRegion;
+    const auto oldExtentX = oldRegion.upper[xAxis] - oldRegion.lower[xAxis];
+    const auto oldExtentY = oldRegion.upper[yAxis] - oldRegion.lower[yAxis];
+    const auto newExtentX = newRegion.upper[xAxis] - newRegion.lower[xAxis];
+    const auto newExtentY = newRegion.upper[yAxis] - newRegion.lower[yAxis];
+    // Viewport -> old scene -> physical -> new scene. Scene y runs opposite
+    // to physical y: plane row 0 is the bottom row and the displayed raster
+    // is mirrored vertically (see displayImageFor), for both planes alike.
+    const auto visible = state.view->mapToScene(
+        state.view->viewport()->rect()).boundingRect();
+    const auto dataX = [&](double sceneX) {
+        return oldRegion.lower[xAxis] + sceneX / cached.width * oldExtentX;
+    };
+    const auto dataY = [&](double sceneY) {
+        return oldRegion.upper[yAxis] - sceneY / cached.height * oldExtentY;
+    };
+    const auto newSceneX = [&](double x) {
+        return (x - newRegion.lower[xAxis]) / newExtentX * incoming.width;
+    };
+    const auto newSceneY = [&](double y) {
+        return (newRegion.upper[yAxis] - y) / newExtentY * incoming.height;
+    };
+    const QRectF window(
+        QPointF(newSceneX(dataX(visible.left())),
+            newSceneY(dataY(visible.top()))),
+        QPointF(newSceneX(dataX(visible.right())),
+            newSceneY(dataY(visible.bottom()))));
+    if (window.isEmpty()) {
+        return std::nullopt;
+    }
+    return window;
 }
 
 void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& display)
@@ -4414,16 +4601,40 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
         if (!display.image.valid()) {
             throw std::runtime_error("renderer produced an invalid image");
         }
-        const QImage wrapped(
-            reinterpret_cast<const uchar*>(display.image.rgba.data()),
-            display.image.width, display.image.height, display.image.strideBytes,
-            QImage::Format_ARGB32);
-        const auto displayImage = verticallyFlippedCopy(wrapped);
-        state.view->setImage(displayImage);
+        // Preserve/Refit/GeometryAware from the cached-vs-incoming request
+        // pair; the rationale lives with the decision in the coordinator.
+        const auto transformPolicy = DisplayCoordinator::rasterTransformPolicy(
+            state.hasCachedRequest, state.cachedRequest, display.request,
+            state.visibleRegion.has_value());
+        // Preserve keeps the scene transform, which is only equivalent to
+        // keeping what the user sees while the raster's pixels-per-data
+        // density is unchanged. A zoomed re-slice can arrive denser: the
+        // full-domain raster is capped at maxSliceOutputDimension while a
+        // subregion fits under the cap, so preserving the scene transform
+        // would show the crop over-zoomed with part of it off screen
+        // (issue #45). When the density changes, preserve the visible *data*
+        // window instead: capture the viewport in physical coordinates
+        // through the old plane's geometry before the swap, then re-frame
+        // that window through the new plane's geometry after it. Equal
+        // densities (pan, uncapped zoom) keep the plain Preserve behavior.
+        std::optional<QRectF> dataWindowInNewScene;
+        if (transformPolicy == ImageTransformPolicy::Preserve) {
+            dataWindowInNewScene = preservedDataWindow(
+                state, display.slice.plane);
+        }
+        state.view->setImage(
+            displayImageFor(display.image), transformPolicy);
+        if (dataWindowInNewScene) {
+            state.view->zoomToRect(*dataWindowInNewScene);
+        }
     }
-    state.plane = display.slice.plane;
-    state.contourPlane = display.contourPlane;
-    state.contourFinePlane = display.contourFinePlane;
+    // Fresh immutable snapshots: replace the pointers, never mutate the
+    // pointees a cached-planes refresh worker may still be reading.
+    state.plane = std::make_shared<const ScalarPlane>(display.slice.plane);
+    state.contourPlane
+        = std::make_shared<const ScalarPlane>(display.contourPlane);
+    state.contourFinePlane
+        = std::make_shared<const ScalarPlane>(display.contourFinePlane);
     state.contourFineFactor = display.contourFineFactor;
     state.contourPolylines = display.contourPolylines;
     const auto fieldName = QString::fromStdString(display.fieldName);
@@ -4440,26 +4651,13 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     state.cachedVectorVField = display.vectorVField;
     state.cachedContourCount = display.contourCount;
     if (m_activeView == &state) {
-        m_colorBar->setLogarithmic(display.logarithmic);
-        m_colorBar->setFieldRange(
-            display.logarithmic ? fieldName + tr(" (log)") : fieldName,
-            display.minimum, display.maximum);
-        // If log was requested but fell back to linear, reflect that in the
-        // checkbox so the user sees log did not apply.
-        if (m_logarithmic->isChecked() != display.logarithmic) {
-            const QSignalBlocker logarithmicBlocker(m_logarithmic);
-            m_logarithmic->setChecked(display.logarithmic);
-        }
-        if (static_cast<RangeMode>(m_rangeMode->currentData().toInt())
-            != RangeMode::User) {
-            const QSignalBlocker minimumBlocker(m_rangeMinimum);
-            const QSignalBlocker maximumBlocker(m_rangeMaximum);
-            m_rangeMinimum->setValue(display.minimum);
-            m_rangeMaximum->setValue(display.maximum);
-        }
+        // Tracks the active view; if log was requested but fell back to linear,
+        // the checkbox reflects that log did not apply.
+        syncActiveViewColorControls(state);
     }
     updateGridBoxes(state);
     updateOverlay(state);
+    updateParticleOverlay(state);
     // This view's region may have changed; refresh every view's guides.
     updateCrosshairs();
 
@@ -4479,96 +4677,159 @@ void MainWindow::syncVisibleRanges()
     if (rangeMode != RangeMode::Visible) {
         return;
     }
-    std::array<PlaneViewState*, 3> views{
-        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
-    const bool logarithmic = m_logarithmic->isChecked();
+    if (m_visibleSyncInFlight) {
+        // Coalesce: rerun with fresh state once the in-flight worker lands
+        // instead of stacking a worker per arrival.
+        m_visibleSyncRerun = true;
+        return;
+    }
 
-    // Use the cached full-domain range when it is current, so the shared
-    // color bar stays stable during zoom and pan instead of tracking the
-    // subregion extrema of whichever panel just finished rendering.
+    // The coordinator resolves the shared range (the cached full-domain
+    // range when current, so the color bar stays stable during zoom and pan;
+    // else the union of the panels' finite extrema) and produces every
+    // panel's raster and contours realigned to it. Only the cheap cached-
+    // range lookup runs here — the coordinator stays confined to the GUI
+    // thread; the heavy half (extrema scans, contour re-extraction, up to
+    // three 16 Mpx renders, and the QImage flips) runs on a worker over the
+    // panels' immutable plane snapshots.
     const FieldId currentField{m_fieldSelector->currentData().toUInt()};
     const auto rawLevel = m_levelSelector->currentData().toInt();
     const auto [composition, maximumLevel] = decodeLevelData(
         rawLevel, m_dataset->metadata().finestLevel);
-    double globalMin = std::numeric_limits<double>::infinity();
-    double globalMax = -std::numeric_limits<double>::infinity();
-    const bool useCachedRange = m_fullDomainRange.has_value()
-        && m_fullDomainRangeField.value == currentField.value
-        && m_fullDomainRangeMaxLevel == maximumLevel
-        && m_fullDomainRangeComposition == composition;
-    if (useCachedRange) {
-        globalMin = m_fullDomainRange->first;
-        globalMax = m_fullDomainRange->second;
-    } else {
-        for (const auto* state : views) {
-            if (state->plane.width <= 0 || state->plane.height <= 0) {
-                continue;
+    const auto cachedRange = m_displayCoordinator.cachedFullDomainRange(
+        {m_dataset->id(), currentField, maximumLevel, composition});
+
+    struct PanelSnapshot {
+        std::shared_ptr<const ScalarPlane> plane;
+        std::shared_ptr<const ScalarPlane> contourFinePlane;
+        int contourFineFactor = 1;
+        bool logarithmic = false;
+        std::array<int, 2> outputSize{0, 0};
+    };
+    std::array<PlaneViewState*, 3> views{
+        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+    std::array<PanelSnapshot, 3> snapshots;
+    for (std::size_t index = 0; index < views.size(); ++index) {
+        const auto* state = views[index];
+        snapshots[index] = {state->plane, state->contourFinePlane,
+            state->contourFineFactor, state->displayLogarithmic,
+            state->cachedRequest.outputSize};
+    }
+
+    struct SyncOutcome {
+        std::optional<DisplayCoordinator::SharedRangeSync> sync;
+        std::array<QImage, 3> images;   // display-ready (flipped) rasters
+    };
+
+    m_visibleSyncInFlight = true;
+    // The sync participates in the interactive batch: the settled signal
+    // (which the smoke tests use to read synchronized state) must not fire
+    // until its results are applied.
+    ++m_activeRequests;
+    const auto generation = m_generation;
+    auto* watcher = new QFutureWatcher<SyncOutcome>(this);
+    connect(watcher, &QFutureWatcher<SyncOutcome>::finished, this,
+        [this, watcher, generation, snapshots, views] {
+            m_visibleSyncInFlight = false;
+            --m_activeRequests;
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
             }
-            for (std::size_t i = 0; i < state->plane.values.size(); ++i) {
-                if (state->plane.valid[i] == 0
-                    || !std::isfinite(state->plane.values[i])) {
-                    continue;
+            auto outcome = watcher->result();
+            const auto nowMode = static_cast<RangeMode>(
+                m_rangeMode->currentData().toInt());
+            const bool current = generation == m_generation
+                && m_viewDimension == 3 && m_dataset
+                && nowMode == RangeMode::Visible;
+            if (current && outcome.sync) {
+                const auto [globalMin, globalMax] = outcome.sync->range;
+                bool activeApplied = false;
+                for (std::size_t index = 0; index < views.size(); ++index) {
+                    auto* state = views[index];
+                    auto& update = outcome.sync->panels[index];
+                    // Apply only while the snapshot this update was computed
+                    // from is still the displayed plane (pointer identity);
+                    // a superseded panel's own arrival re-syncs.
+                    if (!update.applies
+                        || state->plane != snapshots[index].plane) {
+                        continue;
+                    }
+                    state->displayMinimum = globalMin;
+                    state->displayMaximum = globalMax;
+                    if (update.contoursRecomputed) {
+                        state->contourPolylines
+                            = std::move(update.contourPolylines);
+                    }
+                    if (!outcome.images[index].isNull()) {
+                        state->view->setImage(outcome.images[index]);
+                        // setImage clears the scene overlays; restore them.
+                        updateGridBoxes(*state);
+                        updateOverlay(*state);
+                        updateParticleOverlay(*state);
+                    }
+                    activeApplied = activeApplied || state == m_activeView;
                 }
-                const auto v = static_cast<double>(state->plane.values[i]);
-                globalMin = std::min(globalMin, v);
-                globalMax = std::max(globalMax, v);
+                if (activeApplied && m_activeView->plane->width > 0) {
+                    const auto fieldName = m_fieldSelector->currentText();
+                    const auto label = m_activeView->displayLogarithmic
+                        ? fieldName + tr(" (log)") : fieldName;
+                    m_colorBar->setLogarithmic(
+                        m_activeView->displayLogarithmic);
+                    m_colorBar->setFieldRange(label, globalMin, globalMax);
+                    const QSignalBlocker minBlocker(m_rangeMinimum);
+                    const QSignalBlocker maxBlocker(m_rangeMaximum);
+                    m_rangeMinimum->setValue(globalMin);
+                    m_rangeMaximum->setValue(globalMax);
+                }
+                // The deferred full-domain range store (see the slice-arrival
+                // completion): the union is only known here. When a rerun is
+                // queued the union is about to be recomputed with newer
+                // planes — leave the store for the rerun's completion.
+                if (m_pendingRangeStore && !m_visibleSyncRerun) {
+                    m_displayCoordinator.storeFullDomainRange(
+                        *m_pendingRangeStore, outcome.sync->range);
+                    m_pendingRangeStore.reset();
+                }
+            } else if (generation != m_generation) {
+                m_pendingRangeStore.reset();
+                m_visibleSyncRerun = false;
+            }
+            updateDiagnostics();
+            watcher->deleteLater();
+            if (m_visibleSyncRerun) {
+                m_visibleSyncRerun = false;
+                syncVisibleRanges();
+            }
+            if (m_activeRequests == 0) {
+                emit interactiveSlicesSettled();
+            }
+        });
+    watcher->setFuture(QtConcurrent::run([cachedRange, snapshots,
+        logarithmic = m_logarithmic->isChecked(),
+        contourMode = isContourMode(m_displayMode),
+        contourCount = m_contourCount, palette = m_palette] {
+        std::array<DisplayCoordinator::PanelSyncInput, 3> inputs;
+        for (std::size_t index = 0; index < snapshots.size(); ++index) {
+            const auto& snapshot = snapshots[index];
+            inputs[index] = {snapshot.plane.get(),
+                snapshot.contourFinePlane.get(), snapshot.contourFineFactor,
+                snapshot.logarithmic, snapshot.outputSize};
+        }
+        SyncOutcome outcome;
+        outcome.sync = DisplayCoordinator::renderPanelsToSharedRange(
+            cachedRange, inputs, logarithmic, contourMode, contourCount,
+            palette);
+        if (outcome.sync) {
+            for (std::size_t index = 0; index < inputs.size(); ++index) {
+                const auto& image = outcome.sync->panels[index].image;
+                if (image.valid() && image.width > 0) {
+                    outcome.images[index] = displayImageFor(image);
+                }
             }
         }
-    }
-    if (!std::isfinite(globalMin) || !std::isfinite(globalMax)) {
-        return;
-    }
-    if (globalMin == globalMax) {
-        if (logarithmic && globalMin > 0.0) {
-            globalMin /= 1.0 + 1.0e-6;
-            globalMax *= 1.0 + 1.0e-6;
-        } else {
-            const auto pad = std::max(std::abs(globalMin), 1.0) * 1.0e-6;
-            globalMin -= pad;
-            globalMax += pad;
-        }
-    }
-    for (auto* state : views) {
-        if (state->plane.width <= 0 || state->plane.height <= 0) {
-            continue;
-        }
-        state->displayMinimum = globalMin;
-        state->displayMaximum = globalMax;
-        auto image = renderScalarPlane(state->plane, ScalarRenderSettings{
-            .minimum = globalMin,
-            .maximum = globalMax,
-            .logarithmic = state->displayLogarithmic,
-            .palette = &m_palette
-        });
-        if (!image.valid()) {
-            continue;
-        }
-        const QImage wrapped(
-            reinterpret_cast<const uchar*>(image.rgba.data()),
-            image.width, image.height, image.strideBytes,
-            QImage::Format_ARGB32);
-        state->view->setImage(verticallyFlippedCopy(wrapped));
-    }
-    // setImage clears grid boxes and vector/contour overlays; restore them.
-    for (auto* state : views) {
-        if (state->plane.width > 0 && state->plane.height > 0) {
-            updateGridBoxes(*state);
-            updateOverlay(*state);
-        }
-    }
-    if (m_activeView && m_activeView->plane.width > 0) {
-        const auto fieldName = m_fieldSelector->currentText();
-        const auto label = m_activeView->displayLogarithmic
-            ? fieldName + tr(" (log)") : fieldName;
-        m_colorBar->setLogarithmic(m_activeView->displayLogarithmic);
-        m_colorBar->setFieldRange(label, globalMin, globalMax);
-        if (rangeMode != RangeMode::User) {
-            const QSignalBlocker minBlocker(m_rangeMinimum);
-            const QSignalBlocker maxBlocker(m_rangeMaximum);
-            m_rangeMinimum->setValue(globalMin);
-            m_rangeMaximum->setValue(globalMax);
-        }
-    }
+        return outcome;
+    }));
 }
 
 void MainWindow::choosePlotfileSequence()
@@ -4615,6 +4876,11 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
     setPlaybackMode(PlaybackMode::None);
     closeSequence();
     resetRangeState();
+    m_particleStopSource.request_stop();
+    m_particleSamples.clear();
+    m_selectedParticleSpecies.clear();
+    m_particleSelectionInitialized = false;
+    ++m_particleGeneration;
 
     auto sorted = frames;
     std::sort(sorted.begin(), sorted.end(),
@@ -4632,9 +4898,7 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
         return;
     }
 
-    m_sequenceFrames = std::move(sorted);
-    m_animationPanel->setSequenceFrameCount(
-        static_cast<int>(m_sequenceFrames.size()));
+    m_animationPanel->setSequenceFrameCount(static_cast<int>(sorted.size()));
     m_animationPanel->setSequenceVisible(true);
     updateAnimationDockVisibility();
     // Line plot curves are snapshots of the previous dataset; drop the window.
@@ -4643,7 +4907,7 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
     if (linePlotWindow != nullptr) {
         linePlotWindow->close();
     }
-    goToSequenceFrame(0);
+    m_sequenceController->open(std::move(sorted));
 }
 
 void MainWindow::closeSequence()
@@ -4651,10 +4915,7 @@ void MainWindow::closeSequence()
     if (m_playbackMode == PlaybackMode::Sequence) {
         setPlaybackMode(PlaybackMode::None);
     }
-    discardPrefetch();
-    m_sequenceFrames.clear();
-    m_sequenceIndex = -1;
-    m_sequenceInFlight = false;
+    m_sequenceController->close();
     m_animationPanel->setSequenceVisible(false);
     updateAnimationDockVisibility();
 }
@@ -4664,7 +4925,7 @@ void MainWindow::updateAnimationDockVisibility()
     // The Animation panel hosts the 3-D slice-sweep controls and the
     // plotfile-sequence controls. Keep it visible only when one of those
     // applies; otherwise it is dead space.
-    const auto sequenceActive = !m_sequenceFrames.empty();
+    const auto sequenceActive = m_sequenceController->hasSequence();
     const auto threeD = m_dataset != nullptr
         && m_dataset->metadata().dimension == 3;
     m_animationDock->setVisible(sequenceActive || threeD);
@@ -4672,161 +4933,20 @@ void MainWindow::updateAnimationDockVisibility()
 
 void MainWindow::stepSequence(int direction)
 {
-    if (m_sequenceFrames.empty()) {
-        return;
-    }
-    goToSequenceFrame(m_sequenceIndex + direction);
+    m_sequenceController->step(direction);
 }
 
-void MainWindow::goToSequenceFrame(int index)
+void MainWindow::goToSequenceFrame(int index, bool forceRestart)
 {
-    if (m_sequenceFrames.empty()) {
-        return;
-    }
-    const auto count = static_cast<int>(m_sequenceFrames.size());
-    // Both steps and playback wrap around the ends of the sequence.
-    index = ((index % count) + count) % count;
-    if (m_sequenceInFlight && index == m_sequenceIndex) {
-        return;
-    }
-    // Cancel the current dataset's in-flight work, exactly like opening a
-    // fresh dataset does, but keep the view state (field, level, range,
-    // log, palette, zoom, slice positions) for the next frame.
-    const std::array<PlaneViewState*, 4> states{
-        &m_view2d, &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
-    for (auto* state : states) {
-        state->stopSource.request_stop();
-        ++state->sliceGeneration;
-    }
-    m_initialStopSource.request_stop();
-    m_linePlotStopSource.request_stop();
-    m_pendingAllViews = false;
-    m_pendingViews.clear();
-    m_sliceDebounce->stop();
-    // The dataset window shows the previous frame's raw values; drop it.
-    closeDatasetWindow();
-    // Line plot curves are snapshots of this dataset; drop the window so its
-    // title and curves do not go stale across the frame switch.
-    auto* linePlotWindow = m_linePlotWindow;
-    m_linePlotWindow = nullptr;
-    if (linePlotWindow != nullptr) {
-        linePlotWindow->close();
-    }
-    const auto generation = ++m_generation;
-    m_sequenceIndex = index;
-    m_sequenceInFlight = true;
-    m_frameTimer.start();
-    m_datasetPath = m_sequenceFrames[static_cast<std::size_t>(index)];
-    m_animationPanel->setSequenceFrame(index);
-
-    // A still-valid prefetch of this frame is consumed instead of loading
-    // again; anything else in the slot is cancelled and dropped.
-    if (m_prefetched && m_prefetched->frameIndex == index
-        && m_prefetched->specGeneration == m_specGeneration) {
-        auto prefetched = std::move(*m_prefetched);
-        m_prefetched.reset();
-        discardPrefetch();
-        finishFrameLoad(std::move(prefetched.result), prefetched.defaultPositions);
-        return;
-    }
-    discardPrefetch();
-    startFrameLoad(index, generation);
-}
-
-void MainWindow::startFrameLoad(int index, std::uint64_t generation)
-{
-    auto spec = buildFrameSpec();
-    const auto defaultPositions = spec.defaultPositions;
-    const auto path = m_sequenceFrames[static_cast<std::size_t>(index)];
-    const auto datasetId = DatasetId{
-        sequenceDatasetIdBase + ++m_sequenceDatasetCounter};
-    m_initialStopSource = StopSource{};
-    const auto cancellation = m_initialStopSource.get_token();
-    ++m_activeRequests;
-    statusBar()->showMessage(tr("Loading frame %1...").arg(
-        QString::fromStdString(path.filename().string())));
-    updateDiagnostics();
-
-    auto* watcher = new QFutureWatcher<InitialSliceResult>(this);
-    connect(watcher, &QFutureWatcher<InitialSliceResult>::finished, this,
-        [this, watcher, generation, index, defaultPositions] {
-            --m_activeRequests;
-            try {
-                auto result = watcher->result();
-                if (generation == m_generation && index == m_sequenceIndex) {
-                    finishFrameLoad(std::move(result), defaultPositions);
-                } else {
-                    ++m_staleResults;
-                }
-            } catch (const std::exception& error) {
-                if (generation == m_generation && index == m_sequenceIndex) {
-                    m_sequenceInFlight = false;
-                    statusBar()->showMessage(tr("Frame load failed"));
-                    // During animation export the failure is reported by the
-                    // export handler (endExportAnimation); avoid a second dialog.
-                    const bool wasExporting = m_exportAnim.active;
-                    emit sequenceFrameFailed();
-                    if (!wasExporting) {
-                        QMessageBox::critical(this, tr("Cannot load frame"),
-                            exceptionMessage(error));
-                    }
-                } else {
-                    ++m_staleResults;
-                }
-            }
-            updateDiagnostics();
-            watcher->deleteLater();
-        });
-    watcher->setFuture(QtConcurrent::run(
-        [path, datasetId, spec = std::move(spec), cancellation] {
-        return executeFrameLoad(path, datasetId, spec, cancellation);
-    }));
-}
-
-void MainWindow::finishFrameLoad(InitialSliceResult result, bool defaultPositions)
-{
-    try {
-        displayFrameResult(result, defaultPositions);
-    } catch (const std::exception& error) {
-        m_sequenceInFlight = false;
-        statusBar()->showMessage(tr("Frame load failed"));
-        // During animation export the failure is reported by the export
-        // handler (endExportAnimation); avoid a second dialog.
-        const bool wasExporting = m_exportAnim.active;
-        emit sequenceFrameFailed();
-        if (!wasExporting) {
-            QMessageBox::critical(this, tr("Cannot load frame"),
-                exceptionMessage(error));
-        }
-        updateDiagnostics();
-        return;
-    }
-    m_sequenceInFlight = false;
-    m_lastFrameSwitchMs = m_frameTimer.elapsed();
-    m_animationPanel->setSequenceFrame(m_sequenceIndex);
-    m_animationPanel->setSequenceInfo(
-        QString::fromStdString(m_datasetPath.filename().string()),
-        m_openMetadata->time);
-    updateDiagnostics();
-    emit sequenceFrameDisplayed(m_sequenceIndex);
-    // Bounded low-priority prefetch of the next frame: queued behind the
-    // display update, and re-validated when it runs so a frame jump in the
-    // meantime does not start obsolete I/O.
-    const auto displayedIndex = m_sequenceIndex;
-    QTimer::singleShot(0, this, [this, displayedIndex] {
-        if (m_sequenceFrames.empty() || m_sequenceInFlight
-            || m_sequenceIndex != displayedIndex) {
-            return;
-        }
-        const auto count = static_cast<int>(m_sequenceFrames.size());
-        startPrefetch((displayedIndex + 1) % count);
-    });
+    m_sequenceController->goToFrame(index, forceRestart);
 }
 
 void MainWindow::displayFrameResult(InitialSliceResult& result,
     bool defaultPositions)
 {
     m_dataset = result.dataset;
+    m_particleSamples = std::move(result.particles);
+    configureParticleControls(true);
     const auto& metadata = m_dataset->metadata();
     m_viewDimension = metadata.dimension;
 
@@ -4839,7 +4959,7 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     showMetadata(frameMetadata, m_datasetPath);
 
     configureSequenceControls(defaultPositions);
-    if (selectCacheFallbackLevel(m_levelSelector, result)) {
+    if (selectCacheFallbackLevel(m_levelSelector, result.cacheFallbackToLevel)) {
         configureSlicePositionControls();
         updateRangeModeAvailability();
         syncMenuChecks();
@@ -4858,7 +4978,9 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     m_cacheEvictions = cache.evictions;
     validateVectorMode();
     if (result.cacheFallbackToLevel >= 0) {
-        statusBar()->showMessage(cacheFallbackMessage(result));
+        statusBar()->showMessage(cacheFallbackMessage(
+            *result.dataset, result.cacheFallbackFromLevel,
+            result.cacheFallbackToLevel));
     }
 }
 
@@ -4896,6 +5018,7 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
     // 3-D keeps the user's slice positions (clamped into the new domain);
     // the first 3-D frame of a session starts at the domain midpoints.
     const auto isThreeDimensional = metadata.dimension == 3;
+    m_syncRubberBandZoomAction->setVisible(isThreeDimensional);
     if (isThreeDimensional) {
         const auto domain = datasetSampleBounds(metadata);
         for (std::size_t axis = 0; axis < 3; ++axis) {
@@ -4920,20 +5043,7 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
         setActiveView(isThreeDimensional ? m_planeViews[2] : m_view2d);
     }
 
-    m_controlsReady = true;
-    m_fieldSelector->setEnabled(true);
-    m_levelSelector->setEnabled(true);
-    m_rangeMode->setEnabled(true);
-    m_logarithmic->setEnabled(true);
-    m_boxesAction->setEnabled(true);
-    const auto userRange = static_cast<RangeMode>(
-        m_rangeMode->currentData().toInt()) == RangeMode::User;
-    m_rangeMinimum->setEnabled(userRange);
-    m_rangeMaximum->setEnabled(userRange);
-    rebuildLevelMenu();
-    m_levelMenu->setEnabled(true);
-    m_contoursAction->setEnabled(true);
-    m_datasetAction->setEnabled(true);
+    enableDatasetControls(metadata);
     m_exportAnimationAction->setEnabled(true);
     rebuildVariableMenu();
     ensureVectorFieldDefaults();
@@ -4974,9 +5084,8 @@ void MainWindow::resetRangeState()
 {
     m_fieldRanges.clear();
     m_trackedField = 0;
-    m_fullDomainRange.reset();
-    m_fullDomainRangeField = {};
-    m_fullDomainRangeMaxLevel = -1;
+    m_displayCoordinator.invalidateRangeCache();
+    m_pendingRangeStore.reset();
     const QSignalBlocker modeBlocker(m_rangeMode);
     const QSignalBlocker minBlocker(m_rangeMinimum);
     const QSignalBlocker maxBlocker(m_rangeMaximum);
@@ -5069,66 +5178,18 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     // starts the new dataset at its domain midpoints.
     spec.defaultPositions = m_viewDimension != 3;
     spec.slicePositions = m_slicePosition3d;
+    spec.particleSelectionInitialized = m_particleSelectionInitialized;
+    if (m_particleSelectionInitialized) {
+        spec.particleSpecies = m_selectedParticleSpecies;
+    }
+    spec.particleFraction = m_particleFraction;
+    spec.particleSeed = m_particleSeed;
     const auto views = currentViews();
     spec.visibleRegions.reserve(views.size());
-    spec.outputSizes.reserve(views.size());
     for (const auto* state : views) {
         spec.visibleRegions.push_back(state->visibleRegion);
     }
     return spec;
-}
-
-void MainWindow::startPrefetch(int frameIndex)
-{
-    // Single bounded slot: cancel and drop whatever prefetch came before.
-    discardPrefetch();
-    auto spec = buildFrameSpec();
-    const auto defaultPositions = spec.defaultPositions;
-    const auto specGeneration = m_specGeneration;
-    const auto generation = m_prefetchGeneration;
-    const auto path = m_sequenceFrames[static_cast<std::size_t>(frameIndex)];
-    const auto datasetId = DatasetId{
-        sequenceDatasetIdBase + ++m_sequenceDatasetCounter};
-    m_prefetchStopSource = StopSource{};
-    const auto cancellation = m_prefetchStopSource.get_token();
-    ++m_activeRequests;
-    updateDiagnostics();
-
-    auto* watcher = new QFutureWatcher<InitialSliceResult>(this);
-    connect(watcher, &QFutureWatcher<InitialSliceResult>::finished, this,
-        [this, watcher, generation, frameIndex, specGeneration,
-            defaultPositions] {
-            --m_activeRequests;
-            try {
-                auto result = watcher->result();
-                if (generation == m_prefetchGeneration
-                    && !m_sequenceFrames.empty()) {
-                    m_prefetched = PrefetchedFrame{frameIndex, specGeneration,
-                        defaultPositions, std::move(result)};
-                } else {
-                    ++m_staleResults;
-                }
-            } catch (const std::exception&) {
-                // Prefetch failures stay silent: reaching the frame loads it
-                // through the normal path and reports any error then.
-                if (generation != m_prefetchGeneration) {
-                    ++m_staleResults;
-                }
-            }
-            updateDiagnostics();
-            watcher->deleteLater();
-        });
-    watcher->setFuture(QtConcurrent::run(
-        [path, datasetId, spec = std::move(spec), cancellation] {
-        return executeFrameLoad(path, datasetId, spec, cancellation);
-    }));
-}
-
-void MainWindow::discardPrefetch()
-{
-    m_prefetchStopSource.request_stop();
-    ++m_prefetchGeneration;
-    m_prefetched.reset();
 }
 
 void MainWindow::stepSweep(int direction)
@@ -5167,7 +5228,7 @@ void MainWindow::toggleSequencePlayback()
         setPlaybackMode(PlaybackMode::None);
         return;
     }
-    if (m_sequenceFrames.size() < 2) {
+    if (m_sequenceController->frameCount() < 2) {
         return;
     }
     setPlaybackMode(PlaybackMode::Sequence);
@@ -5205,21 +5266,40 @@ void MainWindow::playbackTick()
         return;
     }
     if (m_playbackMode == PlaybackMode::Sequence) {
-        if (m_sequenceFrames.size() < 2) {
+        if (m_sequenceController->frameCount() < 2) {
             setPlaybackMode(PlaybackMode::None);
             return;
         }
         // Skip the tick while the previous frame is still loading.
-        if (m_sequenceInFlight) {
+        if (m_sequenceController->inFlight()) {
             return;
         }
-        goToSequenceFrame(m_sequenceIndex + 1);
+        m_sequenceController->step(1);
     }
 }
 
 void MainWindow::applySpeed()
 {
     m_playbackTimer->setInterval(m_animationPanel->frameDelayMs());
+}
+
+void MainWindow::reportBackgroundError(const QString& message)
+{
+    // Non-modal: background-operation failures append to the Diagnostics dock
+    // and set a status-bar message instead of a modal dialog that disables the
+    // window. Suppressed while closing (stage 1 also guards the handlers).
+    if (m_closing) {
+        return;
+    }
+    qWarning("%s", message.toUtf8().constData());
+    m_backgroundErrors.append(message);
+    constexpr int maximumErrors = 50;
+    while (m_backgroundErrors.size() > maximumErrors) {
+        m_backgroundErrors.removeFirst();
+    }
+    statusBar()->showMessage(message.section(QLatin1Char('\n'), 0, 0));
+    m_diagnosticsDock->setVisible(true);
+    updateDiagnostics();
 }
 
 void MainWindow::updateDiagnostics()
@@ -5242,10 +5322,14 @@ void MainWindow::updateDiagnostics()
             .arg(m_cacheResidentBytes)
             .arg(m_cachePinnedBytes)
             .arg(m_cacheEvictions)
-            .arg(m_lastFrameSwitchMs);
+            .arg(m_sequenceController->lastFrameSwitchMs());
     for (const auto& line : m_probeLines) {
         text += QLatin1Char('\n');
         text += line;
+    }
+    for (const auto& error : m_backgroundErrors) {
+        text += QLatin1Char('\n');
+        text += tr("background error: %1").arg(error);
     }
     m_diagnostics->setPlainText(text);
 }

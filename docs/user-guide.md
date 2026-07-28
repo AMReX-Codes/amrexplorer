@@ -38,6 +38,12 @@ You can also start without a path and use the File menu:
 AMReXplorer displays 2-D and 3-D data whose FAB payloads use IEEE 32-bit or IEEE
 64-bit floating-point storage.
 
+Plotfiles written for non-Cartesian coordinate systems (cylindrical RZ,
+spherical) open normally, but their data is displayed on a Cartesian grid:
+an RZ dataset appears as its r-z plane with no axisymmetric weighting or
+revolution. The coordinate system recorded in the plotfile Header is not
+otherwise interpreted.
+
 ## User interface overview
 
 ![AMReXplorer displaying a three-dimensional plotfile](images/user-guide-overview.png)
@@ -46,7 +52,9 @@ The main controls are:
 
 1. **Field and Level** select the plotted variable and AMR composition.
 2. **3D Position** selects the sample index of each orthogonal slice plane.
-3. **Scale** fits the data to a panel or uses a fixed integer zoom.
+3. **Scale** resets the zoom to the whole domain (Reset Zoom), uses a fixed
+   integer zoom, and controls whether rubber-band zoom is synchronized across
+   3-D panels.
 4. **Range, Log, and Palette** control the mapping from values to colors.
 5. **Slice panels** display the XY, XZ, and YZ planes for a 3-D dataset.
 6. **Isometric view** shows the domain, grid boxes, and current slice planes.
@@ -85,16 +93,17 @@ MultiFab.
    **Variable** menu.
 2. Choose **Finest available** to composite AMR levels, or choose an exact
    level when you need to inspect that level alone.
-3. Left-drag around a region to zoom into it. Use the mouse wheel for
-   additional display zoom.
+3. Left-drag around a region to zoom into it. **Scale > Sync Rubber-band
+   Zoom** applies that normalized region to every 3-D panel and is enabled by
+   default. Use the mouse wheel for additional panel-local display zoom.
 4. Left-click a sample to inspect its coordinates, indices, level, and value in
    the status area.
 5. Select an appropriate **Range** mode and palette.
 6. Add grid boxes, contours, vectors, or line plots as needed.
 7. Use **File > Export Image...** to save the current view.
 
-Double-click a view, press **0**, or select **Fit** to return to the full
-domain.
+Double-click a view, press **0**, or select **Reset Zoom** to return to the
+full domain.
 
 ## Navigating and inspecting data
 
@@ -103,11 +112,11 @@ The active panel is the one most recently clicked or manipulated.
 | Input | Action |
 | --- | --- |
 | Left click | Probe the value under the cursor |
-| Left drag | Zoom to a rectangular subregion |
+| Left drag | Zoom to a rectangular subregion; optionally sync all 3-D panels |
 | Shift+left drag | Pan the view |
 | Arrow keys | Pan the active panel by 5 percent |
-| Mouse wheel | Zoom in or out |
-| Double click | Fit the view to the window |
+| Mouse wheel | Zoom only the panel under the pointer |
+| Double click | Reset the zoom to the whole domain |
 | Shift+middle click | Plot a horizontal line through the selected sample |
 | Shift+right click | Plot a vertical line through the selected sample |
 | Right drag | Plot a line; the drag direction chooses the orientation |
@@ -122,7 +131,7 @@ the visible physical region. Values are grouped by AMR level. Clicking a
 value highlights the corresponding sample in the main view.
 
 Choose **View > Number Format...** to set the `printf`-style format used for
-numeric readouts. The default is `%7.5f`.
+numeric readouts. The default is `%g`.
 
 ## Working with 3-D data
 
@@ -267,7 +276,7 @@ Independent windows have independent datasets, caches, and view state.
 | Shortcut | Action |
 | --- | --- |
 | B | Toggle AMR grid boxes |
-| 0 | Fit to the window |
+| 0 | Reset the zoom to the whole domain |
 | 1 through 6 | Use fixed scales from 1x through 32x |
 | Ctrl+0 | Composite the finest available level |
 | Ctrl+1 through Ctrl+9 | Composite levels 0 through N |

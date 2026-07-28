@@ -201,11 +201,75 @@ int main()
     require(missingCompanionRejected,
         "headerless FAB without a companion header lacked a clear error");
 
+    // A raw FAB whose inline header promises a two-point payload but the file
+    // supplies only one value: the size guard must reject it as truncated
+    // rather than let the block reader run past end-of-file.
+    const auto truncatedPath = root / "truncated_fab";
+    {
+        std::ofstream output(truncatedPath, std::ios::binary);
+        output.write(doubleHeader.data(),
+            static_cast<std::streamsize>(doubleHeader.size()));
+        const double onlyValue = 1.25;  // header declares two points; write one
+        output.write(reinterpret_cast<const char*>(&onlyValue),
+            static_cast<std::streamsize>(sizeof(onlyValue)));
+    }
+    auto truncatedRejected = false;
+    try {
+        [[maybe_unused]] const auto records = amrvis::scanFabFile(truncatedPath);
+    } catch (const amrvis::MetadataReadError& error) {
+        truncatedRejected =
+            std::string(error.what()).find("truncated FAB payload")
+            != std::string::npos;
+    }
+    require(truncatedRejected,
+        "a raw FAB with a short payload was not rejected as truncated");
+
+    // The same guard on the headerless (companion-header) path: the _H places a
+    // second FAB at byte 160, but the _D file stops there, so that record's
+    // payload runs off the end.
+    const auto truncatedHeaderlessPath = root / "trunc_headerless_D_00001";
+    const auto truncatedHeaderlessHeader = root / "trunc_headerless_H";
+    {
+        std::ofstream output(truncatedHeaderlessPath, std::ios::binary);
+        std::vector<double> values(20);  // only the first record's 160 bytes
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            values[index] = static_cast<double>(index);
+        }
+        output.write(reinterpret_cast<const char*>(values.data()),
+            static_cast<std::streamsize>(values.size() * sizeof(double)));
+    }
+    {
+        std::ofstream output(truncatedHeaderlessHeader, std::ios::binary);
+        output <<
+            "2\n1\n1\n(1,2)\n"
+            "(2 0\n"
+            "((0,0) (1,0) (0,0))\n"
+            "((4,0) (5,0) (0,0))\n"
+            ")\n"
+            "2\n"
+            "FabOnDisk: trunc_headerless_D_00001 0\n"
+            "FabOnDisk: trunc_headerless_D_00001 160\n"
+            "\n"
+            "((8, (64 11 52 0 1 12 0 1023)),"
+                "(8, (8 7 6 5 4 3 2 1)))\n";
+    }
+    auto truncatedHeaderlessRejected = false;
+    try {
+        [[maybe_unused]] const auto records =
+            amrvis::scanFabFile(truncatedHeaderlessPath);
+    } catch (const amrvis::MetadataReadError& error) {
+        truncatedHeaderlessRejected =
+            std::string(error.what()).find("truncated headerless FAB payload")
+            != std::string::npos;
+    }
+    require(truncatedHeaderlessRejected,
+        "a headerless FAB whose companion places data past EOF was not rejected");
+
     amrvis::DatasetMetadata source;
     source.dimension = 2;
     source.finestLevel = 0;
     source.fields.push_back(
-        {"value", 1, amrvis::Centering::Cell, {"value"}});
+        {"value", amrvis::Centering::Cell, {"value"}});
     source.levels.resize(1);
     auto& level = source.levels.front();
     level.domain = {{{0, 0, 0}}, {{1, 1, 0}}, {{0, 0, 0}}};
@@ -224,6 +288,35 @@ int main()
         && fab.metadata->levels[0].domain.lower[1] == -2
         && fab.metadata->levels[0].domain.upper[1] == 3,
         "MultiFab ghost points were not included in selected FAB mode");
+
+    // makeSelectedFabMetadata's version-1 branch takes the selected FAB's box
+    // from its own inline header (via inspectFabRecord) instead of growing the
+    // source box by the level ghost width (the v2 path checked above). Point a
+    // v1 source at the raw FAB written at the top of this test — inline box
+    // ((0,0) (1,0)) — but give it a ghost width that would grow to a *different*
+    // box, so this can only pass if the inline header supplied the domain.
+    amrvis::DatasetMetadata v1Source;
+    v1Source.dimension = 2;
+    v1Source.finestLevel = 0;
+    v1Source.fields.push_back(
+        {"value", amrvis::Centering::Cell, {"value"}});
+    v1Source.levels.resize(1);
+    auto& v1Level = v1Source.levels.front();
+    v1Level.domain = {{{0, 0, 0}}, {{1, 1, 0}}, {{0, 0, 0}}};
+    v1Level.boxes.push_back(v1Level.domain);
+    v1Level.blocks.push_back({v1Level.domain, "raw_fabs", 0, std::nullopt});
+    v1Level.ghostWidth = {{1, 2, 0}};   // v2 would grow this to ((-1,-2) (2,3))
+    v1Level.storedComponents = 1;
+    v1Level.visMfHeaderVersion = 1;
+    const auto v1Fab = amrvis::makeSelectedFabMetadata(v1Source, 0, 0, root);
+    require(v1Fab.metadata->levels[0].domain.lower[0] == 0
+        && v1Fab.metadata->levels[0].domain.upper[0] == 1
+        && v1Fab.metadata->levels[0].domain.lower[1] == 0
+        && v1Fab.metadata->levels[0].domain.upper[1] == 0,
+        "v1 selected FAB did not take its box from the inline FAB header");
+    require(v1Fab.metadata->levels[0].blocks[0].box
+                == v1Fab.metadata->levels[0].domain,
+        "v1 selected FAB block box disagrees with its domain");
 
     std::filesystem::remove_all(root);
     return 0;

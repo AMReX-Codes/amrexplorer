@@ -9,6 +9,7 @@
 #include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/query/detail/BlockLookup.hpp>
 
 #include <algorithm>
 #include <array>
@@ -61,44 +62,10 @@ inline std::array<int, 2> inPlaneAxes(int dimension, int normalAxis) noexcept
     return axes;
 }
 
-inline bool intersects(const IntBox& left, const IntBox& right,
-    int dimension) noexcept
-{
-    for (int axis = 0; axis < dimension; ++axis) {
-        const auto i = static_cast<std::size_t>(axis);
-        if (left.upper[i] < right.lower[i] || right.upper[i] < left.lower[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// Offset into a FAB's component-major values (first axis fastest); the point
-// must lie inside box. Mirrors SliceQuery's valueOffset without the overflow
-// checks: the caller only passes points of the intersected valid box.
-inline std::size_t fabValueOffset(const IntBox& box, int i, int j, int k,
-    int dimension) noexcept
-{
-    const auto extent = [&box](std::size_t axis) {
-        return static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(box.upper[axis]) - box.lower[axis] + 1);
-    };
-    const auto nx = extent(0);
-    const auto x = static_cast<std::uint64_t>(
-        static_cast<std::int64_t>(i) - box.lower[0]);
-    if (dimension == 1) {
-        return static_cast<std::size_t>(x);
-    }
-    const auto ny = extent(1);
-    const auto y = static_cast<std::uint64_t>(
-        static_cast<std::int64_t>(j) - box.lower[1]);
-    if (dimension == 2) {
-        return static_cast<std::size_t>(x + nx * y);
-    }
-    const auto z = static_cast<std::uint64_t>(
-        static_cast<std::int64_t>(k) - box.lower[2]);
-    return static_cast<std::size_t>(x + nx * (y + ny * z));
-}
+// The shared overflow-checked helpers (this header previously carried its
+// own unchecked fabValueOffset variant — the drift the consolidation fixed).
+using amrvis::detail::intersects;
+using amrvis::detail::valueOffset;
 
 } // namespace dataset_extract_detail
 
@@ -238,7 +205,6 @@ inline std::size_t fabValueOffset(const IntBox& box, int i, int j, int k,
         const auto iUpper = std::min(validBox.upper[xAxis], extract.upper[0]);
         const auto jLower = std::max(validBox.lower[yAxis], extract.lower[1]);
         const auto jUpper = std::min(validBox.upper[yAxis], extract.upper[1]);
-        const auto k = metadata.dimension == 3 ? extract.sliceIndex : 0;
         for (auto j = jLower; j <= jUpper; ++j) {
             if (cancellation.stop_requested()) {
                 throw ReadCancelled();
@@ -246,9 +212,20 @@ inline std::size_t fabValueOffset(const IntBox& box, int i, int j, int k,
             const auto valueY = static_cast<std::size_t>(
                 static_cast<std::int64_t>(j) - extract.lower[1]);
             for (auto i = iLower; i <= iUpper; ++i) {
-                const auto value = fab.values[
-                    dataset_extract_detail::fabValueOffset(
-                        fab.box, i, j, k, metadata.dimension)];
+                // Place the in-plane indices (i, j) and, in 3-D, the slice
+                // index at their actual axes: the FAB is laid out in global
+                // index space and a grid box need not start at the origin
+                // (finer AMR levels especially), so a positional (i, j, k)
+                // lookup is only correct for a 2-D or xy slice.
+                Int3 cell{};
+                cell[xAxis] = i;
+                cell[yAxis] = j;
+                if (metadata.dimension == 3) {
+                    cell[static_cast<std::size_t>(normalAxis)]
+                        = extract.sliceIndex;
+                }
+                const auto value = fab.values[dataset_extract_detail::valueOffset(
+                    fab.box, cell, metadata.dimension)];
                 const auto valueX = static_cast<std::size_t>(
                     static_cast<std::int64_t>(i) - extract.lower[0]);
                 const auto offset = valueX

@@ -1,4 +1,6 @@
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
+#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
+#include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/detail/VisMfIndex.hpp>
 
 #include <algorithm>
@@ -89,24 +91,42 @@ IntBox readAmrexBox(std::istream& input, int dimension, std::string_view descrip
     return box;
 }
 
-std::vector<int> parseIntegers(const std::string& line)
+using detail::parseIntegers;
+
+// Rejects a metadata-derived path that could redirect reads outside the
+// plotfile directory when joined to the plotfile root: an absolute path
+// replaces the root entirely, and a '..' component walks above it. AMReX only
+// ever writes relative names within the tree, so anything else is malformed
+// or crafted.
+void requireContainedPath(const std::string& value, std::string_view what)
 {
-    std::string numbers = line;
-    std::replace_if(numbers.begin(), numbers.end(), [](char character) {
-        return !(character >= '0' && character <= '9')
-            && character != '-' && character != '+';
-    }, ' ');
-    std::istringstream input(numbers);
-    std::vector<int> values;
-    int value = 0;
-    while (input >> value) {
-        values.push_back(value);
+    const std::filesystem::path path(value);
+    // Reject anything with a root: a root-name (drive/UNC) or a root-directory
+    // (leading separator). is_absolute() is not enough — it is platform
+    // specific, so a POSIX-style "/etc/..." reads as relative on Windows yet
+    // still escapes to the drive root when joined to the plotfile path.
+    if (value.empty() || path.has_root_name() || path.has_root_directory()) {
+        throw MetadataReadError(std::string(what)
+            + " must be a relative path inside the plotfile: '" + value + "'");
     }
-    return values;
+    for (const auto& component : path) {
+        if (component == "..") {
+            throw MetadataReadError(std::string(what)
+                + " must not contain a parent-directory component: '"
+                + value + "'");
+        }
+    }
 }
 
+// Reads a comma-separated VisMF real matrix. AMReX always writes exactly
+// expectedRows x expectedColumns (one row per box, one column per component),
+// so the claimed dimensions are checked against that before any allocation:
+// a crafted header cannot request a huge matrix and OOM the process (the
+// dimensions were previously capped only independently, then allocated in
+// full before the count was cross-checked).
 std::vector<std::vector<double>> readRealMatrix(
-    std::istream& input, std::string_view description)
+    std::istream& input, std::string_view description,
+    std::uint64_t expectedRows, std::uint64_t expectedColumns)
 {
     const auto rows = readRequired<std::uint64_t>(input, description);
     char comma = '\0';
@@ -114,9 +134,9 @@ std::vector<std::vector<double>> readRealMatrix(
         throw MetadataReadError("malformed VisMF matrix dimensions");
     }
     const auto columns = readRequired<std::uint64_t>(input, description);
-    if (rows > static_cast<std::uint64_t>(maximumGridsPerLevel)
-        || columns > static_cast<std::uint64_t>(maximumComponents)) {
-        throw MetadataReadError("VisMF matrix dimensions are outside supported bounds");
+    if (rows != expectedRows || columns != expectedColumns) {
+        throw MetadataReadError("VisMF matrix dimensions do not match the "
+            "BoxArray size and component count");
     }
 
     std::vector<std::vector<double>> matrix(
@@ -136,7 +156,8 @@ std::vector<std::vector<double>> readRealMatrix(
 } // namespace
 
 detail::VisMfIndex detail::readVisMfIndex(
-    const std::filesystem::path& headerPath, int dimension)
+    const std::filesystem::path& headerPath, int dimension,
+    StopToken cancellation)
 {
     std::error_code sizeError;
     const auto headerSize = std::filesystem::file_size(headerPath, sizeError);
@@ -183,6 +204,9 @@ detail::VisMfIndex detail::readVisMfIndex(
     const auto boxCount = static_cast<std::size_t>(boxArrayHeader.front());
     index.boxes.reserve(boxCount);
     for (std::size_t box = 0; box < boxCount; ++box) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         index.boxes.push_back(readAmrexBox(input, dimension, "VisMF BoxArray entry"));
     }
     if (readNonEmptyLine(input, "VisMF BoxArray terminator") != ")") {
@@ -196,17 +220,25 @@ detail::VisMfIndex detail::readVisMfIndex(
     index.fileNames.reserve(boxCount);
     index.fileOffsets.reserve(boxCount);
     for (std::size_t block = 0; block < boxCount; ++block) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         const auto prefix = readRequired<std::string>(input, "FabOnDisk prefix");
         if (prefix != "FabOnDisk:") {
             throw MetadataReadError("malformed FabOnDisk record");
         }
         index.fileNames.push_back(readRequired<std::string>(input, "FAB data filename"));
+        requireContainedPath(index.fileNames.back(), "FAB data filename");
         index.fileOffsets.push_back(readRequired<std::uint64_t>(input, "FAB data offset"));
     }
 
     if (index.version == 1 || index.version == 3) {
-        index.minimum = readRealMatrix(input, "per-block minima");
-        index.maximum = readRealMatrix(input, "per-block maxima");
+        index.minimum = readRealMatrix(input, "per-block minima",
+            static_cast<std::uint64_t>(boxCount),
+            static_cast<std::uint64_t>(index.components));
+        index.maximum = readRealMatrix(input, "per-block maxima",
+            static_cast<std::uint64_t>(boxCount),
+            static_cast<std::uint64_t>(index.components));
         index.hasPerBlockStatistics = true;
         if (index.minimum.size() != boxCount || index.maximum.size() != boxCount) {
             throw MetadataReadError("VisMF statistics do not match BoxArray size");
@@ -281,7 +313,7 @@ IntBox physicalBoundsToCellBox(
 } // namespace
 
 PlotfileMetadataResult PlotfileMetadataReader::read(
-    const std::filesystem::path& plotfile) const
+    const std::filesystem::path& plotfile, StopToken cancellation) const
 {
     const auto headerPath = plotfile / "Header";
     std::error_code sizeError;
@@ -295,6 +327,9 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
     if (!input) {
         throw MetadataReadError("cannot open plotfile Header '" + headerPath.string() + "'");
     }
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
+    }
 
     auto metadata = std::make_shared<DatasetMetadata>();
     const auto fileVersion = readRequired<std::string>(input, "file version");
@@ -307,7 +342,7 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
     metadata->fields.reserve(static_cast<std::size_t>(componentCount));
     for (int component = 0; component < componentCount; ++component) {
         auto name = readNonEmptyLine(input, "component name");
-        metadata->fields.push_back({name, 1, Centering::Cell, {std::move(name)}});
+        metadata->fields.push_back({name, Centering::Cell, {std::move(name)}});
     }
 
     metadata->dimension = readRequired<int>(input, "space dimension");
@@ -344,26 +379,6 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
         levelMetadata.level = static_cast<int>(level);
         levelMetadata.domain = readAmrexBox(
             input, metadata->dimension, "level domain");
-        levelMetadata.refinementRatioToNext = {{1, 1, 1}};
-    }
-    for (std::size_t level = 0; level + 1 < levelCount; ++level) {
-        for (int axis = 0; axis < metadata->dimension; ++axis) {
-            const auto i = static_cast<std::size_t>(axis);
-            const auto coarseLength =
-                static_cast<std::int64_t>(metadata->levels[level].domain.upper[i])
-                - metadata->levels[level].domain.lower[i] + 1;
-            const auto fineLength =
-                static_cast<std::int64_t>(metadata->levels[level + 1].domain.upper[i])
-                - metadata->levels[level + 1].domain.lower[i] + 1;
-            if (coarseLength <= 0 || fineLength <= 0
-                || fineLength % coarseLength != 0
-                || fineLength / coarseLength > std::numeric_limits<int>::max()) {
-                throw MetadataReadError(
-                    "level domains do not define an integral refinement ratio");
-            }
-            metadata->levels[level].refinementRatioToNext[i] =
-                static_cast<int>(fineLength / coarseLength);
-        }
     }
 
     for (auto& level : metadata->levels) {
@@ -398,6 +413,9 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
         level.step = headerStep;
         level.boxes.reserve(static_cast<std::size_t>(gridCount));
         for (int grid = 0; grid < gridCount; ++grid) {
+            if (cancellation.stop_requested()) {
+                throw ReadCancelled();
+            }
             Real3 lower;
             Real3 upper;
             for (int axis = 0; axis < metadata->dimension; ++axis) {
@@ -410,6 +428,7 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
                 level.domain.lower, level.domain.centering, metadata->dimension));
         }
         level.dataPath = readRequired<std::string>(input, "level data path");
+        requireContainedPath(level.dataPath, "plotfile level data path");
     }
 
     const auto issues = validateMetadata(*metadata);
@@ -420,9 +439,12 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
 
     MetadataReadMetrics metrics{1, headerSize, 0, 0};
     for (auto& level : metadata->levels) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         const auto dataPrefix = plotfile / level.dataPath;
         const auto indexPath = std::filesystem::path(dataPrefix.string() + "_H");
-        const auto visMf = detail::readVisMfIndex(indexPath, metadata->dimension);
+        const auto visMf = detail::readVisMfIndex(indexPath, metadata->dimension, cancellation);
         ++metrics.filesRead;
         metrics.bytesRead += visMf.bytesRead;
         if (visMf.components != componentCount) {

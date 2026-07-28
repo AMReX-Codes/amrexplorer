@@ -1,6 +1,7 @@
 #include "MainWindow.hpp"
 #include "FabSelectorDock.hpp"
 
+#include <QAction>
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
@@ -15,12 +16,18 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QStandardPaths>
+#include <QSignalBlocker>
 #include <QTableView>
 #include <QTextStream>
 #include <QTimer>
 
+#include <amrexplorer/render2d/Contours.hpp>
+
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
+#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -336,6 +343,73 @@ bool clearFabSelectorPointFilter(amrvis::qt::FabSelectorDock& selector)
             == static_cast<int>(selector.entries().size());
 }
 
+// Verifies the contour-sync smoke scenario after the re-slice batch settles.
+// The three 3-D panels were sliced at asymmetric positions, so each has its
+// own local range; Visible mode reconciles them into one shared range. The fix
+// requires every panel's contour levels to come from that shared range. We
+// check: all three panels agree on the (positive) shared range, and every
+// contour level shown in any panel is one of contourValues(shared range) --
+// which fails if a panel kept its local-range levels (the bug). A non-vacuous
+// guard ensures contours actually rendered.
+bool contourSyncMatches(amrvis::qt::MainWindow& window)
+{
+    const auto probes = window.contourViewProbesForTest();
+    if (probes.size() != 3) {
+        return false;
+    }
+    const auto within = [](double a, double b) {
+        const auto scale = std::max({1.0, std::fabs(a), std::fabs(b)});
+        return std::fabs(a - b) <= 1.0e-6 * scale;
+    };
+    // Log was requested and every slice is strictly positive, so log must have
+    // applied and all panels must agree on the shared, positive Visible range.
+    const auto& shared = probes.front();
+    for (const auto& probe : probes) {
+        if (!probe.logarithmic || !(probe.displayMinimum > 0.0)
+            || !(probe.displayMinimum < probe.displayMaximum)
+            || !within(probe.displayMinimum, shared.displayMinimum)
+            || !within(probe.displayMaximum, shared.displayMaximum)) {
+            return false;
+        }
+    }
+    std::vector<double> expected;
+    try {
+        expected = amrvis::contourValues(
+            shared.displayMinimum, shared.displayMaximum, 3, true);
+    } catch (const std::exception&) {
+        return false;
+    }
+    // Every level shown in any panel must be one of the shared-range levels;
+    // the bug leaves a panel showing its own local-range levels instead. Track
+    // which shared levels are actually drawn (map each shown level to its
+    // canonical expected index -- a well-defined membership, unlike dedup by an
+    // intransitive tolerance) so the pass is not vacuously met by empty
+    // overlays: require >= 2 shared levels drawn across >= 2 panels.
+    std::vector<bool> drawn(expected.size(), false);
+    std::size_t panelsWithLevels = 0;
+    for (const auto& probe : probes) {
+        for (const auto level : probe.contourLevels) {
+            std::size_t match = expected.size();
+            for (std::size_t i = 0; i < expected.size(); ++i) {
+                if (within(level, expected[i])) {
+                    match = i;
+                    break;
+                }
+            }
+            if (match == expected.size()) {
+                return false;  // a level not derived from the shared range
+            }
+            drawn[match] = true;
+        }
+        if (!probe.contourLevels.empty()) {
+            ++panelsWithLevels;
+        }
+    }
+    const auto sharedLevelsDrawn = static_cast<std::size_t>(
+        std::count(drawn.begin(), drawn.end(), true));
+    return panelsWithLevels >= 2 && sharedLevelsDrawn >= 2;
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -393,22 +467,318 @@ int main(int argc, char* argv[])
         });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
+        && std::string_view(argv[1]) == "--contour-sync-smoke-test") {
+        // Once the initial load lands, switch to contours in Visible+log mode
+        // with asymmetric per-panel slice positions (so the three panels have
+        // unequal local ranges), then verify their contour levels once the
+        // re-slice batch settles. See contourSyncMatches / the issue note.
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(contourSyncMatches(window) ? 0 : 1);
+                    });
+                // YZ(x)@i=3, XZ(y)@j=2, XY(z)@k=1 on the 4^3 cube q=(i+j+k)/9:
+                // local ranges [3/9,1], [2/9,8/9], [1/9,7/9] -> shared [1/9,1].
+                window.configureContourSyncForTest(
+                    3, true, {0.875, 0.625, 0.375});
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1])
+            == "--particle-visible-range-smoke-test") {
+        // A shared Visible-range reconciliation replaces all three rasters.
+        // Particle point batches must be restored after those setImage calls.
+        const std::filesystem::path path(argv[2]);
+        auto* poll = new QTimer(&window);
+        poll->setInterval(10);
+        auto attempts = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, poll](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                window.setParticleSelectionForTest({"Tracer"}, 1.0, 37);
+                poll->start();
+            });
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, &application, poll, attempts] {
+                if (++*attempts > 500) {
+                    application.exit(1);
+                    return;
+                }
+                if (window.particleSampleCountForTest() == 0
+                    || window.particleOverlayCountForTest() == 0
+                    || window.particleSeedForTest() != 37) {
+                    return;
+                }
+                poll->stop();
+                const QColor particleColor(12, 34, 56, 77);
+                window.setParticleColorForTest("Tracer", particleColor);
+                if (!window.particleOverlaysUseColorForTest(particleColor)) {
+                    application.exit(1);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application, particleColor] {
+                        application.exit(
+                            window.particleSampleCountForTest() > 0
+                                && window.particleOverlayCountForTest() > 0
+                                && window.particleSeedForTest() == 37
+                                && window.particleOverlaysUseColorForTest(
+                                    particleColor)
+                            ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+                window.enableVisibleRasterForTest();
+            });
+        QTimer::singleShot(0, &window, [&window, path] {
+            window.openDataset(path);
+        });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--raster-zoom-smoke-test") {
+        // 2-D Visible-range raster/color-bar consistency: after a full-domain
+        // Visible slice caches the range, a zoom must re-render the raster
+        // against that reused range (not the subregion's local range) so it
+        // matches the color bar. See raster-colorbar-mismatch-on-2d-visible-zoom.
+        // interactiveSlicesSettled fires twice: after the full-domain slice
+        // (phase 0 -> zoom) and after the zoom (phase 1 -> verify). phase is a
+        // shared_ptr so it outlives this branch's scope through exec().
+        const std::filesystem::path path(argv[2]);
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                const auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (!success || sync == nullptr || sync->isVisible()) {
+                    application.exit(1);
+                    return;
+                }
+                window.enableVisibleRasterForTest();
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, &application, phase] {
+                if (*phase == 0) {
+                    *phase = 1;
+                    window.zoomActiveViewForTest();
+                } else {
+                    application.exit(
+                        window.activeViewRasterMatchesDisplayRangeForTest()
+                            ? 0 : 1);
+                }
+        });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--rubber-zoom-sync-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (!success || sync == nullptr || !sync->isVisible()) {
+                    application.exit(1);
+                    return;
+                }
+                const QSignalBlocker blocker(sync);
+                sync->setChecked(true);
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(
+                            window.allViewsRubberBandZoomedForTest() ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+                window.rubberBandZoomActiveViewForTest();
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--rubber-zoom-local-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (!success || sync == nullptr) {
+                    application.exit(1);
+                    return;
+                }
+                const QSignalBlocker blocker(sync);
+                sync->setChecked(false);
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(
+                            window.rubberBandZoomedViewCountForTest() == 1
+                                ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+                window.rubberBandZoomActiveViewForTest();
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--rubber-overzoom-smoke-test") {
+        // Regression for issue #45 (over-zoom after rubber-band): on a dataset
+        // whose full-domain raster is capped at maxSliceOutputDimension, the
+        // cropped re-slice arrives at a finer pixels-per-cell density than the
+        // raster it replaces. Preserving the scene transform then shows the
+        // crop over-zoomed with part of it outside the viewport. Rubber-band
+        // the central half and require the arrived crop to be fully visible.
+        const std::filesystem::path path(argv[2]);
+        // Distinct exit codes so a failure pinpoints its stage: 2 = the load
+        // itself failed, 3 = the initial fitted raster was not fully visible,
+        // 1 = the regression (arrived crop not fully framed).
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                // Sanity: the fitted full-domain raster starts fully visible.
+                if (!window.activeViewShowsWholeImageForTest()) {
+                    application.exit(3);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(
+                            window.activeViewIsZoomedForTest()
+                                && window.activeViewShowsWholeImageForTest()
+                            ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+                window.rubberBandZoomActiveViewForTest();
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--pan-zoom-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        auto phase = std::make_shared<int>(0);
+        auto immediateScale = std::make_shared<double>(0.0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, immediateScale](bool success) {
+                auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (!success || sync == nullptr) {
+                    application.exit(1);
+                    return;
+                }
+                const QSignalBlocker blocker(sync);
+                sync->setChecked(true);
+                window.rubberBandZoomActiveViewForTest();
+                *immediateScale = window.activeViewScaleForTest();
+                // Exercise the timing window: pan before the cropped slice
+                // requested by the rubber band has settled.
+                window.panActiveViewForTest(5.0, 0.0);
+                if (std::abs(window.activeViewScaleForTest() - *immediateScale)
+                    > 1.0e-12) {
+                    application.exit(1);
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, &application, phase, immediateScale] {
+                constexpr double tolerance = 1.0e-12;
+                if ((*phase)++ == 0) {
+                    if (std::abs(window.activeViewScaleForTest()
+                            - *immediateScale)
+                        > tolerance) {
+                        application.exit(1);
+                        return;
+                    }
+                    // A valid pan from the central crop must preserve the
+                    // active panel's custom transform through the re-slice.
+                    window.setActiveViewScaleForTest(4);
+                    window.panActiveViewForTest(-5.0, 0.0);
+                    return;
+                }
+                if (std::abs(window.activeViewScaleForTest() - 4.0)
+                    > tolerance) {
+                    application.exit(1);
+                    return;
+                }
+                // The first pan reached the domain edge. Panning farther is a
+                // no-op and must not refit the panel either.
+                window.setActiveViewScaleForTest(3);
+                window.panActiveViewForTest(-5.0, 0.0);
+                application.exit(
+                    std::abs(window.activeViewScaleForTest() - 3.0)
+                            <= tolerance
+                        ? 0 : 1);
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--range-cache-smoke-test") {
+        // Regression for sequence-frame-range-cache-goes-stale: cache the
+        // full-domain Visible range on frame 0, step to frame 1 (whose field is
+        // 10x-scaled), zoom, and confirm the color bar tracks frame 1 instead
+        // of reusing frame 0's cached range. Two signals interleave, sequenced
+        // by a phase held in a shared_ptr so it outlives this branch scope.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        struct RangeCacheState { int phase = 0; double frame0Max = 0.0; };
+        auto state = std::make_shared<RangeCacheState>();
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window](int index) {
+                if (index == 0) {
+                    window.enableVisibleRasterForTest();  // cache frame 0 range
+                } else {
+                    window.zoomActiveViewForTest();        // re-slice frame 1
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, &application, state] {
+                const auto probes = window.contourViewProbesForTest();
+                if (probes.empty()) {
+                    application.exit(1);
+                    return;
+                }
+                const auto displayMax = probes.front().displayMaximum;
+                if (state->phase == 0) {
+                    state->frame0Max = displayMax;   // frame 0 full-domain max
+                    state->phase = 1;
+                    window.stepSequence(1);
+                } else {
+                    // Frame 1 is scaled 10x, so its zoomed max must far exceed
+                    // frame 0's cached max. Reusing the stale cache (the bug)
+                    // would instead leave them equal.
+                    application.exit(
+                        displayMax > 2.0 * state->frame0Max ? 0 : 1);
+                }
+            });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--raw-fab-smoke-test") {
         const std::filesystem::path path(argv[2]);
-        int phase = 0;
+        // Shared, not a block-scoped local captured by reference: the
+        // connection outlives this else-if block, and a by-reference phase
+        // is a stack-use-after-scope once main moves on (caught by the
+        // Qt-enabled ASan build).
+        auto phase = std::make_shared<int>(0);
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-            &application, [&window, &application, &phase](bool success) {
+            &application, [&window, &application, phase](bool success) {
                 auto* selector =
                     window.findChild<amrvis::qt::FabSelectorDock*>();
                 const auto valid = success && selector != nullptr
                     && selector->isVisible() && selector->entries().size() >= 2
                     && fabSelectorIsAscending(*selector)
                     && fabSelectorColumnsMatch(*selector, false)
-                    && fabSelectorPointFilterMatches(*selector, phase == 0)
+                    && fabSelectorPointFilterMatches(*selector, *phase == 0)
                     && fabRangeSelectorMatches(window);
                 if (!valid) {
                     application.exit(1);
-                } else if (phase++ == 0) {
+                } else if ((*phase)++ == 0) {
                     // The unique point match starts the FAB load.
                 } else {
                     application.exit(
@@ -420,9 +790,10 @@ int main(int argc, char* argv[])
     } else if (argc == 3
         && std::string_view(argv[1]) == "--multifab-fab-smoke-test") {
         const std::filesystem::path path(argv[2]);
-        int phase = 0;
+        // Shared for the same lifetime reason as the raw-fab branch above.
+        auto phase = std::make_shared<int>(0);
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-            &application, [&window, &application, &phase](bool success) {
+            &application, [&window, &application, phase](bool success) {
                 auto* selector =
                     window.findChild<amrvis::qt::FabSelectorDock*>();
                 if (!success || selector == nullptr
@@ -430,13 +801,13 @@ int main(int argc, char* argv[])
                     || !fabSelectorIsAscending(*selector)
                     || !fabSelectorColumnsMatch(*selector, true)
                     || !fabSelectorPointFilterMatches(
-                        *selector, phase == 0)) {
+                        *selector, *phase == 0)) {
                     application.exit(1);
                     return;
                 }
-                if (phase == 0) {
-                    ++phase;
-                } else if (phase == 1) {
+                if (*phase == 0) {
+                    ++*phase;
+                } else if (*phase == 1) {
                     auto* back = selector->findChild<QPushButton*>(
                         QStringLiteral("fabBackButton"));
                     if (back == nullptr || !back->isVisible()
@@ -445,7 +816,7 @@ int main(int argc, char* argv[])
                         application.exit(1);
                         return;
                     }
-                    ++phase;
+                    ++*phase;
                     QTimer::singleShot(0, back, &QPushButton::click);
                 } else {
                     const auto* back = selector->findChild<QPushButton*>(
@@ -456,6 +827,91 @@ int main(int argc, char* argv[])
             });
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--fab-zoom-smoke-test") {
+        // Regression for fab-round-trip-loses-visible-region: zoom the MultiFab
+        // slice, drill into a FAB, go back, and confirm the restored MultiFab
+        // view still holds the zoom. Without the fix the round-trip resets it to
+        // full domain. initialSliceFinished fires on each open (MultiFab, FAB,
+        // restored MultiFab); interactiveSlicesSettled fires once for the zoom.
+        // A shared phase sequences the two signals across this branch's scope.
+        const std::filesystem::path path(argv[2]);
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, phase](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                if (*phase == 0) {
+                    *phase = 1;
+                    window.zoomActiveViewForTest();       // zoom the MultiFab
+                } else if (*phase == 2) {
+                    *phase = 3;
+                    auto* back = window.findChild<QPushButton*>(
+                        QStringLiteral("fabBackButton"));
+                    if (back == nullptr) {
+                        application.exit(1);
+                        return;
+                    }
+                    QTimer::singleShot(0, back, &QPushButton::click);  // go back
+                } else if (*phase == 3) {
+                    application.exit(
+                        window.activeViewIsZoomedForTest() ? 0 : 1);
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, phase] {
+                if (*phase == 1) {
+                    *phase = 2;
+                    window.viewFabForTest(0);             // drill into FAB 0
+                }
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--cache-budget-smoke-test") {
+        // Regression for cache-budget-exceeded-hard-fails-after-load: load a
+        // 2-D dataset at finest, shrink the cache budget just below the finest
+        // working set, then switch field to force a non-cache finest re-slice
+        // that overflows the budget. With the fix the slice degrades to a lower
+        // composite level (the level combo drops from "Finest available", -1);
+        // without it the slice hard-fails and the level is unchanged.
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                auto* levels = window.findChild<QComboBox*>(
+                    QStringLiteral("levelSelector"));
+                auto* fields = window.findChild<QComboBox*>(
+                    QStringLiteral("fieldSelector"));
+                if (levels == nullptr || fields == nullptr
+                    || fields->count() < 2
+                    || levels->currentData().toInt() != -1) {
+                    application.exit(1);  // expected finest (-1) with >=2 fields
+                    return;
+                }
+                const auto resident = window.cacheResidentBytesForTest();
+                if (resident == 0) {
+                    application.exit(1);
+                    return;
+                }
+                window.setCacheBudgetForTest(resident - 1);
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&application, levels] {
+                        // With the fix the overflowing finest re-slice fell back
+                        // to a lower composite level, so the combo no longer
+                        // reads "Finest available" (-1).
+                        application.exit(
+                            levels->currentData().toInt() != -1 ? 0 : 1);
+                    });
+                fields->setCurrentIndex(1);  // non-cache finest re-slice
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 4
         && std::string_view(argv[1]) == "--sequence-smoke-test") {
         // Opens the two-frame sequence, waits for the first frame to display,
@@ -466,13 +922,154 @@ int main(int argc, char* argv[])
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
             &application, [&window, &application](int index) {
                 if (index == 0) {
+                    if (window.particleSampleCountForTest() != 0) {
+                        application.exit(1);
+                        return;
+                    }
+                    // Opt in, start a frame load carrying that specification,
+                    // then change it before the worker can complete. The final
+                    // frame must reflect the new empty selection.
+                    window.setParticleSelectionForTest({"Tracer"}, 1.0, 37);
                     window.stepSequence(1);
+                    window.setParticleSelectionForTest({}, 1.0, 41);
+                } else if (index == 1) {
+                    application.exit(
+                        window.particleSampleCountForTest() == 0
+                                && window.particleSeedForTest() == 41
+                            ? 0 : 1);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--sequence-spec-change-smoke-test") {
+        // Start frame 1, then immediately drive an ordinary slice-affecting
+        // control through scheduleSliceRequest while its worker is in flight.
+        // The queued completion for the obsolete specification must not strand
+        // the sequence in its in-flight state.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application](int index) {
+                if (index == 0) {
+                    window.stepSequence(1);
+                    window.enableVisibleRasterForTest();
                 } else if (index == 1) {
                     application.exit(0);
                 }
             });
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
             &application, [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--sequence-zoom-refit-smoke-test") {
+        // Preserve a physical crop while moving from an 8x8 frame to an 8x12
+        // frame. The incoming raster has a different geometry and must be
+        // fitted instead of inheriting the first raster's pixel transform.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        auto zoomSettled = std::make_shared<bool>(false);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, zoomSettled] {
+                if (!*zoomSettled) {
+                    *zoomSettled = true;
+                    window.stepSequence(1);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application, zoomSettled](int index) {
+                if (index == 0) {
+                    window.rubberBandZoomActiveViewForTest();
+                } else if (index == 1) {
+                    application.exit(
+                        *zoomSettled
+                            && window.activeViewIsZoomedForTest()
+                            && window.activeViewIsFitToWindowForTest()
+                        ? 0 : 1);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--sequence-equal-size-zoom-refit-smoke-test") {
+        // Exercise the timing edge directly: the first frame's full-domain
+        // raster is 8x8. Rubber-band zoom changes the view transform and queues
+        // a 4x4 crop, but stepping immediately cancels that work. The second
+        // frame is 16x16, so its central-half crop is also 8x8. A size-only
+        // transform policy mistakes that cropped raster for the cached full
+        // raster and leaves only part of the new image visible.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application](int index) {
+                if (index == 0) {
+                    window.rubberBandZoomActiveViewForTest();
+                    window.stepSequence(1);
+                } else if (index == 1) {
+                    application.exit(
+                        window.activeViewIsZoomedForTest()
+                            && window.activeViewIsFitToWindowForTest()
+                        ? 0 : 1);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--quit-smoke-test") {
+        // Open a dataset, then quit through the main window once the initial
+        // slice resolves (success or failure) and also mid-load. Passes if the
+        // process exits promptly; a regression that blocks quit (an uncanceled
+        // worker pinning the global pool, or a modal failure dialog) keeps it
+        // alive until the watchdog fails the test.
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window](bool) {
+                QTimer::singleShot(0, &window, [&window] { window.close(); });
+            });
+        QTimer::singleShot(300, &window, [&window] { window.close(); });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--export-quit-smoke-test") {
+        // Open a two-frame sequence, start an animation export (bypassing the
+        // interactive color-bar/save dialogs), and quit the instant FFmpeg
+        // encoding begins. With a hung stand-in ffmpeg on PATH the encoder
+        // workers block, so shutdown stays alive unless they are cancelled and
+        // their process terminated on close; the ctest timeout fails the test
+        // if the process never exits.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        const QString outputPath = QString::fromStdString(
+            (first.parent_path() / "anim.png").string());
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, outputPath](int index) {
+                if (index == 0) {
+                    window.startAnimationExportForTest(outputPath, false);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::exportEncodingStarted,
+            &application, [&window] {
+                QTimer::singleShot(0, &window, [&window] { window.close(); });
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
         QTimer::singleShot(0, &window, [&window, first, second] {
             window.openSequence({first, second});
         });

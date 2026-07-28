@@ -1,5 +1,7 @@
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
+#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/FabCatalog.hpp>
+#include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/detail/VisMfIndex.hpp>
 
 #include <algorithm>
@@ -9,28 +11,13 @@
 #include <optional>
 #include <sstream>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace amrvis {
 namespace {
 
-std::vector<int> parseIntegers(const std::string& text)
-{
-    std::string numbers = text;
-    std::replace_if(numbers.begin(), numbers.end(), [](char character) {
-        return !(character >= '0' && character <= '9')
-            && character != '-' && character != '+';
-    }, ' ');
-    std::istringstream input(numbers);
-    std::vector<int> result;
-    int value = 0;
-    while (input >> value) {
-        result.push_back(value);
-    }
-    return result;
-}
+using detail::parseIntegers;
 
 int inferBoxDimension(const std::string& boxText)
 {
@@ -64,7 +51,7 @@ int inferMultiFabDimension(const std::filesystem::path& headerPath)
 }
 
 std::shared_ptr<DatasetMetadata> makeSingleLevelMetadata(
-    int dimension, const IntBox& domain, int components, std::string_view fieldPrefix)
+    int dimension, const IntBox& domain, int components)
 {
     auto metadata = std::make_shared<DatasetMetadata>();
     metadata->dimension = dimension;
@@ -77,9 +64,10 @@ std::shared_ptr<DatasetMetadata> makeSingleLevelMetadata(
     }
     metadata->fields.reserve(static_cast<std::size_t>(components));
     for (int component = 0; component < components; ++component) {
-        auto name = std::string(fieldPrefix) + std::to_string(component);
+        // Neither format stores field names; components are numbered.
+        auto name = "Field_" + std::to_string(component);
         metadata->fields.push_back({
-            name, 1, centeringFromIndexType(domain.centering, dimension), {name}});
+            name, centeringFromIndexType(domain.centering, dimension), {name}});
     }
     metadata->levels.resize(1);
     metadata->levels.front().domain = domain;
@@ -99,12 +87,16 @@ void validateStandalone(const DatasetMetadata& metadata)
 } // namespace
 
 PlotfileMetadataResult StandaloneMetadataReader::readFab(
-    const std::filesystem::path& fabPath, std::uint64_t offset) const
+    const std::filesystem::path& fabPath, std::uint64_t offset,
+    StopToken cancellation) const
 {
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
+    }
     const auto record = inspectFabRecord(fabPath, offset);
 
     auto metadata = makeSingleLevelMetadata(
-        record.dimension, record.storedBox, record.components, "Fab_");
+        record.dimension, record.storedBox, record.components);
     metadata->isFab = true;
     auto& level = metadata->levels.front();
     level.boxes.push_back(record.storedBox);
@@ -138,12 +130,9 @@ PlotfileMetadataResult makeSelectedFabMetadata(
         throw MetadataReadError("selected FAB index is unavailable");
     }
     const auto& sourceBlock = sourceLevel.blocks[blockIndex];
-    auto storedBox = sourceBlock.box;
-    for (int axis = 0; axis < source.dimension; ++axis) {
-        const auto i = static_cast<std::size_t>(axis);
-        storedBox.lower[i] -= sourceLevel.ghostWidth[i];
-        storedBox.upper[i] += sourceLevel.ghostWidth[i];
-    }
+    // Overflow-guarded shared grow (this copy previously used plain int).
+    auto storedBox = detail::grownBox<MetadataReadError>(
+        sourceBlock.box, sourceLevel.ghostWidth, source.dimension);
     if (sourceLevel.visMfHeaderVersion == 1) {
         storedBox = inspectFabRecord(
             dataRoot / sourceBlock.filePath, sourceBlock.fileOffset).storedBox;
@@ -179,8 +168,11 @@ PlotfileMetadataResult makeSelectedFabMetadata(
 }
 
 PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
-    const std::filesystem::path& prefixOrHeader) const
+    const std::filesystem::path& prefixOrHeader, StopToken cancellation) const
 {
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
+    }
     auto prefix = prefixOrHeader;
     if (prefix.string().ends_with("_H")) {
         auto value = prefix.string();
@@ -189,7 +181,7 @@ PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
     }
     const auto headerPath = std::filesystem::path(prefix.string() + "_H");
     const auto dimension = inferMultiFabDimension(headerPath);
-    const auto index = detail::readVisMfIndex(headerPath, dimension);
+    const auto index = detail::readVisMfIndex(headerPath, dimension, cancellation);
     if (index.boxes.empty() || index.components <= 0) {
         throw MetadataReadError("standalone MultiFab is empty");
     }
@@ -203,7 +195,7 @@ PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
         }
     }
     auto metadata = makeSingleLevelMetadata(
-        dimension, domain, index.components, "MultiFab_");
+        dimension, domain, index.components);
     auto& level = metadata->levels.front();
     level.boxes = index.boxes;
     level.ghostWidth = index.ghostWidth;
@@ -233,18 +225,19 @@ PlotfileMetadataResult StandaloneMetadataReader::readMultiFab(
     };
 }
 
-PlotfileMetadataResult readDatasetMetadata(const std::filesystem::path& path)
+PlotfileMetadataResult readDatasetMetadata(const std::filesystem::path& path,
+    StopToken cancellation)
 {
     if (std::filesystem::is_directory(path)
         && std::filesystem::is_regular_file(path / "Header")) {
-        return PlotfileMetadataReader{}.read(path);
+        return PlotfileMetadataReader{}.read(path, cancellation);
     }
     if (path.string().ends_with("_H")
         || std::filesystem::is_regular_file(
             std::filesystem::path(path.string() + "_H"))) {
-        return StandaloneMetadataReader{}.readMultiFab(path);
+        return StandaloneMetadataReader{}.readMultiFab(path, cancellation);
     }
-    return StandaloneMetadataReader{}.readFab(path);
+    return StandaloneMetadataReader{}.readFab(path, 0, cancellation);
 }
 
 } // namespace amrvis

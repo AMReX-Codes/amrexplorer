@@ -1,4 +1,5 @@
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
+#include <amrexplorer/render2d/detail/PlaneValidation.hpp>
 
 #include <algorithm>
 #include <array>
@@ -41,6 +42,9 @@ std::array<std::uint8_t, 3> sampleViridis(double normalized) noexcept
 ImageBuffer renderScalarPlane(
     const ScalarPlane& plane, const ScalarRenderSettings& settings)
 {
+    // Check order is pinned by the unit test: positive extent, then the
+    // stride representation, then the shared storage-match rule (extent is
+    // already vetted here, so AllowEmpty cannot actually pass an empty plane).
     if (plane.width <= 0 || plane.height <= 0) {
         throw std::invalid_argument("scalar plane dimensions must be positive");
     }
@@ -48,13 +52,7 @@ ImageBuffer renderScalarPlane(
             / static_cast<int>(sizeof(std::uint32_t))) {
         throw std::overflow_error("scalar plane row stride exceeds the image representation");
     }
-    const auto pixelCount = static_cast<std::uint64_t>(plane.width)
-        * static_cast<std::uint64_t>(plane.height);
-    if (pixelCount > std::numeric_limits<std::size_t>::max()
-        || plane.values.size() != static_cast<std::size_t>(pixelCount)
-        || plane.valid.size() != static_cast<std::size_t>(pixelCount)) {
-        throw std::invalid_argument("scalar plane storage does not match its dimensions");
-    }
+    detail::validatePlaneStorage(plane, detail::PlaneExtent::AllowEmpty);
     if (!(settings.minimum < settings.maximum)) {
         throw std::invalid_argument("scalar render range must have positive extent");
     }
@@ -76,7 +74,7 @@ ImageBuffer renderScalarPlane(
     image.width = plane.width;
     image.height = plane.height;
     image.strideBytes = plane.width * static_cast<int>(sizeof(std::uint32_t));
-    image.rgba.resize(static_cast<std::size_t>(pixelCount));
+    image.rgba.resize(plane.values.size());
     const Palette& palette = settings.palette != nullptr
         ? *settings.palette : builtinPalette(BuiltinPalette::Rainbow);
     for (std::size_t pixel = 0; pixel < image.rgba.size(); ++pixel) {

@@ -34,13 +34,11 @@ enum class CompositionPolicy : std::uint8_t {
 
 struct BlockRequest {
     DatasetId dataset;
-    int timestep = 0;
     int level = 0;
     int gridIndex = 0;
     FieldId field;
     int firstComponent = 0;
     int componentCount = 1;
-    int ghostWidth = 0;
 };
 
 struct SliceRequest {

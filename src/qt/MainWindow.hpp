@@ -7,18 +7,24 @@
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
+#include <amrexplorer/pipeline/DisplayCoordinator.hpp>
+#include <amrexplorer/pipeline/SlicePipeline.hpp>
+#include <amrexplorer/pipeline/SliceRangeResolver.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
 #include <amrexplorer/render2d/Contours.hpp>
 #include <amrexplorer/render2d/ImageBuffer.hpp>
 #include <amrexplorer/render2d/Palette.hpp>
 #include <amrexplorer/render2d/VectorGlyphs.hpp>
 
+#include <QColor>
 #include <QElapsedTimer>
 #include <QImage>
 #include <QMainWindow>
+#include <QRectF>
 #include <QStringList>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -32,7 +38,6 @@ class QAction;
 class QActionGroup;
 class QCheckBox;
 class QCloseEvent;
-class QColor;
 class QComboBox;
 class QDockWidget;
 class QLabel;
@@ -57,6 +62,7 @@ enum class CompositionPolicy : std::uint8_t;
 
 namespace amrvis::qt {
 
+class AnimationExporter;
 class AnimationPanel;
 class ColorBarWidget;
 class DatasetWindow;
@@ -65,79 +71,16 @@ class ImageView;
 class IsoWidget;
 class LinePlotWindow;
 class ScientificDoubleSpinBox;
+class SequenceController;
 class UserGuideDialog;
 
-enum class RangeMode {
-    Visible,
-    Level,
-    File,
-    User
-};
-
-struct SliceDisplayResult {
-    // The request that produced everything below; PlaneViewState keeps it as
-    // the cache key for the re-render-from-cache path (see requestSlice).
-    SliceRequest request;
-    SliceQueryResult slice;
-    ImageBuffer image;
-    std::vector<VectorSegment> vectors;
-    // Contour modes only: the piecewise plane at data resolution the
-    // contours were extracted from (the display plane itself when the data
-    // is finer than the display), its bilinear refinement, and the
-    // polylines extracted from that refinement, already mapped to
-    // display-plane pixel space (empty otherwise).
-    ScalarPlane contourPlane;
-    ScalarPlane contourFinePlane;
-    int contourFineFactor = 1;
-    std::vector<ContourPolyline> contourPolylines;
-    std::string fieldName;
-    double minimum = 0.0;
-    double maximum = 1.0;
-    bool logarithmic = false;
-    DisplayMode mode = DisplayMode::Raster;
-    std::uint32_t vectorUField = 0;
-    std::uint32_t vectorVField = 0;
-    int contourCount = 0;
-    // Set when the image was intentionally not re-rendered (contour-only
-    // refresh): showSlice keeps the view's current pixmap.
-    bool rasterUnchanged = false;
-};
-
-struct InitialSliceResult {
-    std::shared_ptr<PlotfileDataset> dataset;
-    // One entry per displayed view, ordered by normal axis (2-D: one entry).
-    std::vector<SliceDisplayResult> displays;
-    // First line of the plotfile Header when the path is a plotfile
-    // directory; empty for standalone datasets.
-    std::string fileVersion;
-    // Set when a Finest Available load exceeded the cache budget and was
-    // retried with a lower composite maximum level.
-    int cacheFallbackFromLevel = -1;
-    int cacheFallbackToLevel = -1;
-};
-
-// Everything needed to render one frame's slice(s) off the GUI thread. The
-// sequence path builds this from the current UI state so frame switches keep
-// the user's field/level/range/log/palette/visible-region settings; empty or
-// default entries mean "fall back to the new dataset's defaults" (midpoint
-// slice positions, whole domain, 640x640 output).
-struct FrameSliceSpec {
-    DisplayMode displayMode = DisplayMode::Raster;
-    std::uint32_t field = 0;
-    int levelSelection = -1;  // level combo data: -1 = finest available
-    RangeMode rangeMode = RangeMode::File;
-    std::optional<std::pair<double, double>> userRange;
-    bool logarithmic = false;
-    Palette palette;
-    std::uint32_t vectorUField = 0;
-    std::uint32_t vectorVField = 0;
-    std::uint32_t vectorWField = 0;
-    int contourCount = 10;
-    bool defaultPositions = true;
-    std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
-    std::vector<std::optional<RealBox>> visibleRegions;  // per view, normal order
-    std::vector<std::array<int, 2>> outputSizes;         // per view, normal order
-};
+// These now live in the Qt-free pipeline layer (SlicePipeline.hpp); re-export
+// them in this namespace so amrvis::qt::X keeps resolving for callers and
+// tests. DisplayMode is re-exported by SetContoursDialog.hpp.
+using amrvis::RangeMode;
+using amrvis::SliceDisplayResult;
+using amrvis::InitialSliceResult;
+using amrvis::FrameSliceSpec;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -153,14 +96,117 @@ public:
     // Steps the open sequence by direction frames, wrapping at the ends; the
     // same slot the sequence step buttons and the smoke test hook use.
     void stepSequence(int direction);
+    // Starts an animation export without the interactive color-bar/save
+    // dialogs, writing frames and MP4s under path's directory. Test-only entry
+    // used by the export-quit smoke test to reach the encoder deterministically.
+    void startAnimationExportForTest(const QString& path, bool includeColorBar);
+
+    // Test-only: move each 3-D plane to slicePositions (per axis, so the three
+    // panels sample different data with different local ranges), switch to
+    // contour display (count levels) with the Visible range mode and optional
+    // logarithmic mapping, then re-slice every view once. This is the exact
+    // shape that exposed the stale-contour bug: three unequal local ranges
+    // reconciled into one shared Visible range. interactiveSlicesSettled fires
+    // when that batch finishes.
+    void configureContourSyncForTest(
+        int count, bool logarithmic, std::array<double, 3> slicePositions);
+
+    // Test-only: for each current view (ordered by normal axis; 2-D has one),
+    // the display range and the distinct contour levels present in its overlay
+    // polylines. The contour-sync smoke test checks these levels are re-derived
+    // from the shared Visible range rather than each view's local range.
+    struct ContourViewProbe {
+        double displayMinimum = 0.0;
+        double displayMaximum = 0.0;
+        bool logarithmic = false;
+        std::vector<double> contourLevels;
+    };
+    [[nodiscard]] std::vector<ContourViewProbe> contourViewProbesForTest();
+
+    // Test-only: select Visible range + Raster display and re-slice the full
+    // domain, so the full-domain range is cached. Pair with zoomActiveViewForTest
+    // to drive the 2-D range-reuse raster path. interactiveSlicesSettled fires
+    // when the re-slice completes.
+    void enableVisibleRasterForTest();
+
+    // Test-only: zoom the active view to the upper-value quadrant — a strict
+    // subregion whose local range differs from the full domain — and re-slice.
+    // With Visible mode active and the full-domain range cached, this exercises
+    // the reuse path that must re-render the raster to match the color bar.
+    void zoomActiveViewForTest();
+
+    // Test-only: true when the active view's displayed raster is byte-identical
+    // to its plane re-rendered against the current display (color-bar) range —
+    // i.e. the raster and color bar agree. See
+    // raster-colorbar-mismatch-on-2d-visible-zoom.
+    [[nodiscard]] bool activeViewRasterMatchesDisplayRangeForTest();
+
+    // Test-only: rubber-band the central half of the active 3-D panel through
+    // the same handler used by ImageView::rubberBandSelected.
+    void rubberBandZoomActiveViewForTest();
+
+    // Test-only: true when every current panel has a strict visible subregion.
+    // Used to lock down synchronized 3-D rubber-band zoom.
+    [[nodiscard]] bool allViewsRubberBandZoomedForTest();
+    [[nodiscard]] std::size_t rubberBandZoomedViewCountForTest();
+
+    // Test-only: apply a panel-local scale, drive the exact data-region pan
+    // handlers used by Shift+left drag, and inspect the resulting transform.
+    void setActiveViewScaleForTest(int factor);
+    void panActiveViewForTest(double sceneDeltaX, double sceneDeltaY);
+    [[nodiscard]] qreal activeViewScaleForTest() const;
+    // Test-only: compare the current transform with ImageView's own fitted
+    // transform. The check leaves the view fitted.
+    [[nodiscard]] bool activeViewIsFitToWindowForTest();
+
+    // Test-only: true when the active view's whole raster lies inside the
+    // viewport — i.e. the displayed image is fully visible, however it got
+    // framed. A cropped-region arrival that over-zooms (issue #45) leaves part
+    // of the raster outside the viewport and fails this.
+    [[nodiscard]] bool activeViewShowsWholeImageForTest() const;
+
+    // Test-only: drill into the FAB catalog entry at index (the same path the
+    // dock's viewRequested signal drives). Used by the FAB round-trip zoom test.
+    void viewFabForTest(std::size_t index);
+
+    // Test-only: true when the active view holds a zoom (visibleRegion set).
+    // See fab-round-trip-loses-visible-region.
+    [[nodiscard]] bool activeViewIsZoomedForTest() const;
+
+    // Test-only: shrink the open dataset's cache budget to force cache-pressure
+    // fallback on the next non-cache slice, and read the current resident bytes
+    // to size that budget. See cache-budget-exceeded-hard-fails-after-load.
+    void setCacheBudgetForTest(std::uint64_t bytes);
+    [[nodiscard]] std::uint64_t cacheResidentBytesForTest() const;
+
+    // Test-only: apply particle settings through the same synchronization path
+    // as the dialog, and inspect how many points are currently installed.
+    void setParticleSelectionForTest(
+        std::vector<std::string> species, double fraction,
+        std::uint64_t seed = 0);
+    [[nodiscard]] std::uint64_t particleSeedForTest() const noexcept;
+    void setParticleColorForTest(
+        const std::string& species, const QColor& color);
+    [[nodiscard]] bool particleOverlaysUseColorForTest(
+        const QColor& color);
+    [[nodiscard]] std::size_t particleSampleCountForTest() const;
+    [[nodiscard]] std::size_t particleOverlayCountForTest();
 
 signals:
     void datasetOpenFinished(bool success);
     void initialSliceFinished(bool success);
+    // Emitted when an interactive re-slice batch (a mode/range/log/field
+    // change, pan, or zoom) finishes with no slice work left in flight. The
+    // contour-sync smoke test waits on it. Not emitted for the initial load.
+    void interactiveSlicesSettled();
     // Emitted once a sequence frame's slice(s) are on screen; the offscreen
     // smoke test drives frame stepping off it.
     void sequenceFrameDisplayed(int index);
     void sequenceFrameFailed();
+    // Emitted when the FFmpeg encoding phase begins (frames rendered, encoder
+    // workers about to run); the export-quit smoke test quits on it to exercise
+    // bounded encoder cancellation.
+    void exportEncodingStarted();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -175,14 +221,24 @@ private:
         ImageView* view = nullptr;
         int normal = 1;
         QString label;      // "2-D" / "YZ" / "XZ" / "XY"
-        ScalarPlane plane;
+        // The displayed plane and its contour-mode companions are immutable
+        // shared snapshots, never null (empty planes when nothing is shown):
+        // arrivals REPLACE the pointer and never mutate the pointee. The
+        // cached-planes refresh worker (requestSlice's fromCache path)
+        // captures these shared_ptrs — a refcount bump instead of the former
+        // ~110 MB deep copy on the GUI thread — and can keep reading its
+        // snapshots safely while a newer arrival swaps the view's pointers.
+        std::shared_ptr<const ScalarPlane> plane
+            = std::make_shared<const ScalarPlane>();
         // Contour-mode companions of plane: the data-resolution plane the
         // contours were extracted from, its bilinear refinement, and the
         // display-space polylines. Cleared and updated exactly where plane
         // is; together with the cache key below they let range, palette,
         // and contour-count changes refresh without a new SliceQuery.
-        ScalarPlane contourPlane;
-        ScalarPlane contourFinePlane;
+        std::shared_ptr<const ScalarPlane> contourPlane
+            = std::make_shared<const ScalarPlane>();
+        std::shared_ptr<const ScalarPlane> contourFinePlane
+            = std::make_shared<const ScalarPlane>();
         int contourFineFactor = 1;
         std::vector<ContourPolyline> contourPolylines;
         QString fieldName;
@@ -208,23 +264,12 @@ private:
         int pendingRequests = 0;
     };
 
-    // One prefetched sequence frame: the dataset plus its rendered slice(s),
-    // consumable only while the slice spec that produced it is unchanged.
-    struct PrefetchedFrame {
-        int frameIndex = -1;
-        std::uint64_t specGeneration = 0;
-        bool defaultPositions = false;
-        InitialSliceResult result;
-    };
-
     void chooseDataset();
     void chooseStandaloneDataset(const QString& caption, bool rawFab);
     void openDatasetImpl(const std::filesystem::path& path, bool metadataOnly,
         std::optional<PlotfileMetadataResult> preparedMetadata,
         std::filesystem::path dataRoot, bool preserveFabSelector,
         std::optional<FrameSliceSpec> initialSpec);
-    void configureFabSelector(const PlotfileMetadataResult& result,
-        const std::filesystem::path& path);
     void viewFab(std::size_t entry);
     void backToMultiFab();
     // A fresh independent top-level window (WA_DeleteOnClose) for the
@@ -232,17 +277,13 @@ private:
     MainWindow* createNewWindow();
     void exportImage();
     void exportAnimation();
-    // Animation export is signal-driven (frame rendering is async): exportAnimation
-    // kicks off frame 0; onExportFrameDisplayed saves each rendered frame and
-    // advances; finalizeExportAnimation encodes the MP4; endExportAnimation is the
-    // shared cleanup/restore/report path.
-    void onExportFrameDisplayed(int index);
-    void onExportFrameFailed();
-    void finalizeExportAnimation();
-    void endExportAnimation(bool success, const QString& message);
+    // Shared body of exportAnimation once the output path and color-bar choice
+    // are known (from the dialogs, or from the test hook): freezes the export
+    // zoom, starts the AnimationExporter (which owns the export state machine),
+    // and kicks off frame 0.
+    void beginAnimationExport(const QString& path, bool includeColorBar);
     [[nodiscard]] QImage composeExportFrame(const ImageView* view,
         bool includeColorBar, qreal scaleFactor) const;
-    [[nodiscard]] bool probeFfmpeg() const;
     void createMenus();
     void rebuildLevelMenu();
     void rebuildVariableMenu();
@@ -264,6 +305,11 @@ private:
     void resetRangeState();
     void updateRangeModeAvailability();
     void showContoursDialog();
+    void showParticlesDialog();
+    void configureParticleControls(bool preserveSelection);
+    void requestParticleReload();
+    void updateParticleOverlay(PlaneViewState& state);
+    void updateParticleOverlays();
     void applyContourSettings(DisplayMode mode, int count, int uField, int vField,
         int wField, int contourColor);
     void showNumberFormatDialog();
@@ -280,6 +326,7 @@ private:
     void showAboutDialog();
     void showMetadata(const PlotfileMetadataResult& result, const std::filesystem::path& path);
     void updateDiagnostics();
+    void reportBackgroundError(const QString& message);
     void updateAnimationDockVisibility();
     void updateWindowTitle();
     void restoreSettings();
@@ -289,12 +336,17 @@ private:
     void wireView(PlaneViewState& state);
     [[nodiscard]] std::vector<PlaneViewState*> currentViews();
     void setActiveView(PlaneViewState& state);
+    // Point the color scale and range spin boxes at the active view's display
+    // state. Shared by setActiveView and showSlice's active-view branch.
+    void syncActiveViewColorControls(const PlaneViewState& state);
     [[nodiscard]] std::array<int, 2> displayAxes(int normal) const;
     void probeMoved(PlaneViewState& state, int x, int displayY);
     void probeClicked(PlaneViewState& state, int x, int displayY);
     [[nodiscard]] QString probeReadout(
         const PlaneViewState& state, int x, int displayY) const;
     void rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect);
+    void applyRubberBandZoom(
+        PlaneViewState& state, const QRectF& normalizedRect);
     void beginPanDrag(PlaneViewState& state);
     void updatePanDrag(PlaneViewState& state, const QPointF& totalSceneDelta,
         const QPoint& viewportDelta);
@@ -309,8 +361,20 @@ private:
         Qt::MouseButton button);
     void sliceMoveRequested(PlaneViewState& state, int imageX, int imageY,
         Qt::MouseButton button);
-    void fitView(PlaneViewState& state);
-    void fitViewToWindow();
+    // Reset a view (or all views) to the whole domain and refit: the Scale
+    // menu's "Reset Zoom", the 0 shortcut, and double-click all land here.
+    // Distinct from ImageView::fitToWindow, which only refits the current
+    // raster without touching the visible region.
+    void resetViewZoom(PlaneViewState& state);
+    void resetZoomAllViews();
+    // When a Preserve-policy raster arrives with a different pixels-per-data
+    // density than the plane it replaces (a zoomed re-slice on a dataset whose
+    // full-domain raster hit the output cap), returns the currently visible
+    // physical window mapped into the incoming plane's scene coordinates, for
+    // re-framing after the swap; nullopt when the plain Preserve is already
+    // correct. See issue #45.
+    [[nodiscard]] std::optional<QRectF> preservedDataWindow(
+        const PlaneViewState& state, const ScalarPlane& incoming) const;
     void showSlice(PlaneViewState& state, const SliceDisplayResult& display);
     void updateOverlay(PlaneViewState& state);
     void updateOverlays();
@@ -325,10 +389,18 @@ private:
 
     // Shared 3-D slice positions (physical coordinates per axis).
     void configureSlicePositionControls();
+    // Show or hide the Position group together with its trailing toolbar
+    // separator, so the separator never dangles when no dataset is loaded.
+    void setSlicePositionControlsVisible(bool visible);
     void setSlicePosition(int axis, double value);
     [[nodiscard]] int sliceIndexLevel() const;
     // Visible-range mode in 3-D: recompute the min/max from all three panels'
-    // planes so the single color bar maps them consistently.
+    // planes so the single color bar maps them consistently. The heavy part
+    // (extrema scans, contour re-extraction, up to three full raster renders)
+    // runs on a worker over the panels' immutable plane snapshots;
+    // completions apply per panel only while its snapshot is still the
+    // displayed one (pointer identity). Coalesced single-flight: a call while
+    // a sync worker is in flight marks a rerun instead of stacking workers.
     void syncVisibleRanges();
 
     // Slice requests: the debounce timer coalesces into per-view requests.
@@ -344,6 +416,11 @@ private:
         std::filesystem::path dataRoot = {},
         std::optional<FrameSliceSpec> initialSpec = std::nullopt);
     void configureSliceControls();
+    // Enable the dataset-dependent field/level/range/menu controls once a
+    // dataset (single or sequence frame) is loaded. Shared by
+    // configureSliceControls and configureSequenceControls; the export-animation
+    // action is sequence-only and stays at that call site.
+    void enableDatasetControls(const DatasetMetadata& metadata);
     void appendLinePlotCurve(const LineResult& line, const std::string& fieldName,
         int dimension, int primaryFixedAxis, int lineAxis,
         const std::array<double, 3>& fixedCoordinates, int maximumLevel,
@@ -358,7 +435,7 @@ private:
     };
     void choosePlotfileSequence();
     void closeSequence();
-    void goToSequenceFrame(int index);
+    void goToSequenceFrame(int index, bool forceRestart = false);
     void toggleSequencePlayback();
     void stepSweep(int direction);
     void toggleSweepPlayback();
@@ -366,16 +443,14 @@ private:
     void playbackTick();
     void applySpeed();
 
-    // Sequence frame switching. At most one sync frame load and one
-    // prefetch are alive; everything superseded is cancelled via stop
-    // sources and discarded via generation counters.
-    void startFrameLoad(int index, std::uint64_t generation);
-    void finishFrameLoad(InitialSliceResult result, bool defaultPositions);
+    // Sequence frame switching lives in the SequenceController; this window
+    // supplies the GUI-coupled pieces below as its hooks.
     void displayFrameResult(InitialSliceResult& result, bool defaultPositions);
     void configureSequenceControls(bool defaultPositions);
     [[nodiscard]] FrameSliceSpec buildFrameSpec();
-    void startPrefetch(int frameIndex);
-    void discardPrefetch();
+    void applyParticleSelection(
+        std::vector<std::string> species, double fraction, int pointSize,
+        std::uint64_t seed);
     // Stop timers, request stop on every async task this window can launch,
     // and clear queued thread-pool work. Wired to aboutToQuit so the process
     // exits promptly instead of blocking QThreadPool teardown on an in-flight
@@ -411,6 +486,7 @@ private:
     std::unordered_map<std::uint32_t, FieldRange> m_fieldRanges;
     std::uint32_t m_trackedField = 0;
     QWidget* m_slicePositionControls = nullptr;
+    QAction* m_positionSeparator = nullptr;
     std::array<QSpinBox*, 3> m_sliceSpinboxes{nullptr, nullptr, nullptr};
     QTimer* m_sliceDebounce = nullptr;
     QTimer* m_panDebounce = nullptr;
@@ -421,13 +497,19 @@ private:
     QPointF m_panSceneDelta;
     QPointF m_panLastScheduledDelta;
     bool m_panDataRefresh = false;
-    // Full-domain range cache — kept current whenever a non-zoomed slice
-    // completes, and reused for RangeMode::Visible during zoom/pan so the
-    // color bar stays stable instead of tracking the subregion extrema.
-    std::optional<std::pair<double, double>> m_fullDomainRange;
-    FieldId m_fullDomainRangeField{};
-    int m_fullDomainRangeMaxLevel = -1;
-    CompositionPolicy m_fullDomainRangeComposition{};
+    // Owns the full-domain range cache (kept current whenever a non-zoomed
+    // slice completes, reused for RangeMode::Visible during zoom/pan so the
+    // color bar stays stable) plus the shared-range and transform-policy
+    // decisions the slice paths share. See pipeline/DisplayCoordinator.hpp.
+    amrvis::DisplayCoordinator m_displayCoordinator;
+    // Single-flight state of the async 3-D shared-range sync: one worker at a
+    // time; a request while one is in flight coalesces into a rerun. The
+    // pending range-store key carries the "cache the full-domain union after
+    // the sync" step (see the slice-arrival completion) into the sync
+    // completion, where the union is actually known.
+    bool m_visibleSyncInFlight = false;
+    bool m_visibleSyncRerun = false;
+    std::optional<amrvis::DisplayCoordinator::RangeKey> m_pendingRangeStore;
     QTreeWidget* m_metadataTree = nullptr;
     QPlainTextEdit* m_diagnostics = nullptr;
     QDockWidget* m_metadataDock = nullptr;
@@ -440,32 +522,23 @@ private:
     QPushButton* m_scaleButton = nullptr;
     QMenu* m_levelMenu = nullptr;
     QMenu* m_variableMenu = nullptr;
+    QActionGroup* m_scaleGroup = nullptr;
     QActionGroup* m_levelGroup = nullptr;
     QActionGroup* m_variableGroup = nullptr;
     QActionGroup* m_paletteGroup = nullptr;
     QAction* m_boxesAction = nullptr;
-    QAction* m_fitScaleAction = nullptr;
+    QAction* m_slicePlanesAction = nullptr;
+    QAction* m_resetZoomAction = nullptr;
+    QAction* m_syncRubberBandZoomAction = nullptr;
     QAction* m_contoursAction = nullptr;
+    QAction* m_particlesAction = nullptr;
     QAction* m_datasetAction = nullptr;
     QAction* m_exportAnimationAction = nullptr;
 
-    // Drives File -> Export Animation... Active only while an export is running;
-    // sequenceFrameDisplayed advances it one frame at a time.
-    struct ExportAnimationState {
-        bool active = false;
-        bool canceled = false;
-        bool framesDone = false;
-        bool includeColorBar = false;
-        bool hasFfmpeg = false;
-        qreal scale = 1.0;  // frozen export zoom factor so every frame matches
-        int totalFrames = 0;
-        int restoreIndex = -1;
-        int digitWidth = 5;
-        QString directory;
-        QString stem;
-        QProgressDialog* progress = nullptr;
-    };
-    ExportAnimationState m_exportAnim;
+    // Drives File -> Export Animation...: owns the whole export state machine
+    // (progress, cancellation, FFmpeg encoding). This window supplies frame
+    // rendering and sequence navigation, and restores its UI on finished().
+    AnimationExporter* m_animationExporter = nullptr;
     std::shared_ptr<PlotfileDataset> m_dataset;
     std::shared_ptr<const DatasetMetadata> m_openMetadata;
     std::string m_fileVersion;
@@ -479,12 +552,22 @@ private:
     // OR of the rasterDirty flags of the coalesced pending requests.
     bool m_pendingRasterDirty = false;
     StopSource m_initialStopSource;
+    StopSource m_metadataStopSource;
     DisplayMode m_displayMode = DisplayMode::Raster;
     int m_contourCount = 15;
     int m_contourColor = contourColorBlack;
     int m_vectorUField = -1;
     int m_vectorVField = -1;
     int m_vectorWField = -1;
+    std::vector<std::string> m_selectedParticleSpecies;
+    std::vector<ParticleSample> m_particleSamples;
+    std::unordered_map<std::string, QColor> m_particleColors;
+    double m_particleFraction = 1.0;
+    std::uint64_t m_particleSeed = 0;
+    int m_particlePointSize = 3;
+    bool m_particleSelectionInitialized = false;
+    StopSource m_particleStopSource;
+    std::uint64_t m_particleGeneration = 0;
     std::filesystem::path m_datasetPath;
     struct MultiFabReturnState {
         std::filesystem::path path;
@@ -503,9 +586,11 @@ private:
     QString m_paletteFilePath;
     QString m_numberFormat = defaultNumberFormat();
     QStringList m_probeLines;
+    QStringList m_backgroundErrors;
     bool m_controlsReady = false;
     std::uint64_t m_generation = 0;
     std::uint64_t m_activeRequests = 0;
+    bool m_closing = false;
     std::uint64_t m_staleResults = 0;
     std::uint64_t m_lastFilesRead = 0;
     std::uint64_t m_lastBytesRead = 0;
@@ -517,24 +602,13 @@ private:
     std::uint64_t m_cachePinnedBytes = 0;
     std::uint64_t m_cacheEvictions = 0;
 
-    // Animation state.
+    // Animation state. The sequence frames/index/in-flight/prefetch state
+    // machine lives in the SequenceController; this window keeps only the
+    // playback timer and mode.
     AnimationPanel* m_animationPanel = nullptr;
     QTimer* m_playbackTimer = nullptr;
     PlaybackMode m_playbackMode = PlaybackMode::None;
-    std::vector<std::filesystem::path> m_sequenceFrames;
-    int m_sequenceIndex = -1;
-    bool m_sequenceInFlight = false;
-    // Bumped by every slice-affecting UI change; prefetched frames store the
-    // value they were built against and are discarded once it moves on.
-    std::uint64_t m_specGeneration = 0;
-    // Bumped whenever the prefetch slot is cancelled/invalidated, so a late
-    // prefetch watcher knows to drop its result.
-    std::uint64_t m_prefetchGeneration = 0;
-    std::uint64_t m_sequenceDatasetCounter = 0;
-    StopSource m_prefetchStopSource;
-    std::optional<PrefetchedFrame> m_prefetched;
-    QElapsedTimer m_frameTimer;
-    qint64 m_lastFrameSwitchMs = 0;
+    SequenceController* m_sequenceController = nullptr;
 };
 
 } // namespace amrvis::qt

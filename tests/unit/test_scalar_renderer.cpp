@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <stdexcept>
+#include <string>
 
 namespace {
 
@@ -12,6 +14,28 @@ void require(bool condition, const char* message)
         std::cerr << "FAILED: " << message << '\n';
         std::exit(1);
     }
+}
+
+// Renders and expects a std::invalid_argument whose what() contains `needle`.
+// Matching the message (not just the type) pins which check fired -- the
+// renderer validates in a fixed order (dimensions, stride, storage, range
+// extent, range finiteness, log positivity), which cases below rely on.
+void expectRejected(const amrvis::ScalarPlane& plane,
+    const amrvis::ScalarRenderSettings& settings,
+    const char* needle, const char* what)
+{
+    try {
+        (void)amrvis::renderScalarPlane(plane, settings);
+    } catch (const std::invalid_argument& error) {
+        if (std::string(error.what()).find(needle) != std::string::npos) {
+            return;
+        }
+        std::cerr << "FAILED: " << what << " threw the wrong message: "
+                  << error.what() << '\n';
+        std::exit(1);
+    }
+    std::cerr << "FAILED: " << what << " (no exception thrown)\n";
+    std::exit(1);
 }
 
 } // namespace
@@ -109,5 +133,86 @@ int main()
         threw = true;
     }
     require(threw, "renderer accepted a NaN range endpoint");
+
+    // A well-formed baseline the remaining throw-path cases perturb one field
+    // at a time; it must render so the negatives below prove the perturbation.
+    amrvis::ScalarPlane good;
+    good.width = 2;
+    good.height = 2;
+    good.values = {0.0F, 0.5F, 1.0F, 0.25F};
+    good.valid = {1, 1, 1, 1};
+    good.sourceLevel = {0, 0, 0, 0};
+    amrvis::ScalarRenderSettings base;
+    base.minimum = 0.0;
+    base.maximum = 1.0;
+    require(amrvis::renderScalarPlane(good, base).valid(),
+        "the throw-path baseline did not render");
+
+    // Non-positive dimensions (the first check).
+    {
+        auto badPlane = good;
+        badPlane.width = 0;
+        expectRejected(badPlane, base, "dimensions must be positive",
+            "a zero-width plane was not rejected");
+        badPlane = good;
+        badPlane.height = -1;
+        expectRejected(badPlane, base, "dimensions must be positive",
+            "a negative-height plane was not rejected");
+    }
+
+    // Storage that does not match width*height, on either backing vector.
+    {
+        auto badPlane = good;
+        badPlane.values.pop_back();   // three values for a 2x2 plane
+        expectRejected(badPlane, base, "storage does not match",
+            "a values vector shorter than width*height was not rejected");
+        badPlane = good;
+        badPlane.valid.pop_back();
+        expectRejected(badPlane, base, "storage does not match",
+            "a valid mask shorter than width*height was not rejected");
+    }
+
+    // A degenerate (min == max) range has no positive extent.
+    {
+        auto badSettings = base;
+        badSettings.minimum = 1.0;
+        badSettings.maximum = 1.0;
+        expectRejected(good, badSettings, "positive extent",
+            "a zero-width value range was not rejected");
+    }
+
+    // Logarithmic rendering requires a strictly positive minimum.
+    {
+        auto badSettings = base;
+        badSettings.logarithmic = true;
+        badSettings.minimum = 0.0;
+        badSettings.maximum = 10.0;
+        expectRejected(good, badSettings, "logarithmic scalar range must be positive",
+            "a zero logarithmic minimum was not rejected");
+        badSettings.minimum = -1.0;
+        expectRejected(good, badSettings, "logarithmic scalar range must be positive",
+            "a negative logarithmic minimum was not rejected");
+    }
+
+    // Check order: an earlier fault must win. Dimensions are validated before
+    // the range, and storage before the range/log checks, so a plane that
+    // violates several conditions reports the earliest one.
+    {
+        auto badPlane = good;
+        badPlane.width = 0;                        // dimension fault ...
+        auto badSettings = base;
+        badSettings.minimum = 5.0;
+        badSettings.maximum = 1.0;                 // ... and a bad range
+        expectRejected(badPlane, badSettings, "dimensions must be positive",
+            "the dimension check did not precede the range check");
+
+        badPlane = good;
+        badPlane.values.pop_back();                // storage fault ...
+        badSettings.logarithmic = true;
+        badSettings.minimum = -1.0;                // ... and a bad log range
+        expectRejected(badPlane, badSettings, "storage does not match",
+            "the storage check did not precede the range/log checks");
+    }
+
     return 0;
 }

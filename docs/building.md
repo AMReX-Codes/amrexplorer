@@ -12,6 +12,10 @@ cmake --preset default     # Release build → build/
 cmake --build --preset default
 ctest --preset default
 
+cmake --preset clang       # Release with Clang, warnings as errors → build-clang/
+cmake --build --preset clang
+ctest --preset clang
+
 cmake --preset debug       # Debug build → build-debug/
 cmake --build --preset debug
 ctest --preset debug
@@ -23,9 +27,27 @@ ctest --preset headless
 cmake --preset sanitizers  # Headless + ASan + UBSan → build-sanitizers/
 cmake --build --preset sanitizers
 ctest --preset sanitizers
+
+cmake --preset tsan        # Headless + ThreadSanitizer → build-tsan/
+cmake --build --preset tsan
+ctest --preset tsan
+
+cmake --preset qt-sanitizers  # Qt + ASan + UBSan → build-qt-sanitizers/
+cmake --build --preset qt-sanitizers
+ctest --preset qt-sanitizers
 ```
 
 The sanitizer preset enables AddressSanitizer and UndefinedBehaviorSanitizer.
+The tsan preset enables ThreadSanitizer (mutually exclusive with the ASan
+build), covering the concurrent block-read, cache, and stop-token paths.
+The qt-sanitizers preset runs the full suite — including the offscreen Qt
+smoke tests — under ASan/UBSan with leak detection. A `windows` preset
+(usable only on Windows hosts) mirrors the CI MSVC job.
+
+The clang preset mirrors the CI clang job (which builds with
+`-DAMREXPLORER_WARNINGS_AS_ERRORS=ON`): run it before pushing to catch
+Clang-only diagnostics that a GCC build stays silent about, such as
+`-Wunused-const-variable`.
 
 On macOS, Qt builds produce `build/src/qt/amrexplorer.app` by default. The bundle
 contains its executable at `Contents/MacOS/amrexplorer` and can be installed into a

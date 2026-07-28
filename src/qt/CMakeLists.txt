@@ -1,4 +1,6 @@
 add_executable(amrexplorer_qt
+    AnimationExporter.cpp
+    AnimationExporter.hpp
     AnimationPanel.cpp
     AnimationPanel.hpp
     CacheConfig.hpp
@@ -22,6 +24,8 @@ add_executable(amrexplorer_qt
     NumberFormat.hpp
     ScientificDoubleSpinBox.cpp
     ScientificDoubleSpinBox.hpp
+    SequenceController.cpp
+    SequenceController.hpp
     SetContoursDialog.cpp
     SetContoursDialog.hpp
     Theme.hpp
@@ -56,6 +60,7 @@ target_link_libraries(amrexplorer_qt
         amrexplorer::io
         amrexplorer::query
         amrexplorer::render2d
+        amrexplorer::pipeline
         amrexplorer::warnings
         Qt6::Concurrent
         Qt6::Core

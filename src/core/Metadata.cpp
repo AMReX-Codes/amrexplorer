@@ -112,14 +112,24 @@ std::vector<MetadataIssue> validateMetadata(const DatasetMetadata& metadata)
         } else if (!fieldNames.insert(field.name).second) {
             add(path + ".name", "must be unique");
         }
-        if (field.componentCount <= 0) {
-            add(path + ".componentCount", "must be positive");
-        }
-        if (!field.componentNames.empty()
-            && field.componentNames.size() != static_cast<std::size_t>(field.componentCount)) {
-            add(path + ".componentNames", "size must equal componentCount when provided");
+        // Each field is a single stored component, so componentNames carries at
+        // most one entry when provided.
+        if (field.componentNames.size() > 1) {
+            add(path + ".componentNames", "must not exceed one entry per field");
         }
     }
+
+    // The per-axis checks below index the fixed-size (3-element) geometry
+    // arrays with metadata.dimension. A malformed dimension is exactly the
+    // input this validator exists to catch, so it must not drive those reads
+    // out of bounds: clamp the axis count to the array bounds. An
+    // out-of-range dimension is already reported above; when it is invalid we
+    // skip the per-axis geometry checks entirely (they have no meaningful
+    // "active direction" to check) rather than emit a cascade of derived
+    // issues.
+    const int axisCount = metadata.dimension >= 1 && metadata.dimension <= 3
+        ? metadata.dimension
+        : 0;
 
     for (std::size_t levelIndex = 0; levelIndex < metadata.levels.size(); ++levelIndex) {
         const auto& level = metadata.levels[levelIndex];
@@ -130,7 +140,7 @@ std::vector<MetadataIssue> validateMetadata(const DatasetMetadata& metadata)
         if (!level.domain.valid(metadata.dimension)) {
             add(path + ".domain", "must be a valid index-space box");
         }
-        for (int axis = 0; axis < metadata.dimension; ++axis) {
+        for (int axis = 0; axis < axisCount; ++axis) {
             const auto i = static_cast<std::size_t>(axis);
             if (level.domain.centering[i] != 0
                 && level.domain.centering[i] != 1) {
@@ -147,12 +157,6 @@ std::vector<MetadataIssue> validateMetadata(const DatasetMetadata& metadata)
                     "must be finite in every active direction");
                 break;
             }
-            if (levelIndex + 1 < metadata.levels.size()
-                && level.refinementRatioToNext[i] <= 0) {
-                add(path + ".refinementRatioToNext",
-                    "must be positive in every active direction");
-                break;
-            }
         }
         for (std::size_t boxIndex = 0; boxIndex < level.boxes.size(); ++boxIndex) {
             const auto& box = level.boxes[boxIndex];
@@ -161,7 +165,7 @@ std::vector<MetadataIssue> validateMetadata(const DatasetMetadata& metadata)
                 add(boxPath, "must be a valid index-space box");
                 continue;
             }
-            for (int axis = 0; axis < metadata.dimension; ++axis) {
+            for (int axis = 0; axis < axisCount; ++axis) {
                 const auto i = static_cast<std::size_t>(axis);
                 if (box.lower[i] < level.domain.lower[i]
                     || box.upper[i] > level.domain.upper[i]) {
@@ -180,7 +184,11 @@ std::vector<MetadataIssue> validateMetadata(const DatasetMetadata& metadata)
         for (std::size_t blockIndex = 0; blockIndex < level.blocks.size(); ++blockIndex) {
             const auto& block = level.blocks[blockIndex];
             const auto blockPath = path + ".blocks[" + std::to_string(blockIndex) + "]";
-            if (!(block.box == level.boxes[blockIndex])) {
+            // Guard against a blocks/boxes size mismatch (already reported
+            // above): a block with no corresponding box cannot be compared,
+            // and indexing past level.boxes would be undefined behavior.
+            if (blockIndex < level.boxes.size()
+                && !(block.box == level.boxes[blockIndex])) {
                 add(blockPath + ".box", "must match the corresponding level box");
             }
             if (block.filePath.empty()) {

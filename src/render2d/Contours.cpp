@@ -1,4 +1,5 @@
 #include <amrexplorer/render2d/Contours.hpp>
+#include <amrexplorer/render2d/detail/PlaneValidation.hpp>
 
 #include <algorithm>
 #include <array>
@@ -44,109 +45,10 @@ std::vector<double> contourValues(
     return values;
 }
 
-ScalarPlane supersamplePlane(const ScalarPlane& plane, int factor)
-{
-    if (factor < 1) {
-        throw std::invalid_argument("supersample factor must be at least 1");
-    }
-    if (factor == 1) {
-        return plane;
-    }
-    if (plane.width < 1 || plane.height < 1) {
-        throw std::invalid_argument("scalar plane dimensions must be positive");
-    }
-    const auto pixelCount = static_cast<std::size_t>(plane.width)
-        * static_cast<std::size_t>(plane.height);
-    if (plane.values.size() != pixelCount || plane.valid.size() != pixelCount) {
-        throw std::invalid_argument("scalar plane storage does not match its dimensions");
-    }
-
-    // Fine sample (i * factor + k, j * factor + l) sits at continuous
-    // coordinate (i + k / factor, j + l / factor), so original samples land
-    // exactly on the fine grid.
-    ScalarPlane fine;
-    fine.width = (plane.width - 1) * factor + 1;
-    fine.height = (plane.height - 1) * factor + 1;
-    fine.physicalRegion = plane.physicalRegion;
-    const auto fineCount = static_cast<std::size_t>(fine.width)
-        * static_cast<std::size_t>(fine.height);
-    fine.values.resize(fineCount);
-    fine.valid.resize(fineCount);
-    if (plane.sourceLevel.size() == pixelCount) {
-        fine.sourceLevel.resize(fineCount);
-    }
-
-    const auto width = static_cast<std::size_t>(plane.width);
-    const auto sampleAt = [&](int i, int j) {
-        return static_cast<std::size_t>(i) + static_cast<std::size_t>(j) * width;
-    };
-    const auto usable = [&](std::size_t index) {
-        return plane.valid[index] != 0 && std::isfinite(plane.values[index]);
-    };
-    // Nearest original sample to continuous coordinate (x, y), rounding
-    // halves up, clamped to the plane. Computed in integer arithmetic on the
-    // fine indices so the result is exact for every factor.
-    const auto nearest = [&](int fineIndex, int extent) {
-        const int base = fineIndex / factor;
-        const int rem = fineIndex % factor;
-        int index = base + (2 * rem >= factor ? 1 : 0);
-        return index < extent ? index : extent - 1;
-    };
-
-    for (int j = 0; j < fine.height; ++j) {
-        const int j0 = j / factor;
-        const int j1 = j0 + 1 < plane.height ? j0 + 1 : plane.height - 1;
-        const double ty = static_cast<double>(j % factor) / factor;
-        const int nj = nearest(j, plane.height);
-        for (int i = 0; i < fine.width; ++i) {
-            const int i0 = i / factor;
-            const int i1 = i0 + 1 < plane.width ? i0 + 1 : plane.width - 1;
-            const double tx = static_cast<double>(i % factor) / factor;
-            const auto fineIndex = static_cast<std::size_t>(i)
-                + static_cast<std::size_t>(j) * static_cast<std::size_t>(fine.width);
-
-            const auto bl = sampleAt(i0, j0);
-            const auto br = sampleAt(i1, j0);
-            const auto tl = sampleAt(i0, j1);
-            const auto tr = sampleAt(i1, j1);
-            if (usable(bl) && usable(br) && usable(tl) && usable(tr)) {
-                const double bottom = static_cast<double>(plane.values[bl])
-                    + tx * (static_cast<double>(plane.values[br])
-                        - static_cast<double>(plane.values[bl]));
-                const double top = static_cast<double>(plane.values[tl])
-                    + tx * (static_cast<double>(plane.values[tr])
-                        - static_cast<double>(plane.values[tl]));
-                fine.values[fineIndex] =
-                    static_cast<float>(bottom + ty * (top - bottom));
-                fine.valid[fineIndex] = 1;
-            } else {
-                // Nearest-sample fallback: preserves plateaus and keeps NaN
-                // and invalid samples from bleeding across mask boundaries.
-                const auto near = sampleAt(nearest(i, plane.width), nj);
-                fine.values[fineIndex] = std::isfinite(plane.values[near])
-                    ? plane.values[near] : 0.0F;
-                fine.valid[fineIndex] = usable(near) ? 1 : 0;
-            }
-            if (!fine.sourceLevel.empty()) {
-                const auto near = sampleAt(nearest(i, plane.width), nj);
-                fine.sourceLevel[fineIndex] = plane.sourceLevel[near];
-            }
-        }
-    }
-    return fine;
-}
-
 std::vector<ContourSegment> generateContours(
     const ScalarPlane& plane, const std::vector<double>& values)
 {
-    if (plane.width < 0 || plane.height < 0) {
-        throw std::invalid_argument("scalar plane dimensions must not be negative");
-    }
-    const auto pixelCount = static_cast<std::size_t>(plane.width)
-        * static_cast<std::size_t>(plane.height);
-    if (plane.values.size() != pixelCount || plane.valid.size() != pixelCount) {
-        throw std::invalid_argument("scalar plane storage does not match its dimensions");
-    }
+    detail::validatePlaneStorage(plane, detail::PlaneExtent::AllowEmpty);
 
     std::vector<ContourSegment> segments;
     if (plane.width < 2 || plane.height < 2) {
@@ -426,21 +328,9 @@ void chaikinPass(ContourPolyline& polyline)
 
 std::vector<ContourPolyline> generateContourPolylines(
     const ScalarPlane& plane, const std::vector<double>& values,
-    int smoothIterations, int supersampleFactor)
+    int smoothIterations)
 {
-    if (supersampleFactor < 1) {
-        throw std::invalid_argument("supersample factor must be at least 1");
-    }
-    // With supersampling, chaining and smoothing run on the fine grid and the
-    // coordinates are scaled back at the end, so the output always uses the
-    // original plane pixel space.
-    ScalarPlane fineStorage;
-    const ScalarPlane* grid = &plane;
-    if (supersampleFactor > 1) {
-        fineStorage = supersamplePlane(plane, supersampleFactor);
-        grid = &fineStorage;
-    }
-    const auto segments = generateContours(*grid, values);
+    const auto segments = generateContours(plane, values);
     std::vector<ContourPolyline> polylines;
     // generateContours emits segments grouped by value in `values` order;
     // chain each group separately so different levels never join.
@@ -462,45 +352,7 @@ std::vector<ContourPolyline> generateContourPolylines(
             chaikinPass(polyline);
         }
     }
-    if (supersampleFactor > 1) {
-        const auto scale = 1.0F / static_cast<float>(supersampleFactor);
-        for (auto& polyline : polylines) {
-            for (auto& point : polyline.points) {
-                point[0] *= scale;
-                point[1] *= scale;
-            }
-        }
-    }
     return polylines;
-}
-
-int contourUpsampleFactor(
-    int contourWidth, int contourHeight, int displayWidth, int displayHeight)
-{
-    if (contourWidth < 1 || contourHeight < 1
-        || displayWidth < 1 || displayHeight < 1) {
-        return 1;
-    }
-    const auto displayRatio = std::max(
-        static_cast<double>(displayWidth) / static_cast<double>(contourWidth),
-        static_cast<double>(displayHeight) / static_cast<double>(contourHeight));
-    // Choose factor so that one fine cell spans at most two display pixels,
-    // then enforce a minimum fine-grid size of 256 on the shorter axis so
-    // contours stay smooth when the display is resized (contour extraction
-    // only sees the SliceQuery output size, not the widget dimensions).
-    const auto minAxis = static_cast<double>(
-        std::min(contourWidth, contourHeight));
-    const auto minFactor = static_cast<int>(
-        std::ceil((256.0 - 1.0) / (minAxis - 1.0)));
-    auto factor = std::clamp(static_cast<int>(std::ceil(displayRatio / 2.0)),
-        1, 16);
-    factor = std::max(factor, std::min(minFactor, 16));
-    while (factor > 1
-        && (static_cast<std::int64_t>(contourWidth - 1) * factor + 1 > 1024
-            || static_cast<std::int64_t>(contourHeight - 1) * factor + 1 > 1024)) {
-        --factor;
-    }
-    return factor;
 }
 
 std::vector<ContourPolyline> contourPolylinesForDisplay(
@@ -510,16 +362,16 @@ std::vector<ContourPolyline> contourPolylinesForDisplay(
     if (fineFactor < 1) {
         throw std::invalid_argument("fine factor must be at least 1");
     }
-    // The fine plane is already refined, so extraction runs without further
-    // supersampling; one Chaikin pass softens the cell-scale corners.
-    auto polylines = generateContourPolylines(finePlane, values, 1, 1);
+    // The contour plane is already at contour resolution; one Chaikin pass
+    // softens the cell-scale corners.
+    auto polylines = generateContourPolylines(finePlane, values, 1);
     if (finePlane.width < 1 || finePlane.height < 1) {
         return polylines;
     }
-    // Recover the original (pre-refinement) dimensions supersamplePlane
-    // produced this fine plane from, then map fine coordinates into display
-    // pixel space: fine coordinate f is original sample coordinate
-    // f / fineFactor, and original sample center j maps to display pixel
+    // Recover the original (pre-refinement) dimensions the fine plane was
+    // produced from, then map fine coordinates into display pixel space: fine
+    // coordinate f is original sample coordinate f / fineFactor, and original
+    // sample center j maps to display pixel
     // ((j + 0.5) * display / original) - 0.5, cell-center to cell-center.
     const auto originalWidth = (finePlane.width - 1) / fineFactor + 1;
     const auto originalHeight = (finePlane.height - 1) / fineFactor + 1;

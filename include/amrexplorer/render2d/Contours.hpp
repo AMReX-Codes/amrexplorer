@@ -28,31 +28,6 @@ struct ContourPolyline {
 [[nodiscard]] std::vector<double> contourValues(
     double minimum, double maximum, int count, bool logarithmic = false);
 
-// Refines a scalar plane by bilinear interpolation so contour extraction on
-// the result produces genuinely smooth iso-lines instead of cell-scale
-// staircases. The fine grid has dimensions ((width - 1) * factor + 1) x
-// ((height - 1) * factor + 1), so fine sample (i * factor + k, j * factor + l)
-// sits at continuous coordinate (i + k / factor, j + l / factor) and every
-// original sample lands exactly on a fine sample. physicalRegion is copied
-// unchanged; sourceLevel holds the nearest original sample's level (left
-// empty when the input plane has no per-sample levels).
-//
-// A fine sample takes the bilinear interpolation of the four surrounding
-// original samples when all four are valid (valid != 0) and finite; otherwise
-// it copies the value and validity of the nearest original sample. The
-// nearest-sample fallback preserves plateaus and keeps NaN and invalid
-// samples from bleeding across mask boundaries: a fine sample is valid if and
-// only if its nearest original sample is valid and finite. Non-finite
-// original samples count as invalid for this purpose and are never
-// propagated; a fine sample that would copy a non-finite value is marked
-// invalid and stores 0 instead.
-//
-// Throws std::invalid_argument when factor < 1. factor == 1 returns a copy
-// of the plane. With factor > 1, throws std::invalid_argument when width or
-// height is less than 1 or when the plane storage does not match its
-// dimensions.
-[[nodiscard]] ScalarPlane supersamplePlane(const ScalarPlane& plane, int factor);
-
 // Marching squares over the plane's corner samples. A cell is the quad formed
 // by samples (i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1), so segment
 // coordinates are plane pixel coordinates (x = column, y = row) spanning
@@ -83,31 +58,15 @@ struct ContourPolyline {
 // bounding box. This smoothing is a visual enhancement beyond legacy Amrvis
 // behavior, which drew the raw segments. smoothIterations <= 0 returns the
 // chained but unsmoothed polylines.
-//
-// Supersampling: with supersampleFactor > 1 the plane is first refined with
-// supersamplePlane, segments are chained and smoothed on the fine grid, and
-// every output coordinate is finally scaled back by 1 / supersampleFactor, so
-// polylines are always returned in the original plane pixel space. This
-// removes the cell-scale staircase that Chaikin smoothing alone cannot fix.
-// Throws std::invalid_argument when supersampleFactor < 1.
 [[nodiscard]] std::vector<ContourPolyline> generateContourPolylines(
     const ScalarPlane& plane, const std::vector<double>& values,
-    int smoothIterations = 2, int supersampleFactor = 1);
+    int smoothIterations = 2);
 
-// Chooses the bilinear refinement factor for contour extraction on a
-// data-resolution plane: ceil(display samples per contour-plane sample / 2)
-// (the coarser axis wins), clamped to [1, 16], with a minimum fine-grid
-// target of 256 on the shorter axis, then reduced while the fine grid would
-// exceed 1024 samples on either axis. One fine cell then spans at most a
-// couple of display pixels, so marching squares on the refined plane
-// resolves the bilinear interpolant's iso-curve far below the visible scale.
-[[nodiscard]] int contourUpsampleFactor(
-    int contourWidth, int contourHeight, int displayWidth, int displayHeight);
-
-// Marching squares + chaining + one Chaikin corner-cutting pass on an already
-// refined plane (see supersamplePlane), with the output mapped from
-// fine-plane pixel space into display-plane pixel space. fineFactor is the
-// factor the plane was refined with, so fine coordinate f corresponds to
+// Marching squares + chaining + one Chaikin corner-cutting pass on a contour
+// plane, with the output mapped from contour-plane pixel space into
+// display-plane pixel space. fineFactor is the refinement factor the plane
+// was produced with (1 when the plane is already at contour resolution, which
+// is what the slice pipeline produces): fine coordinate f corresponds to
 // original sample coordinate f / fineFactor, and original sample center j
 // maps to display pixel ((j + 0.5) * display / original) - 0.5 (cell-center
 // to cell-center; display-plane sample i sits at scene coordinate i).

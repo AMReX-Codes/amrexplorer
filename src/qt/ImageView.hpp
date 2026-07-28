@@ -1,17 +1,21 @@
 #pragma once
 
+#include <amrexplorer/pipeline/ImageTransformPolicy.hpp>
+
 #include <QGraphicsView>
 #include <QColor>
 #include <QImage>
 #include <QLineF>
 #include <QPainterPath>
 #include <QPoint>
+#include <QPointF>
 #include <QRectF>
 
 #include <optional>
 #include <vector>
 
 class QGraphicsLineItem;
+class QGraphicsItem;
 class QGraphicsPathItem;
 class QGraphicsPixmapItem;
 class QGraphicsRectItem;
@@ -38,13 +42,30 @@ struct OverlayPath {
     float width = 1.0F;
 };
 
+struct PointOverlay {
+    std::vector<QPointF> points;
+    QColor color;
+    float size = 3.0F;
+};
+
+// ImageTransformPolicy lives in the Qt-free pipeline layer (the
+// DisplayCoordinator decides it from pure request data); re-export it here
+// so amrvis::qt::ImageTransformPolicy keeps resolving for the GUI.
+using amrvis::ImageTransformPolicy;
+
 class ImageView final : public QGraphicsView {
     Q_OBJECT
 
 public:
     explicit ImageView(QWidget* parent = nullptr);
 
-    void setImage(const QImage& image);
+    // Preserve keeps the current panel-local transform when replacing a raster
+    // after rubber-band zoom or pan. GeometryAware refits only when the raster
+    // dimensions change. Refit discards the transform even for equal-size
+    // rasters whose data regions are incompatible.
+    void setImage(const QImage& image,
+        ImageTransformPolicy transformPolicy =
+            ImageTransformPolicy::GeometryAware);
     void setGridBoxes(const std::vector<GridBoxOverlay>& boxes);
     void setOverlaySegments(const std::vector<OverlaySegment>& segments);
     // Smooth contour polylines, rendered as cosmetic-pen path items at the
@@ -52,6 +73,7 @@ public:
     // segment items are untouched, so callers that switch overlay kinds must
     // also clear the other setter. setImage/setPlaceholder drop both.
     void setOverlayPaths(const std::vector<OverlayPath>& paths);
+    void setPointOverlays(const std::vector<PointOverlay>& overlays);
     // Crosshair guides spanning the whole image, used by the 3-D slice views
     // to mark where the other two slice planes intersect this one. The lines
     // are in scene coordinates; a nullopt line hides that guide. They layer
@@ -69,6 +91,8 @@ public:
     void setPlaceholder(const QString& text);
     [[nodiscard]] bool hasImage() const noexcept;
     [[nodiscard]] const QImage& image() const noexcept;
+    [[nodiscard]] std::size_t pointOverlayCount() const noexcept;
+    [[nodiscard]] const std::vector<QColor>& pointOverlayColors() const noexcept;
     // Renders the scene (base image plus grid boxes and any other overlays)
     // to a fresh QImage for export. scaleFactor multiplies the raster's native
     // resolution so the export reflects the on-screen zoom (WYSIWYG); an
@@ -126,6 +150,8 @@ private:
     std::vector<QGraphicsRectItem*> m_gridItems;
     std::vector<QGraphicsLineItem*> m_overlayItems;
     std::vector<QGraphicsPathItem*> m_pathItems;
+    std::vector<QGraphicsItem*> m_pointItems;
+    std::vector<QColor> m_pointOverlayColors;
     std::optional<QLineF> m_crosshairVertical;
     std::optional<QLineF> m_crosshairHorizontal;
     QColor m_crosshairVerticalColor;

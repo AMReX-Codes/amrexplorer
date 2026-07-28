@@ -1,5 +1,8 @@
 #include <amrexplorer/query/SliceQuery.hpp>
 
+#include <amrexplorer/io/PlotfileBlockReader.hpp>  // ReadCancelled
+#include <amrexplorer/io/StandaloneMetadataReader.hpp>  // readMultiFab
+
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -345,9 +348,110 @@ int main()
         }
     }
 
+    // --- Query edge cases: cancellation and a fully-outside-domain slice,
+    // both against the two-level fixture opened at the top (dataset 9).
+    amrvis::SliceRequest edge;
+    edge.dataset.value = 9;
+    edge.field.value = 0;
+    edge.normalDirection = 1;
+    edge.visibleRegion = {{{0.0, 0.0, 0.0}}, {{1.0, 1.0, 0.0}}};
+    edge.maximumLevel = 1;
+    edge.outputSize = {4, 4};
+
+    // A pre-cancelled token aborts execute() with ReadCancelled at the top of
+    // its per-level loop, before any block work. LineQuery had a cancellation
+    // test; SliceQuery did not.
+    {
+        amrvis::StopSource stopped;
+        stopped.request_stop();
+        bool cancelled = false;
+        try {
+            (void)query.execute(edge, stopped.get_token());
+        } catch (const amrvis::ReadCancelled&) {
+            cancelled = true;
+        }
+        require(cancelled, "a pre-cancelled slice query was not aborted");
+    }
+
+    // A visible region entirely outside the physical domain finds no candidate
+    // blocks and yields an all-invalid plane rather than crashing or inventing
+    // coverage.
+    {
+        auto outside = edge;
+        outside.visibleRegion = {{{10.0, 10.0, 0.0}}, {{11.0, 11.0, 0.0}}};
+        const auto result = query.execute(outside);
+        require(result.metrics.candidateBlocks == 0
+                && result.metrics.blocksRead == 0,
+            "an out-of-domain slice read blocks");
+        require(!result.plane.valid.empty(), "the out-of-domain plane is empty");
+        bool allInvalid = true;
+        for (std::size_t pixel = 0; pixel < result.plane.valid.size(); ++pixel) {
+            allInvalid = allInvalid && result.plane.valid[pixel] == 0
+                && result.plane.sourceLevel[pixel] == -1;
+        }
+        require(allInvalid, "an out-of-domain slice invented coverage");
+    }
+
+    // --- ghost-cell-bearing standalone MultiFab --------------------------
+    // A v2 MultiFab whose single 2x2 valid box carries a 1-cell ghost halo:
+    // the FAB payload stores the 4x4 grown box, with the four valid cells set
+    // to 10/20/30/40 and every ghost cell to a -99 sentinel. Slicing the valid
+    // domain must sample the valid cells — proving the reader offsets into the
+    // grown-box data by the ghost width — and must never surface a ghost value
+    // (an off-by-the-ghost-width index would read -99).
+    const auto ghostRoot = std::filesystem::temp_directory_path()
+        / ("amrexplorer-slice-ghost-" + std::to_string(unique));
+    std::filesystem::create_directories(ghostRoot);
+    writeText(ghostRoot / "Cell_H",
+        "2\n1\n1\n"
+        "(1,1)\n"
+        "(1 0\n"
+        "((0,0) (1,1) (0,0))\n"
+        ")\n"
+        "1\n"
+        "FabOnDisk: Cell_D_00000 0\n"
+        "\n"
+        + std::string(realDescriptor) + "\n");
+    {
+        constexpr double g = -99.0;  // ghost sentinel
+        const std::array<double, 16> grown{
+            g, g,  g,  g,     // j = -1 (ghost row)
+            g, 10, 20, g,     // j =  0: valid (0,0)=10, (1,0)=20
+            g, 30, 40, g,     // j =  1: valid (0,1)=30, (1,1)=40
+            g, g,  g,  g,     // j =  2 (ghost row)
+        };
+        std::ofstream out(ghostRoot / "Cell_D_00000", std::ios::binary);
+        out.write(reinterpret_cast<const char*>(grown.data()),
+            static_cast<std::streamsize>(grown.size() * sizeof(double)));
+    }
+    auto ghostMeta =
+        amrvis::StandaloneMetadataReader{}.readMultiFab(ghostRoot / "Cell");
+    require(ghostMeta.metadata->levels[0].ghostWidth[0] == 1
+            && ghostMeta.metadata->levels[0].ghostWidth[1] == 1,
+        "ghost MultiFab did not retain its ghost width");
+    amrvis::PlotfileDataset ghostDataset(
+        ghostRoot, amrvis::DatasetId{31}, 1024 * 1024, ghostMeta);
+    amrvis::SliceQuery ghostQuery(ghostDataset);
+    amrvis::SliceRequest ghostRequest;
+    ghostRequest.dataset.value = 31;
+    ghostRequest.field.value = 0;
+    ghostRequest.normalDirection = 1;
+    ghostRequest.visibleRegion = {{{0.0, 0.0, 0.0}}, {{2.0, 2.0, 0.0}}};
+    ghostRequest.maximumLevel = 0;
+    ghostRequest.outputSize = {2, 2};
+    const auto ghostPlane = ghostQuery.execute(ghostRequest);
+    const std::array<float, 4> expected{10.0F, 20.0F, 30.0F, 40.0F};
+    for (std::size_t pixel = 0; pixel < 4; ++pixel) {
+        require(ghostPlane.plane.valid[pixel] == 1,
+            "ghost MultiFab slice left a hole in the valid domain");
+        require(ghostPlane.plane.values[pixel] == expected[pixel],
+            "ghost MultiFab slice sampled the wrong cell (ghost offset mismatch)");
+    }
+
     std::filesystem::remove_all(root);
     std::filesystem::remove_all(linearRoot);
     std::filesystem::remove_all(linear3dRoot);
+    std::filesystem::remove_all(ghostRoot);
     return 0;
 }
 

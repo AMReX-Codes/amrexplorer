@@ -1,4 +1,5 @@
 #include <amrexplorer/query/LineQuery.hpp>
+#include <amrexplorer/query/detail/BlockLookup.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -13,10 +14,11 @@
 namespace amrvis {
 namespace {
 
-struct LoadedBlock {
-    IntBox validBox;
-    PlotfileDataset::BlockCache::Handle data;
-};
+using detail::LoadedBlock;
+using detail::intersects;
+using detail::contains;
+using detail::physicalToIndex;
+using detail::valueOffset;
 
 // A covering cell hit during the line walk: which level won, the cell index,
 // and the cell-centered value there.
@@ -26,83 +28,7 @@ struct Cover {
     float value = 0.0F;
 };
 
-bool intersects(const IntBox& left, const IntBox& right, int dimension)
-{
-    for (int axis = 0; axis < dimension; ++axis) {
-        const auto i = static_cast<std::size_t>(axis);
-        if (left.upper[i] < right.lower[i] || right.upper[i] < left.lower[i]) {
-            return false;
-        }
-    }
-    return true;
-}
 
-bool contains(const IntBox& box, const Int3& point, int dimension)
-{
-    for (int axis = 0; axis < dimension; ++axis) {
-        const auto i = static_cast<std::size_t>(axis);
-        if (point[i] < box.lower[i] || point[i] > box.upper[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-int physicalToIndex(double position, const DatasetMetadata& metadata,
-    const LevelMetadata& level, int axis)
-{
-    (void) metadata;
-    return sampleIndex(level, axis, position);
-}
-
-std::size_t valueOffset(const IntBox& box, const Int3& point, int dimension)
-{
-    const auto extent = [&box](std::size_t axis) {
-        const auto value = static_cast<std::int64_t>(box.upper[axis])
-            - box.lower[axis] + 1;
-        if (value <= 0) {
-            throw std::overflow_error("FAB extent is not positive");
-        }
-        return static_cast<std::uint64_t>(value);
-    };
-    const auto relative = [&box, &point](std::size_t axis) {
-        const auto value = static_cast<std::int64_t>(point[axis]) - box.lower[axis];
-        if (value < 0) {
-            throw std::overflow_error("FAB point precedes its indexed box");
-        }
-        return static_cast<std::uint64_t>(value);
-    };
-    const auto nx = extent(0);
-    const auto x = relative(0);
-    if (dimension == 1) {
-        return static_cast<std::size_t>(x);
-    }
-    const auto ny = extent(1);
-    const auto y = relative(1);
-    if (dimension == 2) {
-        if (y > (std::numeric_limits<std::uint64_t>::max() - x) / nx) {
-            throw std::overflow_error("2-D FAB offset overflows");
-        }
-        const auto offset = x + nx * y;
-        if (offset > std::numeric_limits<std::size_t>::max()) {
-            throw std::overflow_error("2-D FAB offset exceeds addressable memory");
-        }
-        return static_cast<std::size_t>(offset);
-    }
-    const auto z = relative(2);
-    if (z > (std::numeric_limits<std::uint64_t>::max() - y) / ny) {
-        throw std::overflow_error("3-D FAB row offset overflows");
-    }
-    const auto row = y + ny * z;
-    if (row > (std::numeric_limits<std::uint64_t>::max() - x) / nx) {
-        throw std::overflow_error("3-D FAB offset overflows");
-    }
-    const auto offset = x + nx * row;
-    if (offset > std::numeric_limits<std::size_t>::max()) {
-        throw std::overflow_error("3-D FAB offset exceeds addressable memory");
-    }
-    return static_cast<std::size_t>(offset);
-}
 
 } // namespace
 
@@ -236,7 +162,11 @@ LineQueryResult LineQuery::execute(
     // points. Uncovered stretches (ExactLevel outside coverage, or out of
     // domain) become invalid samples so the polyline breaks there.
     auto x = physicalStart;
-    constexpr double endEpsilon = 1e-9;
+    // Relative to the cell size (matching cellStepNudge below): an absolute
+    // 1e-9 epsilon truncates domains whose physical extent is near that scale
+    // (micro/nano-scale SI-unit geometries), dropping the tail samples or
+    // yielding an empty line with no error.
+    const double endEpsilon = 1e-9 * finestCellSize;
     while (x < physicalEnd - endEpsilon) {
         if ((result.line.positions.size() & 31U) == 0U
             && cancellation.stop_requested()) {

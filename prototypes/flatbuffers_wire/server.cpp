@@ -147,7 +147,7 @@ class Session {
         fieldOffsets.reserve(metadata.fields.size());
         for (const auto& field : metadata.fields) {
             fieldOffsets.push_back(fb::CreateFieldMetadata(
-                builder, builder.CreateString(field.name), field.componentCount));
+                builder, builder.CreateString(field.name), 1));
         }
         const auto lower = builder.CreateVector(metadata.physicalDomain.lower.values.data(),
                                                 metadata.physicalDomain.lower.values.size());

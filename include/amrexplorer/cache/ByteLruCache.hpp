@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -123,6 +124,23 @@ public:
         return Handle(m_state, key, found->second.value, found->second.bytes);
     }
 
+    // Like findAndPin but records no hit or miss. Used for the double-checked
+    // second lookup a caller performs after taking a heavier lock: the logical
+    // lookup was already counted by the first findAndPin, so counting again
+    // would double-count the miss (and record a spurious miss+hit for a
+    // key a racing thread inserted in between).
+    [[nodiscard]] Handle peekAndPin(const Key& key)
+    {
+        std::scoped_lock lock(m_state->mutex);
+        const auto found = m_state->entries.find(key);
+        if (found == m_state->entries.end()) {
+            return {};
+        }
+        touch(*m_state, found->second);
+        pin(*m_state, found->second);
+        return Handle(m_state, key, found->second.value, found->second.bytes);
+    }
+
     [[nodiscard]] Handle insertAndPin(
         Key key, std::shared_ptr<const Value> value, std::uint64_t bytes)
     {
@@ -168,6 +186,7 @@ public:
             return false;
         }
         eraseEntry(*m_state, found);
+        ++m_state->metrics.clears;
         return true;
     }
 
@@ -187,6 +206,7 @@ public:
             if (current->second.pinCount == 0) {
                 const auto doomed = current++;
                 eraseEntry(*m_state, doomed);
+                ++m_state->metrics.clears;
             } else {
                 ++current;
             }
@@ -235,30 +255,36 @@ private:
         ++entry.pinCount;
     }
 
+    // Removes an entry's storage and accounting. The caller records the
+    // reason (capacity eviction vs. explicit clear) in the matching counter.
     static void eraseEntry(State& state, typename EntryMap::iterator entry)
     {
         state.metrics.residentBytes -= entry->second.bytes;
         state.lru.erase(entry->second.lruPosition);
         state.entries.erase(entry);
-        ++state.metrics.evictions;
     }
 
+    // Single tail-to-head sweep of the LRU list, evicting unpinned entries
+    // until the incoming bytes fit or the list is exhausted. Each list node is
+    // examined at most once (O(n)); the previous version restarted from the
+    // tail after every eviction, making it O(k*n) with a pinned-heavy tail.
     static void evictFor(State& state, std::uint64_t incomingBytes)
     {
-        while (state.metrics.residentBytes + incomingBytes > state.metrics.budgetBytes) {
-            bool evicted = false;
-            auto candidate = state.lru.rbegin();
-            while (candidate != state.lru.rend()) {
-                const auto found = state.entries.find(*candidate);
-                if (found != state.entries.end() && found->second.pinCount == 0) {
-                    eraseEntry(state, found);
-                    evicted = true;
-                    break;
-                }
-                ++candidate;
-            }
-            if (!evicted) {
-                break;
+        auto it = state.lru.end();
+        while (it != state.lru.begin()
+            && state.metrics.residentBytes + incomingBytes
+                > state.metrics.budgetBytes) {
+            const auto candidate = std::prev(it);
+            const auto found = state.entries.find(*candidate);
+            if (found != state.entries.end() && found->second.pinCount == 0) {
+                // eraseEntry removes *candidate from the list (invalidating
+                // `candidate`); `it` points past it and stays valid, so the
+                // next std::prev(it) is the node that preceded the erased one.
+                eraseEntry(state, found);
+                ++state.metrics.evictions;
+            } else {
+                // Keep a pinned (or already-gone) entry and move toward head.
+                it = candidate;
             }
         }
     }

@@ -1,4 +1,5 @@
 #include <amrexplorer/io/FabCatalog.hpp>
+#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
@@ -16,73 +17,29 @@
 namespace amrvis {
 namespace {
 
-std::vector<int> parseIntegers(const std::string& text)
-{
-    std::string numbers = text;
-    std::replace_if(numbers.begin(), numbers.end(), [](char character) {
-        return !(character >= '0' && character <= '9')
-            && character != '-' && character != '+';
-    }, ' ');
-    std::istringstream input(numbers);
-    std::vector<int> values;
-    int value = 0;
-    while (input >> value) values.push_back(value);
-    return values;
-}
-
 std::size_t balancedEnd(const std::string& text, std::size_t start)
 {
-    if (start >= text.size() || text[start] != '(') {
-        throw MetadataReadError("expected a parenthesized FAB header expression");
-    }
-    int depth = 0;
-    for (std::size_t i = start; i < text.size(); ++i) {
-        depth += text[i] == '(' ? 1 : text[i] == ')' ? -1 : 0;
-        if (depth == 0) return i + 1;
-    }
-    throw MetadataReadError("unterminated FAB header expression");
+    return detail::balancedExpressionEnd<MetadataReadError>(text, start);
 }
 
 std::pair<FabRealPrecision, std::size_t> parsePrecision(
     const std::string& descriptor)
 {
-    const auto values = parseIntegers(descriptor);
-    constexpr std::size_t start = 1;
-    constexpr std::array<int, 8> ieee32{32, 8, 23, 0, 1, 9, 0, 127};
-    constexpr std::array<int, 8> ieee64{64, 11, 52, 0, 1, 12, 0, 1023};
-    if (values.size() >= 9
-        && std::equal(ieee32.begin(), ieee32.end(), values.begin() + start)) {
-        return {FabRealPrecision::Single, 4};
-    }
-    if (values.size() >= 9
-        && std::equal(ieee64.begin(), ieee64.end(), values.begin() + start)) {
-        return {FabRealPrecision::Double, 8};
-    }
-    throw MetadataReadError("only IEEE-32 and IEEE-64 FAB data are supported");
+    // The strict shared parse: unlike the previous catalog-local variant it
+    // also validates the format-entry count and the byte order, so a
+    // descriptor that would fail at the first block read now fails at
+    // cataloging too instead of slipping through.
+    const auto parsed
+        = detail::parseRealDescriptor<MetadataReadError>(descriptor);
+    return {parsed.bytes == 4 ? FabRealPrecision::Single
+                              : FabRealPrecision::Double,
+        parsed.bytes};
 }
 
 IntBox parseBox(const std::string& text, int& dimension)
 {
-    const auto firstTuple = text.find('(', 1);
-    const auto firstEnd = text.find(')', firstTuple);
-    if (firstTuple == std::string::npos || firstEnd == std::string::npos) {
-        throw MetadataReadError("cannot infer FAB dimension");
-    }
-    dimension = static_cast<int>(
-        parseIntegers(text.substr(firstTuple, firstEnd - firstTuple + 1)).size());
-    const auto values = parseIntegers(text);
-    if (dimension < 1 || dimension > 3
-        || values.size() != static_cast<std::size_t>(dimension * 3)) {
-        throw MetadataReadError("malformed AMReX Box in FAB header");
-    }
-    IntBox box;
-    for (int axis = 0; axis < dimension; ++axis) {
-        const auto i = static_cast<std::size_t>(axis);
-        box.lower[i] = values[i];
-        box.upper[i] = values[static_cast<std::size_t>(dimension + axis)];
-        box.centering[i] = values[static_cast<std::size_t>(2 * dimension + axis)];
-    }
-    return box;
+    return detail::parseAmrexBoxInferDimension<MetadataReadError>(
+        text, dimension);
 }
 
 std::uint64_t payloadBytes(
@@ -175,24 +132,7 @@ std::filesystem::path companionHeaderPath(
 IntBox storedBox(
     const IntBox& validBox, const Int3& ghostWidth, int dimension)
 {
-    auto result = validBox;
-    for (int axis = 0; axis < dimension; ++axis) {
-        const auto index = static_cast<std::size_t>(axis);
-        const auto lower = static_cast<std::int64_t>(validBox.lower[index])
-            - ghostWidth[index];
-        const auto upper = static_cast<std::int64_t>(validBox.upper[index])
-            + ghostWidth[index];
-        if (lower < std::numeric_limits<int>::min()
-            || lower > std::numeric_limits<int>::max()
-            || upper < std::numeric_limits<int>::min()
-            || upper > std::numeric_limits<int>::max()) {
-            throw MetadataReadError(
-                "companion MultiFab ghost-grown FAB box exceeds integer range");
-        }
-        result.lower[index] = static_cast<int>(lower);
-        result.upper[index] = static_cast<int>(upper);
-    }
-    return result;
+    return detail::grownBox<MetadataReadError>(validBox, ghostWidth, dimension);
 }
 
 std::vector<FabRecord> recordsFromCompanion(

@@ -1,118 +1,40 @@
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
+#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 
 namespace amrvis {
 namespace {
 
-struct RealEncoding {
-    std::size_t bytes = 0;
-    bool littleEndian = false;
-};
-
-std::vector<int> parseIntegers(const std::string& text)
-{
-    std::string numbers = text;
-    std::replace_if(numbers.begin(), numbers.end(), [](char character) {
-        return !(character >= '0' && character <= '9')
-            && character != '-' && character != '+';
-    }, ' ');
-    std::istringstream input(numbers);
-    std::vector<int> values;
-    int value = 0;
-    while (input >> value) {
-        values.push_back(value);
-    }
-    return values;
-}
+// Shared strict parsers from FabHeaderParsing.hpp, bound to this reader's
+// error type.
+using RealEncoding = detail::ParsedRealDescriptor;
 
 IntBox parseAmrexBox(const std::string& text, int dimension)
 {
-    const auto values = parseIntegers(text);
-    if (values.size() != static_cast<std::size_t>(dimension * 3)) {
-        throw BlockReadError("malformed AMReX Box in FAB header");
-    }
-    IntBox box;
-    for (int axis = 0; axis < dimension; ++axis) {
-        const auto i = static_cast<std::size_t>(axis);
-        box.lower[i] = values[i];
-        box.upper[i] = values[static_cast<std::size_t>(dimension + axis)];
-        box.centering[i] = values[static_cast<std::size_t>(2 * dimension + axis)];
-    }
-    return box;
+    return detail::parseAmrexBox<BlockReadError>(text, dimension);
 }
 
 std::size_t balancedExpressionEnd(const std::string& text, std::size_t start)
 {
-    if (start >= text.size() || text[start] != '(') {
-        throw BlockReadError("expected a parenthesized FAB header expression");
-    }
-    int depth = 0;
-    for (std::size_t i = start; i < text.size(); ++i) {
-        if (text[i] == '(') {
-            ++depth;
-        } else if (text[i] == ')') {
-            --depth;
-            if (depth == 0) {
-                return i + 1;
-            }
-        }
-    }
-    throw BlockReadError("unterminated FAB header expression");
+    return detail::balancedExpressionEnd<BlockReadError>(text, start);
 }
 
 RealEncoding parseRealDescriptor(const std::string& descriptor)
 {
-    const auto values = parseIntegers(descriptor);
-    constexpr std::size_t formatCountIndex = 0;
-    constexpr std::size_t formatStartIndex = 1;
-    constexpr std::size_t formatEntries = 8;
-    constexpr std::size_t orderCountIndex = formatStartIndex + formatEntries;
-    if (values.size() <= orderCountIndex
-        || values[formatCountIndex] != static_cast<int>(formatEntries)) {
-        throw BlockReadError("malformed FAB RealDescriptor");
-    }
-
-    constexpr std::array<int, formatEntries> ieee32{
-        32, 8, 23, 0, 1, 9, 0, 127};
-    constexpr std::array<int, formatEntries> ieee64{
-        64, 11, 52, 0, 1, 12, 0, 1023};
-    const auto matchesFormat = [&values](const auto& expected) {
-        return std::equal(expected.begin(), expected.end(),
-            values.begin() + static_cast<std::ptrdiff_t>(formatStartIndex));
-    };
-    const auto bytes = matchesFormat(ieee32) ? 4
-        : matchesFormat(ieee64) ? 8 : 0;
-    if (bytes == 0) {
-        throw BlockReadError("only IEEE-32 and IEEE-64 FAB data are supported");
-    }
-
-    if (values[orderCountIndex] != bytes
-        || values.size() < orderCountIndex + 1 + static_cast<std::size_t>(bytes)) {
-        throw BlockReadError("malformed FAB byte-order descriptor");
-    }
-
-    bool ascending = true;
-    bool descending = true;
-    for (int byte = 0; byte < bytes; ++byte) {
-        const auto value = values[orderCountIndex + 1 + static_cast<std::size_t>(byte)];
-        ascending = ascending && value == byte + 1;
-        descending = descending && value == bytes - byte;
-    }
-    if (!ascending && !descending) {
-        throw BlockReadError("unsupported non-contiguous FAB byte order");
-    }
-    return {static_cast<std::size_t>(bytes), descending};
+    return detail::parseRealDescriptor<BlockReadError>(descriptor);
 }
 
 struct FabHeader {
@@ -162,21 +84,7 @@ FabHeader readFabHeader(
 
 IntBox grownBox(const IntBox& source, const Int3& ghost, int dimension)
 {
-    auto result = source;
-    for (int axis = 0; axis < dimension; ++axis) {
-        const auto i = static_cast<std::size_t>(axis);
-        const auto lower = static_cast<std::int64_t>(source.lower[i]) - ghost[i];
-        const auto upper = static_cast<std::int64_t>(source.upper[i]) + ghost[i];
-        if (lower < std::numeric_limits<int>::min()
-            || lower > std::numeric_limits<int>::max()
-            || upper < std::numeric_limits<int>::min()
-            || upper > std::numeric_limits<int>::max()) {
-            throw BlockReadError("ghost-grown FAB box exceeds supported integer range");
-        }
-        result.lower[i] = static_cast<int>(lower);
-        result.upper[i] = static_cast<int>(upper);
-    }
-    return result;
+    return detail::grownBox<BlockReadError>(source, ghost, dimension);
 }
 
 std::uint64_t pointCount(const IntBox& box, int dimension)
@@ -196,30 +104,6 @@ std::uint64_t pointCount(const IntBox& box, int dimension)
         result *= length;
     }
     return result;
-}
-
-double decodeReal(const unsigned char* source, const RealEncoding& encoding)
-{
-    const bool nativeLittle = std::endian::native == std::endian::little;
-    if (encoding.bytes == sizeof(double)) {
-        std::array<unsigned char, sizeof(double)> bytes{};
-        std::copy_n(source, bytes.size(), bytes.begin());
-        if (nativeLittle != encoding.littleEndian) {
-            std::reverse(bytes.begin(), bytes.end());
-        }
-        double value = 0.0;
-        std::memcpy(&value, bytes.data(), sizeof(value));
-        return value;
-    }
-
-    std::array<unsigned char, sizeof(float)> bytes{};
-    std::copy_n(source, bytes.size(), bytes.begin());
-    if (nativeLittle != encoding.littleEndian) {
-        std::reverse(bytes.begin(), bytes.end());
-    }
-    float value = 0.0F;
-    std::memcpy(&value, bytes.data(), sizeof(value));
-    return static_cast<double>(value);
 }
 
 } // namespace
@@ -302,6 +186,15 @@ BlockReadResult PlotfileBlockReader::readBlock(
     if (!input) {
         throw BlockReadError("cannot open FAB data file '" + dataPath.string() + "'");
     }
+    // Stat the file up front so a crafted box extent (which sizes the buffer
+    // below) cannot force a huge transient allocation or bad_alloc: the
+    // requested component must actually fit within the data file.
+    std::error_code sizeError;
+    const auto fileSize = std::filesystem::file_size(dataPath, sizeError);
+    if (sizeError) {
+        throw BlockReadError("cannot stat FAB data file '" + dataPath.string()
+            + "': " + sizeError.message());
+    }
 
     FabHeader header;
     if (level.visMfHeaderVersion == 1) {
@@ -342,42 +235,60 @@ BlockReadResult PlotfileBlockReader::readBlock(
             > static_cast<std::uint64_t>(std::numeric_limits<std::streamsize>::max())) {
         throw BlockReadError("FAB component exceeds addressable memory");
     }
-
-    std::vector<unsigned char> encoded(static_cast<std::size_t>(componentBytes));
-    constexpr std::size_t cancellationChunkBytes = 1024U * 1024U;
-    std::size_t bytesCompleted = 0;
-    while (bytesCompleted < encoded.size()) {
-        if (cancellation.stop_requested()) {
-            throw ReadCancelled();
-        }
-        const auto chunk = std::min(
-            cancellationChunkBytes, encoded.size() - bytesCompleted);
-        input.read(reinterpret_cast<char*>(encoded.data() + bytesCompleted),
-            static_cast<std::streamsize>(chunk));
-        if (input.gcount() != static_cast<std::streamsize>(chunk)) {
-            throw BlockReadError("FAB component payload is truncated");
-        }
-        bytesCompleted += chunk;
+    // Bound the allocation by the actual file (staged to avoid overflow in
+    // offset + bytes): a truncated file or an oversized claimed box is caught
+    // here, before the buffer is sized, rather than after a failed read.
+    if (componentOffset > fileSize || componentBytes > fileSize - componentOffset) {
+        throw BlockReadError("FAB component extends past the end of the data file");
     }
+
+    // Read the component straight into its typed value buffer instead of
+    // staging raw bytes and decoding into a second, equally large vector: this
+    // halves peak memory. IEEE-32/64 data always matches the target type's
+    // size (see parseRealDescriptor), so on a native-endian file (the common
+    // case) the read is the whole decode; a cross-endian file only needs an
+    // in-place per-value byte swap afterward.
+    const bool nativeEndian = (std::endian::native == std::endian::little)
+        == header.encoding.littleEndian;
+    const auto readComponent = [&]<typename Value>() {
+        std::vector<Value> values(static_cast<std::size_t>(valuesPerComponent));
+        constexpr std::size_t cancellationChunkBytes = 1024U * 1024U;
+        auto* const storage = reinterpret_cast<char*>(values.data());
+        std::size_t bytesCompleted = 0;
+        const auto total = static_cast<std::size_t>(componentBytes);
+        while (bytesCompleted < total) {
+            if (cancellation.stop_requested()) {
+                throw ReadCancelled();
+            }
+            const auto chunk = std::min(
+                cancellationChunkBytes, total - bytesCompleted);
+            input.read(storage + bytesCompleted,
+                static_cast<std::streamsize>(chunk));
+            if (input.gcount() != static_cast<std::streamsize>(chunk)) {
+                throw BlockReadError("FAB component payload is truncated");
+            }
+            bytesCompleted += chunk;
+        }
+        if (!nativeEndian) {
+            auto* const raw = reinterpret_cast<unsigned char*>(values.data());
+            for (std::size_t value = 0; value < values.size(); ++value) {
+                if ((value & 4095U) == 0U && cancellation.stop_requested()) {
+                    throw ReadCancelled();
+                }
+                std::reverse(raw + value * sizeof(Value),
+                    raw + (value + 1) * sizeof(Value));
+            }
+        }
+        return FabValues{std::move(values)};
+    };
 
     auto block = std::make_shared<FabBlock>();
     block->box = header.box;
     block->field = request.field;
     block->component = 0;
-    const auto decodeValues = [&]<typename Value>() {
-        std::vector<Value> values(static_cast<std::size_t>(valuesPerComponent));
-        for (std::size_t value = 0; value < values.size(); ++value) {
-            if ((value & 4095U) == 0U && cancellation.stop_requested()) {
-                throw ReadCancelled();
-            }
-            values[value] = static_cast<Value>(decodeReal(
-                encoded.data() + value * header.encoding.bytes, header.encoding));
-        }
-        return FabValues{std::move(values)};
-    };
     block->values = header.encoding.bytes == sizeof(float)
-        ? decodeValues.template operator()<float>()
-        : decodeValues.template operator()<double>();
+        ? readComponent.template operator()<float>()
+        : readComponent.template operator()<double>();
 
     return {
         std::shared_ptr<const FabBlock>(std::move(block)),

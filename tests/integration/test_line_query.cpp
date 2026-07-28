@@ -185,6 +185,23 @@ void test2d(const std::filesystem::path& source, const std::filesystem::path& wo
         "repeated line query did not reuse all three blocks");
     require(cached.metrics.payloadBytesRead == 0, "cached line query performed payload I/O");
 
+    // A strict subregion along the line axis clips the line to the cells whose
+    // centers fall inside it: region x in [0.25, 0.75] keeps only the four
+    // fine-level samples, dropping the coarse end cells at 0.125 and 0.875.
+    {
+        auto clipped = request;
+        clipped.region = amrvis::RealBox{{{0.25, 0.0, 0.0}}, {{0.75, 1.0, 0.0}}};
+        const auto sub = lines.execute(clipped);
+        require(sub.line.positions.size() == 4,
+            "a subregion line did not clip to the region's four fine cells");
+        for (std::size_t i = 0; i < sub.line.positions.size(); ++i) {
+            require(sub.line.positions[i] > 0.25 && sub.line.positions[i] < 0.75,
+                "a subregion line sample fell outside the region");
+            require(sub.line.valid[i] == 1 && sub.line.sourceLevel[i] == 1,
+                "a subregion line sample is not the expected fine-level coverage");
+        }
+    }
+
     // Cross-check against a slice whose single pixel row covers the same cells.
     // The slice composites on a uniform 8-pixel grid, so each native line
     // sample must agree with the slice cell that contains its position.
@@ -458,6 +475,85 @@ void testOffsetGeometry(const std::filesystem::path& source, const std::filesyst
         "offset line query hung (regression: cell-boundary round-trip stall)");
 }
 
+// Regression for the absolute end epsilon: the walk's endEpsilon used to be an
+// absolute 1e-9 in physical units, so a domain at or below that scale
+// (micro/nano-scale SI-unit geometries) was truncated -- an extent of 4e-10
+// produced an empty line. With the cell-relative epsilon the full domain is
+// sampled. Geometry: prob_lo 0, cell size 1e-10, extent 4e-10 (4 cells).
+void testTinyDomain(const std::filesystem::path& source, const std::filesystem::path& work)
+{
+    const auto root = materializeFixture(source, work / "plotfile_3d_tiny");
+    writeFab(root / "Level_0" / "Cell_D_00000", 0,
+        "((0,0,0) (3,3,3) (0,0,0))", 1, field3d());
+    {
+        std::ofstream header(root / "Header", std::ios::binary | std::ios::trunc);
+        require(static_cast<bool>(header), "could not open tiny Header for writing");
+        header <<
+            "HyperCLaw-V1.1\n"
+            "1\n"
+            "q\n"
+            "3\n"
+            "0.0\n"
+            "0\n"
+            "0.0 0.0 0.0\n"
+            "4e-10 4e-10 4e-10\n"
+            "\n"
+            "((0,0,0) (3,3,3) (0,0,0))\n"
+            "0\n"
+            "1e-10 1e-10 1e-10\n"
+            "0\n"
+            "0\n"
+            "0 1 0.0\n"
+            "0\n"
+            "0.0 4e-10\n"
+            "0.0 4e-10\n"
+            "0.0 4e-10\n"
+            "Level_0/Cell\n";
+    }
+
+    amrvis::PlotfileDataset dataset(root, amrvis::DatasetId{22}, 1024 * 1024);
+    amrvis::LineQuery lines(dataset);
+    const auto& metadata = dataset.metadata();
+    require(metadata.dimension == 3 && metadata.finestLevel == 0,
+        "tiny fixture parsed unexpected dimension or level count");
+
+    amrvis::LineRequest request;
+    request.dataset.value = 22;
+    request.field.value = 0;
+    request.axis = 0;
+    const double center = 0.5 * (metadata.physicalDomain.lower[1]
+        + metadata.physicalDomain.upper[1]);
+    request.fixedCoordinates = {center, center, center};
+    request.maximumLevel = 0;
+    request.region = amrvis::RealBox{metadata.physicalDomain.lower,
+        metadata.physicalDomain.upper};
+    const auto lineAxisIndex = static_cast<std::size_t>(request.axis);
+    const auto lineCellSize = metadata.levels[0].cellSize[lineAxisIndex];
+    const auto lineOrigin = metadata.physicalDomain.lower[lineAxisIndex];
+
+    auto ranToCompletion = runWithTimeout(
+        [&] {
+            const auto result = lines.execute(request);
+            require(result.line.positions.size() == 4,
+                "tiny-domain line query was truncated (expected one sample per cell)");
+            for (std::size_t sample = 0; sample < 4; ++sample) {
+                require(result.line.valid[sample] == 1
+                        && result.line.sourceLevel[sample] == 0,
+                    "tiny-domain line query left a hole or reported a wrong level");
+                // Cell centers: origin + (i + 0.5) * cellSize. Pins the walk's
+                // calibration, not just completeness (a half-cell or origin
+                // offset would miss by far more than 1e-6 of a cell).
+                const double expected = lineOrigin
+                    + (static_cast<double>(sample) + 0.5) * lineCellSize;
+                require(std::fabs(result.line.positions[sample] - expected)
+                        <= 1e-6 * lineCellSize,
+                    "tiny-domain sample is not at its cell center");
+            }
+        },
+        10);
+    require(ranToCompletion, "tiny-domain line query hung");
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -478,6 +574,7 @@ int main(int argc, char* argv[])
     test2d(plotfile2d, work);
     test3d(plotfile3d, work);
     testOffsetGeometry(plotfile3d, work);
+    testTinyDomain(plotfile3d, work);
 
     std::filesystem::remove_all(work);
     return 0;

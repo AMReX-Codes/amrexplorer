@@ -20,6 +20,17 @@
       }
     },
     {
+      "name": "clang",
+      "inherits": "default",
+      "displayName": "Release build with Clang (pre-merge check)",
+      "binaryDir": "${sourceDir}/build-clang",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "AMREXPLORER_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
       "name": "debug",
       "displayName": "Debug build",
       "generator": "Ninja",
@@ -59,12 +70,52 @@
         "AMREXPLORER_ENABLE_WIRE_PROTOTYPE": "ON",
         "AMREXPLORER_BUILD_TESTS": "ON"
       }
+    },
+    {
+      "name": "tsan",
+      "inherits": "headless",
+      "displayName": "Headless ThreadSanitizer build",
+      "binaryDir": "${sourceDir}/build-tsan",
+      "cacheVariables": {
+        "AMREXPLORER_ENABLE_TSAN": "ON"
+      }
+    },
+    {
+      "name": "qt-sanitizers",
+      "inherits": "debug",
+      "displayName": "Qt + ASan and UBSan build (offscreen smoke tests)",
+      "binaryDir": "${sourceDir}/build-qt-sanitizers",
+      "cacheVariables": {
+        "AMREXPLORER_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
+      "name": "windows",
+      "displayName": "Windows MSVC build (mirrors the CI job)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": { "value": "x64" },
+      "binaryDir": "${sourceDir}/build-windows",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QT_ROOT_DIR}",
+        "AMREXPLORER_ENABLE_QT": "ON",
+        "AMREXPLORER_ENABLE_VTK": "OFF",
+        "AMREXPLORER_BUILD_TESTS": "ON"
+      }
     }
   ],
   "buildPresets": [
     {
       "name": "default",
       "configurePreset": "default"
+    },
+    {
+      "name": "clang",
+      "configurePreset": "clang"
     },
     {
       "name": "debug",
@@ -81,12 +132,32 @@
     {
       "name": "wire-prototype",
       "configurePreset": "wire-prototype"
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan"
+    },
+    {
+      "name": "qt-sanitizers",
+      "configurePreset": "qt-sanitizers"
+    },
+    {
+      "name": "windows",
+      "configurePreset": "windows",
+      "configuration": "Release"
     }
   ],
   "testPresets": [
     {
       "name": "default",
       "configurePreset": "default",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "clang",
+      "configurePreset": "clang",
       "output": {
         "outputOnFailure": true
       }
@@ -112,6 +183,35 @@
         "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1",
         "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
       },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1 second_deadlock_stack=1"
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "qt-sanitizers",
+      "configurePreset": "qt-sanitizers",
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows",
+      "configurePreset": "windows",
+      "configuration": "Release",
       "output": {
         "outputOnFailure": true
       }

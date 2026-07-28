@@ -3,6 +3,7 @@
 #include "Theme.hpp"
 
 #include <QGraphicsLineItem>
+#include <QGraphicsItem>
 #include <QGraphicsPathItem>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsRectItem>
@@ -38,6 +39,42 @@ public:
     }
 };
 
+class PointCloudItem final : public QGraphicsItem {
+public:
+    PointCloudItem(std::vector<QPointF> points, const QRectF& bounds,
+        QColor color, qreal size)
+        : m_points(std::move(points))
+        , m_bounds(bounds)
+        , m_color(std::move(color))
+        , m_size(size)
+    {
+    }
+
+    [[nodiscard]] QRectF boundingRect() const override
+    {
+        return m_bounds.adjusted(-m_size, -m_size, m_size, m_size);
+    }
+
+    void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override
+    {
+        QPen pen(m_color);
+        pen.setCosmetic(true);
+        pen.setWidthF(m_size);
+        pen.setCapStyle(Qt::RoundCap);
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        painter->setPen(pen);
+        painter->drawPoints(m_points.data(), static_cast<int>(m_points.size()));
+        painter->restore();
+    }
+
+private:
+    std::vector<QPointF> m_points;
+    QRectF m_bounds;
+    QColor m_color;
+    qreal m_size = 3.0;
+};
+
 } // namespace
 
 ImageView::ImageView(QWidget* parent)
@@ -59,17 +96,24 @@ ImageView::ImageView(QWidget* parent)
     setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
 }
 
-void ImageView::setImage(const QImage& image)
+void ImageView::setImage(
+    const QImage& image, ImageTransformPolicy transformPolicy)
 {
     // Refit only when the image changes size (initial open, a zoom into a new
     // region, a differently-sized dataset). When only the colors are remapped
     // at the same size -- toggling Log, or changing field, level, or range --
-    // keep the user's current zoom/pan.
-    const bool refit = m_image.isNull() || m_image.size() != image.size();
+    // keep the user's current zoom/pan. Compatible panel-local cropped-region
+    // refreshes explicitly preserve the transform even when the replacement
+    // raster dimensions differ.
+    const bool refit = transformPolicy == ImageTransformPolicy::Refit
+        || (transformPolicy == ImageTransformPolicy::GeometryAware
+            && (m_image.isNull() || m_image.size() != image.size()));
     m_scene->clear();
     m_gridItems.clear();
     m_overlayItems.clear();
     m_pathItems.clear();
+    m_pointItems.clear();
+    m_pointOverlayColors.clear();
     m_crosshairVerticalItem = nullptr;
     m_crosshairHorizontalItem = nullptr;
     m_cellHighlightItem = nullptr;
@@ -150,6 +194,41 @@ void ImageView::setOverlayPaths(const std::vector<OverlayPath>& paths)
         item->setZValue(2.0);
         m_pathItems.push_back(item);
     }
+}
+
+void ImageView::setPointOverlays(const std::vector<PointOverlay>& overlays)
+{
+    for (auto* item : m_pointItems) {
+        m_scene->removeItem(item);
+        delete item;
+    }
+    m_pointItems.clear();
+    m_pointOverlayColors.clear();
+    if (!hasImage()) {
+        return;
+    }
+    m_pointItems.reserve(overlays.size());
+    for (const auto& overlay : overlays) {
+        if (overlay.points.empty()) {
+            continue;
+        }
+        auto* item = new PointCloudItem(
+            overlay.points, m_scene->sceneRect(), overlay.color, overlay.size);
+        item->setZValue(3.0);
+        m_scene->addItem(item);
+        m_pointItems.push_back(item);
+        m_pointOverlayColors.push_back(overlay.color);
+    }
+}
+
+std::size_t ImageView::pointOverlayCount() const noexcept
+{
+    return m_pointItems.size();
+}
+
+const std::vector<QColor>& ImageView::pointOverlayColors() const noexcept
+{
+    return m_pointOverlayColors;
 }
 
 void ImageView::setCrosshairs(const std::optional<QLineF>& vertical,
@@ -304,6 +383,7 @@ void ImageView::setPlaceholder(const QString& text)
     m_gridItems.clear();
     m_overlayItems.clear();
     m_pathItems.clear();
+    m_pointItems.clear();
     m_crosshairVertical.reset();
     m_crosshairHorizontal.reset();
     m_crosshairVerticalItem = nullptr;

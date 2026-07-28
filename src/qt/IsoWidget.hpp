@@ -35,6 +35,7 @@ public:
     using QWidget::setGeometry;
     void setGeometry(const DatasetMetadata& metadata);
     void setSlicePositions(double x, double y, double z);
+    void setSlicePlanesVisible(bool visible);
     void setColorPalette(const Palette* palette);
 
 protected:
@@ -76,6 +77,7 @@ private:
     RealBox m_domain{};
     std::vector<LevelBoxes> m_levels;
     std::array<double, 3> m_slicePositions{0.0, 0.0, 0.0};
+    bool m_slicePlanesVisible = false;
     const Palette* m_palette = nullptr;
     bool m_hasGeometry = false;
 

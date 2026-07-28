@@ -4,23 +4,26 @@
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
 
+#include <QAbstractTableModel>
 #include <QCloseEvent>
 #include <QColor>
 #include <QException>
 #include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMessageBox>
+#include <QModelIndex>
 #include <QPushButton>
-#include <QStringList>
 #include <QTabWidget>
-#include <QTableWidget>
+#include <QTableView>
+#include <QVariant>
 #include <QVBoxLayout>
 #include <QtConcurrentRun>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -43,6 +46,87 @@ QString exceptionMessage(const std::exception& error)
     }
     return QString::fromUtf8(error.what());
 }
+
+// Presents one level's already-dense DatasetLevelExtract to a QTableView.
+// Cells are produced lazily per visible index instead of materializing a
+// QTableWidgetItem (plus QString) for every one of up to 512x512 samples and
+// running resizeColumnsToContents over all of them, which froze the GUI for
+// seconds and allocated hundreds of MB on a full-domain multi-level dataset.
+// The model holds the extract by reference; it lives no longer than the tab
+// page it is parented to, and the owning DatasetWindow rebuilds all tabs
+// (destroying every model) before or while the backing m_levels changes.
+class LevelTableModel final : public QAbstractTableModel {
+public:
+    LevelTableModel(const DatasetLevelExtract& extract, QString format,
+        QObject* parent)
+        : QAbstractTableModel(parent)
+        , m_extract(extract)
+        , m_format(std::move(format))
+    {
+    }
+
+    int rowCount(const QModelIndex& parent) const override
+    {
+        return parent.isValid() ? 0 : m_extract.ny;
+    }
+
+    int columnCount(const QModelIndex& parent) const override
+    {
+        return parent.isValid() ? 0 : m_extract.nx;
+    }
+
+    QVariant data(const QModelIndex& index, int role) const override
+    {
+        if (!index.isValid() || index.row() < 0 || index.row() >= m_extract.ny
+            || index.column() < 0 || index.column() >= m_extract.nx) {
+            return {};
+        }
+        const auto offset = cellOffset(index.row(), index.column());
+        const bool covered = m_extract.covered[offset] != 0;
+        switch (role) {
+        case Qt::DisplayRole:
+            return covered
+                ? formatNumber(
+                      static_cast<double>(m_extract.values[offset]), m_format)
+                : QString();
+        case Qt::TextAlignmentRole:
+            return covered
+                ? QVariant(static_cast<int>(Qt::AlignRight | Qt::AlignVCenter))
+                : QVariant();
+        case Qt::BackgroundRole:
+            // Cells no grid covers at this level are shaded, as before.
+            return covered ? QVariant() : QVariant(QColor(Qt::darkGray));
+        default:
+            return {};
+        }
+    }
+
+    QVariant headerData(
+        int section, Qt::Orientation orientation, int role) const override
+    {
+        if (role != Qt::DisplayRole || section < 0) {
+            return {};
+        }
+        if (orientation == Qt::Horizontal) {
+            return QString::number(m_extract.lower[0] + section);
+        }
+        // Row 0 shows the highest j, matching the image and the legacy window.
+        return QString::number(m_extract.upper[1] - section);
+    }
+
+private:
+    // Row 0 is the highest j; map (row, column) back to the value array, which
+    // runs the first in-plane axis fastest with j ascending.
+    [[nodiscard]] std::size_t cellOffset(int row, int column) const noexcept
+    {
+        const auto valueRow = static_cast<std::size_t>(m_extract.ny - 1 - row);
+        return static_cast<std::size_t>(column)
+            + static_cast<std::size_t>(m_extract.nx) * valueRow;
+    }
+
+    const DatasetLevelExtract& m_extract;
+    QString m_format;
+};
 
 } // namespace
 
@@ -106,6 +190,9 @@ void DatasetWindow::setNumberFormat(QString format)
 std::vector<DatasetWindow::LevelData> DatasetWindow::extractLevels(
     const DatasetRequest& request, StopToken cancellation)
 {
+    if (!request.dataset) {
+        throw std::runtime_error("dataset window opened without a dataset");
+    }
     const auto& metadata = request.dataset->metadata();
     std::vector<LevelData> levels;
     for (int level = 0; level <= metadata.finestLevel; ++level) {
@@ -144,12 +231,12 @@ void DatasetWindow::startLoad()
                 populateTabs();
                 m_status->setText(tr("Field: %1").arg(m_request.fieldName));
             } catch (const std::exception& error) {
-                // One message for a real failure, then the window closes; a
-                // cancelled read (close/refresh) stays silent.
+                // Report a real failure non-modally through the owner, then
+                // close; a cancelled read (close/refresh) stays silent. A modal
+                // dialog here would disable the whole app and block quitting.
                 if (!m_stopSource.stop_requested()) {
-                    QMessageBox::critical(this,
-                        tr("Cannot load dataset values"),
-                        exceptionMessage(error));
+                    emit extractionFailed(tr("Cannot load dataset values: %1")
+                        .arg(exceptionMessage(error)));
                     close();
                 }
             }
@@ -183,53 +270,29 @@ void DatasetWindow::populateTabs()
                 .arg(extract.nx)
                 .arg(extract.ny));
         }
-        auto* table = new QTableWidget(extract.ny, extract.nx, page);
+        // A model/view over the dense extract: the view realizes only the
+        // visible cells, so a full-domain table no longer freezes the GUI.
+        auto* table = new QTableView(page);
         table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        QStringList columnLabels;
-        for (int column = 0; column < extract.nx; ++column) {
-            columnLabels << QString::number(extract.lower[0] + column);
-        }
-        table->setHorizontalHeaderLabels(columnLabels);
-        QStringList rowLabels;
-        for (int row = 0; row < extract.ny; ++row) {
-            // Row 0 shows the highest j, matching the image and the legacy
-            // dataset window.
-            rowLabels << QString::number(extract.upper[1] - row);
-        }
-        table->setVerticalHeaderLabels(rowLabels);
-        for (int row = 0; row < extract.ny; ++row) {
-            const auto valueRow = static_cast<std::size_t>(
-                static_cast<std::int64_t>(extract.upper[1] - row)
-                - extract.lower[1]);
-            for (int column = 0; column < extract.nx; ++column) {
-                const auto offset = static_cast<std::size_t>(column)
-                    + static_cast<std::size_t>(extract.nx) * valueRow;
-                auto* item = new QTableWidgetItem;
-                if (extract.covered[offset] != 0) {
-                    item->setText(formatNumber(
-                        static_cast<double>(extract.values[offset]),
-                        m_numberFormat));
-                    item->setTextAlignment(
-                        Qt::AlignRight | Qt::AlignVCenter);
-                } else {
-                    item->setBackground(QColor(Qt::darkGray));
-                }
-                item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-                table->setItem(row, column, item);
-            }
-        }
-        table->resizeColumnsToContents();
+        auto* model = new LevelTableModel(extract, m_numberFormat, table);
+        table->setModel(model);
         auto* pageLayout = new QVBoxLayout(page);
         pageLayout->addWidget(info);
         pageLayout->addWidget(table, 1);
-        auto label = tr("Level %1").arg(levelData.level);
+        // Standalone MultiFabs and FABs have no AMR hierarchy, so a
+        // "Level 0" tab would suggest a concept those formats lack; their
+        // single tab is named after the format instead.
+        const auto& metadata = m_request.dataset->metadata();
+        auto label = metadata.hasPhysicalGeometry
+            ? tr("Level %1").arg(levelData.level)
+            : metadata.isFab ? tr("FAB") : tr("MultiFab");
         if (extract.truncatedX || extract.truncatedY) {
             label += tr(" (truncated)");
         }
         m_tabs->addTab(page, label);
-        connect(table, &QTableWidget::cellClicked, this,
-            [this, entry](int row, int column) {
-                cellClicked(entry, row, column);
+        connect(table, &QTableView::clicked, this,
+            [this, entry](const QModelIndex& index) {
+                cellClicked(entry, index.row(), index.column());
             });
     }
 }

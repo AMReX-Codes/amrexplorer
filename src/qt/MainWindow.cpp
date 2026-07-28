@@ -473,7 +473,10 @@ MainWindow::MainWindow(QWidget* parent)
         tr("Apply rubber-band selections to every 3-D panel; "
            "mouse-wheel zoom remains panel-specific"));
     connect(m_syncRubberBandZoomAction, &QAction::toggled,
-        this, [this](bool) { saveSettings(); });
+        this, [this](bool checked) {
+            m_applicationDefaults.synchronizeRubberBand = checked;
+            saveSettings();
+        });
     scaleMenu->addSeparator();
     scaleMenu->addAction(m_syncRubberBandZoomAction);
     m_scaleButton->setMenu(scaleMenu);
@@ -795,7 +798,8 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_animationPanel, &AnimationPanel::sequenceFrameRequested, this,
         [this](int index) { goToSequenceFrame(index); });
     connect(m_animationPanel, &AnimationPanel::speedChanged, this,
-        [this](int) {
+        [this](int value) {
+            m_applicationDefaults.animationSpeed = value;
             applySpeed();
             saveSettings();
         });
@@ -812,7 +816,10 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_rangeMode, qOverload<int>(&QComboBox::currentIndexChanged),
         this, [this](int) { saveSettings(); });
     connect(m_logarithmic, &QCheckBox::toggled,
-        this, [this](bool) { saveSettings(); });
+        this, [this](bool checked) {
+            m_applicationDefaults.logarithmic = checked;
+            saveSettings();
+        });
 
     wireView(m_view2d);
     for (auto& state : m_planeViews) {
@@ -1314,6 +1321,9 @@ void MainWindow::applyPalette(const Palette& palette, std::optional<int> builtin
     } else {
         m_paletteFilePath = filePath;
     }
+    m_applicationDefaults.builtinPaletteIndex = m_builtinIndex;
+    m_applicationDefaults.paletteFromFile = m_paletteFromFile;
+    m_applicationDefaults.paletteFilePath = m_paletteFilePath;
     m_colorBar->setPalette(&m_palette);
     syncPaletteChecks();
     syncPaletteSelector();
@@ -1684,6 +1694,7 @@ void MainWindow::applyNumberFormat(const QString& format)
         return;
     }
     m_numberFormat = format;
+    m_applicationDefaults.numberFormat = format;
     m_rangeMinimum->setNumberFormat(format);
     m_rangeMaximum->setNumberFormat(format);
     m_colorBar->setNumberFormat(format);
@@ -2957,11 +2968,15 @@ void MainWindow::restoreSettings()
     m_colorBar->setPalette(&m_palette);
     syncPaletteChecks();
     syncPaletteSelector();
+    m_applicationDefaults.builtinPaletteIndex = m_builtinIndex;
+    m_applicationDefaults.paletteFromFile = m_paletteFromFile;
+    m_applicationDefaults.paletteFilePath = m_paletteFilePath;
 
     {
         const QSignalBlocker logarithmicBlocker(m_logarithmic);
         m_logarithmic->setChecked(
             settings.value(QStringLiteral("range/logarithmic"), false).toBool());
+        m_applicationDefaults.logarithmic = m_logarithmic->isChecked();
     }
     {
         // A stored format that no longer validates falls back to the default.
@@ -2972,13 +2987,17 @@ void MainWindow::restoreSettings()
         m_rangeMinimum->setNumberFormat(m_numberFormat);
         m_rangeMaximum->setNumberFormat(m_numberFormat);
         m_colorBar->setNumberFormat(m_numberFormat);
+        m_applicationDefaults.numberFormat = m_numberFormat;
     }
     m_animationPanel->setSpeedValue(
         settings.value(QStringLiteral("animation/speed"), 300).toInt());
+    m_applicationDefaults.animationSpeed = m_animationPanel->speedValue();
     {
         const QSignalBlocker syncZoomBlocker(m_syncRubberBandZoomAction);
         m_syncRubberBandZoomAction->setChecked(
             settings.value(QStringLiteral("zoom/syncRubberBand"), true).toBool());
+        m_applicationDefaults.synchronizeRubberBand =
+            m_syncRubberBandZoomAction->isChecked();
     }
     applySpeed();
     const auto geometry = settings.value(QStringLiteral("geometry")).toByteArray();
@@ -2990,19 +3009,26 @@ void MainWindow::restoreSettings()
 void MainWindow::saveSettings()
 {
     auto settings = makeSettings();
+    // Persist the application-local copy, not viewer-state overrides currently
+    // displayed in this window.
     // Range mode is deliberately not persisted: the correct default (File)
     // depends on the dataset and restoring a different mode from a previous
     // session would produce unexpected color bars.
-    settings.setValue(QStringLiteral("range/logarithmic"), m_logarithmic->isChecked());
-    settings.setValue(QStringLiteral("palette/fromFile"), m_paletteFromFile);
-    settings.setValue(QStringLiteral("palette/filePath"), m_paletteFilePath);
+    settings.setValue(QStringLiteral("range/logarithmic"),
+        m_applicationDefaults.logarithmic);
+    settings.setValue(QStringLiteral("palette/fromFile"),
+        m_applicationDefaults.paletteFromFile);
+    settings.setValue(QStringLiteral("palette/filePath"),
+        m_applicationDefaults.paletteFilePath);
     settings.setValue(QStringLiteral("palette/builtin"),
-        QLatin1String(builtinPaletteNames[static_cast<std::size_t>(m_builtinIndex)]));
-    settings.setValue(QStringLiteral("numberFormat"), m_numberFormat);
+        QLatin1String(builtinPaletteNames[static_cast<std::size_t>(
+            m_applicationDefaults.builtinPaletteIndex)]));
+    settings.setValue(QStringLiteral("numberFormat"),
+        m_applicationDefaults.numberFormat);
     settings.setValue(QStringLiteral("animation/speed"),
-        m_animationPanel->speedValue());
+        m_applicationDefaults.animationSpeed);
     settings.setValue(QStringLiteral("zoom/syncRubberBand"),
-        m_syncRubberBandZoomAction->isChecked());
+        m_applicationDefaults.synchronizeRubberBand);
 }
 
 void MainWindow::updateWindowTitle()
@@ -3628,6 +3654,8 @@ FabSelectorBuild buildFabSelector(
 void MainWindow::importViewerState(
     const std::filesystem::path& statePath, bool showFailureDialog)
 {
+    const auto importGeneration = ++m_viewerStateImportGeneration;
+    m_viewerStateImportStopSource.request_stop();
     const auto parsed = readViewerState(statePath);
     if (!parsed) {
         const auto message =
@@ -3640,8 +3668,6 @@ void MainWindow::importViewerState(
         emit viewerStateImportFinished(false);
         return;
     }
-    const auto importGeneration = ++m_viewerStateImportGeneration;
-    m_viewerStateImportStopSource.request_stop();
     m_viewerStateImportStopSource = StopSource{};
     const auto importCancellation =
         m_viewerStateImportStopSource.get_token();

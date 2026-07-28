@@ -601,6 +601,18 @@ private:
     std::filesystem::path m_fabSourcePath;
     std::filesystem::path m_fabDataRoot;
     bool m_fabMode = false;
+    // Viewer-state imports override the live controls without changing these
+    // application-local defaults. User-facing preference handlers update both.
+    struct ApplicationDefaults {
+        bool logarithmic = false;
+        int builtinPaletteIndex = 0;
+        bool paletteFromFile = false;
+        QString paletteFilePath;
+        QString numberFormat = defaultNumberFormat();
+        int animationSpeed = 300;
+        bool synchronizeRubberBand = true;
+    };
+    ApplicationDefaults m_applicationDefaults;
     Palette m_palette = builtinPalette(BuiltinPalette::Rainbow);
     int m_builtinIndex = 0;
     bool m_paletteFromFile = false;

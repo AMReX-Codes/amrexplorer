@@ -46,6 +46,7 @@ elseif(MODE STREQUAL "sequence-vector-identity")
     run_or_die("${AMREXPLORER_QT}" --sequence-vector-identity-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "viewer-state")
+    file(REMOVE_RECURSE "${WORK}/settings")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --viewer-state-smoke-test
         "${WORK}/plt" "${WORK}/saved.amrexplorer-state.json"

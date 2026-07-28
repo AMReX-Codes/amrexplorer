@@ -15,6 +15,7 @@
 #include <QMouseEvent>
 #include <QProcess>
 #include <QPushButton>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QSignalBlocker>
 #include <QTableView>
@@ -410,6 +411,50 @@ bool contourSyncMatches(amrvis::qt::MainWindow& window)
     return panelsWithLevels >= 2 && sharedLevelsDrawn >= 2;
 }
 
+QSettings applicationSettings()
+{
+    return QSettings(
+        QStringLiteral("amrex-codes"), QStringLiteral("amrexplorer"));
+}
+
+QVariantMap viewerPreferenceSettings()
+{
+    static const std::array<QString, 7> keys{
+        QStringLiteral("range/logarithmic"),
+        QStringLiteral("palette/fromFile"),
+        QStringLiteral("palette/filePath"),
+        QStringLiteral("palette/builtin"),
+        QStringLiteral("numberFormat"),
+        QStringLiteral("animation/speed"),
+        QStringLiteral("zoom/syncRubberBand"),
+    };
+    const auto settings = applicationSettings();
+    QVariantMap values;
+    for (const auto& key : keys) {
+        values.insert(key, settings.value(key));
+    }
+    return values;
+}
+
+void seedViewerPreferenceSettings(
+    const amrvis::qt::ViewerStateDocument& document)
+{
+    auto settings = applicationSettings();
+    settings.setValue(
+        QStringLiteral("range/logarithmic"), document.display.logarithmic);
+    settings.setValue(QStringLiteral("palette/fromFile"), false);
+    settings.setValue(QStringLiteral("palette/filePath"), QString());
+    settings.setValue(QStringLiteral("palette/builtin"),
+        QString::fromStdString(document.rendering.palette.name));
+    settings.setValue(
+        QStringLiteral("numberFormat"), document.rendering.numberFormat);
+    settings.setValue(
+        QStringLiteral("animation/speed"), document.animation.speed);
+    settings.setValue(QStringLiteral("zoom/syncRubberBand"),
+        document.synchronizeRubberBand);
+    settings.sync();
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -425,6 +470,14 @@ int main(int argc, char* argv[])
     application.setApplicationName(QStringLiteral("amrexplorer"));
     application.setApplicationDisplayName(QStringLiteral("AMReXplorer"));
     QGuiApplication::setDesktopFileName(QStringLiteral("amrexplorer"));
+    if (argc == 5
+        && std::string_view(argv[1]) == "--viewer-state-smoke-test") {
+        const auto settingsDirectory =
+            std::filesystem::path(argv[3]).parent_path() / "settings";
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+            QString::fromStdString(settingsDirectory.string()));
+    }
     // Bundle the logo (rounded-square heatmap) at several sizes so it stays
     // crisp from the 16 px title bar up to the 256 px taskbar/dock.
     QIcon icon;
@@ -474,6 +527,8 @@ int main(int argc, char* argv[])
         struct ViewerStateSmoke {
             int phase = 0;
             amrvis::qt::ViewerStateDocument expected;
+            QVariantMap expectedSettings;
+            QString importedNumberFormat;
         };
         auto state = std::make_shared<ViewerStateSmoke>();
         QObject::connect(&window,
@@ -566,16 +621,89 @@ int main(int argc, char* argv[])
                     }
                     state->expected = actual;
                     state->phase = 2;
-                    window.importViewerStateForTest(invalidPath);
+                    seedViewerPreferenceSettings(actual);
+                    state->expectedSettings =
+                        viewerPreferenceSettings();
+
+                    auto imported = actual;
+                    imported.display.logarithmic =
+                        !actual.display.logarithmic;
+                    imported.rendering.palette.kind =
+                        amrvis::qt::ViewerPaletteKind::Builtin;
+                    imported.rendering.palette.name =
+                        actual.rendering.palette.name == "turbo"
+                        ? "rainbow" : "turbo";
+                    imported.rendering.numberFormat =
+                        actual.rendering.numberFormat == QStringLiteral("%.3e")
+                        ? QStringLiteral("%.7g") : QStringLiteral("%.3e");
+                    imported.animation.speed =
+                        actual.animation.speed == 1 ? 2 : 1;
+                    imported.synchronizeRubberBand =
+                        !actual.synchronizeRubberBand;
+                    state->importedNumberFormat =
+                        imported.rendering.numberFormat;
+                    if (!amrvis::qt::writeViewerState(
+                            imported, statePath).isEmpty()) {
+                        application.exit(1);
+                        return;
+                    }
+                    window.importViewerStateForTest(statePath);
                     return;
                 }
                 if (state->phase == 2) {
-                    const auto actual = window.captureViewerState(statePath);
-                    application.exit(!success
-                            && actual.source.path == state->expected.source.path
-                            && actual.display.field
-                                == state->expected.display.field
-                        ? 0 : 1);
+                    if (!success) {
+                        application.exit(1);
+                        return;
+                    }
+                    const auto imported =
+                        window.captureViewerState(statePath);
+                    if (imported.rendering.numberFormat
+                        != state->importedNumberFormat) {
+                        application.exit(1);
+                        return;
+                    }
+                    auto superseded = imported;
+                    superseded.rendering.numberFormat =
+                        QStringLiteral("%+.9e");
+                    const auto supersededPath =
+                        statePath.parent_path()
+                        / "superseded-valid.amrexplorer-state.json";
+                    if (!amrvis::qt::writeViewerState(
+                            superseded, supersededPath).isEmpty()) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 3;
+                    window.importViewerStateForTest(supersededPath);
+                    window.importViewerStateForTest(invalidPath);
+                    return;
+                }
+                if (state->phase == 3) {
+                    if (success) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 4;
+                    QTimer::singleShot(1000, &application,
+                        [&window, &application, state, statePath] {
+                            const auto actual =
+                                window.captureViewerState(statePath);
+                            if (state->phase != 4
+                                || actual.rendering.numberFormat
+                                    != state->importedNumberFormat) {
+                                application.exit(1);
+                                return;
+                            }
+                            window.close();
+                            application.exit(
+                                viewerPreferenceSettings()
+                                        == state->expectedSettings
+                                    ? 0 : 1);
+                        });
+                    return;
+                }
+                if (state->phase == 4 && success) {
+                    application.exit(1);
                 }
             });
         QTimer::singleShot(20000, &application,

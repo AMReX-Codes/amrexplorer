@@ -25,6 +25,7 @@ add_library(amrexplorer_remote
     Codec.cpp
     Codec.hpp
     Connection.cpp
+    DebugTrace.hpp
     Frame.cpp
     RemoteDatasetSession.cpp
     Server.cpp

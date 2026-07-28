@@ -1,6 +1,7 @@
 #include <amrexplorer/remote/Server.hpp>
 
 #include "Codec.hpp"
+#include "DebugTrace.hpp"
 
 #include <amrexplorer/data/LocalDatasetSession.hpp>
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
@@ -84,13 +85,16 @@ public:
 
     void submit(std::function<void()> task)
     {
+        std::size_t queued = 0;
         {
             std::scoped_lock lock(m_mutex);
             if (m_stopping) {
                 throw std::runtime_error("server worker pool is stopping");
             }
             m_tasks.push_back(std::move(task));
+            queued = m_tasks.size();
         }
+        debug::trace("server", "worker task queued depth=", queued);
         m_ready.notify_one();
     }
 
@@ -109,10 +113,13 @@ private:
                 task = std::move(m_tasks.front());
                 m_tasks.pop_front();
             }
+            debug::trace("server", "worker task begin");
             try {
                 task();
             } catch (...) {
+                debug::trace("server", "worker task escaped exception");
             }
+            debug::trace("server", "worker task end");
         }
     }
 
@@ -159,10 +166,16 @@ public:
                 if (!frame) {
                     break;
                 }
+                debug::trace("server", "frame received bytes=", frame->size());
                 auto envelope = codec::decode(*frame);
                 dispatch(std::move(envelope));
             }
+        } catch (const std::exception& error) {
+            debug::trace("server", "session receive stopped error=",
+                error.what());
         } catch (...) {
+            debug::trace("server",
+                "session receive stopped unknown error");
         }
         stop();
     }
@@ -201,6 +214,8 @@ private:
     void dispatch(std::unique_ptr<codec::NativeEnvelope> envelope)
     {
         const auto info = codec::inspect(*envelope);
+        debug::trace("server", "dispatch request=", info.requestId,
+            " payload=", debug::payloadName(info.payload));
         if (info.protocolMajor != protocolMajor) {
             sendError(info.requestId, {ErrorCode::UnsupportedProtocol,
                 "unsupported protocol major version"});
@@ -258,6 +273,8 @@ private:
         m_workers.submit([self, sharedEnvelope, stopSource]() {
             self->handle(sharedEnvelope, stopSource.get_token());
         });
+        debug::trace("server", "request=", info.requestId,
+            " submitted to worker");
     }
 
     void handleHello(const codec::NativeEnvelope& envelope)
@@ -310,8 +327,11 @@ private:
     void handle(std::shared_ptr<codec::NativeEnvelope> envelope,
         StopToken cancellation) noexcept
     {
+        const auto info = codec::inspect(*envelope);
+        const auto started = std::chrono::steady_clock::now();
+        debug::trace("server", "request=", info.requestId,
+            " handler begin payload=", debug::payloadName(info.payload));
         try {
-            const auto info = codec::inspect(*envelope);
             switch (info.payload) {
             case PayloadKind::OpenDatasetRequest:
                 openDataset(*envelope, cancellation);
@@ -345,12 +365,21 @@ private:
                     "payload is not a supported client request");
             }
         } catch (const std::exception& error) {
+            debug::trace("server", "request=", envelope->request_id,
+                " handler error=", error.what());
             sendError(envelope->request_id, classifyError(error));
         } catch (...) {
+            debug::trace("server", "request=", envelope->request_id,
+                " handler unknown error");
             sendError(envelope->request_id,
                 {ErrorCode::InternalServerError,
                     "unknown server operation failure"});
         }
+        const auto elapsed
+            = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started);
+        debug::trace("server", "request=", envelope->request_id,
+            " handler end elapsed_ms=", elapsed.count());
         std::scoped_lock lock(m_stateMutex);
         m_active.erase(envelope->request_id);
     }
@@ -456,10 +485,23 @@ private:
             throw std::invalid_argument("slice-view payload is missing");
         }
         const auto request = codec::fromWire(*payload);
+        debug::trace("server", "request=", envelope.request_id,
+            " slice decoded dataset=", request.dataset.value,
+            " normal=", request.normalDirection, " output=",
+            request.outputSize[0], 'x', request.outputSize[1],
+            " max_level=", request.maximumLevel);
         validateSliceBound(request);
         const auto dataset = requireDataset(request.dataset);
+        debug::trace("server", "request=", envelope.request_id,
+            " slice extraction begin");
         const auto result = std::get<SliceQueryResult>(
             dataset->requestView(ViewDataRequest{request}, cancellation));
+        debug::trace("server", "request=", envelope.request_id,
+            " slice extraction end values=", result.plane.values.size(),
+            " candidate_blocks=", result.metrics.candidateBlocks,
+            " blocks_read=", result.metrics.blocksRead, " cache_hits=",
+            result.metrics.cacheHits, " payload_bytes=",
+            result.metrics.payloadBytesRead);
         send(envelope.request_id,
             codec::toWire(result, dataset->cacheMetrics()));
     }
@@ -653,14 +695,28 @@ private:
     void send(std::uint64_t requestId, Payload payload) noexcept
     {
         try {
+            debug::trace("server", "request=", requestId,
+                " response encode begin");
             const auto bytes
                 = codec::encode(requestId, std::move(payload), m_selectedMinor);
+            debug::trace("server", "request=", requestId,
+                " response encoded bytes=", bytes.size());
             std::scoped_lock lock(m_writeMutex);
             if (!m_stopping.load()) {
+                debug::trace("server", "request=", requestId,
+                    " response write begin");
                 writeFrame(
                     m_socket, bytes, m_maximumFrameBytes.load());
+                debug::trace("server", "request=", requestId,
+                    " response write end");
             }
+        } catch (const std::exception& error) {
+            debug::trace("server", "request=", requestId,
+                " response failed error=", error.what());
+            stop();
         } catch (...) {
+            debug::trace("server", "request=", requestId,
+                " response failed unknown error");
             stop();
         }
     }
@@ -712,6 +768,7 @@ public:
         while (!m_stopping.load()) {
             try {
                 auto socket = acceptConnection(m_listener.socket);
+                debug::trace("server", "accepted client connection");
                 auto session = std::make_shared<Session>(
                     std::move(socket), m_workers, m_options);
                 std::scoped_lock lock(m_sessionsMutex);

@@ -1,6 +1,7 @@
 #include <amrexplorer/remote/Connection.hpp>
 
 #include "Codec.hpp"
+#include "DebugTrace.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -75,6 +76,7 @@ public:
         PayloadKind expected, StopToken cancellation)
     {
         const auto requestId = nextRequestId();
+        const auto started = std::chrono::steady_clock::now();
         auto pending = std::make_shared<Pending>();
         pending->expected = expected;
         auto future = pending->promise.get_future();
@@ -88,21 +90,47 @@ public:
             }
             m_pending.emplace(requestId, pending);
         }
+        debug::trace("client", "request=", requestId,
+            " registered expected=", debug::payloadName(expected));
         try {
-            send(codec::encode(requestId, std::move(payload)));
+            auto bytes = codec::encode(requestId, std::move(payload));
+            debug::trace("client", "request=", requestId,
+                " encoded bytes=", bytes.size());
+            send(bytes);
+            debug::trace("client", "request=", requestId,
+                " frame write complete");
         } catch (...) {
+            debug::trace("client", "request=", requestId,
+                " send failed");
             erasePending(requestId);
             throw;
         }
 
         bool cancellationSent = false;
+        auto nextWaitReport = started + std::chrono::seconds(5);
         while (future.wait_for(std::chrono::milliseconds(10))
             != std::future_status::ready) {
             if (cancellation.stop_requested() && !cancellationSent) {
                 cancellationSent = true;
+                debug::trace("client", "request=", requestId,
+                    " cancellation requested");
                 sendCancellation(requestId);
             }
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= nextWaitReport) {
+                const auto elapsed
+                    = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now - started);
+                debug::trace("client", "request=", requestId,
+                    " still waiting elapsed_ms=", elapsed.count());
+                nextWaitReport = now + std::chrono::seconds(5);
+            }
         }
+        const auto elapsed
+            = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started);
+        debug::trace("client", "request=", requestId,
+            " future ready elapsed_ms=", elapsed.count());
         auto response = future.get();
         if (const auto* error = response->payload.AsErrorResponse()) {
             const auto decoded = codec::fromWire(*error);
@@ -152,6 +180,11 @@ public:
             [&](const auto& typed) -> ViewDataResult {
                 using Request = std::decay_t<decltype(typed)>;
                 if constexpr (std::is_same_v<Request, SliceRequest>) {
+                    debug::trace("client", "slice begin dataset=",
+                        typed.dataset.value, " normal=", typed.normalDirection,
+                        " output=", typed.outputSize[0], 'x',
+                        typed.outputSize[1], " max_level=",
+                        typed.maximumLevel);
                     const auto response = transact(codec::toWire(typed),
                         PayloadKind::SliceViewResponse, cancellation);
                     const auto* payload
@@ -162,7 +195,15 @@ public:
                     }
                     updateCache(typed.dataset,
                         codec::fromWire(payload->cache.get()));
-                    return codec::fromWire(*payload);
+                    debug::trace("client", "slice decode begin dataset=",
+                        typed.dataset.value);
+                    auto result = codec::fromWire(*payload);
+                    debug::trace("client", "slice complete dataset=",
+                        typed.dataset.value, " values=",
+                        result.plane.values.size(), " blocks_read=",
+                        result.metrics.blocksRead, " cache_hits=",
+                        result.metrics.cacheHits);
+                    return result;
                 } else {
                     const auto response = transact(codec::toWire(typed),
                         PayloadKind::LineViewResponse, cancellation);
@@ -321,8 +362,11 @@ private:
                 if (!frame) {
                     throw std::runtime_error("remote server closed connection");
                 }
+                debug::trace("client", "frame received bytes=", frame->size());
                 auto envelope = codec::decode(*frame);
                 const auto info = codec::inspect(*envelope);
+                debug::trace("client", "response request=", info.requestId,
+                    " payload=", debug::payloadName(info.payload));
                 if (info.protocolMajor != protocolMajor) {
                     throw std::runtime_error(
                         "remote server changed protocol major version");
@@ -344,8 +388,11 @@ private:
                         "remote response has an unexpected payload type");
                 }
                 pending->promise.set_value(std::move(envelope));
+                debug::trace("client", "response request=", info.requestId,
+                    " delivered to waiter");
             }
         } catch (const std::exception& error) {
+            debug::trace("client", "receiver stopped error=", error.what());
             {
                 std::scoped_lock lock(m_stateMutex);
                 m_connected = false;
@@ -365,7 +412,9 @@ private:
             std::scoped_lock stateLock(m_stateMutex);
             ensureConnected();
         }
+        debug::trace("client", "frame write begin bytes=", bytes.size());
         writeFrame(m_socket, bytes, m_maximumFrameBytes.load());
+        debug::trace("client", "frame write end bytes=", bytes.size());
     }
 
     void sendCancellation(std::uint64_t target)
@@ -383,7 +432,10 @@ private:
         codec::fb::CancelRequestT request;
         request.target_request_id = target;
         try {
-            send(codec::encode(cancelId, std::move(request)));
+            auto bytes = codec::encode(cancelId, std::move(request));
+            debug::trace("client", "cancel request=", cancelId,
+                " target=", target, " encoded bytes=", bytes.size());
+            send(bytes);
         } catch (...) {
             erasePending(cancelId);
         }

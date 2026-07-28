@@ -73,6 +73,22 @@ reopen the path; requests are not replayed automatically. The protocol sends
 viewport-bounded slices and lines, visible Dataset-window pages, particle
 samples, and clipped grid geometry. It never sends full FABs or volume data.
 
+To diagnose a request that stops making progress, enable the remote trace in
+both processes:
+
+```text
+AMREXPLORER_REMOTE_TRACE=1 amrexplorer-server --port 48192
+AMREXPLORER_REMOTE_TRACE=1 amrexplorer \
+    --connect 127.0.0.1:48192 /remote/path/plt00010
+```
+
+Trace lines are written to standard error with the
+`[AMREXPLORER-REMOTE]` prefix. They include request IDs, thread IDs, payload
+types, frame sizes, worker-queue transitions, slice dimensions and I/O
+metrics, and response encoding/writes. A client waiting for a response also
+reports its elapsed time every five seconds. Use the request ID to correlate
+the client and server logs.
+
 ## User interface overview
 
 ![AMReXplorer displaying a three-dimensional plotfile](images/user-guide-overview.png)

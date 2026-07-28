@@ -27,6 +27,9 @@ class SequenceController final : public QObject {
     Q_OBJECT
 
 public:
+    using FrameLoader = std::function<InitialSliceResult(
+        const std::filesystem::path&, DatasetId, const FrameSliceSpec&,
+        StopToken)>;
     struct Hooks {
         // Snapshot of the current UI state for a frame load (the host's
         // buildFrameSpec).
@@ -45,7 +48,8 @@ public:
     // Takes ownership of a validated, sorted, deduplicated frame list and
     // navigates to frame 0. The host performs validation and its own UI
     // setup before calling.
-    void open(std::vector<std::filesystem::path> frames);
+    void open(std::vector<std::filesystem::path> frames,
+        FrameLoader loader = {});
     // Drops the sequence and cancels the in-flight load and prefetch. The
     // host hides its sequence UI itself.
     void close();
@@ -119,6 +123,7 @@ private:
 
     Hooks m_hooks;
     std::vector<std::filesystem::path> m_frames;
+    FrameLoader m_loader;
     int m_index = -1;
     bool m_inFlight = false;
     // Invalidates in-flight loads across frame switches and close(); the

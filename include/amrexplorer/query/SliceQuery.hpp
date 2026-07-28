@@ -16,9 +16,16 @@ struct SliceQueryMetrics {
     std::uint64_t payloadBytesRead = 0;
 };
 
+struct SliceGridBox {
+    int level = 0;
+    RealBox physicalRegion;
+};
+
 struct SliceQueryResult {
     ScalarPlane plane;
     SliceQueryMetrics metrics;
+    bool gridBoxesIncluded = false;
+    std::vector<SliceGridBox> gridBoxes;
 };
 
 class SliceQuery {

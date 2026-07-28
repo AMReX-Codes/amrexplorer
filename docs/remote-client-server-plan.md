@@ -1,6 +1,16 @@
 # Remote client/server architecture plan
 
-Status: proposed for review; no production implementation has started.
+Status: implemented on 2026-07-27.
+
+The production implementation follows the design below. It adds the shared
+local/remote dataset-session boundary, viewport- and page-bounded queries,
+the verified FlatBuffers protocol and portable framed transport, concurrent
+loopback server, single-reader client, remote Qt/CLI workflows, remote
+sequences and prefetch, particles, clipped grid geometry, range availability,
+cache control, cancellation, reconnect/reopen coverage, a headless `remote`
+preset, installation and user documentation, and production protocol and Qt
+smoke tests. The earlier `prototypes/flatbuffers_wire` implementation and its
+build option have been removed.
 
 ## 1. Objective
 
@@ -15,14 +25,14 @@ existing demand-driven query behavior. Remote use will look like:
 ```text
 local Qt UI
     |
-    | high-level dataset operations
+    | viewport-bounded view requests
     v
 remote client ---- framed FlatBuffers over TCP ---- headless server
                                                      |
                                                      v
                                               PlotfileDataset
-                                              SliceQuery
-                                              LineQuery
+                                              view planning
+                                              clipped extraction
 ```
 
 The supported deployment model is a server bound to the remote loopback
@@ -32,12 +42,14 @@ transport compression.
 
 ## 2. Prototype findings to retain
 
-The prototype established that the right remote boundary is above block I/O:
+The prototype established that the right remote boundary is above block I/O,
+but its raw-plane response is only a transport proof:
 
 - the server can open an actual plotfile and execute the existing
   `SliceQuery`;
-- the client can receive a raw `ScalarPlane` and continue to apply palettes,
-  ranges, logarithmic mapping, contours, and other presentation locally;
+- the client can receive typed numeric data and continue to apply palettes,
+  ranges, logarithmic mapping, contours, and other 1-D/2-D presentation
+  locally;
 - a length-prefixed FlatBuffer with a file identifier, protocol version,
   request ID, payload union, frame-size limit, and verifier is a workable
   protocol foundation;
@@ -46,10 +58,12 @@ The prototype established that the right remote boundary is above block I/O:
   CMake build.
 
 The prototype is not production-ready because it stops after one slice and
-one connection. It does not support the complete metadata needed by the UI,
-line plots, the Dataset window, multiple datasets, multiple outstanding
-requests, cancellation, orderly close, reconnect behavior, or application
-integration.
+one connection. It does not support the catalog and view-local metadata needed
+by the UI, line plots, the Dataset window, multiple datasets, multiple
+outstanding requests, cancellation, orderly close, reconnect behavior, or
+application integration. It also serializes a complete `ScalarPlane`;
+production messages must instead contain no more data than is necessary to
+rasterize the current view.
 
 ## 3. Scope
 
@@ -59,8 +73,9 @@ integration.
   local and remote datasets.
 - Production FlatBuffers schema, codec, framing, client connection, server
   session, and server executable.
-- Full view-facing metadata transfer.
-- Remote slice queries, line queries, and Dataset-window level extraction.
+- Lightweight dataset catalog metadata plus view-local metadata returned with
+  each request.
+- Viewport-bounded 1-D and 2-D view queries and visible Dataset-window pages.
 - Multiple datasets and multiple outstanding requests on one connection.
 - Cooperative cancellation using the existing `StopToken` model.
 - Deterministic dataset close, connection shutdown, disconnect reporting, and
@@ -77,14 +92,17 @@ integration.
 - Application-level authentication, authorization, or TLS.
 - Remote filesystem browsing.
 - Server-side rendering, palettes, contours, glyph generation, or image
-  export.
+  export for protocol 1.0.
 - Shared datasets or cache state between separate client connections.
 - Automatic retry of interrupted requests.
-- Application-level compression of `ScalarPlane` data.
+- Application-level compression of view data.
 - Chunked or streaming query results.
+- 3-D volume data or volume geometry on the wire. A future 3-D protocol will
+  return server-rendered frames rather than transferring a volume.
 
-These exclusions keep the first production protocol aligned with the
-validated prototype. They do not prevent additive protocol extensions.
+These exclusions keep the first production protocol narrow while retaining
+the validated transport mechanisms from the prototype. They do not prevent
+additive protocol extensions.
 
 ## 4. Proposed architecture
 
@@ -97,25 +115,28 @@ on `PlotfileDataset`.
 The interface will expose:
 
 - dataset ID;
-- immutable `DatasetMetadata`;
+- immutable `DatasetCatalog` containing only dataset-wide information needed
+  before a view is requested;
 - `MetadataReadMetrics` and file-version text;
-- `executeSlice(SliceRequest, StopToken)`;
-- `executeLine(LineRequest, StopToken)`;
-- `extractLevel(DatasetLevelRequest, StopToken)` for the Dataset window;
+- `requestView(ViewDataRequest, StopToken)` for 1-D and 2-D rasterizable
+  views;
+- `requestDatasetPage(DatasetPageRequest, StopToken)` for the visible portion
+  of the Dataset window;
 - a current cache-metrics snapshot;
 - `clearUnpinnedCache()`;
 - a best-effort, idempotent close operation.
 
 Two implementations will provide the same behavior:
 
-- `LocalDatasetSession` owns a `PlotfileDataset` and invokes
-  `SliceQuery`, `LineQuery`, and the extracted Dataset-window query directly.
+- `LocalDatasetSession` owns a `PlotfileDataset` and invokes the existing
+  queries through a viewport-bounded planning and clipping layer.
 - `RemoteDatasetSession` owns a remote dataset handle and sends the equivalent
   operations through a shared `WireConnection`.
 
 This boundary avoids making the remote client emulate block reads. It also
 keeps AMR composition, sampling, cache policy, and file parsing on the machine
-that owns the data.
+that owns the data. Internal storage reads may load whole intersecting blocks,
+but the server clips their values and geometry before serialization.
 
 The proposed dependency direction is:
 
@@ -135,25 +156,38 @@ Amrvis::io <- Amrvis::query
 `Amrvis::remote` will add FlatBuffers and networking without making the local
 data/query libraries depend on either.
 
-### 4.2 Dataset-window extraction
+### 4.2 View planning and bounded extraction
 
 `src/qt/DatasetExtract.hpp` currently reads blocks directly from
 `PlotfileDataset`. Move this non-Qt operation and its result types into the new
-data layer.
+data layer, then put all slice, line, and Dataset-window operations behind a
+shared view planner.
 
-The resulting operation will accept:
+Every `ViewDataRequest` will describe what the client can actually display:
 
 - dataset ID and field;
-- level;
-- physical region;
-- normal axis and slice position;
-- maximum table extent;
+- view kind, selected fields, and components;
+- visible physical bounds and slice or line definition;
+- viewport pixel width and height;
+- sampling/interpolation mode and its required halo;
+- requested overlays and the view-local geometry they require;
 - cancellation token.
 
-Its result will retain the current cell-index bounds, dimensions, values,
-coverage mask, minimum/maximum, slice index, and truncation flags. The Qt
-`DatasetWindow` will consume this result through `DatasetSession`, so its
-behavior is identical for local and remote datasets.
+The planner will determine the finest useful sampling for that viewport,
+identify contributing AMR cells, include only the interpolation halo needed
+at its edges, and clip coverage and grid geometry to the visible bounds.
+Repeated cells that cannot affect any output pixel must not be serialized.
+
+`DatasetPageRequest` will similarly identify the visible table region and a
+strict row/column or cell-count limit. Its response will retain the current
+cell-index bounds, values, coverage mask, minimum/maximum, slice index, and
+truncation flags only for that page. Scrolling or changing the region issues a
+new request; an unrestricted whole-level extraction is not a remote
+operation.
+
+The Qt view and `DatasetWindow` will consume these owning results through
+`DatasetSession`, so local and remote behavior is equivalent at the visible
+view boundary.
 
 ### 4.3 Qt integration
 
@@ -171,9 +205,11 @@ The following operations will be routed through the session:
 - cache metrics and cache clearing;
 - plotfile-sequence frame load and prefetch.
 
-Presentation stays local. `ScalarRenderer`, contour extraction, vector-glyph
-generation, range selection, image composition, and export do not move to the
-server.
+For 1-D and 2-D views, presentation stays local. `ScalarRenderer`, contour
+extraction, vector-glyph generation, range selection, image composition, and
+export consume the bounded returned cells and do not move to the server.
+Future 3-D support is the deliberate exception: the server will render a
+viewport-sized frame and will never send volume data or volume geometry.
 
 Opening a dataset will be refactored so the metadata and session are created
 once. The current local flow reads metadata, then constructs
@@ -265,11 +301,10 @@ The production schema will cover:
 | Request | Successful response | Purpose |
 |---|---|---|
 | `HelloRequest` | `HelloResponse` | Negotiate the session |
-| `OpenDatasetRequest` | `DatasetOpened` | Open a path and return metadata |
+| `OpenDatasetRequest` | `DatasetOpened` | Open a path and return catalog metadata |
 | `CloseDatasetRequest` | `DatasetClosed` | Release one remote handle |
-| `SliceRequest` | `ScalarPlane` | Execute `SliceQuery` |
-| `LineRequest` | `LineSamples` | Execute `LineQuery` |
-| `DatasetLevelRequest` | `DatasetLevel` | Populate one Dataset-window tab |
+| `ViewDataRequest` | `ViewDataResponse` | Return cells needed for one 1-D/2-D viewport |
+| `DatasetPageRequest` | `DatasetPageResponse` | Populate one visible Dataset-window page |
 | `ClearCacheRequest` | `CacheState` | Clear unpinned blocks |
 | `CancelRequest` | `CancelAcknowledged` | Request cancellation by request ID |
 | `PingRequest` | `PongResponse` | Explicit health check |
@@ -285,22 +320,19 @@ is valid and the cancellation acknowledgment reports that it was too late.
 
 ### 5.5 Metadata representation
 
-`DatasetOpened` will carry the complete current `DatasetMetadata` needed for
-local behavior:
+`DatasetOpened` will carry only dataset-wide catalog metadata needed before a
+view is requested:
 
 - dimension, finest level, time, coordinate system, and physical domain;
 - field names, component counts, centering, and component names;
-- level numbers, steps, integer domains, refinement ratios, cell sizes,
-  ghost widths, component counts, boxes, and block metadata;
-- optional per-block statistics;
+- level numbers, steps, refinement ratios, cell sizes, and level domains;
 - format/file-version text and metadata-read metrics;
 - initial cache state.
 
-The first implementation will mirror all current metadata fields at the
-schema conversion boundary. This keeps range selection, level selection, grid
-overlays, diagnostics, and sequence behavior identical and avoids fabricated
-client-side metadata. Filesystem-specific fields are informational on the
-client and are never used for client-side reads.
+It will not carry block boxes, ghost extents, per-block statistics, FAB
+locations, or other storage geometry. Metadata needed for grid overlays,
+coverage, or sampling is computed for the current view and returned in that
+view's response. Filesystem-specific fields remain on the server.
 
 Decoders will validate semantic invariants after FlatBuffers verification,
 including vector lengths, level counts, box bounds, field indices, and
@@ -308,29 +340,50 @@ metadata consistency.
 
 ### 5.6 Query results
 
-`ScalarPlane` will carry:
+`ViewDataRequest` will carry enough information to prove and enforce the
+response bound:
 
-- dimensions and physical region;
-- float values;
-- validity mask;
-- source-level array;
-- `SliceQueryMetrics`;
-- current server-side cache state.
+- view kind and requested fields/components;
+- visible physical bounds or visible line interval;
+- slice axis and position where applicable;
+- viewport pixel dimensions;
+- sampling/interpolation mode;
+- requested view-local overlays.
 
-`LineSamples` will carry:
+`ViewDataResponse` will carry only data that can contribute to rasterizing
+that request:
 
-- line axis;
-- positions, values, validity mask, and source-level arrays;
-- `SliceQueryMetrics`;
-- current server-side cache state.
+- clipped contributing cell values for the requested fields/components;
+- cell bounds or sample positions needed for client-side rasterization;
+- validity and source-level information for those cells;
+- the minimal interpolation halo at visible edges;
+- clipped AMR coverage or grid-overlay geometry when requested;
+- query metrics, encoded-byte counts, and current server cache state.
 
-`DatasetLevel` will carry the complete moved `DatasetLevelExtract` result and
-the current cache state.
+For a line view, the server will return a pixel-bounded representation. Smooth
+or point-sampled modes may return at most one representative sample per
+horizontal output pixel; modes that must preserve extrema may return a bounded
+minimum/maximum envelope per pixel. Native-resolution full-axis arrays are
+not wire payloads.
+
+`DatasetPageResponse` will carry only the requested visible table page and its
+strictly bounded values, masks, indices, and truncation information. It will
+never carry a whole level.
+
+The protocol must not expose `FabBlock`, whole-level arrays, unrestricted
+dataset extracts, complete native-resolution lines, full-volume cells, or
+volume geometry. The server may overfetch storage blocks internally, but must
+clip values, masks, coverage, and geometry before serialization.
 
 The client copies verified FlatBuffers vectors into the existing owning
-domain result types before releasing the receive buffer. This preserves the
+view-result types before releasing the receive buffer. This preserves the
 current lifetime model and keeps FlatBuffers-generated types out of the UI and
 query APIs.
+
+An additive future 3-D capability will use a distinct
+`RenderedFrameRequest`/`RenderedFrameResponse`. Its response will contain a
+viewport-sized image plus presentation metadata; it will never reuse
+`ViewDataResponse` to transfer volume data or geometry.
 
 ### 5.7 Errors
 
@@ -360,18 +413,19 @@ Protocol 1.0 will not add application-level compression.
 
 Reasons:
 
-- the prototype's raw-plane design preserves simple verification and direct
-  typed vectors;
+- view-bounded typed vectors preserve simple verification and make the
+  uncompressed worst case a function of the viewport rather than dataset
+  resolution;
 - SSH already offers optional stream compression;
 - adding zstd would add a dependency, a second size domain, decompression
   limits, and another full-buffer allocation before measurements establish a
   benefit;
-- the current 4096-by-4096 slice cap keeps the three result arrays below the
-  proposed 128 MiB frame limit.
+- request-specific viewport and page caps keep response arrays below the
+  negotiated frame limit.
 
 The implementation will record encoded bytes and request latency in
 diagnostics. If representative remote workloads show that transfer dominates,
-an additive minor version can introduce a negotiated compressed-plane payload
+an additive minor version can introduce a negotiated compressed-view payload
 without changing request semantics.
 
 This decision is explicitly part of the review for this plan.
@@ -400,7 +454,8 @@ Sending a request will:
 The receive thread will be the only socket reader. It will verify each frame,
 look up the request ID, validate the expected payload type, and complete the
 matching promise. This permits the existing Qt worker tasks to issue slices,
-line queries, Dataset-window reads, and sequence prefetch concurrently.
+line-view queries, Dataset-window page reads, and sequence prefetch
+concurrently.
 
 On EOF, socket error, or protocol failure, the client will atomically mark the
 connection closed and fail every pending operation. Socket shutdown will be
@@ -421,13 +476,13 @@ query.
 
 ## 7. Server design
 
-The `amrvis2-server` executable will be Qt-free and will link the production
+The `amrexplorer-server` executable will be Qt-free and will link the production
 remote, data, query, I/O, cache, and core libraries.
 
 Startup interface:
 
 ```text
-amrvis2-server [--port PORT] [--threads COUNT]
+amrexplorer-server [--port PORT] [--threads COUNT]
                [--max-frame-mib SIZE] [--max-datasets COUNT]
 ```
 
@@ -473,6 +528,13 @@ and release the session. A slow or non-cooperative read may finish after the
 socket is gone, but its response is discarded and it holds no process-global
 session state.
 
+The server validates viewport dimensions, visible bounds, field/component
+counts, halo limits, page limits, and the computed worst-case response size
+before dispatch. It then plans storage reads, performs any whole-block
+overfetch internally, and clips the result before passing it to the codec.
+The codec accepts only bounded view-result types, so an internal `FabBlock` or
+whole-level extract cannot accidentally cross the wire boundary.
+
 The current query and block-read cancellation checkpoints will be reused.
 Cancellation latency is therefore bounded by the longest uncancellable
 filesystem operation, not by network handling.
@@ -499,11 +561,11 @@ Document the normal workflow:
 
 ```bash
 # Remote machine
-amrvis2-server --port 48192
+amrexplorer-server --port 48192
 
 # Local machine
 ssh -N -L 48192:127.0.0.1:48192 user@remote
-amrvis2 --connect 127.0.0.1:48192 /remote/path/to/plt00010
+amrexplorer --connect 127.0.0.1:48192 /remote/path/to/plt00010
 ```
 
 ### 9.2 Desktop actions
@@ -529,7 +591,7 @@ cancelling their work.
 Preserve all current local and smoke-test forms. Add:
 
 ```text
-amrvis2 --connect HOST:PORT REMOTE_PATH [REMOTE_PATH ...]
+amrexplorer --connect HOST:PORT REMOTE_PATH [REMOTE_PATH ...]
 ```
 
 One path opens a dataset and multiple paths open a sequence, matching the
@@ -541,19 +603,20 @@ will produce a usage error before the Qt event loop starts.
 Proposed production layout:
 
 ```text
-schemas/amrvis_wire.fbs
-include/amrvis/data/DatasetSession.hpp
-include/amrvis/data/DatasetExtract.hpp
-include/amrvis/remote/Connection.hpp
-include/amrvis/remote/RemoteDatasetSession.hpp
+schemas/amrexplorer_wire.fbs
+include/amrexplorer/data/DatasetSession.hpp
+include/amrexplorer/data/ViewData.hpp
+include/amrexplorer/remote/Connection.hpp
+include/amrexplorer/remote/RemoteDatasetSession.hpp
 src/data/LocalDatasetSession.cpp
-src/data/DatasetExtract.cpp
+src/data/ViewData.cpp
+src/data/DatasetPage.cpp
 src/remote/Codec.cpp
 src/remote/Frame.cpp
 src/remote/Connection.cpp
 src/remote/RemoteDatasetSession.cpp
 src/remote/Server.cpp
-tools/amrvis2_server/main.cpp
+tools/amrexplorer_server/main.cpp
 ```
 
 Exact private-header splitting may change during implementation, but generated
@@ -561,8 +624,8 @@ FlatBuffers declarations will remain private to `Amrvis::remote`.
 
 Build policy:
 
-- replace `AMRVIS_ENABLE_WIRE_PROTOTYPE` with
-  `AMRVIS_ENABLE_REMOTE`;
+- replace `AMREXPLORER_ENABLE_WIRE_PROTOTYPE` with
+  `AMREXPLORER_ENABLE_REMOTE`;
 - build remote support by default for normal Qt builds and explicitly for the
   headless server preset;
 - generate C++ bindings into the build tree from the checked-in schema;
@@ -570,7 +633,7 @@ Build policy:
 - use an installed compatible FlatBuffers package when available and retain a
   pinned FetchContent fallback;
 - make the generated header an explicit dependency of every codec target;
-- install `amrvis2-server` alongside the desktop executable;
+- install `amrexplorer-server` alongside the desktop executable;
 - replace the `wire-prototype` preset with a `remote` headless preset that
   builds the server and all remote tests.
 
@@ -584,6 +647,12 @@ minimum compatible version separately from the FetchContent fallback version.
 
 - Round-trip every request, response, enum, optional field, and metadata type.
 - Verify domain-to-wire-to-domain equality.
+- Prove that encoded view responses contain no cells outside the planned
+  viewport plus the explicitly permitted interpolation halo.
+- Reject viewport, page, overlay, field/component, and computed-response sizes
+  that exceed negotiated limits before allocating or reading data.
+- Keep wire codecs unable to accept `FabBlock`, whole-level extracts, or
+  volume data types.
 - Reject wrong identifiers, truncated buffers, corrupt offsets, invalid
   unions, zero/oversized frames, invalid vector lengths, overflowed sizes, and
   semantically invalid requests.
@@ -595,14 +664,17 @@ minimum compatible version separately from the FetchContent fallback version.
 
 Materialize existing 2-D and 3-D fixtures and compare local with remote:
 
-- metadata and file-version data;
-- slice plane and metrics;
-- line samples and metrics;
-- each Dataset-window level extraction;
+- catalog metadata and file-version data;
+- view-bounded slice cells, masks, coverage, geometry, and metrics;
+- pixel-bounded line representations and metrics;
+- visible Dataset-window pages;
 - cache clear and cache-budget fallback behavior.
 
-For deterministic fixtures, values, masks, source levels, positions, bounds,
-and relevant metrics should match exactly.
+Exercise zoomed, panned, coarse/fine-boundary, nonuniform, and maximum-halo
+views. For deterministic fixtures, values, masks, source levels, positions,
+bounds, and relevant metrics should match exactly. Instrument the server and
+assert that serialized cell and geometry extents are a subset of the planned
+view bound even when internal reads touched larger FABs.
 
 ### 11.3 Server lifecycle tests
 
@@ -617,6 +689,7 @@ and relevant metrics should match exactly.
 - Server shutdown with connected and idle clients.
 - Duplicate request ID and request-before-handshake rejection.
 - Resource-limit enforcement without process termination.
+- Malicious or extreme viewport requests rejected before expensive reads.
 
 ### 11.4 Reconnect tests
 
@@ -649,26 +722,33 @@ logs on failure.
 - ASan/UBSan server and client integration tests.
 - Manual SSH-tunnel run against a representative remote plotfile.
 - Diagnostics review at native and maximum slice sizes.
+- Wire-size review across zoom levels proving that payload size follows the
+  viewport and requested halo, not the underlying FAB or dataset extent.
+- A protocol inspection confirming that no full FAB, unrestricted level,
+  native-resolution line, volume data, or volume geometry is serialized.
 
 ## 12. Implementation sequence
 
 ### Phase 1: Local abstraction with no networking
 
-1. Move Dataset-window extraction out of Qt.
+1. Move Dataset-window extraction out of Qt and make it page-bounded.
 2. Add `DatasetSession` and `LocalDatasetSession`.
-3. Route all current Qt data access through the session.
-4. Remove duplicate metadata reads during local open.
-5. Run the complete existing test and smoke suite.
+3. Add the shared view planner and bounded owning view-result types.
+4. Route all current Qt data access through the session.
+5. Remove duplicate metadata reads during local open.
+6. Run the complete existing test and smoke suite.
 
 Exit criterion: local behavior and all existing features remain unchanged
 without FlatBuffers or a server.
 
 ### Phase 2: Production schema, codecs, and framing
 
-1. Add the full schema and build-time generation.
-2. Implement domain conversion and semantic validation.
-3. Promote and port the framing/socket layer.
-4. Add protocol, codec, corruption, and limit tests.
+1. Add the viewport-bounded schema and build-time generation.
+2. Implement catalog, view, page, and cache conversion with semantic
+   validation.
+3. Make the wire codec accept only bounded view-result types.
+4. Promote and port the framing/socket layer.
+5. Add protocol, codec, corruption, overfetch, and limit tests.
 
 Exit criterion: every operation round-trips through verified buffers and the
 transport tests pass on supported platforms.
@@ -677,9 +757,11 @@ transport tests pass on supported platforms.
 
 1. Add handshake and session state.
 2. Add dataset registry and open/close.
-3. Dispatch slice, line, and level-extraction requests.
-4. Add request tracking, cancellation, bounded workers, and shutdown.
-5. Add server lifecycle and resource-limit tests.
+3. Dispatch view-data and Dataset-page requests through the shared planner.
+4. Enforce viewport, halo, page, geometry, and response-size limits before
+   serialization.
+5. Add request tracking, cancellation, bounded workers, and shutdown.
+6. Add server lifecycle, no-wire-overfetch, and resource-limit tests.
 
 Exit criterion: a non-Qt integration client exercises all operations,
 concurrency, cancellation, and teardown.
@@ -730,6 +812,11 @@ The architecture is complete when:
 - superseded work is cancelled on the server;
 - disconnects fail promptly and cleanly, and reconnect/reopen succeeds;
 - all received FlatBuffers are bounded and verified before access;
+- every 1-D/2-D response is bounded by the requested viewport plus its
+  explicit interpolation halo;
+- Dataset-window responses contain only the requested visible page;
+- full FABs, whole levels, native-resolution lines, volume data, and volume
+  geometry never cross the wire;
 - server resource limits prevent unbounded client-controlled allocation;
 - the server binds only to loopback and the SSH security boundary is
   documented;
@@ -744,8 +831,9 @@ Please review these choices before implementation:
 1. `DatasetSession` is the shared local/remote boundary; block reads are not a
    public remote operation.
 2. The server is loopback-only and relies on SSH for all security.
-3. Protocol 1.0 transfers raw owning query results and has no application
-   compression or chunking.
+3. Protocol 1.0 transfers only the cells, masks, clipped AMR
+   coverage/geometry, requested components, and interpolation halo needed to
+   rasterize the current 1-D/2-D view.
 4. Remote paths are entered explicitly; there is no remote file browser.
 5. Reconnect is explicit and reopens datasets; requests are never
    automatically replayed.
@@ -753,6 +841,10 @@ Please review these choices before implementation:
    code kept out of git.
 7. The first production release aims for the listed feature parity rather
    than limiting remote support to slices alone.
+8. Protocol 1.0 has no application compression or chunking; its hard payload
+   bound comes from viewport/page limits and the negotiated frame limit.
+9. Future 3-D support returns server-rendered frames and never transfers
+   volume data or volume geometry.
 
 Implementation should begin only after these decisions and any requested
 scope changes are approved.

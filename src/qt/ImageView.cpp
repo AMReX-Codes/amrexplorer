@@ -467,6 +467,14 @@ void ImageView::fitToWindow()
     }
 }
 
+void ImageView::centerImagePreservingScale()
+{
+    if (hasImage()) {
+        m_fitOnResize = false;
+        centerOn(m_scene->sceneRect().center());
+    }
+}
+
 void ImageView::setFixedScale(int factor)
 {
     if (!hasImage() || factor < 1) {

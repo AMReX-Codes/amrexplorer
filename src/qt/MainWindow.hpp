@@ -6,11 +6,11 @@
 
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/StopToken.hpp>
+#include <amrexplorer/data/DatasetSession.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/pipeline/DisplayCoordinator.hpp>
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
-#include <amrexplorer/query/SliceQuery.hpp>
 #include <amrexplorer/render2d/Contours.hpp>
 #include <amrexplorer/render2d/ImageBuffer.hpp>
 #include <amrexplorer/render2d/Palette.hpp>
@@ -30,6 +30,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -54,7 +55,6 @@ class QRectF;
 class QWidget;
 
 namespace amrvis {
-class PlotfileDataset;
 struct DatasetMetadata;
 struct LineResult;
 enum class CompositionPolicy : std::uint8_t;
@@ -89,6 +89,10 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
 
     void openDataset(const std::filesystem::path& path, bool metadataOnly = false);
+    void openRemoteDataset(
+        std::string host, std::uint16_t port, std::string remotePath);
+    void openRemoteSequence(std::string host, std::uint16_t port,
+        const std::vector<std::string>& remotePaths);
     // Opens a plotfile sequence (the legacy "-a" file animation): frames are
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.
@@ -247,6 +251,7 @@ private:
         double displayMaximum = 1.0;
         bool displayLogarithmic = false;
         std::vector<VectorSegment> vectorSegments;
+        std::vector<SliceGridBox> gridBoxes;
         // Cache key of the slice that produced the planes above: a UI change
         // that leaves every key field untouched (palette/log/range/contour
         // count) is satisfied from the cached planes instead of querying
@@ -269,7 +274,9 @@ private:
     void openDatasetImpl(const std::filesystem::path& path, bool metadataOnly,
         std::optional<PlotfileMetadataResult> preparedMetadata,
         std::filesystem::path dataRoot, bool preserveFabSelector,
-        std::optional<FrameSliceSpec> initialSpec);
+        std::optional<FrameSliceSpec> initialSpec,
+        std::optional<std::tuple<std::string, std::uint16_t, std::string>>
+            remoteOpen = std::nullopt);
     void viewFab(std::size_t entry);
     void backToMultiFab();
     // A fresh independent top-level window (WA_DeleteOnClose) for the
@@ -340,6 +347,8 @@ private:
     // state. Shared by setActiveView and showSlice's active-view branch.
     void syncActiveViewColorControls(const PlaneViewState& state);
     [[nodiscard]] std::array<int, 2> displayAxes(int normal) const;
+    [[nodiscard]] std::array<int, 2> viewportOutputSize(
+        const PlaneViewState& state) const;
     void probeMoved(PlaneViewState& state, int x, int displayY);
     void probeClicked(PlaneViewState& state, int x, int displayY);
     [[nodiscard]] QString probeReadout(
@@ -414,7 +423,8 @@ private:
         std::uint64_t generation,
         std::optional<PlotfileMetadataResult> preparedMetadata = std::nullopt,
         std::filesystem::path dataRoot = {},
-        std::optional<FrameSliceSpec> initialSpec = std::nullopt);
+        std::optional<FrameSliceSpec> initialSpec = std::nullopt,
+        std::shared_ptr<DatasetSession> preparedSession = {});
     void configureSliceControls();
     // Enable the dataset-dependent field/level/range/menu controls once a
     // dataset (single or sequence frame) is loaded. Shared by
@@ -539,7 +549,7 @@ private:
     // (progress, cancellation, FFmpeg encoding). This window supplies frame
     // rendering and sequence navigation, and restores its UI on finished().
     AnimationExporter* m_animationExporter = nullptr;
-    std::shared_ptr<PlotfileDataset> m_dataset;
+    std::shared_ptr<DatasetSession> m_dataset;
     std::shared_ptr<const DatasetMetadata> m_openMetadata;
     std::string m_fileVersion;
     PlaneViewState m_view2d;
@@ -569,6 +579,8 @@ private:
     StopSource m_particleStopSource;
     std::uint64_t m_particleGeneration = 0;
     std::filesystem::path m_datasetPath;
+    std::string m_remoteHost;
+    std::uint16_t m_remotePort = 0;
     struct MultiFabReturnState {
         std::filesystem::path path;
         std::filesystem::path dataRoot;

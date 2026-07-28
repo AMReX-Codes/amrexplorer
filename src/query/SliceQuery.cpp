@@ -130,6 +130,7 @@ SliceQueryResult SliceQuery::execute(
     }
 
     std::vector<LevelBlocks> levels;
+    result.gridBoxesIncluded = request.includeGridBoxes;
     for (int levelIndex = maximumLevel; levelIndex >= minimumLevel; --levelIndex) {
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
@@ -142,6 +143,31 @@ SliceQueryResult SliceQuery::execute(
             const auto& block = level.blocks[grid];
             if (!intersects(block.box, queryBox, metadata.dimension)) {
                 continue;
+            }
+            if (request.includeGridBoxes) {
+                auto physicalBox = sampleBounds(
+                    level, block.box, metadata.dimension);
+                bool intersectsSlice = true;
+                if (metadata.dimension == 3) {
+                    const auto normal
+                        = static_cast<std::size_t>(request.normalDirection);
+                    intersectsSlice = request.physicalPosition
+                        >= physicalBox.lower[normal]
+                        && request.physicalPosition < physicalBox.upper[normal];
+                }
+                if (intersectsSlice) {
+                    for (const auto axis : axes) {
+                        const auto index = static_cast<std::size_t>(axis);
+                        physicalBox.lower[index] = std::max(
+                            physicalBox.lower[index],
+                            request.visibleRegion.lower[index]);
+                        physicalBox.upper[index] = std::min(
+                            physicalBox.upper[index],
+                            request.visibleRegion.upper[index]);
+                    }
+                    result.gridBoxes.push_back(
+                        SliceGridBox{levelIndex, physicalBox});
+                }
             }
             ++result.metrics.candidateBlocks;
             BlockRequest blockRequest;

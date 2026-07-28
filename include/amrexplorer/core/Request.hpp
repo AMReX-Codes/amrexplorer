@@ -52,6 +52,7 @@ struct SliceRequest {
     std::array<int, 2> outputSize{0, 0};
     SamplingPolicy sampling = SamplingPolicy::PiecewiseConstant;
     CompositionPolicy composition = CompositionPolicy::FinestAvailable;
+    bool includeGridBoxes = false;
 };
 
 struct LineRequest {
@@ -74,4 +75,3 @@ struct LineRequest {
     const LineRequest& request, int datasetDimension);
 
 } // namespace amrvis
-

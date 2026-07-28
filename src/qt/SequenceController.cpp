@@ -24,9 +24,11 @@ SequenceController::SequenceController(Hooks hooks, QObject* parent)
 {
 }
 
-void SequenceController::open(std::vector<std::filesystem::path> frames)
+void SequenceController::open(
+    std::vector<std::filesystem::path> frames, FrameLoader loader)
 {
     m_frames = std::move(frames);
+    m_loader = std::move(loader);
     goToFrame(0);
 }
 
@@ -36,6 +38,7 @@ void SequenceController::close()
     m_loadStopSource.request_stop();
     ++m_loadGeneration;
     m_frames.clear();
+    m_loader = {};
     m_index = -1;
     m_inFlight = false;
 }
@@ -103,6 +106,7 @@ void SequenceController::startLoad(int index, std::uint64_t generation)
         sequenceDatasetIdBase + ++m_datasetCounter};
     m_loadStopSource = StopSource{};
     const auto cancellation = m_loadStopSource.get_token();
+    const auto loader = m_loader;
     emit loadActivityChanged(+1);
     emit statusMessage(tr("Loading frame %1...").arg(
         QString::fromStdString(path.filename().string())));
@@ -134,7 +138,10 @@ void SequenceController::startLoad(int index, std::uint64_t generation)
             watcher->deleteLater();
         });
     watcher->setFuture(QtConcurrent::run(
-        [path, datasetId, spec = std::move(spec), cancellation] {
+        [path, datasetId, spec = std::move(spec), cancellation, loader] {
+        if (loader) {
+            return loader(path, datasetId, spec, cancellation);
+        }
         return executeFrameLoad(path, datasetId, spec, initialCacheBudget(),
             cancellation);
     }));
@@ -179,6 +186,7 @@ void SequenceController::startPrefetch(int frameIndex)
         sequenceDatasetIdBase + ++m_datasetCounter};
     m_prefetchStopSource = StopSource{};
     const auto cancellation = m_prefetchStopSource.get_token();
+    const auto loader = m_loader;
     emit loadActivityChanged(+1);
 
     auto* watcher = new QFutureWatcher<InitialSliceResult>(this);
@@ -205,7 +213,10 @@ void SequenceController::startPrefetch(int frameIndex)
             watcher->deleteLater();
         });
     watcher->setFuture(QtConcurrent::run(
-        [path, datasetId, spec = std::move(spec), cancellation] {
+        [path, datasetId, spec = std::move(spec), cancellation, loader] {
+        if (loader) {
+            return loader(path, datasetId, spec, cancellation);
+        }
         return executeFrameLoad(path, datasetId, spec, initialCacheBudget(),
             cancellation);
     }));

@@ -62,12 +62,12 @@
       }
     },
     {
-      "name": "wire-prototype",
+      "name": "remote",
       "inherits": "headless",
-      "displayName": "Headless FlatBuffers wire prototype",
-      "binaryDir": "${sourceDir}/build-wire-prototype",
+      "displayName": "Headless remote server and protocol",
+      "binaryDir": "${sourceDir}/build-remote",
       "cacheVariables": {
-        "AMREXPLORER_ENABLE_WIRE_PROTOTYPE": "ON",
+        "AMREXPLORER_ENABLE_REMOTE": "ON",
         "AMREXPLORER_BUILD_TESTS": "ON"
       }
     },
@@ -130,8 +130,8 @@
       "configurePreset": "sanitizers"
     },
     {
-      "name": "wire-prototype",
-      "configurePreset": "wire-prototype"
+      "name": "remote",
+      "configurePreset": "remote"
     },
     {
       "name": "tsan",
@@ -183,6 +183,13 @@
         "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1",
         "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
       },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "remote",
+      "configurePreset": "remote",
       "output": {
         "outputOnFailure": true
       }

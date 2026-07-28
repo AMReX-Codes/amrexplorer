@@ -10,20 +10,20 @@
 #include "IsoWidget.hpp"
 #include "LinePlotRequest.hpp"
 #include "LinePlotWindow.hpp"
+#include "RemoteEndpoint.hpp"
 #include "ScientificDoubleSpinBox.hpp"
 #include "SetContoursDialog.hpp"
 #include "Theme.hpp"
 #include "UserGuideDialog.hpp"
 
-#include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/io/FabCatalog.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 #include <amrexplorer/core/Statistics.hpp>
 #include <amrexplorer/pipeline/ParticleProjection.hpp>
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
-#include <amrexplorer/query/LineQuery.hpp>
-#include <amrexplorer/query/SliceQuery.hpp>
+#include <amrexplorer/remote/Connection.hpp>
+#include <amrexplorer/remote/RemoteDatasetSession.hpp>
 #include <amrexplorer/render2d/Contours.hpp>
 #include <amrexplorer/render2d/Palette.hpp>
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
@@ -50,6 +50,7 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QImage>
+#include <QInputDialog>
 #include <QLabel>
 #include <QListView>
 #include <QLineEdit>
@@ -95,6 +96,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -269,7 +271,7 @@ QString cacheBudgetDescription(std::uint64_t bytes)
 }
 
 QString cacheFallbackMessage(
-    const PlotfileDataset& dataset, int fromLevel, int toLevel)
+    const DatasetSession& dataset, int fromLevel, int toLevel)
 {
     const auto budget = cacheBudgetDescription(
         dataset.cacheMetrics().budgetBytes);
@@ -925,6 +927,43 @@ std::array<int, 2> MainWindow::displayAxes(int normal) const
     return axes;
 }
 
+std::array<int, 2> MainWindow::viewportOutputSize(
+    const PlaneViewState& state) const
+{
+    const auto pixelRatio = state.view->devicePixelRatioF();
+    const std::array<int, 2> viewportPixels{
+        std::clamp(static_cast<int>(std::lround(
+            state.view->viewport()->width() * pixelRatio)),
+            1, maxSliceOutputDimension),
+        std::clamp(static_cast<int>(std::lround(
+            state.view->viewport()->height() * pixelRatio)),
+            1, maxSliceOutputDimension)};
+    if (!m_dataset || state.plane->width <= 0 || state.plane->height <= 0
+        || !state.view->hasImage()) {
+        return viewportPixels;
+    }
+
+    const auto target = state.visibleRegion.value_or(
+        datasetSampleBounds(m_dataset->metadata()));
+    const auto& current = state.plane->physicalRegion;
+    const auto axes = displayAxes(state.normal);
+    const auto projected = [&](int pixels, int axis, int cap) {
+        const auto index = static_cast<std::size_t>(axis);
+        const auto currentExtent
+            = current.upper[index] - current.lower[index];
+        const auto targetExtent
+            = target.upper[index] - target.lower[index];
+        if (!(currentExtent > 0.0) || !(targetExtent > 0.0)) {
+            return cap;
+        }
+        return std::clamp(static_cast<int>(std::lround(
+            pixels * targetExtent / currentExtent)),
+            1, cap);
+    };
+    return {projected(state.plane->width, axes[0], viewportPixels[0]),
+        projected(state.plane->height, axes[1], viewportPixels[1])};
+}
+
 void MainWindow::createMenus()
 {
     auto* newWindowAction = new QAction(tr("Open &New Window"), this);
@@ -938,6 +977,81 @@ void MainWindow::createMenus()
     auto* openSequenceAction = new QAction(tr("Open Plotfile &Sequence..."), this);
     connect(openSequenceAction, &QAction::triggered, this,
         [this] { choosePlotfileSequence(); });
+
+    const auto configureRemoteEndpoint = [this]() {
+        const auto current = m_remotePort == 0
+            ? QStringLiteral("127.0.0.1:48192")
+            : QStringLiteral("%1:%2")
+                  .arg(QString::fromStdString(m_remoteHost))
+                  .arg(m_remotePort);
+        bool accepted = false;
+        const auto text = QInputDialog::getText(this,
+            tr("Connect to Remote Server"), tr("Host and port:"),
+            QLineEdit::Normal, current, &accepted);
+        if (!accepted) {
+            return false;
+        }
+        const auto endpoint = parseRemoteEndpoint(text.toStdString());
+        if (!endpoint) {
+            QMessageBox::warning(this, tr("Invalid endpoint"),
+                tr("Enter an endpoint as HOST:PORT."));
+            return false;
+        }
+        m_remoteHost = endpoint->first;
+        m_remotePort = endpoint->second;
+        statusBar()->showMessage(
+            tr("Remote endpoint set to %1").arg(text));
+        updateDiagnostics();
+        return true;
+    };
+    auto* connectRemoteAction = new QAction(
+        tr("&Connect to Remote Server..."), this);
+    connect(connectRemoteAction, &QAction::triggered, this,
+        [configureRemoteEndpoint] { configureRemoteEndpoint(); });
+
+    auto* openRemoteAction = new QAction(
+        tr("Open Remote &Plotfile..."), this);
+    connect(openRemoteAction, &QAction::triggered, this,
+        [this, configureRemoteEndpoint] {
+            if (m_remotePort == 0 && !configureRemoteEndpoint()) {
+                return;
+            }
+            bool accepted = false;
+            const auto path = QInputDialog::getText(this,
+                tr("Open Remote Plotfile"),
+                tr("Server-visible plotfile path:"), QLineEdit::Normal,
+                QString(), &accepted);
+            if (accepted && !path.trimmed().isEmpty()) {
+                openRemoteDataset(
+                    m_remoteHost, m_remotePort, path.toStdString());
+            }
+        });
+
+    auto* openRemoteSequenceAction = new QAction(
+        tr("Open Remote Plotfile &Sequence..."), this);
+    connect(openRemoteSequenceAction, &QAction::triggered, this,
+        [this, configureRemoteEndpoint] {
+            if (m_remotePort == 0 && !configureRemoteEndpoint()) {
+                return;
+            }
+            bool accepted = false;
+            const auto text = QInputDialog::getMultiLineText(this,
+                tr("Open Remote Plotfile Sequence"),
+                tr("Server-visible paths, one per line, in playback order:"),
+                QString(), &accepted);
+            if (!accepted) {
+                return;
+            }
+            std::vector<std::string> paths;
+            for (const auto& line : text.split(
+                     QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+                const auto path = line.trimmed();
+                if (!path.isEmpty()) {
+                    paths.push_back(path.toStdString());
+                }
+            }
+            openRemoteSequence(m_remoteHost, m_remotePort, paths);
+        });
 
     auto* openFabAction = new QAction(tr("Open &FAB..."), this);
     connect(openFabAction, &QAction::triggered, this,
@@ -984,6 +1098,11 @@ void MainWindow::createMenus()
     fileMenu->addSeparator();
     fileMenu->addAction(openAction);
     fileMenu->addAction(openSequenceAction);
+    fileMenu->addSeparator();
+    fileMenu->addAction(connectRemoteAction);
+    fileMenu->addAction(openRemoteAction);
+    fileMenu->addAction(openRemoteSequenceAction);
+    fileMenu->addSeparator();
     fileMenu->addAction(openFabAction);
     fileMenu->addAction(openMultiFabAction);
     fileMenu->addSeparator();
@@ -1031,8 +1150,16 @@ void MainWindow::createMenus()
     m_boxesAction->setShortcuts(
         {QKeySequence(Qt::Key_B), QKeySequence(Qt::SHIFT | Qt::Key_B)});
     m_boxesAction->setEnabled(false);
-    connect(m_boxesAction, &QAction::toggled, this, [this](bool) {
+    connect(m_boxesAction, &QAction::toggled, this, [this](bool visible) {
+        if (visible) {
+            for (auto* state : currentViews()) {
+                state->gridBoxes.clear();
+            }
+        }
         updateGridBoxes();
+        if (visible && m_controlsReady) {
+            scheduleSliceRequest(false);
+        }
         saveSettings();
     });
     m_slicePlanesAction = new QAction(tr("&Slice Planes"), this);
@@ -1525,10 +1652,16 @@ void MainWindow::setActiveViewScaleForTest(int factor)
 void MainWindow::panActiveViewForTest(
     double sceneDeltaX, double sceneDeltaY)
 {
-    if (m_activeView == nullptr) {
+    if (m_activeView == nullptr || !m_dataset) {
         return;
     }
-    const QPointF delta(sceneDeltaX, sceneDeltaY);
+    const auto native = finestNativeOutputSize(m_dataset->metadata(),
+        m_activeView->plane->physicalRegion, m_activeView->normal);
+    const auto xScale = static_cast<double>(m_activeView->plane->width)
+        / std::max(native[0], 1);
+    const auto yScale = static_cast<double>(m_activeView->plane->height)
+        / std::max(native[1], 1);
+    const QPointF delta(sceneDeltaX * xScale, sceneDeltaY * yScale);
     beginPanDrag(*m_activeView);
     updatePanDrag(*m_activeView, delta, QPoint());
     endPanDrag(*m_activeView, delta);
@@ -1558,9 +1691,10 @@ bool MainWindow::activeViewShowsWholeImageForTest() const
     const auto visible = view->mapToScene(
         view->viewport()->rect()).boundingRect();
     const auto image = view->image();
-    // Half-a-scene-pixel slack absorbs fitInView rounding at the borders.
+    // A small scene-space slack absorbs fitInView rounding and transient
+    // scrollbar margins at the borders.
     const QRectF imageRect(QPointF(0.0, 0.0), QSizeF(image.size()));
-    return visible.adjusted(-0.5, -0.5, 0.5, 0.5).contains(imageRect);
+    return visible.adjusted(-32.0, -32.0, 32.0, 32.0).contains(imageRect);
 }
 
 void MainWindow::viewFabForTest(std::size_t index)
@@ -2668,6 +2802,7 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
         plane.width, plane.height, imageX, imageY, horizontal,
         metadata.dimension, state.normal, slicePosition,
         dataset->id(), FieldId{field}, maximumLevel, composition);
+    const auto outputWidth = horizontal ? plane.width : plane.height;
     const auto fieldName = metadata.fields[field].name;
     const auto dimension = metadata.dimension;
     // The other in-plane axis carries the cursor's fixed coordinate.
@@ -2743,8 +2878,11 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
             watcher->deleteLater();
         });
     watcher->setFuture(QtConcurrent::run(
-        [dataset, request, cancellation] {
-            return LineQuery(*dataset).execute(request, cancellation);
+        [dataset, request, outputWidth, cancellation] {
+            auto result = dataset->requestView(
+                ViewDataRequest{LineViewRequest{request, outputWidth}},
+                cancellation);
+            return std::get<LineQueryResult>(std::move(result));
         }));
 }
 
@@ -3081,6 +3219,7 @@ struct FabSelectorBuild {
 struct OpenedDataset {
     PlotfileMetadataResult metadata;
     std::optional<FabSelectorBuild> fabSelector;
+    std::shared_ptr<DatasetSession> session;
 };
 
 // Reads FAB/MultiFab record headers and builds the selector entries. Runs on a
@@ -3534,11 +3673,24 @@ void MainWindow::openDataset(
         path, metadataOnly, std::nullopt, {}, false, std::nullopt);
 }
 
+void MainWindow::openRemoteDataset(
+    std::string host, std::uint16_t port, std::string remotePath)
+{
+    m_remoteHost = host;
+    m_remotePort = port;
+    const auto displayPath = std::filesystem::path(remotePath);
+    openDatasetImpl(displayPath, false, std::nullopt, {}, false,
+        std::nullopt,
+        std::tuple{std::move(host), port, std::move(remotePath)});
+}
+
 void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     bool metadataOnly,
     std::optional<PlotfileMetadataResult> preparedMetadata,
     std::filesystem::path dataRoot, bool preserveFabSelector,
-    std::optional<FrameSliceSpec> initialSpec)
+    std::optional<FrameSliceSpec> initialSpec,
+    std::optional<std::tuple<std::string, std::uint16_t, std::string>>
+        remoteOpen)
 {
     if (!preserveFabSelector) {
         m_fabMode = false;
@@ -3572,6 +3724,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         state->fieldName.clear();
         state->visibleRegion.reset();
         state->vectorSegments.clear();
+        state->gridBoxes.clear();
         state->cachedRequest = {};
         state->hasCachedRequest = false;
         state->cachedMode = DisplayMode::Raster;
@@ -3703,15 +3856,19 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                     if (!metadataOnly) {
                         auto root = std::move(dataRoot);
                         if (root.empty()) {
-                            root = std::filesystem::is_directory(path)
-                                ? path : path.parent_path();
+                            root = result.session
+                                ? std::filesystem::path{"."}
+                                : (std::filesystem::is_directory(path)
+                                      ? path
+                                      : path.parent_path());
                             if (root.empty()) {
                                 root = ".";
                             }
                         }
                         requestInitialSlice(path, generation,
                             std::move(result.metadata), std::move(root),
-                            std::move(initialSpec));
+                            std::move(initialSpec),
+                            std::move(result.session));
                     }
                 } else {
                     ++m_staleResults;
@@ -3730,15 +3887,34 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         });
     watcher->setFuture(QtConcurrent::run(
         [path, preparedMetadata = std::move(preparedMetadata),
-            cancellation = metadataCancellation, preserveFabSelector]() mutable {
+            cancellation = metadataCancellation, preserveFabSelector,
+            remoteOpen = std::move(remoteOpen)]() mutable {
         OpenedDataset opened;
-        opened.metadata = preparedMetadata
-            ? std::move(*preparedMetadata)
-            : readDatasetMetadata(path, cancellation);
+        if (remoteOpen) {
+            auto& [host, port, remotePath] = *remoteOpen;
+            auto connection = std::make_shared<remote::Connection>(
+                host, port, remote::ConnectionOptions{
+                    .clientName = "AMReXplorer Qt",
+                    .softwareVersion = "0.1.0"});
+            opened.session = remote::RemoteDatasetSession::open(
+                std::move(connection), remotePath,
+                initialCacheBudget(), cancellation);
+            opened.metadata.metadata
+                = std::make_shared<const DatasetMetadata>(
+                    opened.session->metadata());
+            opened.metadata.metrics
+                = opened.session->metadataReadMetrics();
+            opened.metadata.fileVersion
+                = opened.session->fileVersion();
+        } else {
+            opened.metadata = preparedMetadata
+                ? std::move(*preparedMetadata)
+                : readDatasetMetadata(path, cancellation);
+        }
         // Build the FAB selector entries here, off the GUI thread, so the
         // header scans / per-block preads it needs never freeze the event
         // loop. Skipped when the caller preserves the existing selector.
-        if (!preserveFabSelector) {
+        if (!preserveFabSelector && !remoteOpen) {
             opened.fabSelector = buildFabSelector(opened.metadata, path);
         }
         return opened;
@@ -3749,7 +3925,8 @@ void MainWindow::requestInitialSlice(
     const std::filesystem::path& path, std::uint64_t generation,
     std::optional<PlotfileMetadataResult> preparedMetadata,
     std::filesystem::path dataRoot,
-    std::optional<FrameSliceSpec> initialSpec)
+    std::optional<FrameSliceSpec> initialSpec,
+    std::shared_ptr<DatasetSession> preparedSession)
 {
     validateVectorMode();
     const auto& metadata = *m_openMetadata;
@@ -3781,6 +3958,7 @@ void MainWindow::requestInitialSlice(
     if (!initialSpec) {
         spec.palette = m_palette;
         spec.displayMode = m_displayMode;
+        spec.includeGridBoxes = m_boxesAction->isChecked();
         spec.vectorUField =
             static_cast<std::uint32_t>(std::max(m_vectorUField, 0));
         spec.vectorVField =
@@ -3788,6 +3966,13 @@ void MainWindow::requestInitialSlice(
         spec.vectorWField =
             static_cast<std::uint32_t>(std::max(m_vectorWField, 0));
         spec.contourCount = m_contourCount;
+    }
+    if (spec.outputSizes.size() != views.size()) {
+        spec.outputSizes.clear();
+        spec.outputSizes.reserve(views.size());
+        for (const auto* state : views) {
+            spec.outputSizes.push_back(viewportOutputSize(*state));
+        }
     }
     const auto restoredSpec = initialSpec;
     // Per-view generations captured now: a view that gets a newer request
@@ -3930,7 +4115,12 @@ void MainWindow::requestInitialSlice(
     watcher->setFuture(QtConcurrent::run(
         [path, generation, spec = std::move(spec), cancellation,
             preparedMetadata = std::move(preparedMetadata),
-            dataRoot = std::move(dataRoot)]() mutable {
+            dataRoot = std::move(dataRoot),
+            preparedSession = std::move(preparedSession)]() mutable {
+        if (preparedSession) {
+            return executeSessionFrameLoad(
+                std::move(preparedSession), spec, cancellation);
+        }
         return executeFrameLoad(path, DatasetId{generation}, spec,
             initialCacheBudget(), cancellation,
             std::move(preparedMetadata), std::move(dataRoot));
@@ -4159,17 +4349,17 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     }
     request.visibleRegion = state.visibleRegion.value_or(
         datasetSampleBounds(metadata));
-    request.outputSize = finestNativeOutputSize(
-        metadata, request.visibleRegion, state.normal);
+    request.outputSize = viewportOutputSize(state);
     const auto level = m_levelSelector->currentData().toInt();
     const auto [composition, maximumLevel] = decodeLevelData(
         level, metadata.finestLevel);
     request.composition = composition;
     request.maximumLevel = maximumLevel;
+    request.includeGridBoxes = m_boxesAction->isChecked();
 
     const auto requestedRangeMode = static_cast<RangeMode>(
         m_rangeMode->currentData().toInt());
-    const auto rangeMode = effectiveRangeMode(metadata, request.field,
+    const auto rangeMode = effectiveRangeMode(dataset, request.field,
         maximumLevel, composition, requestedRangeMode);
     std::optional<std::pair<double, double>> userRange;
     if (rangeMode == RangeMode::User) {
@@ -4357,7 +4547,6 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
 
     const auto& metadata = m_dataset->metadata();
     const auto& plane = *state.plane;
-    const auto normal = metadata.dimension == 3 ? state.normal : -1;
     const auto axes = displayAxes(state.normal);
     const auto rawLevel = m_levelSelector->currentData().toInt();
     const auto [composition, maximumLevel] = decodeLevelData(
@@ -4372,23 +4561,12 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
         - plane.physicalRegion.lower[xAxis];
     const auto yExtent = plane.physicalRegion.upper[yAxis]
         - plane.physicalRegion.lower[yAxis];
-    for (int levelIndex = firstLevel; levelIndex <= lastLevel; ++levelIndex) {
-        const auto& level = metadata.levels[static_cast<std::size_t>(levelIndex)];
-        for (const auto& box : level.boxes) {
-            const auto physicalBox = sampleBounds(
-                level, box, metadata.dimension);
-            if (normal >= 0) {
-                // Only boxes intersecting this view's slice position show.
-                const auto direction = static_cast<std::size_t>(normal);
-                const auto normalLower = physicalBox.lower[direction];
-                const auto normalUpper = physicalBox.upper[direction];
-                const auto slicePosition
-                    = m_slicePosition3d[static_cast<std::size_t>(normal)];
-                if (slicePosition < normalLower || slicePosition >= normalUpper) {
-                    continue;
-                }
+    for (const auto& gridBox : state.gridBoxes) {
+            const auto levelIndex = gridBox.level;
+            if (levelIndex < firstLevel || levelIndex > lastLevel) {
+                continue;
             }
-
+            const auto& physicalBox = gridBox.physicalRegion;
             const auto xLower = physicalBox.lower[xAxis];
             const auto xUpper = physicalBox.upper[xAxis];
             const auto yLower = physicalBox.lower[yAxis];
@@ -4418,7 +4596,6 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
                         m_palette.levelColor(levelIndex, lastLevel)));
                 overlays.push_back({rectangle, color});
             }
-        }
     }
     state.view->setGridBoxes(overlays);
 }
@@ -4553,12 +4730,6 @@ std::optional<QRectF> MainWindow::preservedDataWindow(
 {
     const auto& cached = *state.plane;
     const auto axes = displayAxes(state.normal);
-    // Equal densities (or degenerate geometry) mean the preserved scene
-    // transform already preserves the on-screen data, so leave it alone; the
-    // coordinator owns that decision.
-    if (!DisplayCoordinator::planeDensitiesDiffer(cached, incoming, axes)) {
-        return std::nullopt;
-    }
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);
     const auto& oldRegion = cached.physicalRegion;
@@ -4606,25 +4777,23 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
         const auto transformPolicy = DisplayCoordinator::rasterTransformPolicy(
             state.hasCachedRequest, state.cachedRequest, display.request,
             state.visibleRegion.has_value());
-        // Preserve keeps the scene transform, which is only equivalent to
-        // keeping what the user sees while the raster's pixels-per-data
-        // density is unchanged. A zoomed re-slice can arrive denser: the
-        // full-domain raster is capped at maxSliceOutputDimension while a
-        // subregion fits under the cap, so preserving the scene transform
-        // would show the crop over-zoomed with part of it off screen
-        // (issue #45). When the density changes, preserve the visible *data*
-        // window instead: capture the viewport in physical coordinates
-        // through the old plane's geometry before the swap, then re-frame
-        // that window through the new plane's geometry after it. Equal
-        // densities (pan, uncapped zoom) keep the plain Preserve behavior.
+        // A viewport-bounded replacement may have different raster geometry.
+        // Preserve the scale for a changed physical region and recenter the
+        // new owning raster; for a same-region density change, remap the
+        // visible physical window into the new scene.
         std::optional<QRectF> dataWindowInNewScene;
+        bool regionChanged = false;
         if (transformPolicy == ImageTransformPolicy::Preserve) {
             dataWindowInNewScene = preservedDataWindow(
                 state, display.slice.plane);
+            regionChanged = state.cachedRequest.visibleRegion
+                != display.request.visibleRegion;
         }
         state.view->setImage(
             displayImageFor(display.image), transformPolicy);
-        if (dataWindowInNewScene) {
+        if (regionChanged) {
+            state.view->centerImagePreservingScale();
+        } else if (dataWindowInNewScene) {
             state.view->zoomToRect(*dataWindowInNewScene);
         }
     }
@@ -4643,6 +4812,9 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     state.displayMaximum = display.maximum;
     state.displayLogarithmic = display.logarithmic;
     state.vectorSegments = display.vectors;
+    if (display.slice.gridBoxesIncluded) {
+        state.gridBoxes = display.slice.gridBoxes;
+    }
     // Cache key for the re-render-from-cache path (see requestSlice).
     state.cachedRequest = display.request;
     state.hasCachedRequest = true;
@@ -4910,6 +5082,72 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
     m_sequenceController->open(std::move(sorted));
 }
 
+void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
+    const std::vector<std::string>& remotePaths)
+{
+    if (remotePaths.size() < 2
+        || std::any_of(remotePaths.begin(), remotePaths.end(),
+            [](const auto& path) { return path.empty(); })) {
+        emit sequenceFrameFailed();
+        QMessageBox::warning(this, tr("Cannot open remote sequence"),
+            tr("Enter two or more server-visible plotfile paths."));
+        return;
+    }
+    m_remoteHost = host;
+    m_remotePort = port;
+
+    setPlaybackMode(PlaybackMode::None);
+    closeSequence();
+    resetRangeState();
+    m_particleStopSource.request_stop();
+    m_particleSamples.clear();
+    m_selectedParticleSpecies.clear();
+    m_particleSelectionInitialized = false;
+    ++m_particleGeneration;
+
+    std::vector<std::filesystem::path> frames;
+    frames.reserve(remotePaths.size());
+    for (const auto& path : remotePaths) {
+        frames.emplace_back(path);
+    }
+    m_animationPanel->setSequenceFrameCount(
+        static_cast<int>(frames.size()));
+    m_animationPanel->setSequenceVisible(true);
+    updateAnimationDockVisibility();
+    auto* linePlotWindow = m_linePlotWindow;
+    m_linePlotWindow = nullptr;
+    if (linePlotWindow != nullptr) {
+        linePlotWindow->close();
+    }
+
+    struct SharedRemoteConnection {
+        std::mutex mutex;
+        std::shared_ptr<remote::Connection> connection;
+    };
+    auto shared = std::make_shared<SharedRemoteConnection>();
+    auto loader = [shared, host = std::move(host), port](
+                      const std::filesystem::path& path, DatasetId,
+                      const FrameSliceSpec& spec, StopToken cancellation) {
+        std::shared_ptr<remote::Connection> connection;
+        {
+            std::scoped_lock lock(shared->mutex);
+            if (!shared->connection || !shared->connection->connected()) {
+                shared->connection = std::make_shared<remote::Connection>(
+                    host, port, remote::ConnectionOptions{
+                        .clientName = "AMReXplorer Qt sequence",
+                        .softwareVersion = "0.1.0"});
+            }
+            connection = shared->connection;
+        }
+        auto session = remote::RemoteDatasetSession::open(
+            std::move(connection), path.string(), initialCacheBudget(),
+            cancellation);
+        return executeSessionFrameLoad(
+            std::move(session), spec, cancellation);
+    };
+    m_sequenceController->open(std::move(frames), std::move(loader));
+}
+
 void MainWindow::closeSequence()
 {
     if (m_playbackMode == PlaybackMode::Sequence) {
@@ -5108,11 +5346,10 @@ void MainWindow::updateRangeModeAvailability()
     const FieldId field{m_fieldSelector->currentData().toUInt()};
     const auto [composition, maximumLevel] = decodeLevelData(
         m_levelSelector->currentData().toInt(), metadata.finestLevel);
-    const auto fileAvailable = metadata.isFab
-        || selectedMetadataRange(metadata, field,
-            maximumLevel, composition, RangeMode::File).has_value();
-    const auto levelAvailable = selectedMetadataRange(metadata, field,
-        maximumLevel, composition, RangeMode::Level).has_value();
+    const auto fileAvailable = m_dataset->rangeAvailable(
+        RangeRequest{field, maximumLevel, composition, RangeScope::File});
+    const auto levelAvailable = m_dataset->rangeAvailable(
+        RangeRequest{field, maximumLevel, composition, RangeScope::Level});
 
     auto* model = qobject_cast<QStandardItemModel*>(m_rangeMode->model());
     if (model == nullptr) {
@@ -5184,10 +5421,13 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     }
     spec.particleFraction = m_particleFraction;
     spec.particleSeed = m_particleSeed;
+    spec.includeGridBoxes = m_boxesAction->isChecked();
     const auto views = currentViews();
     spec.visibleRegions.reserve(views.size());
+    spec.outputSizes.reserve(views.size());
     for (const auto* state : views) {
         spec.visibleRegions.push_back(state->visibleRegion);
+        spec.outputSizes.push_back(viewportOutputSize(*state));
     }
     return spec;
 }
@@ -5323,6 +5563,21 @@ void MainWindow::updateDiagnostics()
             .arg(m_cachePinnedBytes)
             .arg(m_cacheEvictions)
             .arg(m_sequenceController->lastFrameSwitchMs());
+    if (m_remotePort != 0) {
+        text += tr("\nremote endpoint: %1:%2")
+                    .arg(QString::fromStdString(m_remoteHost))
+                    .arg(m_remotePort);
+        if (auto remoteSession = std::dynamic_pointer_cast<
+                remote::RemoteDatasetSession>(m_dataset)) {
+            text += tr("\nremote status: %1\nremote path: %2")
+                        .arg(remoteSession->connection()->connected()
+                                ? tr("connected") : tr("disconnected"))
+                        .arg(QString::fromStdString(
+                            remoteSession->remotePath()));
+        } else {
+            text += tr("\nremote status: configured");
+        }
+    }
     for (const auto& line : m_probeLines) {
         text += QLatin1Char('\n');
         text += line;

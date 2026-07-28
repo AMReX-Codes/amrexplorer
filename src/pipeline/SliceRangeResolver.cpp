@@ -1,7 +1,5 @@
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
 
-#include <amrexplorer/io/PlotfileDataset.hpp>
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -80,35 +78,39 @@ RangeMode effectiveRangeMode(
     return requested;
 }
 
+RangeMode effectiveRangeMode(
+    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
+    int maximumLevel, CompositionPolicy composition, RangeMode requested)
+{
+    if (requested != RangeMode::File && requested != RangeMode::Level) {
+        return requested;
+    }
+    const auto scope = requested == RangeMode::File
+        ? RangeScope::File : RangeScope::Level;
+    return dataset->rangeAvailable(
+               RangeRequest{field, maximumLevel, composition, scope})
+        ? requested : RangeMode::Visible;
+}
+
 std::optional<std::pair<double, double>> fabDataRange(
-    const std::shared_ptr<PlotfileDataset>& dataset, FieldId field)
+    const std::shared_ptr<DatasetSession>& dataset, FieldId field)
 {
     if (!dataset->metadata().isFab) {
         return std::nullopt;
     }
-    BlockRequest request;
-    request.dataset = dataset->id();
-    request.field = field;
-    const auto access = dataset->requestBlock(request);
-    const auto& values = access.handle->values;
-    auto minimum = std::numeric_limits<double>::infinity();
-    auto maximum = -std::numeric_limits<double>::infinity();
-    for (std::size_t index = 0; index < values.size(); ++index) {
-        const auto value = values[index];
-        if (!std::isfinite(value)) {
-            continue;
-        }
-        minimum = std::min(minimum, value);
-        maximum = std::max(maximum, value);
-    }
-    if (!std::isfinite(minimum) || !std::isfinite(maximum)) {
+    const auto range = dataset->requestRange(RangeRequest{
+        .field = field,
+        .maximumLevel = 0,
+        .composition = CompositionPolicy::ExactLevel,
+        .scope = RangeScope::File});
+    if (!range) {
         return std::nullopt;
     }
-    return std::pair{minimum, maximum};
+    return std::pair{range->minimum, range->maximum};
 }
 
 std::pair<double, double> resolveRange(
-    const std::shared_ptr<PlotfileDataset>& dataset, FieldId field,
+    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
     int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const ScalarPlane& plane)
@@ -119,11 +121,16 @@ std::pair<double, double> resolveRange(
             selectedRange = fabDataRange(dataset, field);
         }
         if (!selectedRange) {
-            const auto statistics = selectedMetadataRange(dataset->metadata(),
-                field, maximumLevel, composition, rangeMode);
+            const auto statistics = dataset->requestRange(RangeRequest{
+                .field = field,
+                .maximumLevel = maximumLevel,
+                .composition = composition,
+                .scope = rangeMode == RangeMode::File
+                    ? RangeScope::File
+                    : RangeScope::Level});
             if (statistics) {
-                selectedRange = std::pair{
-                    statistics->minimum, statistics->maximum};
+                selectedRange
+                    = std::pair{statistics->minimum, statistics->maximum};
             }
         }
     }
@@ -152,7 +159,7 @@ std::pair<double, double> resolveRange(
 }
 
 ResolvedRange resolveDisplayRange(
-    const std::shared_ptr<PlotfileDataset>& dataset, FieldId field,
+    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
     int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const ScalarPlane& plane)

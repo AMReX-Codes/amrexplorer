@@ -99,6 +99,7 @@ public:
     // aspect-preserving cap keeps extreme zooms from allocating gigabytes.
     [[nodiscard]] QImage composedImage(qreal scaleFactor = 1.0) const;
     void fitToWindow();
+    void centerImagePreservingScale();
     void setFixedScale(int factor);
     void zoomToRect(const QRectF& sceneRect);
     // Shift+left-drag pans the viewport (scroll bars, or the view transform

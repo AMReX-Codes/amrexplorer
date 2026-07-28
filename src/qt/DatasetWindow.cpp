@@ -1,4 +1,6 @@
 #include "DatasetWindow.hpp"
+
+#include <amrexplorer/pipeline/SlicePipeline.hpp>
 #include "NumberFormat.hpp"
 
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
@@ -199,9 +201,16 @@ std::vector<DatasetWindow::LevelData> DatasetWindow::extractLevels(
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
         }
-        auto extract = extractDatasetLevel(*request.dataset, request.field,
-            level, request.region, request.normalAxis, request.slicePosition,
-            datasetExtractMaxExtent, cancellation);
+        DatasetPageRequest pageRequest;
+        pageRequest.dataset = request.dataset->id();
+        pageRequest.field = request.field;
+        pageRequest.level = level;
+        pageRequest.region = request.region;
+        pageRequest.normalAxis = request.normalAxis;
+        pageRequest.slicePosition = request.slicePosition;
+        pageRequest.maximumExtent = datasetExtractMaxExtent;
+        auto extract = request.dataset->requestDatasetPage(
+            pageRequest, cancellation);
         // Levels the region misses geometrically get no tab.
         if (extract.nx > 0 && extract.ny > 0) {
             levels.push_back(LevelData{level, std::move(extract)});
@@ -317,7 +326,7 @@ void DatasetWindow::cellClicked(std::size_t levelEntry, int row, int column)
 
     const auto& metadata = m_request.dataset->metadata();
     const auto& level = metadata.levels[static_cast<std::size_t>(levelData.level)];
-    const auto axes = dataset_extract_detail::inPlaneAxes(
+    const auto axes = slicePlaneAxes(
         metadata.dimension, m_request.normalAxis);
     // The sample's physical bin at this level's resolution. On nodal axes
     // this is centered on the node rather than shifted to the next cell.

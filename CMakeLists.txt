@@ -10,14 +10,20 @@ project(
 option(AMREXPLORER_ENABLE_QT "Build the Qt 6 desktop application" ON)
 option(AMREXPLORER_ENABLE_VTK "Build the optional VTK volume module" OFF)
 option(AMREXPLORER_ENABLE_MPI "Enable MPI-aware backends" OFF)
-option(AMREXPLORER_ENABLE_WIRE_PROTOTYPE
-    "Build the throwaway FlatBuffers client/server prototype" OFF)
+option(AMREXPLORER_ENABLE_REMOTE
+    "Build production remote client/server support" ${AMREXPLORER_ENABLE_QT})
 option(AMREXPLORER_BUILD_TESTS "Build unit and integration tests" ON)
 option(AMREXPLORER_BUILD_MACOS_APP_BUNDLE
     "Build the Qt application as a macOS .app bundle" ${APPLE})
 option(AMREXPLORER_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(AMREXPLORER_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(AMREXPLORER_ENABLE_TSAN "Enable ThreadSanitizer (mutually exclusive with AMREXPLORER_ENABLE_SANITIZERS)" OFF)
+
+if(AMREXPLORER_ENABLE_QT AND NOT AMREXPLORER_ENABLE_REMOTE)
+    message(FATAL_ERROR
+        "The Qt application requires AMREXPLORER_ENABLE_REMOTE=ON. "
+        "Use the headless preset for a build without remote support.")
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -77,6 +83,24 @@ add_subdirectory(src/core)
 add_subdirectory(src/cache)
 add_subdirectory(src/io)
 add_subdirectory(src/query)
+add_subdirectory(src/data)
+if(AMREXPLORER_ENABLE_REMOTE)
+    include(FetchContent)
+    set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(FLATBUFFERS_BUILD_GRPCTEST OFF CACHE BOOL "" FORCE)
+    set(FLATBUFFERS_BUILD_SHAREDLIB OFF CACHE BOOL "" FORCE)
+    set(FLATBUFFERS_BUILD_STATICLIB OFF CACHE BOOL "" FORCE)
+    set(FLATBUFFERS_BUILD_FLATC ON CACHE BOOL "" FORCE)
+    set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(flatbuffers
+        GIT_REPOSITORY https://github.com/google/flatbuffers.git
+        GIT_TAG v25.12.19
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(flatbuffers)
+    add_subdirectory(src/remote)
+    add_subdirectory(tools/amrexplorer_server)
+endif()
 add_subdirectory(src/render2d)
 add_subdirectory(src/pipeline)
 
@@ -94,23 +118,6 @@ endif()
 add_subdirectory(tools/dataset_inspect)
 add_subdirectory(tools/query_benchmark)
 add_subdirectory(tools/line_repro)
-
-if(AMREXPLORER_ENABLE_WIRE_PROTOTYPE)
-    include(FetchContent)
-    set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(FLATBUFFERS_BUILD_GRPCTEST OFF CACHE BOOL "" FORCE)
-    set(FLATBUFFERS_BUILD_SHAREDLIB OFF CACHE BOOL "" FORCE)
-    set(FLATBUFFERS_BUILD_STATICLIB OFF CACHE BOOL "" FORCE)
-    set(FLATBUFFERS_BUILD_FLATC ON CACHE BOOL "" FORCE)
-    set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(flatbuffers
-        GIT_REPOSITORY https://github.com/google/flatbuffers.git
-        GIT_TAG v25.12.19
-        GIT_SHALLOW TRUE
-    )
-    FetchContent_MakeAvailable(flatbuffers)
-    add_subdirectory(prototypes/flatbuffers_wire)
-endif()
 
 if(AMREXPLORER_BUILD_TESTS)
     include(CTest)

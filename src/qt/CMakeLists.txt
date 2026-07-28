@@ -57,6 +57,7 @@ endif()
 target_link_libraries(amrexplorer_qt
     PRIVATE
         amrexplorer::core
+        amrexplorer::data
         amrexplorer::io
         amrexplorer::query
         amrexplorer::render2d
@@ -67,6 +68,9 @@ target_link_libraries(amrexplorer_qt
         Qt6::Gui
         Qt6::Widgets
 )
+if(TARGET amrexplorer_remote)
+    target_link_libraries(amrexplorer_qt PRIVATE amrexplorer::remote)
+endif()
 target_compile_features(amrexplorer_qt PRIVATE cxx_std_20)
 target_compile_definitions(amrexplorer_qt PRIVATE AMREXPLORER_VERSION="${PROJECT_VERSION}")
 

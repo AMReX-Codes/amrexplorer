@@ -115,7 +115,9 @@ add_test(
 )
 
 add_executable(test_dataset_extract integration/test_dataset_extract.cpp)
-target_link_libraries(test_dataset_extract PRIVATE amrexplorer::io amrexplorer::warnings)
+target_link_libraries(
+    test_dataset_extract PRIVATE amrexplorer::data amrexplorer::warnings
+)
 add_test(NAME dataset_extract COMMAND test_dataset_extract)
 
 add_executable(test_dataset_concurrency integration/test_dataset_concurrency.cpp)
@@ -166,6 +168,38 @@ add_test(
         "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
 )
 
+if(TARGET amrexplorer_remote)
+    add_executable(test_remote_codec unit/test_remote_codec.cpp)
+    target_include_directories(test_remote_codec PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/remote"
+        "${PROJECT_BINARY_DIR}/src/remote/generated")
+    target_link_libraries(test_remote_codec
+        PRIVATE amrexplorer::remote amrexplorer::warnings)
+    add_test(NAME remote_codec COMMAND test_remote_codec)
+
+    add_executable(test_remote_session integration/test_remote_session.cpp)
+    target_link_libraries(test_remote_session
+        PRIVATE
+            amrexplorer::pipeline
+            amrexplorer::remote
+            amrexplorer::warnings
+            Threads::Threads
+    )
+    set(remote_fixture_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_session")
+    add_test(NAME remote_fixture
+        COMMAND "$<TARGET_FILE:fixture_materializer>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "${remote_fixture_dir}")
+    set_tests_properties(remote_fixture PROPERTIES
+        FIXTURES_SETUP remote_materialized)
+    add_test(NAME remote_session
+        COMMAND test_remote_session "${remote_fixture_dir}")
+    set_tests_properties(remote_session PROPERTIES
+        FIXTURES_REQUIRED remote_materialized
+        TIMEOUT 30)
+endif()
+
 # Writes FAB payloads into copies of the metadata-only fixtures; Qt-free so
 # the headless build can compile it too.
 add_executable(fixture_materializer fixture_materializer/main.cpp)
@@ -206,6 +240,18 @@ add_test(NAME tool_line_repro
 set_tests_properties(tool_line_repro PROPERTIES TIMEOUT 60)
 
 if(TARGET amrexplorer_qt)
+    if(TARGET amrexplorer_remote)
+        add_test(
+            NAME qt_remote_slice_smoke
+            COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+                "$<TARGET_FILE:amrexplorer_qt>"
+                --remote-slice-smoke-test "${remote_fixture_dir}"
+        )
+        set_tests_properties(qt_remote_slice_smoke PROPERTIES
+            FIXTURES_REQUIRED remote_materialized
+            TIMEOUT 30)
+    endif()
+
     add_executable(test_user_guide_dialog
         unit/test_user_guide_dialog.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/UserGuideDialog.cpp"

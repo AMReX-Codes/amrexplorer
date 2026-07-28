@@ -206,6 +206,25 @@ add_test(NAME tool_line_repro
 set_tests_properties(tool_line_repro PROPERTIES TIMEOUT 60)
 
 if(TARGET amrexplorer_qt)
+    add_executable(test_viewer_state
+        unit/test_viewer_state.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ViewerState.cpp"
+    )
+    target_include_directories(test_viewer_state
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
+    )
+    target_link_libraries(test_viewer_state
+        PRIVATE
+            amrexplorer::core
+            amrexplorer::pipeline
+            amrexplorer::render2d
+            amrexplorer::warnings
+            Qt6::Core
+            Qt6::Gui
+    )
+    add_test(NAME viewer_state COMMAND test_viewer_state)
+
     add_executable(test_user_guide_dialog
         unit/test_user_guide_dialog.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/UserGuideDialog.cpp"
@@ -299,6 +318,28 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_slice_smoke_2d PROPERTIES TIMEOUT 30)
+    add_test(
+        NAME qt_viewer_state_smoke_2d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_viewer_state_2d"
+            -DMODE=viewer-state
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_viewer_state_smoke_2d PROPERTIES TIMEOUT 30)
+    add_test(
+        NAME qt_viewer_state_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_viewer_state_3d"
+            -DMODE=viewer-state
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_viewer_state_smoke_3d PROPERTIES TIMEOUT 30)
     # Regression test for raster-colorbar-mismatch-on-2d-visible-zoom: after a
     # full-domain Visible slice caches the range, zooming a 2-D view must
     # re-render the raster against that reused range so it matches the color bar.
@@ -539,6 +580,52 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_sequence_smoke PROPERTIES TIMEOUT 30)
+    add_test(
+        NAME qt_sequence_vector_identity_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_vector_identity"
+            -DMODE=sequence-vector-identity
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(
+        qt_sequence_vector_identity_smoke PROPERTIES TIMEOUT 30)
+    add_test(
+        NAME qt_viewer_state_sequence_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_viewer_state_sequence"
+            -DMODE=viewer-state-sequence
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_viewer_state_sequence_smoke PROPERTIES TIMEOUT 30)
+    add_test(
+        NAME qt_viewer_state_heterogeneous_sequence_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_viewer_state_heterogeneous_sequence"
+            -DMODE=viewer-state-heterogeneous-sequence
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(
+        qt_viewer_state_heterogeneous_sequence_smoke PROPERTIES TIMEOUT 30)
+    add_test(
+        NAME qt_viewer_state_fallback_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_viewer_state_fallback"
+            -DMODE=viewer-state-fallback
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_viewer_state_fallback_smoke PROPERTIES TIMEOUT 30)
     # A normal slice-affecting control change while a foreground frame is
     # loading invalidates that frame specification. The replacement load must
     # complete instead of leaving sequence playback latched in-flight.

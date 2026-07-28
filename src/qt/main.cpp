@@ -3,6 +3,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
@@ -12,9 +13,11 @@
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QLoggingCategory>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QProcess>
 #include <QPushButton>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QSignalBlocker>
 #include <QTableView>
@@ -410,6 +413,50 @@ bool contourSyncMatches(amrvis::qt::MainWindow& window)
     return panelsWithLevels >= 2 && sharedLevelsDrawn >= 2;
 }
 
+QSettings applicationSettings()
+{
+    return QSettings(
+        QStringLiteral("amrex-codes"), QStringLiteral("amrexplorer"));
+}
+
+QVariantMap viewerPreferenceSettings()
+{
+    static const std::array<QString, 7> keys{
+        QStringLiteral("range/logarithmic"),
+        QStringLiteral("palette/fromFile"),
+        QStringLiteral("palette/filePath"),
+        QStringLiteral("palette/builtin"),
+        QStringLiteral("numberFormat"),
+        QStringLiteral("animation/speed"),
+        QStringLiteral("zoom/syncRubberBand"),
+    };
+    const auto settings = applicationSettings();
+    QVariantMap values;
+    for (const auto& key : keys) {
+        values.insert(key, settings.value(key));
+    }
+    return values;
+}
+
+void seedViewerPreferenceSettings(
+    const amrvis::qt::ViewerStateDocument& document)
+{
+    auto settings = applicationSettings();
+    settings.setValue(
+        QStringLiteral("range/logarithmic"), document.display.logarithmic);
+    settings.setValue(QStringLiteral("palette/fromFile"), false);
+    settings.setValue(QStringLiteral("palette/filePath"), QString());
+    settings.setValue(QStringLiteral("palette/builtin"),
+        QString::fromStdString(document.rendering.palette.name));
+    settings.setValue(
+        QStringLiteral("numberFormat"), document.rendering.numberFormat);
+    settings.setValue(
+        QStringLiteral("animation/speed"), document.animation.speed);
+    settings.setValue(QStringLiteral("zoom/syncRubberBand"),
+        document.synchronizeRubberBand);
+    settings.sync();
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -425,6 +472,14 @@ int main(int argc, char* argv[])
     application.setApplicationName(QStringLiteral("amrexplorer"));
     application.setApplicationDisplayName(QStringLiteral("AMReXplorer"));
     QGuiApplication::setDesktopFileName(QStringLiteral("amrexplorer"));
+    if (argc == 5
+        && std::string_view(argv[1]) == "--viewer-state-smoke-test") {
+        const auto settingsDirectory =
+            std::filesystem::path(argv[3]).parent_path() / "settings";
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+            QString::fromStdString(settingsDirectory.string()));
+    }
     // Bundle the logo (rounded-square heatmap) at several sizes so it stays
     // crisp from the 16 px title bar up to the 256 px taskbar/dock.
     QIcon icon;
@@ -466,6 +521,254 @@ int main(int argc, char* argv[])
                 application.exit(valid ? 0 : 1);
         });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 5
+        && std::string_view(argv[1]) == "--viewer-state-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        const std::filesystem::path statePath(argv[3]);
+        const std::filesystem::path invalidPath(argv[4]);
+        struct ViewerStateSmoke {
+            int phase = 0;
+            amrvis::qt::ViewerStateDocument expected;
+            QVariantMap expectedSettings;
+            QString importedNumberFormat;
+        };
+        auto state = std::make_shared<ViewerStateSmoke>();
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application,
+            [&window, &application, state, statePath, invalidPath](bool success) {
+                if (!success || state->phase != 0) {
+                    QTextStream(stderr)
+                        << "unexpected initial-slice signal: success "
+                        << success << " phase " << state->phase << "\n";
+                    application.exit(1);
+                    return;
+                }
+                window.configureDistinctPanelCamerasForTest();
+                state->expected = window.captureViewerState(statePath);
+                if (!window.exportViewerStateForTest(statePath)) {
+                    application.exit(1);
+                    return;
+                }
+                QFile invalid(QString::fromStdString(invalidPath.string()));
+                if (!invalid.open(QIODevice::WriteOnly)
+                    || invalid.write("{ broken") < 0) {
+                    application.exit(1);
+                    return;
+                }
+                invalid.close();
+                // Leave ordinary slice work in flight while import prepares.
+                auto* fields = window.findChild<QComboBox*>(
+                    QStringLiteral("fieldSelector"));
+                auto* logarithmic = window.findChild<QCheckBox*>(
+                    QStringLiteral("logarithmicCheckBox"));
+                if (fields != nullptr && fields->count() > 1) {
+                    fields->setCurrentIndex(1);
+                }
+                if (logarithmic == nullptr
+                    || logarithmic->isChecked()
+                        == state->expected.display.logarithmic) {
+                    if (logarithmic == nullptr) {
+                        QTextStream(stderr)
+                            << "logarithmic checkbox not found\n";
+                        application.exit(1);
+                        return;
+                    }
+                    const QSignalBlocker blocker(logarithmic);
+                    logarithmic->setChecked(
+                        !state->expected.display.logarithmic);
+                }
+                state->phase = 1;
+                window.importViewerStateForTest(statePath);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::viewerStateImportFinished,
+            &application,
+            [&window, &application, state, statePath, invalidPath](bool success) {
+                if (state->phase == 1) {
+                    if (!success) {
+                        QTextStream(stderr)
+                            << "initial viewer-state import failed\n";
+                        application.exit(1);
+                        return;
+                    }
+                    const auto actual = window.captureViewerState(statePath);
+                    const auto* variableMenu = window.findChild<QMenu*>(
+                        QStringLiteral("variableMenu"));
+                    int checkedVariableCount = 0;
+                    bool checkedVariableMatches = false;
+                    if (variableMenu != nullptr) {
+                        for (const auto* action : variableMenu->actions()) {
+                            if (action->isChecked()) {
+                                ++checkedVariableCount;
+                                checkedVariableMatches =
+                                    action->text()
+                                    == QString::fromStdString(
+                                        actual.display.field);
+                            }
+                        }
+                    }
+                    auto same =
+                        actual.source.path == state->expected.source.path
+                        && actual.display.field == state->expected.display.field
+                        && actual.display.logarithmic
+                            == state->expected.display.logarithmic
+                        && checkedVariableCount == 1
+                        && checkedVariableMatches
+                        && actual.display.level.mode
+                            == state->expected.display.level.mode
+                        && actual.rendering.mode
+                            == state->expected.rendering.mode
+                        && actual.panels.size() == state->expected.panels.size();
+                    for (const auto& [name, expectedPanel] :
+                        state->expected.panels) {
+                        const auto found = actual.panels.find(name);
+                        if (found == actual.panels.end()) {
+                            same = false;
+                            continue;
+                        }
+                        const auto& expectedCamera = expectedPanel.camera;
+                        const auto& actualCamera = found->second.camera;
+                        same = same
+                            && actualCamera.mode == expectedCamera.mode
+                            && std::abs(actualCamera.zoom
+                                - expectedCamera.zoom) < 1.0e-6
+                            && std::abs(actualCamera.center[0]
+                                - expectedCamera.center[0]) < 0.02
+                            && std::abs(actualCamera.center[1]
+                                - expectedCamera.center[1]) < 0.02;
+                    }
+                    if (!same) {
+                        QTextStream error(stderr);
+                        error << "viewer-state logical/camera mismatch\n";
+                        error << "field expected "
+                              << QString::fromStdString(
+                                  state->expected.display.field)
+                              << " actual "
+                              << QString::fromStdString(actual.display.field)
+                              << " log expected "
+                              << state->expected.display.logarithmic
+                              << " actual " << actual.display.logarithmic
+                              << " checked variables "
+                              << checkedVariableCount << " match "
+                              << checkedVariableMatches << "\n";
+                        for (const auto& [name, expectedPanel] :
+                            state->expected.panels) {
+                            const auto found = actual.panels.find(name);
+                            error << QString::fromStdString(name)
+                                  << " expected zoom "
+                                  << expectedPanel.camera.zoom << " center "
+                                  << expectedPanel.camera.center[0] << ","
+                                  << expectedPanel.camera.center[1];
+                            if (found != actual.panels.end()) {
+                                error << " actual zoom "
+                                      << found->second.camera.zoom << " center "
+                                      << found->second.camera.center[0] << ","
+                                      << found->second.camera.center[1];
+                            }
+                            error << "\n";
+                        }
+                        application.exit(1);
+                        return;
+                    }
+                    state->expected = actual;
+                    state->phase = 2;
+                    seedViewerPreferenceSettings(actual);
+                    state->expectedSettings =
+                        viewerPreferenceSettings();
+
+                    auto imported = actual;
+                    imported.display.logarithmic =
+                        !actual.display.logarithmic;
+                    imported.rendering.palette.kind =
+                        amrvis::qt::ViewerPaletteKind::Builtin;
+                    imported.rendering.palette.name =
+                        actual.rendering.palette.name == "turbo"
+                        ? "rainbow" : "turbo";
+                    imported.rendering.numberFormat =
+                        actual.rendering.numberFormat == QStringLiteral("%.3e")
+                        ? QStringLiteral("%.7g") : QStringLiteral("%.3e");
+                    imported.animation.speed =
+                        actual.animation.speed == 1 ? 2 : 1;
+                    imported.synchronizeRubberBand =
+                        !actual.synchronizeRubberBand;
+                    state->importedNumberFormat =
+                        imported.rendering.numberFormat;
+                    if (!amrvis::qt::writeViewerState(
+                            imported, statePath).isEmpty()) {
+                        application.exit(1);
+                        return;
+                    }
+                    window.importViewerStateForTest(statePath);
+                    return;
+                }
+                if (state->phase == 2) {
+                    if (!success) {
+                        QTextStream(stderr)
+                            << "preference viewer-state import failed\n";
+                        application.exit(1);
+                        return;
+                    }
+                    const auto imported =
+                        window.captureViewerState(statePath);
+                    if (imported.rendering.numberFormat
+                            != state->importedNumberFormat
+                        || imported.display.logarithmic
+                        || !window.numberFormatConsumersMatchForTest(
+                            state->importedNumberFormat)) {
+                        QTextStream(stderr)
+                            << "imported preference mismatch\n";
+                        application.exit(1);
+                        return;
+                    }
+                    auto superseded = imported;
+                    superseded.rendering.numberFormat =
+                        QStringLiteral("%+.9e");
+                    const auto supersededPath =
+                        statePath.parent_path()
+                        / "superseded-valid.amrexplorer-state.json";
+                    if (!amrvis::qt::writeViewerState(
+                            superseded, supersededPath).isEmpty()) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 3;
+                    window.importViewerStateForTest(supersededPath);
+                    window.importViewerStateForTest(invalidPath);
+                    return;
+                }
+                if (state->phase == 3) {
+                    if (success) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 4;
+                    QTimer::singleShot(1000, &application,
+                        [&window, &application, state, statePath] {
+                            const auto actual =
+                                window.captureViewerState(statePath);
+                            if (state->phase != 4
+                                || actual.rendering.numberFormat
+                                    != state->importedNumberFormat) {
+                                application.exit(1);
+                                return;
+                            }
+                            window.close();
+                            application.exit(
+                                viewerPreferenceSettings()
+                                        == state->expectedSettings
+                                    ? 0 : 1);
+                        });
+                    return;
+                }
+                if (state->phase == 4 && success) {
+                    application.exit(1);
+                }
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--contour-sync-smoke-test") {
         // Once the initial load lands, switch to contours in Visible+log mode
@@ -490,6 +793,108 @@ int main(int argc, char* argv[])
                     3, true, {0.875, 0.625, 0.375});
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--viewer-state-fallback-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        const std::filesystem::path statePath(argv[3]);
+        const auto supersededPath =
+            statePath.parent_path() / "superseded.amrexplorer-state.json";
+        const auto validPath =
+            statePath.parent_path() / "valid.amrexplorer-state.json";
+        struct FallbackImportState {
+            int phase = 0;
+            std::string fallbackField;
+            int staleFailures = 0;
+        };
+        auto state = std::make_shared<FallbackImportState>();
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application,
+            [&window, &application, state, statePath](bool success) {
+                if (!success || state->phase != 0) {
+                    application.exit(1);
+                    return;
+                }
+                auto document = window.captureViewerState(statePath);
+                state->fallbackField = document.display.field;
+                document.display.field = "missing_scalar";
+                document.display.ranges.clear();
+                document.display.ranges.emplace("missing_scalar",
+                    amrvis::qt::FieldRangeState{
+                        amrvis::RangeMode::User, std::pair{2.0, 3.0}});
+                document.rendering.mode =
+                    amrvis::qt::ViewerDisplayMode::VelocityVectors;
+                document.rendering.vectorFields = {
+                    "missing_u", "missing_v", "missing_w"};
+                if (!amrvis::qt::writeViewerState(
+                        document, statePath).isEmpty()) {
+                    application.exit(1);
+                    return;
+                }
+                state->phase = 1;
+                window.importViewerStateForTest(statePath);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::viewerStateImportFinished,
+            &application,
+            [&window, &application, state, statePath, supersededPath,
+                validPath](bool success) {
+                if (state->phase == 1) {
+                    const auto actual =
+                        window.captureViewerState(statePath);
+                    const auto range =
+                        actual.display.ranges.find(state->fallbackField);
+                    const auto vectorsResolved = std::all_of(
+                        actual.rendering.vectorFields.begin(),
+                        actual.rendering.vectorFields.end(),
+                        [](const auto& name) {
+                            return !name.empty()
+                                && !name.starts_with("missing_");
+                        });
+                    if (!success
+                        || actual.display.field != state->fallbackField
+                        || range == actual.display.ranges.end()
+                        || range->second.mode != amrvis::RangeMode::Visible
+                        || !vectorsResolved) {
+                        application.exit(1);
+                        return;
+                    }
+
+                    auto superseded =
+                        window.captureViewerState(supersededPath);
+                    superseded.source.path =
+                        supersededPath.parent_path() / "does-not-exist";
+                    if (!amrvis::qt::writeViewerState(
+                            superseded, supersededPath).isEmpty()
+                        || !window.exportViewerStateForTest(validPath)) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 2;
+                    window.importViewerStateForTest(supersededPath);
+                    window.importViewerStateForTest(validPath);
+                    return;
+                }
+                if (state->phase != 2) {
+                    application.exit(1);
+                    return;
+                }
+                if (!success) {
+                    ++state->staleFailures;
+                    return;
+                }
+                state->phase = 3;
+                QTimer::singleShot(100, &application,
+                    [&application, state] {
+                        application.exit(
+                            state->staleFailures == 0 ? 0 : 1);
+                    });
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1])
             == "--particle-visible-range-smoke-test") {
@@ -941,6 +1346,322 @@ int main(int argc, char* argv[])
             });
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
             &application, [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--sequence-vector-identity-smoke-test") {
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application, phase](int index) {
+                if (*phase == 0 && index == 0) {
+                    window.configureVectorFieldsForTest(0, 1, 0);
+                    *phase = 1;
+                    window.stepSequence(1);
+                    return;
+                }
+                const auto names =
+                    window.captureViewerState({}).rendering.vectorFields;
+                const std::array<std::string, 3> expected{
+                    "density", "temperature", "density"};
+                if (names != expected) {
+                    application.exit(1);
+                    return;
+                }
+                if (*phase == 1 && index == 1) {
+                    *phase = 2;
+                    window.stepSequence(1);
+                    return;
+                }
+                application.exit(*phase == 2 && index == 0 ? 0 : 1);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 5
+        && std::string_view(argv[1])
+            == "--viewer-state-sequence-smoke-test") {
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        const std::filesystem::path statePath(argv[4]);
+        const auto singleStatePath =
+            statePath.parent_path() / "single.amrexplorer-state.json";
+        struct SequenceImportState {
+            int phase = 0;
+            bool displayedFrameZeroDuringImport = false;
+            amrvis::qt::ViewerStateDocument expectedSpatialState;
+        };
+        auto state = std::make_shared<SequenceImportState>();
+        const auto spatialStateMatches =
+            [](const amrvis::qt::ViewerStateDocument& expected,
+                const amrvis::qt::ViewerStateDocument& actual) {
+                if (expected.display.slicePositions.size()
+                    != actual.display.slicePositions.size()) {
+                    return false;
+                }
+                for (std::size_t axis = 0;
+                    axis < expected.display.slicePositions.size(); ++axis) {
+                    if (std::abs(expected.display.slicePositions[axis]
+                            - actual.display.slicePositions[axis])
+                        > 1.0e-12) {
+                        return false;
+                    }
+                }
+                for (const auto& [name, expectedPanel] : expected.panels) {
+                    const auto found = actual.panels.find(name);
+                    if (found == actual.panels.end()) {
+                        return false;
+                    }
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        if (std::abs(expectedPanel.visibleRegion.lower[axis]
+                                - found->second.visibleRegion.lower[axis])
+                                > 1.0e-12
+                            || std::abs(expectedPanel.visibleRegion.upper[axis]
+                                - found->second.visibleRegion.upper[axis])
+                                > 1.0e-12) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            };
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application,
+            [&window, &application, state, statePath, singleStatePath,
+                spatialStateMatches](int index) {
+                if (state->phase == 0 && index == 0) {
+                    window.stepSequence(1);
+                    return;
+                }
+                if (state->phase == 0 && index == 1) {
+                    auto document = window.captureViewerState(statePath);
+                    if (document.display.slicePositions.size() != 3
+                        || document.panels.size() != 3) {
+                        application.exit(1);
+                        return;
+                    }
+                    const auto& bounds =
+                        document.panels.at("x").visibleRegion;
+                    document.display.slicePositions = {
+                        bounds.lower[0]
+                            + 0.25 * (bounds.upper[0] - bounds.lower[0]),
+                        bounds.lower[1]
+                            + 0.50 * (bounds.upper[1] - bounds.lower[1]),
+                        bounds.lower[2]
+                            + 0.75 * (bounds.upper[2] - bounds.lower[2])};
+                    constexpr std::array<const char*, 3> panelNames{
+                        "x", "y", "z"};
+                    for (std::size_t normal = 0;
+                        normal < panelNames.size(); ++normal) {
+                        auto& region =
+                            document.panels.at(panelNames[normal]).visibleRegion;
+                        for (std::size_t axis = 0; axis < 3; ++axis) {
+                            if (axis == normal) continue;
+                            const auto extent =
+                                region.upper[axis] - region.lower[axis];
+                            region.lower[axis] += 0.2 * extent;
+                            region.upper[axis] -= 0.2 * extent;
+                        }
+                    }
+                    state->expectedSpatialState = document;
+                    if (!amrvis::qt::writeViewerState(
+                            document, statePath).isEmpty()) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 1;
+                    window.openDataset(document.source.frames[0]);
+                    return;
+                }
+                if (state->phase == 2 && index == 0) {
+                    state->displayedFrameZeroDuringImport = true;
+                    return;
+                }
+                if (state->phase == 3 && index == 0) {
+                    const auto actual =
+                        window.captureViewerState(statePath);
+                    if (!spatialStateMatches(
+                            state->expectedSpatialState, actual)) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 4;
+                    window.importViewerStateForTest(singleStatePath);
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application,
+            [&window, &application, state, statePath,
+                singleStatePath](bool success) {
+                if (!success || state->phase != 1) {
+                    if (!success) application.exit(1);
+                    return;
+                }
+                if (window.sequenceControlsVisibleForTest()
+                    || !window.exportViewerStateForTest(singleStatePath)) {
+                    application.exit(1);
+                    return;
+                }
+                state->phase = 2;
+                window.importViewerStateForTest(statePath);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::viewerStateImportFinished,
+            &application,
+            [&window, &application, state, statePath,
+                singleStatePath, spatialStateMatches](bool success) {
+                const auto actual = window.captureViewerState(statePath);
+                if (state->phase == 2) {
+                    if (!(success
+                        && !state->displayedFrameZeroDuringImport
+                        && actual.source.kind
+                            == amrvis::qt::ViewerSourceKind::PlotfileSequence
+                        && actual.source.currentFrame == 1
+                        && window.sequenceControlsVisibleForTest()
+                        && window.sequenceFrameCountForTest() == 2
+                        && spatialStateMatches(
+                            state->expectedSpatialState, actual))) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 3;
+                    window.stepSequence(1);
+                    return;
+                }
+                application.exit(success && state->phase == 4
+                        && actual.source.kind
+                            != amrvis::qt::ViewerSourceKind::PlotfileSequence
+                        && !window.sequenceControlsVisibleForTest()
+                    ? 0 : 1);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 5
+        && std::string_view(argv[1])
+            == "--viewer-state-heterogeneous-sequence-smoke-test") {
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        const std::filesystem::path statePath(argv[4]);
+        struct HeterogeneousSequenceImportState {
+            int phase = 0;
+        };
+        auto state =
+            std::make_shared<HeterogeneousSequenceImportState>();
+        const auto savedRangeMatches =
+            [](const amrvis::qt::ViewerStateDocument& document) {
+                const auto range =
+                    document.display.ranges.find("temperature");
+                return range != document.display.ranges.end()
+                    && range->second.mode == amrvis::RangeMode::User
+                    && range->second.userRange == std::pair{2.0, 3.0};
+            };
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application,
+            [&window, &application, state, statePath,
+                savedRangeMatches](int index) {
+                if (state->phase == 0 && index == 0) {
+                    window.stepSequence(1);
+                    return;
+                }
+                if (state->phase == 0 && index == 1) {
+                    auto document =
+                        window.captureViewerState(statePath);
+                    document.display.field = "density";
+                    document.display.ranges["temperature"] = {
+                        amrvis::RangeMode::User, std::pair{2.0, 3.0}};
+                    document.particles.initialized = true;
+                    document.particles.species = {"Tracer"};
+                    document.rendering.boxes = true;
+                    if (!amrvis::qt::writeViewerState(
+                            document, statePath).isEmpty()) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 1;
+                    window.importViewerStateForTest(statePath);
+                    return;
+                }
+                if (state->phase == 2 && index == 0) {
+                    const auto imported =
+                        window.captureViewerState(statePath);
+                    if (!savedRangeMatches(imported)
+                        || imported.particles.species
+                            != std::vector<std::string>{"Tracer"}
+                        || window.particleSampleCountForTest() == 0) {
+                        application.exit(1);
+                        return;
+                    }
+                    auto* fields = window.findChild<QComboBox*>(
+                        QStringLiteral("fieldSelector"));
+                    const auto temperature = fields == nullptr
+                        ? -1 : fields->findText(
+                            QStringLiteral("temperature"));
+                    if (temperature < 0) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 3;
+                    fields->setCurrentIndex(temperature);
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::viewerStateImportFinished,
+            &application,
+            [&window, &application, state, statePath,
+                savedRangeMatches](bool success) {
+                if (!success || state->phase != 1) {
+                    application.exit(1);
+                    return;
+                }
+                const auto imported =
+                    window.captureViewerState(statePath);
+                if (!savedRangeMatches(imported)
+                    || imported.particles.species
+                        != std::vector<std::string>{"Tracer"}
+                    || window.particleSampleCountForTest() != 0
+                    || window.gridBoxOverlayCountForTest() == 0) {
+                    application.exit(1);
+                    return;
+                }
+                state->phase = 2;
+                window.stepSequence(1);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application,
+            [&window, &application, state, statePath,
+                savedRangeMatches] {
+                if (state->phase != 3) return;
+                const auto actual =
+                    window.captureViewerState(statePath);
+                application.exit(
+                    actual.display.field == "temperature"
+                        && savedRangeMatches(actual)
+                    ? 0 : 1);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
         QTimer::singleShot(0, &window, [&window, first, second] {
             window.openSequence({first, second});
         });

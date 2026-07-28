@@ -234,6 +234,37 @@ provides:
 Frame changes preserve the active field, level, range, log, palette, and
 visible-region settings when those settings are valid for the next plotfile.
 
+## Saving and restoring viewer state
+
+Use **File > Export Viewer State...** to save the reproducible scientific view
+in a human-readable, versioned `.amrexplorer-state.json` file. Use **File >
+Import Viewer State...** to reopen its data source and restore the field and
+level, per-field ranges, logarithmic mapping, physical slice positions and
+crops, each panel's camera zoom and center, active panel, palette, contours or
+vectors, overlays, number format, particles, and animation controls. A custom
+palette is embedded in the document, so its original `.pal` file is not needed
+when the state is restored.
+
+Source paths below the state file's directory are written relative to that
+file; other paths are normalized absolute paths. Relative paths are always
+resolved against the state file, not the directory from which AMReXplorer was
+started. A sequence state requires every listed frame to remain present and
+valid.
+
+Import is transactional. Malformed or unsupported JSON, a missing source, an
+invalid sequence frame, or a failed dataset load leaves the current dataset,
+controls, images, and cameras unchanged. If a valid document refers to a field,
+vector component, particle species, level, slice, or crop that no longer fits
+the source, AMReXplorer applies the documented compatible fallback and reports
+a summary in the status area and Diagnostics. Playback is always stopped after
+import.
+
+Viewer-state files deliberately exclude rendered images, cached data and
+particle samples, in-flight work, diagnostics counters, plot/probe history,
+dialogs, animation-export progress, the cache budget, and window geometry.
+Those values are either transient or machine-specific. Application-local
+defaults remain managed separately and are not rewritten by import.
+
 ## Exporting images and animations
 
 **File > Export Image...** saves the current view as PNG and asks whether to

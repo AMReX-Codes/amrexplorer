@@ -376,6 +376,22 @@ void IsoWidget::setViewAngles(double azimuth, double elevation)
     update();
 }
 
+IsoCameraState IsoWidget::cameraState() const noexcept
+{
+    return {m_azimuth, m_elevation, m_zoom};
+}
+
+void IsoWidget::restoreCameraState(const IsoCameraState& state)
+{
+    m_azimuth = std::isfinite(state.azimuth) ? state.azimuth : 0.0;
+    m_elevation = std::clamp(
+        std::isfinite(state.elevation) ? state.elevation : 0.0,
+        -pi / 2.0 + 0.01, pi / 2.0 - 0.01);
+    m_zoom = std::clamp(
+        std::isfinite(state.zoom) ? state.zoom : 1.0, 0.1, 10.0);
+    update();
+}
+
 void IsoWidget::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);

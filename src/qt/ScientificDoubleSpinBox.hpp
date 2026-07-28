@@ -14,6 +14,10 @@ public:
     // Uses the format's floating conversion; surrounding literal text is
     // omitted so the displayed value remains directly editable.
     void setNumberFormat(const QString& format);
+    [[nodiscard]] const QString& numberFormat() const noexcept
+    {
+        return m_numberFormat;
+    }
 
 protected:
     [[nodiscard]] QString textFromValue(double value) const override;

@@ -171,6 +171,14 @@ int AnimationPanel::sweepAxis() const
     return m_sweepAxisCombo->currentData().toInt();
 }
 
+void AnimationPanel::setSweepAxis(int axis)
+{
+    const auto index = m_sweepAxisCombo->findData(std::clamp(axis, 0, 2));
+    if (index >= 0) {
+        m_sweepAxisCombo->setCurrentIndex(index);
+    }
+}
+
 void AnimationPanel::setSweepPlaying(bool playing)
 {
     m_sweepPlay->setIcon(style()->standardIcon(
@@ -205,6 +213,16 @@ void AnimationPanel::setSequenceInfo(const QString& directoryName, double time)
 {
     m_frameName->setText(directoryName);
     m_frameTime->setText(tr("T = %1").arg(time, 0, 'g', 12));
+}
+
+bool AnimationPanel::sequenceControlsVisible() const
+{
+    return !m_sequenceGroup->isHidden();
+}
+
+int AnimationPanel::sequenceFrameCount() const
+{
+    return m_frameSlider->maximum() + 1;
 }
 
 int AnimationPanel::speedValue() const

@@ -417,7 +417,39 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
     }
 
     const auto fieldCount = static_cast<std::uint32_t>(metadata.fields.size());
-    const auto field = std::min(spec.field, fieldCount - 1);
+    const auto resolveField = [&](const std::string& name,
+                                  std::uint32_t fallback,
+                                  std::string_view role) {
+        if (!name.empty()) {
+            const auto found = std::find_if(metadata.fields.begin(),
+                metadata.fields.end(), [&](const auto& candidate) {
+                    return candidate.name == name;
+                });
+            if (found != metadata.fields.end()) {
+                return static_cast<std::uint32_t>(
+                    std::distance(metadata.fields.begin(), found));
+            }
+            result.warnings.push_back(
+                std::string(role) + " field '" + name
+                + "' is unavailable; using '"
+                + metadata.fields.front().name + "'.");
+            return 0U;
+        }
+        return std::min(fallback, fieldCount - 1);
+    };
+    const auto field = resolveField(spec.fieldName, spec.field, "Scalar");
+    const auto vectorU = spec.displayMode == DisplayMode::VelocityVectors
+        ? resolveField(spec.vectorFieldNames[0],
+            spec.vectorUField, "Vector U")
+        : std::min(spec.vectorUField, fieldCount - 1);
+    const auto vectorV = spec.displayMode == DisplayMode::VelocityVectors
+        ? resolveField(spec.vectorFieldNames[1],
+            spec.vectorVField, "Vector V")
+        : std::min(spec.vectorVField, fieldCount - 1);
+    const auto vectorW = spec.displayMode == DisplayMode::VelocityVectors
+        ? resolveField(spec.vectorFieldNames[2],
+            spec.vectorWField, "Vector W")
+        : std::min(spec.vectorWField, fieldCount - 1);
     // An out-of-range exact level falls back to finest-available, matching
     // the level combo's behavior when a frame has fewer levels.
     // Combo data encoding: -1=finest, N=level N only, 1000+N=update to N.
@@ -496,9 +528,9 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
                         cancellation, display);
                 }
                 if (spec.displayMode == DisplayMode::VelocityVectors) {
-                    const auto u = std::min(spec.vectorUField, fieldCount - 1);
-                    const auto v = std::min(spec.vectorVField, fieldCount - 1);
-                    const auto w = std::min(spec.vectorWField, fieldCount - 1);
+                    const auto u = vectorU;
+                    const auto v = vectorV;
+                    const auto w = vectorW;
                     auto [f1, f2] = (metadata.dimension == 3)
                         ? (normal == 0 ? std::pair{v, w}
                            : normal == 1 ? std::pair{u, w}

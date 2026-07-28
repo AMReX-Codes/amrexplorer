@@ -2101,6 +2101,15 @@ std::size_t MainWindow::particleOverlayCountForTest()
     return count;
 }
 
+std::size_t MainWindow::gridBoxOverlayCountForTest()
+{
+    std::size_t count = 0;
+    for (const auto* state : currentViews()) {
+        count += state->view->gridBoxCount();
+    }
+    return count;
+}
+
 void MainWindow::requestParticleReload()
 {
     m_particleStopSource.request_stop();
@@ -3759,19 +3768,10 @@ void MainWindow::importViewerState(
                 m_colorBar->setNumberFormat(m_numberFormat);
                 m_particleSelectionInitialized =
                     document.particles.initialized;
-                m_selectedParticleSpecies.clear();
-                for (const auto& selected : document.particles.species) {
-                    const auto available = std::find_if(
-                        prepared.frame.dataset->particleSpecies().begin(),
-                        prepared.frame.dataset->particleSpecies().end(),
-                        [&](const auto& species) {
-                            return species.name == selected;
-                        });
-                    if (available
-                        != prepared.frame.dataset->particleSpecies().end()) {
-                        m_selectedParticleSpecies.push_back(selected);
-                    }
-                }
+                // Particle selection belongs to the sequence, not just the
+                // displayed frame. A temporarily absent species must remain
+                // selected so it is loaded when another frame provides it.
+                m_selectedParticleSpecies = document.particles.species;
                 m_particleFraction = document.particles.fraction;
                 m_particleSeed = document.particles.seed;
                 m_particlePointSize = document.particles.pointSize;
@@ -3912,11 +3912,12 @@ void MainWindow::importViewerState(
                     m_fieldRanges.clear();
                     for (const auto& [name, range] :
                         document.display.ranges) {
-                        if (fieldIndexByName(metadata, name) >= 0) {
-                            m_fieldRanges.emplace(
-                                name, FieldRange{
-                                    range.mode, range.userRange});
-                        }
+                        // Range snapshots are sequence-scoped and keyed by
+                        // stable field name. Preserve entries unavailable in
+                        // this frame for heterogeneous later frames.
+                        m_fieldRanges.emplace(
+                            name, FieldRange{
+                                range.mode, range.userRange});
                     }
                     m_trackedField =
                         m_fieldSelector->currentText().toStdString();
@@ -3958,6 +3959,9 @@ void MainWindow::importViewerState(
                     m_syncRubberBandZoomAction->setChecked(
                         document.synchronizeRubberBand);
                 }
+                // The blockers suppress action side effects while restoring
+                // state, so explicitly refresh the already-installed slices.
+                updateGridBoxes();
                 m_animationPanel->setSweepAxis(
                     document.animation.sweepAxis);
                 m_animationPanel->setSpeedValue(document.animation.speed);
@@ -4125,7 +4129,8 @@ void MainWindow::importViewerState(
                 if (found
                     == prepared.frame.dataset->particleSpecies().end()) {
                     prepared.warnings.push_back(QObject::tr(
-                        "Particle species '%1' is unavailable and was ignored.")
+                        "Particle species '%1' is unavailable in the current "
+                        "frame; its selection was preserved for other frames.")
                         .arg(QString::fromStdString(requested)));
                 }
             }

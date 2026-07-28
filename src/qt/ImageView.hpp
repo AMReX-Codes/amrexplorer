@@ -93,6 +93,7 @@ public:
     void setPlaceholder(const QString& text);
     [[nodiscard]] bool hasImage() const noexcept;
     [[nodiscard]] const QImage& image() const noexcept;
+    [[nodiscard]] std::size_t gridBoxCount() const noexcept;
     [[nodiscard]] std::size_t pointOverlayCount() const noexcept;
     [[nodiscard]] const std::vector<QColor>& pointOverlayColors() const noexcept;
     // Renders the scene (base image plus grid boxes and any other overlays)

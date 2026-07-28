@@ -206,6 +206,7 @@ public:
         const QColor& color);
     [[nodiscard]] std::size_t particleSampleCountForTest() const;
     [[nodiscard]] std::size_t particleOverlayCountForTest();
+    [[nodiscard]] std::size_t gridBoxOverlayCountForTest();
 
 signals:
     void datasetOpenFinished(bool success);

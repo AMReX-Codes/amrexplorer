@@ -7,6 +7,7 @@
 // Usage:
 //   fixture_materializer <sourceFixtureDir> <destDir>
 //       [newTime] [--no-statistics] [--non-finite] [--reverse-fields]
+//       [--rename-last-field <name>]
 //
 // Copies the fixture into destDir and writes each level's Cell_D_* payloads
 // at the FabOnDisk offsets its Cell_H records. An optional time value replaces
@@ -278,16 +279,17 @@ void writeHeaderWithoutStatistics(const std::filesystem::path& path,
 
 int main(int argc, char* argv[])
 {
-    require(argc >= 3 && argc <= 9,
+    require(argc >= 3 && argc <= 11,
         "usage: fixture_materializer <sourceFixtureDir> <destDir> "
         "[newTime] [--no-statistics] [--non-finite] [--reverse-fields] "
-        "[--scale <factor>]");
+        "[--scale <factor>] [--rename-last-field <name>]");
     const std::filesystem::path source(argv[1]);
     const std::filesystem::path destination(argv[2]);
     std::optional<std::string> newTime;
     bool omitStatistics = false;
     bool nonFiniteValues = false;
     bool reverseFields = false;
+    std::optional<std::string> renamedLastField;
     // Multiplies the synthesized field values so successive frames of a
     // sequence can carry different ranges (used by the range-cache test).
     double scale = 1.0;
@@ -313,6 +315,14 @@ int main(int argc, char* argv[])
             } catch (const std::exception&) {
                 require(false, "--scale factor is not a number");
             }
+        } else if (value == "--rename-last-field") {
+            require(argument + 1 < argc,
+                "--rename-last-field requires a name argument");
+            require(!renamedLastField.has_value(),
+                "--rename-last-field was specified more than once");
+            renamedLastField = argv[++argument];
+            require(!renamedLastField->empty(),
+                "--rename-last-field requires a non-empty name");
         } else {
             require(!newTime.has_value(), "more than one new time was specified");
             newTime = value;
@@ -333,7 +343,8 @@ int main(int argc, char* argv[])
         source, destination, std::filesystem::copy_options::recursive, error);
     require(!error, "could not copy the fixture");
 
-    if (newTime.has_value() || reverseFields) {
+    if (newTime.has_value() || reverseFields
+        || renamedLastField.has_value()) {
         auto lines = header.lines;
         if (newTime.has_value()) {
             lines[header.timeLine] = *newTime;
@@ -341,6 +352,10 @@ int main(int argc, char* argv[])
         if (reverseFields) {
             std::reverse(lines.begin() + 2,
                 lines.begin() + 2 + header.fieldCount);
+        }
+        if (renamedLastField) {
+            lines[static_cast<std::size_t>(
+                1 + header.fieldCount)] = *renamedLastField;
         }
         std::ofstream output(destination / "Header", std::ios::trunc);
         require(static_cast<bool>(output), "could not rewrite the Header");

@@ -11,7 +11,8 @@
 #                 particle-visible-range |
 #                 rubber-zoom-local | rubber-overzoom | pan-zoom |
 #                 range-cache | fab-zoom | cache-budget |
-#                 sequence-zoom-refit | sequence-equal-size-zoom-refit
+#                 sequence-zoom-refit | sequence-equal-size-zoom-refit |
+#                 viewer-state-heterogeneous-sequence
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -57,6 +58,15 @@ elseif(MODE STREQUAL "viewer-state-sequence")
     run_or_die("${AMREXPLORER_QT}" --viewer-state-sequence-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010"
         "${WORK}/sequence.amrexplorer-state.json")
+elseif(MODE STREQUAL "viewer-state-heterogeneous-sequence")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010"
+        "2.5" "--rename-last-field" "frame1_only")
+    file(REMOVE_RECURSE "${WORK}/plt00010/Tracer")
+    run_or_die("${AMREXPLORER_QT}"
+        --viewer-state-heterogeneous-sequence-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010"
+        "${WORK}/heterogeneous-sequence.amrexplorer-state.json")
 elseif(MODE STREQUAL "viewer-state-fallback")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt" "--no-statistics")
     run_or_die("${AMREXPLORER_QT}" --viewer-state-fallback-smoke-test

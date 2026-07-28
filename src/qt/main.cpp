@@ -1497,6 +1497,118 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window, [&window, first, second] {
             window.openSequence({first, second});
         });
+    } else if (argc == 5
+        && std::string_view(argv[1])
+            == "--viewer-state-heterogeneous-sequence-smoke-test") {
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        const std::filesystem::path statePath(argv[4]);
+        struct HeterogeneousSequenceImportState {
+            int phase = 0;
+        };
+        auto state =
+            std::make_shared<HeterogeneousSequenceImportState>();
+        const auto savedRangeMatches =
+            [](const amrvis::qt::ViewerStateDocument& document) {
+                const auto range =
+                    document.display.ranges.find("temperature");
+                return range != document.display.ranges.end()
+                    && range->second.mode == amrvis::RangeMode::User
+                    && range->second.userRange == std::pair{2.0, 3.0};
+            };
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application,
+            [&window, &application, state, statePath,
+                savedRangeMatches](int index) {
+                if (state->phase == 0 && index == 0) {
+                    window.stepSequence(1);
+                    return;
+                }
+                if (state->phase == 0 && index == 1) {
+                    auto document =
+                        window.captureViewerState(statePath);
+                    document.display.field = "density";
+                    document.display.ranges["temperature"] = {
+                        amrvis::RangeMode::User, std::pair{2.0, 3.0}};
+                    document.particles.initialized = true;
+                    document.particles.species = {"Tracer"};
+                    document.rendering.boxes = true;
+                    if (!amrvis::qt::writeViewerState(
+                            document, statePath).isEmpty()) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 1;
+                    window.importViewerStateForTest(statePath);
+                    return;
+                }
+                if (state->phase == 2 && index == 0) {
+                    const auto imported =
+                        window.captureViewerState(statePath);
+                    if (!savedRangeMatches(imported)
+                        || imported.particles.species
+                            != std::vector<std::string>{"Tracer"}
+                        || window.particleSampleCountForTest() == 0) {
+                        application.exit(1);
+                        return;
+                    }
+                    auto* fields = window.findChild<QComboBox*>(
+                        QStringLiteral("fieldSelector"));
+                    const auto temperature = fields == nullptr
+                        ? -1 : fields->findText(
+                            QStringLiteral("temperature"));
+                    if (temperature < 0) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 3;
+                    fields->setCurrentIndex(temperature);
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::viewerStateImportFinished,
+            &application,
+            [&window, &application, state, statePath,
+                savedRangeMatches](bool success) {
+                if (!success || state->phase != 1) {
+                    application.exit(1);
+                    return;
+                }
+                const auto imported =
+                    window.captureViewerState(statePath);
+                if (!savedRangeMatches(imported)
+                    || imported.particles.species
+                        != std::vector<std::string>{"Tracer"}
+                    || window.particleSampleCountForTest() != 0
+                    || window.gridBoxOverlayCountForTest() == 0) {
+                    application.exit(1);
+                    return;
+                }
+                state->phase = 2;
+                window.stepSequence(1);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application,
+            [&window, &application, state, statePath,
+                savedRangeMatches] {
+                if (state->phase != 3) return;
+                const auto actual =
+                    window.captureViewerState(statePath);
+                application.exit(
+                    actual.display.field == "temperature"
+                        && savedRangeMatches(actual)
+                    ? 0 : 1);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
     } else if (argc == 4
         && std::string_view(argv[1])
             == "--sequence-spec-change-smoke-test") {

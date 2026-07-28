@@ -154,6 +154,11 @@ void ImageView::setGridBoxes(const std::vector<GridBoxOverlay>& boxes)
     }
 }
 
+std::size_t ImageView::gridBoxCount() const noexcept
+{
+    return m_gridItems.size();
+}
+
 void ImageView::setOverlaySegments(const std::vector<OverlaySegment>& segments)
 {
     for (auto* item : m_overlayItems) {

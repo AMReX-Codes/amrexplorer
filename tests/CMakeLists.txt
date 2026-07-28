@@ -604,6 +604,18 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_viewer_state_sequence_smoke PROPERTIES TIMEOUT 30)
     add_test(
+        NAME qt_viewer_state_heterogeneous_sequence_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_viewer_state_heterogeneous_sequence"
+            -DMODE=viewer-state-heterogeneous-sequence
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(
+        qt_viewer_state_heterogeneous_sequence_smoke PROPERTIES TIMEOUT 30)
+    add_test(
         NAME qt_viewer_state_fallback_smoke
         COMMAND "${CMAKE_COMMAND}"
             "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"

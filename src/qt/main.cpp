@@ -658,7 +658,10 @@ int main(int argc, char* argv[])
                     const auto imported =
                         window.captureViewerState(statePath);
                     if (imported.rendering.numberFormat
-                        != state->importedNumberFormat) {
+                            != state->importedNumberFormat
+                        || imported.display.logarithmic
+                        || !window.numberFormatConsumersMatchForTest(
+                            state->importedNumberFormat)) {
                         application.exit(1);
                         return;
                     }
@@ -1339,28 +1342,105 @@ int main(int argc, char* argv[])
         struct SequenceImportState {
             int phase = 0;
             bool displayedFrameZeroDuringImport = false;
+            amrvis::qt::ViewerStateDocument expectedSpatialState;
         };
         auto state = std::make_shared<SequenceImportState>();
+        const auto spatialStateMatches =
+            [](const amrvis::qt::ViewerStateDocument& expected,
+                const amrvis::qt::ViewerStateDocument& actual) {
+                if (expected.display.slicePositions.size()
+                    != actual.display.slicePositions.size()) {
+                    return false;
+                }
+                for (std::size_t axis = 0;
+                    axis < expected.display.slicePositions.size(); ++axis) {
+                    if (std::abs(expected.display.slicePositions[axis]
+                            - actual.display.slicePositions[axis])
+                        > 1.0e-12) {
+                        return false;
+                    }
+                }
+                for (const auto& [name, expectedPanel] : expected.panels) {
+                    const auto found = actual.panels.find(name);
+                    if (found == actual.panels.end()) {
+                        return false;
+                    }
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        if (std::abs(expectedPanel.visibleRegion.lower[axis]
+                                - found->second.visibleRegion.lower[axis])
+                                > 1.0e-12
+                            || std::abs(expectedPanel.visibleRegion.upper[axis]
+                                - found->second.visibleRegion.upper[axis])
+                                > 1.0e-12) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            };
         QObject::connect(&window,
             &amrvis::qt::MainWindow::sequenceFrameDisplayed,
             &application,
-            [&window, &application, state, statePath](int index) {
+            [&window, &application, state, statePath, singleStatePath,
+                spatialStateMatches](int index) {
                 if (state->phase == 0 && index == 0) {
                     window.stepSequence(1);
                     return;
                 }
                 if (state->phase == 0 && index == 1) {
-                    if (!window.exportViewerStateForTest(statePath)) {
+                    auto document = window.captureViewerState(statePath);
+                    if (document.display.slicePositions.size() != 3
+                        || document.panels.size() != 3) {
+                        application.exit(1);
+                        return;
+                    }
+                    const auto& bounds =
+                        document.panels.at("x").visibleRegion;
+                    document.display.slicePositions = {
+                        bounds.lower[0]
+                            + 0.25 * (bounds.upper[0] - bounds.lower[0]),
+                        bounds.lower[1]
+                            + 0.50 * (bounds.upper[1] - bounds.lower[1]),
+                        bounds.lower[2]
+                            + 0.75 * (bounds.upper[2] - bounds.lower[2])};
+                    constexpr std::array<const char*, 3> panelNames{
+                        "x", "y", "z"};
+                    for (std::size_t normal = 0;
+                        normal < panelNames.size(); ++normal) {
+                        auto& region =
+                            document.panels.at(panelNames[normal]).visibleRegion;
+                        for (std::size_t axis = 0; axis < 3; ++axis) {
+                            if (axis == normal) continue;
+                            const auto extent =
+                                region.upper[axis] - region.lower[axis];
+                            region.lower[axis] += 0.2 * extent;
+                            region.upper[axis] -= 0.2 * extent;
+                        }
+                    }
+                    state->expectedSpatialState = document;
+                    if (!amrvis::qt::writeViewerState(
+                            document, statePath).isEmpty()) {
                         application.exit(1);
                         return;
                     }
                     state->phase = 1;
-                    window.openDataset(
-                        window.captureViewerState(statePath).source.frames[0]);
+                    window.openDataset(document.source.frames[0]);
                     return;
                 }
                 if (state->phase == 2 && index == 0) {
                     state->displayedFrameZeroDuringImport = true;
+                    return;
+                }
+                if (state->phase == 3 && index == 0) {
+                    const auto actual =
+                        window.captureViewerState(statePath);
+                    if (!spatialStateMatches(
+                            state->expectedSpatialState, actual)) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 4;
+                    window.importViewerStateForTest(singleStatePath);
                 }
             });
         QObject::connect(&window,
@@ -1384,7 +1464,7 @@ int main(int argc, char* argv[])
             &amrvis::qt::MainWindow::viewerStateImportFinished,
             &application,
             [&window, &application, state, statePath,
-                singleStatePath](bool success) {
+                singleStatePath, spatialStateMatches](bool success) {
                 const auto actual = window.captureViewerState(statePath);
                 if (state->phase == 2) {
                     if (!(success
@@ -1393,15 +1473,17 @@ int main(int argc, char* argv[])
                             == amrvis::qt::ViewerSourceKind::PlotfileSequence
                         && actual.source.currentFrame == 1
                         && window.sequenceControlsVisibleForTest()
-                        && window.sequenceFrameCountForTest() == 2)) {
+                        && window.sequenceFrameCountForTest() == 2
+                        && spatialStateMatches(
+                            state->expectedSpatialState, actual))) {
                         application.exit(1);
                         return;
                     }
                     state->phase = 3;
-                    window.importViewerStateForTest(singleStatePath);
+                    window.stepSequence(1);
                     return;
                 }
-                application.exit(success && state->phase == 3
+                application.exit(success && state->phase == 4
                         && actual.source.kind
                             != amrvis::qt::ViewerSourceKind::PlotfileSequence
                         && !window.sequenceControlsVisibleForTest()

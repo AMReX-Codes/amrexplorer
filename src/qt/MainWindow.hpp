@@ -108,6 +108,8 @@ public:
     void importViewerStateForTest(const std::filesystem::path& statePath);
     [[nodiscard]] bool sequenceControlsVisibleForTest() const;
     [[nodiscard]] int sequenceFrameCountForTest() const;
+    [[nodiscard]] bool numberFormatConsumersMatchForTest(
+        const QString& format) const;
     // Test-only: enable vector rendering with explicit component indices.
     void configureVectorFieldsForTest(int uField, int vField, int wField);
 

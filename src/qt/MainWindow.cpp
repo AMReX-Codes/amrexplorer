@@ -10,6 +10,7 @@
 #include "IsoWidget.hpp"
 #include "LinePlotRequest.hpp"
 #include "LinePlotWindow.hpp"
+#include "NumberFormat.hpp"
 #include "ScientificDoubleSpinBox.hpp"
 #include "SetContoursDialog.hpp"
 #include "Theme.hpp"
@@ -3268,6 +3269,15 @@ int MainWindow::sequenceFrameCountForTest() const
     return m_animationPanel->sequenceFrameCount();
 }
 
+bool MainWindow::numberFormatConsumersMatchForTest(
+    const QString& format) const
+{
+    return m_numberFormat == format
+        && m_rangeMinimum->numberFormat() == conversionSpecifier(format)
+        && m_rangeMaximum->numberFormat() == conversionSpecifier(format)
+        && m_colorBar->numberFormat() == format;
+}
+
 void MainWindow::chooseDataset()
 {
     const auto settings = makeSettings();
@@ -3744,6 +3754,9 @@ void MainWindow::importViewerState(
                 m_colorBar->setPalette(&m_palette);
                 m_isoWidget->setColorPalette(&m_palette);
                 m_numberFormat = document.rendering.numberFormat;
+                m_rangeMinimum->setNumberFormat(m_numberFormat);
+                m_rangeMaximum->setNumberFormat(m_numberFormat);
+                m_colorBar->setNumberFormat(m_numberFormat);
                 m_particleSelectionInitialized =
                     document.particles.initialized;
                 m_selectedParticleSpecies.clear();
@@ -3789,6 +3802,29 @@ void MainWindow::importViewerState(
                     m_animationPanel->setSequenceFrameCount(
                         static_cast<int>(document.source.frames.size()));
                     m_animationPanel->setSequenceVisible(true);
+                    const auto& metadata =
+                        prepared.frame.dataset->metadata();
+                    const auto bounds = datasetSampleBounds(metadata);
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        m_slicePosition3d[axis] =
+                            prepared.spec.defaultPositions
+                            ? bounds.lower[axis]
+                                + 0.5 * (bounds.upper[axis]
+                                    - bounds.lower[axis])
+                            : prepared.spec.slicePositions[axis];
+                    }
+                    auto importedViews = metadata.dimension == 3
+                        ? std::vector<PlaneViewState*>{
+                              &m_planeViews[0], &m_planeViews[1],
+                              &m_planeViews[2]}
+                        : std::vector<PlaneViewState*>{&m_view2d};
+                    for (std::size_t index = 0;
+                        index < importedViews.size(); ++index) {
+                        importedViews[index]->visibleRegion =
+                            index < prepared.spec.visibleRegions.size()
+                            ? prepared.spec.visibleRegions[index]
+                            : std::nullopt;
+                    }
                     m_sequenceController->adoptPrepared(
                         document.source.frames,
                         document.source.currentFrame,
@@ -3873,8 +3909,6 @@ void MainWindow::importViewerState(
                         m_levelSelector->findData(prepared.spec.levelSelection);
                     m_levelSelector->setCurrentIndex(
                         levelIndex >= 0 ? levelIndex : 0);
-                    m_logarithmic->setChecked(
-                        document.display.logarithmic);
                     m_fieldRanges.clear();
                     for (const auto& [name, range] :
                         document.display.ranges) {
@@ -4070,6 +4104,16 @@ void MainWindow::importViewerState(
                 DatasetId{0x6000000000000000ULL}, prepared.spec,
                 initialCacheBudget(), importCancellation,
                 prepared.displayedMetadata, prepared.dataRoot);
+            if (prepared.document.display.logarithmic
+                && std::any_of(prepared.frame.displays.begin(),
+                    prepared.frame.displays.end(), [](const auto& display) {
+                        return !display.logarithmic;
+                    })) {
+                prepared.document.display.logarithmic = false;
+                prepared.warnings.push_back(QObject::tr(
+                    "The saved logarithmic display is incompatible with the "
+                    "resolved range; using linear display."));
+            }
             for (const auto& requested :
                 prepared.document.particles.species) {
                 const auto found = std::find_if(

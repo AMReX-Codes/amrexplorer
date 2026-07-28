@@ -597,7 +597,7 @@ if(TARGET amrexplorer_qt)
         COMMAND "${CMAKE_COMMAND}"
             "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
             "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
-            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
             "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_viewer_state_sequence"
             -DMODE=viewer-state-sequence
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"

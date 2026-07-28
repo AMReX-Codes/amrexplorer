@@ -22,6 +22,10 @@ public:
     void setPalette(const amrvis::Palette* palette);
     void setFieldRange(QString fieldName, double minimum, double maximum);
     void setNumberFormat(QString format);
+    [[nodiscard]] const QString& numberFormat() const noexcept
+    {
+        return m_numberFormat;
+    }
     void setLogarithmic(bool logarithmic);
     void clearRange();
 

@@ -215,6 +215,16 @@ void AnimationPanel::setSequenceInfo(const QString& directoryName, double time)
     m_frameTime->setText(tr("T = %1").arg(time, 0, 'g', 12));
 }
 
+bool AnimationPanel::sequenceControlsVisible() const
+{
+    return !m_sequenceGroup->isHidden();
+}
+
+int AnimationPanel::sequenceFrameCount() const
+{
+    return m_frameSlider->maximum() + 1;
+}
+
 int AnimationPanel::speedValue() const
 {
     return m_speedSlider->value();

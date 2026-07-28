@@ -50,6 +50,10 @@ elseif(MODE STREQUAL "viewer-state-sequence")
     run_or_die("${AMREXPLORER_QT}" --viewer-state-sequence-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010"
         "${WORK}/sequence.amrexplorer-state.json")
+elseif(MODE STREQUAL "viewer-state-fallback")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt" "--no-statistics")
+    run_or_die("${AMREXPLORER_QT}" --viewer-state-fallback-smoke-test
+        "${WORK}/plt" "${WORK}/fallback.amrexplorer-state.json")
 elseif(MODE STREQUAL "sequence-spec-change")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")

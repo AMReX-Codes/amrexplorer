@@ -33,6 +33,8 @@ public:
     void setSequenceFrameCount(int count);
     void setSequenceFrame(int index);
     void setSequenceInfo(const QString& directoryName, double time);
+    [[nodiscard]] bool sequenceControlsVisible() const;
+    [[nodiscard]] int sequenceFrameCount() const;
 
     // Legacy speed mapping: the legacy slider ran 0..599 with a frame delay
     // of (600 - value) ms; this slider runs 1..600 with delay = 601 - value,

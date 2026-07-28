@@ -108,8 +108,8 @@ using Array = QJsonArray;
     const Object& object, QStringView key)
 {
     const auto number = numberValue(object, key);
-    // JSON numbers cannot represent every uint64 exactly. Restrict the file
-    // format to the exact integer range so seeds round-trip portably.
+    // JSON numbers cannot represent every uint64 exactly. Restrict numeric
+    // members to the exact integer range.
     constexpr double largestExactInteger = 9007199254740991.0;
     if (std::trunc(number) != number || number < 0.0
         || number > largestExactInteger) {
@@ -117,6 +117,31 @@ using Array = QJsonArray;
             "member '%1' must be a non-negative exact JSON integer").arg(key));
     }
     return static_cast<std::uint64_t>(number);
+}
+
+[[nodiscard]] std::uint64_t uint64Value(
+    const Object& object, QStringView key)
+{
+    const auto value = required(object, key);
+    if (value.isString()) {
+        const auto text = value.toString();
+        if (text.isEmpty()
+            || std::any_of(text.cbegin(), text.cend(), [](QChar character) {
+                return character < QLatin1Char('0')
+                    || character > QLatin1Char('9');
+            })) {
+            invalid(QStringLiteral(
+                "member '%1' must be an unsigned decimal integer").arg(key));
+        }
+        bool ok = false;
+        const auto result = text.toULongLong(&ok, 10);
+        if (!ok) {
+            invalid(QStringLiteral(
+                "member '%1' is outside the uint64 range").arg(key));
+        }
+        return result;
+    }
+    return unsignedIntegerValue(object, key);
 }
 
 [[nodiscard]] QColor colorValue(const Object& object, QStringView key)
@@ -306,21 +331,30 @@ private:
         return m_input[m_at++];
     }
 
-    [[nodiscard]] QByteArray string()
+    [[nodiscard]] QString string()
     {
         if (take() != '"') invalid(QStringLiteral("invalid JSON string"));
-        QByteArray result;
+        QByteArray encoded("\"");
         while (m_at < m_input.size()) {
             const auto ch = take();
-            if (ch == '"') return result;
+            encoded.append(ch);
+            if (ch == '"') {
+                QJsonParseError error;
+                const auto decoded = QJsonDocument::fromJson(
+                    QByteArray("[") + encoded + QByteArray("]"), &error);
+                if (error.error != QJsonParseError::NoError
+                    || !decoded.isArray() || decoded.array().size() != 1
+                    || !decoded.array().at(0).isString()) {
+                    invalid(QStringLiteral("invalid JSON string"));
+                }
+                return decoded.array().at(0).toString();
+            }
             if (ch == '\\') {
-                result.append(ch);
-                result.append(take());
+                encoded.append(take());
             } else {
                 if (static_cast<unsigned char>(ch) < 0x20) {
                     invalid(QStringLiteral("invalid JSON string"));
                 }
-                result.append(ch);
             }
         }
         invalid(QStringLiteral("unterminated JSON string"));
@@ -349,7 +383,7 @@ private:
     {
         ++m_at;
         whitespace();
-        std::vector<QByteArray> keys;
+        std::vector<QString> keys;
         if (m_at < m_input.size() && m_input[m_at] == '}') {
             ++m_at;
             return;
@@ -359,7 +393,7 @@ private:
             auto key = string();
             if (std::find(keys.begin(), keys.end(), key) != keys.end()) {
                 invalid(QStringLiteral("duplicate object member '%1'")
-                    .arg(QString::fromUtf8(key)));
+                    .arg(key));
             }
             keys.push_back(std::move(key));
             whitespace();
@@ -545,7 +579,7 @@ QJsonObject toJson(const ViewerStateDocument& document,
             {QStringLiteral("species"), species},
             {QStringLiteral("fraction"), document.particles.fraction},
             {QStringLiteral("seed"),
-                static_cast<double>(document.particles.seed)},
+                QString::number(document.particles.seed)},
             {QStringLiteral("pointSize"), document.particles.pointSize},
             {QStringLiteral("colors"), colors}});
     root.insert(QStringLiteral("animation"),
@@ -859,7 +893,7 @@ ViewerStateReadResult fromJson(const QByteArray& bytes,
             || document.particles.fraction > 1.0) {
             invalid(QStringLiteral("particle fraction must be in [0.0001, 1]"));
         }
-        document.particles.seed = unsignedIntegerValue(particles, u"seed");
+        document.particles.seed = uint64Value(particles, u"seed");
         document.particles.pointSize = integerValue(particles, u"pointSize");
         if (document.particles.pointSize < 1
             || document.particles.pointSize > 12) {

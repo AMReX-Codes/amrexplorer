@@ -106,6 +106,8 @@ public:
     [[nodiscard]] bool exportViewerStateForTest(
         const std::filesystem::path& statePath);
     void importViewerStateForTest(const std::filesystem::path& statePath);
+    [[nodiscard]] bool sequenceControlsVisibleForTest() const;
+    [[nodiscard]] int sequenceFrameCountForTest() const;
 
     // Test-only: move each 3-D plane to slicePositions (per axis, so the three
     // panels sample different data with different local ranges), switch to

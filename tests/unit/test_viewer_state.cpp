@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -107,6 +108,27 @@ int main(int argc, char** argv)
             == original.particles.colors.at("stars").rgba(),
         "particle RGBA color was lost");
 
+    original.particles.seed = std::numeric_limits<std::uint64_t>::max();
+    const auto maximumSeedJson = toJson(original, statePath);
+    require(maximumSeedJson[QStringLiteral("particles")].toObject()
+                [QStringLiteral("seed")].isString(),
+        "particle seed was not serialized losslessly");
+    const auto maximumSeed = fromJson(
+        QJsonDocument(maximumSeedJson).toJson(), statePath);
+    require(maximumSeed
+            && maximumSeed.document->particles.seed
+                == std::numeric_limits<std::uint64_t>::max(),
+        "maximum particle seed did not round-trip");
+    auto legacyNumericSeed = maximumSeedJson;
+    auto legacyParticles =
+        legacyNumericSeed[QStringLiteral("particles")].toObject();
+    legacyParticles[QStringLiteral("seed")] = 42.0;
+    legacyNumericSeed[QStringLiteral("particles")] = legacyParticles;
+    const auto legacySeed = fromJson(
+        QJsonDocument(legacyNumericSeed).toJson(), statePath);
+    require(legacySeed && legacySeed.document->particles.seed == 42,
+        "legacy numeric particle seed was not accepted");
+
     require(writeViewerState(original, statePath).isEmpty(),
         "atomic state write failed");
     require(static_cast<bool>(readViewerState(statePath)),
@@ -141,6 +163,9 @@ int main(int argc, char** argv)
         "future version was accepted");
     reject(R"({"format":"amrexplorer-viewer-state","format":"x","version":1})",
         "duplicate logical key was accepted");
+    reject(
+        R"({"format":"amrexplorer-viewer-state","\u0066ormat":"x","version":1})",
+        "escaped duplicate logical key was accepted");
     reject(QByteArray(maximumViewerStateBytes + 1, ' '),
         "oversized input was accepted");
 

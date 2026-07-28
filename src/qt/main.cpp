@@ -606,6 +606,108 @@ int main(int argc, char* argv[])
                     3, true, {0.875, 0.625, 0.375});
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--viewer-state-fallback-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        const std::filesystem::path statePath(argv[3]);
+        const auto supersededPath =
+            statePath.parent_path() / "superseded.amrexplorer-state.json";
+        const auto validPath =
+            statePath.parent_path() / "valid.amrexplorer-state.json";
+        struct FallbackImportState {
+            int phase = 0;
+            std::string fallbackField;
+            int staleFailures = 0;
+        };
+        auto state = std::make_shared<FallbackImportState>();
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application,
+            [&window, &application, state, statePath](bool success) {
+                if (!success || state->phase != 0) {
+                    application.exit(1);
+                    return;
+                }
+                auto document = window.captureViewerState(statePath);
+                state->fallbackField = document.display.field;
+                document.display.field = "missing_scalar";
+                document.display.ranges.clear();
+                document.display.ranges.emplace("missing_scalar",
+                    amrvis::qt::FieldRangeState{
+                        amrvis::RangeMode::User, std::pair{2.0, 3.0}});
+                document.rendering.mode =
+                    amrvis::qt::ViewerDisplayMode::VelocityVectors;
+                document.rendering.vectorFields = {
+                    "missing_u", "missing_v", "missing_w"};
+                if (!amrvis::qt::writeViewerState(
+                        document, statePath).isEmpty()) {
+                    application.exit(1);
+                    return;
+                }
+                state->phase = 1;
+                window.importViewerStateForTest(statePath);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::viewerStateImportFinished,
+            &application,
+            [&window, &application, state, statePath, supersededPath,
+                validPath](bool success) {
+                if (state->phase == 1) {
+                    const auto actual =
+                        window.captureViewerState(statePath);
+                    const auto range =
+                        actual.display.ranges.find(state->fallbackField);
+                    const auto vectorsResolved = std::all_of(
+                        actual.rendering.vectorFields.begin(),
+                        actual.rendering.vectorFields.end(),
+                        [](const auto& name) {
+                            return !name.empty()
+                                && !name.starts_with("missing_");
+                        });
+                    if (!success
+                        || actual.display.field != state->fallbackField
+                        || range == actual.display.ranges.end()
+                        || range->second.mode != amrvis::RangeMode::Visible
+                        || !vectorsResolved) {
+                        application.exit(1);
+                        return;
+                    }
+
+                    auto superseded =
+                        window.captureViewerState(supersededPath);
+                    superseded.source.path =
+                        supersededPath.parent_path() / "does-not-exist";
+                    if (!amrvis::qt::writeViewerState(
+                            superseded, supersededPath).isEmpty()
+                        || !window.exportViewerStateForTest(validPath)) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 2;
+                    window.importViewerStateForTest(supersededPath);
+                    window.importViewerStateForTest(validPath);
+                    return;
+                }
+                if (state->phase != 2) {
+                    application.exit(1);
+                    return;
+                }
+                if (!success) {
+                    ++state->staleFailures;
+                    return;
+                }
+                state->phase = 3;
+                QTimer::singleShot(100, &application,
+                    [&application, state] {
+                        application.exit(
+                            state->staleFailures == 0 ? 0 : 1);
+                    });
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1])
             == "--particle-visible-range-smoke-test") {
@@ -1066,6 +1168,8 @@ int main(int argc, char* argv[])
         const std::filesystem::path first(argv[2]);
         const std::filesystem::path second(argv[3]);
         const std::filesystem::path statePath(argv[4]);
+        const auto singleStatePath =
+            statePath.parent_path() / "single.amrexplorer-state.json";
         struct SequenceImportState {
             int phase = 0;
             bool displayedFrameZeroDuringImport = false;
@@ -1096,9 +1200,15 @@ int main(int argc, char* argv[])
         QObject::connect(&window,
             &amrvis::qt::MainWindow::initialSliceFinished,
             &application,
-            [&window, &application, state, statePath](bool success) {
+            [&window, &application, state, statePath,
+                singleStatePath](bool success) {
                 if (!success || state->phase != 1) {
                     if (!success) application.exit(1);
+                    return;
+                }
+                if (window.sequenceControlsVisibleForTest()
+                    || !window.exportViewerStateForTest(singleStatePath)) {
+                    application.exit(1);
                     return;
                 }
                 state->phase = 2;
@@ -1107,13 +1217,28 @@ int main(int argc, char* argv[])
         QObject::connect(&window,
             &amrvis::qt::MainWindow::viewerStateImportFinished,
             &application,
-            [&window, &application, state, statePath](bool success) {
+            [&window, &application, state, statePath,
+                singleStatePath](bool success) {
                 const auto actual = window.captureViewerState(statePath);
-                application.exit(success
+                if (state->phase == 2) {
+                    if (!(success
                         && !state->displayedFrameZeroDuringImport
                         && actual.source.kind
                             == amrvis::qt::ViewerSourceKind::PlotfileSequence
                         && actual.source.currentFrame == 1
+                        && window.sequenceControlsVisibleForTest()
+                        && window.sequenceFrameCountForTest() == 2)) {
+                        application.exit(1);
+                        return;
+                    }
+                    state->phase = 3;
+                    window.importViewerStateForTest(singleStatePath);
+                    return;
+                }
+                application.exit(success && state->phase == 3
+                        && actual.source.kind
+                            != amrvis::qt::ViewerSourceKind::PlotfileSequence
+                        && !window.sequenceControlsVisibleForTest()
                     ? 0 : 1);
             });
         QObject::connect(&window,

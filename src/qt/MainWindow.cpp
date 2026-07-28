@@ -3225,6 +3225,16 @@ void MainWindow::importViewerStateForTest(
     importViewerState(statePath, false);
 }
 
+bool MainWindow::sequenceControlsVisibleForTest() const
+{
+    return m_animationPanel->sequenceControlsVisible();
+}
+
+int MainWindow::sequenceFrameCountForTest() const
+{
+    return m_animationPanel->sequenceFrameCount();
+}
+
 void MainWindow::chooseDataset()
 {
     const auto settings = makeSettings();
@@ -3419,15 +3429,21 @@ FabSelectorBuild buildFabSelector(
 }
 
 [[nodiscard]] FrameSliceSpec viewerFrameSpec(
-    const ViewerStateDocument& document, const DatasetMetadata& metadata,
+    ViewerStateDocument& document, const DatasetMetadata& metadata,
     QStringList& warnings)
 {
     FrameSliceSpec spec;
-    spec.fieldName = document.display.field;
-    const auto fieldIndex = fieldIndexByName(metadata, document.display.field);
-    if (fieldIndex >= 0) {
-        spec.field = static_cast<std::uint32_t>(fieldIndex);
+    auto fieldIndex = fieldIndexByName(metadata, document.display.field);
+    if (fieldIndex < 0) {
+        warnings.push_back(QObject::tr(
+            "Scalar field '%1' is unavailable; using '%2'.")
+            .arg(QString::fromStdString(document.display.field),
+                QString::fromStdString(metadata.fields.front().name)));
+        fieldIndex = 0;
+        document.display.field = metadata.fields.front().name;
     }
+    spec.fieldName = document.display.field;
+    spec.field = static_cast<std::uint32_t>(fieldIndex);
     switch (document.display.level.mode) {
     case LevelSelectionMode::FinestAvailable:
         spec.levelSelection = -1;
@@ -3453,10 +3469,24 @@ FabSelectorBuild buildFabSelector(
         }
         break;
     }
-    const auto range = document.display.ranges.find(document.display.field);
-    if (range != document.display.ranges.end()) {
-        spec.rangeMode = range->second.mode;
-        spec.userRange = range->second.userRange;
+    auto& range = document.display.ranges[document.display.field];
+    spec.rangeMode = range.mode;
+    spec.userRange = range.userRange;
+    const auto [composition, maximumLevel] = decodeLevelData(
+        spec.levelSelection, metadata.finestLevel);
+    const auto resolvedRangeMode = effectiveRangeMode(metadata,
+        FieldId{spec.field}, maximumLevel, composition, spec.rangeMode);
+    if (resolvedRangeMode != spec.rangeMode) {
+        warnings.push_back(QObject::tr(
+            "The saved %1 range for field '%2' is unavailable; "
+            "using the visible-data range.")
+            .arg(spec.rangeMode == RangeMode::File
+                    ? QObject::tr("file") : QObject::tr("level"),
+                QString::fromStdString(document.display.field)));
+        spec.rangeMode = resolvedRangeMode;
+        spec.userRange.reset();
+        range.mode = resolvedRangeMode;
+        range.userRange.reset();
     }
     spec.logarithmic = document.display.logarithmic;
     spec.defaultPositions = document.display.slicePositions.size() != 3;
@@ -3494,16 +3524,40 @@ FabSelectorBuild buildFabSelector(
         break;
     }
     spec.contourCount = document.rendering.contourCount;
-    spec.vectorFieldNames = document.rendering.vectorFields;
+    std::vector<std::string> fieldNames;
+    fieldNames.reserve(metadata.fields.size());
+    for (const auto& field : metadata.fields) {
+        fieldNames.push_back(field.name);
+    }
+    auto [fallbackU, fallbackV, fallbackW] =
+        detectVectorFields(fieldNames);
+    if (fallbackU == fallbackV && metadata.fields.size() > 1) {
+        fallbackV = fallbackU == 0 ? 1 : 0;
+    }
+    const std::array<int, 3> vectorFallbacks{
+        fallbackU, fallbackV, fallbackW};
     std::array<std::uint32_t*, 3> vectorIds{
         &spec.vectorUField, &spec.vectorVField, &spec.vectorWField};
-    for (std::size_t index = 0; index < spec.vectorFieldNames.size(); ++index) {
-        const auto field =
-            fieldIndexByName(metadata, spec.vectorFieldNames[index]);
-        if (field >= 0) {
-            *vectorIds[index] = static_cast<std::uint32_t>(field);
+    for (std::size_t index = 0;
+        index < document.rendering.vectorFields.size(); ++index) {
+        const auto requested = document.rendering.vectorFields[index];
+        auto field = fieldIndexByName(metadata, requested);
+        if (field < 0) {
+            field = vectorFallbacks[index];
+            if (!requested.empty()) {
+                warnings.push_back(QObject::tr(
+                    "Vector field '%1' is unavailable; using '%2'.")
+                    .arg(QString::fromStdString(requested),
+                        QString::fromStdString(
+                            metadata.fields[
+                                static_cast<std::size_t>(field)].name)));
+            }
+            document.rendering.vectorFields[index] =
+                metadata.fields[static_cast<std::size_t>(field)].name;
         }
+        *vectorIds[index] = static_cast<std::uint32_t>(field);
     }
+    spec.vectorFieldNames = document.rendering.vectorFields;
     const auto bounds = datasetSampleBounds(metadata);
     const auto addRegion = [&](std::string_view panelName) {
         const auto panel = document.panels.find(std::string(panelName));
@@ -3699,13 +3753,19 @@ void MainWindow::importViewerState(
                 if (document.source.kind
                     == ViewerSourceKind::PlotfileSequence) {
                     m_sequenceController->close();
+                    m_animationPanel->setSequenceFrameCount(
+                        static_cast<int>(document.source.frames.size()));
+                    m_animationPanel->setSequenceVisible(true);
                     m_sequenceController->adoptPrepared(
                         document.source.frames,
                         document.source.currentFrame,
                         std::move(prepared.frame),
                         prepared.spec.defaultPositions);
+                    updateAnimationDockVisibility();
                 } else {
                     m_sequenceController->close();
+                    m_animationPanel->setSequenceVisible(false);
+                    updateAnimationDockVisibility();
                     m_datasetPath = prepared.displayedPath;
                     m_dataset = prepared.frame.dataset;
                     m_particleSamples =
@@ -3885,6 +3945,12 @@ void MainWindow::importViewerState(
                 updateDiagnostics();
                 emit viewerStateImportFinished(true);
             } catch (const std::exception& error) {
+                if (importGeneration != m_viewerStateImportGeneration) {
+                    ++m_staleResults;
+                    watcher->deleteLater();
+                    updateDiagnostics();
+                    return;
+                }
                 const auto message = tr("Cannot import viewer state: %1")
                     .arg(exceptionMessage(error));
                 reportBackgroundError(message);

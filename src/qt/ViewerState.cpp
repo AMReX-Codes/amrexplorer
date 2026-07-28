@@ -6,6 +6,7 @@
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QSaveFile>
+#include <QSet>
 
 #include <algorithm>
 #include <cmath>
@@ -310,7 +311,7 @@ public:
     void scan()
     {
         whitespace();
-        value();
+        value(0);
         whitespace();
         if (m_at != m_input.size()) invalid(QStringLiteral("invalid JSON"));
     }
@@ -360,12 +361,12 @@ private:
         invalid(QStringLiteral("unterminated JSON string"));
     }
 
-    void value()
+    void value(std::size_t depth)
     {
         whitespace();
         if (m_at >= m_input.size()) invalid(QStringLiteral("invalid JSON"));
-        if (m_input[m_at] == '{') return object();
-        if (m_input[m_at] == '[') return array();
+        if (m_input[m_at] == '{') return object(depth + 1);
+        if (m_input[m_at] == '[') return array(depth + 1);
         if (m_input[m_at] == '"') {
             (void)string();
             return;
@@ -379,11 +380,14 @@ private:
         }
     }
 
-    void object()
+    void object(std::size_t depth)
     {
+        if (depth > maximumNestingDepth) {
+            invalid(QStringLiteral("JSON nesting exceeds the supported limit"));
+        }
         ++m_at;
         whitespace();
-        std::vector<QString> keys;
+        QSet<QString> keys;
         if (m_at < m_input.size() && m_input[m_at] == '}') {
             ++m_at;
             return;
@@ -391,14 +395,14 @@ private:
         for (;;) {
             whitespace();
             auto key = string();
-            if (std::find(keys.begin(), keys.end(), key) != keys.end()) {
+            if (keys.contains(key)) {
                 invalid(QStringLiteral("duplicate object member '%1'")
                     .arg(key));
             }
-            keys.push_back(std::move(key));
+            keys.insert(std::move(key));
             whitespace();
             if (take() != ':') invalid(QStringLiteral("invalid JSON object"));
-            value();
+            value(depth);
             whitespace();
             const auto separator = take();
             if (separator == '}') return;
@@ -406,8 +410,11 @@ private:
         }
     }
 
-    void array()
+    void array(std::size_t depth)
     {
+        if (depth > maximumNestingDepth) {
+            invalid(QStringLiteral("JSON nesting exceeds the supported limit"));
+        }
         ++m_at;
         whitespace();
         if (m_at < m_input.size() && m_input[m_at] == ']') {
@@ -415,7 +422,7 @@ private:
             return;
         }
         for (;;) {
-            value();
+            value(depth);
             whitespace();
             const auto separator = take();
             if (separator == ']') return;
@@ -425,6 +432,7 @@ private:
 
     QByteArrayView m_input;
     qsizetype m_at = 0;
+    static constexpr std::size_t maximumNestingDepth = 128;
 };
 
 } // namespace

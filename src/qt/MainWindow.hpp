@@ -108,6 +108,8 @@ public:
     void importViewerStateForTest(const std::filesystem::path& statePath);
     [[nodiscard]] bool sequenceControlsVisibleForTest() const;
     [[nodiscard]] int sequenceFrameCountForTest() const;
+    // Test-only: enable vector rendering with explicit component indices.
+    void configureVectorFieldsForTest(int uField, int vField, int wField);
 
     // Test-only: move each 3-D plane to slicePositions (per axis, so the three
     // panels sample different data with different local ranges), switch to

@@ -1397,6 +1397,13 @@ void MainWindow::applyContourSettings(
     }
 }
 
+void MainWindow::configureVectorFieldsForTest(
+    int uField, int vField, int wField)
+{
+    applyContourSettings(DisplayMode::VelocityVectors, m_contourCount,
+        uField, vField, wField, m_contourColor);
+}
+
 void MainWindow::configureContourSyncForTest(
     int count, bool logarithmic, std::array<double, 3> slicePositions)
 {
@@ -5844,6 +5851,19 @@ void MainWindow::goToSequenceFrame(int index, bool forceRestart)
 void MainWindow::displayFrameResult(InitialSliceResult& result,
     bool defaultPositions)
 {
+    const std::array<int, 3> previousVectorFields{
+        m_vectorUField, m_vectorVField, m_vectorWField};
+    std::array<std::string, 3> vectorFieldNames;
+    if (m_openMetadata) {
+        for (std::size_t axis = 0; axis < vectorFieldNames.size(); ++axis) {
+            const auto field = previousVectorFields[axis];
+            if (field >= 0
+                && field < static_cast<int>(m_openMetadata->fields.size())) {
+                vectorFieldNames[axis] =
+                    m_openMetadata->fields[static_cast<std::size_t>(field)].name;
+            }
+        }
+    }
     m_dataset = result.dataset;
     m_particleSamples = std::move(result.particles);
     configureParticleControls(true);
@@ -5858,6 +5878,15 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
         ? result.fileVersion : m_fileVersion;
     showMetadata(frameMetadata, m_datasetPath);
 
+    const std::array<int*, 3> vectorFields{
+        &m_vectorUField, &m_vectorVField, &m_vectorWField};
+    for (std::size_t axis = 0; axis < vectorFields.size(); ++axis) {
+        const auto resolved = fieldIndexByName(metadata, vectorFieldNames[axis]);
+        *vectorFields[axis] = !vectorFieldNames[axis].empty()
+            ? std::max(resolved, 0)
+            : std::clamp(previousVectorFields[axis], 0,
+                  static_cast<int>(metadata.fields.size()) - 1);
+    }
     configureSequenceControls(defaultPositions);
     if (selectCacheFallbackLevel(m_levelSelector, result.cacheFallbackToLevel)) {
         configureSlicePositionControls();

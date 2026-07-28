@@ -1162,6 +1162,44 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window, [&window, first, second] {
             window.openSequence({first, second});
         });
+    } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--sequence-vector-identity-smoke-test") {
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application, phase](int index) {
+                if (*phase == 0 && index == 0) {
+                    window.configureVectorFieldsForTest(0, 1, 0);
+                    *phase = 1;
+                    window.stepSequence(1);
+                    return;
+                }
+                const auto names =
+                    window.captureViewerState({}).rendering.vectorFields;
+                const std::array<std::string, 3> expected{
+                    "density", "temperature", "density"};
+                if (names != expected) {
+                    application.exit(1);
+                    return;
+                }
+                if (*phase == 1 && index == 1) {
+                    *phase = 2;
+                    window.stepSequence(1);
+                    return;
+                }
+                application.exit(*phase == 2 && index == 0 ? 0 : 1);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
     } else if (argc == 5
         && std::string_view(argv[1])
             == "--viewer-state-sequence-smoke-test") {

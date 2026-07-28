@@ -169,6 +169,27 @@ int main(int argc, char** argv)
     reject(QByteArray(maximumViewerStateBytes + 1, ' '),
         "oversized input was accepted");
 
+    QByteArray deeplyNested =
+        R"({"format":"amrexplorer-viewer-state","version":1,"deep":)";
+    deeplyNested.append(QByteArray(200, '['));
+    deeplyNested.append('0');
+    deeplyNested.append(QByteArray(200, ']'));
+    deeplyNested.append('}');
+    reject(deeplyNested, "excessively nested JSON was accepted");
+
+    QByteArray manyUniqueKeys =
+        QJsonDocument(toJson(original, statePath))
+            .toJson(QJsonDocument::Compact);
+    manyUniqueKeys.chop(1);
+    for (int index = 0; index < 20000; ++index) {
+        manyUniqueKeys.append(",\"key");
+        manyUniqueKeys.append(QByteArray::number(index));
+        manyUniqueKeys.append("\":null");
+    }
+    manyUniqueKeys.append('}');
+    require(static_cast<bool>(fromJson(manyUniqueKeys, statePath)),
+        "large object with unique keys was rejected");
+
     auto invalidRange = toJson(original, statePath);
     auto display = invalidRange[QStringLiteral("display")].toObject();
     auto ranges = display[QStringLiteral("ranges")].toObject();

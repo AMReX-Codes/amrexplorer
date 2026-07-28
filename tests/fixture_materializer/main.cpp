@@ -6,7 +6,7 @@
 //
 // Usage:
 //   fixture_materializer <sourceFixtureDir> <destDir>
-//       [newTime] [--no-statistics] [--non-finite]
+//       [newTime] [--no-statistics] [--non-finite] [--reverse-fields]
 //
 // Copies the fixture into destDir and writes each level's Cell_D_* payloads
 // at the FabOnDisk offsets its Cell_H records. An optional time value replaces
@@ -14,6 +14,7 @@
 // --no-statistics rewrites the VisMF headers as legal version 2 headers whose
 // FabOnDisk records point directly to the generated binary payloads.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -277,14 +278,16 @@ void writeHeaderWithoutStatistics(const std::filesystem::path& path,
 
 int main(int argc, char* argv[])
 {
-    require(argc >= 3 && argc <= 8,
+    require(argc >= 3 && argc <= 9,
         "usage: fixture_materializer <sourceFixtureDir> <destDir> "
-        "[newTime] [--no-statistics] [--non-finite] [--scale <factor>]");
+        "[newTime] [--no-statistics] [--non-finite] [--reverse-fields] "
+        "[--scale <factor>]");
     const std::filesystem::path source(argv[1]);
     const std::filesystem::path destination(argv[2]);
     std::optional<std::string> newTime;
     bool omitStatistics = false;
     bool nonFiniteValues = false;
+    bool reverseFields = false;
     // Multiplies the synthesized field values so successive frames of a
     // sequence can carry different ranges (used by the range-cache test).
     double scale = 1.0;
@@ -298,6 +301,10 @@ int main(int argc, char* argv[])
             require(!nonFiniteValues,
                 "--non-finite was specified more than once");
             nonFiniteValues = true;
+        } else if (value == "--reverse-fields") {
+            require(!reverseFields,
+                "--reverse-fields was specified more than once");
+            reverseFields = true;
         } else if (value == "--scale") {
             require(argument + 1 < argc, "--scale requires a factor argument");
             const std::string factor(argv[++argument]);
@@ -326,9 +333,15 @@ int main(int argc, char* argv[])
         source, destination, std::filesystem::copy_options::recursive, error);
     require(!error, "could not copy the fixture");
 
-    if (newTime.has_value()) {
+    if (newTime.has_value() || reverseFields) {
         auto lines = header.lines;
-        lines[header.timeLine] = *newTime;
+        if (newTime.has_value()) {
+            lines[header.timeLine] = *newTime;
+        }
+        if (reverseFields) {
+            std::reverse(lines.begin() + 2,
+                lines.begin() + 2 + header.fieldCount);
+        }
         std::ofstream output(destination / "Header", std::ios::trunc);
         require(static_cast<bool>(output), "could not rewrite the Header");
         for (const auto& line : lines) {

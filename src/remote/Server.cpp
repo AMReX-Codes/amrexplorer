@@ -24,6 +24,44 @@
 namespace amrvis::remote {
 namespace {
 
+class JoiningThread {
+public:
+    template <typename Function>
+    explicit JoiningThread(Function&& function)
+        : m_thread(std::forward<Function>(function))
+    {
+    }
+
+    ~JoiningThread()
+    {
+        join();
+    }
+
+    JoiningThread(const JoiningThread&) = delete;
+    JoiningThread& operator=(const JoiningThread&) = delete;
+
+    JoiningThread(JoiningThread&&) noexcept = default;
+
+    JoiningThread& operator=(JoiningThread&& other) noexcept
+    {
+        if (this != &other) {
+            join();
+            m_thread = std::move(other.m_thread);
+        }
+        return *this;
+    }
+
+private:
+    void join() noexcept
+    {
+        if (m_thread.joinable()) {
+            m_thread.join();
+        }
+    }
+
+    std::thread m_thread;
+};
+
 class ThreadPool {
 public:
     explicit ThreadPool(unsigned int count)
@@ -82,7 +120,7 @@ private:
     std::condition_variable m_ready;
     std::deque<std::function<void()>> m_tasks;
     bool m_stopping = false;
-    std::vector<std::jthread> m_threads;
+    std::vector<JoiningThread> m_threads;
 };
 
 ErrorData classifyError(const std::exception& error)
@@ -682,7 +720,7 @@ public:
                         return worker.session->stopped();
                     });
                 m_sessions.push_back(SessionWorker{
-                    session, std::jthread(
+                    session, JoiningThread(
                         [session] { session->run(); })});
             } catch (const std::exception&) {
                 if (!m_stopping.load()) {
@@ -722,7 +760,7 @@ private:
 
     struct SessionWorker {
         std::shared_ptr<Session> session;
-        std::jthread thread;
+        JoiningThread thread;
     };
 
     ServerOptions m_options;

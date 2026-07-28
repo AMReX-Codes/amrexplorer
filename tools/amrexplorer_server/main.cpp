@@ -1,3 +1,4 @@
+#include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
 #include <chrono>
@@ -18,6 +19,38 @@ void handleSignal(int)
 {
     stopRequested = 1;
 }
+
+class SignalWatcher {
+public:
+    explicit SignalWatcher(amrvis::remote::Server& server)
+        : m_thread([this, &server] {
+            const auto stop = m_stop.get_token();
+            while (!stop.stop_requested() && stopRequested == 0) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(50));
+            }
+            if (stopRequested != 0) {
+                server.requestStop();
+            }
+        })
+    {
+    }
+
+    ~SignalWatcher()
+    {
+        static_cast<void>(m_stop.request_stop());
+        if (m_thread.joinable()) {
+            m_thread.join();
+        }
+    }
+
+    SignalWatcher(const SignalWatcher&) = delete;
+    SignalWatcher& operator=(const SignalWatcher&) = delete;
+
+private:
+    amrvis::StopSource m_stop;
+    std::thread m_thread;
+};
 
 template <typename Value>
 Value parseUnsigned(const char* text, const char* option)
@@ -78,17 +111,8 @@ int main(int argc, char* argv[])
         amrvis::remote::Server server(options);
         std::cout << "LISTENING 127.0.0.1 " << server.port() << '\n'
                   << std::flush;
-        std::jthread signalWatcher([&](std::stop_token stop) {
-            while (!stop.stop_requested() && stopRequested == 0) {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(50));
-            }
-            if (stopRequested != 0) {
-                server.requestStop();
-            }
-        });
+        SignalWatcher signalWatcher(server);
         server.run();
-        signalWatcher.request_stop();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "server error: " << error.what() << '\n';

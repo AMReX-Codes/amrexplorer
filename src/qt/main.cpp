@@ -442,7 +442,7 @@ int main(int argc, char* argv[])
     amrvis::qt::MainWindow window;
     window.show();
     std::shared_ptr<amrvis::remote::Server> smokeServer;
-    std::optional<std::jthread> smokeServerThread;
+    std::optional<std::thread> smokeServerThread;
     if (argc == 3
         && std::string_view(argv[1]) == "--remote-slice-smoke-test") {
         smokeServer = std::make_shared<amrvis::remote::Server>();

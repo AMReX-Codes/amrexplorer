@@ -1,5 +1,7 @@
 #include <amrexplorer/remote/Frame.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstring>
 #include <limits>
@@ -7,6 +9,9 @@
 #include <utility>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else

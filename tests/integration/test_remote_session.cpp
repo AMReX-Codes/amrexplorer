@@ -14,6 +14,30 @@
 
 namespace {
 
+class ServerThread {
+public:
+    explicit ServerThread(amrvis::remote::Server& server)
+        : m_server(server)
+        , m_thread([&server] { server.run(); })
+    {
+    }
+
+    ~ServerThread()
+    {
+        m_server.requestStop();
+        if (m_thread.joinable()) {
+            m_thread.join();
+        }
+    }
+
+    ServerThread(const ServerThread&) = delete;
+    ServerThread& operator=(const ServerThread&) = delete;
+
+private:
+    amrvis::remote::Server& m_server;
+    std::thread m_thread;
+};
+
 void require(bool condition, const char* message)
 {
     if (!condition) {
@@ -56,7 +80,7 @@ int main(int argc, char* argv[])
         options.maximumDatasets = 4;
         options.maximumOutstandingRequests = 16;
         amrvis::remote::Server server(options);
-        std::jthread serverThread([&] { server.run(); });
+        ServerThread serverThread(server);
 
         auto connection = std::make_shared<amrvis::remote::Connection>(
             "127.0.0.1", server.port());
@@ -209,8 +233,6 @@ int main(int argc, char* argv[])
         reopened->close();
         reconnected->close();
 
-        server.requestStop();
-        serverThread.join();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

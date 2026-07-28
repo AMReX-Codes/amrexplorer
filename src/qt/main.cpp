@@ -450,8 +450,10 @@ int main(int argc, char* argv[])
             [server = smokeServer] { server->run(); });
         QObject::connect(&window,
             &amrvis::qt::MainWindow::initialSliceFinished,
-            &application, [&application](bool success) {
-                application.exit(success ? 0 : 1);
+            &application, [&window, &application](bool success) {
+                application.exit(success
+                        && window.activeViewUsesNativeOutputSizeForTest()
+                    ? 0 : 1);
             });
         QTimer::singleShot(15000, &application,
             [&application] { application.exit(1); });
@@ -515,7 +517,8 @@ int main(int argc, char* argv[])
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
             &application, [&window, &application](bool success) {
                 const auto valid = success
-                    && rangeSelectorMatches(window, true);
+                    && rangeSelectorMatches(window, true)
+                    && window.activeViewUsesNativeOutputSizeForTest();
                 application.exit(valid ? 0 : 1);
         });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
@@ -685,11 +688,16 @@ int main(int argc, char* argv[])
         const std::filesystem::path path(argv[2]);
         // Distinct exit codes so a failure pinpoints its stage: 2 = the load
         // itself failed, 3 = the initial fitted raster was not fully visible,
+        // 4 = the wide raster did not use main's native output dimensions,
         // 1 = the regression (arrived crop not fully framed).
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
             &application, [&window, &application](bool success) {
                 if (!success) {
                     application.exit(2);
+                    return;
+                }
+                if (!window.activeViewUsesNativeOutputSizeForTest()) {
+                    application.exit(4);
                     return;
                 }
                 // Sanity: the fitted full-domain raster starts fully visible.

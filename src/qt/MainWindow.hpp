@@ -145,6 +145,10 @@ public:
     // raster-colorbar-mismatch-on-2d-visible-zoom.
     [[nodiscard]] bool activeViewRasterMatchesDisplayRangeForTest();
 
+    // Test-only: true when the displayed plane uses the same native output
+    // dimensions as main, independent of the viewport geometry.
+    [[nodiscard]] bool activeViewUsesNativeOutputSizeForTest() const;
+
     // Test-only: rubber-band the central half of the active 3-D panel through
     // the same handler used by ImageView::rubberBandSelected.
     void rubberBandZoomActiveViewForTest();
@@ -347,7 +351,7 @@ private:
     // state. Shared by setActiveView and showSlice's active-view branch.
     void syncActiveViewColorControls(const PlaneViewState& state);
     [[nodiscard]] std::array<int, 2> displayAxes(int normal) const;
-    [[nodiscard]] std::array<int, 2> viewportOutputSize(
+    [[nodiscard]] std::array<int, 2> nativeOutputSize(
         const PlaneViewState& state) const;
     void probeMoved(PlaneViewState& state, int x, int displayY);
     void probeClicked(PlaneViewState& state, int x, int displayY);

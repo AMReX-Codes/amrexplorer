@@ -927,41 +927,17 @@ std::array<int, 2> MainWindow::displayAxes(int normal) const
     return axes;
 }
 
-std::array<int, 2> MainWindow::viewportOutputSize(
+std::array<int, 2> MainWindow::nativeOutputSize(
     const PlaneViewState& state) const
 {
-    const auto pixelRatio = state.view->devicePixelRatioF();
-    const std::array<int, 2> viewportPixels{
-        std::clamp(static_cast<int>(std::lround(
-            state.view->viewport()->width() * pixelRatio)),
-            1, maxSliceOutputDimension),
-        std::clamp(static_cast<int>(std::lround(
-            state.view->viewport()->height() * pixelRatio)),
-            1, maxSliceOutputDimension)};
-    if (!m_dataset || state.plane->width <= 0 || state.plane->height <= 0
-        || !state.view->hasImage()) {
-        return viewportPixels;
+    if (!m_openMetadata || m_openMetadata->levels.empty()) {
+        return {1, 1};
     }
 
     const auto target = state.visibleRegion.value_or(
-        datasetSampleBounds(m_dataset->metadata()));
-    const auto& current = state.plane->physicalRegion;
-    const auto axes = displayAxes(state.normal);
-    const auto projected = [&](int pixels, int axis, int cap) {
-        const auto index = static_cast<std::size_t>(axis);
-        const auto currentExtent
-            = current.upper[index] - current.lower[index];
-        const auto targetExtent
-            = target.upper[index] - target.lower[index];
-        if (!(currentExtent > 0.0) || !(targetExtent > 0.0)) {
-            return cap;
-        }
-        return std::clamp(static_cast<int>(std::lround(
-            pixels * targetExtent / currentExtent)),
-            1, cap);
-    };
-    return {projected(state.plane->width, axes[0], viewportPixels[0]),
-        projected(state.plane->height, axes[1], viewportPixels[1])};
+        datasetSampleBounds(*m_openMetadata));
+    return finestNativeOutputSize(
+        *m_openMetadata, target, state.normal);
 }
 
 void MainWindow::createMenus()
@@ -1612,6 +1588,19 @@ bool MainWindow::activeViewRasterMatchesDisplayRangeForTest()
     // Same buffer->view transform showSlice uses, so this stays in lockstep
     // with however the raster is actually displayed.
     return displayImageFor(reference) == state.view->image();
+}
+
+bool MainWindow::activeViewUsesNativeOutputSizeForTest() const
+{
+    if (!m_dataset || m_activeView == nullptr
+        || m_activeView->plane->width <= 0
+        || m_activeView->plane->height <= 0) {
+        return false;
+    }
+    const auto expected = finestNativeOutputSize(m_dataset->metadata(),
+        m_activeView->plane->physicalRegion, m_activeView->normal);
+    return m_activeView->plane->width == expected[0]
+        && m_activeView->plane->height == expected[1];
 }
 
 void MainWindow::rubberBandZoomActiveViewForTest()
@@ -3971,7 +3960,7 @@ void MainWindow::requestInitialSlice(
         spec.outputSizes.clear();
         spec.outputSizes.reserve(views.size());
         for (const auto* state : views) {
-            spec.outputSizes.push_back(viewportOutputSize(*state));
+            spec.outputSizes.push_back(nativeOutputSize(*state));
         }
     }
     const auto restoredSpec = initialSpec;
@@ -4349,7 +4338,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     }
     request.visibleRegion = state.visibleRegion.value_or(
         datasetSampleBounds(metadata));
-    request.outputSize = viewportOutputSize(state);
+    request.outputSize = nativeOutputSize(state);
     const auto level = m_levelSelector->currentData().toInt();
     const auto [composition, maximumLevel] = decodeLevelData(
         level, metadata.finestLevel);
@@ -4730,6 +4719,12 @@ std::optional<QRectF> MainWindow::preservedDataWindow(
 {
     const auto& cached = *state.plane;
     const auto axes = displayAxes(state.normal);
+    // Equal densities (or degenerate geometry) mean the preserved scene
+    // transform already preserves the on-screen data, so leave it alone; the
+    // coordinator owns that decision.
+    if (!DisplayCoordinator::planeDensitiesDiffer(cached, incoming, axes)) {
+        return std::nullopt;
+    }
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);
     const auto& oldRegion = cached.physicalRegion;
@@ -4777,23 +4772,25 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
         const auto transformPolicy = DisplayCoordinator::rasterTransformPolicy(
             state.hasCachedRequest, state.cachedRequest, display.request,
             state.visibleRegion.has_value());
-        // A viewport-bounded replacement may have different raster geometry.
-        // Preserve the scale for a changed physical region and recenter the
-        // new owning raster; for a same-region density change, remap the
-        // visible physical window into the new scene.
+        // Preserve keeps the scene transform, which is only equivalent to
+        // keeping what the user sees while the raster's pixels-per-data
+        // density is unchanged. A zoomed re-slice can arrive denser: the
+        // full-domain raster is capped at maxSliceOutputDimension while a
+        // subregion fits under the cap, so preserving the scene transform
+        // would show the crop over-zoomed with part of it off screen
+        // (issue #45). When the density changes, preserve the visible *data*
+        // window instead: capture the viewport in physical coordinates
+        // through the old plane's geometry before the swap, then re-frame
+        // that window through the new plane's geometry after it. Equal
+        // densities (pan, uncapped zoom) keep the plain Preserve behavior.
         std::optional<QRectF> dataWindowInNewScene;
-        bool regionChanged = false;
         if (transformPolicy == ImageTransformPolicy::Preserve) {
             dataWindowInNewScene = preservedDataWindow(
                 state, display.slice.plane);
-            regionChanged = state.cachedRequest.visibleRegion
-                != display.request.visibleRegion;
         }
         state.view->setImage(
             displayImageFor(display.image), transformPolicy);
-        if (regionChanged) {
-            state.view->centerImagePreservingScale();
-        } else if (dataWindowInNewScene) {
+        if (dataWindowInNewScene) {
             state.view->zoomToRect(*dataWindowInNewScene);
         }
     }
@@ -5427,7 +5424,7 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     spec.outputSizes.reserve(views.size());
     for (const auto* state : views) {
         spec.visibleRegions.push_back(state->visibleRegion);
-        spec.outputSizes.push_back(viewportOutputSize(*state));
+        spec.outputSizes.push_back(nativeOutputSize(*state));
     }
     return spec;
 }

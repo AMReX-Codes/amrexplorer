@@ -38,6 +38,17 @@ struct SliceDisplayResult {
     SliceRequest request;
     SliceQueryResult slice;
     ImageBuffer image;
+    // Coordinate system of the dataset (AMReX Header code). 2 (spherical) warps
+    // `image` into physical (R, Z); all others leave it in logical space.
+    int coordinateSystem = 0;
+    // 2-D spherical layout used to produce `image` (R-Z warp / r-theta /
+    // theta-r); ignored for non-spherical data.
+    SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
+    // Physical bounds of `image` in display space: slice.plane.physicalRegion
+    // for non-spherical data, the (R, Z) sector bounding box for 2-D spherical
+    // R-Z, or the (possibly axis-swapped) logical bounds for r-theta / theta-r.
+    // Overlays and the probe map through this.
+    RealBox displayRegion;
     std::vector<VectorSegment> vectors;
     // Contour modes only: the piecewise plane at data resolution the
     // contours were extracted from (the display plane itself when the data
@@ -100,6 +111,11 @@ struct FrameSliceSpec {
     std::uint32_t vectorVField = 0;
     std::uint32_t vectorWField = 0;
     int contourCount = 10;
+    // 2-D spherical warp resolution carried across frame loads (see
+    // SliceRequest::sphericalSupersample).
+    int sphericalSupersample = 4;
+    // 2-D spherical display layout carried across frame loads.
+    SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
     bool defaultPositions = true;
     std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
     std::vector<std::optional<RealBox>> visibleRegions;  // per view, normal order

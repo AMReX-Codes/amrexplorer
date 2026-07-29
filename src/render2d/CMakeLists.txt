@@ -4,6 +4,7 @@ add_library(amrexplorer_render2d
     ImageBuffer.cpp
     Palette.cpp
     ScalarRenderer.cpp
+    SphericalWarp.cpp
     VectorGlyphs.cpp
 )
 add_library(amrexplorer::render2d ALIAS amrexplorer_render2d)

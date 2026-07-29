@@ -145,6 +145,16 @@ void ImageView::setGridBoxes(const std::vector<GridBoxOverlay>& boxes)
         QPen pen(box.color);
         pen.setCosmetic(true);
         pen.setWidth(1);
+        if (!box.path.isEmpty()) {
+            // Spherical: a curved annular sector. Keep anti-aliasing on (the
+            // view default) so the arcs stay smooth; the crisp-rect trick only
+            // helps axis-aligned edges.
+            auto* item = m_scene->addPath(box.path, pen);
+            item->setBrush(Qt::NoBrush);
+            item->setZValue(1.0);
+            m_gridItems.push_back(item);
+            continue;
+        }
         auto* item = new CrispRectItem(box.rectangle);
         item->setPen(pen);
         item->setBrush(Qt::NoBrush);
@@ -290,6 +300,23 @@ void ImageView::setCellHighlight(const std::optional<QRectF>& sceneRect)
     m_cellHighlightItem->setZValue(4.0);
 }
 
+void ImageView::setCellHighlightPath(const std::optional<QPainterPath>& scenePath)
+{
+    if (m_cellHighlightItem != nullptr) {
+        m_scene->removeItem(m_cellHighlightItem);
+        delete m_cellHighlightItem;
+        m_cellHighlightItem = nullptr;
+    }
+    if (!scenePath.has_value() || !hasImage()) {
+        return;
+    }
+    QPen pen(Qt::red);
+    pen.setCosmetic(true);
+    pen.setWidth(2);
+    m_cellHighlightItem = m_scene->addPath(*scenePath, pen, Qt::NoBrush);
+    m_cellHighlightItem->setZValue(4.0);
+}
+
 void ImageView::setAxisIndicator(const QString& horizontal,
     const QString& vertical)
 {
@@ -375,6 +402,11 @@ void ImageView::drawForeground(QPainter* painter, const QRectF& /*rect*/)
 void ImageView::setSliceMoveEnabled(bool enabled) noexcept
 {
     m_sliceMoveEnabled = enabled;
+}
+
+void ImageView::setLineToolEnabled(bool enabled) noexcept
+{
+    m_lineToolEnabled = enabled;
 }
 
 void ImageView::setPlaceholder(const QString& text)
@@ -538,7 +570,7 @@ void ImageView::mousePressEvent(QMouseEvent* event)
     }
     bool handled = false;
     if ((event->button() == Qt::MiddleButton || event->button() == Qt::RightButton)
-        && hasImage()) {
+        && hasImage() && m_lineToolEnabled) {
         if ((event->modifiers() & Qt::ShiftModifier)
             || event->button() == Qt::RightButton) {
             m_lineDragButton = event->button();

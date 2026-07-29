@@ -6,6 +6,7 @@
 #include <QColor>
 #include <QPoint>
 #include <QRectF>
+#include <QString>
 #include <QWidget>
 
 #include <array>
@@ -31,6 +32,10 @@ struct LinePlotCurve {
     int primaryFixedAxis = 1;  // in-plane fixed axis (from the cursor)
     int lineAxis = 0;          // axis the line varies along
     std::array<double, 3> fixedCoordinates{};
+    // Axis names for the legend and hover text (x/y/z, or r/theta for 2-D
+    // spherical). Indexed by dataset axis.
+    std::array<QString, 3> axisNames{
+        QStringLiteral("x"), QStringLiteral("y"), QStringLiteral("z")};
     int dimension = 2;
     int maximumLevel = 0;
     CompositionPolicy composition = CompositionPolicy::FinestAvailable;

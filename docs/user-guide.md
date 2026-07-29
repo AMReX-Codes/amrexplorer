@@ -38,11 +38,11 @@ You can also start without a path and use the File menu:
 AMReXplorer displays 2-D and 3-D data whose FAB payloads use IEEE 32-bit or IEEE
 64-bit floating-point storage.
 
-Plotfiles written for non-Cartesian coordinate systems (cylindrical RZ,
-spherical) open normally, but their data is displayed on a Cartesian grid:
-an RZ dataset appears as its r-z plane with no axisymmetric weighting or
-revolution. The coordinate system recorded in the plotfile Header is not
-otherwise interpreted.
+Plotfiles written for the cylindrical RZ coordinate system, and 3-D spherical
+plotfiles, open normally but are displayed on their logical grid: an RZ dataset
+appears as its r-z plane with no axisymmetric weighting or revolution. **2-D
+spherical (r, θ)** plotfiles are handled specially and can be shown in true
+physical space — see [2-D spherical coordinates](#2-d-spherical-coordinates).
 
 ## Remote datasets
 
@@ -265,6 +265,30 @@ the U and V components for 2-D data, and the U, V, and W components for 3-D
 data. AMReXplorer may propose fields based on common velocity names; verify the
 component selections for your dataset.
 
+## 2-D spherical coordinates
+
+A 2-D plotfile whose Header records the spherical coordinate system stores its
+data on a logical (r, θ) grid, where r is the radius and θ the polar angle from
+the vertical axis. AMReXplorer can present it three ways, chosen under **View >
+2-D Spherical > Display**:
+
+- **R-Z (physical)** — the default. The (r, θ) data is warped into the physical
+  wedge it represents, with R = r·sin θ horizontal and Z = r·cos θ vertical, so
+  cell boundaries appear as circular arcs and radial lines. Grid boxes, the
+  picked-cell highlight, contours, and the coordinate readout all follow the
+  warp; the readout reports both physical (R, Z) and native (r, θ).
+- **r-θ** — the logical grid drawn directly, r horizontal and θ vertical (the
+  layout used before spherical support was added).
+- **θ-r** — the same logical grid transposed, θ horizontal and r vertical.
+
+Because the R-Z view resamples the logical grid into physical space, its curved
+cell boundaries can look jagged at the native resolution. **View > 2-D Spherical
+> Supersampling** sets how finely the grid is resampled (1x–16x); higher factors
+trace the curves more smoothly at the cost of a larger image.
+
+Line plots, particle overlays, and vector glyphs are available in the r-θ and
+θ-r layouts but not in the R-Z view.
+
 ## Plotfile sequences and animation
 
 Open two or more plotfile directories with **File > Open Plotfile
@@ -281,10 +305,13 @@ visible-region settings when those settings are valid for the next plotfile.
 
 ## Exporting images and animations
 
-**File > Export Image...** saves the current view as PNG and asks whether to
-include the color scale. A 2-D export creates one image. A 3-D export creates
-separate `_xy`, `_xz`, and `_yz` images. The exported images include the
-current zoom and visible overlays.
+**File > Export Image...** saves the current view as either a PNG display image
+or a float64 FITS data image. PNG export asks whether to include the color
+scale. FITS export writes the displayed scalar samples with `BITPIX=-64`;
+invalid samples are written as NaN. A 2-D export creates one image. A 3-D
+export creates separate `_xy`, `_xz`, and `_yz` images. Both formats reflect
+the current zoomed data region; only PNG includes visible overlays and the
+optional color scale.
 
 For an open plotfile sequence, **File > Export Animation...** writes numbered
 PNG frames. If `ffmpeg` is installed and available on `PATH`, AMReXplorer also

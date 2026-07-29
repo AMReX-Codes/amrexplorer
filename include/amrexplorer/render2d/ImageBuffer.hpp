@@ -14,5 +14,10 @@ struct ImageBuffer {
     [[nodiscard]] bool valid() const noexcept;
 };
 
+// Transposes a tightly-packed ARGB raster: dst(col, row) = src(row, col), so
+// dst.width == src.height and vice versa. Used to swap the on-screen axes for
+// the theta-r spherical layout.
+[[nodiscard]] ImageBuffer transposeImage(const ImageBuffer& src);
+
 } // namespace amrvis
 

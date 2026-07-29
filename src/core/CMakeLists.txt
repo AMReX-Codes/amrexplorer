@@ -1,4 +1,5 @@
 add_library(amrexplorer_core
+    CoordinateSystem.cpp
     Metadata.cpp
     Request.cpp
     Statistics.cpp

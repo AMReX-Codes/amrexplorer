@@ -28,6 +28,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -36,6 +39,37 @@
 #include <vector>
 
 namespace {
+
+QtMessageHandler g_previousMessageHandler = nullptr;
+
+// Qt 6 on Wayland logs a benign xdg-shell warning whenever a new grabbing popup
+// -- a menu, submenu, combo-box dropdown, or tooltip -- opens while another
+// popup is still grabbing, which happens during ordinary menu-bar and submenu
+// navigation. QtWayland already copes by reparenting the new popup to the
+// topmost grabbing one, so the "setGrabPopup ... does not match the current
+// topmost grabbing popup" line is pure noise. Drop just that message (matched
+// narrowly on category + text) and forward everything else -- including all
+// other qt.qpa.wayland diagnostics -- to the previous handler unchanged.
+void filterWaylandPopupWarning(QtMsgType type,
+    const QMessageLogContext& context, const QString& message)
+{
+    if (type == QtWarningMsg && context.category != nullptr
+        && std::strcmp(context.category, "qt.qpa.wayland") == 0
+        && message.contains(QLatin1String("topmost grabbing popup"))) {
+        return;
+    }
+    if (g_previousMessageHandler != nullptr) {
+        g_previousMessageHandler(type, context, message);
+        return;
+    }
+    // No prior handler: mirror Qt's default output (stderr, abort on fatal).
+    std::fprintf(stderr, "%s\n",
+        qFormatLogMessage(type, context, message).toLocal8Bit().constData());
+    std::fflush(stderr);
+    if (type == QtFatalMsg) {
+        std::abort();
+    }
+}
 
 // "Copy and run" support for Linux docks. GNOME/KDE docks can only show an app
 // icon when a .desktop entry and a themed icon exist on this machine -- a
@@ -418,6 +452,11 @@ bool contourSyncMatches(amrvis::qt::MainWindow& window)
 
 int main(int argc, char* argv[])
 {
+    // Silence the benign xdg-shell popup-nesting warning that Wayland prints
+    // during menu/submenu/combo navigation (see filterWaylandPopupWarning).
+    // Installed before QApplication so it also covers construction-time output.
+    g_previousMessageHandler = qInstallMessageHandler(filterWaylandPopupWarning);
+
     // Disable Wayland warnings
     QLoggingCategory::setFilterRules(QStringLiteral("qt.qpa.wayland.textinput=false"));
 
@@ -631,6 +670,41 @@ int main(int argc, char* argv[])
                             ? 0 : 1);
                 }
         });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--spherical-supersample-smoke-test") {
+        // Zoom-preserve regression for the 2-D spherical supersample control:
+        // after zooming a spherical view (view-only, no re-slice), changing the
+        // warp factor must resize the warped raster yet keep the same zoomed
+        // framing rather than refitting to the whole sector.
+        const std::filesystem::path path(argv[2]);
+        auto beforeWidth = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, beforeWidth](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                // Spherical zoom is view-only; it must leave fit-to-window.
+                window.rubberBandZoomActiveViewForTest();
+                if (window.activeViewFitsWindowForTest()) {
+                    application.exit(2);
+                    return;
+                }
+                *beforeWidth = window.activeViewImageWidthForTest();
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application, beforeWidth] {
+                        const int afterWidth = window.activeViewImageWidthForTest();
+                        // The 8x warp resized the raster larger, and the view is
+                        // still zoomed (framing preserved, not refit to fit).
+                        const bool resized = afterWidth > *beforeWidth;
+                        const bool preserved = !window.activeViewFitsWindowForTest();
+                        application.exit(resized && preserved ? 0 : 3);
+                    }, Qt::SingleShotConnection);
+                // Default factor is 4x; bump to 8x so the raster grows.
+                window.setSphericalSupersampleForTest(8);
+            });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--rubber-zoom-sync-smoke-test") {

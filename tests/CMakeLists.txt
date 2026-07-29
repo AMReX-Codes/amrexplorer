@@ -46,6 +46,11 @@ add_executable(test_contours unit/test_contours.cpp)
 target_link_libraries(test_contours PRIVATE amrexplorer::render2d amrexplorer::warnings)
 add_test(NAME contours COMMAND test_contours)
 
+add_executable(test_spherical_coords unit/test_spherical_coords.cpp)
+target_link_libraries(test_spherical_coords
+    PRIVATE amrexplorer::core amrexplorer::render2d amrexplorer::warnings)
+add_test(NAME spherical_coords COMMAND test_spherical_coords)
+
 add_executable(test_vector_glyphs unit/test_vector_glyphs.cpp)
 target_link_libraries(test_vector_glyphs PRIVATE amrexplorer::render2d amrexplorer::warnings)
 add_test(NAME vector_glyphs COMMAND test_vector_glyphs)
@@ -89,6 +94,10 @@ add_test(NAME vismf_index COMMAND test_vismf_index)
 add_executable(test_plotfile_header unit/test_plotfile_header.cpp)
 target_link_libraries(test_plotfile_header PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME plotfile_header COMMAND test_plotfile_header)
+
+add_executable(test_fits_writer unit/test_fits_writer.cpp)
+target_link_libraries(test_fits_writer PRIVATE amrexplorer::io amrexplorer::warnings)
+add_test(NAME fits_writer COMMAND test_fits_writer)
 
 add_executable(test_plotfile_metadata integration/test_plotfile_metadata.cpp)
 target_link_libraries(test_plotfile_metadata PRIVATE amrexplorer::io amrexplorer::warnings)
@@ -152,6 +161,17 @@ add_test(NAME display_transitions COMMAND test_display_transitions)
 add_executable(test_slice_query integration/test_slice_query.cpp)
 target_link_libraries(test_slice_query PRIVATE amrexplorer::query amrexplorer::warnings)
 add_test(NAME slice_query COMMAND test_slice_query)
+
+add_executable(test_spherical_display integration/test_spherical_display.cpp)
+target_link_libraries(
+    test_spherical_display
+    PRIVATE
+        amrexplorer::pipeline
+        amrexplorer::render2d
+        amrexplorer::warnings
+        Threads::Threads
+)
+add_test(NAME spherical_display COMMAND test_spherical_display)
 
 add_executable(test_line_query integration/test_line_query.cpp)
 target_link_libraries(
@@ -270,6 +290,15 @@ if(TARGET amrexplorer_qt)
             "$<TARGET_FILE:test_user_guide_dialog>"
     )
 
+    add_executable(test_plane_mapping unit/test_plane_mapping.cpp)
+    target_include_directories(test_plane_mapping
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
+    )
+    target_link_libraries(test_plane_mapping
+        PRIVATE amrexplorer::core amrexplorer::warnings Qt6::Core
+    )
+    add_test(NAME plane_mapping COMMAND test_plane_mapping)
+
     add_executable(test_scientific_double_spin_box
         unit/test_scientific_double_spin_box.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp"
@@ -359,6 +388,20 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_raster_zoom_smoke_2d PROPERTIES TIMEOUT 30)
+    # Regression test for the 2-D spherical supersample control: zooming a
+    # spherical view then changing the warp factor must resize the warped raster
+    # while preserving the zoomed framing (not refit to the whole sector).
+    add_test(
+        NAME qt_spherical_supersample_smoke_2d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_spherical"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_spherical_supersample_2d"
+            -DMODE=spherical-supersample
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_spherical_supersample_smoke_2d PROPERTIES TIMEOUT 30)
     # Regression test for sequence-frame-range-cache-goes-stale: across sequence
     # frames the full-domain range cache must invalidate (its key includes the
     # dataset), so a zoomed Visible color bar tracks the current frame instead

@@ -20,9 +20,11 @@ FAB and MultiFab data.
 - Composite and exact-level views, value probing, line plots, grid boxes,
   contours, and vector glyphs
 - Three orthogonal slice views and an isometric overview for 3-D data
+- 2-D spherical (r, θ) plotfiles rendered in physical R–Z, or as the logical
+  r–θ / θ–r grid
 - Plotfile-sequence and plane-sweep animation
 - Remote plotfiles and sequences through a loopback server and SSH tunnel
-- Multiple palettes, logarithmic and user-defined ranges, and PNG/MP4 export
+- Multiple palettes, logarithmic and user-defined ranges, and PNG/FITS/MP4 export
 
 ## Documentation
 

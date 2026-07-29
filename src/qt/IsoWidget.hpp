@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/core/Metadata.hpp>
+#include <amrexplorer/query/SliceQuery.hpp>
 
 #include <QColor>
 #include <QPoint>
@@ -34,6 +35,8 @@ public:
 
     using QWidget::setGeometry;
     void setGeometry(const DatasetMetadata& metadata);
+    void setVisibleGridBoxes(const std::vector<SliceGridBox>& boxes);
+    [[nodiscard]] std::size_t visibleGridBoxCount() const noexcept;
     void setSlicePositions(double x, double y, double z);
     void setSlicePlanesVisible(bool visible);
     void setColorPalette(const Palette* palette);
@@ -76,6 +79,7 @@ private:
 
     RealBox m_domain{};
     std::vector<LevelBoxes> m_levels;
+    std::vector<SliceGridBox> m_visibleGridBoxes;
     std::array<double, 3> m_slicePositions{0.0, 0.0, 0.0};
     bool m_slicePlanesVisible = false;
     const Palette* m_palette = nullptr;

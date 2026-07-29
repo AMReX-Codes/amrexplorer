@@ -213,6 +213,14 @@ if(TARGET amrexplorer_remote)
             "${remote_fixture_dir}")
     set_tests_properties(remote_fixture PROPERTIES
         FIXTURES_SETUP remote_materialized)
+    set(remote_3d_fixture_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_session_3d")
+    add_test(NAME remote_3d_fixture
+        COMMAND "$<TARGET_FILE:fixture_materializer>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "${remote_3d_fixture_dir}")
+    set_tests_properties(remote_3d_fixture PROPERTIES
+        FIXTURES_SETUP remote_3d_materialized)
     add_test(NAME remote_session
         COMMAND test_remote_session "${remote_fixture_dir}")
     set_tests_properties(remote_session PROPERTIES
@@ -280,6 +288,15 @@ if(TARGET amrexplorer_qt)
         )
         set_tests_properties(qt_remote_rubber_aspect_smoke PROPERTIES
             FIXTURES_REQUIRED remote_materialized
+            TIMEOUT 30)
+        add_test(
+            NAME qt_remote_iso_boxes_smoke
+            COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+                "$<TARGET_FILE:amrexplorer_qt>"
+                --remote-iso-boxes-smoke-test "${remote_3d_fixture_dir}"
+        )
+        set_tests_properties(qt_remote_iso_boxes_smoke PROPERTIES
+            FIXTURES_REQUIRED remote_3d_materialized
             TIMEOUT 30)
     endif()
 

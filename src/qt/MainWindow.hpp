@@ -153,6 +153,7 @@ public:
     // physical X:Y aspect selected by a rubber-band drag.
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
+    [[nodiscard]] std::size_t isoGridBoxCountForTest() const;
 
     // Test-only: rubber-band the central half of the active 3-D panel through
     // the same handler used by ImageView::rubberBandSelected.
@@ -447,6 +448,7 @@ private:
     void updateOverlays();
     void updateGridBoxes(PlaneViewState& state);
     void updateGridBoxes();
+    void updateIsoGridBoxes();
     void updateCrosshairs(PlaneViewState& state);
     void updateCrosshairs();
     [[nodiscard]] QLineF planeSegmentToScene(const PlaneViewState& state,

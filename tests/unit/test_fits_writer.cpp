@@ -47,10 +47,13 @@ int main()
         plane.sourceLevel = {0, 0, 1, -1};
 
         amrvis::writeFloat64Fits(path, plane);
-        std::ifstream input(path, std::ios::binary);
-        const std::vector<unsigned char> bytes{
-            std::istreambuf_iterator<char>(input),
-            std::istreambuf_iterator<char>()};
+        std::vector<unsigned char> bytes;
+        {
+            std::ifstream input(path, std::ios::binary);
+            bytes = {
+                std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>()};
+        }
         std::filesystem::remove(path);
 
         require(bytes.size() == 2 * 2880, "FITS file is not block padded");

@@ -70,12 +70,20 @@ struct PlaneMapping {
     [[nodiscard]] QPointF sceneFromLogical(double a, double b) const
     {
         const auto display = displayFromLogical(a, b);
+        return sceneFromDisplay(display[0], display[1]);
+    }
+
+    // Display-space (u, v) -> scene point: the linear map over displayRegion
+    // every layout shares. Used directly for overlays already expressed in
+    // display coordinates (the R-Z vector glyphs).
+    [[nodiscard]] QPointF sceneFromDisplay(double u, double v) const
+    {
         const double spanX = displayRegion.upper[0] - displayRegion.lower[0];
         const double spanY = displayRegion.upper[1] - displayRegion.lower[1];
         const double x = spanX != 0.0
-            ? (display[0] - displayRegion.lower[0]) / spanX * sceneWidth : 0.0;
+            ? (u - displayRegion.lower[0]) / spanX * sceneWidth : 0.0;
         const double y = spanY != 0.0
-            ? sceneHeight - (display[1] - displayRegion.lower[1]) / spanY * sceneHeight
+            ? sceneHeight - (v - displayRegion.lower[1]) / spanY * sceneHeight
             : 0.0;
         return {x, y};
     }

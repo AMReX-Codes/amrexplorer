@@ -108,6 +108,9 @@ struct FrameSliceSpec {
     std::uint32_t vectorVField = 0;
     std::uint32_t vectorWField = 0;
     int contourCount = 10;
+    // 2-D spherical warp resolution carried across frame loads (see
+    // SliceRequest::sphericalSupersample).
+    int sphericalSupersample = 4;
     bool defaultPositions = true;
     std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
     std::vector<std::optional<RealBox>> visibleRegions;  // per view, normal order

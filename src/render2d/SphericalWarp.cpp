@@ -9,8 +9,8 @@
 
 namespace amrvis {
 
-WarpedRaster warpSpherical(
-    const ImageBuffer& src, const RealBox& logicalRegion, int maxDimension)
+WarpedRaster warpSpherical(const ImageBuffer& src,
+    const RealBox& logicalRegion, int maxDimension, int supersample)
 {
     WarpedRaster out;
 
@@ -46,10 +46,10 @@ WarpedRaster warpSpherical(
     // their edges with the true curves. The pitch is square so an isotropic view
     // transform preserves the R:Z aspect. maxDimension caps the result, at which
     // point the supersampling degrades gracefully back toward source resolution.
-    constexpr int kSupersample = 4;
+    const int factor = std::max(1, supersample);
     const double dr = (r1 - r0) / static_cast<double>(src.width);
     const double dtheta = (t1 - t0) / static_cast<double>(src.height);
-    double pitch = std::min(dr, r1 * dtheta) / static_cast<double>(kSupersample);
+    double pitch = std::min(dr, r1 * dtheta) / static_cast<double>(factor);
     if (!(pitch > 0.0)) {
         pitch = std::max(spanR, spanZ);
     }

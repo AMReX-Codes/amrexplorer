@@ -538,6 +538,10 @@ private:
     QPushButton* m_scaleButton = nullptr;
     QMenu* m_levelMenu = nullptr;
     QMenu* m_variableMenu = nullptr;
+    // View submenu selecting the 2-D spherical warp supersample factor; enabled
+    // only while a spherical dataset is shown.
+    QMenu* m_sphericalSupersampleMenu = nullptr;
+    QActionGroup* m_sphericalSupersampleGroup = nullptr;
     QActionGroup* m_scaleGroup = nullptr;
     QActionGroup* m_levelGroup = nullptr;
     QActionGroup* m_variableGroup = nullptr;
@@ -571,6 +575,8 @@ private:
     StopSource m_metadataStopSource;
     DisplayMode m_displayMode = DisplayMode::Raster;
     int m_contourCount = 15;
+    // 2-D spherical warp supersample factor (see SliceRequest::sphericalSupersample).
+    int m_sphericalSupersample = 4;
     int m_contourColor = contourColorBlack;
     int m_vectorUField = -1;
     int m_vectorVField = -1;

@@ -155,7 +155,8 @@ void applyDisplayCoordinates(
     result.displayRegion = sphericalDisplayBounds(logical);
     if (result.image.width > 0 && result.image.height > 0
         && !result.image.rgba.empty()) {
-        auto warped = warpSpherical(result.image, logical, maxSliceOutputDimension);
+        auto warped = warpSpherical(result.image, logical,
+            maxSliceOutputDimension, result.request.sphericalSupersample);
         result.image = std::move(warped.image);
         result.displayRegion = warped.displayRegion;
     }
@@ -515,6 +516,7 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
                     metadata, request.visibleRegion, request.normalDirection);
                 request.composition = selectedLevel.composition;
                 request.maximumLevel = attemptMaximumLevel;
+                request.sphericalSupersample = spec.sphericalSupersample;
                 if (metadata.dimension == 3) {
                     request.physicalPosition = positions[static_cast<std::size_t>(normal)];
                 }

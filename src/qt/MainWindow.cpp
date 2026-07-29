@@ -1042,6 +1042,34 @@ void MainWindow::createMenus()
     scaleMenu->addSeparator();
     scaleMenu->addAction(m_syncRubberBandZoomAction);
 
+    // Warp resolution for 2-D spherical display; enabled only while a spherical
+    // dataset is shown (see showSlice). Higher factors trace the curved cell
+    // boundaries more smoothly.
+    m_sphericalSupersampleGroup = new QActionGroup(this);
+    m_sphericalSupersampleMenu = new QMenu(tr("Spherical Supersa&mpling"), this);
+    m_sphericalSupersampleMenu->setEnabled(false);
+    constexpr std::array<int, 5> supersampleFactors{1, 2, 4, 6, 8};
+    for (const auto factor : supersampleFactors) {
+        auto* action = new QAction(
+            tr("%1x").arg(factor), m_sphericalSupersampleMenu);
+        action->setCheckable(true);
+        action->setActionGroup(m_sphericalSupersampleGroup);
+        action->setData(factor);
+        action->setChecked(factor == m_sphericalSupersample);
+        connect(action, &QAction::triggered, this, [this, factor] {
+            if (factor == m_sphericalSupersample) {
+                return;
+            }
+            m_sphericalSupersample = factor;
+            saveSettings();
+            // Display-only change: re-warp the cached planes, no new query.
+            if (displayIsSpherical()) {
+                scheduleSliceRequest(true);
+            }
+        });
+        m_sphericalSupersampleMenu->addAction(action);
+    }
+
     m_levelMenu = new QMenu(tr("&Level"), this);
     m_levelGroup = new QActionGroup(this);
     m_levelMenu->setEnabled(false);
@@ -1089,6 +1117,7 @@ void MainWindow::createMenus()
     viewMenu->addAction(m_boxesAction);
     viewMenu->addAction(m_slicePlanesAction);
     viewMenu->addMenu(paletteMenu);
+    viewMenu->addMenu(m_sphericalSupersampleMenu);
     viewMenu->addSeparator();
     viewMenu->addAction(m_contoursAction);
     viewMenu->addAction(m_particlesAction);
@@ -3048,6 +3077,20 @@ void MainWindow::restoreSettings()
         m_syncRubberBandZoomAction->setChecked(
             settings.value(QStringLiteral("zoom/syncRubberBand"), true).toBool());
     }
+    if (m_sphericalSupersampleGroup != nullptr) {
+        const auto stored = settings.value(
+            QStringLiteral("spherical/supersample"), m_sphericalSupersample).toInt();
+        // Accept only a factor the menu offers; otherwise keep the default.
+        // setChecked emits toggled, not triggered, so the re-warp slot is not
+        // fired here.
+        for (auto* action : m_sphericalSupersampleGroup->actions()) {
+            if (action->data().toInt() == stored) {
+                m_sphericalSupersample = stored;
+                action->setChecked(true);
+                break;
+            }
+        }
+    }
     applySpeed();
     const auto geometry = settings.value(QStringLiteral("geometry")).toByteArray();
     if (!geometry.isEmpty()) {
@@ -3071,6 +3114,8 @@ void MainWindow::saveSettings()
         m_animationPanel->speedValue());
     settings.setValue(QStringLiteral("zoom/syncRubberBand"),
         m_syncRubberBandZoomAction->isChecked());
+    settings.setValue(QStringLiteral("spherical/supersample"),
+        m_sphericalSupersample);
 }
 
 void MainWindow::updateWindowTitle()
@@ -3930,6 +3975,7 @@ void MainWindow::requestInitialSlice(
         spec.vectorWField =
             static_cast<std::uint32_t>(std::max(m_vectorWField, 0));
         spec.contourCount = m_contourCount;
+        spec.sphericalSupersample = m_sphericalSupersample;
     }
     const auto restoredSpec = initialSpec;
     // Per-view generations captured now: a view that gets a newer request
@@ -4308,6 +4354,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
         level, metadata.finestLevel);
     request.composition = composition;
     request.maximumLevel = maximumLevel;
+    request.sphericalSupersample = m_sphericalSupersample;
 
     const auto requestedRangeMode = static_cast<RangeMode>(
         m_rangeMode->currentData().toInt());
@@ -4826,6 +4873,10 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     // Spherical display warps the plane, so the straight-line profile tool and
     // (below) the particle/vector overlays are suppressed until warped.
     state.view->setLineToolEnabled(!displayIsSpherical());
+    if (m_sphericalSupersampleMenu != nullptr) {
+        // The supersample control only affects the spherical warp.
+        m_sphericalSupersampleMenu->setEnabled(displayIsSpherical());
+    }
     if (m_viewDimension == 2) {
         // The 2-D view carries no axis indicator normally; spherical labels its
         // physical R (horizontal) and Z (vertical) axes.
@@ -5339,6 +5390,7 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     spec.displayMode = m_displayMode;
     spec.palette = m_palette;
     spec.contourCount = m_contourCount;
+    spec.sphericalSupersample = m_sphericalSupersample;
     spec.logarithmic = m_logarithmic->isChecked();
     spec.rangeMode = static_cast<RangeMode>(m_rangeMode->currentData().toInt());
     if (spec.rangeMode == RangeMode::User) {

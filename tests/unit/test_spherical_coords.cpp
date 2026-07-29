@@ -103,7 +103,7 @@ int main()
             kColor);
 
         const auto region = logicalBox(1.0, 2.0, 0.0, 0.4);
-        const auto warped = warpSpherical(src, region, 128);
+        const auto warped = warpSpherical(src, region, 128, 4);
         require(warped.image.width > 0 && warped.image.height > 0, "warp dims positive");
         require(approx(warped.displayRegion.upper[1],
                     sphericalDisplayBounds(region).upper[1]),

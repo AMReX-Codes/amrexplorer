@@ -52,6 +52,12 @@ struct SliceRequest {
     std::array<int, 2> outputSize{0, 0};
     SamplingPolicy sampling = SamplingPolicy::PiecewiseConstant;
     CompositionPolicy composition = CompositionPolicy::FinestAvailable;
+    // 2-D spherical display only: how finely the (r, theta) raster is
+    // resampled into physical (R, Z). Higher values trace the curved cell
+    // boundaries more smoothly at the cost of a larger warped raster. A pure
+    // display parameter -- deliberately excluded from sameSliceSpec so changing
+    // it re-warps from the cached planes without a new query.
+    int sphericalSupersample = 4;
 };
 
 struct LineRequest {

@@ -5361,7 +5361,6 @@ void MainWindow::syncVisibleRanges()
         std::shared_ptr<const ScalarPlane> plane;
         std::shared_ptr<const ScalarPlane> contourFinePlane;
         int contourFineFactor = 1;
-        bool logarithmic = false;
         std::array<int, 2> outputSize{0, 0};
     };
     std::array<PlaneViewState*, 3> views{
@@ -5370,8 +5369,7 @@ void MainWindow::syncVisibleRanges()
     for (std::size_t index = 0; index < views.size(); ++index) {
         const auto* state = views[index];
         snapshots[index] = {state->plane, state->contourFinePlane,
-            state->contourFineFactor, state->displayLogarithmic,
-            state->cachedRequest.outputSize};
+            state->contourFineFactor, state->cachedRequest.outputSize};
     }
 
     struct SyncOutcome {
@@ -5415,6 +5413,11 @@ void MainWindow::syncVisibleRanges()
                     }
                     state->displayMinimum = globalMin;
                     state->displayMaximum = globalMax;
+                    // One shared log flag across the panel set (see
+                    // shared-log-range-render-throw-fails-load): keep every
+                    // panel's stored flag, and thus the color bar below, in
+                    // agreement with the raster the sync just rendered.
+                    state->displayLogarithmic = outcome.sync->logarithmic;
                     if (update.contoursRecomputed) {
                         state->contourPolylines
                             = std::move(update.contourPolylines);
@@ -5472,7 +5475,7 @@ void MainWindow::syncVisibleRanges()
             const auto& snapshot = snapshots[index];
             inputs[index] = {snapshot.plane.get(),
                 snapshot.contourFinePlane.get(), snapshot.contourFineFactor,
-                snapshot.logarithmic, snapshot.outputSize};
+                snapshot.outputSize};
         }
         SyncOutcome outcome;
         outcome.sync = DisplayCoordinator::renderPanelsToSharedRange(

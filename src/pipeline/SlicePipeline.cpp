@@ -593,14 +593,23 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
                 const auto [globalMin, globalMax] = shared.value_or(
                     spec.logarithmic ? std::pair{1.0, 10.0}
                                      : std::pair{0.0, 1.0});
+                // One log flag for all three panels: log only when the shared
+                // minimum is positive, matching how a single panel degrades to
+                // linear. A per-panel flag kept an all-positive plane
+                // logarithmic against a union that crosses zero, and
+                // renderScalarPlane rejects a non-positive log minimum -- which
+                // failed the whole frame load
+                // (see shared-log-range-render-throw-fails-load).
+                const bool sharedLog = spec.logarithmic && globalMin > 0.0;
                 for (auto& d : result.displays) {
                     d.minimum = globalMin;
                     d.maximum = globalMax;
+                    d.logarithmic = sharedLog;
                     d.image = renderScalarPlane(d.slice.plane,
                         ScalarRenderSettings{
                             .minimum = globalMin,
                             .maximum = globalMax,
-                            .logarithmic = d.logarithmic,
+                            .logarithmic = sharedLog,
                             .palette = &spec.palette
                         });
                     // Contours were extracted per view before the shared range

@@ -373,9 +373,11 @@ private:
     // Enable/disable and re-check the 2-D Spherical menus for the current
     // dataset and display mode (Supersampling applies only to the R-Z warp).
     void updateSphericalControls();
-    // Horizontal and vertical axis names for the active spherical layout
-    // ({"R","Z"}, {"r","theta"}, or {"theta","r"}).
-    [[nodiscard]] std::array<QString, 2> sphericalAxisLabels() const;
+    // Horizontal and vertical axis names for a spherical layout ({"R","Z"},
+    // {"r","theta"}, or {"theta","r"}). Callers pass the displayed view
+    // state's mode so labels always describe the raster on screen.
+    [[nodiscard]] static std::array<QString, 2> sphericalAxisLabels(
+        SphericalDisplay mode);
     void probeMoved(PlaneViewState& state, int x, int displayY);
     void probeClicked(PlaneViewState& state, int x, int displayY);
     [[nodiscard]] QString probeReadout(

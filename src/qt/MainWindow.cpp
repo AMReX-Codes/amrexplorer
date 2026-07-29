@@ -9,8 +9,8 @@
 #include "ImageView.hpp"
 #include "IsoWidget.hpp"
 #include "LinePlotRequest.hpp"
-#include "PlaneMapping.hpp"
 #include "LinePlotWindow.hpp"
+#include "PlaneMapping.hpp"
 #include "ScientificDoubleSpinBox.hpp"
 #include "SetContoursDialog.hpp"
 #include "Theme.hpp"
@@ -950,10 +950,10 @@ void MainWindow::updateSphericalControls()
     }
 }
 
-std::array<QString, 2> MainWindow::sphericalAxisLabels() const
+std::array<QString, 2> MainWindow::sphericalAxisLabels(SphericalDisplay mode)
 {
     const QString theta(QChar(0x03B8));
-    switch (m_sphericalDisplay) {
+    switch (mode) {
     case SphericalDisplay::RTheta:
         return {QStringLiteral("r"), theta};
     case SphericalDisplay::ThetaR:
@@ -2560,7 +2560,9 @@ QString MainWindow::probeReadout(
         const auto rText = formatNumber(position[xAxis], m_numberFormat);
         const auto thetaText = formatNumber(position[yAxis], m_numberFormat);
         QString coords;
-        switch (m_sphericalDisplay) {
+        // The state's mode, not the menu selection: the readout labels must
+        // match the mapping that produced the coordinates above.
+        switch (state.sphericalDisplay) {
         case SphericalDisplay::RZ: {
             // Physical (R, Z) plus the native spherical (r, theta).
             const auto display = sphericalToDisplay(
@@ -2929,8 +2931,10 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
         const auto mapping = planeMapping(state);
         const auto logical = mapping.logicalFromScene(
             static_cast<double>(imageX) + 0.5, static_cast<double>(imageY) + 0.5);
+        // The state's mode, matching the mapping the click was interpreted
+        // through (the raster on screen, not a pending menu selection).
         const int horizontalAxis =
-            m_sphericalDisplay == SphericalDisplay::ThetaR ? 1 : 0;
+            state.sphericalDisplay == SphericalDisplay::ThetaR ? 1 : 0;
         const int variedAxis = horizontal ? horizontalAxis : 1 - horizontalAxis;
         const int fixedAxis = 1 - variedAxis;
         request.dataset = dataset->id();
@@ -3849,7 +3853,9 @@ void MainWindow::datasetCellActivated(const RealBox& physicalCell)
         const double t1 = physicalCell.upper[yAxis];
         const auto mapping = planeMapping(*m_activeView);
         const bool valid = r1 > r0 && t1 > t0;
-        if (m_sphericalDisplay == SphericalDisplay::RZ) {
+        // Branch on the view state's mode, matching the mapping (see
+        // updateGridBoxes).
+        if (m_activeView->sphericalDisplay == SphericalDisplay::RZ) {
             std::optional<QPainterPath> highlight;
             if (valid) {
                 highlight = sphericalSectorPath(mapping, r0, r1, t0, t1);
@@ -4771,11 +4777,15 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
                 : QColor::fromRgb(static_cast<QRgb>(
                     m_palette.levelColor(levelIndex, lastLevel)));
             if (spherical) {
-                // xAxis is r, yAxis is theta.
+                // xAxis is r, yAxis is theta. Branch on the state's mode (the
+                // raster on screen), not m_sphericalDisplay (the menu
+                // selection): between a mode change and the re-rendered
+                // arrival the two disagree, and the overlay must match the
+                // displayed raster.
                 if (!(xUpper > xLower) || !(yUpper > yLower)) {
                     continue;
                 }
-                if (m_sphericalDisplay == SphericalDisplay::RZ) {
+                if (state.sphericalDisplay == SphericalDisplay::RZ) {
                     // Warped wedge: a curved annular sector.
                     GridBoxOverlay overlay;
                     overlay.color = color;
@@ -5116,7 +5126,7 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
         // The 2-D view carries no axis indicator normally; spherical labels its
         // horizontal/vertical axes per display mode (R-Z, r-theta, or theta-r).
         if (displayIsSpherical()) {
-            const auto labels = sphericalAxisLabels();
+            const auto labels = sphericalAxisLabels(state.sphericalDisplay);
             state.view->setAxisIndicator(labels[0], labels[1]);
         } else {
             state.view->setAxisIndicator(QString(), QString());

@@ -20,6 +20,13 @@ endforeach()
 
 set(ENV{QT_QPA_PLATFORM} offscreen)
 
+# Isolate QSettings per run: a fresh, empty config directory makes every smoke
+# test start from defaults, so persisted UI state (spherical display mode and
+# supersample factor, palette, log scale, ...) never leaks between runs or from
+# the developer's own config and skews an assertion.
+file(REMOVE_RECURSE "${WORK}/config")
+set(ENV{XDG_CONFIG_HOME} "${WORK}/config")
+
 macro(run_or_die)
     execute_process(COMMAND ${ARGN}
         RESULT_VARIABLE stepResult
@@ -82,6 +89,9 @@ elseif(MODE STREQUAL "particle-visible-range")
 elseif(MODE STREQUAL "raster-zoom")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --raster-zoom-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "spherical-supersample")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --spherical-supersample-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "rubber-zoom-sync")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --rubber-zoom-sync-smoke-test "${WORK}/plt")

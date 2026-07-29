@@ -72,6 +72,7 @@ class IsoWidget;
 class LinePlotWindow;
 class ScientificDoubleSpinBox;
 class SequenceController;
+struct PlaneMapping;
 class UserGuideDialog;
 
 // These now live in the Qt-free pipeline layer (SlicePipeline.hpp); re-export
@@ -173,6 +174,15 @@ public:
     // See fab-round-trip-loses-visible-region.
     [[nodiscard]] bool activeViewIsZoomedForTest() const;
 
+    // Test-only, for the spherical supersample zoom-preserve regression:
+    // change the warp factor through the same path as the menu, read the active
+    // view's warped-pixmap width (to confirm the raster resized), and read
+    // whether it is at fit-to-window without mutating it (unlike
+    // activeViewIsFitToWindowForTest, which refits as a side effect).
+    void setSphericalSupersampleForTest(int factor);
+    [[nodiscard]] int activeViewImageWidthForTest() const;
+    [[nodiscard]] bool activeViewFitsWindowForTest() const;
+
     // Test-only: shrink the open dataset's cache budget to force cache-pressure
     // fallback on the next non-cache slice, and read the current resident bytes
     // to size that budget. See cache-budget-exceeded-hard-fails-after-load.
@@ -243,6 +253,15 @@ private:
         std::vector<ContourPolyline> contourPolylines;
         QString fieldName;
         std::optional<RealBox> visibleRegion;
+        // Dataset coordinate system (AMReX Header code). 2 (spherical) means
+        // `plane` holds logical (r, theta) data that `view` displays warped
+        // into physical (R, Z), with displayRegion giving that warped raster's
+        // (R, Z) bounds. For every other system displayRegion equals the
+        // plane's physical region and no warp occurs, so overlays and the probe
+        // can map through displayRegion uniformly.
+        int coordinateSystem = 0;
+        SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
+        RealBox displayRegion;
         double displayMinimum = 0.0;
         double displayMaximum = 1.0;
         bool displayLogarithmic = false;
@@ -340,6 +359,25 @@ private:
     // state. Shared by setActiveView and showSlice's active-view branch.
     void syncActiveViewColorControls(const PlaneViewState& state);
     [[nodiscard]] std::array<int, 2> displayAxes(int normal) const;
+    // True when the active dataset is displayed as a warped 2-D spherical
+    // (r, theta) plane. Gates the coordinate-warp overlay, probe, and label
+    // paths; all other datasets keep their Cartesian behavior.
+    [[nodiscard]] bool displayIsSpherical() const;
+    // True only for the warped R-Z spherical view. Overlays that assume a
+    // linear plane-pixel-to-scene mapping (line plots, particle points, vector
+    // glyphs) work in the logical r-theta / theta-r layouts but not here.
+    [[nodiscard]] bool displayIsSphericalWarp() const;
+    // Coordinate mapper for a view: logical (x, y)/(r, theta) <-> scene pixels,
+    // built from the plane, the warped display region, and the pixmap size.
+    [[nodiscard]] PlaneMapping planeMapping(const PlaneViewState& state) const;
+    // Enable/disable and re-check the 2-D Spherical menus for the current
+    // dataset and display mode (Supersampling applies only to the R-Z warp).
+    void updateSphericalControls();
+    // Horizontal and vertical axis names for a spherical layout ({"R","Z"},
+    // {"r","theta"}, or {"theta","r"}). Callers pass the displayed view
+    // state's mode so labels always describe the raster on screen.
+    [[nodiscard]] static std::array<QString, 2> sphericalAxisLabels(
+        SphericalDisplay mode);
     void probeMoved(PlaneViewState& state, int x, int displayY);
     void probeClicked(PlaneViewState& state, int x, int displayY);
     [[nodiscard]] QString probeReadout(
@@ -375,6 +413,13 @@ private:
     // correct. See issue #45.
     [[nodiscard]] std::optional<QRectF> preservedDataWindow(
         const PlaneViewState& state, const ScalarPlane& incoming) const;
+    // Spherical supersample change: the physical (R, Z) bounds are unchanged
+    // but the warped pixmap is resized. Returns the scene rect that keeps the
+    // currently-visible physical window on screen at the new resolution, or
+    // nullopt when a plain refit is correct (first frame, dataset/domain
+    // change, or no resolution change).
+    [[nodiscard]] std::optional<QRectF> sphericalReframe(
+        const PlaneViewState& state, const SliceDisplayResult& display) const;
     void showSlice(PlaneViewState& state, const SliceDisplayResult& display);
     void updateOverlay(PlaneViewState& state);
     void updateOverlays();
@@ -522,6 +567,14 @@ private:
     QPushButton* m_scaleButton = nullptr;
     QMenu* m_levelMenu = nullptr;
     QMenu* m_variableMenu = nullptr;
+    // "2-D Spherical" View section grouping the warped-display options; the
+    // whole submenu is enabled only while a 2-D spherical dataset is shown.
+    // Supersampling is its first child; more options will join it.
+    QMenu* m_sphericalMenu = nullptr;
+    QMenu* m_sphericalDisplayMenu = nullptr;
+    QActionGroup* m_sphericalDisplayGroup = nullptr;
+    QMenu* m_sphericalSupersampleMenu = nullptr;
+    QActionGroup* m_sphericalSupersampleGroup = nullptr;
     QActionGroup* m_scaleGroup = nullptr;
     QActionGroup* m_levelGroup = nullptr;
     QActionGroup* m_variableGroup = nullptr;
@@ -555,6 +608,10 @@ private:
     StopSource m_metadataStopSource;
     DisplayMode m_displayMode = DisplayMode::Raster;
     int m_contourCount = 15;
+    // 2-D spherical warp supersample factor (see SliceRequest::sphericalSupersample).
+    int m_sphericalSupersample = 4;
+    // 2-D spherical display layout (see SliceRequest::sphericalDisplay).
+    SphericalDisplay m_sphericalDisplay = SphericalDisplay::RZ;
     int m_contourColor = contourColorBlack;
     int m_vectorUField = -1;
     int m_vectorVField = -1;

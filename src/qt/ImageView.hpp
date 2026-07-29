@@ -28,6 +28,9 @@ namespace amrvis::qt {
 struct GridBoxOverlay {
     QRectF rectangle;
     QColor color;
+    // When non-empty (2-D spherical), the box is an annular sector: draw this
+    // scene-space path instead of the axis-aligned rectangle above.
+    QPainterPath path;
 };
 
 struct OverlaySegment {
@@ -88,8 +91,16 @@ public:
     // std::nullopt clears it, and setImage/setPlaceholder drop it too. It
     // layers at z 4, above the overlay segments.
     void setCellHighlight(const std::optional<QRectF>& sceneRect);
+    // Spherical companion of setCellHighlight: the picked cell is an annular
+    // sector, so mark it with a scene-space path. std::nullopt clears it; both
+    // setters share the single highlight item, so calling either replaces the
+    // other's.
+    void setCellHighlightPath(const std::optional<QPainterPath>& scenePath);
     void setPlaceholder(const QString& text);
     [[nodiscard]] bool hasImage() const noexcept;
+    // True while the view auto-fits the whole image to the window (i.e. the
+    // user has not zoomed or set a fixed scale). Cleared by zoom/pan/scale.
+    [[nodiscard]] bool isFitToWindow() const noexcept { return m_fitOnResize; }
     [[nodiscard]] const QImage& image() const noexcept;
     [[nodiscard]] std::size_t pointOverlayCount() const noexcept;
     [[nodiscard]] const std::vector<QColor>& pointOverlayColors() const noexcept;
@@ -110,6 +121,10 @@ public:
     // drag, arms a line-plot request. A plain middle click or drag is a no-op.
     // (Only Shift is honored; Control is not.)
     void setSliceMoveEnabled(bool enabled) noexcept;
+    // Disables the line-plot drag and its preview guide, used for 2-D spherical
+    // display where the straight-line profile tool is not yet meaningful.
+    // Probing and rubber-band zoom still work.
+    void setLineToolEnabled(bool enabled) noexcept;
     // Highlight (or clear) a coloured border indicating the active panel.
     void setActiveBorder(bool active);
     // Remove any temporary line-plot preview guide from the scene.
@@ -147,7 +162,9 @@ private:
     QGraphicsScene* m_scene = nullptr;
     QGraphicsPixmapItem* m_item = nullptr;
     QImage m_image;
-    std::vector<QGraphicsRectItem*> m_gridItems;
+    // Rect items (Cartesian) or path items (spherical sectors); QGraphicsItem*
+    // so both kinds share the list.
+    std::vector<QGraphicsItem*> m_gridItems;
     std::vector<QGraphicsLineItem*> m_overlayItems;
     std::vector<QGraphicsPathItem*> m_pathItems;
     std::vector<QGraphicsItem*> m_pointItems;
@@ -158,7 +175,7 @@ private:
     QColor m_crosshairHorizontalColor;
     QGraphicsLineItem* m_crosshairVerticalItem = nullptr;
     QGraphicsLineItem* m_crosshairHorizontalItem = nullptr;
-    QGraphicsRectItem* m_cellHighlightItem = nullptr;
+    QGraphicsItem* m_cellHighlightItem = nullptr;
     QString m_indicatorH;
     QString m_indicatorV;
     QPoint m_pressPosition;
@@ -170,6 +187,7 @@ private:
     bool m_panActive = false;
     QGraphicsLineItem* m_lineGuide = nullptr;
     bool m_sliceMoveEnabled = false;
+    bool m_lineToolEnabled = true;
     bool m_fitOnResize = true;
 };
 

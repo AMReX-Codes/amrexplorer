@@ -174,6 +174,19 @@ public:
     void paint(QPainter* painter, const QStyleOptionViewItem& option,
         const QModelIndex& index) const override
     {
+        if (isSeparator(index)) {
+            // The default combo delegate draws separators as a thin rule; this
+            // custom delegate replaces it, so render the rule ourselves rather
+            // than leaving a tall blank row.
+            painter->save();
+            painter->fillRect(option.rect, option.palette.color(QPalette::Base));
+            painter->setPen(option.palette.color(QPalette::Mid));
+            const int y = option.rect.center().y();
+            painter->drawLine(option.rect.left() + kSeparatorMargin, y,
+                option.rect.right() - kSeparatorMargin, y);
+            painter->restore();
+            return;
+        }
         QStyleOptionViewItem opt = option;
         initStyleOption(&opt, index);
         auto* const style = opt.widget != nullptr ? opt.widget->style() : nullptr;
@@ -209,6 +222,11 @@ public:
     QSize sizeHint(const QStyleOptionViewItem& option,
         const QModelIndex& index) const override
     {
+        if (isSeparator(index)) {
+            // A short row for the rule; the default sizeHint would give it a
+            // full text-row height and read as a large gap.
+            return QSize(0, kSeparatorHeight);
+        }
         QSize size = QStyledItemDelegate::sizeHint(option, index);
         // Reserve the marker column horizontally and add vertical padding so
         // the names have breathing room; keeps the closed combo unaffected.
@@ -218,8 +236,16 @@ public:
     }
 
 private:
+    static bool isSeparator(const QModelIndex& index)
+    {
+        return index.data(Qt::AccessibleDescriptionRole).toString()
+            == QLatin1String("separator");
+    }
+
     static constexpr int kMarkerColumn = 16;
     static constexpr int kRowVerticalPadding = 6;
+    static constexpr int kSeparatorHeight = 9;
+    static constexpr int kSeparatorMargin = 4;
     QPointer<QComboBox> m_combo;
 };
 
@@ -1397,8 +1423,9 @@ void MainWindow::syncPaletteSelector()
         }
         return label;
     };
-    // The active palette carries an "_r" suffix (the plasma_r convention) so the
-    // closed selector reflects the reversal instead of just showing the name.
+    // Reversal is a global modifier, so every palette name carries the "_r"
+    // suffix (the plasma_r convention) while it is on -- including the closed
+    // selector, which shows the active one.
     const QString suffix = m_reversePalette ? QStringLiteral("_r") : QString();
     for (int item = 0; item < m_paletteSelector->count(); ++item) {
         const auto entryData = m_paletteSelector->itemData(item);
@@ -1407,8 +1434,7 @@ void MainWindow::syncPaletteSelector()
         }
         const auto value = entryData.toInt();
         if (value >= 0) {
-            m_paletteSelector->setItemText(item, builtinLabel(value)
-                + (!m_paletteFromFile && value == m_builtinIndex ? suffix : QString()));
+            m_paletteSelector->setItemText(item, builtinLabel(value) + suffix);
         } else if (value == -3) {
             // The toggle item shows a check mark while reversal is on.
             m_paletteSelector->setItemText(item,

@@ -554,6 +554,85 @@ void testTinyDomain(const std::filesystem::path& source, const std::filesystem::
     require(ranToCompletion, "tiny-domain line query hung");
 }
 
+// Regression for the large-offset walk stall: the native walk advanced x by a
+// nudge relative to the cell size, but the rounding error of the boundary
+// position is relative to the coordinate magnitude (~|x| * 2^-53). Once
+// |x|/dx exceeds ~4.5e6 the nudge falls below one ULP of x, so the addition
+// rounds back, floor re-derives the same cell, and the walk spins forever
+// while re-pushing the same sample (a hang plus unbounded memory growth). The
+// pre-existing testOffsetGeometry/testTinyDomain only reach |x|/dx ~= 1e2.
+// Geometry: prob_lo 1e5, cell size 1e-5 (|x|/dx = 1e10) -- the old walk stalls
+// on the very first cell here.
+void testLargeOffset(const std::filesystem::path& source, const std::filesystem::path& work)
+{
+    const auto root = materializeFixture(source, work / "plotfile_3d_large_offset");
+    writeFab(root / "Level_0" / "Cell_D_00000", 0,
+        "((0,0,0) (3,3,3) (0,0,0))", 1, field3d());
+    {
+        std::ofstream header(root / "Header", std::ios::binary | std::ios::trunc);
+        require(static_cast<bool>(header), "could not open large-offset Header for writing");
+        // prob_hi = prob_lo + 4 * cellSize; the grid bounds round back to the
+        // index box ((0,0,0) (3,3,3) ...) via physicalBoundsToCellBox. The
+        // offset is 1e10 cell widths from the origin, well past the ~4.5e6
+        // ratio where the old cell-relative nudge sank below an ULP of x.
+        header <<
+            "HyperCLaw-V1.1\n"
+            "1\n"
+            "q\n"
+            "3\n"
+            "0.0\n"
+            "0\n"
+            "100000.0 100000.0 100000.0\n"
+            "100000.00004 100000.00004 100000.00004\n"
+            "\n"
+            "((0,0,0) (3,3,3) (0,0,0))\n"
+            "0\n"
+            "1e-5 1e-5 1e-5\n"
+            "0\n"
+            "0\n"
+            "0 1 0.0\n"
+            "0\n"
+            "100000.0 100000.00004\n"
+            "100000.0 100000.00004\n"
+            "100000.0 100000.00004\n"
+            "Level_0/Cell\n";
+    }
+
+    amrvis::PlotfileDataset dataset(root, amrvis::DatasetId{23}, 1024 * 1024);
+    amrvis::LineQuery lines(dataset);
+    const auto& metadata = dataset.metadata();
+    require(metadata.dimension == 3 && metadata.finestLevel == 0,
+        "large-offset fixture parsed unexpected dimension or level count");
+
+    amrvis::LineRequest request;
+    request.dataset.value = 23;
+    request.field.value = 0;
+    request.axis = 0;
+    const double center = 0.5 * (metadata.physicalDomain.lower[1]
+        + metadata.physicalDomain.upper[1]);
+    request.fixedCoordinates = {center, center, center};
+    request.maximumLevel = 0;
+    request.region = amrvis::RealBox{metadata.physicalDomain.lower,
+        metadata.physicalDomain.upper};
+
+    // Watchdog: the regressed walk loops forever and would hang ctest. Run it on
+    // a worker and fail loudly instead of hanging if it does not return.
+    auto ranToCompletion = runWithTimeout(
+        [&] {
+            const auto result = lines.execute(request);
+            require(result.line.positions.size() == 4,
+                "large-offset line query did not sample every cell");
+            for (std::size_t sample = 0; sample < 4; ++sample) {
+                require(result.line.valid[sample] == 1
+                        && result.line.sourceLevel[sample] == 0,
+                    "large-offset line query left a hole or reported a wrong level");
+            }
+        },
+        10);
+    require(ranToCompletion,
+        "large-offset line query hung (regression: nudge below an ULP of x)");
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -575,6 +654,7 @@ int main(int argc, char* argv[])
     test3d(plotfile3d, work);
     testOffsetGeometry(plotfile3d, work);
     testTinyDomain(plotfile3d, work);
+    testLargeOffset(plotfile3d, work);
 
     std::filesystem::remove_all(work);
     return 0;

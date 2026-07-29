@@ -28,6 +28,17 @@ std::uint32_t Palette::slotArgb(int index) const noexcept
         | static_cast<std::uint32_t>(color.blue);
 }
 
+Palette Palette::reversed() const
+{
+    Palette result = *this;
+    for (int index = paletteStart; index <= paletteEnd; ++index) {
+        const auto mirror = paletteStart + paletteEnd - index;
+        result.slots_[static_cast<std::size_t>(index)] =
+            slots_[static_cast<std::size_t>(mirror)];
+    }
+    return result;
+}
+
 std::uint32_t Palette::argb(double t) const noexcept
 {
     // Legacy clipping: below the range maps to the first data slot, above

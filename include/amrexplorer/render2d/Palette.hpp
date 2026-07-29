@@ -44,6 +44,13 @@ public:
     // The slot as an opaque 0xAARRGGBB pixel.
     [[nodiscard]] std::uint32_t slotArgb(int index) const noexcept;
 
+    // A copy with the data color range [paletteStart, paletteEnd] reversed,
+    // leaving the reserved slots (white/black/body) untouched. The result maps
+    // values to colors in the opposite order -- the "_r" variant of the
+    // palette (e.g. plasma_r) -- so argb, the color bar, slotArgb over the data
+    // range, and levelColor all follow the reversed ramp.
+    [[nodiscard]] Palette reversed() const;
+
     // Maps a normalized value onto an opaque 0xAARRGGBB pixel using the
     // legacy AmrPicture semantics: t <= 0 selects paletteStart, t >= 1
     // selects paletteEnd, and in between the slot is

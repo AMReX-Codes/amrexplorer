@@ -1,5 +1,6 @@
 #pragma once
 
+#include <amrexplorer/core/Geometry.hpp>
 #include <amrexplorer/core/Result.hpp>
 
 #include <vector>
@@ -31,5 +32,25 @@ struct VectorSegment {
 // per arrow, the shaft segment followed by its two head segments.
 [[nodiscard]] std::vector<VectorSegment> generateVectorGlyphs(
     const ScalarPlane& uComponent, const ScalarPlane& vComponent, int count);
+
+// Vector glyphs for the warped R-Z display of a 2-D spherical (r, theta)
+// plane. The component planes are the stored fields sampled on the logical
+// grid (physicalRegion gives its (r, theta) bounds): uComponent is the radial
+// velocity v_r and vComponent the physical meridional velocity v_theta (both
+// in length/time; AMReX spherical solvers store physical components, not the
+// angular rate). Each sampled cell center is anchored at its physical position
+// (R, Z) = (r sin theta, r cos theta) and its velocity is rotated into display
+// components
+//   V_R = v_r sin(theta) + v_theta cos(theta)
+//   V_Z = v_r cos(theta) - v_theta sin(theta).
+// Sampling stride, arrow-length normalization (against the maximum speed
+// hypot(v_r, v_theta)), and head construction follow generateVectorGlyphs;
+// the arrow scale derives from displayRegion's longest side so the on-screen
+// glyph size matches the logical layouts. Output segments are in display
+// physical (R, Z) coordinates with y increasing along +Z -- independent of the
+// warped raster resolution, so a supersample change does not invalidate them.
+[[nodiscard]] std::vector<VectorSegment> generateSphericalRZVectorGlyphs(
+    const ScalarPlane& uComponent, const ScalarPlane& vComponent, int count,
+    const RealBox& displayRegion);
 
 } // namespace amrvis

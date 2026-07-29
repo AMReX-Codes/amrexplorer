@@ -162,10 +162,10 @@ LineQueryResult LineQuery::execute(
     // points. Uncovered stretches (ExactLevel outside coverage, or out of
     // domain) become invalid samples so the polyline breaks there.
     auto x = physicalStart;
-    // Relative to the cell size (matching cellStepNudge below): an absolute
-    // 1e-9 epsilon truncates domains whose physical extent is near that scale
-    // (micro/nano-scale SI-unit geometries), dropping the tail samples or
-    // yielding an empty line with no error.
+    // Relative to the cell size: an absolute 1e-9 epsilon truncates domains
+    // whose physical extent is near that scale (micro/nano-scale SI-unit
+    // geometries), dropping the tail samples or yielding an empty line with no
+    // error.
     const double endEpsilon = 1e-9 * finestCellSize;
     while (x < physicalEnd - endEpsilon) {
         if ((result.line.positions.size() & 31U) == 0U
@@ -185,18 +185,23 @@ LineQueryResult LineQuery::execute(
                 result.line.valid.push_back(1);
                 result.line.sourceLevel.push_back(static_cast<std::int16_t>(cover.level));
             }
-            // Advance to the far boundary of this cell, then nudge a tiny
-            // fraction of a cell into the next one. The next iteration
-            // re-derives the cell index via floor((x - probLo) / cellSize);
-            // landing exactly on a boundary makes that floor rounding-sensitive,
-            // and for a non-zero physical origin with a non-dyadic cell size
-            // (prob_lo + cellSize) - prob_lo can round below cellSize, so the
-            // same cell is selected again and x never advances -> infinite loop.
-            // The nudge is far below a cell, so it never skips one (including a
-            // finer cell across a coarse/fine boundary in a composite).
-            constexpr double cellStepNudge = 1e-9;
-            x = center + 0.5 * level.cellSize[lineAxis]
-                + cellStepNudge * level.cellSize[lineAxis];
+            // Step just past the far boundary of this cell into the next one.
+            // The step is half of the *finest* cell: small enough to never skip
+            // a finer patch that begins at the boundary (it lands inside the
+            // first finest cell past the edge), yet an absolute length that
+            // clears one ULP of x for any addressable domain. A step scaled to
+            // *this* cell instead -- the old 1e-9 * cellSize nudge -- falls below
+            // an ULP of x once |x|/dx exceeds ~4.5e6: the addition rounds back,
+            // floor re-derives the same cell, and the walk spins forever
+            // (line-query-walk-stalls-at-large-offset).
+            x = center + 0.5 * level.cellSize[lineAxis] + 0.5 * finestCellSize;
+            // Hard progress guarantee for the pathological tail: if round-off
+            // still failed to advance the derived index, jump to the next cell
+            // center by index (exact in index space) so the loop cannot stall.
+            if (physicalToIndex(x, metadata, level, request.axis)
+                <= cover.point[lineAxis]) {
+                x = samplePosition(level, request.axis, cover.point[lineAxis] + 1);
+            }
         } else {
             Int3 point{};
             for (int axis = 0; axis < metadata.dimension; ++axis) {
@@ -216,11 +221,10 @@ LineQueryResult LineQuery::execute(
                 result.line.valid.push_back(0);
                 result.line.sourceLevel.push_back(-1);
             }
-            // Advance past the far boundary into the next cell; see the covered
-            // branch above for why a bare boundary advance can stall the walk.
-            constexpr double cellStepNudge = 1e-9;
-            x = center + 0.5 * finestCellSize
-                + cellStepNudge * finestCellSize;
+            // Advance to the next finest cell center by index. This branch
+            // always samples at the finest level, so index + 1 is exact and
+            // immune to the large-|x|/dx stall described in the covered branch.
+            x = samplePosition(samplingLevel, request.axis, point[lineAxis] + 1);
         }
     }
     return result;

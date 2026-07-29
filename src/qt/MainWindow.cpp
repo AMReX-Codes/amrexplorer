@@ -177,9 +177,17 @@ public:
         if (isSeparator(index)) {
             // The default combo delegate draws separators as a thin rule; this
             // custom delegate replaces it, so render the rule ourselves rather
-            // than leaving a tall blank row.
+            // than leaving a tall blank row. Paint the same item-view panel the
+            // other rows use so the background matches, then draw the line.
+            QStyleOptionViewItem sepOpt = option;
+            initStyleOption(&sepOpt, index);
+            auto* const sepStyle =
+                sepOpt.widget != nullptr ? sepOpt.widget->style() : nullptr;
+            if (sepStyle != nullptr) {
+                sepStyle->drawPrimitive(
+                    QStyle::PE_PanelItemViewItem, &sepOpt, painter, sepOpt.widget);
+            }
             painter->save();
-            painter->fillRect(option.rect, option.palette.color(QPalette::Base));
             painter->setPen(option.palette.color(QPalette::Mid));
             const int y = option.rect.center().y();
             painter->drawLine(option.rect.left() + kSeparatorMargin, y,

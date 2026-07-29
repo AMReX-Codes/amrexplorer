@@ -21,7 +21,7 @@ FAB and MultiFab data.
   contours, and vector glyphs
 - Three orthogonal slice views and an isometric overview for 3-D data
 - Plotfile-sequence and plane-sweep animation
-- Multiple palettes, logarithmic and user-defined ranges, and PNG/MP4 export
+- Multiple palettes, logarithmic and user-defined ranges, and PNG/FITS/MP4 export
 
 ## Documentation
 

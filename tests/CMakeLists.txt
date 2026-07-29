@@ -90,6 +90,10 @@ add_executable(test_plotfile_header unit/test_plotfile_header.cpp)
 target_link_libraries(test_plotfile_header PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME plotfile_header COMMAND test_plotfile_header)
 
+add_executable(test_fits_writer unit/test_fits_writer.cpp)
+target_link_libraries(test_fits_writer PRIVATE amrexplorer::io amrexplorer::warnings)
+add_test(NAME fits_writer COMMAND test_fits_writer)
+
 add_executable(test_plotfile_metadata integration/test_plotfile_metadata.cpp)
 target_link_libraries(test_plotfile_metadata PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(

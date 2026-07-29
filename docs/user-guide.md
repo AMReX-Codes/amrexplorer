@@ -236,10 +236,13 @@ visible-region settings when those settings are valid for the next plotfile.
 
 ## Exporting images and animations
 
-**File > Export Image...** saves the current view as PNG and asks whether to
-include the color scale. A 2-D export creates one image. A 3-D export creates
-separate `_xy`, `_xz`, and `_yz` images. The exported images include the
-current zoom and visible overlays.
+**File > Export Image...** saves the current view as either a PNG display image
+or a float64 FITS data image. PNG export asks whether to include the color
+scale. FITS export writes the displayed scalar samples with `BITPIX=-64`;
+invalid samples are written as NaN. A 2-D export creates one image. A 3-D
+export creates separate `_xy`, `_xz`, and `_yz` images. Both formats reflect
+the current zoomed data region; only PNG includes visible overlays and the
+optional color scale.
 
 For an open plotfile sequence, **File > Export Animation...** writes numbered
 PNG frames. If `ffmpeg` is installed and available on `PATH`, AMReXplorer also

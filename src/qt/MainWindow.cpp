@@ -965,10 +965,24 @@ std::array<int, 2> MainWindow::sliceOutputSize(
         return {1, 1};
     }
     const auto scale = state.view->devicePixelRatioF();
-    return {std::clamp(static_cast<int>(std::lround(viewport->width() * scale)),
-                1, maxSliceOutputDimension),
+    const std::array<int, 2> viewportPixels{
+        std::clamp(static_cast<int>(std::lround(viewport->width() * scale)),
+            1, maxSliceOutputDimension),
         std::clamp(static_cast<int>(std::lround(viewport->height() * scale)),
             1, maxSliceOutputDimension)};
+    // The viewport bounds the remote payload, but it must not define the
+    // raster's aspect: a rubber-band region can have a different X:Y ratio
+    // from the widget. Scale the native grid geometry uniformly to the
+    // largest raster that fits in the viewport, so Qt displays square data
+    // pixels and the server sends no more than a viewport-sized frame.
+    const auto native = nativeOutputSize(state);
+    const auto fit = std::min(
+        static_cast<double>(viewportPixels[0]) / native[0],
+        static_cast<double>(viewportPixels[1]) / native[1]);
+    return {std::clamp(static_cast<int>(std::lround(native[0] * fit)),
+                1, viewportPixels[0]),
+        std::clamp(static_cast<int>(std::lround(native[1] * fit)),
+            1, viewportPixels[1])};
 }
 
 bool MainWindow::displayIsSpherical() const
@@ -1753,6 +1767,22 @@ bool MainWindow::activeViewUsesNativeOutputSizeForTest() const
         && m_activeView->plane->height == expected[1];
 }
 
+bool MainWindow::activeViewHasNativePixelAspectForTest() const
+{
+    if (!m_dataset || m_activeView == nullptr
+        || m_activeView->plane->width <= 0
+        || m_activeView->plane->height <= 0) {
+        return false;
+    }
+    const auto expected = finestNativeOutputSize(m_dataset->metadata(),
+        m_activeView->plane->physicalRegion, m_activeView->normal);
+    const auto expectedAspect = static_cast<double>(expected[0]) / expected[1];
+    const auto actualAspect = static_cast<double>(m_activeView->plane->width)
+        / m_activeView->plane->height;
+    return std::abs(actualAspect - expectedAspect)
+        <= 0.02 * expectedAspect;
+}
+
 void MainWindow::rubberBandZoomActiveViewForTest()
 {
     if (m_activeView == nullptr || m_activeView->plane->width <= 0
@@ -1763,6 +1793,18 @@ void MainWindow::rubberBandZoomActiveViewForTest()
     const auto height = static_cast<double>(m_activeView->plane->height);
     rubberBandZoom(*m_activeView,
         QRectF(0.25 * width, 0.25 * height, 0.5 * width, 0.5 * height));
+}
+
+void MainWindow::rubberBandZoomRectangularActiveViewForTest()
+{
+    if (m_activeView == nullptr || m_activeView->plane->width <= 0
+        || m_activeView->plane->height <= 0) {
+        return;
+    }
+    const auto width = static_cast<double>(m_activeView->plane->width);
+    const auto height = static_cast<double>(m_activeView->plane->height);
+    rubberBandZoom(*m_activeView,
+        QRectF(0.25 * width, 0.375 * height, 0.5 * width, 0.25 * height));
 }
 
 bool MainWindow::allViewsRubberBandZoomedForTest()

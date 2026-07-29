@@ -149,10 +149,16 @@ public:
     // Test-only: true when the displayed plane uses the same native output
     // dimensions as main, independent of the viewport geometry.
     [[nodiscard]] bool activeViewUsesNativeOutputSizeForTest() const;
+    // Test-only: verify that a remote raster retains the native grid's X:Y
+    // aspect even when its resolution is scaled to the viewport.
+    [[nodiscard]] bool activeViewHasNativePixelAspectForTest() const;
 
     // Test-only: rubber-band the central half of the active 3-D panel through
     // the same handler used by ImageView::rubberBandSelected.
     void rubberBandZoomActiveViewForTest();
+    // Test-only: select a deliberately non-square region. This is the seam at
+    // which viewport-sized remote requests can otherwise distort data.
+    void rubberBandZoomRectangularActiveViewForTest();
 
     // Test-only: true when every current panel has a strict visible subregion.
     // Used to lock down synchronized 3-D rubber-band zoom.

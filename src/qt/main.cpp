@@ -501,6 +501,34 @@ int main(int argc, char* argv[])
                 window.openRemoteDataset(
                     "127.0.0.1", server->port(), path);
             });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--remote-rubber-aspect-smoke-test") {
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(window.activeViewIsZoomedForTest()
+                                && window.activeViewHasNativePixelAspectForTest()
+                            ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+                window.rubberBandZoomRectangularActiveViewForTest();
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                window.openRemoteDataset(
+                    "127.0.0.1", server->port(), path);
+            });
     } else if (argc >= 4 && std::string_view(argv[1]) == "--connect") {
         const auto endpoint = amrvis::qt::parseRemoteEndpoint(argv[2]);
         if (!endpoint) {

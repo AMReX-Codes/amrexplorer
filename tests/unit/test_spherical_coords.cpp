@@ -125,6 +125,40 @@ int main()
         require(transparent > 0, "warp has transparent exterior");
     }
 
+    // transposeImage: dimensions swap and every pixel lands at its transposed
+    // position; degenerate input passes through unchanged.
+    {
+        ImageBuffer src;
+        src.width = 3;
+        src.height = 2;
+        src.strideBytes = src.width * static_cast<int>(sizeof(std::uint32_t));
+        // Unique values so any mis-indexing is caught.
+        src.rgba = {10U, 11U, 12U, 20U, 21U, 22U};
+
+        const auto dst = transposeImage(src);
+        require(dst.width == 2 && dst.height == 3, "transpose swaps dimensions");
+        require(dst.strideBytes == dst.width * static_cast<int>(sizeof(std::uint32_t)),
+            "transpose stride matches new width");
+        require(dst.rgba.size() == src.rgba.size(), "transpose keeps pixel count");
+        for (int row = 0; row < src.height; ++row) {
+            for (int col = 0; col < src.width; ++col) {
+                const auto source = src.rgba[static_cast<std::size_t>(row)
+                    * static_cast<std::size_t>(src.width)
+                    + static_cast<std::size_t>(col)];
+                const auto transposed = dst.rgba[static_cast<std::size_t>(col)
+                    * static_cast<std::size_t>(dst.width)
+                    + static_cast<std::size_t>(row)];
+                require(source == transposed, "transpose moves pixel to (col, row)");
+            }
+        }
+
+        const ImageBuffer empty;
+        const auto degenerate = transposeImage(empty);
+        require(degenerate.width == 0 && degenerate.height == 0
+                && degenerate.rgba.empty(),
+            "transpose passes a degenerate raster through");
+    }
+
     std::cout << "spherical_coords OK\n";
     return 0;
 }

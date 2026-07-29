@@ -156,6 +156,17 @@ add_executable(test_slice_query integration/test_slice_query.cpp)
 target_link_libraries(test_slice_query PRIVATE amrexplorer::query amrexplorer::warnings)
 add_test(NAME slice_query COMMAND test_slice_query)
 
+add_executable(test_spherical_display integration/test_spherical_display.cpp)
+target_link_libraries(
+    test_spherical_display
+    PRIVATE
+        amrexplorer::pipeline
+        amrexplorer::render2d
+        amrexplorer::warnings
+        Threads::Threads
+)
+add_test(NAME spherical_display COMMAND test_spherical_display)
+
 add_executable(test_line_query integration/test_line_query.cpp)
 target_link_libraries(
     test_line_query
@@ -228,6 +239,15 @@ if(TARGET amrexplorer_qt)
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_user_guide_dialog>"
     )
+
+    add_executable(test_plane_mapping unit/test_plane_mapping.cpp)
+    target_include_directories(test_plane_mapping
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
+    )
+    target_link_libraries(test_plane_mapping
+        PRIVATE amrexplorer::core amrexplorer::warnings Qt6::Core
+    )
+    add_test(NAME plane_mapping COMMAND test_plane_mapping)
 
     add_executable(test_scientific_double_spin_box
         unit/test_scientific_double_spin_box.cpp

@@ -73,7 +73,6 @@ void IsoWidget::setGeometry(const DatasetMetadata& metadata)
     m_hasGeometry = metadata.dimension == 3;
     m_domain = datasetSampleBounds(metadata);
     m_levels.clear();
-    m_visibleGridBoxes.clear();
     if (m_hasGeometry) {
         m_levels.reserve(metadata.levels.size());
         for (const auto& level : metadata.levels) {
@@ -89,17 +88,6 @@ void IsoWidget::setGeometry(const DatasetMetadata& metadata)
         }
     }
     update();
-}
-
-void IsoWidget::setVisibleGridBoxes(const std::vector<SliceGridBox>& boxes)
-{
-    m_visibleGridBoxes = boxes;
-    update();
-}
-
-std::size_t IsoWidget::visibleGridBoxCount() const noexcept
-{
-    return m_visibleGridBoxes.size();
 }
 
 void IsoWidget::setSlicePositions(double x, double y, double z)
@@ -139,21 +127,10 @@ void IsoWidget::paintEvent(QPaintEvent* event)
     projection.scale = std::max(
         std::min(projection.centerX, projection.centerY) - margin, 1.0);
 
-    bool hasCatalogGridBoxes = false;
     for (const auto& level : m_levels) {
-        hasCatalogGridBoxes = hasCatalogGridBoxes || !level.boxes.empty();
         const QPen pen(levelOutlineColor(level.level), 1);
         for (const auto& box : level.boxes) {
             drawBox(painter, projection, physicalBox(level, box), pen);
-        }
-    }
-    // Remote catalogs intentionally omit whole-dataset block geometry. The
-    // boxes returned with the three current slices are view-local and supply
-    // the visible AMR wireframe context without expanding the wire contract.
-    if (!hasCatalogGridBoxes) {
-        for (const auto& box : m_visibleGridBoxes) {
-            drawBox(painter, projection, box.physicalRegion,
-                QPen(levelOutlineColor(box.level), 1));
         }
     }
     drawBox(painter, projection, m_domain, QPen(Qt::white, 1));

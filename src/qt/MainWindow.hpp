@@ -448,7 +448,6 @@ private:
     void updateOverlays();
     void updateGridBoxes(PlaneViewState& state);
     void updateGridBoxes();
-    void updateIsoGridBoxes();
     void updateCrosshairs(PlaneViewState& state);
     void updateCrosshairs();
     [[nodiscard]] QLineF planeSegmentToScene(const PlaneViewState& state,

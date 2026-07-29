@@ -71,7 +71,8 @@ If the tunnel or server disconnects, outstanding work fails and the
 Diagnostics panel reports the endpoint and status. Reconnect explicitly and
 reopen the path; requests are not replayed automatically. The protocol sends
 viewport-bounded slices and lines, visible Dataset-window pages, particle
-samples, and clipped grid geometry. It never sends full FABs or volume data.
+samples, and AMR box metadata for the 3-D wireframe. It never sends full FABs
+or volume field data.
 
 To diagnose a request that stops making progress, enable the remote trace in
 both processes:

@@ -97,8 +97,10 @@ int main(int argc, char* argv[])
         require(dataset->metadata().levels.size() == 2,
             "remote catalog has the wrong level count");
         for (const auto& level : dataset->metadata().levels) {
-            require(level.blocks.empty() && level.boxes.empty(),
-                "remote catalog exposed storage block geometry");
+            require(level.blocks.empty(),
+                "remote catalog exposed storage block metadata");
+            require(!level.boxes.empty(),
+                "remote catalog omitted AMR wireframe boxes");
         }
 
         const auto slice = std::get<amrvis::SliceQueryResult>(

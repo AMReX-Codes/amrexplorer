@@ -165,6 +165,7 @@ std::unique_ptr<fb::IntBoxT> toWire(const IntBox& value)
     auto wire = std::make_unique<fb::IntBoxT>();
     wire->lower = toWire(value.lower);
     wire->upper = toWire(value.upper);
+    wire->centering = toWire(value.centering);
     return wire;
 }
 
@@ -209,6 +210,9 @@ IntBox fromWire(const fb::IntBoxT* value)
     IntBox result;
     result.lower = fromWire(value->lower.get());
     result.upper = fromWire(value->upper.get());
+    if (value->centering) {
+        result.centering = fromWire(value->centering.get());
+    }
     return result;
 }
 
@@ -326,6 +330,10 @@ fb::DatasetOpenedT toWire(const OpenedDataset& value)
         converted->domain = toWire(level.domain);
         converted->cell_size = toWire(level.cellSize);
         converted->index_origin = toWire(level.indexOrigin);
+        converted->boxes.reserve(level.boxes.size());
+        for (const auto& box : level.boxes) {
+            converted->boxes.push_back(toWire(box));
+        }
         wire.levels.push_back(std::move(converted));
     }
     for (const auto& species : value.particleSpecies) {
@@ -382,6 +390,13 @@ OpenedDataset fromWire(const fb::DatasetOpenedT& value)
         converted.domain = fromWire(level->domain.get());
         converted.cellSize = fromWire(level->cell_size.get());
         converted.indexOrigin = fromWire(level->index_origin.get());
+        converted.boxes.reserve(level->boxes.size());
+        for (const auto& box : level->boxes) {
+            if (!box) {
+                throw std::invalid_argument("wire level box is missing");
+            }
+            converted.boxes.push_back(fromWire(box.get()));
+        }
         result.catalog.levels.push_back(std::move(converted));
     }
     for (const auto& species : value.particle_species) {

@@ -57,6 +57,7 @@ table Real3 {
 table IntBox {
   lower:Int3;
   upper:Int3;
+  centering:Int3;
 }
 
 table RealBox {
@@ -111,6 +112,7 @@ table LevelCatalog {
   domain:IntBox;
   cell_size:Real3;
   index_origin:Real3;
+  boxes:[IntBox];
 }
 
 table ParticleSpeciesCatalog {

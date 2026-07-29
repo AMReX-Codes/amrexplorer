@@ -1303,7 +1303,6 @@ void MainWindow::createMenus()
             }
         }
         updateGridBoxes();
-        updateIsoGridBoxes();
         if (visible && m_controlsReady) {
             scheduleSliceRequest(false);
         }
@@ -1791,7 +1790,14 @@ bool MainWindow::activeViewHasPhysicalAspectForTest(double expectedAspect) const
 
 std::size_t MainWindow::isoGridBoxCountForTest() const
 {
-    return m_isoWidget == nullptr ? 0 : m_isoWidget->visibleGridBoxCount();
+    if (!m_dataset || m_dataset->metadata().dimension != 3) {
+        return 0;
+    }
+    std::size_t count = 0;
+    for (const auto& level : m_dataset->metadata().levels) {
+        count += level.boxes.size();
+    }
+    return count;
 }
 
 void MainWindow::rubberBandZoomActiveViewForTest()
@@ -4456,10 +4462,7 @@ void MainWindow::requestInitialSlice(
     if (!initialSpec) {
         spec.palette = m_palette;
         spec.displayMode = m_displayMode;
-        spec.includeGridBoxes = m_boxesAction->isChecked()
-            || (metadata.dimension == 3 && preparedSession
-                && std::dynamic_pointer_cast<remote::RemoteDatasetSession>(
-                    preparedSession));
+        spec.includeGridBoxes = m_boxesAction->isChecked();
         spec.vectorUField =
             static_cast<std::uint32_t>(std::max(m_vectorUField, 0));
         spec.vectorVField =
@@ -4858,9 +4861,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
         level, metadata.finestLevel);
     request.composition = composition;
     request.maximumLevel = maximumLevel;
-    request.includeGridBoxes = m_boxesAction->isChecked()
-        || (metadata.dimension == 3
-            && std::dynamic_pointer_cast<remote::RemoteDatasetSession>(dataset));
+    request.includeGridBoxes = m_boxesAction->isChecked();
     request.sphericalSupersample = m_sphericalSupersample;
     request.sphericalDisplay = m_sphericalDisplay;
 
@@ -5143,31 +5144,6 @@ void MainWindow::updateGridBoxes()
     }
 }
 
-void MainWindow::updateIsoGridBoxes()
-{
-    if (m_isoWidget == nullptr || !m_dataset
-        || m_dataset->metadata().dimension != 3) {
-        return;
-    }
-
-    std::vector<SliceGridBox> boxes;
-    for (const auto* state : currentViews()) {
-        for (const auto& candidate : state->gridBoxes) {
-            const auto sameBox = [&candidate](const SliceGridBox& existing) {
-                return existing.level == candidate.level
-                    && existing.physicalRegion.lower.values
-                        == candidate.physicalRegion.lower.values
-                    && existing.physicalRegion.upper.values
-                        == candidate.physicalRegion.upper.values;
-            };
-            if (std::find_if(boxes.begin(), boxes.end(), sameBox) == boxes.end()) {
-                boxes.push_back(candidate);
-            }
-        }
-    }
-    m_isoWidget->setVisibleGridBoxes(boxes);
-}
-
 void MainWindow::updateCrosshairs(PlaneViewState& state)
 {
     std::optional<QLineF> vertical;
@@ -5439,7 +5415,6 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     if (display.slice.gridBoxesIncluded) {
         state.gridBoxes = display.slice.gridBoxes;
     }
-    updateIsoGridBoxes();
     // Cache key for the re-render-from-cache path (see requestSlice).
     state.cachedRequest = display.request;
     state.hasCachedRequest = true;

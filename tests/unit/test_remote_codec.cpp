@@ -48,6 +48,27 @@ int main()
             == hello.supportedCompressions,
         "hello compression capabilities did not round-trip");
 
+    OpenedDataset opened;
+    opened.id = DatasetId{9};
+    opened.catalog.dimension = 3;
+    opened.catalog.finestLevel = 0;
+    opened.catalog.physicalDomain = RealBox{
+        Real3{{0.0, 0.0, 0.0}}, Real3{{1.0, 1.0, 1.0}}};
+    LevelMetadata level;
+    level.level = 0;
+    level.domain = IntBox{
+        Int3{{0, 0, 0}}, Int3{{3, 3, 3}}, Int3{{0, 0, 0}}};
+    level.boxes.push_back(
+        IntBox{Int3{{0, 0, 0}}, Int3{{1, 3, 3}}, Int3{{1, 0, 0}}});
+    opened.catalog.levels.push_back(level);
+    bytes = codec::encode(8, codec::toWire(opened));
+    envelope = codec::decode(bytes);
+    const auto openedDecoded = codec::fromWire(
+        *envelope->payload.AsDatasetOpened());
+    require(openedDecoded.catalog.levels.size() == 1
+            && openedDecoded.catalog.levels.front().boxes == level.boxes,
+        "AMR wireframe boxes did not round-trip in the catalog");
+
     SliceQueryResult slice;
     slice.plane.width = 2;
     slice.plane.height = 1;
@@ -61,7 +82,7 @@ int main()
         {1, RealBox{Real3{{0.5, 0.0, 0.0}},
                 Real3{{1.0, 1.0, 0.0}}}});
     bytes = codec::encode(
-        8, codec::toWire(slice, CacheMetrics{}));
+        10, codec::toWire(slice, CacheMetrics{}));
     envelope = codec::decode(bytes);
     const auto decoded = codec::fromWire(
         *envelope->payload.AsSliceViewResponse());

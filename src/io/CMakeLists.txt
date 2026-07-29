@@ -1,4 +1,5 @@
 add_library(amrexplorer_io
+    FitsWriter.cpp
     plotfile/FabCatalog.cpp
     plotfile/PlotfileBlockReader.cpp
     plotfile/PlotfileDataset.cpp

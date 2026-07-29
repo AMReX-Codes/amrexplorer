@@ -23,7 +23,7 @@ FAB and MultiFab data.
 - 2-D spherical (r, θ) plotfiles rendered in physical R–Z, or as the logical
   r–θ / θ–r grid
 - Plotfile-sequence and plane-sweep animation
-- Multiple palettes, logarithmic and user-defined ranges, and PNG/MP4 export
+- Multiple palettes, logarithmic and user-defined ranges, and PNG/FITS/MP4 export
 
 ## Documentation
 

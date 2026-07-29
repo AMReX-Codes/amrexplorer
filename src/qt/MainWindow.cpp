@@ -18,6 +18,7 @@
 
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/io/FabCatalog.hpp>
+#include <amrexplorer/io/FitsWriter.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 #include <amrexplorer/core/CoordinateSystem.hpp>
@@ -3574,6 +3575,71 @@ void MainWindow::exportImage()
         return;
     }
 
+    QString selectedFilter;
+    auto filename = QFileDialog::getSaveFileName(
+        this, tr("Export scalar image"), QString(),
+        tr("PNG image (*.png);;FITS float64 image (*.fits *.fit)"),
+        &selectedFilter);
+    if (filename.isEmpty()) {
+        return;
+    }
+
+    const bool hasFitsExtension = filename.endsWith(
+            QStringLiteral(".fits"), Qt::CaseInsensitive)
+        || filename.endsWith(QStringLiteral(".fit"), Qt::CaseInsensitive);
+    const bool hasPngExtension = filename.endsWith(
+        QStringLiteral(".png"), Qt::CaseInsensitive);
+    // An explicitly typed recognized extension wins over the selected filter.
+    const bool fits = hasFitsExtension
+        || (!hasPngExtension
+            && selectedFilter.contains(QStringLiteral("*.fits")));
+    const QString extension = filename.endsWith(
+            QStringLiteral(".fit"), Qt::CaseInsensitive)
+        ? QStringLiteral(".fit")
+        : fits ? QStringLiteral(".fits") : QStringLiteral(".png");
+
+    // Normalize the chosen extension and get the base name used for the
+    // per-panel suffixes of a 3-D export.
+    QString base = filename;
+    if (base.endsWith(QStringLiteral(".fits"), Qt::CaseInsensitive)) {
+        base.chop(5);
+    } else if (base.endsWith(QStringLiteral(".fit"), Qt::CaseInsensitive)
+        || base.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive)) {
+        base.chop(4);
+    }
+    filename = base + extension;
+
+    if (fits) {
+        const auto writePlane = [this](const QString& outPath,
+                                    const ScalarPlane& plane) {
+            try {
+                writeFloat64Fits(
+                    std::filesystem::path(outPath.toStdString()), plane);
+                return true;
+            } catch (const std::exception& error) {
+                QMessageBox::critical(this, tr("Cannot export image"),
+                    tr("Could not write %1.\n\n%2")
+                        .arg(outPath, QString::fromUtf8(error.what())));
+                return false;
+            }
+        };
+        if (m_viewDimension == 3) {
+            constexpr std::array<const char*, 3> suffixes{"_yz", "_xz", "_xy"};
+            for (std::size_t normal = 0; normal < m_planeViews.size(); ++normal) {
+                const auto& state = m_planeViews[normal];
+                if (state.plane->width <= 0 || state.plane->height <= 0) {
+                    continue;
+                }
+                const auto outPath = base
+                    + QString::fromLatin1(suffixes[normal]) + extension;
+                writePlane(outPath, *state.plane);
+            }
+        } else if (m_activeView != nullptr) {
+            writePlane(filename, *m_activeView->plane);
+        }
+        return;
+    }
+
     QMessageBox choice(this);
     choice.setIcon(QMessageBox::Question);
     choice.setWindowTitle(tr("Export Image"));
@@ -3588,22 +3654,6 @@ void MainWindow::exportImage()
         return;
     }
     const bool includeColorBar = choice.clickedButton() == withBar;
-
-    auto filename = QFileDialog::getSaveFileName(
-        this, tr("Export scalar image"), QString(), tr("PNG image (*.png)"));
-    if (filename.isEmpty()) {
-        return;
-    }
-
-    // Strip a trailing ".png" (case-insensitive) to get the base name; the
-    // per-panel suffix is inserted before the extension is re-appended.
-    QString base = filename;
-    if (base.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive)) {
-        base.chop(4);
-    } else {
-        // The dialog does not auto-append on Linux; ensure we don't double it.
-        filename += QStringLiteral(".png");
-    }
 
     if (m_viewDimension == 3) {
         // Export all three panels: foo_xy.png, foo_xz.png, foo_yz.png.

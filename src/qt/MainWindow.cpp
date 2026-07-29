@@ -865,6 +865,17 @@ void MainWindow::wireView(PlaneViewState& state)
         });
     connect(view, &ImageView::fitRequested, this,
         [this, &state] { resetViewZoom(state); });
+    connect(view, &ImageView::viewportResized, this,
+        [this, &state](const QSize&) {
+            if (!m_dataset || !std::dynamic_pointer_cast<
+                    remote::RemoteDatasetSession>(m_dataset)) {
+                return;
+            }
+            if (!state.hasCachedRequest
+                || state.cachedRequest.outputSize != sliceOutputSize(state)) {
+                scheduleSliceRequest(state);
+            }
+        });
 }
 
 std::vector<MainWindow::PlaneViewState*> MainWindow::currentViews()
@@ -941,6 +952,23 @@ std::array<int, 2> MainWindow::nativeOutputSize(
         datasetSampleBounds(*m_openMetadata));
     return finestNativeOutputSize(
         *m_openMetadata, target, state.normal);
+}
+
+std::array<int, 2> MainWindow::sliceOutputSize(
+    const PlaneViewState& state) const
+{
+    if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)) {
+        return nativeOutputSize(state);
+    }
+    const auto* viewport = state.view == nullptr ? nullptr : state.view->viewport();
+    if (viewport == nullptr || viewport->width() < 1 || viewport->height() < 1) {
+        return {1, 1};
+    }
+    const auto scale = state.view->devicePixelRatioF();
+    return {std::clamp(static_cast<int>(std::lround(viewport->width() * scale)),
+                1, maxSliceOutputDimension),
+        std::clamp(static_cast<int>(std::lround(viewport->height() * scale)),
+            1, maxSliceOutputDimension)};
 }
 
 bool MainWindow::displayIsSpherical() const
@@ -4386,7 +4414,7 @@ void MainWindow::requestInitialSlice(
         spec.outputSizes.clear();
         spec.outputSizes.reserve(views.size());
         for (const auto* state : views) {
-            spec.outputSizes.push_back(nativeOutputSize(*state));
+            spec.outputSizes.push_back(sliceOutputSize(*state));
         }
     }
     const auto restoredSpec = initialSpec;
@@ -4764,7 +4792,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     }
     request.visibleRegion = state.visibleRegion.value_or(
         datasetSampleBounds(metadata));
-    request.outputSize = nativeOutputSize(state);
+    request.outputSize = sliceOutputSize(state);
     const auto level = m_levelSelector->currentData().toInt();
     const auto [composition, maximumLevel] = decodeLevelData(
         level, metadata.finestLevel);
@@ -5954,7 +5982,7 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     spec.outputSizes.reserve(views.size());
     for (const auto* state : views) {
         spec.visibleRegions.push_back(state->visibleRegion);
-        spec.outputSizes.push_back(nativeOutputSize(*state));
+        spec.outputSizes.push_back(sliceOutputSize(*state));
     }
     return spec;
 }

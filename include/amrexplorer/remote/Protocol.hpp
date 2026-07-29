@@ -8,6 +8,7 @@
 #include <amrexplorer/data/ViewData.hpp>
 #include <amrexplorer/io/ParticleReader.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
+#include <amrexplorer/remote/Frame.hpp>
 
 #include <cstdint>
 #include <stdexcept>
@@ -70,6 +71,7 @@ struct HelloRequestData {
     std::uint16_t minimumMinor = 0;
     std::uint16_t maximumMinor = 0;
     std::uint32_t maximumFrameBytes = 0;
+    std::vector<FrameCompression> supportedCompressions;
 };
 
 struct HelloResponseData {
@@ -80,6 +82,7 @@ struct HelloResponseData {
     std::uint32_t maximumDatasets = 0;
     std::uint32_t maximumOutstandingRequests = 0;
     std::uint32_t workerCount = 0;
+    FrameCompression compression = FrameCompression::None;
 };
 
 struct OpenDatasetData {

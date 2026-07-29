@@ -1,5 +1,7 @@
 #include <amrexplorer/remote/Frame.hpp>
 
+#include <zstd.h>
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -320,23 +322,73 @@ Socket connectTo(const std::string& host, std::uint16_t port)
     throwSocketError("connect", lastError);
 }
 
+namespace {
+
+[[nodiscard]] std::size_t wireCapacity(
+    std::uint32_t maximumBytes, FrameCompression compression)
+{
+    return compression == FrameCompression::Zstd
+        ? ZSTD_compressBound(maximumBytes) : maximumBytes;
+}
+
+[[nodiscard]] std::vector<std::uint8_t> compressPayload(
+    std::span<const std::uint8_t> payload)
+{
+    std::vector<std::uint8_t> result(ZSTD_compressBound(payload.size()));
+    const auto size = ZSTD_compress(result.data(), result.size(), payload.data(),
+        payload.size(), 3);
+    if (ZSTD_isError(size)) {
+        throw std::runtime_error(std::string("zstd compression failed: ")
+            + ZSTD_getErrorName(size));
+    }
+    result.resize(size);
+    return result;
+}
+
+[[nodiscard]] std::vector<std::uint8_t> decompressPayload(
+    std::span<const std::uint8_t> payload, std::uint32_t maximumBytes)
+{
+    const auto size = ZSTD_getFrameContentSize(payload.data(), payload.size());
+    if (size == ZSTD_CONTENTSIZE_ERROR || size == ZSTD_CONTENTSIZE_UNKNOWN
+        || size == 0 || size > maximumBytes) {
+        throw std::runtime_error("compressed wire frame has an invalid uncompressed size");
+    }
+    std::vector<std::uint8_t> result(size);
+    const auto decoded = ZSTD_decompress(result.data(), result.size(),
+        payload.data(), payload.size());
+    if (ZSTD_isError(decoded) || decoded != result.size()) {
+        throw std::runtime_error(std::string("zstd decompression failed: ")
+            + ZSTD_getErrorName(decoded));
+    }
+    return result;
+}
+
+} // namespace
+
 void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
-    std::uint32_t maximumBytes)
+    std::uint32_t maximumBytes, FrameCompression compression)
 {
     if (payload.empty() || payload.size() > maximumBytes
         || payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::runtime_error("wire frame size is outside the allowed range");
     }
-    const auto networkSize = htonl(static_cast<std::uint32_t>(payload.size()));
+    const auto wire = compression == FrameCompression::Zstd
+        ? compressPayload(payload) : std::vector<std::uint8_t>(
+            payload.begin(), payload.end());
+    if (wire.size() > wireCapacity(maximumBytes, compression)
+        || wire.size() > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("compressed wire frame size is outside the allowed range");
+    }
+    const auto networkSize = htonl(static_cast<std::uint32_t>(wire.size()));
     const auto* sizeBytes
         = reinterpret_cast<const std::uint8_t*>(&networkSize);
     writeExact(native(socket.descriptor()),
         std::span<const std::uint8_t>(sizeBytes, sizeof(networkSize)));
-    writeExact(native(socket.descriptor()), payload);
+    writeExact(native(socket.descriptor()), wire);
 }
 
 std::optional<std::vector<std::uint8_t>> readFrame(
-    const Socket& socket, std::uint32_t maximumBytes)
+    const Socket& socket, std::uint32_t maximumBytes, FrameCompression compression)
 {
     std::array<std::uint8_t, sizeof(std::uint32_t)> sizeBytes{};
     if (!readExact(native(socket.descriptor()), sizeBytes, true)) {
@@ -345,13 +397,14 @@ std::optional<std::vector<std::uint8_t>> readFrame(
     std::uint32_t networkSize = 0;
     std::memcpy(&networkSize, sizeBytes.data(), sizeof(networkSize));
     const auto size = ntohl(networkSize);
-    if (size == 0 || size > maximumBytes) {
+    if (size == 0 || size > wireCapacity(maximumBytes, compression)) {
         throw std::runtime_error("wire frame size is outside the allowed range");
     }
     std::vector<std::uint8_t> payload(size);
     static_cast<void>(
         readExact(native(socket.descriptor()), payload, false));
-    return payload;
+    return compression == FrameCompression::Zstd
+        ? decompressPayload(payload, maximumBytes) : payload;
 }
 
 } // namespace amrvis::remote

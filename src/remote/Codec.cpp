@@ -242,13 +242,28 @@ fb::HelloRequestT toWire(const HelloRequestData& value)
     wire.minimum_minor = value.minimumMinor;
     wire.maximum_minor = value.maximumMinor;
     wire.maximum_frame_bytes = value.maximumFrameBytes;
+    wire.supported_compressions.reserve(value.supportedCompressions.size());
+    for (const auto compression : value.supportedCompressions) {
+        wire.supported_compressions.push_back(
+            static_cast<fb::FrameCompression>(compression));
+    }
     return wire;
 }
 
 HelloRequestData fromWire(const fb::HelloRequestT& value)
 {
-    return {value.client_name, value.software_version, value.minimum_minor,
-        value.maximum_minor, value.maximum_frame_bytes};
+    HelloRequestData result;
+    result.clientName = value.client_name;
+    result.softwareVersion = value.software_version;
+    result.minimumMinor = value.minimum_minor;
+    result.maximumMinor = value.maximum_minor;
+    result.maximumFrameBytes = value.maximum_frame_bytes;
+    result.supportedCompressions.reserve(value.supported_compressions.size());
+    for (const auto compression : value.supported_compressions) {
+        result.supportedCompressions.push_back(
+            static_cast<FrameCompression>(compression));
+    }
+    return result;
 }
 
 fb::HelloResponseT toWire(const HelloResponseData& value)
@@ -261,6 +276,7 @@ fb::HelloResponseT toWire(const HelloResponseData& value)
     wire.maximum_datasets = value.maximumDatasets;
     wire.maximum_outstanding_requests = value.maximumOutstandingRequests;
     wire.worker_count = value.workerCount;
+    wire.compression = static_cast<fb::FrameCompression>(value.compression);
     return wire;
 }
 
@@ -268,7 +284,8 @@ HelloResponseData fromWire(const fb::HelloResponseT& value)
 {
     return {value.server_name, value.software_version, value.selected_minor,
         value.maximum_frame_bytes, value.maximum_datasets,
-        value.maximum_outstanding_requests, value.worker_count};
+        value.maximum_outstanding_requests, value.worker_count,
+        static_cast<FrameCompression>(value.compression)};
 }
 
 fb::OpenDatasetRequestT toWire(const OpenDatasetData& value)

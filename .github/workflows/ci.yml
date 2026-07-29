@@ -41,7 +41,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes cmake desktop-file-utils ninja-build qt6-base-dev ${{ matrix.package }}
+          sudo apt-get install --yes cmake desktop-file-utils libzstd-dev ninja-build qt6-base-dev ${{ matrix.package }}
 
       - name: Configure
         run: cmake --preset default -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
@@ -68,7 +68,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install dependencies
-        run: brew install cmake ninja qt
+        run: brew install cmake ninja qt zstd
 
       - name: Configure
         run: cmake --preset default -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
@@ -99,8 +99,11 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
+      - name: Install zstd
+        run: vcpkg install zstd:x64-windows
+
       - name: Configure
-        run: cmake --preset windows -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
+        run: cmake --preset windows -DAMREXPLORER_WARNINGS_AS_ERRORS=ON -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
         run: cmake --build --preset windows --parallel 4
@@ -141,7 +144,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes cmake g++ ninja-build qt6-base-dev
+          sudo apt-get install --yes cmake g++ libzstd-dev ninja-build qt6-base-dev
 
       - name: Configure
         run: cmake --preset qt-sanitizers -DAMREXPLORER_WARNINGS_AS_ERRORS=ON

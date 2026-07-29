@@ -702,6 +702,7 @@ void ImageView::resizeEvent(QResizeEvent* event)
     if (m_fitOnResize) {
         fitImage();
     }
+    emit viewportResized(viewport()->size());
 }
 
 void ImageView::wheelEvent(QWheelEvent* event)

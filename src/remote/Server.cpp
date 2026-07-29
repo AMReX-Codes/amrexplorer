@@ -162,7 +162,8 @@ public:
         try {
             while (!m_stopping.load()) {
                 const auto frame
-                    = readFrame(m_socket, m_maximumFrameBytes.load());
+                    = readFrame(m_socket, m_maximumFrameBytes.load(),
+                        m_compression.load());
                 if (!frame) {
                     break;
                 }
@@ -292,7 +293,12 @@ private:
             = std::min<std::uint16_t>(protocolMinor, request->maximum_minor);
         m_maximumFrameBytes = std::min(
             m_options.maximumFrameBytes, request->maximum_frame_bytes);
-        m_handshakeComplete = true;
+        const auto compression = m_selectedMinor >= 1
+                && std::find(request->supported_compressions.begin(),
+                    request->supported_compressions.end(),
+                    codec::fb::FrameCompression::Zstd)
+                    != request->supported_compressions.end()
+            ? FrameCompression::Zstd : FrameCompression::None;
         HelloResponseData response;
         response.serverName = "AMReXplorer server";
         response.softwareVersion = m_options.softwareVersion;
@@ -302,7 +308,12 @@ private:
         response.maximumOutstandingRequests
             = m_options.maximumOutstandingRequests;
         response.workerCount = m_options.workerCount;
+        response.compression = compression;
         send(envelope.request_id, codec::toWire(response));
+        // The hello exchange is always uncompressed. Both peers switch only
+        // after its response has been sent/received.
+        m_compression = compression;
+        m_handshakeComplete = true;
     }
 
     void handleCancel(const codec::NativeEnvelope& envelope)
@@ -706,7 +717,8 @@ private:
                 debug::trace("server", "request=", requestId,
                     " response write begin");
                 writeFrame(
-                    m_socket, bytes, m_maximumFrameBytes.load());
+                    m_socket, bytes, m_maximumFrameBytes.load(),
+                    m_compression.load());
                 debug::trace("server", "request=", requestId,
                     " response write end");
             }
@@ -730,6 +742,7 @@ private:
     ThreadPool& m_workers;
     ServerOptions m_options;
     std::atomic<std::uint32_t> m_maximumFrameBytes;
+    std::atomic<FrameCompression> m_compression{FrameCompression::None};
     std::atomic_bool m_stopping{false};
     std::uint16_t m_selectedMinor = 0;
     bool m_handshakeComplete = false;

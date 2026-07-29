@@ -41,6 +41,11 @@ enum ErrorCode : ushort {
   Disconnected
 }
 
+enum FrameCompression : ubyte {
+  None,
+  Zstd
+}
+
 table Int3 {
   values:[int];
 }
@@ -75,6 +80,7 @@ table HelloRequest {
   minimum_minor:ushort;
   maximum_minor:ushort;
   maximum_frame_bytes:uint;
+  supported_compressions:[FrameCompression];
 }
 
 table HelloResponse {
@@ -85,6 +91,7 @@ table HelloResponse {
   maximum_datasets:uint;
   maximum_outstanding_requests:uint;
   worker_count:uint;
+  compression:FrameCompression = None;
 }
 
 table OpenDatasetRequest {

@@ -44,6 +44,7 @@ public:
             hello.minimumMinor = 0;
             hello.maximumMinor = protocolMinor;
             hello.maximumFrameBytes = options.maximumFrameBytes;
+            hello.supportedCompressions = {FrameCompression::Zstd};
             const auto response = transact(codec::toWire(hello),
                 PayloadKind::HelloResponse, {});
             const auto* payload = response->payload.AsHelloResponse();
@@ -60,6 +61,17 @@ public:
             m_maximumFrameBytes = std::min(
                 m_maximumFrameBytes.load(),
                 m_serverInfo.maximumFrameBytes);
+            if (m_serverInfo.selectedMinor < 1
+                && m_serverInfo.compression != FrameCompression::None) {
+                throw std::runtime_error(
+                    "server enabled compression for an incompatible protocol version");
+            }
+            m_compression = m_serverInfo.compression;
+            {
+                std::scoped_lock lock(m_handshakeMutex);
+                m_compressionReady = true;
+            }
+            m_handshakeReady.notify_all();
         } catch (...) {
             close();
             throw;
@@ -323,6 +335,11 @@ public:
             }
             m_connected = false;
         }
+        {
+            std::scoped_lock lock(m_handshakeMutex);
+            m_compressionReady = true;
+        }
+        m_handshakeReady.notify_all();
         m_socket.shutdown();
         if (m_receiver.joinable()
             && m_receiver.get_id() != std::this_thread::get_id()) {
@@ -358,7 +375,8 @@ private:
         try {
             for (;;) {
                 const auto frame
-                    = readFrame(m_socket, m_maximumFrameBytes.load());
+                    = readFrame(m_socket, m_maximumFrameBytes.load(),
+                        m_compression.load());
                 if (!frame) {
                     throw std::runtime_error("remote server closed connection");
                 }
@@ -390,6 +408,11 @@ private:
                 pending->promise.set_value(std::move(envelope));
                 debug::trace("client", "response request=", info.requestId,
                     " delivered to waiter");
+                if (info.payload == PayloadKind::HelloResponse) {
+                    std::unique_lock lock(m_handshakeMutex);
+                    m_handshakeReady.wait(lock,
+                        [this] { return m_compressionReady; });
+                }
             }
         } catch (const std::exception& error) {
             debug::trace("client", "receiver stopped error=", error.what());
@@ -413,7 +436,8 @@ private:
             ensureConnected();
         }
         debug::trace("client", "frame write begin bytes=", bytes.size());
-        writeFrame(m_socket, bytes, m_maximumFrameBytes.load());
+        writeFrame(m_socket, bytes, m_maximumFrameBytes.load(),
+            m_compression.load());
         debug::trace("client", "frame write end bytes=", bytes.size());
     }
 
@@ -484,6 +508,10 @@ private:
 
     Socket m_socket;
     std::atomic<std::uint32_t> m_maximumFrameBytes;
+    std::atomic<FrameCompression> m_compression{FrameCompression::None};
+    std::mutex m_handshakeMutex;
+    std::condition_variable m_handshakeReady;
+    bool m_compressionReady = false;
     std::atomic<std::uint64_t> m_nextRequestId{1};
     mutable std::mutex m_stateMutex;
     bool m_connected = true;

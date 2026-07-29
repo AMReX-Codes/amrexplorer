@@ -372,6 +372,8 @@ private:
     [[nodiscard]] std::array<int, 2> displayAxes(int normal) const;
     [[nodiscard]] std::array<int, 2> nativeOutputSize(
         const PlaneViewState& state) const;
+    [[nodiscard]] std::array<int, 2> sliceOutputSize(
+        const PlaneViewState& state) const;
     // True when the active dataset is displayed as a warped 2-D spherical
     // (r, theta) plane. Gates the coordinate-warp overlay, probe, and label
     // paths; all other datasets keep their Cartesian behavior.

@@ -34,7 +34,8 @@ int main()
     using namespace amrvis;
     using namespace amrvis::remote;
 
-    HelloRequestData hello{"codec test", "1", 0, 0, 4096};
+    HelloRequestData hello{"codec test", "1", 0, protocolMinor, 4096,
+        {FrameCompression::Zstd}};
     auto bytes = codec::encode(7, codec::toWire(hello));
     auto envelope = codec::decode(bytes);
     require(codec::inspect(*envelope).requestId == 7,
@@ -42,6 +43,10 @@ int main()
     require(codec::fromWire(*envelope->payload.AsHelloRequest()).clientName
             == hello.clientName,
         "hello payload did not round-trip");
+    require(codec::fromWire(*envelope->payload.AsHelloRequest())
+                .supportedCompressions
+            == hello.supportedCompressions,
+        "hello compression capabilities did not round-trip");
 
     SliceQueryResult slice;
     slice.plane.width = 2;

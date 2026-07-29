@@ -9,9 +9,14 @@
 namespace amrvis::remote {
 
 inline constexpr std::uint16_t protocolMajor = 1;
-inline constexpr std::uint16_t protocolMinor = 0;
+inline constexpr std::uint16_t protocolMinor = 1;
 inline constexpr std::uint32_t defaultMaximumFrameBytes
     = 128U * 1024U * 1024U;
+
+enum class FrameCompression : std::uint8_t {
+    None,
+    Zstd
+};
 
 class Socket {
 public:
@@ -46,9 +51,11 @@ struct Listener {
 [[nodiscard]] Socket connectTo(const std::string& host, std::uint16_t port);
 
 void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
-    std::uint32_t maximumBytes = defaultMaximumFrameBytes);
+    std::uint32_t maximumBytes = defaultMaximumFrameBytes,
+    FrameCompression compression = FrameCompression::None);
 [[nodiscard]] std::optional<std::vector<std::uint8_t>> readFrame(
     const Socket& socket,
-    std::uint32_t maximumBytes = defaultMaximumFrameBytes);
+    std::uint32_t maximumBytes = defaultMaximumFrameBytes,
+    FrameCompression compression = FrameCompression::None);
 
 } // namespace amrvis::remote

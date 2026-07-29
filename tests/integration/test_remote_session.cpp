@@ -86,6 +86,9 @@ int main(int argc, char* argv[])
             "127.0.0.1", server.port());
         require(connection->serverInfo().workerCount == 3,
             "handshake did not report worker count");
+        require(connection->serverInfo().compression
+                == amrvis::remote::FrameCompression::Zstd,
+            "handshake did not negotiate zstd compression");
         auto dataset = amrvis::remote::RemoteDatasetSession::open(
             connection, std::filesystem::path(argv[1]).string(),
             16ULL * 1024ULL * 1024ULL);

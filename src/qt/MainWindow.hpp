@@ -363,6 +363,10 @@ private:
     // (r, theta) plane. Gates the coordinate-warp overlay, probe, and label
     // paths; all other datasets keep their Cartesian behavior.
     [[nodiscard]] bool displayIsSpherical() const;
+    // True only for the warped R-Z spherical view. Overlays that assume a
+    // linear plane-pixel-to-scene mapping (line plots, particle points, vector
+    // glyphs) work in the logical r-theta / theta-r layouts but not here.
+    [[nodiscard]] bool displayIsSphericalWarp() const;
     // Coordinate mapper for a view: logical (x, y)/(r, theta) <-> scene pixels,
     // built from the plane, the warped display region, and the pixmap size.
     [[nodiscard]] PlaneMapping planeMapping(const PlaneViewState& state) const;

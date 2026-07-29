@@ -36,8 +36,6 @@ const std::array<QColor, 8>& curveColors()
     return colors;
 }
 
-constexpr std::array<const char*, 3> axisLetters{"x", "y", "z"};
-
 std::size_t sampleCount(const LinePlotCurve& curve)
 {
     return std::min({curve.line.positions.size(), curve.line.values.size(),
@@ -248,9 +246,9 @@ QString LinePlotWidget::hoverTextAt(const QPointF& position) const
         ? QString::number(static_cast<long long>(std::llround(coordinate)))
         : formatNumber(coordinate, m_numberFormat);
     const auto axis = nearestCurve->lineAxis >= 0
-            && nearestCurve->lineAxis < static_cast<int>(axisLetters.size())
-        ? QLatin1String(
-              axisLetters[static_cast<std::size_t>(nearestCurve->lineAxis)])
+            && nearestCurve->lineAxis
+                < static_cast<int>(nearestCurve->axisNames.size())
+        ? nearestCurve->axisNames[static_cast<std::size_t>(nearestCurve->lineAxis)]
         : QStringLiteral("x");
     return tr("%1\n%2 = %3\nvalue = %4")
         .arg(QString::fromStdString(nearestCurve->fieldName))
@@ -558,8 +556,7 @@ QString LinePlotWindow::curveDescription(const LinePlotCurve& curve) const
             }
             result += (first ? QStringLiteral(" ") : QChar('\n') + indent)
                 + tr("%1=%2")
-                    .arg(QLatin1String(
-                        axisLetters[static_cast<std::size_t>(axis)]))
+                    .arg(curve.axisNames[static_cast<std::size_t>(axis)])
                     .arg(curve.fixedCoordinates[static_cast<std::size_t>(axis)],
                         0, 'g', 6);
             first = false;
@@ -567,7 +564,7 @@ QString LinePlotWindow::curveDescription(const LinePlotCurve& curve) const
     } else {
         const auto fixed = static_cast<std::size_t>(curve.primaryFixedAxis);
         result += tr(" %1=%2")
-            .arg(QLatin1String(axisLetters[fixed]))
+            .arg(curve.axisNames[fixed])
             .arg(curve.fixedCoordinates[fixed], 0, 'g', 6);
     }
     return result;

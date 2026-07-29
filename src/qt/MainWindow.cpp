@@ -932,6 +932,11 @@ bool MainWindow::displayIsSpherical() const
     return m_dataset && isSpherical2D(m_dataset->metadata());
 }
 
+bool MainWindow::displayIsSphericalWarp() const
+{
+    return displayIsSpherical() && m_sphericalDisplay == SphericalDisplay::RZ;
+}
+
 void MainWindow::updateSphericalControls()
 {
     const bool spherical = displayIsSpherical();
@@ -1887,15 +1892,22 @@ void MainWindow::updateOverlay(PlaneViewState& state)
     }
 
     if (m_displayMode == DisplayMode::VelocityVectors) {
-        // Vector glyphs are not yet warped for spherical display; suppress them
-        // rather than drawing arrows against the unwarped (r, theta) grid.
-        if (!displayIsSpherical()) {
+        // The warped R-Z view would bend straight arrows, so suppress glyphs
+        // there. The logical r-theta / theta-r layouts map each glyph endpoint
+        // through the plane mapping (identity for r-theta, transposed for
+        // theta-r).
+        if (!displayIsSphericalWarp()) {
             overlays.reserve(state.vectorSegments.size());
             const auto vectorColor = overlayColor();
+            const bool spherical = displayIsSpherical();
+            const auto mapping = planeMapping(state);
             for (const auto& segment : state.vectorSegments) {
-                overlays.push_back({planeSegmentToScene(state,
-                    segment.x0, segment.y0, segment.x1, segment.y1),
-                    vectorColor, 1.0F});
+                const auto line = spherical
+                    ? QLineF(mapping.sceneFromPlanePixel(segment.x0, segment.y0),
+                        mapping.sceneFromPlanePixel(segment.x1, segment.y1))
+                    : planeSegmentToScene(state,
+                        segment.x0, segment.y0, segment.x1, segment.y1);
+                overlays.push_back({line, vectorColor, 1.0F});
             }
         }
         state.view->setOverlaySegments(overlays);
@@ -2270,12 +2282,14 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
     std::vector<PointOverlay> overlays;
     if (!m_dataset || !state.view->hasImage()
         || state.plane->width <= 0 || state.plane->height <= 0
-        // Particle projection assumes the unwarped plane; suppress the overlay
-        // in spherical display until it is warped (deferred).
-        || displayIsSpherical()) {
+        // The warped R-Z view has no linear plane-pixel mapping for points.
+        || displayIsSphericalWarp()) {
         state.view->setPointOverlays(overlays);
         return;
     }
+    const bool spherical = displayIsSpherical();
+    const auto mapping = planeMapping(state);
+    const auto planeHeight = static_cast<double>(state.plane->height);
     overlays.reserve(m_particleSamples.size());
     for (const auto& sample : m_particleSamples) {
         PointOverlay overlay;
@@ -2288,7 +2302,16 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
             m_dataset->metadata().dimension, state.normal);
         overlay.points.reserve(projected.size());
         for (const auto& point : projected) {
-            overlay.points.emplace_back(point.x, point.y);
+            if (spherical) {
+                // projectParticlePoints returns r-theta scene coords (y flipped
+                // from height to 0). Recover the plane pixel and re-map through
+                // the active layout (identity for r-theta, transposed otherwise).
+                const auto scene = mapping.sceneFromPlanePixel(
+                    point.x, planeHeight - point.y);
+                overlay.points.emplace_back(scene.x(), scene.y());
+            } else {
+                overlay.points.emplace_back(point.x, point.y);
+            }
         }
         overlays.push_back(std::move(overlay));
     }
@@ -2896,10 +2919,34 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
     const auto field = m_fieldSelector->currentData().toUInt();
     const auto slicePosition = metadata.dimension == 3
         ? m_slicePosition3d[static_cast<std::size_t>(state.normal)] : 0.0;
-    const auto request = makeLineRequest(plane.physicalRegion,
-        plane.width, plane.height, imageX, imageY, horizontal,
-        metadata.dimension, state.normal, slicePosition,
-        dataset->id(), FieldId{field}, maximumLevel, composition);
+    LineRequest request;
+    if (displayIsSpherical()) {
+        // Logical r-theta / theta-r layout: the click is in the possibly
+        // transposed pixmap, so makeLineRequest's "r is horizontal" assumption
+        // does not hold. Derive the varied axis and the fixed coordinate through
+        // the mode-aware mapping instead. A horizontal drag varies whichever
+        // logical axis is horizontal (r for r-theta, theta for theta-r).
+        const auto mapping = planeMapping(state);
+        const auto logical = mapping.logicalFromScene(
+            static_cast<double>(imageX) + 0.5, static_cast<double>(imageY) + 0.5);
+        const int horizontalAxis =
+            m_sphericalDisplay == SphericalDisplay::ThetaR ? 1 : 0;
+        const int variedAxis = horizontal ? horizontalAxis : 1 - horizontalAxis;
+        const int fixedAxis = 1 - variedAxis;
+        request.dataset = dataset->id();
+        request.field = FieldId{field};
+        request.maximumLevel = maximumLevel;
+        request.composition = composition;
+        request.axis = variedAxis;
+        request.fixedCoordinates[static_cast<std::size_t>(fixedAxis)] =
+            logical[static_cast<std::size_t>(fixedAxis)];
+        request.region = plane.physicalRegion;
+    } else {
+        request = makeLineRequest(plane.physicalRegion,
+            plane.width, plane.height, imageX, imageY, horizontal,
+            metadata.dimension, state.normal, slicePosition,
+            dataset->id(), FieldId{field}, maximumLevel, composition);
+    }
     const auto fieldName = metadata.fields[field].name;
     const auto dimension = metadata.dimension;
     // The other in-plane axis carries the cursor's fixed coordinate.
@@ -3038,6 +3085,11 @@ void MainWindow::appendLinePlotCurve(const LineResult& line,
     curve.dimension = dimension;
     curve.maximumLevel = maximumLevel;
     curve.composition = composition;
+    if (displayIsSpherical()) {
+        // Logical axes 0 and 1 are always r and theta, whichever screen layout
+        // is active.
+        curve.axisNames = {QStringLiteral("r"), QString(QChar(0x03B8)), QString()};
+    }
     m_linePlotWindow->addCurve(std::move(curve));
     m_linePlotWindow->show();
     m_linePlotWindow->raise();
@@ -5054,9 +5106,9 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
         // the checkbox reflects that log did not apply.
         syncActiveViewColorControls(state);
     }
-    // Spherical display warps the plane, so the straight-line profile tool and
-    // (below) the particle/vector overlays are suppressed until warped.
-    state.view->setLineToolEnabled(!displayIsSpherical());
+    // The straight-line profile tool works on the logical r-theta / theta-r
+    // grid but not on the warped R-Z view.
+    state.view->setLineToolEnabled(!displayIsSphericalWarp());
     // The 2-D Spherical menu (and, within it, Supersampling only in R-Z mode)
     // is available only for spherical datasets.
     updateSphericalControls();

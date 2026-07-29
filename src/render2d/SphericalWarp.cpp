@@ -36,14 +36,20 @@ WarpedRaster warpSpherical(
         return out;
     }
 
-    // Square physical pitch fine enough to keep the source's finest detail:
-    // the smaller of the radial cell size (dr) and the tangential cell arc
-    // length at the outer radius (r1*dtheta). A finer-than-source pitch means
-    // several output pixels cover each source cell, so the warp never leaves
-    // gaps between sectors.
+    // Output pixel pitch. The base is the smaller of the radial cell size (dr)
+    // and the outer-radius tangential cell arc (r1*dtheta); dividing by a
+    // supersample factor makes each logical (r, theta) cell span several output
+    // pixels so its curved boundaries (constant-r arcs, constant-theta rays)
+    // are traced smoothly rather than quantized into a square-pixel staircase,
+    // and so the finer inner-radius cells are still resolved without gaps.
+    // Nearest sampling keeps the cells crisp -- the extra resolution only aligns
+    // their edges with the true curves. The pitch is square so an isotropic view
+    // transform preserves the R:Z aspect. maxDimension caps the result, at which
+    // point the supersampling degrades gracefully back toward source resolution.
+    constexpr int kSupersample = 4;
     const double dr = (r1 - r0) / static_cast<double>(src.width);
     const double dtheta = (t1 - t0) / static_cast<double>(src.height);
-    double pitch = std::min(dr, r1 * dtheta);
+    double pitch = std::min(dr, r1 * dtheta) / static_cast<double>(kSupersample);
     if (!(pitch > 0.0)) {
         pitch = std::max(spanR, spanZ);
     }

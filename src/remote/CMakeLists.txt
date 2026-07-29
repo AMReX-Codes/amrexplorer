@@ -31,7 +31,14 @@ add_library(amrexplorer_remote
     Server.cpp
     "${amrexplorer_wire_generated}"
 )
-find_package(zstd CONFIG REQUIRED)
+find_package(zstd CONFIG QUIET)
+if(TARGET zstd::libzstd)
+    set(amrexplorer_zstd_target zstd::libzstd)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(zstd REQUIRED IMPORTED_TARGET libzstd)
+    set(amrexplorer_zstd_target PkgConfig::zstd)
+endif()
 add_library(amrexplorer::remote ALIAS amrexplorer_remote)
 
 target_include_directories(amrexplorer_remote
@@ -44,7 +51,7 @@ target_link_libraries(amrexplorer_remote
     PUBLIC
         amrexplorer::data
         FlatBuffers::FlatBuffers
-        zstd::libzstd
+        ${amrexplorer_zstd_target}
         Threads::Threads
     PRIVATE amrexplorer::warnings
 )

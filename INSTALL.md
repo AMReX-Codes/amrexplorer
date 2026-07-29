@@ -10,15 +10,15 @@ Tested on Ubuntu 24.04 and macOS.
 Install the dependencies:
 
 ```bash
-sudo apt install g++ cmake ninja-build qt6-base-dev
+sudo apt install g++ cmake ninja-build qt6-base-dev libzstd-dev
 ```
 
 ### Linux (all distros)
 
 Install the dependencies with [Spack](https://github.com/spack/spack):
 ```bash
-spack install qt-base
-spack load qt-base
+spack install qt-base zstd
+spack load qt-base zstd
 cmake --preset default
 cmake --build --preset default
 ./build/src/qt/amrexplorer /path/to/plotfile
@@ -32,7 +32,7 @@ desktop builds. FlatBuffers is fetched automatically as part of the build.
 Install the dependencies with [Homebrew][]:
 
 ```bash
-brew install cmake ninja qt
+brew install cmake ninja qt zstd
 ```
 
 [Homebrew]: https://brew.sh

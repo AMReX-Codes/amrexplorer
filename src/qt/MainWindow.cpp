@@ -3226,10 +3226,12 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // Mark this window closing so asynchronous completion handlers that fire
     // during or after shutdown do not pop modal dialogs or reopen windows.
     m_closing = true;
-    // Stop resubmit timers, request cancellation on every async task, and
-    // clear queued global-pool jobs. Running tasks re-check their stop token
-    // and bail promptly; without this a task mid-read can leave the process
-    // lingering at quit. (aboutToQuit also calls this, as a fallback.)
+    // Stop resubmit timers and request cancellation on every async task this
+    // window owns; running tasks re-check their stop token and bail promptly,
+    // so a task mid-read cannot leave the process lingering at quit. This does
+    // NOT clear the shared global pool -- that would strand other windows'
+    // queued work; the pool clear happens only on aboutToQuit (see
+    // cancelInFlight).
     cancelInFlight();
     // Secondary top-level windows are parentless or non-modal; close them with
     // the main window so none lingers and keeps the process alive.

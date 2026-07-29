@@ -243,8 +243,11 @@ cell boundaries can look jagged at the native resolution. **View > 2-D Spherical
 > Supersampling** sets how finely the grid is resampled (1x–16x); higher factors
 trace the curves more smoothly at the cost of a larger image.
 
-Line plots, particle overlays, and vector glyphs are available in the r-θ and
-θ-r layouts but not in the R-Z view.
+Vector glyphs are available in all three layouts. In the R-Z view each arrow is
+anchored at its physical position and the (v_r, v_θ) components are rotated
+into physical directions; in the r-θ and θ-r layouts the components are drawn
+on the logical grid. Line plots and particle overlays are available in the r-θ
+and θ-r layouts but not in the R-Z view.
 
 ## Plotfile sequences and animation
 

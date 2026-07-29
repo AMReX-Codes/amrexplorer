@@ -1999,23 +1999,29 @@ void MainWindow::updateOverlay(PlaneViewState& state)
     }
 
     if (m_displayMode == DisplayMode::VelocityVectors) {
-        // The warped R-Z view would bend straight arrows, so suppress glyphs
-        // there. The logical r-theta / theta-r layouts map each glyph endpoint
-        // through the plane mapping (identity for r-theta, transposed for
-        // theta-r).
-        if (!displayIsSphericalWarp()) {
-            overlays.reserve(state.vectorSegments.size());
-            const auto vectorColor = overlayColor();
-            const bool spherical = displayIsSpherical();
-            const auto mapping = planeMapping(state);
-            for (const auto& segment : state.vectorSegments) {
-                const auto line = spherical
-                    ? QLineF(mapping.sceneFromPlanePixel(segment.x0, segment.y0),
-                        mapping.sceneFromPlanePixel(segment.x1, segment.y1))
-                    : planeSegmentToScene(state,
-                        segment.x0, segment.y0, segment.x1, segment.y1);
-                overlays.push_back({line, vectorColor, 1.0F});
-            }
+        // Segment coordinates depend on the layout the arrival was generated
+        // for (state, not the in-flight menu selection): R-Z glyphs carry
+        // display physical (R, Z) endpoints already rotated into physical
+        // directions (see generateSphericalRZVectorGlyphs); the logical
+        // r-theta / theta-r layouts carry plane pixels mapped through the
+        // plane mapping (identity or transposed); Cartesian keeps the plain
+        // pixel-to-scene flip.
+        overlays.reserve(state.vectorSegments.size());
+        const auto vectorColor = overlayColor();
+        const bool spherical = displayIsSpherical();
+        const bool sphericalRZ = spherical
+            && state.sphericalDisplay == SphericalDisplay::RZ;
+        const auto mapping = planeMapping(state);
+        for (const auto& segment : state.vectorSegments) {
+            const auto line = sphericalRZ
+                ? QLineF(mapping.sceneFromDisplay(segment.x0, segment.y0),
+                    mapping.sceneFromDisplay(segment.x1, segment.y1))
+                : spherical
+                ? QLineF(mapping.sceneFromPlanePixel(segment.x0, segment.y0),
+                    mapping.sceneFromPlanePixel(segment.x1, segment.y1))
+                : planeSegmentToScene(state,
+                    segment.x0, segment.y0, segment.x1, segment.y1);
+            overlays.push_back({line, vectorColor, 1.0F});
         }
         state.view->setOverlaySegments(overlays);
         state.view->setOverlayPaths(paths);
@@ -4739,7 +4745,18 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
         && (!isContourMode(displayMode) || state.contourFinePlane->width > 0)
         && (displayMode != DisplayMode::VelocityVectors
             || (!state.vectorSegments.empty()
-                && contourCount == state.cachedContourCount));
+                && contourCount == state.cachedContourCount
+                // Cached glyphs are layout-specific for a spherical dataset:
+                // R-Z segments carry display (R, Z) coordinates while the
+                // logical layouts carry plane pixels, so a display-mode switch
+                // must regenerate them. (A supersample change is fine: R-Z
+                // segments are resolution-independent physical coordinates.)
+                && (!displayIsSpherical()
+                    || (state.cachedRequest.sphericalDisplay
+                            == request.sphericalDisplay)
+                    || (state.cachedRequest.sphericalDisplay
+                            != SphericalDisplay::RZ
+                        && request.sphericalDisplay != SphericalDisplay::RZ))));
 
     state.stopSource.request_stop();
     state.stopSource = StopSource{};

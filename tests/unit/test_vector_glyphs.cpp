@@ -1,5 +1,7 @@
 #include <amrexplorer/render2d/VectorGlyphs.hpp>
 
+#include <amrexplorer/core/CoordinateSystem.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -146,6 +148,128 @@ int main()
         const auto intact = amrvis::generateVectorGlyphs(offGrid, offGridV, 10);
         require(intact.size() == 150,
             "a non-finite off-grid sample corrupted the glyph field");
+    }
+
+    // Spherical R-Z glyphs: anchors at (r sin theta, r cos theta), the
+    // physical (v_r, v_theta) pair rotated into display directions, and
+    // segments in display physical (R, Z) coordinates.
+    {
+        const auto logicalBox = [](double r0, double r1, double t0, double t1) {
+            amrvis::RealBox box;
+            box.lower[0] = r0;
+            box.upper[0] = r1;
+            box.lower[1] = t0;
+            box.upper[1] = t1;
+            return box;
+        };
+
+        // One sample centered at theta ~ 0 (on the +Z axis), pure v_r = 1:
+        // the arrow must point along +Z with the full arrowMax length, anchored
+        // at (R, Z) ~ (0, r).
+        {
+            auto u = makePlane(1, 1, 1.0F);
+            auto v = makePlane(1, 1, 0.0F);
+            const auto region = logicalBox(1.5, 2.5, 0.0, 1.0e-6);
+            u.physicalRegion = region;
+            v.physicalRegion = region;
+            const auto display = amrvis::sphericalDisplayBounds(region);
+            const auto arrows = amrvis::generateSphericalRZVectorGlyphs(
+                u, v, 1, display);
+            require(arrows.size() == 3, "radial sample did not yield one arrow");
+            const auto& shaft = arrows.front();
+            require(nearlyEqual(shaft.x0, 0.0F, 1.0e-4F)
+                    && nearlyEqual(shaft.y0, 2.0F, 1.0e-4F),
+                "radial arrow anchor is not at (0, r)");
+            const double span = std::max(
+                display.upper[0] - display.lower[0],
+                display.upper[1] - display.lower[1]);
+            const auto arrowMax = static_cast<float>(1.25 * span);
+            require(nearlyEqual(shaft.x1 - shaft.x0, 0.0F, 1.0e-4F)
+                    && nearlyEqual(shaft.y1 - shaft.y0, arrowMax, 1.0e-4F),
+                "pure v_r at theta=0 does not point along +Z at arrowMax");
+        }
+
+        // Same geometry, pure v_theta = 1: e_theta at theta ~ 0 is (+R, 0), so
+        // the arrow points along +R, and the lone sample carries the maximum
+        // speed so it reaches the full arrowMax length.
+        {
+            auto u = makePlane(1, 1, 0.0F);
+            auto v = makePlane(1, 1, 1.0F);
+            const auto region = logicalBox(1.5, 2.5, 0.0, 1.0e-6);
+            u.physicalRegion = region;
+            v.physicalRegion = region;
+            const auto display = amrvis::sphericalDisplayBounds(region);
+            const auto arrows = amrvis::generateSphericalRZVectorGlyphs(
+                u, v, 1, display);
+            require(arrows.size() == 3, "v_theta sample did not yield one arrow");
+            const auto& shaft = arrows.front();
+            const double span = std::max(
+                display.upper[0] - display.lower[0],
+                display.upper[1] - display.lower[1]);
+            require(nearlyEqual(shaft.x1 - shaft.x0,
+                        static_cast<float>(1.25 * span), 1.0e-4F)
+                    && nearlyEqual(shaft.y1 - shaft.y0, 0.0F, 1.0e-4F),
+                "pure v_theta at theta=0 does not point along +R at arrowMax");
+        }
+
+        // The components are physical velocities, so equal v_theta at two
+        // different radii means equal speeds: both arrows reach arrowMax with
+        // no radius weighting, anchored at their own (0, r).
+        {
+            auto u = makePlane(2, 1, 0.0F);
+            auto v = makePlane(2, 1, 1.0F);
+            const auto region = logicalBox(1.0, 3.0, 0.0, 1.0e-6);
+            u.physicalRegion = region;
+            v.physicalRegion = region;
+            const auto display = amrvis::sphericalDisplayBounds(region);
+            const auto arrows = amrvis::generateSphericalRZVectorGlyphs(
+                u, v, 2, display);
+            require(arrows.size() == 6, "two radii did not yield two arrows");
+            const auto innerLength = std::hypot(
+                arrows[0].x1 - arrows[0].x0, arrows[0].y1 - arrows[0].y0);
+            const auto outerLength = std::hypot(
+                arrows[3].x1 - arrows[3].x0, arrows[3].y1 - arrows[3].y0);
+            require(nearlyEqual(
+                    static_cast<float>(innerLength / outerLength), 1.0F, 1.0e-4F),
+                "equal physical speeds did not yield equal arrow lengths");
+            // Cell centers at r = 1.5 and 2.5 anchor at (R, Z) ~ (0, r).
+            require(nearlyEqual(arrows[0].y0, 1.5F, 1.0e-4F)
+                    && nearlyEqual(arrows[3].y0, 2.5F, 1.0e-4F),
+                "arrows are not anchored at their sample radii");
+        }
+
+        // At theta ~ pi/2 (the equator), pure v_r points along +R and pure
+        // v_theta points along -Z (e_theta = (cos, -sin) = (0, -1)).
+        {
+            auto u = makePlane(1, 1, 1.0F);
+            auto v = makePlane(1, 1, 0.0F);
+            const double half = 1.5707963267948966;
+            const auto region = logicalBox(1.5, 2.5, half - 5.0e-7, half + 5.0e-7);
+            u.physicalRegion = region;
+            v.physicalRegion = region;
+            const auto display = amrvis::sphericalDisplayBounds(region);
+            const auto arrows = amrvis::generateSphericalRZVectorGlyphs(
+                u, v, 1, display);
+            require(arrows.size() == 3, "equator sample did not yield one arrow");
+            const auto& shaft = arrows.front();
+            require(shaft.x1 - shaft.x0 > 0.0F
+                    && nearlyEqual(shaft.y1 - shaft.y0, 0.0F, 1.0e-3F),
+                "pure v_r at the equator does not point along +R");
+
+            auto angularV = makePlane(1, 1, 1.0F);
+            auto equatorU = makePlane(1, 1, 0.0F);
+            equatorU.physicalRegion = region;
+            angularV.physicalRegion = region;
+            const auto angularArrows = amrvis::generateSphericalRZVectorGlyphs(
+                equatorU, angularV, 1, display);
+            require(angularArrows.size() == 3,
+                "equator v_theta sample did not yield one arrow");
+            const auto& angularShaft = angularArrows.front();
+            require(angularShaft.y1 - angularShaft.y0 < 0.0F
+                    && nearlyEqual(
+                        angularShaft.x1 - angularShaft.x0, 0.0F, 1.0e-3F),
+                "pure v_theta at the equator does not point along -Z");
+        }
     }
 
     return 0;

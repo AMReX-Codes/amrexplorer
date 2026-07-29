@@ -415,6 +415,10 @@ private:
         }
         {
             std::scoped_lock lock(m_stateMutex);
+            if (cancellation.stop_requested()) {
+                dataset->close();
+                throw ReadCancelled();
+            }
             if (m_datasets.size() >= m_options.maximumDatasets) {
                 throw RemoteError(ErrorCode::ResourceLimitExceeded,
                     "session dataset limit exceeded");

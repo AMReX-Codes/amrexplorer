@@ -972,16 +972,24 @@ std::array<int, 2> MainWindow::sliceOutputSize(
             1, maxSliceOutputDimension)};
     // The viewport bounds the remote payload, but it must not define the
     // raster's aspect: a rubber-band region can have a different X:Y ratio
-    // from the widget. Scale the native grid geometry uniformly to the
-    // largest raster that fits in the viewport, so Qt displays square data
-    // pixels and the server sends no more than a viewport-sized frame.
-    const auto native = nativeOutputSize(state);
+    // from the widget. Scene pixels are square, so scale the selected
+    // physical extents uniformly to the largest raster that fits in it.
+    const auto target = state.visibleRegion.value_or(
+        datasetSampleBounds(*m_openMetadata));
+    const auto axes = displayAxes(state.normal);
+    const auto extentX = target.upper[static_cast<std::size_t>(axes[0])]
+        - target.lower[static_cast<std::size_t>(axes[0])];
+    const auto extentY = target.upper[static_cast<std::size_t>(axes[1])]
+        - target.lower[static_cast<std::size_t>(axes[1])];
+    if (!(extentX > 0.0) || !(extentY > 0.0)) {
+        return {1, 1};
+    }
     const auto fit = std::min(
-        static_cast<double>(viewportPixels[0]) / native[0],
-        static_cast<double>(viewportPixels[1]) / native[1]);
-    return {std::clamp(static_cast<int>(std::lround(native[0] * fit)),
+        static_cast<double>(viewportPixels[0]) / extentX,
+        static_cast<double>(viewportPixels[1]) / extentY);
+    return {std::clamp(static_cast<int>(std::lround(extentX * fit)),
                 1, viewportPixels[0]),
-        std::clamp(static_cast<int>(std::lround(native[1] * fit)),
+        std::clamp(static_cast<int>(std::lround(extentY * fit)),
             1, viewportPixels[1])};
 }
 
@@ -1767,16 +1775,13 @@ bool MainWindow::activeViewUsesNativeOutputSizeForTest() const
         && m_activeView->plane->height == expected[1];
 }
 
-bool MainWindow::activeViewHasNativePixelAspectForTest() const
+bool MainWindow::activeViewHasPhysicalAspectForTest(double expectedAspect) const
 {
     if (!m_dataset || m_activeView == nullptr
         || m_activeView->plane->width <= 0
-        || m_activeView->plane->height <= 0) {
+        || m_activeView->plane->height <= 0 || !(expectedAspect > 0.0)) {
         return false;
     }
-    const auto expected = finestNativeOutputSize(m_dataset->metadata(),
-        m_activeView->plane->physicalRegion, m_activeView->normal);
-    const auto expectedAspect = static_cast<double>(expected[0]) / expected[1];
     const auto actualAspect = static_cast<double>(m_activeView->plane->width)
         / m_activeView->plane->height;
     return std::abs(actualAspect - expectedAspect)
@@ -1803,8 +1808,10 @@ void MainWindow::rubberBandZoomRectangularActiveViewForTest()
     }
     const auto width = static_cast<double>(m_activeView->plane->width);
     const auto height = static_cast<double>(m_activeView->plane->height);
+    // Deliberately avoid cell boundaries. With the 8x8 fixture, snapping this
+    // requested 9:4 rectangle outward produces a 5:3 rectangle instead.
     rubberBandZoom(*m_activeView,
-        QRectF(0.25 * width, 0.375 * height, 0.5 * width, 0.25 * height));
+        QRectF(0.275 * width, 0.35 * height, 0.45 * width, 0.2 * height));
 }
 
 bool MainWindow::allViewsRubberBandZoomedForTest()
@@ -2899,25 +2906,27 @@ void MainWindow::applyRubberBandZoom(
         + (height - clamped.bottom()) / height * yExtent;
     visible.upper[yAxis] = region.lower[yAxis]
         + (height - clamped.top()) / height * yExtent;
-    // The edges above land mid-cell. Snap them outward to finest-level cell
-    // boundaries so the slice output (one pixel per finest cell, see
-    // finestNativeOutputSize) samples exactly at cell centers; fractional
-    // edges make the sampling pitch differ from the cell size and produce
-    // duplicated or skipped rows/columns of cells.
-    const auto& metadata = m_dataset->metadata();
-    const auto& finest = metadata.levels[static_cast<std::size_t>(
-        std::max(0, metadata.finestLevel))];
-    visible = snapToCellBoundaries(
-        visible, datasetSampleBounds(metadata), finest.cellSize, axes);
+    // Local slices use one output pixel per finest cell, so their edges must
+    // land on cell boundaries to keep those pixel centers aligned. Remote
+    // slices are viewport-resampled instead: expanding an arbitrary
+    // rubber-band box to cell boundaries changes its X:Y aspect, so retain
+    // the exact physical bounds the user selected.
+    if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)) {
+        const auto& metadata = m_dataset->metadata();
+        const auto& finest = metadata.levels[static_cast<std::size_t>(
+            std::max(0, metadata.finestLevel))];
+        visible = snapToCellBoundaries(
+            visible, datasetSampleBounds(metadata), finest.cellSize, axes);
+    }
     state.visibleRegion = visible;
-    // Zoom to the snapped region mapped back to scene pixels, so the view
-    // transform matches the region the requested slice will actually cover.
-    const QRectF snappedScene(
+    // Map the requested region back to scene pixels, so the immediate view
+    // transform matches the region the resulting slice will actually cover.
+    const QRectF requestedScene(
         QPointF((visible.lower[xAxis] - region.lower[xAxis]) / xExtent * width,
             (region.upper[yAxis] - visible.upper[yAxis]) / yExtent * height),
         QPointF((visible.upper[xAxis] - region.lower[xAxis]) / xExtent * width,
             (region.upper[yAxis] - visible.lower[yAxis]) / yExtent * height));
-    state.view->zoomToRect(snappedScene.normalized());
+    state.view->zoomToRect(requestedScene.normalized());
     scheduleSliceRequest(state);
 }
 

@@ -149,9 +149,10 @@ public:
     // Test-only: true when the displayed plane uses the same native output
     // dimensions as main, independent of the viewport geometry.
     [[nodiscard]] bool activeViewUsesNativeOutputSizeForTest() const;
-    // Test-only: verify that a remote raster retains the native grid's X:Y
-    // aspect even when its resolution is scaled to the viewport.
-    [[nodiscard]] bool activeViewHasNativePixelAspectForTest() const;
+    // Test-only: verify that the raster's scene aspect matches the original
+    // physical X:Y aspect selected by a rubber-band drag.
+    [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
+        double expectedAspect) const;
 
     // Test-only: rubber-band the central half of the active 3-D panel through
     // the same handler used by ImageView::rubberBandSelected.

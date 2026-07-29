@@ -517,7 +517,7 @@ int main(int argc, char* argv[])
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
                     &application, [&window, &application] {
                         application.exit(window.activeViewIsZoomedForTest()
-                                && window.activeViewHasNativePixelAspectForTest()
+                                && window.activeViewHasPhysicalAspectForTest(9.0 / 4.0)
                             ? 0 : 1);
                     }, Qt::SingleShotConnection);
                 window.rubberBandZoomRectangularActiveViewForTest();

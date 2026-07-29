@@ -270,9 +270,8 @@ if(TARGET amrexplorer_qt)
         set_tests_properties(qt_remote_slice_smoke PROPERTIES
             FIXTURES_REQUIRED remote_materialized
             TIMEOUT 30)
-        # A viewport-sized remote response must retain the physical aspect of
-        # a non-square rubber-band selection rather than inherit the window's
-        # pixel ratio.
+        # A remote rubber-band request must retain the aspect the user drew,
+        # rather than expanding it to an unrelated cell-aligned rectangle.
         add_test(
             NAME qt_remote_rubber_aspect_smoke
             COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen

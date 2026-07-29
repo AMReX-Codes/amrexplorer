@@ -504,10 +504,13 @@ private:
     void applyParticleSelection(
         std::vector<std::string> species, double fraction, int pointSize,
         std::uint64_t seed);
-    // Stop timers, request stop on every async task this window can launch,
-    // and clear queued thread-pool work. Wired to aboutToQuit so the process
-    // exits promptly instead of blocking QThreadPool teardown on an in-flight
-    // read that holds the global I/O mutex.
+    // Stop timers and request stop on every async task this window can launch,
+    // so an in-flight read that holds the global I/O mutex bails promptly and
+    // does not block QThreadPool teardown. Called from closeEvent and (via a
+    // lambda that additionally clears the shared pool) from aboutToQuit. It
+    // must not clear() the global pool itself: the pool is shared across
+    // windows and clearing it from a per-window close strands other windows'
+    // queued work (see window-close-clears-shared-thread-pool).
     void cancelInFlight();
 
     QStackedWidget* m_stack = nullptr;

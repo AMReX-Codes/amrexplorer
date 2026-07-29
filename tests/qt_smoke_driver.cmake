@@ -6,7 +6,8 @@
 #   SOURCE        fixture source directory (e.g. tests/data/plotfile_2d)
 #   WORK          directory the materialized copies are written into
 #   MODE          slice | sequence | missing-range | non-finite | raw-fab |
-#                 multifab-fab | quit | quit-on-failure | export-quit |
+#                 multifab-fab | quit | quit-on-failure | window-close-pool |
+#                 export-quit |
 #                 contour-sync | raster-zoom | rubber-zoom-sync |
 #                 particle-visible-range |
 #                 rubber-zoom-local | rubber-overzoom | pan-zoom |
@@ -129,6 +130,9 @@ elseif(MODE STREQUAL "cache-budget")
 elseif(MODE STREQUAL "quit")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --quit-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "window-close-pool")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --window-close-pool-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "quit-on-failure")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     # Drop the FAB payloads so the slice read fails while metadata stays valid

@@ -17,14 +17,18 @@
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QSignalBlocker>
+#include <QRunnable>
 #include <QTableView>
 #include <QTextStream>
+#include <QThreadPool>
 #include <QTimer>
 
 #include <amrexplorer/render2d/Contours.hpp>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -32,6 +36,7 @@
 #include <filesystem>
 #include <memory>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -1101,6 +1106,47 @@ int main(int argc, char* argv[])
             &application, [&application] { application.exit(1); });
         QTimer::singleShot(0, &window, [&window, first, second] {
             window.openSequence({first, second});
+        });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--window-close-pool-smoke-test") {
+        // Regression for window-close-clears-shared-thread-pool: opening and
+        // closing a second window must not discard the first window's queued
+        // work on the shared global pool (which would strand it on
+        // "Loading..." forever). Constrain the pool to one thread and occupy
+        // that thread with a gate runnable, so this window's initial-load
+        // worker is genuinely queued (not running) when the second window
+        // closes. The pre-fix closeEvent called QThreadPool::clear(), which
+        // dropped that queued worker; the fix keeps clear() off the per-window
+        // path, so the worker survives, runs once the gate releases, and the
+        // load completes. A watchdog fails instead of hanging on a strand.
+        const std::filesystem::path path(argv[2]);
+        auto* pool = QThreadPool::globalInstance();
+        pool->setMaxThreadCount(1);
+        auto gate = std::make_shared<std::atomic<bool>>(false);
+        pool->start(QRunnable::create([gate] {
+            while (!gate->load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        }));
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&application](bool success) {
+                application.exit(success ? 0 : 1);
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, path, gate] {
+            // Queue this window's metadata/initial-load worker behind the gate.
+            window.openDataset(path);
+            // A second window, opened and closed while that worker is still
+            // queued. Its closeEvent runs synchronously here, so the pre-fix
+            // clear() would drop the queued worker before the gate releases.
+            auto* second = new amrvis::qt::MainWindow;
+            second->show();
+            second->close();
+            second->deleteLater();
+            // Release the gate so the surviving worker (with the fix) can run.
+            gate->store(true);
         });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--quit-smoke-test") {

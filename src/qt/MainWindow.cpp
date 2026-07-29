@@ -874,9 +874,17 @@ MainWindow::MainWindow(QWidget* parent)
     restoreSettings();
     // Cancel in-flight async work on any quit path (last-window close, Cmd-Q,
     // menu Quit) so QThreadPool teardown does not block on an outstanding read
-    // and the process can exit promptly.
-    connect(qApp, &QCoreApplication::aboutToQuit, this,
-        &MainWindow::cancelInFlight);
+    // and the process can exit promptly. Only here -- where every window is
+    // going away -- is it safe to also drop the shared global pool's queued
+    // jobs, so teardown skips starting work that would only observe its stop
+    // token and exit; a per-window close must not (see cancelInFlight and
+    // window-close-clears-shared-thread-pool).
+    connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
+        cancelInFlight();
+        if (auto* pool = QThreadPool::globalInstance()) {
+            pool->clear();
+        }
+    });
 }
 
 void MainWindow::wireView(PlaneViewState& state)
@@ -3218,10 +3226,12 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // Mark this window closing so asynchronous completion handlers that fire
     // during or after shutdown do not pop modal dialogs or reopen windows.
     m_closing = true;
-    // Stop resubmit timers, request cancellation on every async task, and
-    // clear queued global-pool jobs. Running tasks re-check their stop token
-    // and bail promptly; without this a task mid-read can leave the process
-    // lingering at quit. (aboutToQuit also calls this, as a fallback.)
+    // Stop resubmit timers and request cancellation on every async task this
+    // window owns; running tasks re-check their stop token and bail promptly,
+    // so a task mid-read cannot leave the process lingering at quit. This does
+    // NOT clear the shared global pool -- that would strand other windows'
+    // queued work; the pool clear happens only on aboutToQuit (see
+    // cancelInFlight).
     cancelInFlight();
     // Secondary top-level windows are parentless or non-modal; close them with
     // the main window so none lingers and keeps the process alive.
@@ -3257,17 +3267,24 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
 void MainWindow::cancelInFlight()
 {
-    // Application shutdown: stop the timers that resubmit work, request stop on
-    // every async task this window can launch, and clear the queued jobs from
-    // the global thread pool. The slice/prefetch/line-query/initial-load tasks
-    // run on QThreadPool::globalInstance() via QtConcurrent::run, and that
-    // pool's destructor calls waitForDone() with no timeout. A task caught
-    // mid-read holds the global AMReX I/O mutex and only re-checks its
-    // cancellation token at the next chunk boundary (PlotfileBlockReader
-    // checks every 1 MiB / 4096 values), so unless it is told to stop the process lingers
-    // "not responding" at quit -- which is what made closing the window look
-    // like a hang. request_stop is the cooperative signal those tasks poll, so
-    // once set a running task bails promptly and teardown unblocks.
+    // Stop the timers that resubmit work and request stop on every async task
+    // this window can launch. The slice/prefetch/line-query/initial-load tasks
+    // run on QThreadPool::globalInstance() via QtConcurrent::run; that pool's
+    // destructor calls waitForDone() with no timeout, and a task caught mid-read
+    // holds the global AMReX I/O mutex and only re-checks its cancellation token
+    // at the next chunk boundary (PlotfileBlockReader checks every 1 MiB / 4096
+    // values). request_stop is the cooperative signal those tasks poll, so once
+    // set a running task bails promptly and teardown unblocks -- which is what
+    // keeps closing a window (or quitting) from looking like a hang.
+    //
+    // This must NOT clear() the global pool: it is shared by every MainWindow
+    // (File -> Open New Window), and clear() discards *other* windows' queued-
+    // but-unstarted runnables, whose QFutureWatchers then never fire, wedging
+    // those windows on "Loading..." forever (see
+    // window-close-clears-shared-thread-pool). Cancellation is per-task via the
+    // stop tokens above; a queued task starts, observes its token, and exits
+    // cheaply. clear() belongs only on the aboutToQuit path (every window is
+    // going away), where it is wired in the constructor.
     if (m_sliceDebounce != nullptr) {
         m_sliceDebounce->stop();
     }
@@ -3282,9 +3299,6 @@ void MainWindow::cancelInFlight()
     m_view2d.stopSource.request_stop();
     for (auto& state : m_planeViews) {
         state.stopSource.request_stop();
-    }
-    if (auto* pool = QThreadPool::globalInstance()) {
-        pool->clear();
     }
 }
 

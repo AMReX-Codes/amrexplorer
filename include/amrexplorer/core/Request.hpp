@@ -1,5 +1,6 @@
 #pragma once
 
+#include <amrexplorer/core/CoordinateSystem.hpp>
 #include <amrexplorer/core/Geometry.hpp>
 
 #include <array>
@@ -58,6 +59,9 @@ struct SliceRequest {
     // display parameter -- deliberately excluded from sameSliceSpec so changing
     // it re-warps from the cached planes without a new query.
     int sphericalSupersample = 4;
+    // 2-D spherical display layout (R-Z warp, r-theta, or theta-r). Also a pure
+    // display parameter, excluded from sameSliceSpec.
+    SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
 };
 
 struct LineRequest {

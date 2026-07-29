@@ -260,6 +260,7 @@ private:
         // plane's physical region and no warp occurs, so overlays and the probe
         // can map through displayRegion uniformly.
         int coordinateSystem = 0;
+        SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
         RealBox displayRegion;
         double displayMinimum = 0.0;
         double displayMaximum = 1.0;
@@ -365,6 +366,12 @@ private:
     // Coordinate mapper for a view: logical (x, y)/(r, theta) <-> scene pixels,
     // built from the plane, the warped display region, and the pixmap size.
     [[nodiscard]] PlaneMapping planeMapping(const PlaneViewState& state) const;
+    // Enable/disable and re-check the 2-D Spherical menus for the current
+    // dataset and display mode (Supersampling applies only to the R-Z warp).
+    void updateSphericalControls();
+    // Horizontal and vertical axis names for the active spherical layout
+    // ({"R","Z"}, {"r","theta"}, or {"theta","r"}).
+    [[nodiscard]] std::array<QString, 2> sphericalAxisLabels() const;
     void probeMoved(PlaneViewState& state, int x, int displayY);
     void probeClicked(PlaneViewState& state, int x, int displayY);
     [[nodiscard]] QString probeReadout(
@@ -558,6 +565,8 @@ private:
     // whole submenu is enabled only while a 2-D spherical dataset is shown.
     // Supersampling is its first child; more options will join it.
     QMenu* m_sphericalMenu = nullptr;
+    QMenu* m_sphericalDisplayMenu = nullptr;
+    QActionGroup* m_sphericalDisplayGroup = nullptr;
     QMenu* m_sphericalSupersampleMenu = nullptr;
     QActionGroup* m_sphericalSupersampleGroup = nullptr;
     QActionGroup* m_scaleGroup = nullptr;
@@ -595,6 +604,8 @@ private:
     int m_contourCount = 15;
     // 2-D spherical warp supersample factor (see SliceRequest::sphericalSupersample).
     int m_sphericalSupersample = 4;
+    // 2-D spherical display layout (see SliceRequest::sphericalDisplay).
+    SphericalDisplay m_sphericalDisplay = SphericalDisplay::RZ;
     int m_contourColor = contourColorBlack;
     int m_vectorUField = -1;
     int m_vectorVField = -1;

@@ -147,18 +147,40 @@ void applyDisplayCoordinates(
     const DatasetMetadata& metadata, SliceDisplayResult& result)
 {
     result.coordinateSystem = metadata.coordinateSystem;
-    const auto& logical = result.slice.plane.physicalRegion;
+    const auto& logical = result.slice.plane.physicalRegion;  // (r, theta)
     if (!isSpherical2D(metadata)) {
         result.displayRegion = logical;
         return;
     }
-    result.displayRegion = sphericalDisplayBounds(logical);
-    if (result.image.width > 0 && result.image.height > 0
-        && !result.image.rgba.empty()) {
-        auto warped = warpSpherical(result.image, logical,
-            maxSliceOutputDimension, result.request.sphericalSupersample);
-        result.image = std::move(warped.image);
-        result.displayRegion = warped.displayRegion;
+    result.sphericalDisplay = result.request.sphericalDisplay;
+    const bool haveImage = result.image.width > 0 && result.image.height > 0
+        && !result.image.rgba.empty();
+    switch (result.request.sphericalDisplay) {
+    case SphericalDisplay::RTheta:
+        // Logical grid as-is: r horizontal, theta vertical (no warp).
+        result.displayRegion = logical;
+        break;
+    case SphericalDisplay::ThetaR:
+        // Logical grid transposed: theta horizontal, r vertical.
+        result.displayRegion.lower[0] = logical.lower[1];
+        result.displayRegion.upper[0] = logical.upper[1];
+        result.displayRegion.lower[1] = logical.lower[0];
+        result.displayRegion.upper[1] = logical.upper[0];
+        if (haveImage) {
+            result.image = transposeImage(result.image);
+        }
+        break;
+    case SphericalDisplay::RZ:
+    default:
+        // Warped physical wedge (R, Z); the supersample factor applies here.
+        result.displayRegion = sphericalDisplayBounds(logical);
+        if (haveImage) {
+            auto warped = warpSpherical(result.image, logical,
+                maxSliceOutputDimension, result.request.sphericalSupersample);
+            result.image = std::move(warped.image);
+            result.displayRegion = warped.displayRegion;
+        }
+        break;
     }
 }
 
@@ -517,6 +539,7 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
                 request.composition = selectedLevel.composition;
                 request.maximumLevel = attemptMaximumLevel;
                 request.sphericalSupersample = spec.sphericalSupersample;
+                request.sphericalDisplay = spec.sphericalDisplay;
                 if (metadata.dimension == 3) {
                     request.physicalPosition = positions[static_cast<std::size_t>(normal)];
                 }

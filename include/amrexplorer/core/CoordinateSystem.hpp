@@ -17,6 +17,13 @@ enum class CoordinateSystem : int {
     Spherical = 2,    // 2-D (r, theta): axis 0 = radius, axis 1 = polar angle
 };
 
+// How a 2-D spherical (r, theta) plane is laid out on screen.
+enum class SphericalDisplay : int {
+    RZ = 0,      // warped physical wedge: R = r*sin(theta) horizontal, Z vertical
+    RTheta = 1,  // logical grid, r horizontal, theta vertical (the unwarped view)
+    ThetaR = 2,  // logical grid transposed, theta horizontal, r vertical
+};
+
 // True for a 2-D spherical plotfile carrying real geometry: the only
 // coordinate system this build warps into physical (R, Z) display space.
 // Everything else (Cartesian, cylindrical, 1-D/3-D, standalone FAB/MultiFab)

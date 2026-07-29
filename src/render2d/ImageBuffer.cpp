@@ -21,4 +21,25 @@ bool ImageBuffer::valid() const noexcept
         && static_cast<std::uint64_t>(strideBytes) >= minimumStride;
 }
 
+ImageBuffer transposeImage(const ImageBuffer& src)
+{
+    ImageBuffer dst;
+    if (src.width <= 0 || src.height <= 0 || src.rgba.empty()) {
+        return src;
+    }
+    dst.width = src.height;
+    dst.height = src.width;
+    dst.strideBytes = dst.width * static_cast<int>(sizeof(std::uint32_t));
+    dst.rgba.resize(src.rgba.size());
+    const auto srcW = static_cast<std::size_t>(src.width);
+    const auto srcH = static_cast<std::size_t>(src.height);
+    for (std::size_t row = 0; row < srcH; ++row) {
+        for (std::size_t col = 0; col < srcW; ++col) {
+            // dst is srcH wide: dst(row=col, col=row).
+            dst.rgba[col * srcH + row] = src.rgba[row * srcW + col];
+        }
+    }
+    return dst;
+}
+
 } // namespace amrvis

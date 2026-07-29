@@ -932,10 +932,38 @@ bool MainWindow::displayIsSpherical() const
     return m_dataset && isSpherical2D(m_dataset->metadata());
 }
 
+void MainWindow::updateSphericalControls()
+{
+    const bool spherical = displayIsSpherical();
+    if (m_sphericalMenu != nullptr) {
+        m_sphericalMenu->setEnabled(spherical);
+    }
+    if (m_sphericalSupersampleMenu != nullptr) {
+        // Supersampling only affects the R-Z warp.
+        m_sphericalSupersampleMenu->setEnabled(
+            spherical && m_sphericalDisplay == SphericalDisplay::RZ);
+    }
+}
+
+std::array<QString, 2> MainWindow::sphericalAxisLabels() const
+{
+    const QString theta(QChar(0x03B8));
+    switch (m_sphericalDisplay) {
+    case SphericalDisplay::RTheta:
+        return {QStringLiteral("r"), theta};
+    case SphericalDisplay::ThetaR:
+        return {theta, QStringLiteral("r")};
+    case SphericalDisplay::RZ:
+    default:
+        return {QStringLiteral("R"), QStringLiteral("Z")};
+    }
+}
+
 PlaneMapping MainWindow::planeMapping(const PlaneViewState& state) const
 {
     PlaneMapping mapping;
     mapping.spherical = displayIsSpherical();
+    mapping.mode = state.sphericalDisplay;
     mapping.logicalRegion = state.plane->physicalRegion;
     mapping.displayRegion = state.displayRegion;
     mapping.sceneWidth = std::max(1, state.view->image().width());
@@ -1047,6 +1075,39 @@ void MainWindow::createMenus()
     // such a dataset is shown (see showSlice). More options will be added here.
     m_sphericalMenu = new QMenu(tr("2-D Spherical"), this);
     m_sphericalMenu->setEnabled(false);
+
+    // Display layout: the physical R-Z warp, or the logical r-theta / theta-r
+    // (transposed) grid. Only R-Z uses the supersample control below.
+    m_sphericalDisplayGroup = new QActionGroup(this);
+    m_sphericalDisplayMenu = new QMenu(tr("&Display"), this);
+    const QString theta(QChar(0x03B8));
+    const std::array<SphericalDisplay, 3> displayModes{
+        SphericalDisplay::RZ, SphericalDisplay::RTheta, SphericalDisplay::ThetaR};
+    const std::array<QString, 3> displayLabels{
+        tr("R-Z (physical)"), QStringLiteral("r-") + theta,
+        theta + QStringLiteral("-r")};
+    for (std::size_t index = 0; index < displayModes.size(); ++index) {
+        const auto displayMode = displayModes[index];
+        auto* action = new QAction(displayLabels[index], m_sphericalDisplayMenu);
+        action->setCheckable(true);
+        action->setActionGroup(m_sphericalDisplayGroup);
+        action->setData(static_cast<int>(displayMode));
+        action->setChecked(displayMode == m_sphericalDisplay);
+        connect(action, &QAction::triggered, this, [this, displayMode] {
+            if (displayMode == m_sphericalDisplay) {
+                return;
+            }
+            m_sphericalDisplay = displayMode;
+            saveSettings();
+            updateSphericalControls();
+            // Display-only change: re-render from the cached planes, no query.
+            if (displayIsSpherical()) {
+                scheduleSliceRequest(true);
+            }
+        });
+        m_sphericalDisplayMenu->addAction(action);
+    }
+    m_sphericalMenu->addMenu(m_sphericalDisplayMenu);
 
     // Warp resolution: higher factors trace the curved cell boundaries more
     // smoothly at the cost of a larger warped raster.
@@ -2471,20 +2532,31 @@ QString MainWindow::probeReadout(
     const auto valueText = formatNumber(
         static_cast<double>(plane.values[offset]), m_numberFormat);
     if (displayIsSpherical()) {
-        // Report the physical display coordinates (R, Z) plus the native
-        // spherical (r, theta) the cell is stored at.
-        const auto display = sphericalToDisplay(position[xAxis], position[yAxis]);
-        return tr("R=%1 Z=%2 r=%3 %4=%5 value=%6%7 %8=(%9) %10")
-            .arg(formatNumber(display[0], m_numberFormat))
-            .arg(formatNumber(display[1], m_numberFormat))
-            .arg(formatNumber(position[xAxis], m_numberFormat))
-            .arg(QString(QChar(0x03B8)))  // theta
-            .arg(formatNumber(position[yAxis], m_numberFormat))
-            .arg(valueText)
-            .arg(levelText)
-            .arg(QString::fromLatin1(indexKind))
-            .arg(join(cell))
-            .arg(boxText);
+        // position[xAxis] is r, position[yAxis] is theta (from logicalFromScene).
+        const QString theta(QChar(0x03B8));
+        const auto rText = formatNumber(position[xAxis], m_numberFormat);
+        const auto thetaText = formatNumber(position[yAxis], m_numberFormat);
+        QString coords;
+        switch (m_sphericalDisplay) {
+        case SphericalDisplay::RZ: {
+            // Physical (R, Z) plus the native spherical (r, theta).
+            const auto display = sphericalToDisplay(
+                position[xAxis], position[yAxis]);
+            coords = QStringLiteral("R=%1 Z=%2 r=%3 %4=%5").arg(
+                formatNumber(display[0], m_numberFormat),
+                formatNumber(display[1], m_numberFormat), rText, theta, thetaText);
+            break;
+        }
+        case SphericalDisplay::ThetaR:
+            coords = QStringLiteral("%1=%2 r=%3").arg(theta, thetaText, rText);
+            break;
+        case SphericalDisplay::RTheta:
+        default:
+            coords = QStringLiteral("r=%1 %2=%3").arg(rText, theta, thetaText);
+            break;
+        }
+        return tr("%1 value=%2%3 %4=(%5) %6").arg(coords, valueText, levelText,
+            QString::fromLatin1(indexKind), join(cell), boxText);
     }
     return tr("%1=%2 %3=%4 value=%5%6 %7=(%8) %9")
         .arg(QString::fromLatin1(axisNames[xAxis]))
@@ -3120,6 +3192,17 @@ void MainWindow::restoreSettings()
             }
         }
     }
+    if (m_sphericalDisplayGroup != nullptr) {
+        const auto stored = settings.value(QStringLiteral("spherical/display"),
+            static_cast<int>(m_sphericalDisplay)).toInt();
+        for (auto* action : m_sphericalDisplayGroup->actions()) {
+            if (action->data().toInt() == stored) {
+                m_sphericalDisplay = static_cast<SphericalDisplay>(stored);
+                action->setChecked(true);
+                break;
+            }
+        }
+    }
     applySpeed();
     const auto geometry = settings.value(QStringLiteral("geometry")).toByteArray();
     if (!geometry.isEmpty()) {
@@ -3145,6 +3228,8 @@ void MainWindow::saveSettings()
         m_syncRubberBandZoomAction->isChecked());
     settings.setValue(QStringLiteral("spherical/supersample"),
         m_sphericalSupersample);
+    settings.setValue(QStringLiteral("spherical/display"),
+        static_cast<int>(m_sphericalDisplay));
 }
 
 void MainWindow::updateWindowTitle()
@@ -3705,17 +3790,31 @@ void MainWindow::datasetCellActivated(const RealBox& physicalCell)
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);
     if (displayIsSpherical()) {
-        // xAxis is r, yAxis is theta: mark the picked cell as a curved sector.
+        // xAxis is r, yAxis is theta.
         const double r0 = physicalCell.lower[xAxis];
         const double r1 = physicalCell.upper[xAxis];
         const double t0 = physicalCell.lower[yAxis];
         const double t1 = physicalCell.upper[yAxis];
-        std::optional<QPainterPath> highlight;
-        if (r1 > r0 && t1 > t0) {
-            highlight = sphericalSectorPath(
-                planeMapping(*m_activeView), r0, r1, t0, t1);
+        const auto mapping = planeMapping(*m_activeView);
+        const bool valid = r1 > r0 && t1 > t0;
+        if (m_sphericalDisplay == SphericalDisplay::RZ) {
+            std::optional<QPainterPath> highlight;
+            if (valid) {
+                highlight = sphericalSectorPath(mapping, r0, r1, t0, t1);
+            }
+            m_activeView->view->setCellHighlightPath(highlight);
+        } else {
+            std::optional<QRectF> highlight;
+            if (valid) {
+                QRectF rect(mapping.sceneFromLogical(r0, t0),
+                    mapping.sceneFromLogical(r1, t1));
+                rect = rect.normalized();
+                if (!rect.isEmpty()) {
+                    highlight = rect;
+                }
+            }
+            m_activeView->view->setCellHighlight(highlight);
         }
-        m_activeView->view->setCellHighlightPath(highlight);
         return;
     }
     const auto& region = plane.physicalRegion;
@@ -4005,6 +4104,7 @@ void MainWindow::requestInitialSlice(
             static_cast<std::uint32_t>(std::max(m_vectorWField, 0));
         spec.contourCount = m_contourCount;
         spec.sphericalSupersample = m_sphericalSupersample;
+        spec.sphericalDisplay = m_sphericalDisplay;
     }
     const auto restoredSpec = initialSpec;
     // Per-view generations captured now: a view that gets a newer request
@@ -4384,6 +4484,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     request.composition = composition;
     request.maximumLevel = maximumLevel;
     request.sphericalSupersample = m_sphericalSupersample;
+    request.sphericalDisplay = m_sphericalDisplay;
 
     const auto requestedRangeMode = static_cast<RangeMode>(
         m_rangeMode->currentData().toInt());
@@ -4618,15 +4719,26 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
                 : QColor::fromRgb(static_cast<QRgb>(
                     m_palette.levelColor(levelIndex, lastLevel)));
             if (spherical) {
-                // xAxis is r, yAxis is theta: draw the box as a curved sector.
+                // xAxis is r, yAxis is theta.
                 if (!(xUpper > xLower) || !(yUpper > yLower)) {
                     continue;
                 }
-                GridBoxOverlay overlay;
-                overlay.color = color;
-                overlay.path = sphericalSectorPath(
-                    mapping, xLower, xUpper, yLower, yUpper);
-                overlays.push_back(std::move(overlay));
+                if (m_sphericalDisplay == SphericalDisplay::RZ) {
+                    // Warped wedge: a curved annular sector.
+                    GridBoxOverlay overlay;
+                    overlay.color = color;
+                    overlay.path = sphericalSectorPath(
+                        mapping, xLower, xUpper, yLower, yUpper);
+                    overlays.push_back(std::move(overlay));
+                } else {
+                    // Logical r-theta / theta-r: an axis-aligned rectangle.
+                    QRectF rect(mapping.sceneFromLogical(xLower, yLower),
+                        mapping.sceneFromLogical(xUpper, yUpper));
+                    rect = rect.normalized();
+                    if (!rect.isEmpty()) {
+                        overlays.push_back({rect, color, QPainterPath{}});
+                    }
+                }
                 continue;
             }
             const auto pixelX0 = std::round(
@@ -4837,13 +4949,15 @@ std::optional<QRectF> MainWindow::preservedDataWindow(
 std::optional<QRectF> MainWindow::sphericalReframe(
     const PlaneViewState& state, const SliceDisplayResult& display) const
 {
-    // Only spherical, and only once a raster is already on screen: the first
-    // frame refits, and a dataset/domain change alters displayRegion (handled
-    // by the plain refit below). A view still at fit-to-window should stay
-    // fit-to-window (and keep auto-fitting on resize), so only re-frame when
-    // the user has actually zoomed.
-    if (!displayIsSpherical() || !state.view->hasImage()
-        || state.view->isFitToWindow()
+    // Only the R-Z warp has a resolution knob (supersampling); r-theta and
+    // theta-r never resize in place, and a mode switch changes displayRegion
+    // (so the plain refit below applies). Only once a raster is already on
+    // screen (the first frame refits), and only when the user has actually
+    // zoomed (a fit-to-window view should stay fit and keep auto-fitting).
+    if (!displayIsSpherical()
+        || display.sphericalDisplay != SphericalDisplay::RZ
+        || state.sphericalDisplay != SphericalDisplay::RZ
+        || !state.view->hasImage() || state.view->isFitToWindow()
         || !(display.displayRegion == state.displayRegion)) {
         return std::nullopt;
     }
@@ -4914,6 +5028,7 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     // map through displayRegion, which for every other system is just the
     // plane's logical bounds (see PlaneMapping).
     state.coordinateSystem = display.coordinateSystem;
+    state.sphericalDisplay = display.sphericalDisplay;
     state.displayRegion = display.displayRegion;
     state.contourPlane
         = std::make_shared<const ScalarPlane>(display.contourPlane);
@@ -4942,16 +5057,18 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     // Spherical display warps the plane, so the straight-line profile tool and
     // (below) the particle/vector overlays are suppressed until warped.
     state.view->setLineToolEnabled(!displayIsSpherical());
-    if (m_sphericalMenu != nullptr) {
-        // The 2-D Spherical options apply only to warped spherical display.
-        m_sphericalMenu->setEnabled(displayIsSpherical());
-    }
+    // The 2-D Spherical menu (and, within it, Supersampling only in R-Z mode)
+    // is available only for spherical datasets.
+    updateSphericalControls();
     if (m_viewDimension == 2) {
         // The 2-D view carries no axis indicator normally; spherical labels its
-        // physical R (horizontal) and Z (vertical) axes.
-        state.view->setAxisIndicator(
-            displayIsSpherical() ? QStringLiteral("R") : QString(),
-            displayIsSpherical() ? QStringLiteral("Z") : QString());
+        // horizontal/vertical axes per display mode (R-Z, r-theta, or theta-r).
+        if (displayIsSpherical()) {
+            const auto labels = sphericalAxisLabels();
+            state.view->setAxisIndicator(labels[0], labels[1]);
+        } else {
+            state.view->setAxisIndicator(QString(), QString());
+        }
     }
     updateGridBoxes(state);
     updateOverlay(state);
@@ -5460,6 +5577,7 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     spec.palette = m_palette;
     spec.contourCount = m_contourCount;
     spec.sphericalSupersample = m_sphericalSupersample;
+    spec.sphericalDisplay = m_sphericalDisplay;
     spec.logarithmic = m_logarithmic->isChecked();
     spec.rangeMode = static_cast<RangeMode>(m_rangeMode->currentData().toInt());
     if (spec.rangeMode == RangeMode::User) {

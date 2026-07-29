@@ -5043,7 +5043,6 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
                 overlays.push_back({rectangle, color, QPainterPath{}});
             }
         }
-    }
     state.view->setGridBoxes(overlays);
 }
 

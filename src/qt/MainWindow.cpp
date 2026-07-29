@@ -9,6 +9,7 @@
 #include "ImageView.hpp"
 #include "IsoWidget.hpp"
 #include "LinePlotRequest.hpp"
+#include "PlaneMapping.hpp"
 #include "LinePlotWindow.hpp"
 #include "ScientificDoubleSpinBox.hpp"
 #include "SetContoursDialog.hpp"
@@ -19,6 +20,7 @@
 #include <amrexplorer/io/FabCatalog.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
+#include <amrexplorer/core/CoordinateSystem.hpp>
 #include <amrexplorer/core/Statistics.hpp>
 #include <amrexplorer/pipeline/ParticleProjection.hpp>
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
@@ -925,6 +927,24 @@ std::array<int, 2> MainWindow::displayAxes(int normal) const
     return axes;
 }
 
+bool MainWindow::displayIsSpherical() const
+{
+    return m_dataset && isSpherical2D(m_dataset->metadata());
+}
+
+PlaneMapping MainWindow::planeMapping(const PlaneViewState& state) const
+{
+    PlaneMapping mapping;
+    mapping.spherical = displayIsSpherical();
+    mapping.logicalRegion = state.plane->physicalRegion;
+    mapping.displayRegion = state.displayRegion;
+    mapping.sceneWidth = std::max(1, state.view->image().width());
+    mapping.sceneHeight = std::max(1, state.view->image().height());
+    mapping.planeWidth = std::max(1, state.plane->width);
+    mapping.planeHeight = std::max(1, state.plane->height);
+    return mapping;
+}
+
 void MainWindow::createMenus()
 {
     auto* newWindowAction = new QAction(tr("Open &New Window"), this);
@@ -1748,12 +1768,16 @@ void MainWindow::updateOverlay(PlaneViewState& state)
     }
 
     if (m_displayMode == DisplayMode::VelocityVectors) {
-        overlays.reserve(state.vectorSegments.size());
-        const auto vectorColor = overlayColor();
-        for (const auto& segment : state.vectorSegments) {
-            overlays.push_back({planeSegmentToScene(state,
-                segment.x0, segment.y0, segment.x1, segment.y1),
-                vectorColor, 1.0F});
+        // Vector glyphs are not yet warped for spherical display; suppress them
+        // rather than drawing arrows against the unwarped (r, theta) grid.
+        if (!displayIsSpherical()) {
+            overlays.reserve(state.vectorSegments.size());
+            const auto vectorColor = overlayColor();
+            for (const auto& segment : state.vectorSegments) {
+                overlays.push_back({planeSegmentToScene(state,
+                    segment.x0, segment.y0, segment.x1, segment.y1),
+                    vectorColor, 1.0F});
+            }
         }
         state.view->setOverlaySegments(overlays);
         state.view->setOverlayPaths(paths);
@@ -1773,18 +1797,26 @@ void MainWindow::updateOverlay(PlaneViewState& state)
         // image is mirrored vertically, so scene y runs opposite to plane y
         // (see showSlice).
         const auto contourColor = overlayColor();
+        const bool spherical = displayIsSpherical();
+        const auto mapping = planeMapping(state);
         const auto top = static_cast<double>(state.plane->height) - 1.0;
+        // Cartesian: plane pixel maps 1:1 to the scene (only the vertical flip).
+        // Spherical: re-project each (r, theta) plane pixel through the warp.
+        const auto toScene = [&](const auto& point) -> QPointF {
+            if (spherical) {
+                return mapping.sceneFromPlanePixel(point[0], point[1]);
+            }
+            return QPointF(point[0], top - point[1]);
+        };
         std::map<double, QPainterPath> pathsByValue;
         for (const auto& polyline : state.contourPolylines) {
             if (polyline.points.empty()) {
                 continue;
             }
             auto& path = pathsByValue[polyline.value];
-            const auto& first = polyline.points.front();
-            path.moveTo(QPointF(first[0], top - first[1]));
+            path.moveTo(toScene(polyline.points.front()));
             for (std::size_t i = 1; i < polyline.points.size(); ++i) {
-                const auto& point = polyline.points[i];
-                path.lineTo(QPointF(point[0], top - point[1]));
+                path.lineTo(toScene(polyline.points[i]));
             }
             if (polyline.closed) {
                 path.closeSubpath();
@@ -2118,7 +2150,10 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
 {
     std::vector<PointOverlay> overlays;
     if (!m_dataset || !state.view->hasImage()
-        || state.plane->width <= 0 || state.plane->height <= 0) {
+        || state.plane->width <= 0 || state.plane->height <= 0
+        // Particle projection assumes the unwarped plane; suppress the overlay
+        // in spherical display until it is warped (deferred).
+        || displayIsSpherical()) {
         state.view->setPointOverlays(overlays);
         return;
     }
@@ -2232,27 +2267,55 @@ QString MainWindow::probeReadout(
     if (!m_dataset || plane.width <= 0 || plane.height <= 0) {
         return tr("no data");
     }
-    const auto y = plane.height - 1 - displayY;
-    const auto offset = static_cast<std::size_t>(x)
-        + static_cast<std::size_t>(plane.width) * static_cast<std::size_t>(y);
-    if (offset >= plane.values.size() || plane.valid[offset] == 0) {
-        return tr("no data");
-    }
     const auto& metadata = m_dataset->metadata();
     const auto axes = displayAxes(state.normal);
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);
+    const auto& region = plane.physicalRegion;
+
+    // Map the probed pixmap pixel to a logical (x, y)/(r, theta) position and
+    // the source plane offset holding its value, validity, and level. Cartesian
+    // pixmap pixels index the plane directly; spherical pixmap pixels are in
+    // warped (R, Z) space, so invert the warp first and re-derive the pixel.
     std::array<double, 3> position{0.0, 0.0, 0.0};
-    position[xAxis] = plane.physicalRegion.lower[xAxis]
-        + (static_cast<double>(x) + 0.5)
-            / static_cast<double>(plane.width)
-            * (plane.physicalRegion.upper[xAxis]
-                - plane.physicalRegion.lower[xAxis]);
-    position[yAxis] = plane.physicalRegion.lower[yAxis]
-        + (static_cast<double>(y) + 0.5)
-            / static_cast<double>(plane.height)
-            * (plane.physicalRegion.upper[yAxis]
-                - plane.physicalRegion.lower[yAxis]);
+    std::size_t offset = 0;
+    if (displayIsSpherical()) {
+        const auto mapping = planeMapping(state);
+        const auto logical = mapping.logicalFromScene(
+            static_cast<double>(x) + 0.5, static_cast<double>(displayY) + 0.5);
+        if (logical[0] < region.lower[xAxis] || logical[0] > region.upper[xAxis]
+            || logical[1] < region.lower[yAxis]
+            || logical[1] > region.upper[yAxis]) {
+            return tr("no data");  // cursor is outside the annular sector
+        }
+        position[xAxis] = logical[0];
+        position[yAxis] = logical[1];
+        const auto spanX = region.upper[xAxis] - region.lower[xAxis];
+        const auto spanY = region.upper[yAxis] - region.lower[yAxis];
+        const int col = std::clamp(static_cast<int>(
+            (logical[0] - region.lower[xAxis]) / spanX * plane.width),
+            0, plane.width - 1);
+        const int row = std::clamp(static_cast<int>(
+            (logical[1] - region.lower[yAxis]) / spanY * plane.height),
+            0, plane.height - 1);
+        offset = static_cast<std::size_t>(col)
+            + static_cast<std::size_t>(plane.width)
+                * static_cast<std::size_t>(row);
+    } else {
+        const auto y = plane.height - 1 - displayY;
+        offset = static_cast<std::size_t>(x)
+            + static_cast<std::size_t>(plane.width)
+                * static_cast<std::size_t>(y);
+        position[xAxis] = region.lower[xAxis]
+            + (static_cast<double>(x) + 0.5) / static_cast<double>(plane.width)
+                * (region.upper[xAxis] - region.lower[xAxis]);
+        position[yAxis] = region.lower[yAxis]
+            + (static_cast<double>(y) + 0.5) / static_cast<double>(plane.height)
+                * (region.upper[yAxis] - region.lower[yAxis]);
+    }
+    if (offset >= plane.values.size() || plane.valid[offset] == 0) {
+        return tr("no data");
+    }
     if (metadata.dimension == 3) {
         position[static_cast<std::size_t>(state.normal)]
             = m_slicePosition3d[static_cast<std::size_t>(state.normal)];
@@ -2347,13 +2410,30 @@ QString MainWindow::probeReadout(
     const auto levelText = metadata.hasPhysicalGeometry
         ? tr(" level=%1").arg(level)
         : QString();
+    const auto valueText = formatNumber(
+        static_cast<double>(plane.values[offset]), m_numberFormat);
+    if (displayIsSpherical()) {
+        // Report the physical display coordinates (R, Z) plus the native
+        // spherical (r, theta) the cell is stored at.
+        const auto display = sphericalToDisplay(position[xAxis], position[yAxis]);
+        return tr("R=%1 Z=%2 r=%3 %4=%5 value=%6%7 %8=(%9) %10")
+            .arg(formatNumber(display[0], m_numberFormat))
+            .arg(formatNumber(display[1], m_numberFormat))
+            .arg(formatNumber(position[xAxis], m_numberFormat))
+            .arg(QString(QChar(0x03B8)))  // theta
+            .arg(formatNumber(position[yAxis], m_numberFormat))
+            .arg(valueText)
+            .arg(levelText)
+            .arg(QString::fromLatin1(indexKind))
+            .arg(join(cell))
+            .arg(boxText);
+    }
     return tr("%1=%2 %3=%4 value=%5%6 %7=(%8) %9")
         .arg(QString::fromLatin1(axisNames[xAxis]))
         .arg(formatNumber(position[xAxis], m_numberFormat))
         .arg(QString::fromLatin1(axisNames[yAxis]))
         .arg(formatNumber(position[yAxis], m_numberFormat))
-        .arg(formatNumber(static_cast<double>(plane.values[offset]),
-            m_numberFormat))
+        .arg(valueText)
         .arg(levelText)
         .arg(QString::fromLatin1(indexKind))
         .arg(join(cell))
@@ -2383,6 +2463,28 @@ void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
     setActiveView(state);
     const auto& plane = *state.plane;
     if (!m_dataset || plane.width <= 0 || plane.height <= 0) {
+        return;
+    }
+    if (displayIsSpherical()) {
+        // The scene is warped (R, Z); re-slicing a logical (r, theta) subregion
+        // from it is deferred. Zoom the view only, leaving the full-domain
+        // warped raster in place.
+        const QRectF bounds(0.0, 0.0,
+            static_cast<double>(state.view->image().width()),
+            static_cast<double>(state.view->image().height()));
+        const auto selection = sceneRect.normalized().intersected(bounds);
+        if (selection.width() < 1.0 || selection.height() < 1.0) {
+            return;
+        }
+        state.view->zoomToRect(selection);
+        if (m_scaleGroup != nullptr) {
+            if (auto* checked = m_scaleGroup->checkedAction()) {
+                checked->setChecked(false);
+            }
+        }
+        if (m_scaleButton != nullptr) {
+            m_scaleButton->setText(tr("Custom"));
+        }
         return;
     }
     const auto clamped = sceneRect.normalized().intersected(
@@ -3062,6 +3164,32 @@ void MainWindow::chooseStandaloneDataset(const QString& caption, bool rawFab)
 
 namespace {
 
+// Scene-space annular-sector outline for a logical (r, theta) box: two
+// straight radial edges (constant theta) and two subdivided arcs (constant r).
+// Used for the spherical grid-box outlines and the picked-cell highlight.
+QPainterPath sphericalSectorPath(const PlaneMapping& mapping,
+    double r0, double r1, double t0, double t1)
+{
+    // ~1 degree per arc segment keeps the curve smooth; clamp so both tiny and
+    // whole-domain sectors stay reasonable.
+    const int steps = std::clamp(
+        static_cast<int>(std::ceil((t1 - t0) / 0.02)), 8, 512);
+    QPainterPath path;
+    path.moveTo(mapping.sceneFromLogical(r0, t0));
+    path.lineTo(mapping.sceneFromLogical(r1, t0));  // radial edge at theta0
+    for (int i = 1; i <= steps; ++i) {              // outer arc at r1
+        const double theta = t0 + (t1 - t0) * i / steps;
+        path.lineTo(mapping.sceneFromLogical(r1, theta));
+    }
+    path.lineTo(mapping.sceneFromLogical(r0, t1));  // radial edge at theta1
+    for (int i = 1; i <= steps; ++i) {              // inner arc at r0
+        const double theta = t1 - (t1 - t0) * i / steps;
+        path.lineTo(mapping.sceneFromLogical(r0, theta));
+    }
+    path.closeSubpath();
+    return path;
+}
+
 // Everything the FAB selector dock needs for a source, computed off the GUI
 // thread (see buildFabSelector) so its header scans / per-block preads never
 // block the event loop. `matched` distinguishes a recognized FAB or
@@ -3502,6 +3630,20 @@ void MainWindow::datasetCellActivated(const RealBox& physicalCell)
     const auto axes = displayAxes(m_activeView->normal);
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);
+    if (displayIsSpherical()) {
+        // xAxis is r, yAxis is theta: mark the picked cell as a curved sector.
+        const double r0 = physicalCell.lower[xAxis];
+        const double r1 = physicalCell.upper[xAxis];
+        const double t0 = physicalCell.lower[yAxis];
+        const double t1 = physicalCell.upper[yAxis];
+        std::optional<QPainterPath> highlight;
+        if (r1 > r0 && t1 > t0) {
+            highlight = sphericalSectorPath(
+                planeMapping(*m_activeView), r0, r1, t0, t1);
+        }
+        m_activeView->view->setCellHighlightPath(highlight);
+        return;
+    }
     const auto& region = plane.physicalRegion;
     const auto xExtent = region.upper[xAxis] - region.lower[xAxis];
     const auto yExtent = region.upper[yAxis] - region.lower[yAxis];
@@ -4372,6 +4514,8 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
         - plane.physicalRegion.lower[xAxis];
     const auto yExtent = plane.physicalRegion.upper[yAxis]
         - plane.physicalRegion.lower[yAxis];
+    const bool spherical = displayIsSpherical();
+    const auto mapping = planeMapping(state);
     for (int levelIndex = firstLevel; levelIndex <= lastLevel; ++levelIndex) {
         const auto& level = metadata.levels[static_cast<std::size_t>(levelIndex)];
         for (const auto& box : level.boxes) {
@@ -4393,6 +4537,22 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
             const auto xUpper = physicalBox.upper[xAxis];
             const auto yLower = physicalBox.lower[yAxis];
             const auto yUpper = physicalBox.upper[yAxis];
+            const auto color = levelIndex == firstLevel
+                ? QColor(Qt::white)
+                : QColor::fromRgb(static_cast<QRgb>(
+                    m_palette.levelColor(levelIndex, lastLevel)));
+            if (spherical) {
+                // xAxis is r, yAxis is theta: draw the box as a curved sector.
+                if (!(xUpper > xLower) || !(yUpper > yLower)) {
+                    continue;
+                }
+                GridBoxOverlay overlay;
+                overlay.color = color;
+                overlay.path = sphericalSectorPath(
+                    mapping, xLower, xUpper, yLower, yUpper);
+                overlays.push_back(std::move(overlay));
+                continue;
+            }
             const auto pixelX0 = std::round(
                 (xLower - plane.physicalRegion.lower[xAxis])
                     / xExtent * plane.width);
@@ -4412,11 +4572,7 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
             rectangle = rectangle.normalized().intersected(
                 QRectF(0.0, 0.0, plane.width, plane.height));
             if (!rectangle.isEmpty()) {
-                const auto color = levelIndex == firstLevel
-                    ? QColor(Qt::white)
-                    : QColor::fromRgb(static_cast<QRgb>(
-                        m_palette.levelColor(levelIndex, lastLevel)));
-                overlays.push_back({rectangle, color});
+                overlays.push_back({rectangle, color, QPainterPath{}});
             }
         }
     }
@@ -4551,6 +4707,13 @@ void MainWindow::showMetadata(
 std::optional<QRectF> MainWindow::preservedDataWindow(
     const PlaneViewState& state, const ScalarPlane& incoming) const
 {
+    // Spherical scenes are warped (R, Z) while the plane geometry is logical
+    // (r, theta); the linear viewport->physical->scene re-frame below does not
+    // apply. Spherical never re-slices a subregion (zoom is view-only), so the
+    // plain Preserve transform is already correct.
+    if (displayIsSpherical()) {
+        return std::nullopt;
+    }
     const auto& cached = *state.plane;
     const auto axes = displayAxes(state.normal);
     // Equal densities (or degenerate geometry) mean the preserved scene
@@ -4631,6 +4794,11 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     // Fresh immutable snapshots: replace the pointers, never mutate the
     // pointees a cached-planes refresh worker may still be reading.
     state.plane = std::make_shared<const ScalarPlane>(display.slice.plane);
+    // Spherical warps the raster into physical (R, Z); overlays and the probe
+    // map through displayRegion, which for every other system is just the
+    // plane's logical bounds (see PlaneMapping).
+    state.coordinateSystem = display.coordinateSystem;
+    state.displayRegion = display.displayRegion;
     state.contourPlane
         = std::make_shared<const ScalarPlane>(display.contourPlane);
     state.contourFinePlane
@@ -4654,6 +4822,16 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
         // Tracks the active view; if log was requested but fell back to linear,
         // the checkbox reflects that log did not apply.
         syncActiveViewColorControls(state);
+    }
+    // Spherical display warps the plane, so the straight-line profile tool and
+    // (below) the particle/vector overlays are suppressed until warped.
+    state.view->setLineToolEnabled(!displayIsSpherical());
+    if (m_viewDimension == 2) {
+        // The 2-D view carries no axis indicator normally; spherical labels its
+        // physical R (horizontal) and Z (vertical) axes.
+        state.view->setAxisIndicator(
+            displayIsSpherical() ? QStringLiteral("R") : QString(),
+            displayIsSpherical() ? QStringLiteral("Z") : QString());
     }
     updateGridBoxes(state);
     updateOverlay(state);

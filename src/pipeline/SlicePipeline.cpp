@@ -1,9 +1,11 @@
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 
 #include <amrexplorer/cache/ByteLruCache.hpp>
+#include <amrexplorer/core/CoordinateSystem.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/pipeline/DisplayCoordinator.hpp>
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
+#include <amrexplorer/render2d/SphericalWarp.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -133,6 +135,34 @@ std::string cacheBudgetDescription(std::uint64_t bytes)
     return std::to_string(bytes) + " bytes";
 }
 
+namespace {
+
+// Records the dataset's coordinate system on the result and, for 2-D spherical
+// data, replaces the logical (r, theta) raster with one warped into physical
+// (R, Z) display space. Non-spherical data keeps its raster untouched and its
+// display region equal to the plane's logical bounds. Safe to call when the
+// raster was intentionally not rendered (contour-only refresh): the display
+// region still updates from the plane's bounds.
+void applyDisplayCoordinates(
+    const DatasetMetadata& metadata, SliceDisplayResult& result)
+{
+    result.coordinateSystem = metadata.coordinateSystem;
+    const auto& logical = result.slice.plane.physicalRegion;
+    if (!isSpherical2D(metadata)) {
+        result.displayRegion = logical;
+        return;
+    }
+    result.displayRegion = sphericalDisplayBounds(logical);
+    if (result.image.width > 0 && result.image.height > 0
+        && !result.image.rgba.empty()) {
+        auto warped = warpSpherical(result.image, logical, maxSliceOutputDimension);
+        result.image = std::move(warped.image);
+        result.displayRegion = warped.displayRegion;
+    }
+}
+
+} // namespace
+
 SliceDisplayResult executeSlice(const std::shared_ptr<PlotfileDataset>& dataset,
     const SliceRequest& request,
     RangeMode rangeMode,
@@ -156,6 +186,7 @@ SliceDisplayResult executeSlice(const std::shared_ptr<PlotfileDataset>& dataset,
             .logarithmic = range.logarithmic,
             .palette = &palette
         });
+    applyDisplayCoordinates(dataset->metadata(), result);
     return result;
 }
 
@@ -336,6 +367,7 @@ SliceDisplayResult refreshCachedSlice(
     if (displayMode == DisplayMode::VelocityVectors) {
         result.vectors = std::move(vectors);
     }
+    applyDisplayCoordinates(dataset->metadata(), result);
     return result;
 }
 

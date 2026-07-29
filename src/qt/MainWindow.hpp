@@ -72,6 +72,7 @@ class IsoWidget;
 class LinePlotWindow;
 class ScientificDoubleSpinBox;
 class SequenceController;
+struct PlaneMapping;
 class UserGuideDialog;
 
 // These now live in the Qt-free pipeline layer (SlicePipeline.hpp); re-export
@@ -243,6 +244,14 @@ private:
         std::vector<ContourPolyline> contourPolylines;
         QString fieldName;
         std::optional<RealBox> visibleRegion;
+        // Dataset coordinate system (AMReX Header code). 2 (spherical) means
+        // `plane` holds logical (r, theta) data that `view` displays warped
+        // into physical (R, Z), with displayRegion giving that warped raster's
+        // (R, Z) bounds. For every other system displayRegion equals the
+        // plane's physical region and no warp occurs, so overlays and the probe
+        // can map through displayRegion uniformly.
+        int coordinateSystem = 0;
+        RealBox displayRegion;
         double displayMinimum = 0.0;
         double displayMaximum = 1.0;
         bool displayLogarithmic = false;
@@ -340,6 +349,13 @@ private:
     // state. Shared by setActiveView and showSlice's active-view branch.
     void syncActiveViewColorControls(const PlaneViewState& state);
     [[nodiscard]] std::array<int, 2> displayAxes(int normal) const;
+    // True when the active dataset is displayed as a warped 2-D spherical
+    // (r, theta) plane. Gates the coordinate-warp overlay, probe, and label
+    // paths; all other datasets keep their Cartesian behavior.
+    [[nodiscard]] bool displayIsSpherical() const;
+    // Coordinate mapper for a view: logical (x, y)/(r, theta) <-> scene pixels,
+    // built from the plane, the warped display region, and the pixmap size.
+    [[nodiscard]] PlaneMapping planeMapping(const PlaneViewState& state) const;
     void probeMoved(PlaneViewState& state, int x, int displayY);
     void probeClicked(PlaneViewState& state, int x, int displayY);
     [[nodiscard]] QString probeReadout(

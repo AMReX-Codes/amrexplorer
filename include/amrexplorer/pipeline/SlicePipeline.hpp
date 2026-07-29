@@ -39,6 +39,13 @@ struct SliceDisplayResult {
     SliceRequest request;
     SliceQueryResult slice;
     ImageBuffer image;
+    // Coordinate system of the dataset (AMReX Header code). 2 (spherical) warps
+    // `image` into physical (R, Z); all others leave it in logical space.
+    int coordinateSystem = 0;
+    // Physical bounds of `image` in display space: slice.plane.physicalRegion
+    // for non-spherical data, the (R, Z) sector bounding box for 2-D spherical.
+    // Overlays and the probe map through this.
+    RealBox displayRegion;
     std::vector<VectorSegment> vectors;
     // Contour modes only: the piecewise plane at data resolution the
     // contours were extracted from (the display plane itself when the data

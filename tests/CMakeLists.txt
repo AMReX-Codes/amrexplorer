@@ -46,6 +46,11 @@ add_executable(test_contours unit/test_contours.cpp)
 target_link_libraries(test_contours PRIVATE amrexplorer::render2d amrexplorer::warnings)
 add_test(NAME contours COMMAND test_contours)
 
+add_executable(test_spherical_coords unit/test_spherical_coords.cpp)
+target_link_libraries(test_spherical_coords
+    PRIVATE amrexplorer::core amrexplorer::render2d amrexplorer::warnings)
+add_test(NAME spherical_coords COMMAND test_spherical_coords)
+
 add_executable(test_vector_glyphs unit/test_vector_glyphs.cpp)
 target_link_libraries(test_vector_glyphs PRIVATE amrexplorer::render2d amrexplorer::warnings)
 add_test(NAME vector_glyphs COMMAND test_vector_glyphs)

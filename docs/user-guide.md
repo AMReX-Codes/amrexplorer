@@ -203,7 +203,9 @@ turns **Log** off; use a positive user minimum when necessary.
 
 Built-in palettes include rainbow, turbo, viridis, plasma, parula, coolwarm,
 and blackbody. Use **View > Palette > Load Palette File...** to load a custom
-`.pal` file.
+`.pal` file. **View > Palette > Reverse Colormap** flips the selected palette's
+color ramp (the "_r" variant, e.g. plasma_r) and stays applied as you switch
+between palettes.
 
 ## Grid boxes, contours, and vectors
 

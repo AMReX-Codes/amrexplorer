@@ -164,5 +164,39 @@ int main(int argc, char** argv)
     require(image.rgba[0] == rainbow.argb(0.0), "minimum value color mismatch");
     require(image.rgba[1] == rainbow.argb(1.0), "maximum value color mismatch");
     require(image.rgba[0] != image.rgba[1], "renderer endpoints mapped to one color");
+
+    // reversed(): the data color range [paletteStart, paletteEnd] is mirrored
+    // while the reserved slots (white/black/body) stay put.
+    const auto reversedRainbow = rainbow.reversed();
+    bool dataReversed = true;
+    for (int index = amrvis::Palette::paletteStart;
+         index <= amrvis::Palette::paletteEnd; ++index) {
+        const auto mirror = amrvis::Palette::paletteStart
+            + amrvis::Palette::paletteEnd - index;
+        dataReversed = dataReversed
+            && reversedRainbow.slotArgb(index) == rainbow.slotArgb(mirror);
+    }
+    require(dataReversed, "reversed() did not mirror the data color range");
+    require(reversedRainbow.slotArgb(amrvis::Palette::whiteIndex)
+                == rainbow.slotArgb(amrvis::Palette::whiteIndex)
+            && reversedRainbow.slotArgb(amrvis::Palette::blackIndex)
+                == rainbow.slotArgb(amrvis::Palette::blackIndex)
+            && reversedRainbow.slotArgb(amrvis::Palette::bodyIndex)
+                == rainbow.slotArgb(amrvis::Palette::bodyIndex),
+        "reversed() disturbed the reserved slots");
+
+    // The value-to-color mapping is flipped end to end (the "_r" variant).
+    require(reversedRainbow.argb(0.0) == rainbow.argb(1.0)
+            && reversedRainbow.argb(1.0) == rainbow.argb(0.0),
+        "reversed() did not flip the value-to-color endpoints");
+
+    // Reversing twice restores the original palette exactly (an involution).
+    const auto restored = reversedRainbow.reversed();
+    bool involution = true;
+    for (int index = 0; index < amrvis::Palette::slotCount; ++index) {
+        involution = involution
+            && restored.slotArgb(index) == rainbow.slotArgb(index);
+    }
+    require(involution, "reversing twice did not restore the palette");
     return 0;
 }

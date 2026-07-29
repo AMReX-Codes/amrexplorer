@@ -522,9 +522,17 @@ MainWindow::MainWindow(QWidget* parent)
         if (!label.isEmpty()) {
             label[0] = label[0].toUpper();
         }
-        widestBuiltin = std::max(widestBuiltin, paletteFm.horizontalAdvance(label));
+        // Reserve room for the reversed form ("Plasma_r") so the closed
+        // selector never elides the "_r" suffix syncPaletteSelector appends.
+        widestBuiltin = std::max(widestBuiltin,
+            paletteFm.horizontalAdvance(label + QStringLiteral("_r")));
         m_paletteSelector->addItem(label, static_cast<int>(index));
     }
+    // A toggle that reverses the selected palette (data -3), kept at the end of
+    // the popup. Its label reflects the state (see syncPaletteSelector); it is
+    // never the closed selection, so it does not affect the fixed width below.
+    m_paletteSelector->insertSeparator(m_paletteSelector->count());
+    m_paletteSelector->addItem(tr("Reverse Colormap"), -3);
     // Size the closed combo to exactly fit the longest builtin name (the popup
     // expands independently, so the "Load Palette File..." / custom entries are
     // never truncated there). Any custom entry shows elided when closed.
@@ -540,6 +548,10 @@ MainWindow::MainWindow(QWidget* parent)
             const auto selection = m_paletteSelector->currentData().toInt();
             if (selection >= 0) {
                 selectBuiltinPalette(selection);
+            } else if (selection == -3) {
+                // The "Reverse Colormap" toggle: flip the state, then
+                // syncPaletteSelector restores the current index to the palette.
+                setReversePalette(!m_reversePalette);
             }
             // selection == -2 is the transient "Custom: <file>" entry added by
             // syncPaletteSelector(); selecting it is a no-op.
@@ -1016,6 +1028,14 @@ void MainWindow::createMenus()
         paletteMenu->addAction(action);
     }
     paletteMenu->addSeparator();
+    // Reverses the selected palette's color ramp (the "_r" variant, e.g.
+    // plasma_r), applied on top of whichever builtin or file palette is active.
+    m_reversePaletteAction = paletteMenu->addAction(tr("&Reverse Colormap"));
+    m_reversePaletteAction->setCheckable(true);
+    m_reversePaletteAction->setChecked(m_reversePalette);
+    connect(m_reversePaletteAction, &QAction::toggled, this,
+        [this](bool on) { setReversePalette(on); });
+    paletteMenu->addSeparator();
     auto* loadPaletteAction = paletteMenu->addAction(tr("&Load Palette File..."));
     connect(loadPaletteAction, &QAction::triggered, this, [this] { loadPaletteFile(); });
 
@@ -1366,11 +1386,42 @@ void MainWindow::syncPaletteSelector()
     if (custom >= 0) {
         m_paletteSelector->removeItem(custom);
     }
+
+    const auto builtinLabel = [](int index) {
+        const auto raw =
+            builtinPaletteName(builtinPalettes[static_cast<std::size_t>(index)]);
+        auto label = QString::fromLatin1(
+            raw.data(), static_cast<qsizetype>(raw.size()));
+        if (!label.isEmpty()) {
+            label[0] = label[0].toUpper();
+        }
+        return label;
+    };
+    // The active palette carries an "_r" suffix (the plasma_r convention) so the
+    // closed selector reflects the reversal instead of just showing the name.
+    const QString suffix = m_reversePalette ? QStringLiteral("_r") : QString();
+    for (int item = 0; item < m_paletteSelector->count(); ++item) {
+        const auto entryData = m_paletteSelector->itemData(item);
+        if (!entryData.isValid()) {
+            continue;  // separator
+        }
+        const auto value = entryData.toInt();
+        if (value >= 0) {
+            m_paletteSelector->setItemText(item, builtinLabel(value)
+                + (!m_paletteFromFile && value == m_builtinIndex ? suffix : QString()));
+        } else if (value == -3) {
+            // The toggle item shows a check mark while reversal is on.
+            m_paletteSelector->setItemText(item,
+                (m_reversePalette ? QStringLiteral("✓ ") : QString())
+                    + tr("Reverse Colormap"));
+        }
+    }
+
     if (m_paletteFromFile) {
         const auto label =
-            tr("Custom: %1").arg(QFileInfo(m_paletteFilePath).fileName());
+            tr("Custom: %1").arg(QFileInfo(m_paletteFilePath).fileName()) + suffix;
         // Insert just after the builtins (and before the separator) so the
-        // "Load Palette File..." entry stays anchored at the bottom.
+        // reverse toggle stays anchored at the bottom.
         m_paletteSelector->insertItem(
             static_cast<int>(builtinPalettes.size()), label, -2);
         m_paletteSelector->setCurrentIndex(m_paletteSelector->findData(-2));
@@ -1413,7 +1464,7 @@ void MainWindow::loadPaletteFile()
 void MainWindow::applyPalette(const Palette& palette, std::optional<int> builtinIndex,
     const QString& filePath)
 {
-    m_palette = palette;
+    m_basePalette = palette;
     m_paletteFromFile = !builtinIndex.has_value();
     if (builtinIndex.has_value()) {
         m_builtinIndex = *builtinIndex;
@@ -1421,15 +1472,36 @@ void MainWindow::applyPalette(const Palette& palette, std::optional<int> builtin
     } else {
         m_paletteFilePath = filePath;
     }
-    m_colorBar->setPalette(&m_palette);
     syncPaletteChecks();
     syncPaletteSelector();
     saveSettings();
+    refreshPaletteDisplay();
+}
+
+void MainWindow::refreshPaletteDisplay()
+{
+    m_palette = m_reversePalette ? m_basePalette.reversed() : m_basePalette;
+    m_colorBar->setPalette(&m_palette);
     scheduleSliceRequest();
     updateGridBoxes();
     updateOverlays();
     updateCrosshairs();
     m_isoWidget->update();
+}
+
+void MainWindow::setReversePalette(bool reversed)
+{
+    if (reversed == m_reversePalette) {
+        return;
+    }
+    m_reversePalette = reversed;
+    if (m_reversePaletteAction != nullptr) {
+        const QSignalBlocker blocker(m_reversePaletteAction);
+        m_reversePaletteAction->setChecked(reversed);
+    }
+    saveSettings();
+    refreshPaletteDisplay();
+    syncPaletteSelector();
 }
 
 void MainWindow::showContoursDialog()
@@ -3185,7 +3257,7 @@ void MainWindow::restoreSettings()
         const auto path = settings.value(QStringLiteral("palette/filePath")).toString();
         if (!path.isEmpty()) {
             try {
-                m_palette = Palette::load(path.toStdString());
+                m_basePalette = Palette::load(path.toStdString());
                 m_paletteFromFile = true;
                 m_paletteFilePath = path;
                 paletteRestored = true;
@@ -3204,11 +3276,18 @@ void MainWindow::restoreSettings()
                 break;
             }
         }
-        m_palette = builtinPalette(
+        m_basePalette = builtinPalette(
             builtinPalettes[static_cast<std::size_t>(m_builtinIndex)]);
         m_paletteFromFile = false;
         m_paletteFilePath.clear();
     }
+    m_reversePalette = settings.value(QStringLiteral("palette/reversed"), false)
+        .toBool();
+    if (m_reversePaletteAction != nullptr) {
+        const QSignalBlocker blocker(m_reversePaletteAction);
+        m_reversePaletteAction->setChecked(m_reversePalette);
+    }
+    m_palette = m_reversePalette ? m_basePalette.reversed() : m_basePalette;
     m_colorBar->setPalette(&m_palette);
     syncPaletteChecks();
     syncPaletteSelector();
@@ -3278,6 +3357,7 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("palette/filePath"), m_paletteFilePath);
     settings.setValue(QStringLiteral("palette/builtin"),
         QLatin1String(builtinPaletteNames[static_cast<std::size_t>(m_builtinIndex)]));
+    settings.setValue(QStringLiteral("palette/reversed"), m_reversePalette);
     settings.setValue(QStringLiteral("numberFormat"), m_numberFormat);
     settings.setValue(QStringLiteral("animation/speed"),
         m_animationPanel->speedValue());

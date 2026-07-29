@@ -314,6 +314,14 @@ private:
     void loadPaletteFile();
     void applyPalette(const Palette& palette, std::optional<int> builtinIndex,
         const QString& filePath);
+    // Derives m_palette from m_basePalette and the reverse toggle, then pushes
+    // it to the color bar, iso widget, and a re-render. Shared by applyPalette
+    // and the reverse-colormap toggle.
+    void refreshPaletteDisplay();
+    // Sets the reverse-colormap state and keeps the menu action, toolbar
+    // selector, settings, and rendering in sync. The single entry point for
+    // both the menu toggle and the palette-selector toggle item.
+    void setReversePalette(bool reversed);
     // Per-field user range: each field remembers its own RangeMode and, when
     // User, its min/max. commitFieldRange snapshots the current widgets for a
     // field, applyFieldRange loads a field's snapshot (or the Visible default)
@@ -579,6 +587,7 @@ private:
     QActionGroup* m_levelGroup = nullptr;
     QActionGroup* m_variableGroup = nullptr;
     QActionGroup* m_paletteGroup = nullptr;
+    QAction* m_reversePaletteAction = nullptr;
     QAction* m_boxesAction = nullptr;
     QAction* m_slicePlanesAction = nullptr;
     QAction* m_resetZoomAction = nullptr;
@@ -637,9 +646,14 @@ private:
     std::filesystem::path m_fabSourcePath;
     std::filesystem::path m_fabDataRoot;
     bool m_fabMode = false;
+    // The selected palette before any reversal; m_palette is derived from it as
+    // m_reversePalette ? m_basePalette.reversed() : m_basePalette and is the
+    // value the renderer, color bar, and overlays actually use.
+    Palette m_basePalette = builtinPalette(BuiltinPalette::Rainbow);
     Palette m_palette = builtinPalette(BuiltinPalette::Rainbow);
     int m_builtinIndex = 0;
     bool m_paletteFromFile = false;
+    bool m_reversePalette = false;
     QString m_paletteFilePath;
     QString m_numberFormat = defaultNumberFormat();
     QStringList m_probeLines;

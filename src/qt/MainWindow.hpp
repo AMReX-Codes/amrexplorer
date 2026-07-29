@@ -174,6 +174,15 @@ public:
     // See fab-round-trip-loses-visible-region.
     [[nodiscard]] bool activeViewIsZoomedForTest() const;
 
+    // Test-only, for the spherical supersample zoom-preserve regression:
+    // change the warp factor through the same path as the menu, read the active
+    // view's warped-pixmap width (to confirm the raster resized), and read
+    // whether it is at fit-to-window without mutating it (unlike
+    // activeViewIsFitToWindowForTest, which refits as a side effect).
+    void setSphericalSupersampleForTest(int factor);
+    [[nodiscard]] int activeViewImageWidthForTest() const;
+    [[nodiscard]] bool activeViewFitsWindowForTest() const;
+
     // Test-only: shrink the open dataset's cache budget to force cache-pressure
     // fallback on the next non-cache slice, and read the current resident bytes
     // to size that budget. See cache-budget-exceeded-hard-fails-after-load.
@@ -391,6 +400,13 @@ private:
     // correct. See issue #45.
     [[nodiscard]] std::optional<QRectF> preservedDataWindow(
         const PlaneViewState& state, const ScalarPlane& incoming) const;
+    // Spherical supersample change: the physical (R, Z) bounds are unchanged
+    // but the warped pixmap is resized. Returns the scene rect that keeps the
+    // currently-visible physical window on screen at the new resolution, or
+    // nullopt when a plain refit is correct (first frame, dataset/domain
+    // change, or no resolution change).
+    [[nodiscard]] std::optional<QRectF> sphericalReframe(
+        const PlaneViewState& state, const SliceDisplayResult& display) const;
     void showSlice(PlaneViewState& state, const SliceDisplayResult& display);
     void updateOverlay(PlaneViewState& state);
     void updateOverlays();
@@ -538,8 +554,10 @@ private:
     QPushButton* m_scaleButton = nullptr;
     QMenu* m_levelMenu = nullptr;
     QMenu* m_variableMenu = nullptr;
-    // View submenu selecting the 2-D spherical warp supersample factor; enabled
-    // only while a spherical dataset is shown.
+    // "2-D Spherical" View section grouping the warped-display options; the
+    // whole submenu is enabled only while a 2-D spherical dataset is shown.
+    // Supersampling is its first child; more options will join it.
+    QMenu* m_sphericalMenu = nullptr;
     QMenu* m_sphericalSupersampleMenu = nullptr;
     QActionGroup* m_sphericalSupersampleGroup = nullptr;
     QActionGroup* m_scaleGroup = nullptr;

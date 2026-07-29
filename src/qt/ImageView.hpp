@@ -98,6 +98,9 @@ public:
     void setCellHighlightPath(const std::optional<QPainterPath>& scenePath);
     void setPlaceholder(const QString& text);
     [[nodiscard]] bool hasImage() const noexcept;
+    // True while the view auto-fits the whole image to the window (i.e. the
+    // user has not zoomed or set a fixed scale). Cleared by zoom/pan/scale.
+    [[nodiscard]] bool isFitToWindow() const noexcept { return m_fitOnResize; }
     [[nodiscard]] const QImage& image() const noexcept;
     [[nodiscard]] std::size_t pointOverlayCount() const noexcept;
     [[nodiscard]] const std::vector<QColor>& pointOverlayColors() const noexcept;

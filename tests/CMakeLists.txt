@@ -318,6 +318,20 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_raster_zoom_smoke_2d PROPERTIES TIMEOUT 30)
+    # Regression test for the 2-D spherical supersample control: zooming a
+    # spherical view then changing the warp factor must resize the warped raster
+    # while preserving the zoomed framing (not refit to the whole sector).
+    add_test(
+        NAME qt_spherical_supersample_smoke_2d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_spherical"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_spherical_supersample_2d"
+            -DMODE=spherical-supersample
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_spherical_supersample_smoke_2d PROPERTIES TIMEOUT 30)
     # Regression test for sequence-frame-range-cache-goes-stale: across sequence
     # frames the full-domain range cache must invalidate (its key includes the
     # dataset), so a zoomed Visible color bar tracks the current frame instead

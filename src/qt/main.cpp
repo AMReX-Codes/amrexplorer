@@ -616,6 +616,41 @@ int main(int argc, char* argv[])
         });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
+        && std::string_view(argv[1]) == "--spherical-supersample-smoke-test") {
+        // Zoom-preserve regression for the 2-D spherical supersample control:
+        // after zooming a spherical view (view-only, no re-slice), changing the
+        // warp factor must resize the warped raster yet keep the same zoomed
+        // framing rather than refitting to the whole sector.
+        const std::filesystem::path path(argv[2]);
+        auto beforeWidth = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, beforeWidth](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                // Spherical zoom is view-only; it must leave fit-to-window.
+                window.rubberBandZoomActiveViewForTest();
+                if (window.activeViewFitsWindowForTest()) {
+                    application.exit(2);
+                    return;
+                }
+                *beforeWidth = window.activeViewImageWidthForTest();
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application, beforeWidth] {
+                        const int afterWidth = window.activeViewImageWidthForTest();
+                        // The 8x warp resized the raster larger, and the view is
+                        // still zoomed (framing preserved, not refit to fit).
+                        const bool resized = afterWidth > *beforeWidth;
+                        const bool preserved = !window.activeViewFitsWindowForTest();
+                        application.exit(resized && preserved ? 0 : 3);
+                    }, Qt::SingleShotConnection);
+                // Default factor is 4x; bump to 8x so the raster grows.
+                window.setSphericalSupersampleForTest(8);
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--rubber-zoom-sync-smoke-test") {
         const std::filesystem::path path(argv[2]);
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,

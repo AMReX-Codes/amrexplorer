@@ -1042,13 +1042,17 @@ void MainWindow::createMenus()
     scaleMenu->addSeparator();
     scaleMenu->addAction(m_syncRubberBandZoomAction);
 
-    // Warp resolution for 2-D spherical display; enabled only while a spherical
-    // dataset is shown (see showSlice). Higher factors trace the curved cell
-    // boundaries more smoothly.
+    // "2-D Spherical" groups the options specific to warped spherical
+    // (r, theta) -> (R, Z) display; the whole submenu is enabled only while
+    // such a dataset is shown (see showSlice). More options will be added here.
+    m_sphericalMenu = new QMenu(tr("2-D Spherical"), this);
+    m_sphericalMenu->setEnabled(false);
+
+    // Warp resolution: higher factors trace the curved cell boundaries more
+    // smoothly at the cost of a larger warped raster.
     m_sphericalSupersampleGroup = new QActionGroup(this);
-    m_sphericalSupersampleMenu = new QMenu(tr("Spherical Supersa&mpling"), this);
-    m_sphericalSupersampleMenu->setEnabled(false);
-    constexpr std::array<int, 5> supersampleFactors{1, 2, 4, 6, 8};
+    m_sphericalSupersampleMenu = new QMenu(tr("&Supersampling"), this);
+    constexpr std::array<int, 5> supersampleFactors{1, 2, 4, 8, 16};
     for (const auto factor : supersampleFactors) {
         auto* action = new QAction(
             tr("%1x").arg(factor), m_sphericalSupersampleMenu);
@@ -1069,6 +1073,7 @@ void MainWindow::createMenus()
         });
         m_sphericalSupersampleMenu->addAction(action);
     }
+    m_sphericalMenu->addMenu(m_sphericalSupersampleMenu);
 
     m_levelMenu = new QMenu(tr("&Level"), this);
     m_levelGroup = new QActionGroup(this);
@@ -1117,7 +1122,8 @@ void MainWindow::createMenus()
     viewMenu->addAction(m_boxesAction);
     viewMenu->addAction(m_slicePlanesAction);
     viewMenu->addMenu(paletteMenu);
-    viewMenu->addMenu(m_sphericalSupersampleMenu);
+    viewMenu->addSeparator();
+    viewMenu->addMenu(m_sphericalMenu);
     viewMenu->addSeparator();
     viewMenu->addAction(m_contoursAction);
     viewMenu->addAction(m_particlesAction);
@@ -1620,6 +1626,29 @@ void MainWindow::viewFabForTest(std::size_t index)
 bool MainWindow::activeViewIsZoomedForTest() const
 {
     return m_activeView != nullptr && m_activeView->visibleRegion.has_value();
+}
+
+void MainWindow::setSphericalSupersampleForTest(int factor)
+{
+    // Mirror the menu handler: record the factor and re-warp the cached planes.
+    m_sphericalSupersample = factor;
+    if (displayIsSpherical()) {
+        scheduleSliceRequest(true);
+    }
+}
+
+int MainWindow::activeViewImageWidthForTest() const
+{
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return 0;
+    }
+    return m_activeView->view->image().width();
+}
+
+bool MainWindow::activeViewFitsWindowForTest() const
+{
+    return m_activeView != nullptr && m_activeView->view->hasImage()
+        && m_activeView->view->isFitToWindow();
 }
 
 void MainWindow::setCacheBudgetForTest(std::uint64_t bytes)
@@ -4805,37 +4834,77 @@ std::optional<QRectF> MainWindow::preservedDataWindow(
     return window;
 }
 
+std::optional<QRectF> MainWindow::sphericalReframe(
+    const PlaneViewState& state, const SliceDisplayResult& display) const
+{
+    // Only spherical, and only once a raster is already on screen: the first
+    // frame refits, and a dataset/domain change alters displayRegion (handled
+    // by the plain refit below). A view still at fit-to-window should stay
+    // fit-to-window (and keep auto-fitting on resize), so only re-frame when
+    // the user has actually zoomed.
+    if (!displayIsSpherical() || !state.view->hasImage()
+        || state.view->isFitToWindow()
+        || !(display.displayRegion == state.displayRegion)) {
+        return std::nullopt;
+    }
+    const auto oldSize = state.view->image().size();
+    const QSize newSize(display.image.width, display.image.height);
+    if (oldSize.width() <= 0 || oldSize.height() <= 0 || newSize == oldSize) {
+        return std::nullopt;  // no resolution change (e.g. a field/range refresh)
+    }
+    // The physical bounds are unchanged, so the currently-visible physical
+    // window occupies a scene rect scaled by the pixmap-resolution ratio.
+    const auto visible = state.view->mapToScene(
+        state.view->viewport()->rect()).boundingRect();
+    const double sx = static_cast<double>(newSize.width())
+        / static_cast<double>(oldSize.width());
+    const double sy = static_cast<double>(newSize.height())
+        / static_cast<double>(oldSize.height());
+    return QRectF(visible.x() * sx, visible.y() * sy,
+        visible.width() * sx, visible.height() * sy);
+}
+
 void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& display)
 {
     if (!display.rasterUnchanged) {
         if (!display.image.valid()) {
             throw std::runtime_error("renderer produced an invalid image");
         }
-        // Preserve/Refit/GeometryAware from the cached-vs-incoming request
-        // pair; the rationale lives with the decision in the coordinator.
-        const auto transformPolicy = DisplayCoordinator::rasterTransformPolicy(
-            state.hasCachedRequest, state.cachedRequest, display.request,
-            state.visibleRegion.has_value());
-        // Preserve keeps the scene transform, which is only equivalent to
-        // keeping what the user sees while the raster's pixels-per-data
-        // density is unchanged. A zoomed re-slice can arrive denser: the
-        // full-domain raster is capped at maxSliceOutputDimension while a
-        // subregion fits under the cap, so preserving the scene transform
-        // would show the crop over-zoomed with part of it off screen
-        // (issue #45). When the density changes, preserve the visible *data*
-        // window instead: capture the viewport in physical coordinates
-        // through the old plane's geometry before the swap, then re-frame
-        // that window through the new plane's geometry after it. Equal
-        // densities (pan, uncapped zoom) keep the plain Preserve behavior.
-        std::optional<QRectF> dataWindowInNewScene;
-        if (transformPolicy == ImageTransformPolicy::Preserve) {
-            dataWindowInNewScene = preservedDataWindow(
-                state, display.slice.plane);
-        }
-        state.view->setImage(
-            displayImageFor(display.image), transformPolicy);
-        if (dataWindowInNewScene) {
-            state.view->zoomToRect(*dataWindowInNewScene);
+        // A spherical supersample change keeps the same physical (R, Z) bounds
+        // but resizes the warped pixmap. Keep what the user is looking at by
+        // re-framing the visible window to the new resolution rather than
+        // refitting to the whole sector (the GeometryAware size-change refit).
+        if (const auto sphericalWindow = sphericalReframe(state, display)) {
+            state.view->setImage(displayImageFor(display.image),
+                ImageTransformPolicy::Preserve);
+            state.view->zoomToRect(*sphericalWindow);
+        } else {
+            // Preserve/Refit/GeometryAware from the cached-vs-incoming request
+            // pair; the rationale lives with the decision in the coordinator.
+            const auto transformPolicy = DisplayCoordinator::rasterTransformPolicy(
+                state.hasCachedRequest, state.cachedRequest, display.request,
+                state.visibleRegion.has_value());
+            // Preserve keeps the scene transform, which is only equivalent to
+            // keeping what the user sees while the raster's pixels-per-data
+            // density is unchanged. A zoomed re-slice can arrive denser: the
+            // full-domain raster is capped at maxSliceOutputDimension while a
+            // subregion fits under the cap, so preserving the scene transform
+            // would show the crop over-zoomed with part of it off screen
+            // (issue #45). When the density changes, preserve the visible *data*
+            // window instead: capture the viewport in physical coordinates
+            // through the old plane's geometry before the swap, then re-frame
+            // that window through the new plane's geometry after it. Equal
+            // densities (pan, uncapped zoom) keep the plain Preserve behavior.
+            std::optional<QRectF> dataWindowInNewScene;
+            if (transformPolicy == ImageTransformPolicy::Preserve) {
+                dataWindowInNewScene = preservedDataWindow(
+                    state, display.slice.plane);
+            }
+            state.view->setImage(
+                displayImageFor(display.image), transformPolicy);
+            if (dataWindowInNewScene) {
+                state.view->zoomToRect(*dataWindowInNewScene);
+            }
         }
     }
     // Fresh immutable snapshots: replace the pointers, never mutate the
@@ -4873,9 +4942,9 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     // Spherical display warps the plane, so the straight-line profile tool and
     // (below) the particle/vector overlays are suppressed until warped.
     state.view->setLineToolEnabled(!displayIsSpherical());
-    if (m_sphericalSupersampleMenu != nullptr) {
-        // The supersample control only affects the spherical warp.
-        m_sphericalSupersampleMenu->setEnabled(displayIsSpherical());
+    if (m_sphericalMenu != nullptr) {
+        // The 2-D Spherical options apply only to warped spherical display.
+        m_sphericalMenu->setEnabled(displayIsSpherical());
     }
     if (m_viewDimension == 2) {
         // The 2-D view carries no axis indicator normally; spherical labels its

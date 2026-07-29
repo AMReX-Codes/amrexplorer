@@ -9,6 +9,7 @@
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -186,6 +187,72 @@ void testVersion4(const std::filesystem::path& path)
             && index.maximum.front()[0] == 1.0
             && index.maximum.front()[1] == 101.0,
         "v4 FabArray maxima parsed wrong");
+}
+
+void testAcceptsNonFiniteV1(const std::filesystem::path& path)
+{
+    // Regression for nonfinite-header-statistics-unopenable: an overflowed run
+    // leaves +/-inf (and possibly NaN) in AMReX's per-block min/max, serialized
+    // as "inf" / "-inf" / "nan" text that operator>>(double) cannot parse. The
+    // reader must accept those tokens so the (loadable) plotfile still opens;
+    // metadataValueRange discards the non-finite stats downstream (File/Level
+    // range then falls back to Visible), so the values are stored as-is here.
+    writeHeader(path,
+        "1\n1\n2\n0\n"
+        "(2 0\n"
+        "((0,0) (1,3) (0,0))\n"
+        "((2,0) (3,3) (0,0))\n"
+        ")\n"
+        "2\n"
+        "FabOnDisk: Cell_D_00000 0\n"
+        "FabOnDisk: Cell_D_00000 4096\n"
+        "\n"
+        "2,2\n"                                  // per-block minima shape
+        "inf,-inf,\n"                            // box 0: +inf, -inf
+        "nan,2.00000000000000000e+00,\n"         // box 1: nan, finite
+        "\n"
+        "2,2\n"                                  // per-block maxima shape
+        "1.00000000000000000e+00,1.01000000000000000e+02,\n"
+        "3.00000000000000000e+00,1.03000000000000000e+02,\n");
+    const auto index = readHeader(path, 2, "1-nonfinite");
+    require(index.hasPerBlockStatistics,
+        "non-finite v1 statistics were not parsed");
+    require(index.minimum.size() == 2 && index.minimum.front().size() == 2,
+        "non-finite v1 minima shape mismatch");
+    require(std::isinf(index.minimum[0][0]) && index.minimum[0][0] > 0.0,
+        "v1 +inf minimum not parsed");
+    require(std::isinf(index.minimum[0][1]) && index.minimum[0][1] < 0.0,
+        "v1 -inf minimum not parsed");
+    require(std::isnan(index.minimum[1][0]), "v1 nan minimum not parsed");
+    require(index.minimum[1][1] == 2.0,
+        "a finite value alongside non-finite ones was mis-parsed");
+}
+
+void testAcceptsNonFiniteV4(const std::filesystem::path& path)
+{
+    // The same leniency on the version-4 FabArray-wide min/max list.
+    writeHeader(path,
+        "4\n1\n2\n0\n"
+        "(2 0\n"
+        "((0,0) (1,3) (0,0))\n"
+        "((2,0) (3,3) (0,0))\n"
+        ")\n"
+        "2\n"
+        "FabOnDisk: Cell_D_00000 0\n"
+        "FabOnDisk: Cell_D_00000 4096\n"
+        "-inf,inf,\n"                            // FA minima: -inf, +inf
+        "nan,1.01000000000000000e+02,\n"         // FA maxima: nan, finite
+        "((8, (64 11 52 0 1 12 0 1023)),(8, (8 7 6 5 4 3 2 1)))\n");
+    const auto index = readHeader(path, 2, "4-nonfinite");
+    require(index.minimum.size() == 1 && index.minimum.front().size() == 2,
+        "non-finite v4 minima shape mismatch");
+    require(std::isinf(index.minimum.front()[0]) && index.minimum.front()[0] < 0.0,
+        "v4 -inf minimum not parsed");
+    require(std::isinf(index.minimum.front()[1]) && index.minimum.front()[1] > 0.0,
+        "v4 +inf minimum not parsed");
+    require(std::isnan(index.maximum.front()[0]), "v4 nan maximum not parsed");
+    require(index.realDescriptor == kRealDescriptor,
+        "v4 RealDescriptor not parsed after non-finite statistics");
 }
 
 // A crafted header must be rejected with MetadataReadError specifically (not
@@ -407,6 +474,8 @@ int main()
     testVersion2(scratch / "v2_H");
     testVersion3(scratch / "v3_H");
     testVersion4(scratch / "v4_H");
+    testAcceptsNonFiniteV1(scratch / "v1_nonfinite_H");
+    testAcceptsNonFiniteV4(scratch / "v4_nonfinite_H");
     testRejectsOversizedMatrix(scratch / "bad_matrix_H");
     testRejectsMatrixShapeMismatch(scratch / "bad_shape_H");
     testRejectsMalformedMatrixDimensions(scratch / "bad_dims_H");

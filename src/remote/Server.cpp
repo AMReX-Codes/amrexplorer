@@ -405,13 +405,6 @@ private:
         if (request == nullptr || request->path.empty()) {
             throw std::invalid_argument("dataset path is empty");
         }
-        {
-            std::scoped_lock lock(m_stateMutex);
-            if (m_datasets.size() >= m_options.maximumDatasets) {
-                throw RemoteError(ErrorCode::ResourceLimitExceeded,
-                    "session dataset limit exceeded");
-            }
-        }
         const auto id = DatasetId{m_nextDatasetId.fetch_add(1)};
         std::shared_ptr<LocalDatasetSession> dataset;
         try {
@@ -422,6 +415,10 @@ private:
         }
         {
             std::scoped_lock lock(m_stateMutex);
+            if (m_datasets.size() >= m_options.maximumDatasets) {
+                throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                    "session dataset limit exceeded");
+            }
             m_datasets.emplace(id.value, dataset);
         }
         OpenedDataset opened;

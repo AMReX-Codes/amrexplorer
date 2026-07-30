@@ -117,6 +117,12 @@ int main()
         other.composition = amrvis::CompositionPolicy::ExactLevel;
         require(!amrvis::sameSliceSpec(base, other), "composition difference missed");
     }
+    {
+        auto other = base;
+        other.includeGridBoxes = true;
+        require(!amrvis::sameSliceSpec(base, other),
+            "grid-overlay difference missed");
+    }
     // --- coveredCells -----------------------------------------------------
     // A [0,9] cell-centered level with cell size 1 spans physical [0, 10].
     const auto grid = makeMetadata(2, 1.0);

@@ -6,6 +6,7 @@
 #include <amrexplorer/io/PlotfileDataset.hpp>
 
 #include <cstdint>
+#include <vector>
 
 namespace amrvis {
 
@@ -16,9 +17,17 @@ struct SliceQueryMetrics {
     std::uint64_t payloadBytesRead = 0;
 };
 
+struct SliceGridBox {
+    int level = 0;
+    RealBox physicalRegion;
+};
+
 struct SliceQueryResult {
     ScalarPlane plane;
     SliceQueryMetrics metrics;
+    bool gridBoxesIncluded = false;
+    bool gridBoxesTruncated = false;
+    std::vector<SliceGridBox> gridBoxes;
 };
 
 class SliceQuery {

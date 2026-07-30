@@ -591,6 +591,43 @@ int main(int argc, char* argv[])
                     "127.0.0.1", server->port(), path);
             });
     } else if (argc == 3
+        && std::string_view(argv[1]) == "--remote-grid-boxes-smoke-test") {
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        auto boxLoads = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, boxLoads](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                window.setGridBoxesVisibleForTest(false);
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application, boxLoads] {
+                        if (window.activeViewGridBoxCountForTest() == 0) {
+                            application.exit(1);
+                            return;
+                        }
+                        if ((*boxLoads)++ == 0) {
+                            window.setGridBoxesVisibleForTest(false);
+                            window.setGridBoxesVisibleForTest(true);
+                            return;
+                        }
+                        application.exit(0);
+                    });
+                window.setGridBoxesVisibleForTest(true);
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                window.openRemoteDataset(
+                    "127.0.0.1", server->port(), path);
+            });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--remote-sequence-smoke-test") {
         smokeServer = std::make_shared<amrvis::remote::Server>();
         smokeServerThread.emplace(

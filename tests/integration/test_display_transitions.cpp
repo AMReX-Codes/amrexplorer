@@ -24,6 +24,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -241,6 +242,90 @@ std::pair<double, double> planeExtrema(const amrvis::ScalarPlane& plane)
     return *range;
 }
 
+class RecordingSession final : public amrvis::DatasetSession {
+public:
+    explicit RecordingSession(std::shared_ptr<amrvis::DatasetSession> delegate)
+        : m_delegate(std::move(delegate))
+    {
+    }
+
+    [[nodiscard]] amrvis::DatasetId id() const noexcept override
+    {
+        return m_delegate->id();
+    }
+    [[nodiscard]] const amrvis::DatasetMetadata& metadata() const noexcept override
+    {
+        return m_delegate->metadata();
+    }
+    [[nodiscard]] const amrvis::MetadataReadMetrics& metadataReadMetrics()
+        const noexcept override
+    {
+        return m_delegate->metadataReadMetrics();
+    }
+    [[nodiscard]] const std::string& fileVersion() const noexcept override
+    {
+        return m_delegate->fileVersion();
+    }
+    [[nodiscard]] const std::vector<amrvis::ParticleSpeciesMetadata>&
+    particleSpecies() const noexcept override
+    {
+        return m_delegate->particleSpecies();
+    }
+    [[nodiscard]] amrvis::ViewDataResult requestView(
+        const amrvis::ViewDataRequest& request,
+        amrvis::StopToken cancellation = {}) override
+    {
+        if (const auto* slice = std::get_if<amrvis::SliceRequest>(&request)) {
+            m_gridBoxRequests.push_back(slice->includeGridBoxes);
+        }
+        return m_delegate->requestView(request, cancellation);
+    }
+    [[nodiscard]] amrvis::DatasetPage requestDatasetPage(
+        const amrvis::DatasetPageRequest& request,
+        amrvis::StopToken cancellation = {}) override
+    {
+        return m_delegate->requestDatasetPage(request, cancellation);
+    }
+    [[nodiscard]] std::optional<amrvis::ValueRange> requestRange(
+        const amrvis::RangeRequest& request,
+        amrvis::StopToken cancellation = {}) override
+    {
+        return m_delegate->requestRange(request, cancellation);
+    }
+    [[nodiscard]] bool rangeAvailable(
+        const amrvis::RangeRequest& request) const noexcept override
+    {
+        return m_delegate->rangeAvailable(request);
+    }
+    [[nodiscard]] amrvis::ParticleSample requestParticleSample(
+        const std::string& species, double fraction, std::uint64_t seed,
+        amrvis::StopToken cancellation = {}) override
+    {
+        return m_delegate->requestParticleSample(
+            species, fraction, seed, cancellation);
+    }
+    [[nodiscard]] amrvis::CacheMetrics cacheMetrics() const override
+    {
+        return m_delegate->cacheMetrics();
+    }
+    [[nodiscard]] bool setCacheBudget(std::uint64_t bytes) override
+    {
+        return m_delegate->setCacheBudget(bytes);
+    }
+    void clearUnpinnedCache() override { m_delegate->clearUnpinnedCache(); }
+    void close() noexcept override { m_delegate->close(); }
+
+    [[nodiscard]] const std::vector<bool>& gridBoxRequests() const noexcept
+    {
+        return m_gridBoxRequests;
+    }
+    void clearGridBoxRequests() { m_gridBoxRequests.clear(); }
+
+private:
+    std::shared_ptr<amrvis::DatasetSession> m_delegate;
+    std::vector<bool> m_gridBoxRequests;
+};
+
 } // namespace
 
 int main()
@@ -373,6 +458,34 @@ int main()
             "no vector glyphs were generated");
         requireDisplayInvariants(vectors.dataset->metadata(),
             vectors.displays.front(), palette, "initial vectors");
+
+        auto backing = std::make_shared<amrvis::LocalDatasetSession>(
+            root2d, amrvis::DatasetId{nextId++}, bigBudget);
+        auto recording = std::make_shared<RecordingSession>(backing);
+        amrvis::SliceRequest request;
+        request.dataset = recording->id();
+        request.field = amrvis::FieldId{0};
+        request.normalDirection = 1;
+        request.physicalPosition = 0.5;
+        request.visibleRegion
+            = amrvis::datasetSampleBounds(recording->metadata());
+        request.maximumLevel = recording->metadata().finestLevel;
+        request.outputSize = {16, 16};
+        request.includeGridBoxes = true;
+        static_cast<void>(amrvis::executeSliceWithFallback(recording, request,
+            amrvis::RangeMode::File, std::nullopt, false, palette,
+            amrvis::DisplayMode::RasterContours, 0, 0, 4, {}));
+        require(recording->gridBoxRequests()
+                == std::vector<bool>{true, false},
+            "contour mode requested the grid-box list more than once");
+
+        recording->clearGridBoxRequests();
+        static_cast<void>(amrvis::executeSliceWithFallback(recording, request,
+            amrvis::RangeMode::File, std::nullopt, false, palette,
+            amrvis::DisplayMode::VelocityVectors, 0, 0, 4, {}));
+        require(recording->gridBoxRequests()
+                == std::vector<bool>{true, false, false},
+            "vector mode requested the grid-box list more than once");
     }
 
     // --- zoomed load: region honored, clipped, or dropped ------------------

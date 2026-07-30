@@ -614,17 +614,25 @@ MainWindow::MainWindow(QWidget* parent)
                     applyFieldRange(newField);
                 }
             }
+            // A deferred full-domain range store (m_pendingRangeStore) is keyed
+            // to the field/level/mode in effect when it was queued. Changing any
+            // of them means a completing 3-D Visible sync would store its union
+            // under the wrong key, so drop the pending store here (the sync
+            // completion also re-checks the key; see range-cache-staleness-races).
+            m_pendingRangeStore.reset();
             updateRangeModeAvailability();
             scheduleSliceRequest();
         });
     connect(m_levelSelector, qOverload<int>(&QComboBox::currentIndexChanged),
         this, [this](int) {
             configureSlicePositionControls();
+            m_pendingRangeStore.reset();  // see the field selector above
             updateRangeModeAvailability();
             scheduleSliceRequest();
         });
     connect(m_rangeMode, qOverload<int>(&QComboBox::currentIndexChanged),
         this, [this](int) {
+            m_pendingRangeStore.reset();  // see the field selector above
             updateRangeModeAvailability();
             const auto userRange = static_cast<RangeMode>(
                 m_rangeMode->currentData().toInt()) == RangeMode::User;
@@ -4844,7 +4852,17 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     // Cache the full-domain range whenever we get a non-zoomed
                     // Visible-range slice; reuse it for zoomed (subregion)
                     // slices so the color bar stays stable during pan and zoom.
-                    const bool isFullDomain = !state.visibleRegion.has_value();
+                    // Whether this slice covered the full domain must come from
+                    // the request that produced it, not live view state:
+                    // rubber-band zoom / pan / reset-zoom mutate
+                    // state.visibleRegion without bumping sliceGeneration (they
+                    // only schedule the debounced re-slice), so a slice in
+                    // flight when one of those fires would be misclassified --
+                    // caching a subregion range as the full-domain range on a
+                    // reset, or dropping the full-domain range on a zoom
+                    // (range-cache-staleness-races).
+                    const bool isFullDomain = result.request.visibleRegion
+                        == datasetSampleBounds(dataset->metadata());
                     const DisplayCoordinator::RangeKey rangeKey{
                         result.request.dataset, result.request.field,
                         result.request.maximumLevel,
@@ -5467,8 +5485,25 @@ void MainWindow::syncVisibleRanges()
                 // queued the union is about to be recomputed with newer
                 // planes — leave the store for the rerun's completion.
                 if (m_pendingRangeStore && !m_visibleSyncRerun) {
-                    m_displayCoordinator.storeFullDomainRange(
-                        *m_pendingRangeStore, outcome.sync->range);
+                    // Only store if the pending key still describes the current
+                    // (dataset, field, level, composition): a full-domain
+                    // arrival's key can outlive its own sync (e.g. its
+                    // syncVisibleRanges early-returned because the mode was
+                    // File), and this sync's union is for the *current* field,
+                    // so storing it under the stale key would poison that
+                    // field's cached range (range-cache-staleness-races).
+                    const FieldId liveField{
+                        m_fieldSelector->currentData().toUInt()};
+                    const auto [liveComposition, liveMaximumLevel] =
+                        decodeLevelData(m_levelSelector->currentData().toInt(),
+                            m_dataset->metadata().finestLevel);
+                    const DisplayCoordinator::RangeKey liveKey{
+                        m_dataset->id(), liveField, liveMaximumLevel,
+                        liveComposition};
+                    if (*m_pendingRangeStore == liveKey) {
+                        m_displayCoordinator.storeFullDomainRange(
+                            *m_pendingRangeStore, outcome.sync->range);
+                    }
                     m_pendingRangeStore.reset();
                 }
             } else if (generation != m_generation) {

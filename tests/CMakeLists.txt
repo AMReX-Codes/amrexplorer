@@ -394,6 +394,16 @@ if(TARGET amrexplorer_qt)
     set_tests_properties(qt_remote_silent_hello_close_smoke PROPERTIES
         TIMEOUT 10)
 
+    add_test(
+        NAME qt_remote_sequence_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-sequence-smoke-test "${remote_server_fixture_dir}"
+    )
+    set_tests_properties(qt_remote_sequence_smoke PROPERTIES
+        FIXTURES_REQUIRED remote_server_materialized
+        TIMEOUT 30)
+
     add_executable(test_user_guide_dialog
         unit/test_user_guide_dialog.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/UserGuideDialog.cpp"

@@ -60,6 +60,41 @@ std::array<int, 2> finestNativeOutputSize(
     return {cells(axes[0]), cells(axes[1])};
 }
 
+std::array<int, 2> viewportBoundedOutputSize(
+    const DatasetMetadata& metadata, const RealBox& region, int normal,
+    std::array<int, 2> viewportSize)
+{
+    viewportSize[0] = std::clamp(
+        viewportSize[0], 1, maxSliceOutputDimension);
+    viewportSize[1] = std::clamp(
+        viewportSize[1], 1, maxSliceOutputDimension);
+    const auto axes = slicePlaneAxes(metadata.dimension, normal);
+    auto extentX = region.upper[static_cast<std::size_t>(axes[0])]
+        - region.lower[static_cast<std::size_t>(axes[0])];
+    auto extentY = region.upper[static_cast<std::size_t>(axes[1])]
+        - region.lower[static_cast<std::size_t>(axes[1])];
+    if (isSpherical2D(metadata)) {
+        // Radius and angle have heterogeneous units. Use their finest-level
+        // sample counts as the normalized display aspect instead of comparing
+        // raw physical extents with unrelated dimensions.
+        const auto normalized = finestNativeOutputSize(
+            metadata, region, normal);
+        extentX = static_cast<double>(normalized[0]);
+        extentY = static_cast<double>(normalized[1]);
+    }
+    if (!(extentX > 0.0) || !(extentY > 0.0)) {
+        return {1, 1};
+    }
+    const auto fit = std::min(
+        static_cast<double>(viewportSize[0]) / extentX,
+        static_cast<double>(viewportSize[1]) / extentY);
+    return {
+        std::clamp(static_cast<int>(std::lround(extentX * fit)),
+            1, viewportSize[0]),
+        std::clamp(static_cast<int>(std::lround(extentY * fit)),
+            1, viewportSize[1])};
+}
+
 bool sameSliceSpec(const SliceRequest& lhs, const SliceRequest& rhs)
 {
     return lhs.dataset == rhs.dataset && lhs.field == rhs.field
@@ -543,10 +578,19 @@ InitialSliceResult executeSessionFrameLoad(
                     region.upper[index] = upper;
                 }
                 request.visibleRegion = region;
+                const auto hasOutputSize = !spec.outputSizes.empty();
                 request.outputSize = entry < spec.outputSizes.size()
                     ? spec.outputSizes[entry]
-                    : finestNativeOutputSize(metadata, request.visibleRegion,
-                        request.normalDirection);
+                    : (spec.outputSizesAreViewportBounds && hasOutputSize
+                              ? spec.outputSizes.back()
+                              : finestNativeOutputSize(metadata,
+                                    request.visibleRegion,
+                                    request.normalDirection));
+                if (spec.outputSizesAreViewportBounds && hasOutputSize) {
+                    request.outputSize = viewportBoundedOutputSize(metadata,
+                        request.visibleRegion, request.normalDirection,
+                        request.outputSize);
+                }
                 request.outputSize[0] = std::clamp(
                     request.outputSize[0], 1, maxSliceOutputDimension);
                 request.outputSize[1] = std::clamp(

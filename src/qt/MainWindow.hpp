@@ -93,6 +93,8 @@ public:
     void openDataset(const std::filesystem::path& path, bool metadataOnly = false);
     void openRemoteDataset(
         std::string host, std::uint16_t port, std::string remotePath);
+    void openRemoteSequence(std::string host, std::uint16_t port,
+        const std::vector<std::string>& remotePaths);
     // Opens a plotfile sequence (the legacy "-a" file animation): frames are
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.
@@ -395,6 +397,8 @@ private:
     [[nodiscard]] std::array<int, 2> displayAxes(int normal) const;
     [[nodiscard]] std::array<int, 2> nativeOutputSize(
         const PlaneViewState& state) const;
+    [[nodiscard]] std::array<int, 2> viewportPixelSize(
+        const PlaneViewState& state) const;
     [[nodiscard]] std::array<int, 2> sliceOutputSize(
         const PlaneViewState& state, bool forceRemote = false) const;
     // True when the active dataset is displayed as a warped 2-D spherical
@@ -673,6 +677,7 @@ private:
     std::filesystem::path m_datasetPath;
     std::string m_remoteHost;
     std::uint16_t m_remotePort = 0;
+    bool m_remoteSequence = false;
     struct MultiFabReturnState {
         std::filesystem::path path;
         std::filesystem::path dataRoot;

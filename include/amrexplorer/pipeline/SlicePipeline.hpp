@@ -120,6 +120,10 @@ struct FrameSliceSpec {
     std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
     std::vector<std::optional<RealBox>> visibleRegions;  // per view, normal order
     std::vector<std::array<int, 2>> outputSizes;  // per view, viewport pixels
+    // When true, outputSizes are viewport bounds rather than exact raster
+    // dimensions; the frame loader preserves the physical aspect ratio within
+    // each bound after it has opened the frame and knows its geometry.
+    bool outputSizesAreViewportBounds = false;
     bool particleSelectionInitialized = false;
     std::vector<std::string> particleSpecies;
     double particleFraction = 1.0;
@@ -155,6 +159,12 @@ inline constexpr int maxSliceOutputDimension = maxViewOutputDimension;
 // fixed scales magnify it through the view zoom.
 [[nodiscard]] std::array<int, 2> finestNativeOutputSize(
     const DatasetMetadata& metadata, const RealBox& region, int normal);
+
+// Fits a physical slice region into a pixel bound without distorting its
+// in-plane aspect ratio.
+[[nodiscard]] std::array<int, 2> viewportBoundedOutputSize(
+    const DatasetMetadata& metadata, const RealBox& region, int normal,
+    std::array<int, 2> viewportSize);
 
 // The cache-key comparison for a cached slice: everything a cached slice
 // depends on. Range, log scale, palette, and contour count are deliberately

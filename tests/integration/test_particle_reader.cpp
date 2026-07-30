@@ -1,5 +1,5 @@
 #include <amrexplorer/io/ParticleReader.hpp>
-#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/data/LocalDatasetSession.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 
@@ -313,7 +313,7 @@ int main(int argc, char* argv[])
         }
         auto preparedMetadata
             = amrvis::PlotfileMetadataReader{}.read(preparedRoot);
-        amrvis::PlotfileDataset preparedDataset(
+        amrvis::LocalDatasetSession preparedDataset(
             preparedRoot, amrvis::DatasetId{1}, 1024 * 1024,
             std::move(preparedMetadata));
         require(preparedDataset.particleSpecies().size() == 2,

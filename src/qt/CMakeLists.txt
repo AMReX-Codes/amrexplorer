@@ -57,6 +57,7 @@ endif()
 target_link_libraries(amrexplorer_qt
     PRIVATE
         amrexplorer::core
+        amrexplorer::data
         amrexplorer::io
         amrexplorer::query
         amrexplorer::render2d

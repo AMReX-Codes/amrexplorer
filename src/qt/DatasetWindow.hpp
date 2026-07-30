@@ -5,6 +5,7 @@
 #include <amrexplorer/core/Geometry.hpp>
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/StopToken.hpp>
+#include <amrexplorer/data/DatasetSession.hpp>
 
 #include <QString>
 #include <QWidget>
@@ -18,17 +19,13 @@ class QCloseEvent;
 class QLabel;
 class QTabWidget;
 
-namespace amrvis {
-class PlotfileDataset;
-}
-
 namespace amrvis::qt {
 
 // Everything one read of the dataset window needs: the dataset and field,
 // the physical region of the source view, and for 3-D the view normal plus
 // the current slice position.
 struct DatasetRequest {
-    std::shared_ptr<PlotfileDataset> dataset;
+    std::shared_ptr<DatasetSession> dataset;
     FieldId field;
     QString fieldName;
     RealBox region;

@@ -4,6 +4,7 @@
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/StopToken.hpp>
+#include <amrexplorer/data/DatasetSession.hpp>
 #include <amrexplorer/io/ParticleReader.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/pipeline/DisplayMode.hpp>
@@ -30,8 +31,6 @@
 // orchestrates these from its request/completion handlers.
 
 namespace amrvis {
-
-class PlotfileDataset;
 
 struct SliceDisplayResult {
     // The request that produced everything below; the GUI keeps it as the
@@ -82,7 +81,7 @@ struct SliceDisplayResult {
 };
 
 struct InitialSliceResult {
-    std::shared_ptr<PlotfileDataset> dataset;
+    std::shared_ptr<DatasetSession> dataset;
     // One entry per displayed view, ordered by normal axis (2-D: one entry).
     std::vector<SliceDisplayResult> displays;
     std::vector<ParticleSample> particles;
@@ -184,7 +183,7 @@ inline constexpr int maxSliceOutputDimension = 4096;
 
 // Executes the display slice and resolves its range, rendering the raster.
 [[nodiscard]] SliceDisplayResult executeSlice(
-    const std::shared_ptr<PlotfileDataset>& dataset, const SliceRequest& request,
+    const std::shared_ptr<DatasetSession>& dataset, const SliceRequest& request,
     RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, StopToken cancellation);
@@ -192,7 +191,7 @@ inline constexpr int maxSliceOutputDimension = 4096;
 // Vector mode queries the U- and V-component planes independently and
 // derives arrow glyphs from them. Both slices share the raster request's
 // region, level, and output size so the planes line up sample for sample.
-void appendVectorGlyphs(const std::shared_ptr<PlotfileDataset>& dataset,
+void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
     SliceRequest request, FieldId uField, FieldId vField, int count,
     StopToken cancellation, SliceDisplayResult& result);
 
@@ -205,7 +204,7 @@ void appendVectorGlyphs(const std::shared_ptr<PlotfileDataset>& dataset,
 // error instead (plain untranslated text; the GUI wraps failures in its own
 // translated message).
 [[nodiscard]] SliceDisplayResult executeSliceWithFallback(
-    const std::shared_ptr<PlotfileDataset>& dataset, SliceRequest request,
+    const std::shared_ptr<DatasetSession>& dataset, SliceRequest request,
     RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
@@ -215,7 +214,7 @@ void appendVectorGlyphs(const std::shared_ptr<PlotfileDataset>& dataset,
 // Extracts contour polylines for the request at data resolution and maps
 // them to display-plane pixel space; caches the fine plane on the result so
 // range and contour-count changes can re-extract without a new SliceQuery.
-void appendContours(const std::shared_ptr<PlotfileDataset>& dataset,
+void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request, int contourCount, double minimum,
     double maximum, bool logarithmic, StopToken cancellation,
     SliceDisplayResult& result);
@@ -228,7 +227,7 @@ void appendContours(const std::shared_ptr<PlotfileDataset>& dataset,
 // the view's pixmap. Vector glyphs are reused from the cache: they do not
 // depend on palette/log/range.
 [[nodiscard]] SliceDisplayResult refreshCachedSlice(
-    const std::shared_ptr<PlotfileDataset>& dataset,
+    const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request, ScalarPlane displayPlane,
     ScalarPlane contourPlane, ScalarPlane contourFinePlane,
     int contourFineFactor, std::vector<VectorSegment> vectors,
@@ -258,7 +257,7 @@ void recomputeContourPolylines(SliceDisplayResult& result);
 // names are ignored, matching the behavior needed when a plotfile sequence
 // frame does not contain every species selected on another frame.
 [[nodiscard]] std::vector<ParticleSample> loadParticleSamples(
-    const PlotfileDataset& dataset,
+    DatasetSession& dataset,
     std::span<const std::string> selectedSpecies, double fraction,
     std::uint64_t seed, StopToken cancellation = {});
 
@@ -275,5 +274,10 @@ void recomputeContourPolylines(SliceDisplayResult& result);
     StopToken cancellation,
     std::optional<PlotfileMetadataResult> preparedMetadata = std::nullopt,
     std::filesystem::path dataRoot = {});
+
+// Renders an already-open session using the same initial/frame pipeline.
+[[nodiscard]] InitialSliceResult executeSessionFrameLoad(
+    std::shared_ptr<DatasetSession> dataset, const FrameSliceSpec& spec,
+    StopToken cancellation);
 
 } // namespace amrvis

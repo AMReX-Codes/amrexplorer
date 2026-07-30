@@ -4,14 +4,13 @@
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/Statistics.hpp>
+#include <amrexplorer/data/DatasetSession.hpp>
 
 #include <memory>
 #include <optional>
 #include <utility>
 
 namespace amrvis {
-
-class PlotfileDataset;
 
 // How a slice's color-mapping range is chosen. Values are persisted (combo data
 // and QSettings), so their order must stay stable.
@@ -46,11 +45,14 @@ struct ResolvedRange {
 [[nodiscard]] RangeMode effectiveRangeMode(
     const DatasetMetadata& metadata, FieldId field, int maximumLevel,
     CompositionPolicy composition, RangeMode requested);
+[[nodiscard]] RangeMode effectiveRangeMode(
+    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
+    int maximumLevel, CompositionPolicy composition, RangeMode requested);
 
 // The finite extrema of a standalone FAB's payload, or nullopt for non-FAB
 // datasets / all-non-finite data.
 [[nodiscard]] std::optional<std::pair<double, double>> fabDataRange(
-    const std::shared_ptr<PlotfileDataset>& dataset, FieldId field);
+    const std::shared_ptr<DatasetSession>& dataset, FieldId field);
 
 // The display range for a slice: the user's explicit range, the level/file
 // metadata range, or the finite extrema of the plane itself, padded so
@@ -58,7 +60,7 @@ struct ResolvedRange {
 // strictly positive throws, so the caller can fall back to linear. Shared by
 // executeSlice and the re-render-from-cache path, which must agree exactly.
 [[nodiscard]] std::pair<double, double> resolveRange(
-    const std::shared_ptr<PlotfileDataset>& dataset, FieldId field,
+    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
     int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const ScalarPlane& plane);
@@ -69,7 +71,7 @@ struct ResolvedRange {
 // whole slice. A slice with no finite values uses a neutral positive range and
 // can therefore remain logarithmic.
 [[nodiscard]] ResolvedRange resolveDisplayRange(
-    const std::shared_ptr<PlotfileDataset>& dataset, FieldId field,
+    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
     int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const ScalarPlane& plane);

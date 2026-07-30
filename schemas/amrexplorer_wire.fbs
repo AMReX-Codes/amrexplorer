@@ -1,0 +1,339 @@
+namespace amrexplorer.wire;
+
+enum SamplingPolicy : ubyte {
+  Nearest,
+  PiecewiseConstant,
+  Linear
+}
+
+enum CompositionPolicy : ubyte {
+  FinestAvailable,
+  ExactLevel
+}
+
+enum Centering : ubyte {
+  Cell,
+  Node,
+  FaceX,
+  FaceY,
+  FaceZ,
+  EdgeX,
+  EdgeY,
+  EdgeZ,
+  Mixed
+}
+
+enum RangeScope : ubyte {
+  File,
+  Level
+}
+
+enum ErrorCode : ushort {
+  UnsupportedProtocol,
+  InvalidRequest,
+  UnknownDataset,
+  DatasetOpenFailure,
+  Cancelled,
+  CacheBudgetExceeded,
+  ResourceLimitExceeded,
+  OperationFailure,
+  InternalServerError,
+  Disconnected
+}
+
+table Int3 {
+  values:[int];
+}
+
+table Real3 {
+  values:[double];
+}
+
+table IntBox {
+  lower:Int3;
+  upper:Int3;
+  centering:Int3;
+}
+
+table RealBox {
+  lower:Real3;
+  upper:Real3;
+}
+
+table CacheState {
+  budget_bytes:ulong;
+  resident_bytes:ulong;
+  pinned_bytes:ulong;
+  hits:ulong;
+  misses:ulong;
+  evictions:ulong;
+  clears:ulong;
+}
+
+table HelloRequest {
+  client_name:string;
+  software_version:string;
+  minimum_minor:ushort;
+  maximum_minor:ushort;
+  maximum_frame_bytes:uint;
+}
+
+table HelloResponse {
+  server_name:string;
+  software_version:string;
+  selected_minor:ushort;
+  maximum_frame_bytes:uint;
+  maximum_datasets:uint;
+  maximum_outstanding_requests:uint;
+  worker_count:uint;
+}
+
+table OpenDatasetRequest {
+  path:string;
+  cache_budget_bytes:ulong;
+}
+
+table FieldCatalog {
+  name:string;
+  centering:Centering;
+  component_names:[string];
+}
+
+table LevelCatalog {
+  level:int;
+  step:int;
+  domain:IntBox;
+  cell_size:Real3;
+  index_origin:Real3;
+  boxes:[IntBox];
+}
+
+table ParticleSpeciesCatalog {
+  name:string;
+  dimension:int;
+  real_component_count:int;
+  int_component_count:int;
+  particle_count:ulong;
+  single_precision:bool;
+}
+
+table MetadataReadMetrics {
+  files_read:ulong;
+  bytes_read:ulong;
+  payload_files_read:ulong;
+  payload_bytes_read:ulong;
+}
+
+table DatasetOpened {
+  dataset_id:ulong;
+  dimension:int;
+  finest_level:int;
+  is_fab:bool;
+  has_physical_geometry:bool;
+  time:double;
+  coordinate_system:int;
+  physical_domain:RealBox;
+  fields:[FieldCatalog];
+  levels:[LevelCatalog];
+  particle_species:[ParticleSpeciesCatalog];
+  file_range_available:[ubyte];
+  level_range_available:[ubyte];
+  metadata_metrics:MetadataReadMetrics;
+  file_version:string;
+  cache:CacheState;
+}
+
+table CloseDatasetRequest {
+  dataset_id:ulong;
+}
+
+table DatasetClosed {
+  dataset_id:ulong;
+}
+
+table SliceViewRequest {
+  dataset_id:ulong;
+  field:uint;
+  component:int;
+  normal_direction:int;
+  physical_position:double;
+  visible_region:RealBox;
+  maximum_level:int;
+  width:int;
+  height:int;
+  sampling:SamplingPolicy;
+  composition:CompositionPolicy;
+}
+
+table SliceViewResponse {
+  width:int;
+  height:int;
+  physical_region:RealBox;
+  values:[float];
+  valid:[ubyte];
+  source_level:[short];
+  candidate_blocks:ulong;
+  blocks_read:ulong;
+  cache_hits:ulong;
+  payload_bytes_read:ulong;
+  cache:CacheState;
+}
+
+table LineViewRequest {
+  dataset_id:ulong;
+  field:uint;
+  component:int;
+  axis:int;
+  fixed_coordinates:Real3;
+  maximum_level:int;
+  composition:CompositionPolicy;
+  region:RealBox;
+  has_region:bool;
+  output_width:int;
+}
+
+table LineViewResponse {
+  axis:int;
+  positions_are_indices:bool;
+  positions:[double];
+  values:[float];
+  valid:[ubyte];
+  source_level:[short];
+  candidate_blocks:ulong;
+  blocks_read:ulong;
+  cache_hits:ulong;
+  payload_bytes_read:ulong;
+  cache:CacheState;
+}
+
+table DatasetPageRequest {
+  dataset_id:ulong;
+  field:uint;
+  level:int;
+  region:RealBox;
+  normal_axis:int;
+  slice_position:double;
+  maximum_extent:int;
+}
+
+table DatasetPageResponse {
+  lower:[int];
+  upper:[int];
+  nx:int;
+  ny:int;
+  slice_index:int;
+  values:[float];
+  covered:[ubyte];
+  minimum:double;
+  maximum:double;
+  has_finite_values:bool;
+  truncated_x:bool;
+  truncated_y:bool;
+  cache:CacheState;
+}
+
+table ParticleSampleRequest {
+  dataset_id:ulong;
+  species:string;
+  fraction:double;
+  seed:ulong;
+}
+
+table ParticleSampleResponse {
+  species:ParticleSpeciesCatalog;
+  ids:[ulong];
+  positions:[double];
+  integer_bytes_read:ulong;
+  real_bytes_read:ulong;
+  level_directories_scanned:ulong;
+  data_files_opened:ulong;
+  cache:CacheState;
+}
+
+table RangeRequest {
+  dataset_id:ulong;
+  field:uint;
+  maximum_level:int;
+  composition:CompositionPolicy;
+  scope:RangeScope;
+}
+
+table RangeResponse {
+  has_range:bool;
+  minimum:double;
+  maximum:double;
+  cache:CacheState;
+}
+
+table ClearCacheRequest {
+  dataset_id:ulong;
+}
+
+table SetCacheBudgetRequest {
+  dataset_id:ulong;
+  budget_bytes:ulong;
+}
+
+table CacheResponse {
+  dataset_id:ulong;
+  cache:CacheState;
+}
+
+table CancelRequest {
+  target_request_id:ulong;
+}
+
+table CancelAcknowledged {
+  target_request_id:ulong;
+  accepted:bool;
+}
+
+table PingRequest {
+  nonce:ulong;
+}
+
+table PongResponse {
+  nonce:ulong;
+}
+
+table ErrorResponse {
+  code:ErrorCode;
+  message:string;
+}
+
+union Payload {
+  HelloRequest,
+  HelloResponse,
+  OpenDatasetRequest,
+  DatasetOpened,
+  CloseDatasetRequest,
+  DatasetClosed,
+  SliceViewRequest,
+  SliceViewResponse,
+  LineViewRequest,
+  LineViewResponse,
+  DatasetPageRequest,
+  DatasetPageResponse,
+  ParticleSampleRequest,
+  ParticleSampleResponse,
+  RangeRequest,
+  RangeResponse,
+  ClearCacheRequest,
+  SetCacheBudgetRequest,
+  CacheResponse,
+  CancelRequest,
+  CancelAcknowledged,
+  PingRequest,
+  PongResponse,
+  ErrorResponse
+}
+
+table Envelope {
+  protocol_major:ushort = 1;
+  protocol_minor:ushort = 0;
+  request_id:ulong;
+  payload:Payload;
+}
+
+root_type Envelope;
+file_identifier "AVR2";

@@ -97,8 +97,10 @@ rasterize the current view.
 - Automatic retry of interrupted requests.
 - Application-level compression of view data.
 - Chunked or streaming query results.
-- 3-D volume data or volume geometry on the wire. A future 3-D protocol will
-  return server-rendered frames rather than transferring a volume.
+- 3-D volume field data or arbitrary volume geometry on the wire. The compact
+  AMR box hierarchy is an exception: it is catalog metadata used to draw the
+  3-D wireframe. A future volume-rendering protocol will return server-rendered
+  frames rather than transferring a volume.
 
 These exclusions keep the first production protocol narrow while retaining
 the validated transport mechanisms from the prototype. They do not prevent
@@ -208,8 +210,9 @@ The following operations will be routed through the session:
 For 1-D and 2-D views, presentation stays local. `ScalarRenderer`, contour
 extraction, vector-glyph generation, range selection, image composition, and
 export consume the bounded returned cells and do not move to the server.
-Future 3-D support is the deliberate exception: the server will render a
-viewport-sized frame and will never send volume data or volume geometry.
+Future 3-D volume rendering is the deliberate exception: the server will
+render a viewport-sized frame and will never send volume field data or
+arbitrary volume geometry.
 
 Opening a dataset will be refactored so the metadata and session are created
 once. The current local flow reads metadata, then constructs
@@ -329,10 +332,11 @@ view is requested:
 - format/file-version text and metadata-read metrics;
 - initial cache state.
 
-It will not carry block boxes, ghost extents, per-block statistics, FAB
-locations, or other storage geometry. Metadata needed for grid overlays,
-coverage, or sampling is computed for the current view and returned in that
-view's response. Filesystem-specific fields remain on the server.
+It will not carry ghost extents, per-block statistics, FAB locations, or other
+storage metadata. It does carry each AMR box's index bounds, solely to draw the
+3-D wireframe. Metadata needed for 2-D grid overlays, coverage, or sampling is
+computed for the current view and returned in that view's response.
+Filesystem-specific fields remain on the server.
 
 Decoders will validate semantic invariants after FlatBuffers verification,
 including vector lengths, level counts, box bounds, field indices, and
@@ -372,18 +376,19 @@ never carry a whole level.
 
 The protocol must not expose `FabBlock`, whole-level arrays, unrestricted
 dataset extracts, complete native-resolution lines, full-volume cells, or
-volume geometry. The server may overfetch storage blocks internally, but must
-clip values, masks, coverage, and geometry before serialization.
+arbitrary volume geometry. The AMR box hierarchy is permitted as compact
+wireframe metadata. The server may overfetch storage blocks internally, but
+must clip values, masks, coverage, and other geometry before serialization.
 
 The client copies verified FlatBuffers vectors into the existing owning
 view-result types before releasing the receive buffer. This preserves the
 current lifetime model and keeps FlatBuffers-generated types out of the UI and
 query APIs.
 
-An additive future 3-D capability will use a distinct
+An additive future 3-D volume-rendering capability will use a distinct
 `RenderedFrameRequest`/`RenderedFrameResponse`. Its response will contain a
 viewport-sized image plus presentation metadata; it will never reuse
-`ViewDataResponse` to transfer volume data or geometry.
+`ViewDataResponse` to transfer volume field data or arbitrary geometry.
 
 ### 5.7 Errors
 
@@ -843,8 +848,8 @@ Please review these choices before implementation:
    than limiting remote support to slices alone.
 8. Protocol 1.0 has no application compression or chunking; its hard payload
    bound comes from viewport/page limits and the negotiated frame limit.
-9. Future 3-D support returns server-rendered frames and never transfers
-   volume data or volume geometry.
+9. Future 3-D volume rendering returns server-rendered frames and never
+   transfers volume field data or arbitrary volume geometry.
 
 Implementation should begin only after these decisions and any requested
 scope changes are approved.

@@ -135,14 +135,25 @@ std::vector<ContourSegment> generateContours(
             const double invDXb = (br != bl) ? 1.0 / (br - bl) : 0.0;
             const double invDXt = (tr != tl) ? 1.0 / (tr - tl) : 0.0;
             for (double value : finiteValues) {
-                const bool left   = (bl <= value && value <= tl)
-                    || (bl >= value && value >= tl);
-                const bool right  = (br <= value && value <= tr)
-                    || (br >= value && value >= tr);
-                const bool bottom = (bl <= value && value <= br)
-                    || (bl >= value && value >= br);
-                const bool top    = (tl <= value && value <= tr)
-                    || (tl >= value && value >= tr);
+                // Half-open edge-crossing test: an edge is crossed when its two
+                // endpoints fall on opposite sides of `value`, classifying a
+                // corner exactly equal to `value` as "not above". An inclusive
+                // both-ends test (bl <= value && value <= tl, ...) instead fired
+                // on every edge of a cell whose four corners all equal the value
+                // -- an interior plateau sitting exactly on a contour level --
+                // collapsing the crossings onto corners and hatching the region
+                // with the saddle else-arm's left/bottom edges; the half-open
+                // form yields no crossings there. It also assigns a corner-exact
+                // hit to one side only. For any cell with no corner exactly on
+                // `value` the two tests are identical.
+                const bool aboveBl = bl > value;
+                const bool aboveBr = br > value;
+                const bool aboveTl = tl > value;
+                const bool aboveTr = tr > value;
+                const bool left   = aboveBl != aboveTl;
+                const bool right  = aboveBr != aboveTr;
+                const bool bottom = aboveBl != aboveBr;
+                const bool top    = aboveTl != aboveTr;
                 if (!left && !right && !bottom && !top) {
                     continue;
                 }
@@ -157,12 +168,20 @@ std::vector<ContourSegment> generateContours(
                 if (top)    xT = x0 + static_cast<float>((value - tl) * invDXt);
 
                 const auto emit = [&](float ax, float ay, float bx, float by) {
+                    // Drop zero-length segments: a contour passing exactly
+                    // through a grid corner interpolates both incident edge
+                    // crossings onto that corner, collapsing them to one point.
+                    // Chaining such a segment would inject a duplicate vertex or
+                    // a one-point "closed" polyline.
+                    if (ax == bx && ay == by) {
+                        return;
+                    }
                     segments.push_back({ax, ay, bx, by, value});
                 };
 
                 if (left && right && bottom && top) {
                     const double center = (bl + br + tl + tr) / 4.0;
-                    if ((bl > value) != (center > value)) {
+                    if (aboveBl != (center > value)) {
                         emit(xL, yL, xB, yB);
                         emit(xT, yT, xR, yR);
                     } else {

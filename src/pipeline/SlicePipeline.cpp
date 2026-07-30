@@ -543,8 +543,14 @@ InitialSliceResult executeSessionFrameLoad(
                     region.upper[index] = upper;
                 }
                 request.visibleRegion = region;
-                request.outputSize = finestNativeOutputSize(
-                    metadata, request.visibleRegion, request.normalDirection);
+                request.outputSize = entry < spec.outputSizes.size()
+                    ? spec.outputSizes[entry]
+                    : finestNativeOutputSize(metadata, request.visibleRegion,
+                        request.normalDirection);
+                request.outputSize[0] = std::clamp(
+                    request.outputSize[0], 1, maxSliceOutputDimension);
+                request.outputSize[1] = std::clamp(
+                    request.outputSize[1], 1, maxSliceOutputDimension);
                 request.composition = selectedLevel.composition;
                 request.maximumLevel = attemptMaximumLevel;
                 request.sphericalSupersample = spec.sphericalSupersample;

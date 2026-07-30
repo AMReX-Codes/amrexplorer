@@ -24,6 +24,10 @@ cmake --build --preset default
 ./build/src/qt/amrexplorer /path/to/plotfile
 ```
 
+Remote support and the headless `amrexplorer-server` executable are included
+in normal desktop builds. FlatBuffers is fetched automatically while CMake
+configures the remote targets.
+
 ### macOS
 
 Install the dependencies with [Homebrew][]:

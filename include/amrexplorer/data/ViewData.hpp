@@ -8,6 +8,8 @@
 
 namespace amrvis {
 
+inline constexpr int maxViewOutputDimension = 4096;
+
 struct LineViewRequest {
     LineRequest query;
     int outputWidth = 0;

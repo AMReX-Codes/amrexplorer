@@ -146,7 +146,7 @@ struct LevelSelection {
 // of the cell size, so when this cap does engage the sampling pitch only
 // ever exceeds the cell size — honest downsampling — and never produces
 // duplicated or skipped cells.
-inline constexpr int maxSliceOutputDimension = 4096;
+inline constexpr int maxSliceOutputDimension = maxViewOutputDimension;
 
 // Native render resolution for a slice: the count of finest-level cells the
 // visible region spans along each in-plane axis. At the 1x fixed scale this is

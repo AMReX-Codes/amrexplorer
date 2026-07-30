@@ -98,6 +98,18 @@ if(TARGET amrexplorer_remote)
         PRIVATE amrexplorer::remote amrexplorer::warnings Threads::Threads
     )
     add_test(NAME remote_frame COMMAND test_remote_frame)
+
+    add_executable(test_remote_codec unit/test_remote_codec.cpp)
+    target_include_directories(test_remote_codec PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/remote"
+        "${PROJECT_BINARY_DIR}/src/remote/generated")
+    target_link_libraries(test_remote_codec
+        PRIVATE
+            amrexplorer::remote
+            FlatBuffers::FlatBuffers
+            amrexplorer::warnings
+    )
+    add_test(NAME remote_codec COMMAND test_remote_codec)
 endif()
 
 add_executable(test_vismf_index unit/test_vismf_index.cpp)

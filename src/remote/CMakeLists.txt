@@ -22,6 +22,8 @@ add_custom_command(
 )
 
 add_library(amrexplorer_remote
+    Codec.cpp
+    Codec.hpp
     Frame.cpp
     "${amrexplorer_wire_generated}"
 )
@@ -35,7 +37,7 @@ target_include_directories(amrexplorer_remote
 )
 target_link_libraries(amrexplorer_remote
     PUBLIC amrexplorer::data
-    PRIVATE amrexplorer::warnings
+    PRIVATE FlatBuffers::FlatBuffers amrexplorer::warnings
 )
 if(WIN32)
     target_link_libraries(amrexplorer_remote PRIVATE ws2_32)

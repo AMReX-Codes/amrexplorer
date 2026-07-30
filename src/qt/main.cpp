@@ -1023,6 +1023,50 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window, [&window, first, second] {
             window.openSequence({first, second});
         });
+    } else if (argc == 5
+        && std::string_view(argv[1]) == "--sequence-after-fab-smoke-test") {
+        // Regression for open-sequence-stale-fab-state: open a raw FAB (enters
+        // FAB mode -- selector dock visible, "— FAB" title suffix), then open a
+        // plotfile sequence. openSequence does not go through openDatasetImpl,
+        // so without the reset the FAB mode, dock, and title leak into the
+        // frames. Exit 0 only if the first frame shows with the dock hidden and
+        // no "— FAB" title.
+        const std::filesystem::path fab(argv[2]);
+        const std::filesystem::path first(argv[3]);
+        const std::filesystem::path second(argv[4]);
+        const auto inFabMode = [](const amrvis::qt::MainWindow& w) {
+            const auto* selector = w.findChild<amrvis::qt::FabSelectorDock*>();
+            return selector != nullptr && selector->isVisible()
+                && w.windowTitle().endsWith(QStringLiteral(" FAB"));
+        };
+        auto opened = std::make_shared<bool>(false);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, first, second, opened,
+                inFabMode](bool success) {
+                if (*opened) {
+                    return;  // later FAB re-slices are irrelevant
+                }
+                // Precondition: the raw FAB really did enter FAB mode, so the
+                // sequence open below is exercising the leak.
+                if (!success || !inFabMode(window)) {
+                    application.exit(1);
+                    return;
+                }
+                *opened = true;
+                window.openSequence({first, second});
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application, inFabMode](int index) {
+                if (index != 0) {
+                    return;
+                }
+                application.exit(inFabMode(window) ? 1 : 0);
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, fab] { window.openDataset(fab); });
     } else if (argc == 4
         && std::string_view(argv[1])
             == "--sequence-spec-change-smoke-test") {

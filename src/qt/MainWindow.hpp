@@ -289,6 +289,12 @@ private:
         std::optional<PlotfileMetadataResult> preparedMetadata,
         std::filesystem::path dataRoot, bool preserveFabSelector,
         std::optional<FrameSliceSpec> initialSpec);
+    // Clears standalone FAB/MultiFab view state (mode flag, MultiFab-return
+    // record, source metadata/paths) and hides the FAB selector dock. Any path
+    // that replaces the displayed dataset with a non-FAB one -- a plain dataset
+    // open, or a plotfile sequence -- must call this or stale FAB state leaks
+    // into the new view (see open-sequence-stale-fab-state).
+    void resetFabState();
     void viewFab(std::size_t entry);
     void backToMultiFab();
     // A fresh independent top-level window (WA_DeleteOnClose) for the

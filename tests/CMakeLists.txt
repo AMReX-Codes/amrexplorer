@@ -192,6 +192,11 @@ if(TARGET amrexplorer_remote)
     set_tests_properties(remote_session PROPERTIES
         FIXTURES_REQUIRED remote_server_materialized
         TIMEOUT 30)
+
+    add_test(NAME remote_server_help
+        COMMAND "$<TARGET_FILE:amrexplorer_server>" --help)
+    set_tests_properties(remote_server_help PROPERTIES
+        PASS_REGULAR_EXPRESSION "usage: amrexplorer-server")
 endif()
 
 add_executable(test_vismf_index unit/test_vismf_index.cpp)

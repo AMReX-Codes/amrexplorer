@@ -44,6 +44,36 @@ appears as its r-z plane with no axisymmetric weighting or revolution. **2-D
 spherical (r, θ)** plotfiles are handled specially and can be shown in true
 physical space — see [2-D spherical coordinates](#2-d-spherical-coordinates).
 
+## Remote datasets
+
+Run the headless server on the machine that can read the plotfiles. It binds
+only to that machine's loopback interface:
+
+```text
+amrexplorer-server --port 48192
+```
+
+Forward the port over SSH from the desktop machine, then open one
+server-visible path (or several paths in sequence order):
+
+```text
+ssh -N -L 48192:127.0.0.1:48192 user@remote
+amrexplorer --connect 127.0.0.1:48192 /remote/path/plt00010
+```
+
+The same workflow is available under **File > Connect to Remote Server...**,
+**Open Remote Plotfile...**, and **Open Remote Plotfile Sequence...**. Remote
+paths are entered explicitly; protocol 1.0 does not browse the remote
+filesystem. Authentication, encryption, host verification, and optional
+compression are provided by SSH rather than the AMReXplorer protocol.
+
+If the tunnel or server disconnects, outstanding work fails and the
+Diagnostics panel reports the endpoint and status. Reconnect explicitly and
+reopen the path; requests are not replayed automatically. The protocol sends
+viewport-bounded slices and lines, visible Dataset-window pages, particle
+samples, and clipped grid geometry. It never sends full FABs or volume field
+data.
+
 ## User interface overview
 
 ![AMReXplorer displaying a three-dimensional plotfile](images/user-guide-overview.png)

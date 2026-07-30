@@ -1,8 +1,8 @@
 # Remote client/server architecture plan
 
-Status: proposed.
+Status: implemented by the remote client/server PR stack.
 
-This document proposes a production implementation with a shared local/remote
+The implementation follows the design below: a shared local/remote
 dataset-session boundary, viewport- and page-bounded queries, a verified
 FlatBuffers protocol and portable framed transport, a concurrent loopback
 server, a single-reader client, remote Qt/CLI workflows, remote sequences and

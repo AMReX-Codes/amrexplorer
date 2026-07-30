@@ -56,6 +56,7 @@ jobs:
         run: |
           cmake --install build --prefix "${RUNNER_TEMP}/install-test"
           test -x "${RUNNER_TEMP}/install-test/bin/amrexplorer"
+          test -x "${RUNNER_TEMP}/install-test/bin/amrexplorer-server"
           desktop-file-validate \
             "${RUNNER_TEMP}/install-test/share/applications/amrexplorer.desktop"
 
@@ -83,6 +84,29 @@ jobs:
         run: |
           cmake --install build --prefix "${RUNNER_TEMP}/install-test"
           test -x "${RUNNER_TEMP}/install-test/amrexplorer.app/Contents/MacOS/amrexplorer"
+          test -x "${RUNNER_TEMP}/install-test/bin/amrexplorer-server"
+
+  remote:
+    name: Linux / headless remote server
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes cmake g++ ninja-build
+
+      - name: Configure
+        run: cmake --preset remote -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build --preset remote --parallel 4
+
+      - name: Test
+        run: ctest --preset remote --parallel 4
 
   windows:
     name: Windows / MSVC

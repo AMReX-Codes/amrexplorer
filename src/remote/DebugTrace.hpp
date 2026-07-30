@@ -15,6 +15,24 @@ namespace amrvis::remote::debug {
 inline bool traceEnabled() noexcept
 {
     static const bool enabled = [] {
+#ifdef _WIN32
+        char* value = nullptr;
+        std::size_t valueLength = 0;
+        if (_dupenv_s(&value, &valueLength, "AMREXPLORER_REMOTE_TRACE") != 0
+            || value == nullptr) {
+            return false;
+        }
+        if (*value == '\0') {
+            std::free(value);
+            return false;
+        }
+        const std::string_view setting(value);
+        const bool isEnabled = setting != "0" && setting != "false"
+            && setting != "FALSE" && setting != "off"
+            && setting != "OFF";
+        std::free(value);
+        return isEnabled;
+#else
         const char* value = std::getenv("AMREXPLORER_REMOTE_TRACE");
         if (value == nullptr || *value == '\0') {
             return false;
@@ -23,6 +41,7 @@ inline bool traceEnabled() noexcept
         return setting != "0" && setting != "false"
             && setting != "FALSE" && setting != "off"
             && setting != "OFF";
+#endif
     }();
     return enabled;
 }

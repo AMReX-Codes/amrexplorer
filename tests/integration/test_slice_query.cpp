@@ -148,6 +148,41 @@ int main()
         "repeated slice did not reuse both blocks");
     require(cached.metrics.payloadBytesRead == 0, "cached slice performed payload I/O");
 
+    {
+        auto overlays = request;
+        overlays.includeGridBoxes = true;
+        overlays.maximumGridBoxes = 1;
+        const auto bounded = query.execute(overlays);
+        require(bounded.gridBoxesIncluded && bounded.gridBoxesTruncated
+                && bounded.gridBoxes.size() == 1,
+            "slice query did not stop overlay collection at its count bound");
+        for (const auto& box : bounded.gridBoxes) {
+            require(box.physicalRegion.lower[0]
+                        < box.physicalRegion.upper[0]
+                    && box.physicalRegion.lower[1]
+                        < box.physicalRegion.upper[1],
+                "slice query emitted a degenerate clipped grid box");
+        }
+
+        // Linear sampling expands the planning halo beyond the visible
+        // region. The left coarse block then touches x=0.5 only at its edge;
+        // clipping must discard that zero-width overlay while retaining the
+        // right block that has a nonempty visible intersection.
+        auto halo = request;
+        halo.includeGridBoxes = true;
+        halo.maximumLevel = 0;
+        halo.composition = amrvis::CompositionPolicy::ExactLevel;
+        halo.sampling = amrvis::SamplingPolicy::Linear;
+        halo.visibleRegion.lower[0] = 0.5;
+        const auto clipped = query.execute(halo);
+        require(!clipped.gridBoxesTruncated && clipped.gridBoxes.size() == 1
+                && clipped.gridBoxes.front().physicalRegion.lower[0]
+                    < clipped.gridBoxes.front().physicalRegion.upper[0]
+                && clipped.gridBoxes.front().physicalRegion.lower[1]
+                    < clipped.gridBoxes.front().physicalRegion.upper[1],
+            "slice query transmitted a halo-only or degenerate grid box");
+    }
+
     request.composition = amrvis::CompositionPolicy::ExactLevel;
     const auto exact = query.execute(request);
     require(exact.plane.valid[0] == 0, "exact-level slice filled a fine-level hole");
@@ -454,4 +489,3 @@ int main()
     std::filesystem::remove_all(ghostRoot);
     return 0;
 }
-

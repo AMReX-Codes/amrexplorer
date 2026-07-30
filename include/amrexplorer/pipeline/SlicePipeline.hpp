@@ -128,6 +128,7 @@ struct FrameSliceSpec {
     // dimensions; the frame loader preserves the physical aspect ratio within
     // each bound after it has opened the frame and knows its geometry.
     bool outputSizesAreViewportBounds = false;
+    bool includeGridBoxes = false;
     bool particleSelectionInitialized = false;
     std::vector<std::string> particleSpecies;
     double particleFraction = 1.0;

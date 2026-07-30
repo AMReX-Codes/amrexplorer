@@ -564,11 +564,31 @@ private:
         if (payload == nullptr) {
             throw std::invalid_argument("slice-view payload is missing");
         }
-        const auto request = codec::fromWire(*payload);
+        auto request = codec::fromWire(*payload);
         validateSliceBound(request);
+        request.maximumGridBoxes = maximumSliceGridBoxes(request);
         const auto dataset = requireDataset(request.dataset);
-        const auto result = std::get<SliceQueryResult>(
+        auto result = std::get<SliceQueryResult>(
             dataset->requestView(ViewDataRequest{request}, cancellation));
+        const auto responseSize = [&] {
+            return codec::encode(envelope.request_id,
+                codec::toWire(result, dataset->cacheMetrics()),
+                m_selectedMinor).size();
+        };
+        // The planner uses a conservative per-box budget. Keep an exact final
+        // guard so FlatBuffers layout changes can only shed optional overlays,
+        // never reject an otherwise valid raster response.
+        auto encodedBytes = responseSize();
+        while (encodedBytes > m_maximumFrameBytes.load()
+            && !result.gridBoxes.empty()) {
+            result.gridBoxesTruncated = true;
+            result.gridBoxes.resize(result.gridBoxes.size() / 2U);
+            encodedBytes = responseSize();
+        }
+        if (encodedBytes > m_maximumFrameBytes.load()) {
+            throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                "slice raster cannot fit in one negotiated frame");
+        }
         send(envelope.request_id,
             codec::toWire(result, dataset->cacheMetrics()));
     }
@@ -736,12 +756,40 @@ private:
         }
     }
 
+    [[nodiscard]] std::size_t maximumSliceGridBoxes(
+        const SliceRequest& request) const noexcept
+    {
+        if (!request.includeGridBoxes) {
+            return 0;
+        }
+        const auto cells = static_cast<std::uint64_t>(request.outputSize[0])
+            * static_cast<std::uint64_t>(request.outputSize[1]);
+        constexpr std::uint64_t bytesPerCell
+            = sizeof(float) + sizeof(std::uint8_t) + sizeof(std::int16_t);
+        // A grid box carries its vector offset, table/vtable, level, RealBox
+        // table, six doubles, and alignment. This conservative charge keeps
+        // collection bounded before serialization; the exact guard above is
+        // authoritative.
+        constexpr std::uint64_t bytesPerGridBox = 128;
+        const auto frameBytes
+            = static_cast<std::uint64_t>(m_maximumFrameBytes.load());
+        if (frameBytes <= responseOverheadReserveBytes) {
+            return 0;
+        }
+        const auto available = frameBytes - responseOverheadReserveBytes;
+        const auto rasterBytes = cells * bytesPerCell;
+        if (available <= rasterBytes) {
+            return 0;
+        }
+        return static_cast<std::size_t>(
+            (available - rasterBytes) / bytesPerGridBox);
+    }
+
     [[nodiscard]] bool fitsResponse(std::uint64_t vectorBytes) const noexcept
     {
         // Reserve room for the envelope, tables, vector offsets, metrics, and
         // FlatBuffers alignment. send() performs the final exact encoded-size
         // check before touching the socket.
-        constexpr std::uint64_t responseOverheadReserveBytes = 512;
         const auto frameBytes
             = static_cast<std::uint64_t>(m_maximumFrameBytes.load());
         return frameBytes >= responseOverheadReserveBytes
@@ -848,6 +896,7 @@ private:
     }
 
     Socket m_socket;
+    static constexpr std::uint64_t responseOverheadReserveBytes = 512;
     ThreadPool& m_workers;
     ServerOptions m_options;
     std::chrono::steady_clock::time_point m_handshakeDeadline;

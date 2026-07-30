@@ -4091,6 +4091,18 @@ void MainWindow::openDataset(
         path, metadataOnly, std::nullopt, {}, false, std::nullopt);
 }
 
+void MainWindow::resetFabState()
+{
+    m_fabMode = false;
+    m_multifabReturn.reset();
+    m_fabSourceMetadata.reset();
+    m_fabSourcePath.clear();
+    m_fabDataRoot.clear();
+    m_fabSelectorDock->setEntries({});
+    m_fabSelectorDock->setBackAvailable(false);
+    m_fabSelectorDock->setVisible(false);
+}
+
 void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     bool metadataOnly,
     std::optional<PlotfileMetadataResult> preparedMetadata,
@@ -4098,14 +4110,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     std::optional<FrameSliceSpec> initialSpec)
 {
     if (!preserveFabSelector) {
-        m_fabMode = false;
-        m_multifabReturn.reset();
-        m_fabSourceMetadata.reset();
-        m_fabSourcePath.clear();
-        m_fabDataRoot.clear();
-        m_fabSelectorDock->setEntries({});
-        m_fabSelectorDock->setBackAvailable(false);
-        m_fabSelectorDock->setVisible(false);
+        resetFabState();
     }
     // Opening a single dataset ends any plotfile sequence and stops playback
     // of either animation mode.
@@ -5572,6 +5577,15 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
                "plotfile directory."));
         return;
     }
+
+    // A sequence replaces any standalone FAB/MultiFab with plotfile frames.
+    // openSequence does not go through openDatasetImpl, so clear the FAB view
+    // state here too; otherwise m_fabMode keeps every frame's title suffixed
+    // "— FAB" and the stale selector dock's clicks reopen the old file (see
+    // open-sequence-stale-fab-state). Only after the validity check above, so a
+    // rejected selection leaves the current FAB view untouched. The first
+    // frame's display refreshes the title with m_fabMode now false.
+    resetFabState();
 
     m_animationPanel->setSequenceFrameCount(static_cast<int>(sorted.size()));
     m_animationPanel->setSequenceVisible(true);

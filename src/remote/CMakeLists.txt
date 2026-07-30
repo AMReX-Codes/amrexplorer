@@ -26,6 +26,7 @@ add_library(amrexplorer_remote
     Codec.hpp
     Connection.cpp
     Frame.cpp
+    RemoteDatasetSession.cpp
     Server.cpp
     "${amrexplorer_wire_generated}"
 )

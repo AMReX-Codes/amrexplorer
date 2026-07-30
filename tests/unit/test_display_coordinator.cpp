@@ -201,9 +201,9 @@ int main()
         const auto fine = makePlane({2.0F, 6.0F});
         const amrvis::ScalarPlane empty;
         const std::array<DisplayCoordinator::PanelSyncInput, 3> inputs{{
-            {&a, &fine, 1, false, {2, 1}},
-            {&b, nullptr, 1, false, {2, 1}},
-            {&empty, nullptr, 1, false, {0, 0}},
+            {&a, &fine, 1, {2, 1}},
+            {&b, nullptr, 1, {2, 1}},
+            {&empty, nullptr, 1, {0, 0}},
         }};
 
         // No cached range: the union across panels drives every update.
@@ -234,10 +234,68 @@ int main()
         // Neither cache nor finite samples: nothing to synchronize to.
         coordinator.invalidateRangeCache();
         const std::array<DisplayCoordinator::PanelSyncInput, 1> emptyOnly{{
-            {&empty, nullptr, 1, false, {0, 0}}}};
+            {&empty, nullptr, 1, {0, 0}}}};
         require(!coordinator.syncPanelsToSharedRange(
                 key, emptyOnly, false, false, 3, palette).has_value(),
             "an empty panel set produced a sync");
+    }
+
+    // --- shared log degrades when the union crosses zero --------------------
+    {
+        // Regression for shared-log-range-render-throw-fails-load: with log
+        // requested and one panel all-positive but the union crossing zero,
+        // rendering each panel logarithmically against the negative shared
+        // minimum used to throw and fail the whole load.
+        const amrvis::Palette palette;
+        const auto positive = makePlane({2.0F, 6.0F});   // all-positive panel
+        const auto crossing = makePlane({-4.0F, 1.0F});  // crosses zero
+        const auto fine = makePlane({2.0F, 6.0F});
+        const std::array<DisplayCoordinator::PanelSyncInput, 2> mixed{{
+            {&positive, &fine, 1, {2, 1}},
+            {&crossing, nullptr, 1, {2, 1}},
+        }};
+        const auto sync = DisplayCoordinator::renderPanelsToSharedRange(
+            std::nullopt, mixed, true, true, 3, palette);
+        require(sync.has_value(), "mixed-sign log sync found no range");
+        require(nearlyEqual(sync->range.first, -4.0)
+                && nearlyEqual(sync->range.second, 6.0),
+            "mixed-sign log sync range is not the union");
+        require(!sync->logarithmic,
+            "log was not degraded for a union that crosses zero");
+        require(sync->panels[0].image.width > 0
+                && sync->panels[1].image.width > 0,
+            "mixed-sign log sync did not render every panel");
+
+        // An all-positive union keeps the requested log mapping.
+        const auto other = makePlane({3.0F, 5.0F});
+        const std::array<DisplayCoordinator::PanelSyncInput, 2> allPositive{{
+            {&positive, nullptr, 1, {2, 1}},
+            {&other, nullptr, 1, {2, 1}},
+        }};
+        const auto positiveSync = DisplayCoordinator::renderPanelsToSharedRange(
+            std::nullopt, allPositive, true, false, 3, palette);
+        require(positiveSync && positiveSync->logarithmic,
+            "log was dropped over an all-positive union");
+
+        // realignArrivalToRange degrades identically: a log arrival realigned
+        // to a full-domain range that crosses zero must render linear.
+        amrvis::SliceDisplayResult arrival;
+        arrival.slice.plane = makePlane({2.0F, 6.0F});
+        arrival.logarithmic = true;
+        DisplayCoordinator::realignArrivalToRange(
+            arrival, {-1.0, 10.0}, palette, true);
+        require(!arrival.logarithmic,
+            "realign kept log against a range that crosses zero");
+        require(arrival.image.valid() && arrival.image.width > 0,
+            "realign did not render the degraded raster");
+
+        amrvis::SliceDisplayResult positiveArrival;
+        positiveArrival.slice.plane = makePlane({2.0F, 6.0F});
+        positiveArrival.logarithmic = true;
+        DisplayCoordinator::realignArrivalToRange(
+            positiveArrival, {0.5, 10.0}, palette, true);
+        require(positiveArrival.logarithmic,
+            "realign dropped log over a positive range");
     }
 
     // --- planeDensitiesDiffer -----------------------------------------------

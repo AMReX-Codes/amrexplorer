@@ -84,7 +84,6 @@ public:
         const ScalarPlane* plane = nullptr;            // display plane
         const ScalarPlane* contourFinePlane = nullptr; // contour modes only
         int contourFineFactor = 1;
-        bool logarithmic = false;      // the panel's effective log mapping
         std::array<int, 2> outputSize{0, 0};  // display size for contours
     };
     struct PanelSyncUpdate {
@@ -95,6 +94,11 @@ public:
     };
     struct SharedRangeSync {
         std::pair<double, double> range;
+        // One log flag for the whole panel set: the requested log mapping,
+        // kept only when the shared range minimum is positive (renderScalarPlane
+        // rejects a non-positive log minimum). Callers apply it to every panel
+        // and to the shared color bar so all three agree with the raster.
+        bool logarithmic = false;
         std::vector<PanelSyncUpdate> panels;  // parallel to the input span
     };
 

@@ -4,12 +4,15 @@
 #include <amrexplorer/io/detail/VisMfIndex.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -27,6 +30,39 @@ T readRequired(std::istream& input, std::string_view description)
 {
     T value{};
     if (!(input >> value)) {
+        throw MetadataReadError("malformed plotfile Header while reading "
+            + std::string(description));
+    }
+    return value;
+}
+
+// Reads one VisMF min/max statistic, which -- unlike the geometry fields --
+// may be non-finite. AMReX's FArrayBox::min/max propagate +/-inf (and can
+// leave a NaN) from an overflowed run, and its plotfile headers carry those
+// per-block/FabArray extrema serialized as the "inf" / "-inf" / "nan" text
+// C++ ostreams emit. operator>>(double) cannot parse that text, so a plain
+// readRequired<double> made the whole (loadable) plotfile refuse to open --
+// exactly the run a user opens a viewer to debug. std::strtod does accept
+// those tokens, so read a comma/whitespace-delimited token and strtod it;
+// genuinely malformed tokens still fault. The non-finite value is stored
+// as-is: metadataValueRange discards non-finite block statistics, so File/
+// Level range modes degrade to Visible rather than the open failing (see
+// nonfinite-header-statistics-unopenable).
+double readStatisticValue(std::istream& input, std::string_view description)
+{
+    input >> std::ws;
+    std::string token;
+    for (auto next = input.peek();
+         next != std::char_traits<char>::eof()
+             && next != ','
+             && std::isspace(static_cast<unsigned char>(next)) == 0;
+         next = input.peek()) {
+        token.push_back(static_cast<char>(input.get()));
+    }
+    const char* begin = token.c_str();
+    char* end = nullptr;
+    const double value = std::strtod(begin, &end);
+    if (token.empty() || end != begin + token.size()) {
         throw MetadataReadError("malformed plotfile Header while reading "
             + std::string(description));
     }
@@ -144,7 +180,7 @@ std::vector<std::vector<double>> readRealMatrix(
         std::vector<double>(static_cast<std::size_t>(columns)));
     for (auto& row : matrix) {
         for (auto& value : row) {
-            value = readRequired<double>(input, description);
+            value = readStatisticValue(input, description);
             if (!(input >> comma) || comma != ',') {
                 throw MetadataReadError("malformed comma-separated VisMF matrix");
             }
@@ -248,13 +284,15 @@ detail::VisMfIndex detail::readVisMfIndex(
         index.maximum.push_back({});
         char comma = '\0';
         for (int component = 0; component < index.components; ++component) {
-            index.minimum.front().push_back(readRequired<double>(input, "FabArray minimum"));
+            index.minimum.front().push_back(
+                readStatisticValue(input, "FabArray minimum"));
             if (!(input >> comma) || comma != ',') {
                 throw MetadataReadError("malformed FabArray minima");
             }
         }
         for (int component = 0; component < index.components; ++component) {
-            index.maximum.front().push_back(readRequired<double>(input, "FabArray maximum"));
+            index.maximum.front().push_back(
+                readStatisticValue(input, "FabArray maximum"));
             if (!(input >> comma) || comma != ',') {
                 throw MetadataReadError("malformed FabArray maxima");
             }

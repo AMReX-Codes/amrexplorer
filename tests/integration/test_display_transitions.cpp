@@ -147,6 +147,45 @@ void write3dPlotfile(const std::filesystem::path& root)
         "((0,0,0) (3,3,3) (0,0,0))", values);
 }
 
+// Single-level 3-D plotfile whose three default mid-planes are mixed-sign:
+// q = 5 + 0.1*(i + j + k) everywhere (all-positive), except cell (0,0,2) is
+// forced to -3. The x=0.5 (i=2) and y=0.5 (j=2) mid-planes are all-positive,
+// while the z=0.5 (k=2) mid-plane holds the single negative, so the shared
+// Visible union crosses zero even though two panels resolve log on their own.
+void write3dMixedSignPlotfile(const std::filesystem::path& root)
+{
+    std::filesystem::create_directories(root / "Level_0");
+    writeText(root / "Header",
+        "HyperCLaw-V1.1\n"
+        "1\nq\n"
+        "3\n0.0\n0\n"
+        "0.0 0.0 0.0\n1.0 1.0 1.0\n\n"
+        "((0,0,0) (3,3,3) (0,0,0))\n"
+        "0\n"
+        "0.25 0.25 0.25\n"
+        "0\n0\n"
+        "0 1 0.0\n0\n"
+        "0.0 1.0\n0.0 1.0\n0.0 1.0\n"
+        "Level_0/Cell\n");
+    writeText(root / "Level_0" / "Cell_H",
+        "1\n1\n1\n0\n"
+        "(1 0\n((0,0,0) (3,3,3) (0,0,0))\n)\n"
+        "1\nFabOnDisk: Cell_D_00000 0\n\n"
+        "1,1\n-3.0,\n\n1,1\n5.9,\n\n");
+    std::vector<double> values;
+    for (int k = 0; k <= 3; ++k) {
+        for (int j = 0; j <= 3; ++j) {
+            for (int i = 0; i <= 3; ++i) {
+                const bool negativeCell = i == 0 && j == 0 && k == 2;
+                values.push_back(negativeCell
+                    ? -3.0 : 5.0 + 0.1 * (i + j + k));
+            }
+        }
+    }
+    writeFab(root / "Level_0" / "Cell_D_00000",
+        "((0,0,0) (3,3,3) (0,0,0))", values);
+}
+
 // The per-display internal-consistency invariants (I2, I3, I5 above).
 void requireDisplayInvariants(const amrvis::DatasetMetadata& metadata,
     const amrvis::SliceDisplayResult& d, const amrvis::Palette& palette,
@@ -211,8 +250,10 @@ int main()
         / ("amrexplorer-display-transitions-" + std::to_string(unique));
     const auto root2d = base / "plt2d";
     const auto root3d = base / "plt3d";
+    const auto root3dMixed = base / "plt3dmixed";
     write2dPlotfile(root2d);
     write3dPlotfile(root3d);
+    write3dMixedSignPlotfile(root3dMixed);
 
     const amrvis::Palette palette;
     constexpr std::uint64_t bigBudget = 1ULL << 20;
@@ -399,6 +440,37 @@ int main()
                 "3-D Visible panels do not share one range");
             requireDisplayInvariants(result.dataset->metadata(), d, palette,
                 "3-D shared range");
+        }
+    }
+
+    // --- 3-D shared Visible range, log, mixed-sign field -------------------
+    {
+        // Regression for shared-log-range-render-throw-fails-load: log
+        // requested, two default mid-planes all-positive, but the shared union
+        // crosses zero. The per-panel log flag used to keep the positive
+        // panels logarithmic against the negative union minimum, so
+        // renderScalarPlane threw and executeFrameLoad failed the whole load.
+        amrvis::FrameSliceSpec spec;
+        spec.rangeMode = amrvis::RangeMode::Visible;
+        spec.logarithmic = true;
+        spec.displayMode = amrvis::DisplayMode::RasterContours;
+        spec.contourCount = 3;
+        const auto result = amrvis::executeFrameLoad(
+            root3dMixed, amrvis::DatasetId{nextId++}, spec, bigBudget, {});
+        require(result.displays.size() == 3, "mixed-sign 3-D load lost a panel");
+        const auto& first = result.displays.front();
+        require(first.minimum < 0.0,
+            "mixed-sign union did not cross zero as the fixture intends");
+        for (const auto& d : result.displays) {
+            // I1: one shared range across all panels.
+            require(nearlyEqual(d.minimum, first.minimum)
+                    && nearlyEqual(d.maximum, first.maximum),
+                "mixed-sign 3-D panels do not share one range");
+            // The whole set degrades to linear together (never per-panel).
+            require(!d.logarithmic,
+                "a panel stayed logarithmic against a union that crosses zero");
+            requireDisplayInvariants(result.dataset->metadata(), d, palette,
+                "mixed-sign 3-D shared range");
         }
     }
 

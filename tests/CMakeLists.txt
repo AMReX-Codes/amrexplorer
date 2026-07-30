@@ -161,6 +161,21 @@ if(TARGET amrexplorer_remote)
     set_tests_properties(remote_connection PROPERTIES
         FIXTURES_REQUIRED remote_server_materialized
         TIMEOUT 30)
+
+    add_executable(test_remote_session
+        integration/test_remote_session.cpp)
+    target_link_libraries(test_remote_session
+        PRIVATE
+            amrexplorer::pipeline
+            amrexplorer::remote
+            amrexplorer::warnings
+            Threads::Threads
+    )
+    add_test(NAME remote_session
+        COMMAND test_remote_session "${remote_server_fixture_dir}")
+    set_tests_properties(remote_session PROPERTIES
+        FIXTURES_REQUIRED remote_server_materialized
+        TIMEOUT 30)
 endif()
 
 add_executable(test_vismf_index unit/test_vismf_index.cpp)

@@ -91,12 +91,14 @@ target_link_libraries(
 )
 add_test(NAME slice_pipeline COMMAND test_slice_pipeline)
 
-add_executable(test_remote_frame unit/test_remote_frame.cpp)
-target_link_libraries(
-    test_remote_frame
-    PRIVATE amrexplorer::remote amrexplorer::warnings Threads::Threads
-)
-add_test(NAME remote_frame COMMAND test_remote_frame)
+if(TARGET amrexplorer_remote)
+    add_executable(test_remote_frame unit/test_remote_frame.cpp)
+    target_link_libraries(
+        test_remote_frame
+        PRIVATE amrexplorer::remote amrexplorer::warnings Threads::Threads
+    )
+    add_test(NAME remote_frame COMMAND test_remote_frame)
+endif()
 
 add_executable(test_vismf_index unit/test_vismf_index.cpp)
 target_link_libraries(test_vismf_index PRIVATE amrexplorer::io amrexplorer::warnings)

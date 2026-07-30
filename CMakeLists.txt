@@ -9,6 +9,8 @@ project(
 
 option(AMREXPLORER_ENABLE_QT "Build the Qt 6 desktop application" ON)
 option(AMREXPLORER_ENABLE_VTK "Build the optional VTK volume module" OFF)
+option(AMREXPLORER_ENABLE_REMOTE
+    "Build production remote client/server support" ${AMREXPLORER_ENABLE_QT})
 option(AMREXPLORER_BUILD_TESTS "Build unit and integration tests" ON)
 option(AMREXPLORER_BUILD_MACOS_APP_BUNDLE
     "Build the Qt application as a macOS .app bundle" ${APPLE})
@@ -71,7 +73,22 @@ add_subdirectory(src/cache)
 add_subdirectory(src/io)
 add_subdirectory(src/query)
 add_subdirectory(src/data)
-add_subdirectory(src/remote)
+if(AMREXPLORER_ENABLE_REMOTE)
+    include(FetchContent)
+    set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(FLATBUFFERS_BUILD_GRPCTEST OFF CACHE BOOL "" FORCE)
+    set(FLATBUFFERS_BUILD_SHAREDLIB OFF CACHE BOOL "" FORCE)
+    set(FLATBUFFERS_BUILD_STATICLIB OFF CACHE BOOL "" FORCE)
+    set(FLATBUFFERS_BUILD_FLATC ON CACHE BOOL "" FORCE)
+    set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(flatbuffers
+        GIT_REPOSITORY https://github.com/google/flatbuffers.git
+        GIT_TAG v25.12.19
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(flatbuffers)
+    add_subdirectory(src/remote)
+endif()
 add_subdirectory(src/render2d)
 add_subdirectory(src/pipeline)
 

@@ -25,6 +25,7 @@ add_library(amrexplorer_remote
     Codec.cpp
     Codec.hpp
     Frame.cpp
+    Server.cpp
     "${amrexplorer_wire_generated}"
 )
 add_library(amrexplorer::remote ALIAS amrexplorer_remote)
@@ -37,7 +38,10 @@ target_include_directories(amrexplorer_remote
 )
 target_link_libraries(amrexplorer_remote
     PUBLIC amrexplorer::data
-    PRIVATE FlatBuffers::FlatBuffers amrexplorer::warnings
+    PRIVATE
+        FlatBuffers::FlatBuffers
+        Threads::Threads
+        amrexplorer::warnings
 )
 if(WIN32)
     target_link_libraries(amrexplorer_remote PRIVATE ws2_32)

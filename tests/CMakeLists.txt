@@ -110,6 +110,31 @@ if(TARGET amrexplorer_remote)
             amrexplorer::warnings
     )
     add_test(NAME remote_codec COMMAND test_remote_codec)
+
+    add_executable(test_remote_server
+        integration/test_remote_server.cpp)
+    target_include_directories(test_remote_server PRIVATE
+        "${PROJECT_BINARY_DIR}/src/remote/generated")
+    target_link_libraries(test_remote_server
+        PRIVATE
+            amrexplorer::remote
+            FlatBuffers::FlatBuffers
+            amrexplorer::warnings
+            Threads::Threads
+    )
+    set(remote_server_fixture_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_server")
+    add_test(NAME remote_server_fixture
+        COMMAND "$<TARGET_FILE:fixture_materializer>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "${remote_server_fixture_dir}")
+    set_tests_properties(remote_server_fixture PROPERTIES
+        FIXTURES_SETUP remote_server_materialized)
+    add_test(NAME remote_server
+        COMMAND test_remote_server "${remote_server_fixture_dir}")
+    set_tests_properties(remote_server PROPERTIES
+        FIXTURES_REQUIRED remote_server_materialized
+        TIMEOUT 30)
 endif()
 
 add_executable(test_vismf_index unit/test_vismf_index.cpp)

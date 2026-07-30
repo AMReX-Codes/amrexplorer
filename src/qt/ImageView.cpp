@@ -720,6 +720,7 @@ void ImageView::resizeEvent(QResizeEvent* event)
     if (m_transformMode == TransformMode::Fit) {
         fitImage();
     }
+    emit viewportResized(viewport()->size());
 }
 
 void ImageView::wheelEvent(QWheelEvent* event)

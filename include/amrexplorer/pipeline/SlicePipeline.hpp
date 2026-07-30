@@ -119,6 +119,7 @@ struct FrameSliceSpec {
     bool defaultPositions = true;
     std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
     std::vector<std::optional<RealBox>> visibleRegions;  // per view, normal order
+    std::vector<std::array<int, 2>> outputSizes;  // per view, viewport pixels
     bool particleSelectionInitialized = false;
     std::vector<std::string> particleSpecies;
     double particleFraction = 1.0;

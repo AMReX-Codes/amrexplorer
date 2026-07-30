@@ -22,6 +22,7 @@ add_executable(amrexplorer_qt
     MainWindow.hpp
     NumberFormat.cpp
     NumberFormat.hpp
+    RemoteEndpoint.hpp
     ScientificDoubleSpinBox.cpp
     ScientificDoubleSpinBox.hpp
     SequenceController.cpp
@@ -68,6 +69,7 @@ target_link_libraries(amrexplorer_qt
         Qt6::Gui
         Qt6::Widgets
 )
+target_link_libraries(amrexplorer_qt PRIVATE amrexplorer::remote)
 target_compile_features(amrexplorer_qt PRIVATE cxx_std_20)
 target_compile_definitions(amrexplorer_qt PRIVATE AMREXPLORER_VERSION="${PROJECT_VERSION}")
 

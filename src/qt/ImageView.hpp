@@ -163,6 +163,7 @@ signals:
     void linePlotRequested(int imageX, int imageY, Qt::MouseButton button);
     void sliceMoveRequested(int imageX, int imageY, Qt::MouseButton button);
     void fitRequested();
+    void viewportResized(const QSize& size);
 
 protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;

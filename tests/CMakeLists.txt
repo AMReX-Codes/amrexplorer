@@ -319,6 +319,27 @@ add_test(NAME tool_line_repro
 set_tests_properties(tool_line_repro PROPERTIES TIMEOUT 60)
 
 if(TARGET amrexplorer_qt)
+    add_test(
+        NAME qt_remote_slice_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-slice-smoke-test "${remote_server_fixture_dir}"
+    )
+    set_tests_properties(qt_remote_slice_smoke PROPERTIES
+        FIXTURES_REQUIRED remote_server_materialized
+        TIMEOUT 30)
+
+    add_test(
+        NAME qt_remote_rubber_aspect_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-rubber-aspect-smoke-test
+            "${remote_server_fixture_dir}"
+    )
+    set_tests_properties(qt_remote_rubber_aspect_smoke PROPERTIES
+        FIXTURES_REQUIRED remote_server_materialized
+        TIMEOUT 30)
+
     add_executable(test_user_guide_dialog
         unit/test_user_guide_dialog.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/UserGuideDialog.cpp"

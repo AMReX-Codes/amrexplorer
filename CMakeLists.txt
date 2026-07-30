@@ -18,6 +18,12 @@ option(AMREXPLORER_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(AMREXPLORER_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(AMREXPLORER_ENABLE_TSAN "Enable ThreadSanitizer (mutually exclusive with AMREXPLORER_ENABLE_SANITIZERS)" OFF)
 
+if(AMREXPLORER_ENABLE_QT AND NOT AMREXPLORER_ENABLE_REMOTE)
+    message(FATAL_ERROR
+        "The Qt application requires AMREXPLORER_ENABLE_REMOTE=ON. "
+        "Use the headless preset for a build without remote support.")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

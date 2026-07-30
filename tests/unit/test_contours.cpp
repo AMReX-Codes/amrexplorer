@@ -422,5 +422,74 @@ int main()
             "an Nx1 plane produced contour polylines");
     }
 
+    // (o) A plateau exactly on a contour level must not hatch its interior.
+    // 5x5 field: an interior 3x3 block of points (indices 1..3) at 5.0, a
+    // border ring at 10.0, so the value-5 contour traces the plateau boundary
+    // (the square x,y in {1,3}) and leaves the interior empty. The inclusive
+    // predicate emitted the left+bottom edge of every interior cell, hatching
+    // x=2 / y=2 with a grid of segments (contour-plateau-and-corner-artifacts).
+    {
+        amrvis::ScalarPlane plateau;
+        plateau.width = 5;
+        plateau.height = 5;
+        plateau.values.resize(25);
+        plateau.valid.assign(25, 1);
+        plateau.sourceLevel.assign(25, 0);
+        for (int y = 0; y < 5; ++y) {
+            for (int x = 0; x < 5; ++x) {
+                const bool interior = x >= 1 && x <= 3 && y >= 1 && y <= 3;
+                plateau.values[static_cast<std::size_t>(x + 5 * y)]
+                    = interior ? 5.0F : 10.0F;
+            }
+        }
+        const auto plateauSegments = amrvis::generateContours(plateau, {5.0});
+        require(!plateauSegments.empty(),
+            "the plateau boundary contour was fully suppressed");
+        for (const auto& segment : plateauSegments) {
+            const bool startInside = segment.x0 > 1.0F && segment.x0 < 3.0F
+                && segment.y0 > 1.0F && segment.y0 < 3.0F;
+            const bool endInside = segment.x1 > 1.0F && segment.x1 < 3.0F
+                && segment.y1 > 1.0F && segment.y1 < 3.0F;
+            require(!startInside && !endInside,
+                "a segment hatched the interior of a value-exact plateau");
+        }
+    }
+
+    // (p) A contour passing exactly through grid corners must emit no
+    // zero-length segments. value(x, y) = x - y on a 3x3 grid: the v = 0
+    // iso-line runs along the main diagonal through the corners (0,0), (1,1),
+    // (2,2). Cells straddling the diagonal interpolate their crossings onto
+    // those shared corners; the reader must draw the diagonal while dropping
+    // the degenerate zero-length touches (else chaining injects a duplicate
+    // vertex or a one-point "closed" polyline).
+    {
+        amrvis::ScalarPlane corner;
+        corner.width = 3;
+        corner.height = 3;
+        corner.values.resize(9);
+        corner.valid.assign(9, 1);
+        corner.sourceLevel.assign(9, 0);
+        for (int y = 0; y < 3; ++y) {
+            for (int x = 0; x < 3; ++x) {
+                corner.values[static_cast<std::size_t>(x + 3 * y)]
+                    = static_cast<float>(x - y);
+            }
+        }
+        const auto cornerSegments = amrvis::generateContours(corner, {0.0});
+        for (const auto& segment : cornerSegments) {
+            require(!(segment.x0 == segment.x1 && segment.y0 == segment.y1),
+                "a corner-exact contour emitted a zero-length segment");
+        }
+        require(hasSegment(cornerSegments, 0.0, 0.0, 1.0, 1.0)
+                && hasSegment(cornerSegments, 1.0, 1.0, 2.0, 2.0),
+            "corner-exact contour dropped the real diagonal iso-line");
+        const auto cornerLines =
+            amrvis::generateContourPolylines(corner, {0.0}, 0);
+        for (const auto& line : cornerLines) {
+            require(line.points.size() >= 2,
+                "corner-exact contour produced a one-point polyline");
+        }
+    }
+
     return 0;
 }

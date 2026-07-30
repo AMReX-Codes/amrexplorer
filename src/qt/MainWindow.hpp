@@ -6,11 +6,11 @@
 
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/StopToken.hpp>
+#include <amrexplorer/data/DatasetSession.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/pipeline/DisplayCoordinator.hpp>
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
-#include <amrexplorer/query/SliceQuery.hpp>
 #include <amrexplorer/render2d/Contours.hpp>
 #include <amrexplorer/render2d/ImageBuffer.hpp>
 #include <amrexplorer/render2d/Palette.hpp>
@@ -54,7 +54,6 @@ class QRectF;
 class QWidget;
 
 namespace amrvis {
-class PlotfileDataset;
 struct DatasetMetadata;
 struct LineResult;
 enum class CompositionPolicy : std::uint8_t;
@@ -615,7 +614,7 @@ private:
     // (progress, cancellation, FFmpeg encoding). This window supplies frame
     // rendering and sequence navigation, and restores its UI on finished().
     AnimationExporter* m_animationExporter = nullptr;
-    std::shared_ptr<PlotfileDataset> m_dataset;
+    std::shared_ptr<DatasetSession> m_dataset;
     std::shared_ptr<const DatasetMetadata> m_openMetadata;
     std::string m_fileVersion;
     PlaneViewState m_view2d;

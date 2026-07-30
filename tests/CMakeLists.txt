@@ -124,7 +124,9 @@ add_test(
 )
 
 add_executable(test_dataset_extract integration/test_dataset_extract.cpp)
-target_link_libraries(test_dataset_extract PRIVATE amrexplorer::io amrexplorer::warnings)
+target_link_libraries(
+    test_dataset_extract PRIVATE amrexplorer::data amrexplorer::warnings
+)
 add_test(NAME dataset_extract COMMAND test_dataset_extract)
 
 add_executable(test_dataset_concurrency integration/test_dataset_concurrency.cpp)

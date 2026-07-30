@@ -1,8 +1,8 @@
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 
 #include <amrexplorer/cache/ByteLruCache.hpp>
+#include <amrexplorer/data/LocalDatasetSession.hpp>
 #include <amrexplorer/core/CoordinateSystem.hpp>
-#include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/pipeline/DisplayCoordinator.hpp>
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
 #include <amrexplorer/render2d/SphericalWarp.hpp>
@@ -14,6 +14,16 @@
 #include <stdexcept>
 
 namespace amrvis {
+namespace {
+
+SliceQueryResult requestSlice(DatasetSession& dataset,
+    const SliceRequest& request, StopToken cancellation)
+{
+    return std::get<SliceQueryResult>(
+        dataset.requestView(ViewDataRequest{request}, cancellation));
+}
+
+} // namespace
 
 LevelSelection decodeLevelData(int data, int finestLevel)
 {
@@ -186,7 +196,7 @@ void applyDisplayCoordinates(
 
 } // namespace
 
-SliceDisplayResult executeSlice(const std::shared_ptr<PlotfileDataset>& dataset,
+SliceDisplayResult executeSlice(const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request,
     RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
@@ -194,7 +204,7 @@ SliceDisplayResult executeSlice(const std::shared_ptr<PlotfileDataset>& dataset,
 {
     SliceDisplayResult result;
     result.request = request;
-    result.slice = SliceQuery(*dataset).execute(request, cancellation);
+    result.slice = requestSlice(*dataset, request, cancellation);
     const auto range = resolveDisplayRange(dataset, request.field,
         request.maximumLevel, request.composition, rangeMode, userRange,
         logarithmic, result.slice.plane);
@@ -213,14 +223,14 @@ SliceDisplayResult executeSlice(const std::shared_ptr<PlotfileDataset>& dataset,
     return result;
 }
 
-void appendVectorGlyphs(const std::shared_ptr<PlotfileDataset>& dataset,
+void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
     SliceRequest request, FieldId uField, FieldId vField, int count,
     StopToken cancellation, SliceDisplayResult& result)
 {
     request.field = uField;
-    auto uSlice = SliceQuery(*dataset).execute(request, cancellation);
+    auto uSlice = requestSlice(*dataset, request, cancellation);
     request.field = vField;
-    auto vSlice = SliceQuery(*dataset).execute(request, cancellation);
+    auto vSlice = requestSlice(*dataset, request, cancellation);
     // The warped R-Z spherical view anchors each glyph at its physical (R, Z)
     // position and rotates the components into display directions; the
     // executeSlice call preceding this one already populated
@@ -242,7 +252,7 @@ void appendVectorGlyphs(const std::shared_ptr<PlotfileDataset>& dataset,
 }
 
 SliceDisplayResult executeSliceWithFallback(
-    const std::shared_ptr<PlotfileDataset>& dataset, SliceRequest request,
+    const std::shared_ptr<DatasetSession>& dataset, SliceRequest request,
     RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
@@ -306,7 +316,7 @@ SliceDisplayResult executeSliceWithFallback(
 // the GUI thread only converts the polylines to painter paths. The contour
 // plane is cached by the GUI, so range and contour-count changes re-run only
 // this cheap extraction (see refreshCachedSlice).
-void appendContours(const std::shared_ptr<PlotfileDataset>& dataset,
+void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request, int contourCount, double minimum, double maximum,
     bool logarithmic, StopToken cancellation, SliceDisplayResult& result)
 {
@@ -332,7 +342,7 @@ void appendContours(const std::shared_ptr<PlotfileDataset>& dataset,
         std::min(std::max(dataWidth, 512), 1024),
         std::min(std::max(dataHeight, 512), 1024)};
     contourRequest.sampling = SamplingPolicy::Linear;
-    auto contour = SliceQuery(*dataset).execute(contourRequest, cancellation);
+    auto contour = requestSlice(*dataset, contourRequest, cancellation);
     result.contourPlane = std::move(contour.plane);
     result.slice.metrics.candidateBlocks += contour.metrics.candidateBlocks;
     result.slice.metrics.blocksRead += contour.metrics.blocksRead;
@@ -352,7 +362,7 @@ void appendContours(const std::shared_ptr<PlotfileDataset>& dataset,
 }
 
 SliceDisplayResult refreshCachedSlice(
-    const std::shared_ptr<PlotfileDataset>& dataset,
+    const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request, ScalarPlane displayPlane,
     ScalarPlane contourPlane, ScalarPlane contourFinePlane, int contourFineFactor,
     std::vector<VectorSegment> vectors,
@@ -434,7 +444,7 @@ void recomputeContourPolylines(SliceDisplayResult& result)
 }
 
 std::vector<ParticleSample> loadParticleSamples(
-    const PlotfileDataset& dataset,
+    DatasetSession& dataset,
     std::span<const std::string> selectedSpecies, double fraction,
     std::uint64_t seed, StopToken cancellation)
 {
@@ -452,33 +462,23 @@ std::vector<ParticleSample> loadParticleSamples(
     return samples;
 }
 
-InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
-    DatasetId datasetId, const FrameSliceSpec& spec,
-    std::uint64_t cacheBudgetBytes, StopToken cancellation,
-    std::optional<PlotfileMetadataResult> preparedMetadata,
-    std::filesystem::path dataRoot)
+InitialSliceResult executeSessionFrameLoad(
+    std::shared_ptr<DatasetSession> dataset, const FrameSliceSpec& spec,
+    StopToken cancellation)
 {
     InitialSliceResult result;
-    if (preparedMetadata) {
-        result.fileVersion = preparedMetadata->fileVersion;
-        result.dataset = std::make_shared<PlotfileDataset>(
-            std::move(dataRoot), datasetId, cacheBudgetBytes,
-            std::move(*preparedMetadata));
-    } else {
-        result.dataset = std::make_shared<PlotfileDataset>(
-            path, datasetId, cacheBudgetBytes);
+    result.dataset = std::move(dataset);
+    if (!result.dataset) {
+        throw std::invalid_argument("frame load requires a dataset session");
     }
+    const auto datasetId = result.dataset->id();
+    const auto cacheBudgetBytes
+        = result.dataset->cacheMetrics().budgetBytes;
     const auto& metadata = result.dataset->metadata();
     if (metadata.fields.empty()) {
         throw std::runtime_error("dataset has no scalar fields to display");
     }
-    if (result.fileVersion.empty()) {
-        std::ifstream header(path / "Header");
-        std::getline(header, result.fileVersion);
-        while (!result.fileVersion.empty() && result.fileVersion.back() == '\r') {
-            result.fileVersion.pop_back();
-        }
-    }
+    result.fileVersion = result.dataset->fileVersion();
 
     const auto fieldCount = static_cast<std::uint32_t>(metadata.fields.size());
     const auto field = std::min(spec.field, fieldCount - 1);
@@ -496,7 +496,7 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
     const auto selectedLevel = decodeLevelData(
         levelSelection, metadata.finestLevel);
     auto attemptMaximumLevel = selectedLevel.maximumLevel;
-    const auto rangeMode = effectiveRangeMode(metadata, FieldId{field},
+    const auto rangeMode = effectiveRangeMode(result.dataset, FieldId{field},
         attemptMaximumLevel, selectedLevel.composition, spec.rangeMode);
     std::array<double, 3> positions{0.0, 0.0, 0.0};
     const auto dataBounds = datasetSampleBounds(metadata);
@@ -648,6 +648,25 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
         spec.particleSpecies, spec.particleFraction, spec.particleSeed,
         cancellation);
     return result;
+}
+
+InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
+    DatasetId datasetId, const FrameSliceSpec& spec,
+    std::uint64_t cacheBudgetBytes, StopToken cancellation,
+    std::optional<PlotfileMetadataResult> preparedMetadata,
+    std::filesystem::path dataRoot)
+{
+    std::shared_ptr<DatasetSession> dataset;
+    if (preparedMetadata) {
+        dataset = std::make_shared<LocalDatasetSession>(
+            std::move(dataRoot), datasetId, cacheBudgetBytes,
+            std::move(*preparedMetadata));
+    } else {
+        dataset = std::make_shared<LocalDatasetSession>(
+            path, datasetId, cacheBudgetBytes);
+    }
+    return executeSessionFrameLoad(
+        std::move(dataset), spec, cancellation);
 }
 
 } // namespace amrvis

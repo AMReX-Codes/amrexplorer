@@ -361,12 +361,12 @@ int main()
                 true, cached, makeRequest(1, 2, 0.0), true)
                 == ImageTransformPolicy::Refit,
             "an orientation change should refit");
-        // A different dataset with an identical region and normal keeps the
-        // geometry-aware default (same pixel-to-data mapping).
+        // A different dataset always refits: equal raster dimensions do not
+        // prove that its physical geometry is compatible.
         require(DisplayCoordinator::rasterTransformPolicy(
                 true, cached, makeRequest(2, 1, 0.0), true)
-                == ImageTransformPolicy::GeometryAware,
-            "a same-region dataset swap should stay geometry-aware");
+                == ImageTransformPolicy::Refit,
+            "a same-region dataset swap should refit");
     }
 
     return 0;

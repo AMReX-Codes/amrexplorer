@@ -60,9 +60,9 @@ public:
 
     // How the view should treat its transform when `incoming` replaces the
     // raster produced by `cached`. A zoomed panel-local refresh (same
-    // dataset and orientation) preserves; a replacement whose region or
-    // orientation differs refits even if the dimensions coincide; everything
-    // else refits only on a dimension change. Moved verbatim from the GUI's
+    // dataset and orientation) preserves; a replacement from another dataset
+    // or orientation refits even if the dimensions coincide; everything else
+    // refits only on a dimension change. Moved verbatim from the GUI's
     // showSlice (see the raster-colorbar and rubber-band issues).
     [[nodiscard]] static ImageTransformPolicy rasterTransformPolicy(
         bool hasCachedRequest, const SliceRequest& cached,

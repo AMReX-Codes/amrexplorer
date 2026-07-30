@@ -77,10 +77,8 @@ ImageTransformPolicy DisplayCoordinator::rasterTransformPolicy(
     const bool samePanelRenderContext = hasCachedRequest
         && cached.dataset == incoming.dataset
         && cached.normalDirection == incoming.normalDirection;
-    const bool incompatibleRasterContext = hasCachedRequest
-        && !samePanelRenderContext
-        && (cached.normalDirection != incoming.normalDirection
-            || cached.visibleRegion != incoming.visibleRegion);
+    const bool incompatibleRasterContext
+        = hasCachedRequest && !samePanelRenderContext;
     if (incompatibleRasterContext) {
         return ImageTransformPolicy::Refit;
     }

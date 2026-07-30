@@ -1,0 +1,62 @@
+#pragma once
+
+#include <amrexplorer/core/StopToken.hpp>
+#include <amrexplorer/data/DatasetPage.hpp>
+#include <amrexplorer/data/DatasetSession.hpp>
+#include <amrexplorer/data/ViewData.hpp>
+#include <amrexplorer/remote/Frame.hpp>
+#include <amrexplorer/remote/Protocol.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+
+namespace amrvis::remote {
+
+struct ConnectionOptions {
+    std::string clientName = "AMReXplorer";
+    std::string softwareVersion = "unknown";
+    std::uint32_t maximumFrameBytes = defaultMaximumFrameBytes;
+};
+
+class Connection {
+public:
+    Connection(std::string host, std::uint16_t port,
+        ConnectionOptions options = {});
+    ~Connection();
+
+    Connection(const Connection&) = delete;
+    Connection& operator=(const Connection&) = delete;
+
+    [[nodiscard]] const HelloResponseData& serverInfo() const noexcept;
+    [[nodiscard]] bool connected() const noexcept;
+    [[nodiscard]] std::string disconnectReason() const;
+
+    [[nodiscard]] OpenedDataset openDataset(const std::string& path,
+        std::uint64_t cacheBudgetBytes, StopToken cancellation = {});
+    void closeDataset(DatasetId dataset, StopToken cancellation = {});
+    [[nodiscard]] ViewDataResult requestView(
+        const ViewDataRequest& request, StopToken cancellation = {});
+    [[nodiscard]] DatasetPage requestDatasetPage(
+        const DatasetPageRequest& request, StopToken cancellation = {});
+    [[nodiscard]] std::optional<ValueRange> requestRange(DatasetId dataset,
+        const RangeRequest& request, StopToken cancellation = {});
+    [[nodiscard]] ParticleSample requestParticleSample(DatasetId dataset,
+        const std::string& species, double fraction, std::uint64_t seed,
+        StopToken cancellation = {});
+    [[nodiscard]] CacheMetrics clearCache(
+        DatasetId dataset, StopToken cancellation = {});
+    [[nodiscard]] CacheMetrics setCacheBudget(DatasetId dataset,
+        std::uint64_t bytes, StopToken cancellation = {});
+    [[nodiscard]] CacheMetrics latestCache(DatasetId dataset) const;
+    void ping(StopToken cancellation = {});
+
+    void close() noexcept;
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> m_impl;
+};
+
+} // namespace amrvis::remote

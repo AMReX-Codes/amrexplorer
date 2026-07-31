@@ -46,65 +46,52 @@ physical space — see [2-D spherical coordinates](#2-d-spherical-coordinates).
 
 ## Remote datasets
 
-Run the headless server on the machine that can read the plotfiles. It binds
-only to that machine's loopback interface and prints a per-session access
-token that clients must present:
+AMReXplorer can display plotfiles that live on another machine, such as an HPC
+login node. You run a small server on that machine, connect it to your desktop
+through an SSH tunnel, and then open the data. The commands below are labelled
+`(remote) $` for the machine that holds the plotfiles and `(local) $` for your
+own desktop.
+
+**Step 1 — On the remote machine, start the server.** It prints a port number
+and an access token that you will use in the next two steps:
 
 ```text
-$ amrexplorer-server --port 8642
-LISTENING 127.0.0.1 8642 TOKEN 58f50743dff4f653b58c3a1fe5858904
+(remote) $ amrexplorer-server
+LISTENING 127.0.0.1 41419 TOKEN 58f50743dff4f653b58c3a1fe5858904
 ```
 
-The token is mandatory and freshly generated at every startup; there is no way
-to disable it. Because loopback is shared by every user on a multi-user host,
-the token — not the port — is what keeps another local user from connecting to
-your server and reading data through your account. Only the terminal (and the
-SSH session that carries it) ever sees the token.
+The port and token are new every time you start the server, so use the values
+from your own output (here, port `41419`), not the ones printed above.
 
-On a shared machine, prefer `--port 0` so the kernel assigns a free port,
-printed on the `LISTENING` line; a fixed port risks colliding with another
-user's server or with a transient connection. Avoid ports in the ephemeral
-range (32768–60999 on Linux), which can be briefly occupied by unrelated
-outbound connections.
-
-Forward the port over SSH from the desktop machine, then open one
-server-visible path (or several paths in sequence order), supplying the token
-after the endpoint as `HOST:PORT#TOKEN`:
+**Step 2 — On your local machine, open an SSH tunnel** using the port from
+step 1. Leave this running while you work:
 
 ```text
-ssh -N -L 8642:127.0.0.1:8642 user@remote
-amrexplorer --connect 127.0.0.1:8642#58f50743dff4f653b58c3a1fe5858904 \
+(local) $ ssh -N -L 41419:localhost:41419 user@remote
+```
+
+If you reach the remote machine through a separate login gateway, add
+`-J user@gateway`:
+
+```text
+(local) $ ssh -N -J user@gateway -L 41419:localhost:41419 user@remote
+```
+
+**Step 3 — On your local machine, open the dataset.** Give the port and token
+from step 1 as `127.0.0.1:PORT#TOKEN`, and the plotfile path as it appears on
+the remote machine:
+
+```text
+(local) $ amrexplorer --connect 127.0.0.1:41419#58f50743dff4f653b58c3a1fe5858904 \
     /remote/path/plt00010
 ```
 
-Here `8642` is whatever port the server is on — the fixed value you passed to
-`--port`, or, with `--port 0`, the kernel-assigned port shown on the
-`LISTENING` line. Use that same number on both sides of the `-L` forward and in
-the `--connect` endpoint.
+To open several plotfiles as a sequence, list more than one path.
 
-If the remote host sits behind a login gateway (the machine you SSH to only
-relays the session and serves forwards on its own loopback), forward through
-the compute host directly with `-J`:
-
-```text
-ssh -N -J user@gateway -L 8642:localhost:8642 user@compute-host
-```
-
-The same workflow is available under **File > Connect to Remote Server...**,
-**Open Remote Plotfile...**, and **Open Remote Plotfile Sequence...**. The
-Connect dialog accepts `HOST:PORT` and then prompts for the token separately,
-or you can paste `HOST:PORT#TOKEN` to supply both at once. Remote paths are
-entered explicitly; protocol 1.0 does not browse the remote filesystem.
-Encryption, host verification, and optional compression are provided by SSH;
-the session token guards against other local users on the server host sharing
-the loopback interface.
-
-If the tunnel or server disconnects, outstanding work fails and the
-Diagnostics panel reports the endpoint and status. Reconnect explicitly and
-reopen the path; requests are not replayed automatically. The protocol sends
-viewport-bounded slices and lines, visible Dataset-window pages, particle
-samples, and clipped grid geometry. It never sends full FABs or volume field
-data.
+The same thing is available from the menus: **File > Connect to Remote
+Server...** (enter `127.0.0.1:PORT`, then the token when prompted), followed by
+**Open Remote Plotfile...** or **Open Remote Plotfile Sequence...** and the
+remote path.
 
 ## User interface overview
 

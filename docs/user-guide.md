@@ -77,6 +77,11 @@ amrexplorer --connect 127.0.0.1:8642#58f50743dff4f653b58c3a1fe5858904 \
     /remote/path/plt00010
 ```
 
+Here `8642` is whatever port the server is on — the fixed value you passed to
+`--port`, or, with `--port 0`, the kernel-assigned port shown on the
+`LISTENING` line. Use that same number on both sides of the `-L` forward and in
+the `--connect` endpoint.
+
 If the remote host sits behind a login gateway (the machine you SSH to only
 relays the session and serves forwards on its own loopback), forward through
 the compute host directly with `-J`:

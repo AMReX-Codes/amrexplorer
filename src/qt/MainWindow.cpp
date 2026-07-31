@@ -301,6 +301,28 @@ QString exceptionMessage(const std::exception& error)
     return QString::fromUtf8(error.what());
 }
 
+// Recovers a remote error code from a worker exception, unwrapping the
+// QUnhandledException that Qt Concurrent wraps around a thrown std exception.
+// Returns nullopt for local failures and any non-remote error.
+std::optional<remote::ErrorCode> remoteErrorCode(const std::exception& error)
+{
+    const auto* unhandled = dynamic_cast<const QUnhandledException*>(&error);
+    if (unhandled != nullptr && unhandled->exception()) {
+        try {
+            std::rethrow_exception(unhandled->exception());
+        } catch (const remote::RemoteError& remoteError) {
+            return remoteError.code();
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+    if (const auto* remoteError
+            = dynamic_cast<const remote::RemoteError*>(&error)) {
+        return remoteError->code();
+    }
+    return std::nullopt;
+}
+
 // QString face of the pipeline's formatter, for the GUI-side messages; hides
 // amrvis::cacheBudgetDescription for unqualified calls in this namespace.
 QString cacheBudgetDescription(std::uint64_t bytes)
@@ -4679,8 +4701,23 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                 }
             } catch (const std::exception& error) {
                 if (generation == m_generation) {
-                    reportBackgroundError(
-                        tr("Cannot open dataset: %1").arg(exceptionMessage(error)));
+                    if (remoteErrorCode(error)
+                        == remote::ErrorCode::Unauthorized) {
+                        QMessageBox::warning(this,
+                            tr("Remote authentication failed"),
+                            tr("The server at %1:%2 rejected the session "
+                               "token.\n\nEnter the token exactly as the "
+                               "server printed it after \"TOKEN\" on its "
+                               "startup line, via File → Connect to "
+                               "Remote Server… (or paste it as "
+                               "HOST:PORT#TOKEN). A new token is generated "
+                               "each time the server starts.")
+                                .arg(QString::fromStdString(m_remoteHost))
+                                .arg(m_remotePort));
+                    } else {
+                        reportBackgroundError(tr("Cannot open dataset: %1")
+                                .arg(exceptionMessage(error)));
+                    }
                     emit datasetOpenFinished(false);
                 } else {
                     ++m_staleResults;

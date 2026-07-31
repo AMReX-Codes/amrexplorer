@@ -1185,15 +1185,22 @@ void MainWindow::createMenus()
         [this] { choosePlotfileSequence(); });
 
     const auto configureRemoteEndpoint = [this]() {
-        // The server's port is assigned fresh each time it starts, so there is
-        // no useful fixed default; prefill the loopback host and let the user
-        // append the port the server printed. After a successful entry the
-        // last host:port is offered again.
-        const auto current = m_remotePort == 0
-            ? QStringLiteral("127.0.0.1:")
-            : QStringLiteral("%1:%2")
-                  .arg(QString::fromStdString(m_remoteHost))
-                  .arg(m_remotePort);
+        // Prefill the loopback host and the last port used (this session, or
+        // the one saved from a previous run against a still-running server).
+        // The token is never persisted, so it is always entered fresh.
+        QString current;
+        if (m_remotePort != 0) {
+            current = QStringLiteral("%1:%2")
+                          .arg(QString::fromStdString(m_remoteHost))
+                          .arg(m_remotePort);
+        } else {
+            const auto savedPort = makeSettings()
+                    .value(QStringLiteral("remote/port"), 0U)
+                    .toUInt();
+            current = (savedPort > 0 && savedPort <= 65535)
+                ? QStringLiteral("127.0.0.1:%1").arg(savedPort)
+                : QStringLiteral("127.0.0.1:");
+        }
         bool accepted = false;
         const auto text = QInputDialog::getText(this,
             tr("Connect to Remote Server"), tr("Host and port:"),
@@ -1227,6 +1234,7 @@ void MainWindow::createMenus()
         m_remoteHost = endpoint->host;
         m_remotePort = endpoint->port;
         m_remoteToken = std::move(token);
+        saveRemoteSettings();
         statusBar()->showMessage(tr("Remote endpoint set to %1:%2")
                 .arg(QString::fromStdString(m_remoteHost))
                 .arg(m_remotePort));
@@ -3974,10 +3982,22 @@ void MainWindow::restoreSettings()
         }
     }
     applySpeed();
+
     const auto geometry = settings.value(QStringLiteral("geometry")).toByteArray();
     if (!geometry.isEmpty()) {
         restoreGeometry(geometry);
     }
+}
+
+void MainWindow::saveRemoteSettings()
+{
+    // Only the port is persisted, purely to prefill the Connect dialog after a
+    // client restart against a still-running server. The token is a secret and
+    // is deliberately never written to disk; the host is always loopback via
+    // the SSH tunnel.
+    auto settings = makeSettings();
+    settings.setValue(QStringLiteral("remote/port"),
+        static_cast<uint>(m_remotePort));
 }
 
 void MainWindow::saveSettings()

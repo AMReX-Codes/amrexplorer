@@ -166,12 +166,35 @@ int main(int argc, char* argv[])
     Server server(options);
     RunningServer running(server);
 
+    require(!server.token().empty(),
+        "server did not generate a session token");
+
+    // A handshake carrying the wrong token must be refused with Unauthorized,
+    // and the server must close that connection rather than serve it.
+    {
+        auto rogue = connectTo("127.0.0.1", server.port());
+        auto rejected = exchange(rogue, 1,
+            codec::toWire(HelloRequestData{
+                "rogue client", "test", 0, protocolMinor,
+                defaultMaximumFrameBytes, server.token() + "x", {}}),
+            defaultMaximumFrameBytes);
+        require(codec::inspect(*rejected).payload
+                == PayloadKind::ErrorResponse,
+            "server accepted a bad token");
+        require(codec::fromWire(*rejected->payload.AsErrorResponse()).code
+                == ErrorCode::Unauthorized,
+            "bad token returned the wrong error code");
+        require(!readFrame(rogue, defaultMaximumFrameBytes).has_value(),
+            "server left the rejected connection open");
+    }
+
     auto socket = connectTo("127.0.0.1", server.port());
     constexpr std::uint32_t reducedFrameBytes = 1U * 1024U * 1024U;
-    auto reducedFrameHello = helloRequest();
-    reducedFrameHello.maximumFrameBytes = reducedFrameBytes;
+    auto authorizedHello = helloRequest();
+    authorizedHello.sessionToken = server.token();
+    authorizedHello.maximumFrameBytes = reducedFrameBytes;
     auto envelope = exchange(socket, 1,
-        codec::toWire(reducedFrameHello), reducedFrameBytes);
+        codec::toWire(authorizedHello), reducedFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
         "server rejected a compatible handshake");
     const auto hello = codec::fromWire(

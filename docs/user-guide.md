@@ -47,25 +47,52 @@ physical space — see [2-D spherical coordinates](#2-d-spherical-coordinates).
 ## Remote datasets
 
 Run the headless server on the machine that can read the plotfiles. It binds
-only to that machine's loopback interface:
+only to that machine's loopback interface and prints a per-session access
+token that clients must present:
 
 ```text
-amrexplorer-server --port 48192
+$ amrexplorer-server --port 8642
+LISTENING 127.0.0.1 8642 TOKEN 58f50743dff4f653b58c3a1fe5858904
 ```
 
+The token is mandatory and freshly generated at every startup; there is no way
+to disable it. Because loopback is shared by every user on a multi-user host,
+the token — not the port — is what keeps another local user from connecting to
+your server and reading data through your account. Only the terminal (and the
+SSH session that carries it) ever sees the token.
+
+On a shared machine, prefer `--port 0` so the kernel assigns a free port,
+printed on the `LISTENING` line; a fixed port risks colliding with another
+user's server or with a transient connection. Avoid ports in the ephemeral
+range (32768–60999 on Linux), which can be briefly occupied by unrelated
+outbound connections.
+
 Forward the port over SSH from the desktop machine, then open one
-server-visible path (or several paths in sequence order):
+server-visible path (or several paths in sequence order), supplying the token
+after the endpoint as `HOST:PORT#TOKEN`:
 
 ```text
-ssh -N -L 48192:127.0.0.1:48192 user@remote
-amrexplorer --connect 127.0.0.1:48192 /remote/path/plt00010
+ssh -N -L 8642:127.0.0.1:8642 user@remote
+amrexplorer --connect 127.0.0.1:8642#58f50743dff4f653b58c3a1fe5858904 \
+    /remote/path/plt00010
+```
+
+If the remote host sits behind a login gateway (the machine you SSH to only
+relays the session and serves forwards on its own loopback), forward through
+the compute host directly with `-J`:
+
+```text
+ssh -N -J user@gateway -L 8642:localhost:8642 user@compute-host
 ```
 
 The same workflow is available under **File > Connect to Remote Server...**,
-**Open Remote Plotfile...**, and **Open Remote Plotfile Sequence...**. Remote
-paths are entered explicitly; protocol 1.0 does not browse the remote
-filesystem. Authentication, encryption, host verification, and optional
-compression are provided by SSH rather than the AMReXplorer protocol.
+**Open Remote Plotfile...**, and **Open Remote Plotfile Sequence...**. The
+Connect dialog accepts `HOST:PORT` and then prompts for the token separately,
+or you can paste `HOST:PORT#TOKEN` to supply both at once. Remote paths are
+entered explicitly; protocol 1.0 does not browse the remote filesystem.
+Encryption, host verification, and optional compression are provided by SSH;
+the session token guards against other local users on the server host sharing
+the loopback interface.
 
 If the tunnel or server disconnects, outstanding work fails and the
 Diagnostics panel reports the endpoint and status. Reconnect explicitly and

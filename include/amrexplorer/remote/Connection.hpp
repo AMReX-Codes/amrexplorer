@@ -24,6 +24,9 @@ struct ConnectionOptions {
     // acknowledgement. Plotfile-operation responses have no wall-clock
     // deadline and remain governed by cancellation or disconnect instead.
     std::chrono::milliseconds requestTimeout{30000};
+    // Access token printed by the server at startup. Required: a server always
+    // enforces a token, so an empty value here is rejected at the handshake.
+    std::string sessionToken;
 };
 
 class Connection : public std::enable_shared_from_this<Connection> {

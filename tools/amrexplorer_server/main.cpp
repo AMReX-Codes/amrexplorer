@@ -131,8 +131,17 @@ int main(int argc, char* argv[])
         std::signal(SIGINT, handleSignal);
         std::signal(SIGTERM, handleSignal);
         amrvis::remote::Server server(options);
-        std::cout << "LISTENING 127.0.0.1 " << server.port() << '\n'
+        // The token gates every connection; clients must present it in their
+        // handshake. It is printed here (and only here) so it travels over the
+        // same channel the operator already trusts — their terminal or SSH
+        // session — never onto the wire in the clear beyond the loopback bind.
+        std::cout << "LISTENING 127.0.0.1 " << server.port() << " TOKEN "
+                  << server.token() << '\n'
                   << std::flush;
+        std::cerr << "amrexplorer-server ready on 127.0.0.1:" << server.port()
+                  << "\nsession token: " << server.token()
+                  << "\nconnect the client to 127.0.0.1:" << server.port()
+                  << " and supply this token\n";
         SignalWatcher signalWatcher(server);
         server.run();
         return 0;

@@ -63,9 +63,12 @@ int main()
     auto envelope = codec::decode(bytes);
     require(codec::inspect(*envelope).requestId == 7,
         "hello request ID did not round-trip");
-    require(codec::fromWire(*envelope->payload.AsHelloRequest()).clientName
-            == hello.clientName,
+    const auto decodedHello
+        = codec::fromWire(*envelope->payload.AsHelloRequest());
+    require(decodedHello.clientName == hello.clientName,
         "hello payload did not round-trip");
+    require(decodedHello.sessionToken == hello.sessionToken,
+        "hello session token did not round-trip");
     require(codec::fromWire(*envelope->payload.AsHelloRequest()).capabilities
             == hello.capabilities,
         "hello capabilities did not round-trip");

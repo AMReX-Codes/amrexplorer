@@ -1156,7 +1156,7 @@ void MainWindow::createMenus()
 
     const auto configureRemoteEndpoint = [this]() {
         const auto current = m_remotePort == 0
-            ? QStringLiteral("127.0.0.1:48192")
+            ? QStringLiteral("127.0.0.1:8642")
             : QStringLiteral("%1:%2")
                   .arg(QString::fromStdString(m_remoteHost))
                   .arg(m_remotePort);
@@ -1173,10 +1173,29 @@ void MainWindow::createMenus()
                 tr("Enter an endpoint as HOST:PORT."));
             return false;
         }
-        m_remoteHost = endpoint->first;
-        m_remotePort = endpoint->second;
-        statusBar()->showMessage(
-            tr("Remote endpoint set to %1").arg(text));
+        auto token = endpoint->token;
+        if (token.empty()) {
+            bool tokenAccepted = false;
+            const auto tokenText = QInputDialog::getText(this,
+                tr("Connect to Remote Server"),
+                tr("Session token (printed by the server at startup):"),
+                QLineEdit::Normal, QString(), &tokenAccepted);
+            if (!tokenAccepted) {
+                return false;
+            }
+            token = tokenText.trimmed().toStdString();
+        }
+        if (token.empty()) {
+            QMessageBox::warning(this, tr("Missing token"),
+                tr("A session token is required to connect."));
+            return false;
+        }
+        m_remoteHost = endpoint->host;
+        m_remotePort = endpoint->port;
+        m_remoteToken = std::move(token);
+        statusBar()->showMessage(tr("Remote endpoint set to %1:%2")
+                .arg(QString::fromStdString(m_remoteHost))
+                .arg(m_remotePort));
         updateDiagnostics();
         return true;
     };
@@ -1198,8 +1217,8 @@ void MainWindow::createMenus()
                 tr("Server-visible plotfile path:"), QLineEdit::Normal,
                 QString(), &accepted);
             if (accepted && !path.trimmed().isEmpty()) {
-                openRemoteDataset(
-                    m_remoteHost, m_remotePort, path.toStdString());
+                openRemoteDataset(m_remoteHost, m_remotePort,
+                    path.toStdString(), m_remoteToken);
             }
         });
 
@@ -1226,7 +1245,8 @@ void MainWindow::createMenus()
                     paths.push_back(path.toStdString());
                 }
             }
-            openRemoteSequence(m_remoteHost, m_remotePort, paths);
+            openRemoteSequence(
+                m_remoteHost, m_remotePort, paths, m_remoteToken);
         });
 
     auto* openFabAction = new QAction(tr("Open &FAB..."), this);
@@ -4625,15 +4645,17 @@ void MainWindow::resetFabState()
     m_fabSelectorDock->setVisible(false);
 }
 
-void MainWindow::openRemoteDataset(
-    std::string host, std::uint16_t port, std::string remotePath)
+void MainWindow::openRemoteDataset(std::string host, std::uint16_t port,
+    std::string remotePath, std::string token)
 {
     m_remoteHost = host;
     m_remotePort = port;
+    m_remoteToken = token;
     const auto displayPath = std::filesystem::path(remotePath);
     openDatasetImpl(displayPath, false, std::nullopt, {}, false,
         std::nullopt,
-        std::tuple{std::move(host), port, std::move(remotePath)});
+        std::tuple{std::move(host), port, std::move(remotePath),
+            std::move(token)});
 }
 
 void MainWindow::openDatasetImpl(const std::filesystem::path& path,
@@ -4641,7 +4663,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     std::optional<PlotfileMetadataResult> preparedMetadata,
     std::filesystem::path dataRoot, bool preserveFabSelector,
     std::optional<FrameSliceSpec> initialSpec,
-    std::optional<std::tuple<std::string, std::uint16_t, std::string>>
+    std::optional<
+        std::tuple<std::string, std::uint16_t, std::string, std::string>>
         remoteOpen)
 {
     if (!preserveFabSelector) {
@@ -4838,11 +4861,12 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
             remoteOpen = std::move(remoteOpen)]() mutable {
         OpenedDataset opened;
         if (remoteOpen) {
-            auto& [host, port, remotePath] = *remoteOpen;
+            auto& [host, port, remotePath, token] = *remoteOpen;
             auto connection = std::make_shared<remote::Connection>(
                 host, port, remote::ConnectionOptions{
                     .clientName = "AMReXplorer Qt",
-                    .softwareVersion = AMREXPLORER_VERSION},
+                    .softwareVersion = AMREXPLORER_VERSION,
+                    .sessionToken = token},
                 cancellation);
             opened.session = remote::RemoteDatasetSession::open(
                 std::move(connection), remotePath,
@@ -6229,7 +6253,7 @@ void MainWindow::prepareSequence(std::size_t frameCount)
 }
 
 void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
-    const std::vector<std::string>& remotePaths)
+    const std::vector<std::string>& remotePaths, std::string token)
 {
     if (remotePaths.size() < 2
         || std::any_of(remotePaths.begin(), remotePaths.end(),
@@ -6242,6 +6266,7 @@ void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
 
     m_remoteHost = host;
     m_remotePort = port;
+    m_remoteToken = token;
     prepareSequence(remotePaths.size());
     m_remoteSequence = true;
 
@@ -6256,7 +6281,8 @@ void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
         std::uint64_t generation = 0;
     };
     auto shared = std::make_shared<SharedRemoteConnection>();
-    auto loader = [shared, host = std::move(host), port](
+    auto loader = [shared, host = std::move(host), port,
+                      token = std::move(token)](
                       const std::filesystem::path& path, DatasetId,
                       const FrameSliceSpec& spec, StopToken cancellation) {
         std::shared_ptr<remote::Connection> connection;
@@ -6273,7 +6299,8 @@ void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
             auto candidate = std::make_shared<remote::Connection>(host, port,
                 remote::ConnectionOptions{
                     .clientName = "AMReXplorer Qt sequence",
-                    .softwareVersion = AMREXPLORER_VERSION},
+                    .softwareVersion = AMREXPLORER_VERSION,
+                    .sessionToken = token},
                 cancellation);
             {
                 std::scoped_lock lock(shared->mutex);

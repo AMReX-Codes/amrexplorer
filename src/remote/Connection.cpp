@@ -54,6 +54,7 @@ public:
             hello.minimumMinorVersion = 0;
             hello.maximumMinorVersion = protocolMinorVersion;
             hello.maximumFrameBytes = options.maximumFrameBytes;
+            hello.sessionToken = std::move(options.sessionToken);
             const auto response = transact(codec::toWire(hello),
                 PayloadKind::HelloResponse, cancellation,
                 m_connectionDeadline);

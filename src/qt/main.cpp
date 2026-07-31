@@ -505,7 +505,7 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
                 window.openRemoteDataset(
-                    "127.0.0.1", server->port(), path);
+                    "127.0.0.1", server->port(), path, server->token());
             });
     } else if (argc == 3
         && std::string_view(argv[1])
@@ -537,7 +537,7 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
                 window.openRemoteDataset(
-                    "127.0.0.1", server->port(), path);
+                    "127.0.0.1", server->port(), path, server->token());
             });
     } else if (argc == 2
         && std::string_view(argv[1])
@@ -559,7 +559,8 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, port = listener->port] {
                 window.openRemoteDataset(
-                    "127.0.0.1", port, "/not-opened-before-hello");
+                    "127.0.0.1", port, "/not-opened-before-hello",
+                    "test-token");
             });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--remote-rubber-aspect-smoke-test") {
@@ -588,7 +589,7 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
                 window.openRemoteDataset(
-                    "127.0.0.1", server->port(), path);
+                    "127.0.0.1", server->port(), path, server->token());
             });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--remote-grid-boxes-smoke-test") {
@@ -625,7 +626,7 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
                 window.openRemoteDataset(
-                    "127.0.0.1", server->port(), path);
+                    "127.0.0.1", server->port(), path, server->token());
             });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--remote-sequence-smoke-test") {
@@ -658,13 +659,18 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
                 window.openRemoteSequence(
-                    "127.0.0.1", server->port(), {path, path});
+                    "127.0.0.1", server->port(), {path, path},
+                    server->token());
             });
     } else if (argc >= 4
         && std::string_view(argv[1]) == "--connect") {
         const auto endpoint = amrvis::qt::parseRemoteEndpoint(argv[2]);
         if (!endpoint) {
-            qCritical("invalid remote endpoint; expected HOST:PORT");
+            qCritical("invalid remote endpoint; expected HOST:PORT[#TOKEN]");
+            return 2;
+        }
+        if (endpoint->token.empty()) {
+            qCritical("missing session token; expected HOST:PORT#TOKEN");
             return 2;
         }
         std::vector<std::string> paths;
@@ -679,16 +685,16 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, endpoint = *endpoint, paths = std::move(paths)] {
                 if (paths.size() == 1) {
-                    window.openRemoteDataset(
-                        endpoint.first, endpoint.second, paths.front());
+                    window.openRemoteDataset(endpoint.host, endpoint.port,
+                        paths.front(), endpoint.token);
                 } else {
-                    window.openRemoteSequence(
-                        endpoint.first, endpoint.second, paths);
+                    window.openRemoteSequence(endpoint.host, endpoint.port,
+                        paths, endpoint.token);
                 }
             });
     } else if (argc >= 2
         && std::string_view(argv[1]) == "--connect") {
-        qCritical("usage: amrexplorer --connect HOST:PORT REMOTE_PATH "
+        qCritical("usage: amrexplorer --connect HOST:PORT#TOKEN REMOTE_PATH "
                   "[REMOTE_PATH ...]");
         return 2;
     } else if (argc == 3 && std::string_view(argv[1]) == "--smoke-test") {
@@ -1310,7 +1316,7 @@ int main(int argc, char* argv[])
                 }
                 *opened = true;
                 window.openRemoteSequence("127.0.0.1", server->port(),
-                    {first, second});
+                    {first, second}, server->token());
             });
         QObject::connect(&window,
             &amrvis::qt::MainWindow::sequenceFrameDisplayed,

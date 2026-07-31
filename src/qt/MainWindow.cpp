@@ -323,6 +323,14 @@ std::optional<remote::ErrorCode> remoteErrorCode(const std::exception& error)
     return std::nullopt;
 }
 
+// Result of the cheap connect-time handshake used to validate an endpoint and
+// token before any dataset is opened.
+struct RemoteVerifyOutcome {
+    bool ok = false;
+    bool unauthorized = false;
+    QString message;
+};
+
 // QString face of the pipeline's formatter, for the GUI-side messages; hides
 // amrvis::cacheBudgetDescription for unqualified calls in this namespace.
 QString cacheBudgetDescription(std::uint64_t bytes)
@@ -1147,8 +1155,12 @@ void MainWindow::createMenus()
         [this] { choosePlotfileSequence(); });
 
     const auto configureRemoteEndpoint = [this]() {
+        // The server's port is assigned fresh each time it starts, so there is
+        // no useful fixed default; prefill the loopback host and let the user
+        // append the port the server printed. After a successful entry the
+        // last host:port is offered again.
         const auto current = m_remotePort == 0
-            ? QStringLiteral("127.0.0.1:8642")
+            ? QStringLiteral("127.0.0.1:")
             : QStringLiteral("%1:%2")
                   .arg(QString::fromStdString(m_remoteHost))
                   .arg(m_remotePort);
@@ -1194,7 +1206,12 @@ void MainWindow::createMenus()
     auto* connectRemoteAction = new QAction(
         tr("&Connect to Remote Server..."), this);
     connect(connectRemoteAction, &QAction::triggered, this,
-        [configureRemoteEndpoint] { configureRemoteEndpoint(); });
+        [this, configureRemoteEndpoint] {
+            if (configureRemoteEndpoint()) {
+                verifyRemoteEndpoint(
+                    m_remoteHost, m_remotePort, m_remoteToken);
+            }
+        });
 
     auto* openRemoteAction = new QAction(
         tr("Open Remote &Plotfile..."), this);
@@ -1215,7 +1232,7 @@ void MainWindow::createMenus()
         });
 
     auto* openRemoteSequenceAction = new QAction(
-        tr("Open Remote Plotfile &Sequence..."), this);
+        tr("Open &Remote Plotfile Sequence..."), this);
     connect(openRemoteSequenceAction, &QAction::triggered, this,
         [this, configureRemoteEndpoint] {
             if (m_remotePort == 0 && !configureRemoteEndpoint()) {
@@ -4499,6 +4516,68 @@ void MainWindow::resetFabState()
     m_fabSelectorDock->setEntries({});
     m_fabSelectorDock->setBackAvailable(false);
     m_fabSelectorDock->setVisible(false);
+}
+
+void MainWindow::verifyRemoteEndpoint(
+    std::string host, std::uint16_t port, std::string token)
+{
+    statusBar()->showMessage(tr("Verifying connection to %1:%2...")
+            .arg(QString::fromStdString(host))
+            .arg(port));
+    auto* watcher = new QFutureWatcher<RemoteVerifyOutcome>(this);
+    connect(watcher, &QFutureWatcher<RemoteVerifyOutcome>::finished, this,
+        [this, watcher, host, port, token] {
+            const auto outcome = watcher->result();
+            watcher->deleteLater();
+            if (m_closing) {
+                return;
+            }
+            // Skip a stale check whose endpoint the user has since changed.
+            if (host != m_remoteHost || port != m_remotePort
+                || token != m_remoteToken) {
+                return;
+            }
+            if (outcome.ok) {
+                statusBar()->showMessage(
+                    tr("Connected to %1:%2 — session token accepted")
+                        .arg(QString::fromStdString(host))
+                        .arg(port));
+            } else if (outcome.unauthorized) {
+                statusBar()->showMessage(tr("Remote authentication failed"));
+                QMessageBox::warning(this, tr("Remote authentication failed"),
+                    tr("The server at %1:%2 rejected the session token.\n\n"
+                       "Enter the token exactly as the server printed it after "
+                       "\"TOKEN\" on its startup line. A new token is generated "
+                       "each time the server starts.")
+                        .arg(QString::fromStdString(host))
+                        .arg(port));
+            } else {
+                statusBar()->showMessage(tr("Could not reach remote server"));
+                reportBackgroundError(tr("Could not connect to %1:%2: %3")
+                        .arg(QString::fromStdString(host))
+                        .arg(port)
+                        .arg(outcome.message));
+            }
+            updateDiagnostics();
+        });
+    watcher->setFuture(QtConcurrent::run(
+        [host, port, token]() -> RemoteVerifyOutcome {
+            try {
+                remote::Connection connection(host, port,
+                    remote::ConnectionOptions{
+                        .clientName = "AMReXplorer Qt",
+                        .softwareVersion = AMREXPLORER_VERSION,
+                        .sessionToken = token});
+                connection.ping();
+                return {true, false, {}};
+            } catch (const remote::RemoteError& error) {
+                return {false,
+                    error.code() == remote::ErrorCode::Unauthorized,
+                    QString::fromUtf8(error.what())};
+            } catch (const std::exception& error) {
+                return {false, false, QString::fromUtf8(error.what())};
+            }
+        }));
 }
 
 void MainWindow::openRemoteDataset(std::string host, std::uint16_t port,

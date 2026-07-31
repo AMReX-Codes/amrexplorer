@@ -95,6 +95,11 @@ public:
         std::string remotePath, std::string token);
     void openRemoteSequence(std::string host, std::uint16_t port,
         const std::vector<std::string>& remotePaths, std::string token);
+    // Cheap connect-time check: runs a handshake (and ping) off the GUI thread
+    // to confirm the endpoint is reachable and the token is accepted, without
+    // opening a dataset.
+    void verifyRemoteEndpoint(
+        std::string host, std::uint16_t port, std::string token);
     // Opens a plotfile sequence (the legacy "-a" file animation): frames are
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.

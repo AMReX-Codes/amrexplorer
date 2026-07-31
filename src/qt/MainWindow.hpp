@@ -100,6 +100,10 @@ public:
     // opening a dataset.
     void verifyRemoteEndpoint(
         std::string host, std::uint16_t port, std::string token);
+    // Persists only the remote port, to prefill the Connect dialog after a
+    // client restart against a still-running server. The token is never
+    // written to disk.
+    void saveRemoteSettings();
     // Opens a plotfile sequence (the legacy "-a" file animation): frames are
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.

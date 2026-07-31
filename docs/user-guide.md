@@ -93,6 +93,17 @@ Server...** (enter `127.0.0.1:PORT`, then the token when prompted), followed by
 **Open Remote Plotfile...** or **Open Remote Plotfile Sequence...** and the
 remote path.
 
+**Tip — use a fixed local port.** In the tunnel command the first number is a
+port on your own machine and can be any value you pick; only the second has to
+match the server. Choose a fixed local port and step 3 always uses the same
+number, even though the server's port changes each run:
+
+```text
+(local) $ ssh -N -L 9000:localhost:41419 user@remote
+(local) $ amrexplorer --connect 127.0.0.1:9000#58f50743dff4f653b58c3a1fe5858904 \
+    /remote/path/plt00010
+```
+
 ## User interface overview
 
 ![AMReXplorer displaying a three-dimensional plotfile](images/user-guide-overview.png)

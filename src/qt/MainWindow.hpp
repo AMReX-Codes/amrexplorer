@@ -683,6 +683,8 @@ private:
     bool m_pendingRasterDirty = false;
     StopSource m_initialStopSource;
     StopSource m_metadataStopSource;
+    StopSource m_remoteVerifyStopSource;
+    std::uint64_t m_remoteVerifyGeneration = 0;
     DisplayMode m_displayMode = DisplayMode::Raster;
     int m_contourCount = 15;
     // 2-D spherical warp supersample factor (see SliceRequest::sphericalSupersample).

@@ -120,9 +120,13 @@ int main(int argc, char* argv[])
                 }
                 options.maximumFrameBytes = mebibytes * oneMebibyte;
             } else if (option == "--max-datasets") {
-                options.maximumDatasets
-                    = parseUnsigned<std::uint32_t>(
-                        value, "--max-datasets");
+                const auto maximumDatasets
+                    = parseUnsigned<std::uint32_t>(value, "--max-datasets");
+                if (maximumDatasets == 0) {
+                    throw std::invalid_argument(
+                        "--max-datasets must be greater than zero");
+                }
+                options.maximumDatasets = maximumDatasets;
             } else {
                 throw std::invalid_argument("unknown option: " + option);
             }

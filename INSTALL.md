@@ -25,8 +25,11 @@ cmake --build --preset default
 ```
 
 Remote support and the headless `amrexplorer-server` executable are included
-in normal desktop builds. FlatBuffers is fetched automatically while CMake
-configures the remote targets.
+in normal desktop builds. CMake uses an installed FlatBuffers CMake package
+when one is available, otherwise it fetches the project's pinned FlatBuffers
+version. Package-managed and offline builds can point `CMAKE_PREFIX_PATH` at an
+installed FlatBuffers package. Set `-DAMREXPLORER_FORCE_FETCH_FLATBUFFERS=ON`
+to test or explicitly select the pinned fallback.
 
 ### macOS
 

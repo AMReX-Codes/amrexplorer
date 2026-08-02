@@ -322,6 +322,11 @@ provides:
 
 Frame changes preserve the active field, level, range, log, palette, and
 visible-region settings when those settings are valid for the next plotfile.
+Fit mode refits each frame, while a fixed integer scale is reapplied to the new
+frame. A custom view created with wheel zoom or panning preserves the same
+visible physical region across frames with compatible geometry. AMReXplorer
+refits when the domain, coordinate system, panel orientation, or raster mapping
+changes and the previous physical view is no longer compatible.
 
 ## Exporting images and animations
 

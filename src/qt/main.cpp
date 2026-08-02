@@ -540,8 +540,13 @@ int main(int argc, char* argv[])
                     "127.0.0.1", server->port(), path, server->token());
             });
     } else if (argc == 2
-        && std::string_view(argv[1])
-            == "--remote-silent-hello-close-smoke-test") {
+        && (std::string_view(argv[1])
+                == "--remote-silent-hello-close-smoke-test"
+            || std::string_view(argv[1])
+                == "--remote-silent-verification-close-smoke-test")) {
+        const bool verification
+            = std::string_view(argv[1])
+            == "--remote-silent-verification-close-smoke-test";
         auto listener = std::make_shared<amrvis::remote::Listener>(
             amrvis::remote::listenOnLoopback(0));
         smokePeerThread.emplace([listener, &window] {
@@ -557,10 +562,15 @@ int main(int argc, char* argv[])
         QTimer::singleShot(5000, &application,
             [&application] { application.exit(1); });
         QTimer::singleShot(0, &window,
-            [&window, port = listener->port] {
-                window.openRemoteDataset(
-                    "127.0.0.1", port, "/not-opened-before-hello",
-                    "test-token");
+            [&window, port = listener->port, verification] {
+                if (verification) {
+                    window.verifyRemoteEndpoint(
+                        "127.0.0.1", port, "test-token");
+                } else {
+                    window.openRemoteDataset(
+                        "127.0.0.1", port, "/not-opened-before-hello",
+                        "test-token");
+                }
             });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--remote-rubber-aspect-smoke-test") {

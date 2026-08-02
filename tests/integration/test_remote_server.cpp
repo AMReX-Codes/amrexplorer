@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <iostream>
 #include <memory>
@@ -123,6 +124,27 @@ amrvis::remote::HelloRequestData helloRequest()
         defaultMaximumFrameBytes, {}, {}};
 }
 
+void writeOversizedParticleHeader(const std::filesystem::path& root)
+{
+    using namespace amrvis::remote;
+    constexpr std::uint64_t bytesPerPoint
+        = sizeof(std::uint64_t) + 3 * sizeof(double);
+    constexpr std::uint64_t particleCount
+        = defaultMaximumFrameBytes / bytesPerPoint + 1;
+    const auto species = root / "Oversized";
+    std::filesystem::create_directories(species);
+    std::ofstream header(species / "Header");
+    require(static_cast<bool>(header),
+        "could not create oversized particle Header");
+    header << "Version_Two_Dot_Zero_double\n"
+           << "2\n0\n0\n1\n"
+           << particleCount << '\n'
+           << particleCount + 1 << "\n0\n1\n"
+           << "0 " << particleCount << " 0\n";
+    require(static_cast<bool>(header),
+        "could not write oversized particle Header");
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -134,6 +156,7 @@ int main(int argc, char* argv[])
         std::cerr << "usage: test_remote_server MATERIALIZED_PLOTFILE\n";
         return 2;
     }
+    writeOversizedParticleHeader(argv[1]);
 
     ServerOptions options;
     options.workerCount = 2;
@@ -167,6 +190,14 @@ int main(int argc, char* argv[])
     require(opened.catalog.dimension == 2
             && opened.catalog.levels.size() == 2,
         "server returned an incomplete dataset catalog");
+
+    envelope = exchange(socket, 8,
+        codec::toWire(opened.id, "Oversized", 1.0, 0),
+        hello.maximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
+            && codec::fromWire(*envelope->payload.AsErrorResponse()).code
+                == ErrorCode::ResourceLimitExceeded,
+        "oversized particle request reached the particle reader");
 
     SliceRequest request;
     request.dataset = opened.id;
@@ -225,20 +256,31 @@ int main(int argc, char* argv[])
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetClosed,
         "server did not close the second dataset");
 
-    auto duplicateSocket = connectTo("127.0.0.1", server.port());
+    ServerOptions duplicateOptions;
+    duplicateOptions.workerCount = 2;
+    duplicateOptions.maximumDatasets = 1;
+    duplicateOptions.maximumOutstandingRequests = 2;
+    duplicateOptions.maximumConnections = 1;
+    Server duplicateServer(duplicateOptions);
+    RunningServer duplicateRunning(duplicateServer);
+    auto duplicateSocket
+        = connectTo("127.0.0.1", duplicateServer.port());
     envelope = exchange(duplicateSocket, 1, codec::toWire(helloRequest()),
         defaultMaximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
         "server rejected the duplicate-ID test connection");
+    const auto duplicateHello = codec::fromWire(
+        *envelope->payload.AsHelloResponse());
     const OpenDatasetData duplicateOpen{
         std::filesystem::path(argv[1]).string(),
         16ULL * 1024ULL * 1024ULL};
     envelope = exchange(duplicateSocket, 2, codec::toWire(duplicateOpen),
-        hello.maximumFrameBytes);
+        duplicateHello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
         "server did not open the duplicate-ID test dataset");
     const auto duplicateOpened = codec::fromWire(
         *envelope->payload.AsDatasetOpened());
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
 
     SliceRequest duplicateSlice;
     duplicateSlice.dataset = duplicateOpened.id;
@@ -255,14 +297,17 @@ int main(int argc, char* argv[])
     duplicateSlice.outputSize = {1536, 1536};
     writeFrame(duplicateSocket,
         codec::encode(3, codec::toWire(duplicateSlice)),
-        hello.maximumFrameBytes);
+        duplicateHello.maximumFrameBytes);
+    writeFrame(duplicateSocket,
+        codec::encode(4, codec::toWire(duplicateSlice)),
+        duplicateHello.maximumFrameBytes);
     writeFrame(duplicateSocket,
         codec::encode(3, codec::toWire(duplicateSlice)),
-        hello.maximumFrameBytes);
+        duplicateHello.maximumFrameBytes);
     bool duplicateRejected = false;
-    for (int response = 0; response < 2 && !duplicateRejected; ++response) {
+    for (int response = 0; response < 3 && !duplicateRejected; ++response) {
         auto duplicateResponse = readWithDeadline(duplicateSocket,
-            hello.maximumFrameBytes, std::chrono::seconds{10});
+            duplicateHello.maximumFrameBytes, std::chrono::seconds{10});
         require(duplicateResponse != nullptr,
             "duplicate request ID caused an unbounded disconnect");
         if (codec::inspect(*duplicateResponse).payload
@@ -276,10 +321,12 @@ int main(int argc, char* argv[])
     }
     require(duplicateRejected,
         "duplicate live request ID did not receive a bounded error");
+    require(duplicateRunning.stopWithin(std::chrono::seconds{2}),
+        "duplicate-ID server shutdown exceeded its deadline");
 
     codec::fb::CloseDatasetRequestT close;
     close.dataset_id = opened.id.value;
-    envelope = exchange(socket, 8, std::move(close),
+    envelope = exchange(socket, 9, std::move(close),
         hello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetClosed,
         "server did not close the dataset");
@@ -342,5 +389,7 @@ int main(int argc, char* argv[])
     }
     require(boundedRunning.stopWithin(std::chrono::seconds{2}),
         "small-frame server shutdown exceeded its deadline");
+    std::filesystem::remove_all(
+        std::filesystem::path(argv[1]) / "Oversized");
     return 0;
 }

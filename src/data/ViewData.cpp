@@ -46,18 +46,22 @@ LineQueryResult boundLineToViewport(LineQueryResult result, int outputWidth)
         if (begin >= end) {
             continue;
         }
+        const auto invalid = std::find(result.line.valid.begin()
+                + static_cast<std::ptrdiff_t>(begin),
+            result.line.valid.begin() + static_cast<std::ptrdiff_t>(end), 0);
+        if (invalid != result.line.valid.begin()
+                + static_cast<std::ptrdiff_t>(end)) {
+            append(static_cast<std::size_t>(
+                std::distance(result.line.valid.begin(), invalid)));
+            continue;
+        }
         auto minimum = begin;
         auto maximum = begin;
         for (auto index = begin + 1; index < end; ++index) {
-            if (result.line.valid[index] == 0) {
-                continue;
-            }
-            if (result.line.valid[minimum] == 0
-                || result.line.values[index] < result.line.values[minimum]) {
+            if (result.line.values[index] < result.line.values[minimum]) {
                 minimum = index;
             }
-            if (result.line.valid[maximum] == 0
-                || result.line.values[index] > result.line.values[maximum]) {
+            if (result.line.values[index] > result.line.values[maximum]) {
                 maximum = index;
             }
         }

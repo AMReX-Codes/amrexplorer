@@ -36,7 +36,7 @@ int main()
 
     const auto listener = listenOnLoopback(0);
     std::exception_ptr serverFailure;
-    std::jthread server([&] {
+    std::thread server([&] {
         try {
             auto peer = acceptConnection(listener.socket);
             const auto request = readFrame(peer, 64);
@@ -68,12 +68,13 @@ int main()
         "an oversized frame was accepted");
 
     const auto eofListener = listenOnLoopback(0);
-    std::jthread closer([&] {
+    std::thread closer([&] {
         auto peer = acceptConnection(eofListener.socket);
         peer.close();
     });
     auto eofClient = connectTo("127.0.0.1", eofListener.port);
     require(!readFrame(eofClient, 64).has_value(),
         "clean EOF was not distinguished from a partial frame");
+    closer.join();
     return 0;
 }

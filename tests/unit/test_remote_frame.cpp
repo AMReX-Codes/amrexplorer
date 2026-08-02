@@ -1,11 +1,25 @@
 #include <amrexplorer/remote/Frame.hpp>
 
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#else
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#endif
 
 namespace {
 
@@ -26,6 +40,66 @@ void requireRejected(Function&& function, const char* message)
         return;
     }
     require(false, message);
+}
+
+void writeRaw(const amrvis::remote::Socket& socket,
+    const std::vector<std::uint8_t>& bytes)
+{
+    std::size_t completed = 0;
+    while (completed < bytes.size()) {
+#ifdef _WIN32
+        const auto count = ::send(
+            static_cast<SOCKET>(socket.descriptor()),
+            reinterpret_cast<const char*>(bytes.data() + completed),
+            static_cast<int>(bytes.size() - completed), 0);
+        require(count > 0 && count != SOCKET_ERROR, "raw test send failed");
+#else
+        const auto count = ::send(static_cast<int>(socket.descriptor()),
+            bytes.data() + completed, bytes.size() - completed, 0);
+        require(count > 0, "raw test send failed");
+#endif
+        completed += static_cast<std::size_t>(count);
+    }
+}
+
+std::vector<std::uint8_t> header(std::uint32_t size)
+{
+    const auto network = htonl(size);
+    std::vector<std::uint8_t> bytes(sizeof(network));
+    std::memcpy(bytes.data(), &network, sizeof(network));
+    return bytes;
+}
+
+void closeAbortively(amrvis::remote::Socket& socket)
+{
+    linger option{};
+    option.l_onoff = 1;
+    option.l_linger = 0;
+#ifdef _WIN32
+    const auto result = ::setsockopt(
+        static_cast<SOCKET>(socket.descriptor()), SOL_SOCKET, SO_LINGER,
+        reinterpret_cast<const char*>(&option), sizeof(option));
+    require(result != SOCKET_ERROR, "could not configure abortive close");
+#else
+    const auto result = ::setsockopt(static_cast<int>(socket.descriptor()),
+        SOL_SOCKET, SO_LINGER, &option, sizeof(option));
+    require(result == 0, "could not configure abortive close");
+#endif
+    socket.close();
+}
+
+template <typename Writer, typename Reader>
+void loopbackExchange(Writer&& writer, Reader&& reader)
+{
+    using namespace amrvis::remote;
+    const auto listener = listenOnLoopback(0);
+    std::thread peerThread([&] {
+        auto peer = acceptConnection(listener.socket);
+        writer(peer);
+    });
+    auto client = connectTo("127.0.0.1", listener.port);
+    reader(client);
+    peerThread.join();
 }
 
 } // namespace
@@ -67,6 +141,61 @@ int main()
         [&] { writeFrame(client, std::vector<std::uint8_t>(65), 64); },
         "an oversized frame was accepted");
 
+    // A TCP-segment boundary may tear the four-byte header without making the
+    // frame malformed. readFrame must assemble it exactly.
+    loopbackExchange(
+        [](const Socket& peer) {
+            auto bytes = header(3);
+            writeRaw(peer, std::vector<std::uint8_t>(
+                bytes.begin(), bytes.begin() + 2));
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            std::vector<std::uint8_t> tail(bytes.begin() + 2, bytes.end());
+            tail.insert(tail.end(), {4, 5, 6});
+            writeRaw(peer, tail);
+        },
+        [](const Socket& peer) {
+            require(readFrame(peer, 64)
+                    == std::optional{
+                        std::vector<std::uint8_t>{4, 5, 6}},
+                "a torn header was not reassembled");
+        });
+
+    loopbackExchange(
+        [](const Socket& peer) {
+            const auto bytes = header(4);
+            writeRaw(peer, std::vector<std::uint8_t>(
+                bytes.begin(), bytes.begin() + 2));
+        },
+        [](const Socket& peer) {
+            requireRejected([&] { static_cast<void>(readFrame(peer, 64)); },
+                "EOF inside a short header was accepted");
+        });
+
+    loopbackExchange(
+        [](const Socket& peer) { writeRaw(peer, header(0)); },
+        [](const Socket& peer) {
+            requireRejected([&] { static_cast<void>(readFrame(peer, 64)); },
+                "a zero-length injected frame was accepted");
+        });
+
+    loopbackExchange(
+        [](const Socket& peer) { writeRaw(peer, header(65)); },
+        [](const Socket& peer) {
+            requireRejected([&] { static_cast<void>(readFrame(peer, 64)); },
+                "an injected oversized frame was accepted");
+        });
+
+    loopbackExchange(
+        [](const Socket& peer) {
+            auto bytes = header(4);
+            bytes.insert(bytes.end(), {1, 2});
+            writeRaw(peer, bytes);
+        },
+        [](const Socket& peer) {
+            requireRejected([&] { static_cast<void>(readFrame(peer, 64)); },
+                "EOF inside a short payload was accepted");
+        });
+
     const auto eofListener = listenOnLoopback(0);
     std::thread closer([&] {
         auto peer = acceptConnection(eofListener.socket);
@@ -76,5 +205,27 @@ int main()
     require(!readFrame(eofClient, 64).has_value(),
         "clean EOF was not distinguished from a partial frame");
     closer.join();
+
+    const auto resetListener = listenOnLoopback(0);
+    std::thread resetter([&] {
+        auto peer = acceptConnection(resetListener.socket);
+        closeAbortively(peer);
+    });
+    auto resetClient = connectTo("127.0.0.1", resetListener.port);
+    requireRejected(
+        [&] { static_cast<void>(readFrame(resetClient, 64)); },
+        "an abortive close was not observed by the client");
+    resetter.join();
+
+    // On Unix this reaches EPIPE after the reset. The connected-socket setup and
+    // per-send flags must convert it to an exception instead of SIGPIPE process
+    // termination; Windows has the equivalent socket-error behavior.
+    requireRejected(
+        [&] {
+            for (int attempt = 0; attempt < 4; ++attempt) {
+                writeFrame(resetClient, std::vector<std::uint8_t>{1}, 64);
+            }
+        },
+        "writing to a closed peer did not throw");
     return 0;
 }

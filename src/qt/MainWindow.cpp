@@ -1021,6 +1021,9 @@ std::array<int, 2> MainWindow::sliceOutputSize(
         && !std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)) {
         return nativeOutputSize(state);
     }
+    if (!m_openMetadata || m_openMetadata->levels.empty()) {
+        return {1, 1};
+    }
     const auto* viewport = state.view == nullptr ? nullptr : state.view->viewport();
     if (viewport == nullptr || viewport->width() < 1 || viewport->height() < 1) {
         return {1, 1};
@@ -1034,10 +1037,19 @@ std::array<int, 2> MainWindow::sliceOutputSize(
     const auto target = state.visibleRegion.value_or(
         datasetSampleBounds(*m_openMetadata));
     const auto axes = displayAxes(state.normal);
-    const auto extentX = target.upper[static_cast<std::size_t>(axes[0])]
+    auto extentX = target.upper[static_cast<std::size_t>(axes[0])]
         - target.lower[static_cast<std::size_t>(axes[0])];
-    const auto extentY = target.upper[static_cast<std::size_t>(axes[1])]
+    auto extentY = target.upper[static_cast<std::size_t>(axes[1])]
         - target.lower[static_cast<std::size_t>(axes[1])];
+    if (isSpherical2D(*m_openMetadata)) {
+        // Radius and angle have heterogeneous units, so their raw physical
+        // extents do not define a meaningful display aspect. Normalize both
+        // axes to their finest-level sample counts before fitting the viewport.
+        const auto normalized = finestNativeOutputSize(
+            *m_openMetadata, target, state.normal);
+        extentX = static_cast<double>(normalized[0]);
+        extentY = static_cast<double>(normalized[1]);
+    }
     if (!(extentX > 0.0) || !(extentY > 0.0)) {
         return {1, 1};
     }
@@ -1854,6 +1866,29 @@ bool MainWindow::activeViewUsesViewportBoundedOutputForTest() const
     const auto expected = sliceOutputSize(*m_activeView, true);
     return m_activeView->plane->width == expected[0]
         && m_activeView->plane->height == expected[1];
+}
+
+bool MainWindow::allViewsUseViewportBoundedOutputForTest() const
+{
+    if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)) {
+        return false;
+    }
+    const std::array<const PlaneViewState*, 3> threeDimensional{
+        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+    const auto check = [&](const PlaneViewState& state) {
+        if (state.plane->width <= 1 || state.plane->height <= 1) {
+            return false;
+        }
+        const auto expected = sliceOutputSize(state, true);
+        return state.plane->width == expected[0]
+            && state.plane->height == expected[1];
+    };
+    if (m_viewDimension == 2) {
+        return check(m_view2d);
+    }
+    return m_viewDimension == 3
+        && std::all_of(threeDimensional.begin(), threeDimensional.end(),
+            [&](const auto* state) { return check(*state); });
 }
 
 bool MainWindow::activeViewHasPhysicalAspectForTest(
@@ -4554,7 +4589,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
             auto connection = std::make_shared<remote::Connection>(
                 host, port, remote::ConnectionOptions{
                     .clientName = "AMReXplorer Qt",
-                    .softwareVersion = AMREXPLORER_VERSION});
+                    .softwareVersion = AMREXPLORER_VERSION},
+                cancellation);
             opened.session = remote::RemoteDatasetSession::open(
                 std::move(connection), remotePath,
                 initialCacheBudget(), cancellation);
@@ -4590,6 +4626,14 @@ void MainWindow::requestInitialSlice(
     validateVectorMode();
     const auto& metadata = *m_openMetadata;
     m_viewDimension = metadata.dimension;
+    // Make the correct page visible and synchronously activate its layout
+    // before deriving remote viewport budgets. The 3-D grid is otherwise still
+    // the hidden stacked page and reports construction-time placeholder sizes.
+    m_stack->setCurrentIndex(m_viewDimension == 3 ? 1 : 0);
+    if (auto* page = m_stack->currentWidget(); page != nullptr
+        && page->layout() != nullptr) {
+        page->layout()->activate();
+    }
     const auto views = currentViews();
     // The XY view starts out as the active one in 3-D.
     setActiveView(m_viewDimension == 3
@@ -4652,7 +4696,7 @@ void MainWindow::requestInitialSlice(
     auto* watcher = new QFutureWatcher<InitialSliceResult>(this);
     connect(watcher, &QFutureWatcher<InitialSliceResult>::finished, this,
         [this, watcher, generation, cancellation, views, viewGenerations,
-            restoredSpec] {
+            restoredSpec, isRemote] {
             --m_activeRequests;
             if (m_closing) {
                 watcher->deleteLater();
@@ -4746,6 +4790,18 @@ void MainWindow::requestInitialSlice(
                                 : std::optional<RealBox>{};
                         }
                         showSlice(*views[index], result.displays[index]);
+                    }
+                    if (isRemote) {
+                        // A resize during the initial worker cannot submit a
+                        // slice yet because m_dataset is not published. Once
+                        // that result settles, coalesce each changed viewport
+                        // into exactly one request using its newest size.
+                        for (std::size_t index = 0; index < views.size(); ++index) {
+                            if (result.displays[index].request.outputSize
+                                != sliceOutputSize(*views[index])) {
+                                scheduleSliceRequest(*views[index]);
+                            }
+                        }
                     }
                     const auto cache = m_dataset->cacheMetrics();
                     m_cacheBudgetBytes = cache.budgetBytes;

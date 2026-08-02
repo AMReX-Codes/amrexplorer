@@ -138,6 +138,22 @@ if(TARGET amrexplorer_remote)
             "${remote_server_private_fixture_dir}")
     set_tests_properties(remote_server_private_fixture PROPERTIES
         FIXTURES_SETUP remote_server_private_materialized)
+    set(remote_server_fixture_3d_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_server_3d")
+    add_test(NAME remote_server_fixture_3d
+        COMMAND "$<TARGET_FILE:fixture_materializer>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "${remote_server_fixture_3d_dir}")
+    set_tests_properties(remote_server_fixture_3d PROPERTIES
+        FIXTURES_SETUP remote_server_3d_materialized)
+    set(remote_server_fixture_spherical_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_server_spherical")
+    add_test(NAME remote_server_fixture_spherical
+        COMMAND "$<TARGET_FILE:fixture_materializer>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_spherical"
+            "${remote_server_fixture_spherical_dir}")
+    set_tests_properties(remote_server_fixture_spherical PROPERTIES
+        FIXTURES_SETUP remote_server_spherical_materialized)
     add_test(NAME remote_server
         COMMAND test_remote_server "${remote_server_private_fixture_dir}")
     set_tests_properties(remote_server PROPERTIES
@@ -319,6 +335,13 @@ add_test(NAME tool_line_repro
 set_tests_properties(tool_line_repro PROPERTIES TIMEOUT 60)
 
 if(TARGET amrexplorer_qt)
+    add_executable(test_remote_endpoint unit/test_remote_endpoint.cpp)
+    target_include_directories(test_remote_endpoint
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_remote_endpoint
+        PRIVATE amrexplorer::warnings)
+    add_test(NAME remote_endpoint COMMAND test_remote_endpoint)
+
     add_test(
         NAME qt_remote_slice_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
@@ -339,6 +362,37 @@ if(TARGET amrexplorer_qt)
     set_tests_properties(qt_remote_rubber_aspect_smoke PROPERTIES
         FIXTURES_REQUIRED remote_server_materialized
         TIMEOUT 30)
+
+    add_test(
+        NAME qt_remote_3d_initial_geometry_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-initial-geometry-smoke-test
+            "${remote_server_fixture_3d_dir}"
+    )
+    set_tests_properties(qt_remote_3d_initial_geometry_smoke PROPERTIES
+        FIXTURES_REQUIRED remote_server_3d_materialized
+        TIMEOUT 30)
+
+    add_test(
+        NAME qt_remote_spherical_initial_geometry_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-initial-geometry-smoke-test
+            "${remote_server_fixture_spherical_dir}"
+    )
+    set_tests_properties(qt_remote_spherical_initial_geometry_smoke PROPERTIES
+        FIXTURES_REQUIRED remote_server_spherical_materialized
+        TIMEOUT 30)
+
+    add_test(
+        NAME qt_remote_silent_hello_close_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-silent-hello-close-smoke-test
+    )
+    set_tests_properties(qt_remote_silent_hello_close_smoke PROPERTIES
+        TIMEOUT 10)
 
     add_executable(test_user_guide_dialog
         unit/test_user_guide_dialog.cpp

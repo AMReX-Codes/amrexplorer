@@ -1,6 +1,7 @@
 # Remote client/server architecture plan
 
-Status: implemented by the remote client/server PR stack.
+Status: implemented and validated by the remote client/server PR stack; the
+PR #119 review remediation completed on 2026-08-01.
 
 The implementation follows the design below: a shared local/remote
 dataset-session boundary, viewport- and page-bounded queries, a verified

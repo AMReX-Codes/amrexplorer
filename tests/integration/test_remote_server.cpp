@@ -12,6 +12,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -117,11 +118,11 @@ std::unique_ptr<amrvis::remote::codec::NativeEnvelope> readWithDeadline(
     return pending.get();
 }
 
-amrvis::remote::HelloRequestData helloRequest()
+amrvis::remote::HelloRequestData helloRequest(std::string sessionToken)
 {
     using namespace amrvis::remote;
     return {"server integration test", "test", 0, protocolMinorVersion,
-        defaultMaximumFrameBytes, {}, {}};
+        defaultMaximumFrameBytes, std::move(sessionToken), {}};
 }
 
 void writeOversizedParticleHeader(const std::filesystem::path& root)
@@ -190,8 +191,7 @@ int main(int argc, char* argv[])
 
     auto socket = connectTo("127.0.0.1", server.port());
     constexpr std::uint32_t reducedFrameBytes = 1U * 1024U * 1024U;
-    auto authorizedHello = helloRequest();
-    authorizedHello.sessionToken = server.token();
+    auto authorizedHello = helloRequest(server.token());
     authorizedHello.maximumFrameBytes = reducedFrameBytes;
     auto envelope = exchange(socket, 1,
         codec::toWire(authorizedHello), reducedFrameBytes);
@@ -321,7 +321,8 @@ int main(int argc, char* argv[])
     RunningServer duplicateRunning(duplicateServer);
     auto duplicateSocket
         = connectTo("127.0.0.1", duplicateServer.port());
-    envelope = exchange(duplicateSocket, 1, codec::toWire(helloRequest()),
+    envelope = exchange(duplicateSocket, 1,
+        codec::toWire(helloRequest(duplicateServer.token())),
         defaultMaximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
         "server rejected the duplicate-ID test connection");
@@ -444,7 +445,8 @@ int main(int argc, char* argv[])
     RunningServer connectionLimitedRunning(connectionLimitedServer);
     auto allowedSocket
         = connectTo("127.0.0.1", connectionLimitedServer.port());
-    envelope = exchange(allowedSocket, 1, codec::toWire(helloRequest()),
+    envelope = exchange(allowedSocket, 1,
+        codec::toWire(helloRequest(connectionLimitedServer.token())),
         defaultMaximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
         "server rejected the allowed connection");
@@ -554,7 +556,7 @@ int main(int argc, char* argv[])
     Server boundedServer(boundedOptions);
     RunningServer boundedRunning(boundedServer);
     auto boundedSocket = connectTo("127.0.0.1", boundedServer.port());
-    auto boundedHello = helloRequest();
+    auto boundedHello = helloRequest(boundedServer.token());
     boundedHello.maximumFrameBytes = boundedOptions.maximumFrameBytes;
     envelope = exchange(boundedSocket, 1, codec::toWire(boundedHello),
         boundedOptions.maximumFrameBytes);

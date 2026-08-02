@@ -29,12 +29,20 @@ std::runtime_error disconnectedError(const std::string& reason)
 
 class Connection::Impl {
 public:
-    Impl(std::string host, std::uint16_t port, ConnectionOptions options)
-        : m_socket(connectTo(host, port))
+    Impl(std::string host, std::uint16_t port, ConnectionOptions options,
+        StopToken cancellation)
+        : m_connectionDeadline(deadlineAfter(
+              options.connectionTimeout, "connection timeout"))
+        , m_socket(connectTo(host, port, m_connectionDeadline, cancellation))
         , m_maximumFrameBytes(options.maximumFrameBytes)
+        , m_requestTimeout(options.requestTimeout)
         , m_receiver([this] { receiveLoop(); })
     {
         try {
+            if (m_requestTimeout <= std::chrono::milliseconds::zero()) {
+                throw std::invalid_argument(
+                    "request timeout must be greater than zero");
+            }
             HelloRequestData hello;
             hello.clientName = std::move(options.clientName);
             hello.softwareVersion = std::move(options.softwareVersion);
@@ -42,7 +50,8 @@ public:
             hello.maximumMinor = protocolMinor;
             hello.maximumFrameBytes = options.maximumFrameBytes;
             const auto response = transact(codec::toWire(hello),
-                PayloadKind::HelloResponse, {});
+                PayloadKind::HelloResponse, cancellation,
+                m_connectionDeadline);
             const auto* payload = response->payload.AsHelloResponse();
             if (payload == nullptr) {
                 throw std::runtime_error(
@@ -72,6 +81,15 @@ public:
     std::unique_ptr<NativeEnvelope> transact(Payload payload,
         PayloadKind expected, StopToken cancellation)
     {
+        return transact(std::move(payload), expected, cancellation,
+            deadlineAfter(m_requestTimeout, "request timeout"));
+    }
+
+    template <typename Payload>
+    std::unique_ptr<NativeEnvelope> transact(Payload payload,
+        PayloadKind expected, StopToken cancellation,
+        std::chrono::steady_clock::time_point deadline)
+    {
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
         }
@@ -82,12 +100,14 @@ public:
         {
             std::scoped_lock lock(m_stateMutex);
             ensureConnected();
-            if (m_pending.size() >= m_serverInfo.maximumOutstandingRequests
+            if (m_outstandingRequests
+                    >= m_serverInfo.maximumOutstandingRequests
                 && m_serverInfo.maximumOutstandingRequests != 0) {
                 throw RemoteError(ErrorCode::ResourceLimitExceeded,
                     "connection has too many outstanding requests");
             }
             m_pending.emplace(requestId, pending);
+            ++m_outstandingRequests;
         }
         try {
             auto bytes = codec::encode(requestId, std::move(payload));
@@ -100,9 +120,30 @@ public:
         bool cancellationSent = false;
         while (future.wait_for(std::chrono::milliseconds(10))
             != std::future_status::ready) {
+            if (future.wait_for(std::chrono::milliseconds::zero())
+                == std::future_status::ready) {
+                break;
+            }
             if (cancellation.stop_requested() && !cancellationSent) {
+                if (expected == PayloadKind::HelloResponse) {
+                    erasePending(requestId);
+                    close();
+                    throw ReadCancelled();
+                }
                 cancellationSent = true;
                 sendCancellation(requestId);
+            }
+            if (future.wait_for(std::chrono::milliseconds::zero())
+                == std::future_status::ready) {
+                break;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                erasePending(requestId);
+                close();
+                throw std::runtime_error(
+                    expected == PayloadKind::HelloResponse
+                        ? "remote handshake timed out"
+                        : "remote request timed out");
             }
         }
         auto response = future.get();
@@ -115,9 +156,6 @@ public:
                 throw CacheBudgetExceeded(decoded.message);
             }
             throw RemoteError(decoded.code, decoded.message);
-        }
-        if (cancellation.stop_requested()) {
-            throw ReadCancelled();
         }
         return response;
     }
@@ -253,7 +291,7 @@ public:
     void ping(StopToken cancellation)
     {
         codec::fb::PingRequestT request;
-        request.nonce = nextRequestId();
+        request.nonce = m_nextPingNonce.fetch_add(1);
         static_cast<void>(transact(
             std::move(request), PayloadKind::PongResponse, cancellation));
     }
@@ -263,7 +301,7 @@ public:
         return m_serverInfo;
     }
 
-    bool connected() const noexcept
+    bool connected() const
     {
         std::scoped_lock lock(m_stateMutex);
         return m_connected;
@@ -278,26 +316,41 @@ public:
     void close() noexcept
     {
         {
+            std::scoped_lock sendLock(m_sendMutex);
             std::scoped_lock lock(m_stateMutex);
             if (!m_connected && !m_socket.valid()) {
                 return;
             }
             m_connected = false;
+            m_socket.shutdown();
         }
-        m_socket.shutdown();
         if (m_receiver.joinable()
             && m_receiver.get_id() != std::this_thread::get_id()) {
             m_receiver.join();
         }
-        m_socket.close();
+        {
+            std::scoped_lock lock(m_sendMutex);
+            m_socket.close();
+        }
         failPending("remote connection closed");
     }
 
 private:
     struct Pending {
         PayloadKind expected = PayloadKind::None;
+        bool countsAgainstBudget = true;
         std::promise<std::unique_ptr<NativeEnvelope>> promise;
     };
+
+    static std::chrono::steady_clock::time_point deadlineAfter(
+        std::chrono::milliseconds timeout, const char* description)
+    {
+        if (timeout <= std::chrono::milliseconds::zero()) {
+            throw std::invalid_argument(
+                std::string(description) + " must be greater than zero");
+        }
+        return std::chrono::steady_clock::now() + timeout;
+    }
 
     template <typename Payload>
     CacheMetrics cacheRequest(
@@ -330,6 +383,7 @@ private:
                         "remote server changed protocol major version");
                 }
                 std::shared_ptr<Pending> pending;
+                bool payloadMismatch = false;
                 {
                     std::scoped_lock lock(m_stateMutex);
                     const auto found = m_pending.find(info.requestId);
@@ -338,10 +392,17 @@ private:
                             "remote response has an unknown request ID");
                     }
                     pending = found->second;
+                    payloadMismatch = info.payload != pending->expected
+                        && info.payload != PayloadKind::ErrorResponse;
                     m_pending.erase(found);
+                    if (pending->countsAgainstBudget) {
+                        --m_outstandingRequests;
+                    }
                 }
-                if (info.payload != pending->expected
-                    && info.payload != PayloadKind::ErrorResponse) {
+                if (payloadMismatch) {
+                    pending->promise.set_exception(std::make_exception_ptr(
+                        std::runtime_error(
+                            "remote response has an unexpected payload type")));
                     throw std::runtime_error(
                         "remote response has an unexpected payload type");
                 }
@@ -375,6 +436,7 @@ private:
         const auto cancelId = nextRequestId();
         auto pending = std::make_shared<Pending>();
         pending->expected = PayloadKind::CancelAcknowledged;
+        pending->countsAgainstBudget = false;
         {
             std::scoped_lock lock(m_stateMutex);
             if (!m_connected) {
@@ -395,7 +457,13 @@ private:
     void erasePending(std::uint64_t requestId)
     {
         std::scoped_lock lock(m_stateMutex);
-        m_pending.erase(requestId);
+        const auto found = m_pending.find(requestId);
+        if (found != m_pending.end()) {
+            if (found->second->countsAgainstBudget) {
+                --m_outstandingRequests;
+            }
+            m_pending.erase(found);
+        }
     }
 
     void failPending(const std::string& reason) noexcept
@@ -404,6 +472,7 @@ private:
         {
             std::scoped_lock lock(m_stateMutex);
             pending.swap(m_pending);
+            m_outstandingRequests = 0;
         }
         for (auto& [id, operation] : pending) {
             static_cast<void>(id);
@@ -433,13 +502,17 @@ private:
         m_cache[dataset.value] = cache;
     }
 
+    std::chrono::steady_clock::time_point m_connectionDeadline;
     Socket m_socket;
     std::atomic<std::uint32_t> m_maximumFrameBytes;
+    std::chrono::milliseconds m_requestTimeout;
     std::atomic<std::uint64_t> m_nextRequestId{1};
+    std::atomic<std::uint64_t> m_nextPingNonce{1};
     mutable std::mutex m_stateMutex;
     bool m_connected = true;
     std::string m_disconnectReason;
     std::unordered_map<std::uint64_t, std::shared_ptr<Pending>> m_pending;
+    std::uint32_t m_outstandingRequests = 0;
     std::mutex m_sendMutex;
     mutable std::mutex m_cacheMutex;
     std::unordered_map<std::uint64_t, CacheMetrics> m_cache;
@@ -448,9 +521,9 @@ private:
 };
 
 Connection::Connection(std::string host, std::uint16_t port,
-    ConnectionOptions options)
+    ConnectionOptions options, StopToken cancellation)
     : m_impl(std::make_unique<Impl>(
-          std::move(host), port, std::move(options)))
+          std::move(host), port, std::move(options), cancellation))
 {
 }
 
@@ -461,7 +534,7 @@ const HelloResponseData& Connection::serverInfo() const noexcept
     return m_impl->serverInfo();
 }
 
-bool Connection::connected() const noexcept
+bool Connection::connected() const
 {
     return m_impl->connected();
 }

@@ -172,6 +172,7 @@ int main(int argc, char* argv[])
         // planner while the raster response still succeeds within the frame.
         amrvis::remote::ConnectionOptions smallFrameOptions;
         smallFrameOptions.maximumFrameBytes = 4096;
+        smallFrameOptions.sessionToken = server.token();
         auto smallFrameConnection
             = std::make_shared<amrvis::remote::Connection>(
                 "127.0.0.1", server.port(), smallFrameOptions);

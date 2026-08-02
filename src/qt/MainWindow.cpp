@@ -3715,6 +3715,8 @@ void MainWindow::cancelInFlight()
     }
     m_initialStopSource.request_stop();
     m_metadataStopSource.request_stop();
+    m_remoteVerifyStopSource.request_stop();
+    ++m_remoteVerifyGeneration;
     m_sequenceController->cancelActiveWork();
     m_linePlotStopSource.request_stop();
     m_particleStopSource.request_stop();
@@ -4541,15 +4543,19 @@ void MainWindow::resetFabState()
 void MainWindow::verifyRemoteEndpoint(
     std::string host, std::uint16_t port, std::string token)
 {
+    m_remoteVerifyStopSource.request_stop();
+    m_remoteVerifyStopSource = StopSource{};
+    const auto cancellation = m_remoteVerifyStopSource.get_token();
+    const auto generation = ++m_remoteVerifyGeneration;
     statusBar()->showMessage(tr("Verifying connection to %1:%2...")
             .arg(QString::fromStdString(host))
             .arg(port));
     auto* watcher = new QFutureWatcher<RemoteVerifyOutcome>(this);
     connect(watcher, &QFutureWatcher<RemoteVerifyOutcome>::finished, this,
-        [this, watcher, host, port, token] {
+        [this, watcher, host, port, token, generation] {
             const auto outcome = watcher->result();
             watcher->deleteLater();
-            if (m_closing) {
+            if (m_closing || generation != m_remoteVerifyGeneration) {
                 return;
             }
             // Skip a stale check whose endpoint the user has since changed.
@@ -4581,14 +4587,15 @@ void MainWindow::verifyRemoteEndpoint(
             updateDiagnostics();
         });
     watcher->setFuture(QtConcurrent::run(
-        [host, port, token]() -> RemoteVerifyOutcome {
+        [host, port, token, cancellation]() -> RemoteVerifyOutcome {
             try {
                 remote::Connection connection(host, port,
                     remote::ConnectionOptions{
                         .clientName = "AMReXplorer Qt",
                         .softwareVersion = AMREXPLORER_VERSION,
-                        .sessionToken = token});
-                connection.ping();
+                        .sessionToken = token},
+                    cancellation);
+                connection.ping(cancellation);
                 return {true, false, {}};
             } catch (const remote::RemoteError& error) {
                 return {false,

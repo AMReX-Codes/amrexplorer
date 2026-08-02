@@ -55,7 +55,12 @@ Clang-only diagnostics that a GCC build stays silent about, such as
 
 Remote support is enabled by default with Qt and can be selected explicitly
 with `-DAMREXPLORER_ENABLE_REMOTE=ON`. The checked-in FlatBuffers schema is
-compiled into the build tree; generated bindings are not checked in.
+compiled into the build tree; generated bindings are not checked in. CMake
+first searches for an installed FlatBuffers config package that provides
+`flatbuffers::flatbuffers` and `flatbuffers::flatc`. If none is available, it
+fetches the pinned fallback. Use `CMAKE_PREFIX_PATH` to select a package-manager
+installation, or `-DAMREXPLORER_FORCE_FETCH_FLATBUFFERS=ON` to force the
+fallback path.
 
 On macOS, Qt builds produce `build/src/qt/amrexplorer.app` by default. The bundle
 contains its executable at `Contents/MacOS/amrexplorer` and can be installed into a

@@ -9,14 +9,14 @@ add_custom_command(
     OUTPUT "${amrexplorer_wire_generated}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory
         "${amrexplorer_wire_generated_dir}"
-    COMMAND "$<TARGET_FILE:flatc>"
+    COMMAND "$<TARGET_FILE:${AMREXPLORER_FLATC_TARGET}>"
         --cpp
         --gen-object-api
         --scoped-enums
         --warnings-as-errors
         -o "${amrexplorer_wire_generated_dir}"
         "${amrexplorer_wire_schema}"
-    DEPENDS flatc "${amrexplorer_wire_schema}"
+    DEPENDS ${AMREXPLORER_FLATC_TARGET} "${amrexplorer_wire_schema}"
     COMMENT "Generating production AMReXplorer wire bindings"
     VERBATIM
 )
@@ -41,7 +41,7 @@ target_include_directories(amrexplorer_remote
 target_link_libraries(amrexplorer_remote
     PUBLIC amrexplorer::data
     PRIVATE
-        FlatBuffers::FlatBuffers
+        ${AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET}
         Threads::Threads
         amrexplorer::warnings
 )

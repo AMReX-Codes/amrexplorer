@@ -3,8 +3,10 @@
 #include <amrexplorer/core/Geometry.hpp>
 #include <amrexplorer/core/StopToken.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -50,6 +52,11 @@ public:
     using std::runtime_error::runtime_error;
 };
 
+class ParticleSampleLimitExceeded : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 [[nodiscard]] std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
     const std::filesystem::path& plotfile, StopToken cancellation = {});
 
@@ -59,6 +66,7 @@ public:
 [[nodiscard]] ParticleSample readParticleSample(
     const std::filesystem::path& plotfile, const std::string& species,
     double fraction, std::uint64_t seed = 0,
-    StopToken cancellation = {});
+    StopToken cancellation = {},
+    std::size_t maximumPoints = std::numeric_limits<std::size_t>::max());
 
 } // namespace amrvis

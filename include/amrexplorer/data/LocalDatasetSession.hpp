@@ -39,6 +39,9 @@ public:
     [[nodiscard]] ParticleSample requestParticleSample(
         const std::string& species, double fraction, std::uint64_t seed,
         StopToken cancellation = {}) override;
+    [[nodiscard]] ParticleSample requestParticleSample(
+        const std::string& species, double fraction, std::uint64_t seed,
+        std::size_t maximumPoints, StopToken cancellation = {});
 
     [[nodiscard]] CacheMetrics cacheMetrics() const override;
     [[nodiscard]] bool setCacheBudget(std::uint64_t bytes) override;

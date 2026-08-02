@@ -158,6 +158,15 @@ int main(int argc, char* argv[])
         require(all.points[2].position[0] == 3.0
                 && all.points[2].position[1] == 6.0,
             "particle position was decoded incorrectly");
+        bool sampleLimitRejected = false;
+        try {
+            static_cast<void>(amrvis::readParticleSample(
+                root, "Tracer", 1.0, 0, {}, 1));
+        } catch (const amrvis::ParticleSampleLimitExceeded&) {
+            sampleLimitRejected = true;
+        }
+        require(sampleLimitRejected,
+            "particle reader exceeded its caller-provided point limit");
 
         writeFixture(root, identities, 0.0, false, 0, false);
         const auto nonCheckpointSpecies

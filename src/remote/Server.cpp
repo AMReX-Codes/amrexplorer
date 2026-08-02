@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -133,6 +134,9 @@ ErrorData classifyError(const std::exception& error)
     if (dynamic_cast<const CacheBudgetExceeded*>(&error) != nullptr) {
         return {ErrorCode::CacheBudgetExceeded, error.what()};
     }
+    if (dynamic_cast<const ParticleSampleLimitExceeded*>(&error) != nullptr) {
+        return {ErrorCode::ResourceLimitExceeded, error.what()};
+    }
     if (dynamic_cast<const std::invalid_argument*>(&error) != nullptr) {
         return {ErrorCode::InvalidRequest, error.what()};
     }
@@ -252,12 +256,14 @@ private:
         Rejection rejection = Rejection::None;
         {
             std::scoped_lock lock(m_stateMutex);
-            if (m_active.size() >= m_options.maximumOutstandingRequests) {
-                rejection = Rejection::OutstandingLimit;
-            } else if (!m_active.emplace(info.requestId,
-                           ActiveRequest{dataset, stopSource})
-                            .second) {
+            if (m_active.contains(info.requestId)) {
                 rejection = Rejection::Duplicate;
+            } else if (m_active.size()
+                >= m_options.maximumOutstandingRequests) {
+                rejection = Rejection::OutstandingLimit;
+            } else {
+                m_active.emplace(info.requestId,
+                    ActiveRequest{dataset, stopSource});
             }
         }
         if (rejection == Rejection::OutstandingLimit) {
@@ -622,10 +628,30 @@ private:
         }
         const auto request = codec::fromWire(*payload);
         const auto dataset = requireDataset(request.dataset);
-        const auto sample = dataset->requestParticleSample(request.species,
-            request.fraction, request.seed, cancellation);
         constexpr std::uint64_t bytesPerPoint
             = sizeof(std::uint64_t) + 3 * sizeof(double);
+        constexpr std::uint64_t particleResponseOverheadBytes = 512;
+        const auto frameBytes
+            = static_cast<std::uint64_t>(m_maximumFrameBytes.load());
+        const auto maximumPoints = static_cast<std::size_t>(
+            frameBytes > particleResponseOverheadBytes
+                ? (frameBytes - particleResponseOverheadBytes) / bytesPerPoint
+                : 0);
+        const auto& species = dataset->particleSpecies();
+        const auto metadata = std::find_if(species.begin(), species.end(),
+            [&](const auto& entry) { return entry.name == request.species; });
+        if (metadata == species.end()) {
+            throw std::invalid_argument("particle species is unavailable");
+        }
+        const auto requestedPoints = std::ceil(
+            static_cast<long double>(metadata->particleCount)
+            * static_cast<long double>(request.fraction));
+        if (requestedPoints > static_cast<long double>(maximumPoints)) {
+            throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                "particle sample cannot fit in one negotiated frame");
+        }
+        const auto sample = dataset->requestParticleSample(request.species,
+            request.fraction, request.seed, maximumPoints, cancellation);
         if (!fitsResponse(static_cast<std::uint64_t>(sample.points.size())
                 * bytesPerPoint)) {
             throw RemoteError(ErrorCode::ResourceLimitExceeded,

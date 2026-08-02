@@ -37,7 +37,8 @@ public:
         const noexcept;
     [[nodiscard]] ParticleSample requestParticleSample(
         const std::string& species, double fraction, std::uint64_t seed = 0,
-        StopToken cancellation = {}) const;
+        StopToken cancellation = {},
+        std::size_t maximumPoints = std::numeric_limits<std::size_t>::max()) const;
     [[nodiscard]] const std::filesystem::path& dataRoot() const noexcept;
 
     [[nodiscard]] BlockAccess requestBlock(

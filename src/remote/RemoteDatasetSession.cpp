@@ -1,5 +1,7 @@
 #include <amrexplorer/remote/RemoteDatasetSession.hpp>
 
+#include <amrexplorer/data/SessionValidation.hpp>
+
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -72,18 +74,7 @@ ViewDataResult RemoteDatasetSession::requestView(
     const ViewDataRequest& request, StopToken cancellation)
 {
     requireOpen();
-    const auto requestDataset = std::visit([](const auto& typed) {
-        using Request = std::decay_t<decltype(typed)>;
-        if constexpr (std::is_same_v<Request, SliceRequest>) {
-            return typed.dataset;
-        } else {
-            return typed.query.dataset;
-        }
-    }, request);
-    if (requestDataset != m_id) {
-        throw std::invalid_argument(
-            "view request uses the wrong remote dataset");
-    }
+    validateSessionViewRequest(m_metadata, m_id, request);
     return m_connection->requestView(request, cancellation);
 }
 
@@ -91,10 +82,7 @@ DatasetPage RemoteDatasetSession::requestDatasetPage(
     const DatasetPageRequest& request, StopToken cancellation)
 {
     requireOpen();
-    if (request.dataset != m_id) {
-        throw std::invalid_argument(
-            "page request uses the wrong remote dataset");
-    }
+    validateSessionDatasetPageRequest(m_metadata, m_id, request);
     return m_connection->requestDatasetPage(request, cancellation);
 }
 
@@ -102,6 +90,7 @@ std::optional<ValueRange> RemoteDatasetSession::requestRange(
     const RangeRequest& request, StopToken cancellation)
 {
     requireOpen();
+    validateSessionRangeRequest(m_metadata, request);
     return m_connection->requestRange(m_id, request, cancellation);
 }
 
@@ -141,6 +130,8 @@ ParticleSample RemoteDatasetSession::requestParticleSample(
     StopToken cancellation)
 {
     requireOpen();
+    validateSessionParticleRequest(
+        m_metadata, m_particleSpecies, species, fraction);
     return m_connection->requestParticleSample(
         m_id, species, fraction, seed, cancellation);
 }
@@ -154,7 +145,7 @@ CacheMetrics RemoteDatasetSession::cacheMetrics() const
 bool RemoteDatasetSession::setCacheBudget(std::uint64_t bytes)
 {
     requireOpen();
-    return m_connection->setCacheBudget(m_id, bytes).budgetBytes == bytes;
+    return m_connection->setCacheBudget(m_id, bytes).withinBudget();
 }
 
 void RemoteDatasetSession::clearUnpinnedCache()
@@ -172,11 +163,8 @@ void RemoteDatasetSession::close() noexcept
         }
         m_open = false;
     }
-    try {
-        if (m_connection->connected()) {
-            m_connection->closeDataset(m_id);
-        }
-    } catch (...) {
+    if (m_connection->connected()) {
+        m_connection->closeDatasetBestEffort(m_id);
     }
 }
 

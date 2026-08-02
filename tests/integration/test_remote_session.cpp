@@ -1,3 +1,4 @@
+#include <amrexplorer/data/LocalDatasetSession.hpp>
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 #include <amrexplorer/remote/Connection.hpp>
 #include <amrexplorer/remote/RemoteDatasetSession.hpp>
@@ -65,6 +66,17 @@ amrvis::SliceRequest sliceRequest(
     return request;
 }
 
+template <typename Function>
+std::string exceptionMessage(Function&& function)
+{
+    try {
+        function();
+    } catch (const std::exception& error) {
+        return error.what();
+    }
+    return {};
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -88,8 +100,20 @@ int main(int argc, char* argv[])
         auto dataset = amrvis::remote::RemoteDatasetSession::open(
             connection, std::filesystem::path(argv[1]).string(),
             16ULL * 1024ULL * 1024ULL);
+        amrvis::LocalDatasetSession localDataset(
+            std::filesystem::path(argv[1]), amrvis::DatasetId{1001},
+            16ULL * 1024ULL * 1024ULL);
         require(dataset->metadata().dimension == 2,
             "remote catalog has the wrong dimension");
+        require(dataset->metadata().dimension
+                    == localDataset.metadata().dimension
+                && dataset->metadata().finestLevel
+                    == localDataset.metadata().finestLevel
+                && dataset->metadata().physicalDomain
+                    == localDataset.metadata().physicalDomain
+                && dataset->metadata().fields.size()
+                    == localDataset.metadata().fields.size(),
+            "local and remote metadata values differ");
         require(dataset->metadata().levels.size() == 2,
             "remote catalog has the wrong level count");
         for (const auto& level : dataset->metadata().levels) {
@@ -99,11 +123,21 @@ int main(int argc, char* argv[])
                 "remote catalog omitted AMR wireframe boxes");
         }
 
+        const auto remoteSliceRequest = sliceRequest(*dataset, 8, 6);
+        const auto localSliceRequest = sliceRequest(localDataset, 8, 6);
         const auto slice = std::get<amrvis::SliceQueryResult>(
-            dataset->requestView(sliceRequest(*dataset, 8, 6)));
+            dataset->requestView(remoteSliceRequest));
+        const auto localSlice = std::get<amrvis::SliceQueryResult>(
+            localDataset.requestView(localSliceRequest));
         require(slice.plane.width == 8 && slice.plane.height == 6
                 && slice.plane.values.size() == 48,
             "remote slice did not honor the viewport extent");
+        require(slice.plane.values == localSlice.plane.values
+                && slice.plane.valid == localSlice.plane.valid
+                && slice.plane.sourceLevel == localSlice.plane.sourceLevel
+                && slice.plane.physicalRegion
+                    == localSlice.plane.physicalRegion,
+            "local and remote slice values differ");
 
         amrvis::LineViewRequest line;
         line.query.dataset = dataset->id();
@@ -115,8 +149,18 @@ int main(int argc, char* argv[])
         line.outputWidth = 2;
         const auto lineResult = std::get<amrvis::LineQueryResult>(
             dataset->requestView(line));
+        auto localLine = line;
+        localLine.query.dataset = localDataset.id();
+        const auto localLineResult = std::get<amrvis::LineQueryResult>(
+            localDataset.requestView(localLine));
         require(lineResult.line.values.size() <= 4,
             "remote line exceeded its two-samples-per-pixel bound");
+        require(lineResult.line.positions == localLineResult.line.positions
+                && lineResult.line.values == localLineResult.line.values
+                && lineResult.line.valid == localLineResult.line.valid
+                && lineResult.line.sourceLevel
+                    == localLineResult.line.sourceLevel,
+            "local and remote line values differ");
         line.outputWidth = 20000;
         try {
             static_cast<void>(dataset->requestView(line));
@@ -135,9 +179,17 @@ int main(int argc, char* argv[])
         pageRequest.normalAxis = 1;
         pageRequest.maximumExtent = 2;
         const auto page = dataset->requestDatasetPage(pageRequest);
+        auto localPageRequest = pageRequest;
+        localPageRequest.dataset = localDataset.id();
+        const auto localPage
+            = localDataset.requestDatasetPage(localPageRequest);
         require(page.nx <= 2 && page.ny <= 2
                 && page.values.size() <= 4,
             "remote dataset page exceeded its requested extent");
+        require(page.lower == localPage.lower && page.upper == localPage.upper
+                && page.values == localPage.values
+                && page.covered == localPage.covered,
+            "local and remote dataset-page values differ");
 
         const auto range = dataset->requestRange(amrvis::RangeRequest{
             .field = amrvis::FieldId{0},
@@ -145,6 +197,32 @@ int main(int argc, char* argv[])
             .composition = amrvis::CompositionPolicy::FinestAvailable,
             .scope = amrvis::RangeScope::File});
         require(range.has_value(), "remote file range is missing");
+        const auto localRange
+            = localDataset.requestRange(amrvis::RangeRequest{
+                .field = amrvis::FieldId{0},
+                .maximumLevel = localDataset.metadata().finestLevel,
+                .composition = amrvis::CompositionPolicy::FinestAvailable,
+                .scope = amrvis::RangeScope::File});
+        require(range.has_value() == localRange.has_value()
+                && (!range
+                    || (range->minimum == localRange->minimum
+                        && range->maximum == localRange->maximum)),
+            "local and remote range values differ");
+
+        const amrvis::RangeRequest invalidRange{
+            .field = amrvis::FieldId{999},
+            .maximumLevel = 0,
+            .composition = amrvis::CompositionPolicy::FinestAvailable,
+            .scope = amrvis::RangeScope::File};
+        const auto remoteRangeError = exceptionMessage([&] {
+            static_cast<void>(dataset->requestRange(invalidRange));
+        });
+        const auto localRangeError = exceptionMessage([&] {
+            static_cast<void>(localDataset.requestRange(invalidRange));
+        });
+        require(!remoteRangeError.empty()
+                && remoteRangeError == localRangeError,
+            "local and remote range validation differs");
         require(!dataset->particleSpecies().empty(),
             "remote particle catalog is missing");
         const auto particles = dataset->requestParticleSample(

@@ -1927,6 +1927,15 @@ bool MainWindow::activeViewHasPhysicalAspectForTest(
         <= 0.02 * expectedAspect;
 }
 
+bool MainWindow::fabStateClearedForTest() const
+{
+    return !m_fabMode && !m_multifabReturn && !m_fabSourceMetadata
+        && m_fabSourcePath.empty() && m_fabDataRoot.empty()
+        && m_fabSelectorDock->entries().empty()
+        && !m_fabSelectorDock->isVisible()
+        && !windowTitle().endsWith(QStringLiteral(" FAB"));
+}
+
 void MainWindow::rubberBandZoomActiveViewForTest()
 {
     if (m_activeView == nullptr || m_activeView->plane->width <= 0
@@ -5977,18 +5986,6 @@ void MainWindow::choosePlotfileSequence()
 
 void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
 {
-    // Sweep and sequence playback are mutually exclusive.
-    setPlaybackMode(PlaybackMode::None);
-    closeSequence();
-    resetRangeState();
-    m_particleStopSource.request_stop();
-    m_particleSamples.clear();
-    m_selectedParticleSpecies.clear();
-    m_particleSelectionInitialized = false;
-    m_particleLoading = false;
-    m_particleProgress->setVisible(false);
-    ++m_particleGeneration;
-
     auto sorted = frames;
     std::sort(sorted.begin(), sorted.end(),
         [](const auto& lhs, const auto& rhs) {
@@ -6005,16 +6002,29 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
         return;
     }
 
-    // A sequence replaces any standalone FAB/MultiFab with plotfile frames.
-    // openSequence does not go through openDatasetImpl, so clear the FAB view
-    // state here too; otherwise m_fabMode keeps every frame's title suffixed
-    // "— FAB" and the stale selector dock's clicks reopen the old file (see
-    // open-sequence-stale-fab-state). Only after the validity check above, so a
-    // rejected selection leaves the current FAB view untouched. The first
-    // frame's display refreshes the title with m_fabMode now false.
-    resetFabState();
+    prepareSequence(sorted.size());
+    m_sequenceController->open(std::move(sorted));
+}
 
-    m_animationPanel->setSequenceFrameCount(static_cast<int>(sorted.size()));
+void MainWindow::prepareSequence(std::size_t frameCount)
+{
+    // A sequence replaces any standalone FAB/MultiFab with plotfile frames.
+    // Both local and remote entry points bypass openDatasetImpl, so establish
+    // their complete state transition in one place after validation.
+    setPlaybackMode(PlaybackMode::None);
+    closeSequence();
+    resetRangeState();
+    resetFabState();
+    m_particleStopSource.request_stop();
+    m_particleSamples.clear();
+    m_selectedParticleSpecies.clear();
+    m_particleSelectionInitialized = false;
+    m_particleLoading = false;
+    m_particleProgress->setVisible(false);
+    ++m_particleGeneration;
+    m_remoteSequenceConnectionGeneration = 0;
+
+    m_animationPanel->setSequenceFrameCount(static_cast<int>(frameCount));
     m_animationPanel->setSequenceVisible(true);
     updateAnimationDockVisibility();
     // Line plot curves are snapshots of the previous dataset; drop the window.
@@ -6023,7 +6033,6 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
     if (linePlotWindow != nullptr) {
         linePlotWindow->close();
     }
-    m_sequenceController->open(std::move(sorted));
 }
 
 void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
@@ -6040,55 +6049,59 @@ void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
 
     m_remoteHost = host;
     m_remotePort = port;
-    setPlaybackMode(PlaybackMode::None);
-    closeSequence();
+    prepareSequence(remotePaths.size());
     m_remoteSequence = true;
-    resetRangeState();
-    m_particleStopSource.request_stop();
-    m_particleSamples.clear();
-    m_selectedParticleSpecies.clear();
-    m_particleSelectionInitialized = false;
-    ++m_particleGeneration;
 
     std::vector<std::filesystem::path> frames;
     frames.reserve(remotePaths.size());
     for (const auto& path : remotePaths) {
         frames.emplace_back(path);
     }
-    m_animationPanel->setSequenceFrameCount(
-        static_cast<int>(frames.size()));
-    m_animationPanel->setSequenceVisible(true);
-    updateAnimationDockVisibility();
-    auto* linePlotWindow = m_linePlotWindow;
-    m_linePlotWindow = nullptr;
-    if (linePlotWindow != nullptr) {
-        linePlotWindow->close();
-    }
-
     struct SharedRemoteConnection {
         std::mutex mutex;
         std::shared_ptr<remote::Connection> connection;
+        std::uint64_t generation = 0;
     };
     auto shared = std::make_shared<SharedRemoteConnection>();
     auto loader = [shared, host = std::move(host), port](
                       const std::filesystem::path& path, DatasetId,
                       const FrameSliceSpec& spec, StopToken cancellation) {
         std::shared_ptr<remote::Connection> connection;
+        std::uint64_t connectionGeneration = 0;
         {
             std::scoped_lock lock(shared->mutex);
-            if (!shared->connection || !shared->connection->connected()) {
-                shared->connection = std::make_shared<remote::Connection>(
-                    host, port, remote::ConnectionOptions{
-                        .clientName = "AMReXplorer Qt sequence",
-                        .softwareVersion = AMREXPLORER_VERSION});
-            }
             connection = shared->connection;
+            connectionGeneration = shared->generation;
+        }
+        if (!connection || !connection->connected()) {
+            // Connect outside the shared-state mutex. Foreground loads and
+            // prefetches may overlap, and neither should inherit the other's
+            // network wait or lose its own cancellation deadline.
+            auto candidate = std::make_shared<remote::Connection>(host, port,
+                remote::ConnectionOptions{
+                    .clientName = "AMReXplorer Qt sequence",
+                    .softwareVersion = AMREXPLORER_VERSION},
+                cancellation);
+            {
+                std::scoped_lock lock(shared->mutex);
+                if (!shared->connection || !shared->connection->connected()) {
+                    shared->connection = std::move(candidate);
+                    ++shared->generation;
+                }
+                connection = shared->connection;
+                connectionGeneration = shared->generation;
+            }
+            // If another load won the connection race, release this redundant
+            // connection only after dropping the shared-state mutex.
+            candidate.reset();
         }
         auto session = remote::RemoteDatasetSession::open(
             std::move(connection), path.string(), initialCacheBudget(),
             cancellation);
-        return executeSessionFrameLoad(
+        auto result = executeSessionFrameLoad(
             std::move(session), spec, cancellation);
+        result.connectionGeneration = connectionGeneration;
+        return result;
     };
     m_sequenceController->open(std::move(frames), std::move(loader));
 }
@@ -6128,6 +6141,16 @@ void MainWindow::goToSequenceFrame(int index, bool forceRestart)
 void MainWindow::displayFrameResult(InitialSliceResult& result,
     bool defaultPositions)
 {
+    if (result.connectionGeneration != 0
+        && result.connectionGeneration
+            != m_remoteSequenceConnectionGeneration) {
+        // DatasetId is allocated by the server and can restart at one after a
+        // reconnect. Drop every dataset-scoped display range before publishing
+        // a frame from a new connection generation so an old ID cannot alias.
+        m_displayCoordinator.invalidateRangeCache();
+        m_pendingRangeStore.reset();
+        m_remoteSequenceConnectionGeneration = result.connectionGeneration;
+    }
     m_dataset = result.dataset;
     m_particleSamples = std::move(result.particles);
     configureParticleControls(true);

@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -44,6 +45,7 @@ struct FixtureHeader {
     int fieldCount = 0;
     int dimension = 0;
     std::size_t timeLine = 0;
+    std::size_t physicalUpperLine = 0;
 };
 
 // Plotfile Header layout: version, field count, one line per field name,
@@ -67,6 +69,7 @@ FixtureHeader readHeader(const std::filesystem::path& path)
         "the fixture Header is missing its dimension/time lines");
     header.dimension = std::stoi(header.lines[dimensionLine]);
     header.timeLine = dimensionLine + 1;
+    header.physicalUpperLine = header.timeLine + 3;
     require(header.dimension == 2 || header.dimension == 3,
         "the fixture is neither 2-D nor 3-D");
     return header;
@@ -277,9 +280,10 @@ void writeHeaderWithoutStatistics(const std::filesystem::path& path,
 
 int main(int argc, char* argv[])
 {
-    require(argc >= 3 && argc <= 8,
+    require(argc >= 3 && argc <= 10,
         "usage: fixture_materializer <sourceFixtureDir> <destDir> "
-        "[newTime] [--no-statistics] [--non-finite] [--scale <factor>]");
+        "[newTime] [--no-statistics] [--non-finite] [--scale <factor>] "
+        "[--domain-upper-x <value>]");
     const std::filesystem::path source(argv[1]);
     const std::filesystem::path destination(argv[2]);
     std::optional<std::string> newTime;
@@ -288,6 +292,7 @@ int main(int argc, char* argv[])
     // Multiplies the synthesized field values so successive frames of a
     // sequence can carry different ranges (used by the range-cache test).
     double scale = 1.0;
+    std::optional<double> domainUpperX;
     for (int argument = 3; argument < argc; ++argument) {
         const std::string value(argv[argument]);
         if (value == "--no-statistics") {
@@ -305,6 +310,14 @@ int main(int argc, char* argv[])
                 scale = std::stod(factor);
             } catch (const std::exception&) {
                 require(false, "--scale factor is not a number");
+            }
+        } else if (value == "--domain-upper-x") {
+            require(argument + 1 < argc,
+                "--domain-upper-x requires a value");
+            try {
+                domainUpperX = std::stod(argv[++argument]);
+            } catch (const std::exception&) {
+                require(false, "--domain-upper-x value is not a number");
             }
         } else {
             require(!newTime.has_value(), "more than one new time was specified");
@@ -326,9 +339,31 @@ int main(int argc, char* argv[])
         source, destination, std::filesystem::copy_options::recursive, error);
     require(!error, "could not copy the fixture");
 
-    if (newTime.has_value()) {
+    if (newTime.has_value() || domainUpperX.has_value()) {
         auto lines = header.lines;
-        lines[header.timeLine] = *newTime;
+        if (newTime.has_value()) {
+            lines[header.timeLine] = *newTime;
+        }
+        if (domainUpperX.has_value()) {
+            std::istringstream input(lines[header.physicalUpperLine]);
+            std::vector<double> upper(
+                static_cast<std::size_t>(header.dimension));
+            for (auto& coordinate : upper) {
+                input >> coordinate;
+            }
+            require(static_cast<bool>(input),
+                "could not parse the Header physical upper bound");
+            upper[0] = *domainUpperX;
+            std::ostringstream output;
+            output << std::setprecision(17);
+            for (std::size_t axis = 0; axis < upper.size(); ++axis) {
+                if (axis != 0) {
+                    output << ' ';
+                }
+                output << upper[axis];
+            }
+            lines[header.physicalUpperLine] = output.str();
+        }
         std::ofstream output(destination / "Header", std::ios::trunc);
         require(static_cast<bool>(output), "could not rewrite the Header");
         for (const auto& line : lines) {

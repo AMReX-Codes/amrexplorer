@@ -64,28 +64,21 @@ std::optional<std::pair<double, double>> DisplayCoordinator::sharedVisibleRange(
 }
 
 ImageTransformPolicy DisplayCoordinator::rasterTransformPolicy(
-    bool hasCachedRequest, const SliceRequest& cached,
-    const SliceRequest& incoming, bool zoomed)
+    const std::optional<RasterGeometry>& cached,
+    const RasterGeometry& incoming)
 {
-    // A zoomed visibleRegion is physical data state, not evidence that the
-    // old raster transform is compatible with the incoming image. Preserve
-    // the transform only for a panel-local refresh in the same dataset and
-    // orientation (rubber-band zoom or pan). If a dataset replacement
-    // overtakes such a refresh, explicitly refit when the cached and
-    // incoming rasters cover different regions: their dimensions can
-    // coincide even though their pixel-to-data mappings do not.
-    const bool samePanelRenderContext = hasCachedRequest
-        && cached.dataset == incoming.dataset
-        && cached.normalDirection == incoming.normalDirection;
-    const bool incompatibleRasterContext
-        = hasCachedRequest && !samePanelRenderContext;
-    if (incompatibleRasterContext) {
+    // Dataset ids are connection/session-local ownership, not display
+    // geometry. A sequence frame with a fresh id remains compatible when its
+    // physical domain and raster-to-data orientation are unchanged. Pixel
+    // density is also allowed to change: MainWindow remaps Custom mode's
+    // visible physical window through the old and new planes.
+    if (!cached.has_value()) {
+        return ImageTransformPolicy::GeometryAware;
+    }
+    if (*cached != incoming) {
         return ImageTransformPolicy::Refit;
     }
-    if (zoomed && samePanelRenderContext) {
-        return ImageTransformPolicy::Preserve;
-    }
-    return ImageTransformPolicy::GeometryAware;
+    return ImageTransformPolicy::Preserve;
 }
 
 void DisplayCoordinator::realignArrivalToRange(SliceDisplayResult& result,

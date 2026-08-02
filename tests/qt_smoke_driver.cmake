@@ -13,7 +13,10 @@
 #                 particle-visible-range |
 #                 rubber-zoom-local | rubber-overzoom | pan-zoom |
 #                 range-cache | fab-zoom | cache-budget |
-#                 sequence-zoom-refit | sequence-equal-size-zoom-refit
+#                 fixed-scale-1 | fixed-scale-4 | sequence-transform-preserve |
+#                 sequence-density-preserve |
+#                 sequence-equal-size-transform-preserve |
+#                 sequence-geometry-refit
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -61,24 +64,44 @@ elseif(MODE STREQUAL "sequence-spec-change")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
     run_or_die("${AMREXPLORER_QT}" --sequence-spec-change-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
-elseif(MODE STREQUAL "sequence-zoom-refit")
+elseif(MODE STREQUAL "fixed-scale-1" OR MODE STREQUAL "fixed-scale-4")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    if(MODE STREQUAL "fixed-scale-1")
+        set(factor 1)
+    else()
+        set(factor 4)
+    endif()
+    run_or_die("${AMREXPLORER_QT}" --fixed-scale-arrival-smoke-test
+        "${WORK}/plt" "${factor}")
+elseif(MODE STREQUAL "sequence-transform-preserve")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --sequence-transform-preserve-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "sequence-density-preserve")
     if(NOT DEFINED SECOND_SOURCE)
         message(FATAL_ERROR
-            "sequence-zoom-refit requires -DSECOND_SOURCE=...")
+            "sequence-density-preserve requires -DSECOND_SOURCE=...")
     endif()
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SECOND_SOURCE}" "${WORK}/plt00010")
-    run_or_die("${AMREXPLORER_QT}" --sequence-zoom-refit-smoke-test
+    run_or_die("${AMREXPLORER_QT}" --sequence-density-preserve-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
-elseif(MODE STREQUAL "sequence-equal-size-zoom-refit")
+elseif(MODE STREQUAL "sequence-equal-size-transform-preserve")
     if(NOT DEFINED SECOND_SOURCE)
         message(FATAL_ERROR
-            "sequence-equal-size-zoom-refit requires -DSECOND_SOURCE=...")
+            "sequence-equal-size-transform-preserve requires -DSECOND_SOURCE=...")
     endif()
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SECOND_SOURCE}" "${WORK}/plt00010")
     run_or_die("${AMREXPLORER_QT}"
-        --sequence-equal-size-zoom-refit-smoke-test
+        --sequence-equal-size-transform-preserve-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "sequence-geometry-refit")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5"
+        --domain-upper-x "2.0")
+    run_or_die("${AMREXPLORER_QT}" --sequence-geometry-refit-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "missing-range")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt" "--no-statistics")

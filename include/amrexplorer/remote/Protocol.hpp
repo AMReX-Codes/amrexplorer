@@ -20,44 +20,45 @@ inline constexpr std::uint16_t protocolMajor = 1;
 inline constexpr std::uint16_t protocolMinor = 0;
 
 enum class PayloadKind : std::uint8_t {
-    None,
-    HelloRequest,
-    HelloResponse,
-    OpenDatasetRequest,
-    DatasetOpened,
-    CloseDatasetRequest,
-    DatasetClosed,
-    SliceViewRequest,
-    SliceViewResponse,
-    LineViewRequest,
-    LineViewResponse,
-    DatasetPageRequest,
-    DatasetPageResponse,
-    ParticleSampleRequest,
-    ParticleSampleResponse,
-    RangeRequest,
-    RangeResponse,
-    ClearCacheRequest,
-    SetCacheBudgetRequest,
-    CacheResponse,
-    CancelRequest,
-    CancelAcknowledged,
-    PingRequest,
-    PongResponse,
-    ErrorResponse
+    None = 0,
+    HelloRequest = 1,
+    HelloResponse = 2,
+    OpenDatasetRequest = 3,
+    DatasetOpened = 4,
+    CloseDatasetRequest = 5,
+    DatasetClosed = 6,
+    SliceViewRequest = 7,
+    SliceViewResponse = 8,
+    LineViewRequest = 9,
+    LineViewResponse = 10,
+    DatasetPageRequest = 11,
+    DatasetPageResponse = 12,
+    ParticleSampleRequest = 13,
+    ParticleSampleResponse = 14,
+    RangeRequest = 15,
+    RangeResponse = 16,
+    ClearCacheRequest = 17,
+    SetCacheBudgetRequest = 18,
+    CacheResponse = 19,
+    CancelRequest = 20,
+    CancelAcknowledged = 21,
+    PingRequest = 22,
+    PongResponse = 23,
+    ErrorResponse = 24
 };
 
 enum class ErrorCode : std::uint16_t {
-    UnsupportedProtocol,
-    InvalidRequest,
-    UnknownDataset,
-    DatasetOpenFailure,
-    Cancelled,
-    CacheBudgetExceeded,
-    ResourceLimitExceeded,
-    OperationFailure,
-    InternalServerError,
-    Disconnected
+    UnsupportedProtocol = 0,
+    InvalidRequest = 1,
+    UnknownDataset = 2,
+    DatasetOpenFailure = 3,
+    Cancelled = 4,
+    CacheBudgetExceeded = 5,
+    ResourceLimitExceeded = 6,
+    OperationFailure = 7,
+    InternalServerError = 8,
+    Disconnected = 9,
+    Unauthorized = 10
 };
 
 struct EnvelopeInfo {
@@ -73,6 +74,8 @@ struct HelloRequestData {
     std::uint16_t minimumMinor = 0;
     std::uint16_t maximumMinor = 0;
     std::uint32_t maximumFrameBytes = 0;
+    std::string sessionToken;
+    std::vector<std::uint64_t> capabilities;
 };
 
 struct HelloResponseData {
@@ -83,6 +86,7 @@ struct HelloResponseData {
     std::uint32_t maximumDatasets = 0;
     std::uint32_t maximumOutstandingRequests = 0;
     std::uint32_t workerCount = 0;
+    std::vector<std::uint64_t> capabilities;
 };
 
 struct OpenDatasetData {

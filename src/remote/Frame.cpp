@@ -18,6 +18,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -90,7 +91,33 @@ NativeSocket native(Socket::Native descriptor)
 }
 
 [[noreturn]] void throwSocketError(
-    const std::string& operation, int error = lastSocketError())
+    const std::string& operation, int error = lastSocketError());
+
+void setIntegerSocketOption(NativeSocket descriptor, int level, int option,
+    int value, const char* name)
+{
+#ifdef _WIN32
+    const auto* bytes = reinterpret_cast<const char*>(&value);
+#else
+    const auto* bytes = &value;
+#endif
+    if (::setsockopt(descriptor, level, option, bytes, sizeof(value)) != 0) {
+        throwSocketError(std::string("setsockopt(") + name + ')');
+    }
+}
+
+void configureConnectedSocket(NativeSocket descriptor)
+{
+#ifdef SO_NOSIGPIPE
+    setIntegerSocketOption(
+        descriptor, SOL_SOCKET, SO_NOSIGPIPE, 1, "SO_NOSIGPIPE");
+#endif
+    setIntegerSocketOption(
+        descriptor, IPPROTO_TCP, TCP_NODELAY, 1, "TCP_NODELAY");
+}
+
+[[noreturn]] void throwSocketError(
+    const std::string& operation, int error)
 {
 #ifdef _WIN32
     throw std::runtime_error(
@@ -232,17 +259,13 @@ Listener listenOnLoopback(std::uint16_t port, int backlog)
         || native(socket.descriptor()) == invalidSocket) {
         throwSocketError("socket");
     }
-    const int reuse = 1;
 #ifdef _WIN32
-    const auto* reuseBytes = reinterpret_cast<const char*>(&reuse);
+    setIntegerSocketOption(native(socket.descriptor()), SOL_SOCKET,
+        SO_EXCLUSIVEADDRUSE, 1, "SO_EXCLUSIVEADDRUSE");
 #else
-    const auto* reuseBytes = &reuse;
+    setIntegerSocketOption(native(socket.descriptor()), SOL_SOCKET,
+        SO_REUSEADDR, 1, "SO_REUSEADDR");
 #endif
-    if (::setsockopt(native(socket.descriptor()), SOL_SOCKET, SO_REUSEADDR,
-            reuseBytes, sizeof(reuse))
-        != 0) {
-        throwSocketError("setsockopt");
-    }
 
     sockaddr_in address{};
     address.sin_family = AF_INET;
@@ -273,7 +296,9 @@ Socket acceptConnection(const Socket& listener)
         const auto descriptor
             = ::accept(native(listener.descriptor()), nullptr, nullptr);
         if (descriptor != invalidSocket) {
-            return Socket(static_cast<Socket::Native>(descriptor));
+            Socket socket(static_cast<Socket::Native>(descriptor));
+            configureConnectedSocket(descriptor);
+            return socket;
         }
         const auto error = lastSocketError();
         if (!interrupted(error)) {
@@ -297,6 +322,10 @@ Socket connectTo(const std::string& host, std::uint16_t port)
         throw std::runtime_error(
             "getaddrinfo: " + std::string(gai_strerror(status)));
     }
+    if (addresses == nullptr) {
+        throw std::runtime_error(
+            "getaddrinfo succeeded without returning a usable address");
+    }
 
     int lastError = 0;
     for (auto* address = addresses; address != nullptr;
@@ -312,6 +341,7 @@ Socket connectTo(const std::string& host, std::uint16_t port)
                 static_cast<SocketLength>(address->ai_addrlen))
             == 0) {
             ::freeaddrinfo(addresses);
+            configureConnectedSocket(native(socket.descriptor()));
             return socket;
         }
         lastError = lastSocketError();

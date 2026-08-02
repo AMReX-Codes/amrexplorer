@@ -150,6 +150,7 @@ public:
     [[nodiscard]] bool allViewsUseViewportBoundedOutputForTest() const;
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
+    [[nodiscard]] bool fabStateClearedForTest() const;
 
     // Test-only: rubber-band the central half of the active 3-D panel through
     // the same handler used by ImageView::rubberBandSelected.
@@ -522,6 +523,9 @@ private:
         Sequence
     };
     void choosePlotfileSequence();
+    // Establishes the shared local/remote sequence invariants after the frame
+    // list has been validated.
+    void prepareSequence(std::size_t frameCount);
     void closeSequence();
     void goToSequenceFrame(int index, bool forceRestart = false);
     void toggleSequencePlayback();
@@ -678,6 +682,7 @@ private:
     std::string m_remoteHost;
     std::uint16_t m_remotePort = 0;
     bool m_remoteSequence = false;
+    std::uint64_t m_remoteSequenceConnectionGeneration = 0;
     struct MultiFabReturnState {
         std::filesystem::path path;
         std::filesystem::path dataRoot;

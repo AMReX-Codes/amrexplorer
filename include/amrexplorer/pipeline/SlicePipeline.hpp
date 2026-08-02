@@ -92,6 +92,10 @@ struct InitialSliceResult {
     // retried with a lower composite maximum level.
     int cacheFallbackFromLevel = -1;
     int cacheFallbackToLevel = -1;
+    // Nonzero for remote sequence frames. Server-local dataset identifiers can
+    // restart after reconnect, so GUI caches also key their lifetime to this
+    // client-side connection generation.
+    std::uint64_t connectionGeneration = 0;
 };
 
 // Everything needed to render one frame's slice(s) off the GUI thread. The

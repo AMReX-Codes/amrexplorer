@@ -603,6 +603,8 @@ int main(int argc, char* argv[])
                 if (index == 0 && !*firstFrameDisplayed) {
                     *firstFrameDisplayed = true;
                     window.stepSequence(1);
+                    window.stepSequence(-1);
+                    window.stepSequence(1);
                     return;
                 }
                 if (index == 1) {
@@ -1245,6 +1247,48 @@ int main(int argc, char* argv[])
         QTimer::singleShot(15000, &application,
             [&application] { application.exit(1); });
         QTimer::singleShot(0, &window, [&window, fab] { window.openDataset(fab); });
+    } else if (argc == 5
+        && std::string_view(argv[1])
+            == "--remote-sequence-after-fab-smoke-test") {
+        const std::filesystem::path fab(argv[2]);
+        const std::string first(argv[3]);
+        const std::string second(argv[4]);
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        auto opened = std::make_shared<bool>(false);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, first, second, opened,
+                server = smokeServer](bool success) {
+                if (*opened) {
+                    return;
+                }
+                const auto* selector
+                    = window.findChild<amrvis::qt::FabSelectorDock*>();
+                if (!success || selector == nullptr || !selector->isVisible()
+                    || !window.windowTitle().endsWith(
+                        QStringLiteral(" FAB"))) {
+                    application.exit(1);
+                    return;
+                }
+                *opened = true;
+                window.openRemoteSequence("127.0.0.1", server->port(),
+                    {first, second});
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application](int index) {
+                if (index == 0) {
+                    application.exit(
+                        window.fabStateClearedForTest() ? 0 : 1);
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, fab] { window.openDataset(fab); });
     } else if (argc == 4
         && std::string_view(argv[1])
             == "--sequence-spec-change-smoke-test") {

@@ -353,6 +353,7 @@ public:
 
     void close() noexcept
     {
+        std::scoped_lock closeLock(m_closeMutex);
         {
             std::scoped_lock lock(m_stateMutex);
             if (!m_connected && !m_socket.valid()) {
@@ -574,6 +575,7 @@ private:
     StopSource m_lifecycleStop;
     std::atomic<std::uint64_t> m_nextRequestId{1};
     std::atomic<std::uint64_t> m_nextPingNonce{1};
+    std::mutex m_closeMutex;
     mutable std::mutex m_stateMutex;
     bool m_connected = true;
     std::string m_disconnectReason;
@@ -619,6 +621,25 @@ OpenedDataset Connection::openDataset(const std::string& path,
 void Connection::closeDataset(DatasetId dataset, StopToken cancellation)
 {
     m_impl->closeDataset(dataset, cancellation);
+}
+
+void Connection::closeDatasetBestEffort(DatasetId dataset) noexcept
+{
+    try {
+        auto self = shared_from_this();
+        std::thread([self = std::move(self), dataset] {
+            try {
+                self->closeDataset(dataset);
+            } catch (...) {
+                // A failed close acknowledgement leaves the server handle's
+                // ownership uncertain. Closing the connection makes server
+                // session teardown the final cleanup authority.
+                self->close();
+            }
+        }).detach();
+    } catch (...) {
+        close();
+    }
 }
 
 ViewDataResult Connection::requestView(

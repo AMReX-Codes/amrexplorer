@@ -7,6 +7,7 @@
 #include <amrexplorer/remote/Frame.hpp>
 #include <amrexplorer/remote/Protocol.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -18,19 +19,21 @@ struct ConnectionOptions {
     std::string clientName = "AMReXplorer";
     std::string softwareVersion = "unknown";
     std::uint32_t maximumFrameBytes = defaultMaximumFrameBytes;
+    std::chrono::milliseconds connectionTimeout{10000};
+    std::chrono::milliseconds requestTimeout{30000};
 };
 
 class Connection {
 public:
     Connection(std::string host, std::uint16_t port,
-        ConnectionOptions options = {});
+        ConnectionOptions options = {}, StopToken cancellation = {});
     ~Connection();
 
     Connection(const Connection&) = delete;
     Connection& operator=(const Connection&) = delete;
 
     [[nodiscard]] const HelloResponseData& serverInfo() const noexcept;
-    [[nodiscard]] bool connected() const noexcept;
+    [[nodiscard]] bool connected() const;
     [[nodiscard]] std::string disconnectReason() const;
 
     [[nodiscard]] OpenedDataset openDataset(const std::string& path,

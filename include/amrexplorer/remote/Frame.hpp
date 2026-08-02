@@ -46,6 +46,9 @@ struct Listener {
 [[nodiscard]] Socket acceptConnection(
     const Socket& listener, StopToken cancellation = {});
 [[nodiscard]] Socket connectTo(const std::string& host, std::uint16_t port);
+[[nodiscard]] Socket connectTo(const std::string& host, std::uint16_t port,
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation = {});
 
 void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
     std::uint32_t maximumBytes = defaultMaximumFrameBytes);

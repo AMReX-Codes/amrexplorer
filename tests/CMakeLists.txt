@@ -146,9 +146,13 @@ if(TARGET amrexplorer_remote)
 
     add_executable(test_remote_connection
         integration/test_remote_connection.cpp)
+    target_include_directories(test_remote_connection PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/remote"
+        "${PROJECT_BINARY_DIR}/src/remote/generated")
     target_link_libraries(test_remote_connection
         PRIVATE
             amrexplorer::remote
+            FlatBuffers::FlatBuffers
             amrexplorer::warnings
             Threads::Threads
     )

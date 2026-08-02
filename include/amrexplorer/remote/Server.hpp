@@ -14,6 +14,7 @@ struct ServerOptions {
     std::uint32_t maximumFrameBytes = defaultMaximumFrameBytes;
     std::uint32_t maximumDatasets = 8;
     std::uint32_t maximumOutstandingRequests = 64;
+    std::uint32_t maximumConnections = 32;
     std::string softwareVersion = "unknown";
 };
 
@@ -26,6 +27,7 @@ public:
     Server& operator=(const Server&) = delete;
 
     [[nodiscard]] std::uint16_t port() const noexcept;
+    [[nodiscard]] std::string lastError() const;
     void run();
     void requestStop() noexcept;
 

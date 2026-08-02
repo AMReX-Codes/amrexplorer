@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -170,19 +171,28 @@ public:
         if (m_stopping.exchange(true)) {
             return;
         }
+        m_socket.shutdown();
         std::vector<StopSource> stops;
+        std::vector<std::shared_ptr<LocalDatasetSession>> datasets;
         {
             std::scoped_lock lock(m_stateMutex);
             for (const auto& [id, active] : m_active) {
                 static_cast<void>(id);
                 stops.push_back(active.stop);
             }
+            datasets.reserve(m_datasets.size());
+            for (auto& [id, dataset] : m_datasets) {
+                static_cast<void>(id);
+                datasets.push_back(std::move(dataset));
+            }
             m_datasets.clear();
         }
         for (auto& stop : stops) {
             stop.request_stop();
         }
-        m_socket.shutdown();
+        for (const auto& dataset : datasets) {
+            dataset->close();
+        }
     }
 
     [[nodiscard]] bool stopped() const noexcept
@@ -234,21 +244,32 @@ private:
         }
         const auto dataset = requestDataset(*envelope);
         StopSource stopSource;
+        enum class Rejection {
+            None,
+            OutstandingLimit,
+            Duplicate
+        };
+        Rejection rejection = Rejection::None;
         {
             std::scoped_lock lock(m_stateMutex);
             if (m_active.size() >= m_options.maximumOutstandingRequests) {
-                sendError(info.requestId,
-                    {ErrorCode::ResourceLimitExceeded,
-                        "too many outstanding requests"});
-                return;
+                rejection = Rejection::OutstandingLimit;
+            } else if (!m_active.emplace(info.requestId,
+                           ActiveRequest{dataset, stopSource})
+                            .second) {
+                rejection = Rejection::Duplicate;
             }
-            if (!m_active.emplace(info.requestId,
-                    ActiveRequest{dataset, stopSource}).second) {
-                sendError(info.requestId, {ErrorCode::InvalidRequest,
-                    "duplicate live request ID"});
-                stop();
-                return;
-            }
+        }
+        if (rejection == Rejection::OutstandingLimit) {
+            sendError(info.requestId, {ErrorCode::ResourceLimitExceeded,
+                "too many outstanding requests"});
+            return;
+        }
+        if (rejection == Rejection::Duplicate) {
+            sendError(info.requestId, {ErrorCode::InvalidRequest,
+                "duplicate live request ID"});
+            stop();
+            return;
         }
         auto self = shared_from_this();
         auto sharedEnvelope
@@ -290,13 +311,17 @@ private:
     {
         const auto* request = envelope.payload.AsCancelRequest();
         bool accepted = false;
+        StopSource activeStop;
         if (request != nullptr) {
             std::scoped_lock lock(m_stateMutex);
             const auto found = m_active.find(request->target_request_id);
             if (found != m_active.end()) {
-                found->second.stop.request_stop();
+                activeStop = found->second.stop;
                 accepted = true;
             }
+        }
+        if (accepted) {
+            activeStop.request_stop();
         }
         codec::fb::CancelAcknowledgedT response;
         response.target_request_id
@@ -363,55 +388,105 @@ private:
         if (request == nullptr || request->path.empty()) {
             throw std::invalid_argument("dataset path is empty");
         }
-        const auto id = DatasetId{m_nextDatasetId.fetch_add(1)};
-        std::shared_ptr<LocalDatasetSession> dataset;
-        try {
-            dataset = std::make_shared<LocalDatasetSession>(
-                request->path, id, request->cache_budget_bytes);
-        } catch (const std::exception& error) {
-            throw RemoteError(ErrorCode::DatasetOpenFailure, error.what());
-        }
         {
             std::scoped_lock lock(m_stateMutex);
-            if (cancellation.stop_requested()) {
-                dataset->close();
+            if (m_stopping.load() || cancellation.stop_requested()) {
                 throw ReadCancelled();
             }
-            if (m_datasets.size() >= m_options.maximumDatasets) {
+            if (m_datasets.size() + m_datasetReservations
+                >= m_options.maximumDatasets) {
                 throw RemoteError(ErrorCode::ResourceLimitExceeded,
                     "session dataset limit exceeded");
             }
-            m_datasets.emplace(id.value, dataset);
+            ++m_datasetReservations;
         }
-        OpenedDataset opened;
-        opened.id = id;
-        opened.catalog = dataset->metadata();
-        opened.metadataMetrics = dataset->metadataReadMetrics();
-        opened.fileVersion = dataset->fileVersion();
-        opened.particleSpecies = dataset->particleSpecies();
-        opened.fileRangeAvailable.reserve(
-            opened.catalog.fields.size());
-        opened.levelRangeAvailable.reserve(opened.catalog.fields.size()
-            * opened.catalog.levels.size());
-        for (std::size_t field = 0;
-             field < opened.catalog.fields.size(); ++field) {
-            const auto fieldId = FieldId{
-                static_cast<std::uint32_t>(field)};
-            opened.fileRangeAvailable.push_back(
-                dataset->rangeAvailable(RangeRequest{fieldId,
-                    opened.catalog.finestLevel,
-                    CompositionPolicy::FinestAvailable,
-                    RangeScope::File}));
-            for (int level = 0;
-                 level <= opened.catalog.finestLevel; ++level) {
-                opened.levelRangeAvailable.push_back(
-                    dataset->rangeAvailable(RangeRequest{fieldId, level,
-                        CompositionPolicy::ExactLevel,
-                        RangeScope::Level}));
+
+        const auto id = DatasetId{m_nextDatasetId.fetch_add(1)};
+        std::shared_ptr<LocalDatasetSession> dataset;
+        bool reservationActive = true;
+        try {
+            dataset = std::make_shared<LocalDatasetSession>(
+                request->path, id, request->cache_budget_bytes);
+            OpenedDataset opened;
+            opened.id = id;
+            opened.catalog = dataset->metadata();
+            opened.metadataMetrics = dataset->metadataReadMetrics();
+            opened.fileVersion = dataset->fileVersion();
+            opened.particleSpecies = dataset->particleSpecies();
+            opened.fileRangeAvailable.reserve(opened.catalog.fields.size());
+            opened.levelRangeAvailable.reserve(opened.catalog.fields.size()
+                * opened.catalog.levels.size());
+            for (std::size_t field = 0;
+                 field < opened.catalog.fields.size(); ++field) {
+                if (cancellation.stop_requested()) {
+                    throw ReadCancelled();
+                }
+                const auto fieldId
+                    = FieldId{static_cast<std::uint32_t>(field)};
+                opened.fileRangeAvailable.push_back(
+                    dataset->rangeAvailable(RangeRequest{fieldId,
+                        opened.catalog.finestLevel,
+                        CompositionPolicy::FinestAvailable,
+                        RangeScope::File}));
+                for (int level = 0;
+                     level <= opened.catalog.finestLevel; ++level) {
+                    opened.levelRangeAvailable.push_back(
+                        dataset->rangeAvailable(RangeRequest{fieldId, level,
+                            CompositionPolicy::ExactLevel,
+                            RangeScope::Level}));
+                }
             }
+            opened.cache = dataset->cacheMetrics();
+            if (codec::encode(envelope.request_id, codec::toWire(opened),
+                    m_selectedMinor)
+                    .size()
+                > m_maximumFrameBytes.load()) {
+                throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                    "dataset catalog cannot fit in one negotiated frame");
+            }
+
+            bool published = false;
+            {
+                std::scoped_lock lock(m_stateMutex);
+                --m_datasetReservations;
+                reservationActive = false;
+                if (!m_stopping.load() && !cancellation.stop_requested()) {
+                    published = m_datasets.emplace(id.value, dataset).second;
+                }
+            }
+            if (!published) {
+                throw ReadCancelled();
+            }
+            send(envelope.request_id, codec::toWire(opened));
+            return;
+        } catch (const ReadCancelled&) {
+            if (reservationActive) {
+                std::scoped_lock lock(m_stateMutex);
+                --m_datasetReservations;
+            }
+            if (dataset) {
+                dataset->close();
+            }
+            throw;
+        } catch (const RemoteError&) {
+            if (reservationActive) {
+                std::scoped_lock lock(m_stateMutex);
+                --m_datasetReservations;
+            }
+            if (dataset) {
+                dataset->close();
+            }
+            throw;
+        } catch (const std::exception& error) {
+            if (reservationActive) {
+                std::scoped_lock lock(m_stateMutex);
+                --m_datasetReservations;
+            }
+            if (dataset) {
+                dataset->close();
+            }
+            throw RemoteError(ErrorCode::DatasetOpenFailure, error.what());
         }
-        opened.cache = dataset->cacheMetrics();
-        send(envelope.request_id, codec::toWire(opened));
     }
 
     void closeDataset(const codec::NativeEnvelope& envelope)
@@ -475,6 +550,13 @@ private:
             throw RemoteError(ErrorCode::ResourceLimitExceeded,
                 "line viewport width is outside the server limit");
         }
+        constexpr std::uint64_t bytesPerPoint = sizeof(double)
+            + sizeof(float) + sizeof(std::uint8_t) + sizeof(std::int16_t);
+        if (!fitsResponse(static_cast<std::uint64_t>(request.outputWidth)
+                * 2U * bytesPerPoint)) {
+            throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                "line response cannot fit in one negotiated frame");
+        }
         const auto dataset = requireDataset(request.query.dataset);
         const auto result = std::get<LineQueryResult>(
             dataset->requestView(ViewDataRequest{request}, cancellation));
@@ -499,6 +581,15 @@ private:
             || request.maximumExtent > datasetPageMaxExtent) {
             throw RemoteError(ErrorCode::ResourceLimitExceeded,
                 "dataset page extent is outside the server limit");
+        }
+        constexpr std::uint64_t bytesPerCell
+            = sizeof(float) + sizeof(std::uint8_t);
+        const auto maximumCells
+            = static_cast<std::uint64_t>(request.maximumExtent)
+            * static_cast<std::uint64_t>(request.maximumExtent);
+        if (!fitsResponse(maximumCells * bytesPerCell)) {
+            throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                "dataset page cannot fit in one negotiated frame");
         }
         const auto dataset = requireDataset(request.dataset);
         const auto page
@@ -535,8 +626,8 @@ private:
             request.fraction, request.seed, cancellation);
         constexpr std::uint64_t bytesPerPoint
             = sizeof(std::uint64_t) + 3 * sizeof(double);
-        if (sample.points.size()
-            > m_maximumFrameBytes.load() / bytesPerPoint) {
+        if (!fitsResponse(static_cast<std::uint64_t>(sample.points.size())
+                * bytesPerPoint)) {
             throw RemoteError(ErrorCode::ResourceLimitExceeded,
                 "particle sample cannot fit in one negotiated frame");
         }
@@ -587,10 +678,22 @@ private:
             * static_cast<std::uint64_t>(request.outputSize[1]);
         constexpr std::uint64_t bytesPerCell
             = sizeof(float) + sizeof(std::uint8_t) + sizeof(std::int16_t);
-        if (cells > m_maximumFrameBytes.load() / bytesPerCell) {
+        if (!fitsResponse(cells * bytesPerCell)) {
             throw RemoteError(ErrorCode::ResourceLimitExceeded,
                 "slice viewport cannot fit in one negotiated frame");
         }
+    }
+
+    [[nodiscard]] bool fitsResponse(std::uint64_t vectorBytes) const noexcept
+    {
+        // Reserve room for the envelope, tables, vector offsets, metrics, and
+        // FlatBuffers alignment. send() performs the final exact encoded-size
+        // check before touching the socket.
+        constexpr std::uint64_t responseOverheadReserveBytes = 512;
+        const auto frameBytes
+            = static_cast<std::uint64_t>(m_maximumFrameBytes.load());
+        return frameBytes >= responseOverheadReserveBytes
+            && vectorBytes <= frameBytes - responseOverheadReserveBytes;
     }
 
     std::shared_ptr<LocalDatasetSession> requireDataset(DatasetId id)
@@ -654,6 +757,11 @@ private:
         try {
             const auto bytes
                 = codec::encode(requestId, std::move(payload), m_selectedMinor);
+            if (bytes.size() > m_maximumFrameBytes.load()) {
+                sendError(requestId, {ErrorCode::ResourceLimitExceeded,
+                    "response cannot fit in one negotiated frame"});
+                return;
+            }
             std::scoped_lock lock(m_writeMutex);
             if (!m_stopping.load()) {
                 writeFrame(m_socket, bytes, m_maximumFrameBytes.load());
@@ -665,7 +773,20 @@ private:
 
     void sendError(std::uint64_t requestId, ErrorData error) noexcept
     {
-        send(requestId, codec::toWire(error));
+        try {
+            const auto bytes = codec::encode(
+                requestId, codec::toWire(error), m_selectedMinor);
+            if (bytes.size() > m_maximumFrameBytes.load()) {
+                stop();
+                return;
+            }
+            std::scoped_lock lock(m_writeMutex);
+            if (!m_stopping.load()) {
+                writeFrame(m_socket, bytes, m_maximumFrameBytes.load());
+            }
+        } catch (...) {
+            stop();
+        }
     }
 
     Socket m_socket;
@@ -680,6 +801,7 @@ private:
     mutable std::mutex m_stateMutex;
     std::unordered_map<std::uint64_t,
         std::shared_ptr<LocalDatasetSession>> m_datasets;
+    std::size_t m_datasetReservations = 0;
     std::unordered_map<std::uint64_t, ActiveRequest> m_active;
 };
 
@@ -692,6 +814,13 @@ public:
         , m_listener(listenOnLoopback(m_options.port))
         , m_workers(resolveWorkerCount(m_options.workerCount))
     {
+        if (m_options.maximumConnections == 0
+            || m_options.maximumDatasets == 0
+            || m_options.maximumOutstandingRequests == 0
+            || m_options.maximumFrameBytes == 0) {
+            throw std::invalid_argument(
+                "server resource limits must be greater than zero");
+        }
         m_options.workerCount = resolveWorkerCount(m_options.workerCount);
     }
 
@@ -705,8 +834,15 @@ public:
         return m_listener.port;
     }
 
+    std::string lastError() const
+    {
+        std::scoped_lock lock(m_errorMutex);
+        return m_lastError;
+    }
+
     void run()
     {
+        auto retryDelay = std::chrono::milliseconds{10};
         while (!m_stopping.load()) {
             try {
                 auto socket = acceptConnection(m_listener.socket);
@@ -717,13 +853,40 @@ public:
                     [](const auto& worker) {
                         return worker.session->stopped();
                     });
+                if (m_stopping.load()) {
+                    session->stop();
+                    break;
+                }
+                if (m_sessions.size() >= m_options.maximumConnections) {
+                    session->stop();
+                    continue;
+                }
                 m_sessions.push_back(SessionWorker{
                     session, JoiningThread(
                         [session] { session->run(); })});
-            } catch (const std::exception&) {
-                if (!m_stopping.load()) {
-                    throw;
+                retryDelay = std::chrono::milliseconds{10};
+            } catch (const std::exception& error) {
+                if (m_stopping.load()) {
+                    break;
                 }
+                {
+                    std::scoped_lock lock(m_errorMutex);
+                    m_lastError = error.what();
+                }
+                std::this_thread::sleep_for(retryDelay);
+                retryDelay = std::min(
+                    retryDelay * 2, std::chrono::milliseconds{250});
+            } catch (...) {
+                if (m_stopping.load()) {
+                    break;
+                }
+                {
+                    std::scoped_lock lock(m_errorMutex);
+                    m_lastError = "unknown server accept-loop failure";
+                }
+                std::this_thread::sleep_for(retryDelay);
+                retryDelay = std::min(
+                    retryDelay * 2, std::chrono::milliseconds{250});
             }
         }
     }
@@ -767,6 +930,8 @@ private:
     std::atomic_bool m_stopping{false};
     std::mutex m_sessionsMutex;
     std::vector<SessionWorker> m_sessions;
+    mutable std::mutex m_errorMutex;
+    std::string m_lastError;
 };
 
 Server::Server(ServerOptions options)
@@ -779,6 +944,11 @@ Server::~Server() = default;
 std::uint16_t Server::port() const noexcept
 {
     return m_impl->port();
+}
+
+std::string Server::lastError() const
+{
+    return m_impl->lastError();
 }
 
 void Server::run()

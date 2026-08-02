@@ -4,9 +4,11 @@
 #include <amrexplorer/remote/Frame.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
+#include <chrono>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <thread>
@@ -26,12 +28,14 @@ class RunningServer {
 public:
     explicit RunningServer(amrvis::remote::Server& server)
         : m_server(server)
+        , m_done(m_donePromise.get_future())
         , m_thread([this] {
             try {
                 m_server.run();
             } catch (...) {
                 m_failure = std::current_exception();
             }
+            m_donePromise.set_value();
         })
     {
     }
@@ -39,7 +43,9 @@ public:
     ~RunningServer()
     {
         m_server.requestStop();
-        m_thread.join();
+        if (m_thread.joinable()) {
+            m_thread.join();
+        }
         if (m_failure) {
             try {
                 std::rethrow_exception(m_failure);
@@ -53,8 +59,22 @@ public:
     RunningServer(const RunningServer&) = delete;
     RunningServer& operator=(const RunningServer&) = delete;
 
+    bool stopWithin(std::chrono::milliseconds timeout)
+    {
+        m_server.requestStop();
+        if (m_done.wait_for(timeout) != std::future_status::ready) {
+            return false;
+        }
+        if (m_thread.joinable()) {
+            m_thread.join();
+        }
+        return true;
+    }
+
 private:
     amrvis::remote::Server& m_server;
+    std::promise<void> m_donePromise;
+    std::future<void> m_done;
     std::thread m_thread;
     std::exception_ptr m_failure;
 };
@@ -75,6 +95,34 @@ std::unique_ptr<amrvis::remote::codec::NativeEnvelope> exchange(
     return envelope;
 }
 
+std::unique_ptr<amrvis::remote::codec::NativeEnvelope> readWithDeadline(
+    amrvis::remote::Socket& socket, std::uint32_t maximumFrameBytes,
+    std::chrono::milliseconds timeout)
+{
+    auto pending = std::async(std::launch::async,
+        [&socket, maximumFrameBytes] {
+            const auto response
+                = amrvis::remote::readFrame(socket, maximumFrameBytes);
+            return response
+                ? amrvis::remote::codec::decode(*response)
+                : std::unique_ptr<
+                      amrvis::remote::codec::NativeEnvelope>{};
+        });
+    if (pending.wait_for(timeout) != std::future_status::ready) {
+        socket.shutdown();
+        pending.wait();
+        return {};
+    }
+    return pending.get();
+}
+
+amrvis::remote::HelloRequestData helloRequest()
+{
+    using namespace amrvis::remote;
+    return {"server integration test", "test", 0, protocolMinor,
+        defaultMaximumFrameBytes, {}, {}};
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -91,14 +139,13 @@ int main(int argc, char* argv[])
     options.workerCount = 2;
     options.maximumDatasets = 2;
     options.maximumOutstandingRequests = 8;
+    options.maximumConnections = 4;
     Server server(options);
     RunningServer running(server);
 
     auto socket = connectTo("127.0.0.1", server.port());
     auto envelope = exchange(socket, 1,
-        codec::toWire(HelloRequestData{
-            "server integration test", "test", 0, protocolMinor,
-            defaultMaximumFrameBytes}),
+        codec::toWire(helloRequest()),
         defaultMaximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
         "server rejected a compatible handshake");
@@ -151,11 +198,127 @@ int main(int argc, char* argv[])
     require(error.code == ErrorCode::ResourceLimitExceeded,
         "oversized slice returned the wrong error");
 
+    envelope = exchange(socket, 5,
+        codec::toWire(OpenDatasetData{
+            std::filesystem::path(argv[1]).string(),
+            16ULL * 1024ULL * 1024ULL}),
+        hello.maximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
+        "server rejected the second allowed dataset");
+    const auto secondOpened
+        = codec::fromWire(*envelope->payload.AsDatasetOpened());
+
+    envelope = exchange(socket, 6,
+        codec::toWire(OpenDatasetData{
+            std::filesystem::path(argv[1]).string(),
+            16ULL * 1024ULL * 1024ULL}),
+        hello.maximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
+            && codec::fromWire(*envelope->payload.AsErrorResponse()).code
+                == ErrorCode::ResourceLimitExceeded,
+        "server did not enforce the configured dataset limit");
+
+    codec::fb::CloseDatasetRequestT closeSecond;
+    closeSecond.dataset_id = secondOpened.id.value;
+    envelope = exchange(socket, 7, std::move(closeSecond),
+        hello.maximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::DatasetClosed,
+        "server did not close the second dataset");
+
+    auto duplicateSocket = connectTo("127.0.0.1", server.port());
+    envelope = exchange(duplicateSocket, 1, codec::toWire(helloRequest()),
+        defaultMaximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
+        "server rejected the duplicate-ID test connection");
+    const OpenDatasetData duplicateOpen{
+        std::filesystem::path(argv[1]).string(),
+        16ULL * 1024ULL * 1024ULL};
+    writeFrame(duplicateSocket, codec::encode(2, codec::toWire(duplicateOpen)),
+        hello.maximumFrameBytes);
+    writeFrame(duplicateSocket, codec::encode(2, codec::toWire(duplicateOpen)),
+        hello.maximumFrameBytes);
+    bool duplicateRejected = false;
+    for (int response = 0; response < 2 && !duplicateRejected; ++response) {
+        auto duplicateResponse = readWithDeadline(duplicateSocket,
+            hello.maximumFrameBytes, std::chrono::seconds{2});
+        require(duplicateResponse != nullptr,
+            "duplicate request ID caused an unbounded disconnect");
+        if (codec::inspect(*duplicateResponse).payload
+            == PayloadKind::ErrorResponse) {
+            duplicateRejected
+                = codec::fromWire(
+                      *duplicateResponse->payload.AsErrorResponse())
+                      .code
+                == ErrorCode::InvalidRequest;
+        }
+    }
+    require(duplicateRejected,
+        "duplicate live request ID did not receive a bounded error");
+
     codec::fb::CloseDatasetRequestT close;
     close.dataset_id = opened.id.value;
-    envelope = exchange(socket, 5, std::move(close),
+    envelope = exchange(socket, 8, std::move(close),
         hello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetClosed,
         "server did not close the dataset");
+    require(running.stopWithin(std::chrono::seconds{2}),
+        "server shutdown exceeded its deadline");
+
+    ServerOptions connectionOptions;
+    connectionOptions.workerCount = 1;
+    connectionOptions.maximumConnections = 1;
+    Server connectionLimitedServer(connectionOptions);
+    RunningServer connectionLimitedRunning(connectionLimitedServer);
+    auto allowedSocket
+        = connectTo("127.0.0.1", connectionLimitedServer.port());
+    envelope = exchange(allowedSocket, 1, codec::toWire(helloRequest()),
+        defaultMaximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
+        "server rejected the allowed connection");
+    auto excessSocket
+        = connectTo("127.0.0.1", connectionLimitedServer.port());
+    bool excessDisconnected = false;
+    try {
+        excessDisconnected = readWithDeadline(excessSocket,
+            defaultMaximumFrameBytes, std::chrono::seconds{2})
+            == nullptr;
+    } catch (const std::exception&) {
+        excessDisconnected = true;
+    }
+    require(excessDisconnected,
+        "server did not enforce the configured connection limit");
+    require(connectionLimitedRunning.stopWithin(std::chrono::seconds{2}),
+        "connection-limited server shutdown exceeded its deadline");
+
+    ServerOptions boundedOptions;
+    boundedOptions.workerCount = 1;
+    boundedOptions.maximumDatasets = 1;
+    boundedOptions.maximumFrameBytes = 1024;
+    Server boundedServer(boundedOptions);
+    RunningServer boundedRunning(boundedServer);
+    auto boundedSocket = connectTo("127.0.0.1", boundedServer.port());
+    auto boundedHello = helloRequest();
+    boundedHello.maximumFrameBytes = boundedOptions.maximumFrameBytes;
+    envelope = exchange(boundedSocket, 1, codec::toWire(boundedHello),
+        boundedOptions.maximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
+        "small-frame server rejected a fitting hello response");
+    for (std::uint64_t requestId : {2ULL, 3ULL}) {
+        envelope = exchange(boundedSocket, requestId,
+            codec::toWire(OpenDatasetData{
+                std::filesystem::path(argv[1]).string(),
+                16ULL * 1024ULL * 1024ULL}),
+            boundedOptions.maximumFrameBytes);
+        require(codec::inspect(*envelope).payload
+                    == PayloadKind::ErrorResponse
+                && codec::fromWire(*envelope->payload.AsErrorResponse()).code
+                    == ErrorCode::ResourceLimitExceeded
+                && codec::fromWire(*envelope->payload.AsErrorResponse())
+                       .message.find("catalog")
+                    != std::string::npos,
+            "oversized dataset catalog was not rejected before publication");
+    }
+    require(boundedRunning.stopWithin(std::chrono::seconds{2}),
+        "small-frame server shutdown exceeded its deadline");
     return 0;
 }

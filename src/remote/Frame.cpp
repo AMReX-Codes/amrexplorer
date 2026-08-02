@@ -64,6 +64,11 @@ bool wouldBlock(int error)
 {
     return error == WSAEWOULDBLOCK;
 }
+
+bool transientAcceptFailure(int error)
+{
+    return interrupted(error) || error == WSAECONNABORTED;
+}
 void closeNative(NativeSocket socket)
 {
     ::closesocket(socket);
@@ -88,6 +93,11 @@ bool interrupted(int error)
 bool wouldBlock(int error)
 {
     return error == EAGAIN || error == EWOULDBLOCK;
+}
+
+bool transientAcceptFailure(int error)
+{
+    return interrupted(error) || error == ECONNABORTED;
 }
 void closeNative(NativeSocket socket)
 {
@@ -464,7 +474,7 @@ Socket acceptConnection(const Socket& listener, StopToken cancellation)
             return socket;
         }
         const auto error = lastSocketError();
-        if (!interrupted(error) && !wouldBlock(error)) {
+        if (!transientAcceptFailure(error) && !wouldBlock(error)) {
             throwSocketError("accept", error);
         }
     }

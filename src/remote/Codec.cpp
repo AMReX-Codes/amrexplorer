@@ -4,12 +4,88 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <utility>
 
 namespace amrvis::remote::codec {
 namespace {
+
+#define AMREXPLORER_ASSERT_PAYLOAD_VALUE(nativeName, wireName)               \
+    static_assert(static_cast<std::uint8_t>(PayloadKind::nativeName)         \
+        == static_cast<std::uint8_t>(fb::Payload::wireName))
+
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(None, NONE);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(HelloRequest, HelloRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(HelloResponse, HelloResponse);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(OpenDatasetRequest, OpenDatasetRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(DatasetOpened, DatasetOpened);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(CloseDatasetRequest, CloseDatasetRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(DatasetClosed, DatasetClosed);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(SliceViewRequest, SliceViewRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(SliceViewResponse, SliceViewResponse);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(LineViewRequest, LineViewRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(LineViewResponse, LineViewResponse);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(DatasetPageRequest, DatasetPageRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(DatasetPageResponse, DatasetPageResponse);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(ParticleSampleRequest, ParticleSampleRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(ParticleSampleResponse, ParticleSampleResponse);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(RangeRequest, RangeRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(RangeResponse, RangeResponse);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(ClearCacheRequest, ClearCacheRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(SetCacheBudgetRequest, SetCacheBudgetRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(CacheResponse, CacheResponse);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(CancelRequest, CancelRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(CancelAcknowledged, CancelAcknowledged);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(PingRequest, PingRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(PongResponse, PongResponse);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(ErrorResponse, ErrorResponse);
+
+#undef AMREXPLORER_ASSERT_PAYLOAD_VALUE
+
+#define AMREXPLORER_ASSERT_ERROR_VALUE(name)                                \
+    static_assert(static_cast<std::uint16_t>(ErrorCode::name)               \
+        == static_cast<std::uint16_t>(fb::ErrorCode::name))
+
+AMREXPLORER_ASSERT_ERROR_VALUE(UnsupportedProtocol);
+AMREXPLORER_ASSERT_ERROR_VALUE(InvalidRequest);
+AMREXPLORER_ASSERT_ERROR_VALUE(UnknownDataset);
+AMREXPLORER_ASSERT_ERROR_VALUE(DatasetOpenFailure);
+AMREXPLORER_ASSERT_ERROR_VALUE(Cancelled);
+AMREXPLORER_ASSERT_ERROR_VALUE(CacheBudgetExceeded);
+AMREXPLORER_ASSERT_ERROR_VALUE(ResourceLimitExceeded);
+AMREXPLORER_ASSERT_ERROR_VALUE(OperationFailure);
+AMREXPLORER_ASSERT_ERROR_VALUE(InternalServerError);
+AMREXPLORER_ASSERT_ERROR_VALUE(Disconnected);
+AMREXPLORER_ASSERT_ERROR_VALUE(Unauthorized);
+
+#undef AMREXPLORER_ASSERT_ERROR_VALUE
+
+void requireFinite(double value, const char* description)
+{
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument(description);
+    }
+}
+
+template <typename Values>
+void requireFiniteValues(const Values& values, const char* description)
+{
+    if (!std::all_of(values.begin(), values.end(),
+            [](const auto value) { return std::isfinite(value); })) {
+        throw std::invalid_argument(description);
+    }
+}
+
+std::size_t checkedProduct(
+    std::size_t left, std::size_t right, const char* description)
+{
+    if (right != 0 && left > std::numeric_limits<std::size_t>::max() / right) {
+        throw std::invalid_argument(description);
+    }
+    return left * right;
+}
 
 template <typename Destination, typename Source>
 void requireVectorSize(const Source& source, std::size_t size,
@@ -50,9 +126,13 @@ SamplingPolicy fromWireSampling(fb::SamplingPolicy value)
 
 fb::CompositionPolicy toWireComposition(CompositionPolicy value)
 {
-    return value == CompositionPolicy::ExactLevel
-        ? fb::CompositionPolicy::ExactLevel
-        : fb::CompositionPolicy::FinestAvailable;
+    switch (value) {
+    case CompositionPolicy::FinestAvailable:
+        return fb::CompositionPolicy::FinestAvailable;
+    case CompositionPolicy::ExactLevel:
+        return fb::CompositionPolicy::ExactLevel;
+    }
+    throw std::invalid_argument("unknown composition policy");
 }
 
 CompositionPolicy fromWireComposition(fb::CompositionPolicy value)
@@ -69,7 +149,11 @@ CompositionPolicy fromWireComposition(fb::CompositionPolicy value)
 
 fb::Centering toWireCentering(Centering value)
 {
-    return static_cast<fb::Centering>(static_cast<std::uint8_t>(value));
+    const auto raw = static_cast<std::uint8_t>(value);
+    if (raw > static_cast<std::uint8_t>(Centering::Mixed)) {
+        throw std::invalid_argument("unknown centering");
+    }
+    return static_cast<fb::Centering>(raw);
 }
 
 Centering fromWireCentering(fb::Centering value)
@@ -83,13 +167,17 @@ Centering fromWireCentering(fb::Centering value)
 
 fb::ErrorCode toWireError(ErrorCode value)
 {
-    return static_cast<fb::ErrorCode>(static_cast<std::uint16_t>(value));
+    const auto raw = static_cast<std::uint16_t>(value);
+    if (raw > static_cast<std::uint16_t>(ErrorCode::Unauthorized)) {
+        throw std::invalid_argument("unknown error code");
+    }
+    return static_cast<fb::ErrorCode>(raw);
 }
 
 ErrorCode fromWireError(fb::ErrorCode value)
 {
     const auto raw = static_cast<std::uint16_t>(value);
-    if (raw > static_cast<std::uint16_t>(ErrorCode::Disconnected)) {
+    if (raw > static_cast<std::uint16_t>(ErrorCode::Unauthorized)) {
         throw std::invalid_argument("unknown wire error code");
     }
     return static_cast<ErrorCode>(raw);
@@ -97,7 +185,34 @@ ErrorCode fromWireError(fb::ErrorCode value)
 
 PayloadKind payloadKind(fb::Payload value)
 {
-    return static_cast<PayloadKind>(static_cast<std::uint8_t>(value));
+    const auto raw = static_cast<std::uint8_t>(value);
+    if (raw > static_cast<std::uint8_t>(PayloadKind::ErrorResponse)) {
+        throw std::invalid_argument("unknown wire payload kind");
+    }
+    return static_cast<PayloadKind>(raw);
+}
+
+fb::RangeScope toWireRangeScope(RangeScope value)
+{
+    switch (value) {
+    case RangeScope::File:
+        return fb::RangeScope::File;
+    case RangeScope::Level:
+        return fb::RangeScope::Level;
+    }
+    throw std::invalid_argument("unknown range scope");
+}
+
+RangeScope fromWireRangeScope(fb::RangeScope value)
+{
+    switch (value) {
+    case fb::RangeScope::File:
+        return RangeScope::File;
+    case fb::RangeScope::Level:
+        return RangeScope::Level;
+    default:
+        throw std::invalid_argument("unknown wire range scope");
+    }
 }
 
 void validateResultVectors(
@@ -123,17 +238,24 @@ std::unique_ptr<NativeEnvelope> decode(
     if (!fb::VerifyEnvelopeBuffer(verifier)) {
         throw std::invalid_argument("wire payload failed verification");
     }
-    std::unique_ptr<NativeEnvelope> envelope(
-        fb::GetEnvelope(bytes.data())->UnPack());
-    if (!envelope || envelope->request_id == 0
-        || envelope->payload.type == fb::Payload::NONE) {
+    const auto* wireEnvelope = fb::GetEnvelope(bytes.data());
+    if (wireEnvelope->request_id() == 0
+        || wireEnvelope->payload_type() == fb::Payload::NONE) {
         throw std::invalid_argument("wire envelope is incomplete");
+    }
+    static_cast<void>(payloadKind(wireEnvelope->payload_type()));
+    std::unique_ptr<NativeEnvelope> envelope(wireEnvelope->UnPack());
+    if (!envelope) {
+        throw std::invalid_argument("wire envelope could not be unpacked");
     }
     return envelope;
 }
 
 EnvelopeInfo inspect(const NativeEnvelope& envelope)
 {
+    if (envelope.request_id == 0 || envelope.payload.type == fb::Payload::NONE) {
+        throw std::invalid_argument("wire envelope is incomplete");
+    }
     return {envelope.protocol_major, envelope.protocol_minor,
         envelope.request_id, payloadKind(envelope.payload.type)};
 }
@@ -174,6 +296,8 @@ Real3 fromWire(const fb::Real3T* value)
     if (value == nullptr || value->values.size() != 3) {
         throw std::invalid_argument("wire Real3 must contain three values");
     }
+    requireFiniteValues(value->values,
+        "wire Real3 contains a non-finite value");
     Real3 result;
     std::copy(value->values.begin(), value->values.end(),
         result.values.begin());
@@ -246,6 +370,8 @@ fb::HelloRequestT toWire(const HelloRequestData& value)
     wire.minimum_minor = value.minimumMinor;
     wire.maximum_minor = value.maximumMinor;
     wire.maximum_frame_bytes = value.maximumFrameBytes;
+    wire.session_token = value.sessionToken;
+    wire.capabilities = value.capabilities;
     return wire;
 }
 
@@ -257,6 +383,8 @@ HelloRequestData fromWire(const fb::HelloRequestT& value)
     result.minimumMinor = value.minimum_minor;
     result.maximumMinor = value.maximum_minor;
     result.maximumFrameBytes = value.maximum_frame_bytes;
+    result.sessionToken = value.session_token;
+    result.capabilities = value.capabilities;
     return result;
 }
 
@@ -270,14 +398,22 @@ fb::HelloResponseT toWire(const HelloResponseData& value)
     wire.maximum_datasets = value.maximumDatasets;
     wire.maximum_outstanding_requests = value.maximumOutstandingRequests;
     wire.worker_count = value.workerCount;
+    wire.capabilities = value.capabilities;
     return wire;
 }
 
 HelloResponseData fromWire(const fb::HelloResponseT& value)
 {
-    return {value.server_name, value.software_version, value.selected_minor,
-        value.maximum_frame_bytes, value.maximum_datasets,
-        value.maximum_outstanding_requests, value.worker_count};
+    HelloResponseData result;
+    result.serverName = value.server_name;
+    result.softwareVersion = value.software_version;
+    result.selectedMinor = value.selected_minor;
+    result.maximumFrameBytes = value.maximum_frame_bytes;
+    result.maximumDatasets = value.maximum_datasets;
+    result.maximumOutstandingRequests = value.maximum_outstanding_requests;
+    result.workerCount = value.worker_count;
+    result.capabilities = value.capabilities;
+    return result;
 }
 
 fb::OpenDatasetRequestT toWire(const OpenDatasetData& value)
@@ -351,6 +487,55 @@ fb::DatasetOpenedT toWire(const OpenedDataset& value)
 
 OpenedDataset fromWire(const fb::DatasetOpenedT& value)
 {
+    if (value.finest_level < 0) {
+        throw std::invalid_argument("wire finest level is negative");
+    }
+    const auto expectedLevelCount
+        = static_cast<std::size_t>(value.finest_level) + std::size_t{1};
+    if (value.levels.size() != expectedLevelCount) {
+        throw std::invalid_argument("wire level catalog count is inconsistent");
+    }
+    const auto fieldCount = value.fields.size();
+    const auto levelCount = value.levels.size();
+    const auto expectedLevelRanges = checkedProduct(fieldCount, levelCount,
+        "wire range-availability catalog size overflows");
+    if (value.file_range_available.size() != fieldCount
+        || value.level_range_available.size() != expectedLevelRanges) {
+        throw std::invalid_argument(
+            "wire range-availability catalog is inconsistent");
+    }
+    requireFinite(value.time, "wire dataset time is non-finite");
+    static_cast<void>(fromWire(value.physical_domain.get()));
+    for (const auto& field : value.fields) {
+        if (!field) {
+            throw std::invalid_argument("wire field catalog is missing");
+        }
+        static_cast<void>(fromWireCentering(field->centering));
+    }
+    for (const auto& level : value.levels) {
+        if (!level) {
+            throw std::invalid_argument("wire level catalog is missing");
+        }
+        static_cast<void>(fromWire(level->domain.get()));
+        static_cast<void>(fromWire(level->cell_size.get()));
+        static_cast<void>(fromWire(level->index_origin.get()));
+        for (const auto& box : level->boxes) {
+            if (!box) {
+                throw std::invalid_argument("wire level box is missing");
+            }
+            static_cast<void>(fromWire(box.get()));
+        }
+    }
+    for (const auto& species : value.particle_species) {
+        if (!species) {
+            throw std::invalid_argument("wire particle catalog is missing");
+        }
+    }
+    if (!value.metadata_metrics) {
+        throw std::invalid_argument("wire metadata metrics are missing");
+    }
+    static_cast<void>(fromWire(value.cache.get()));
+
     OpenedDataset result;
     result.id = DatasetId{value.dataset_id};
     result.catalog.dimension = value.dimension;
@@ -400,29 +585,12 @@ OpenedDataset fromWire(const fb::DatasetOpenedT& value)
     }
     result.fileRangeAvailable = value.file_range_available;
     result.levelRangeAvailable = value.level_range_available;
-    const auto fieldCount = result.catalog.fields.size();
-    const auto levelCount = result.catalog.levels.size();
-    if (result.fileRangeAvailable.size() != fieldCount
-        || (fieldCount != 0
-            && (result.levelRangeAvailable.size() % fieldCount != 0
-                || result.levelRangeAvailable.size() / fieldCount
-                    != levelCount))) {
-        throw std::invalid_argument(
-            "wire range-availability catalog is inconsistent");
-    }
-    if (!value.metadata_metrics) {
-        throw std::invalid_argument("wire metadata metrics are missing");
-    }
     result.metadataMetrics = {value.metadata_metrics->files_read,
         value.metadata_metrics->bytes_read,
         value.metadata_metrics->payload_files_read,
         value.metadata_metrics->payload_bytes_read};
     result.fileVersion = value.file_version;
     result.cache = fromWire(value.cache.get());
-    if (result.catalog.levels.size()
-        != static_cast<std::size_t>(result.catalog.finestLevel + 1)) {
-        throw std::invalid_argument("wire level catalog count is inconsistent");
-    }
     return result;
 }
 
@@ -445,17 +613,22 @@ fb::SliceViewRequestT toWire(const SliceRequest& value)
 
 SliceRequest fromWire(const fb::SliceViewRequestT& value)
 {
+    requireFinite(value.physical_position,
+        "wire slice position is non-finite");
+    const auto visibleRegion = fromWire(value.visible_region.get());
+    const auto sampling = fromWireSampling(value.sampling);
+    const auto composition = fromWireComposition(value.composition);
     SliceRequest result;
     result.dataset = DatasetId{value.dataset_id};
     result.field = FieldId{value.field};
     result.component = value.component;
     result.normalDirection = value.normal_direction;
     result.physicalPosition = value.physical_position;
-    result.visibleRegion = fromWire(value.visible_region.get());
+    result.visibleRegion = visibleRegion;
     result.maximumLevel = value.maximum_level;
     result.outputSize = {value.width, value.height};
-    result.sampling = fromWireSampling(value.sampling);
-    result.composition = fromWireComposition(value.composition);
+    result.sampling = sampling;
+    result.composition = composition;
     return result;
 }
 
@@ -482,14 +655,16 @@ SliceQueryResult fromWire(const fb::SliceViewResponseT& value)
     if (value.width < 1 || value.height < 1) {
         throw std::invalid_argument("wire slice dimensions are invalid");
     }
-    const auto expected = static_cast<std::size_t>(value.width)
-        * static_cast<std::size_t>(value.height);
+    const auto expected = checkedProduct(static_cast<std::size_t>(value.width),
+        static_cast<std::size_t>(value.height),
+        "wire slice dimensions overflow");
     validateResultVectors(expected, value.values.size(), value.valid.size(),
         value.source_level.size(), "wire slice vectors are inconsistent");
+    const auto physicalRegion = fromWire(value.physical_region.get());
     SliceQueryResult result;
     result.plane.width = value.width;
     result.plane.height = value.height;
-    result.plane.physicalRegion = fromWire(value.physical_region.get());
+    result.plane.physicalRegion = physicalRegion;
     result.plane.values = value.values;
     result.plane.valid = value.valid;
     result.plane.sourceLevel = value.source_level;
@@ -520,18 +695,21 @@ fb::LineViewRequestT toWire(const LineViewRequest& value)
 
 LineViewRequest fromWire(const fb::LineViewRequestT& value)
 {
+    const auto fixedCoordinates = fromWire(value.fixed_coordinates.get()).values;
+    const auto composition = fromWireComposition(value.composition);
+    std::optional<RealBox> region;
+    if (value.has_region) {
+        region = fromWire(value.region.get());
+    }
     LineViewRequest result;
     result.query.dataset = DatasetId{value.dataset_id};
     result.query.field = FieldId{value.field};
     result.query.component = value.component;
     result.query.axis = value.axis;
-    result.query.fixedCoordinates
-        = fromWire(value.fixed_coordinates.get()).values;
+    result.query.fixedCoordinates = fixedCoordinates;
     result.query.maximumLevel = value.maximum_level;
-    result.query.composition = fromWireComposition(value.composition);
-    if (value.has_region) {
-        result.query.region = fromWire(value.region.get());
-    }
+    result.query.composition = composition;
+    result.query.region = region;
     result.outputWidth = value.output_width;
     return result;
 }
@@ -559,6 +737,8 @@ LineQueryResult fromWire(const fb::LineViewResponseT& value)
     validateResultVectors(value.positions.size(), value.values.size(),
         value.valid.size(), value.source_level.size(),
         "wire line vectors are inconsistent");
+    requireFiniteValues(value.positions,
+        "wire line positions contain a non-finite value");
     LineQueryResult result;
     result.line.axis = value.axis;
     result.line.positionsAreIndices = value.positions_are_indices;
@@ -586,9 +766,11 @@ fb::DatasetPageRequestT toWire(const DatasetPageRequest& value)
 
 DatasetPageRequest fromWire(const fb::DatasetPageRequestT& value)
 {
+    requireFinite(value.slice_position,
+        "wire dataset page slice position is non-finite");
+    const auto region = fromWire(value.region.get());
     return {DatasetId{value.dataset_id}, FieldId{value.field}, value.level,
-        fromWire(value.region.get()), value.normal_axis,
-        value.slice_position, value.maximum_extent};
+        region, value.normal_axis, value.slice_position, value.maximum_extent};
 }
 
 fb::DatasetPageResponseT toWire(
@@ -622,11 +804,21 @@ DatasetPage fromWire(const fb::DatasetPageResponseT& value)
         || value.ny > datasetPageMaxExtent) {
         throw std::invalid_argument("wire dataset page extent is invalid");
     }
-    const auto expected = static_cast<std::size_t>(value.nx)
-        * static_cast<std::size_t>(value.ny);
+    const auto expected = checkedProduct(static_cast<std::size_t>(value.nx),
+        static_cast<std::size_t>(value.ny),
+        "wire dataset page extent overflows");
     if (value.values.size() != expected || value.covered.size() != expected) {
         throw std::invalid_argument(
             "wire dataset page vectors are inconsistent");
+    }
+    if (value.has_finite_values) {
+        requireFinite(value.minimum,
+            "wire dataset page minimum is non-finite");
+        requireFinite(value.maximum,
+            "wire dataset page maximum is non-finite");
+        if (value.minimum > value.maximum) {
+            throw std::invalid_argument("wire dataset page range is invalid");
+        }
     }
     DatasetPage result;
     std::copy(value.lower.begin(), value.lower.end(), result.lower.begin());
@@ -728,9 +920,7 @@ fb::RangeRequestT toWire(DatasetId dataset, const RangeRequest& value)
     wire.field = value.field.value;
     wire.maximum_level = value.maximumLevel;
     wire.composition = toWireComposition(value.composition);
-    wire.scope = value.scope == RangeScope::Level
-        ? fb::RangeScope::Level
-        : fb::RangeScope::File;
+    wire.scope = toWireRangeScope(value.scope);
     return wire;
 }
 
@@ -741,9 +931,7 @@ std::pair<DatasetId, RangeRequest> fromWire(
     request.field = FieldId{value.field};
     request.maximumLevel = value.maximum_level;
     request.composition = fromWireComposition(value.composition);
-    request.scope = value.scope == fb::RangeScope::Level
-        ? RangeScope::Level
-        : RangeScope::File;
+    request.scope = fromWireRangeScope(value.scope);
     return {DatasetId{value.dataset_id}, request};
 }
 
@@ -765,7 +953,9 @@ std::optional<ValueRange> fromWire(const fb::RangeResponseT& value)
     if (!value.has_range) {
         return std::nullopt;
     }
-    if (!(value.minimum <= value.maximum)) {
+    requireFinite(value.minimum, "wire range minimum is non-finite");
+    requireFinite(value.maximum, "wire range maximum is non-finite");
+    if (value.minimum > value.maximum) {
         throw std::invalid_argument("wire range is invalid");
     }
     return ValueRange{value.minimum, value.maximum};

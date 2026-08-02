@@ -21,6 +21,9 @@ template <typename Payload>
 Bytes encode(std::uint64_t requestId, Payload payload,
     std::uint16_t minor = protocolMinor)
 {
+    if (requestId == 0) {
+        throw std::invalid_argument("wire request ID must be non-zero");
+    }
     NativeEnvelope envelope;
     envelope.protocol_major = protocolMajor;
     envelope.protocol_minor = minor;

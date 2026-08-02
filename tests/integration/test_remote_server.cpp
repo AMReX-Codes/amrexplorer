@@ -233,14 +233,36 @@ int main(int argc, char* argv[])
     const OpenDatasetData duplicateOpen{
         std::filesystem::path(argv[1]).string(),
         16ULL * 1024ULL * 1024ULL};
-    writeFrame(duplicateSocket, codec::encode(2, codec::toWire(duplicateOpen)),
+    envelope = exchange(duplicateSocket, 2, codec::toWire(duplicateOpen),
         hello.maximumFrameBytes);
-    writeFrame(duplicateSocket, codec::encode(2, codec::toWire(duplicateOpen)),
+    require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
+        "server did not open the duplicate-ID test dataset");
+    const auto duplicateOpened = codec::fromWire(
+        *envelope->payload.AsDatasetOpened());
+
+    SliceRequest duplicateSlice;
+    duplicateSlice.dataset = duplicateOpened.id;
+    duplicateSlice.field = FieldId{0};
+    duplicateSlice.normalDirection = 1;
+    duplicateSlice.visibleRegion = duplicateOpened.catalog.physicalDomain;
+    duplicateSlice.physicalPosition = 0.5
+        * (duplicateSlice.visibleRegion.lower[1]
+            + duplicateSlice.visibleRegion.upper[1]);
+    duplicateSlice.maximumLevel = duplicateOpened.catalog.finestLevel;
+    // Keep the first request live while the reader dispatches the duplicate:
+    // its response is larger than the socket's send buffer and cannot finish
+    // until this client starts reading below.
+    duplicateSlice.outputSize = {1536, 1536};
+    writeFrame(duplicateSocket,
+        codec::encode(3, codec::toWire(duplicateSlice)),
+        hello.maximumFrameBytes);
+    writeFrame(duplicateSocket,
+        codec::encode(3, codec::toWire(duplicateSlice)),
         hello.maximumFrameBytes);
     bool duplicateRejected = false;
     for (int response = 0; response < 2 && !duplicateRejected; ++response) {
         auto duplicateResponse = readWithDeadline(duplicateSocket,
-            hello.maximumFrameBytes, std::chrono::seconds{2});
+            hello.maximumFrameBytes, std::chrono::seconds{10});
         require(duplicateResponse != nullptr,
             "duplicate request ID caused an unbounded disconnect");
         if (codec::inspect(*duplicateResponse).payload

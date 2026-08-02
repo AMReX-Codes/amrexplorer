@@ -144,6 +144,7 @@ public:
     // raster-colorbar-mismatch-on-2d-visible-zoom.
     [[nodiscard]] bool activeViewRasterMatchesDisplayRangeForTest();
     [[nodiscard]] bool activeViewUsesViewportBoundedOutputForTest() const;
+    [[nodiscard]] bool allViewsUseViewportBoundedOutputForTest() const;
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
 

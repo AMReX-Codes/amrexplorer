@@ -12,15 +12,27 @@ namespace amrvis::qt {
 inline std::optional<std::pair<std::string, std::uint16_t>>
 parseRemoteEndpoint(std::string_view text)
 {
-    const auto separator = text.rfind(':');
+    std::size_t separator = std::string_view::npos;
+    std::string_view host;
+    if (!text.empty() && text.front() == '[') {
+        const auto close = text.find(']');
+        if (close == std::string_view::npos || close == 1
+            || close + 1 >= text.size() || text[close + 1] != ':') {
+            return std::nullopt;
+        }
+        host = text.substr(1, close - 1);
+        separator = close + 1;
+    } else {
+        separator = text.find(':');
+        if (separator != text.rfind(':')) {
+            // A bare IPv6 literal is ambiguous with the port separator.
+            return std::nullopt;
+        }
+        host = text.substr(0, separator);
+    }
     if (separator == std::string_view::npos || separator == 0
         || separator + 1 == text.size()) {
         return std::nullopt;
-    }
-    auto host = text.substr(0, separator);
-    if (host.size() >= 2 && host.front() == '[' && host.back() == ']') {
-        host.remove_prefix(1);
-        host.remove_suffix(1);
     }
     if (host.empty()) {
         return std::nullopt;

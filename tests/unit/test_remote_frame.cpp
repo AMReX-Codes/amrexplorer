@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <exception>
+#include <future>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
@@ -207,11 +208,15 @@ int main()
     closer.join();
 
     const auto resetListener = listenOnLoopback(0);
+    std::promise<void> resetConnected;
+    auto resetMayProceed = resetConnected.get_future();
     std::thread resetter([&] {
         auto peer = acceptConnection(resetListener.socket);
+        resetMayProceed.wait();
         closeAbortively(peer);
     });
     auto resetClient = connectTo("127.0.0.1", resetListener.port);
+    resetConnected.set_value();
     requireRejected(
         [&] { static_cast<void>(readFrame(resetClient, 64)); },
         "an abortive close was not observed by the client");

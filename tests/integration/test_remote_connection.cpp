@@ -258,7 +258,7 @@ int main(int argc, char* argv[])
     auto fanoutPeer = std::async(std::launch::async, [&] {
         auto peer = acceptConnection(fanoutListener.socket);
         static_cast<void>(acceptHello(peer));
-        for (int request = 0; request < 2; ++request) {
+        for (int pendingRequest = 0; pendingRequest < 2; ++pendingRequest) {
             require(readFrame(peer, defaultMaximumFrameBytes).has_value(),
                 "client omitted a concurrent request");
         }

@@ -391,6 +391,7 @@ private:
                         "remote server changed protocol major version");
                 }
                 std::shared_ptr<Pending> pending;
+                bool minorVersionMismatch = false;
                 bool payloadMismatch = false;
                 {
                     std::scoped_lock lock(m_stateMutex);
@@ -400,12 +401,23 @@ private:
                             "remote response has an unknown request ID");
                     }
                     pending = found->second;
+                    minorVersionMismatch
+                        = pending->expected != PayloadKind::HelloResponse
+                        && info.protocolMinorVersion
+                            != m_selectedMinorVersion;
                     payloadMismatch = info.payload != pending->expected
                         && info.payload != PayloadKind::ErrorResponse;
                     m_pending.erase(found);
                     if (pending->countsAgainstBudget) {
                         --m_outstandingRequests;
                     }
+                }
+                if (minorVersionMismatch) {
+                    pending->promise.set_exception(std::make_exception_ptr(
+                        std::runtime_error(
+                            "remote server changed protocol minor version")));
+                    throw std::runtime_error(
+                        "remote server changed protocol minor version");
                 }
                 if (payloadMismatch) {
                     pending->promise.set_exception(std::make_exception_ptr(

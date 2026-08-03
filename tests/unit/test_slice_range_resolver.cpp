@@ -68,7 +68,7 @@ int main()
     // resolveRange/resolveDisplayRange only consult the dataset for the
     // Level/File statistics branch; the User and Visible paths are pure. The
     // null dataset below locks in that contract.
-    const std::shared_ptr<amrvis::PlotfileDataset> noDataset;
+    const std::shared_ptr<amrvis::DatasetSession> noDataset;
 
     // --- finiteRange -----------------------------------------------------
     {

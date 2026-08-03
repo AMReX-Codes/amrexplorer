@@ -33,11 +33,11 @@ std::filesystem::path sourceDataRoot(const std::filesystem::path& path)
 }
 
 std::vector<ParticleSpeciesMetadata> discoverParticlesForPlotfileRoot(
-    const std::filesystem::path& root)
+    const std::filesystem::path& root, StopToken cancellation)
 {
     if (std::filesystem::is_directory(root)
         && std::filesystem::is_regular_file(root / "Header")) {
-        return discoverParticleSpecies(root);
+        return discoverParticleSpecies(root, cancellation);
     }
     return {};
 }
@@ -45,12 +45,13 @@ std::vector<ParticleSpeciesMetadata> discoverParticlesForPlotfileRoot(
 } // namespace
 
 PlotfileDataset::PlotfileDataset(
-    std::filesystem::path plotfile, DatasetId id, std::uint64_t cacheBudgetBytes)
+    std::filesystem::path plotfile, DatasetId id,
+    std::uint64_t cacheBudgetBytes, StopToken cancellation)
     : m_plotfile(sourceDataRoot(plotfile))
     , m_id(id)
-    , m_metadataResult(readDatasetMetadata(plotfile))
+    , m_metadataResult(readDatasetMetadata(plotfile, cancellation))
     , m_particleSpecies(std::filesystem::is_directory(plotfile)
-            ? discoverParticleSpecies(m_plotfile)
+            ? discoverParticleSpecies(m_plotfile, cancellation)
             : std::vector<ParticleSpeciesMetadata>{})
     , m_blockReader(m_plotfile, m_metadataResult.metadata)
     , m_cache(cacheBudgetBytes)
@@ -61,11 +62,13 @@ PlotfileDataset::PlotfileDataset(
 }
 
 PlotfileDataset::PlotfileDataset(std::filesystem::path root, DatasetId id,
-    std::uint64_t cacheBudgetBytes, PlotfileMetadataResult metadata)
+    std::uint64_t cacheBudgetBytes, PlotfileMetadataResult metadata,
+    StopToken cancellation)
     : m_plotfile(std::move(root))
     , m_id(id)
     , m_metadataResult(std::move(metadata))
-    , m_particleSpecies(discoverParticlesForPlotfileRoot(m_plotfile))
+    , m_particleSpecies(
+          discoverParticlesForPlotfileRoot(m_plotfile, cancellation))
     , m_blockReader(m_plotfile, m_metadataResult.metadata)
     , m_cache(cacheBudgetBytes)
 {

@@ -6,6 +6,10 @@ add_executable(test_geometry unit/test_geometry.cpp)
 target_link_libraries(test_geometry PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME geometry COMMAND test_geometry)
 
+add_executable(test_view_data unit/test_view_data.cpp)
+target_link_libraries(test_view_data PRIVATE amrexplorer::data amrexplorer::warnings)
+add_test(NAME view_data COMMAND test_view_data)
+
 add_executable(test_stop_token unit/test_stop_token.cpp)
 target_compile_definitions(
     test_stop_token PRIVATE AMREXPLORER_TEST_FORCE_FALLBACK_STOP_TOKEN
@@ -124,7 +128,9 @@ add_test(
 )
 
 add_executable(test_dataset_extract integration/test_dataset_extract.cpp)
-target_link_libraries(test_dataset_extract PRIVATE amrexplorer::io amrexplorer::warnings)
+target_link_libraries(
+    test_dataset_extract PRIVATE amrexplorer::data amrexplorer::warnings
+)
 add_test(NAME dataset_extract COMMAND test_dataset_extract)
 
 add_executable(test_dataset_concurrency integration/test_dataset_concurrency.cpp)

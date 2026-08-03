@@ -11,7 +11,7 @@
 // logic is unit-tested in test_display_coordinator and its wiring by the
 // Qt zoom/pan smoke tests.)
 
-#include <amrexplorer/io/PlotfileDataset.hpp>
+#include <amrexplorer/data/LocalDatasetSession.hpp>
 #include <amrexplorer/pipeline/DisplayCoordinator.hpp>
 #include <amrexplorer/pipeline/ParticleProjection.hpp>
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
@@ -548,7 +548,7 @@ int main()
         // Measure the two blocks' resident sizes on a fresh dataset with a
         // generous budget (a frame load would have populated the cache
         // already), then rerun with budgets sized to force each fallback.
-        auto measured = std::make_shared<amrvis::PlotfileDataset>(
+        auto measured = std::make_shared<amrvis::LocalDatasetSession>(
             root2d, amrvis::DatasetId{nextId++}, bigBudget);
         const auto metadata = measured->metadata();
         const auto bounds = amrvis::datasetSampleBounds(metadata);
@@ -573,7 +573,7 @@ int main()
         require(coarseBytes > 0 && fineBytes > 0,
             "block size measurement failed");
 
-        const auto freshRequest = [&](const amrvis::PlotfileDataset& dataset) {
+        const auto freshRequest = [&](const amrvis::DatasetSession& dataset) {
             auto fresh = request;
             fresh.dataset = dataset.id();
             return fresh;
@@ -581,7 +581,7 @@ int main()
 
         // Composite finest under pressure: falls back to level 0 and records
         // the fallback; the result is still internally consistent.
-        auto tight = std::make_shared<amrvis::PlotfileDataset>(root2d,
+        auto tight = std::make_shared<amrvis::LocalDatasetSession>(root2d,
             amrvis::DatasetId{nextId++}, coarseBytes + fineBytes / 2);
         const auto fallback = amrvis::executeSliceWithFallback(tight,
             freshRequest(*tight), amrvis::RangeMode::Visible, std::nullopt,
@@ -594,7 +594,7 @@ int main()
             "budget fallback");
 
         // A generous budget records no fallback.
-        auto roomy = std::make_shared<amrvis::PlotfileDataset>(root2d,
+        auto roomy = std::make_shared<amrvis::LocalDatasetSession>(root2d,
             amrvis::DatasetId{nextId++}, bigBudget);
         const auto normal = amrvis::executeSliceWithFallback(roomy,
             freshRequest(*roomy), amrvis::RangeMode::Visible, std::nullopt,
@@ -604,7 +604,7 @@ int main()
             "an unpressured slice recorded a fallback");
 
         // An exact level cannot shed resolution: actionable error.
-        auto exact = std::make_shared<amrvis::PlotfileDataset>(root2d,
+        auto exact = std::make_shared<amrvis::LocalDatasetSession>(root2d,
             amrvis::DatasetId{nextId++}, std::min(coarseBytes, fineBytes) / 2);
         bool threw = false;
         try {
@@ -623,7 +623,7 @@ int main()
         require(threw, "an oversized exact level did not report an error");
 
         // Even level 0 cannot fit: the actionable dead-end error.
-        auto hopeless = std::make_shared<amrvis::PlotfileDataset>(root2d,
+        auto hopeless = std::make_shared<amrvis::LocalDatasetSession>(root2d,
             amrvis::DatasetId{nextId++}, coarseBytes / 2);
         threw = false;
         try {

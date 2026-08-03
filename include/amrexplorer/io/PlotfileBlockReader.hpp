@@ -62,11 +62,6 @@ public:
     using std::runtime_error::runtime_error;
 };
 
-class ReadCancelled : public std::runtime_error {
-public:
-    ReadCancelled() : std::runtime_error("block read cancelled") {}
-};
-
 class PlotfileBlockReader {
 public:
     PlotfileBlockReader(

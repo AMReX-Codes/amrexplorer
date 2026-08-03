@@ -46,8 +46,8 @@ public:
             HelloRequestData hello;
             hello.clientName = std::move(options.clientName);
             hello.softwareVersion = std::move(options.softwareVersion);
-            hello.minimumMinor = 0;
-            hello.maximumMinor = protocolMinor;
+            hello.minimumMinorVersion = 0;
+            hello.maximumMinorVersion = protocolMinorVersion;
             hello.maximumFrameBytes = options.maximumFrameBytes;
             const auto response = transact(codec::toWire(hello),
                 PayloadKind::HelloResponse, cancellation,
@@ -58,11 +58,12 @@ public:
                     "server returned the wrong hello payload");
             }
             m_serverInfo = codec::fromWire(*payload);
-            if (m_serverInfo.selectedMinor > protocolMinor
+            if (m_serverInfo.selectedMinorVersion > protocolMinorVersion
                 || m_serverInfo.maximumFrameBytes == 0) {
                 throw std::runtime_error(
                     "server negotiated invalid capabilities");
             }
+            m_selectedMinorVersion = m_serverInfo.selectedMinorVersion;
             m_maximumFrameBytes = std::min(
                 m_maximumFrameBytes.load(),
                 m_serverInfo.maximumFrameBytes);
@@ -110,7 +111,8 @@ public:
             ++m_outstandingRequests;
         }
         try {
-            auto bytes = codec::encode(requestId, std::move(payload));
+            auto bytes = codec::encode(
+                requestId, std::move(payload), m_selectedMinorVersion);
             send(bytes, deadline, cancellation);
         } catch (...) {
             erasePending(requestId);
@@ -457,7 +459,8 @@ private:
         codec::fb::CancelRequestT request;
         request.target_request_id = target;
         try {
-            auto bytes = codec::encode(cancelId, std::move(request));
+            auto bytes = codec::encode(
+                cancelId, std::move(request), m_selectedMinorVersion);
             send(bytes, deadline);
         } catch (...) {
             erasePending(cancelId);
@@ -518,6 +521,7 @@ private:
 
     std::chrono::steady_clock::time_point m_connectionDeadline;
     Socket m_socket;
+    std::uint16_t m_selectedMinorVersion = protocolMinorVersion;
     std::atomic<std::uint32_t> m_maximumFrameBytes;
     std::chrono::milliseconds m_requestTimeout;
     std::atomic<std::uint64_t> m_nextRequestId{1};

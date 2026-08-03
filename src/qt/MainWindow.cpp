@@ -1766,6 +1766,78 @@ void MainWindow::setActiveViewScaleForTest(int factor)
     }
 }
 
+void MainWindow::selectFixedScaleForTest(int factor)
+{
+    if (m_scaleGroup == nullptr) {
+        return;
+    }
+    const auto label = tr("%1x").arg(factor);
+    for (auto* action : m_scaleGroup->actions()) {
+        auto text = action->text();
+        text.remove(QLatin1Char('&'));
+        if (text == label) {
+            action->trigger();
+            return;
+        }
+    }
+}
+
+bool MainWindow::fixedScaleStateMatchesForTest(int factor) const
+{
+    if (m_activeView == nullptr || m_scaleGroup == nullptr
+        || m_scaleButton == nullptr) {
+        return false;
+    }
+    const auto expected = tr("%1x").arg(factor);
+    auto* checked = m_scaleGroup->checkedAction();
+    auto checkedText = checked == nullptr ? QString() : checked->text();
+    checkedText.remove(QLatin1Char('&'));
+    const auto* view = m_activeView->view;
+    return view->transformMode() == ImageView::TransformMode::FixedScale
+        && view->fixedScaleFactor() == factor
+        && std::fabs(view->transform().m11() - factor) <= 1.0e-12
+        && m_scaleButton->text() == expected && checkedText == expected;
+}
+
+void MainWindow::wheelZoomAndPanActiveViewForTest()
+{
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return;
+    }
+    m_activeView->view->zoomBy(1.5);
+    m_activeView->view->panViewport(QPoint(11, -7));
+}
+
+QRectF MainWindow::activeViewVisibleDataWindowForTest() const
+{
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return {};
+    }
+    const auto* view = m_activeView->view;
+    const auto& plane = *m_activeView->plane;
+    if (plane.width < 1 || plane.height < 1) {
+        return {};
+    }
+    const auto visible = view->mapToScene(
+        view->viewport()->rect()).boundingRect().intersected(
+            QRectF(0.0, 0.0, plane.width, plane.height));
+    const auto axes = displayAxes(m_activeView->normal);
+    const auto xAxis = static_cast<std::size_t>(axes[0]);
+    const auto yAxis = static_cast<std::size_t>(axes[1]);
+    const auto& region = plane.physicalRegion;
+    const auto xExtent = region.upper[xAxis] - region.lower[xAxis];
+    const auto yExtent = region.upper[yAxis] - region.lower[yAxis];
+    const auto x0 = region.lower[xAxis]
+        + visible.left() / plane.width * xExtent;
+    const auto x1 = region.lower[xAxis]
+        + visible.right() / plane.width * xExtent;
+    const auto y0 = region.upper[yAxis]
+        - visible.bottom() / plane.height * yExtent;
+    const auto y1 = region.upper[yAxis]
+        - visible.top() / plane.height * yExtent;
+    return QRectF(QPointF(x0, y0), QPointF(x1, y1)).normalized();
+}
+
 void MainWindow::panActiveViewForTest(
     double sceneDeltaX, double sceneDeltaY)
 {
@@ -5184,12 +5256,6 @@ std::optional<QRectF> MainWindow::preservedDataWindow(
     }
     const auto& cached = *state.plane;
     const auto axes = displayAxes(state.normal);
-    // Equal densities (or degenerate geometry) mean the preserved scene
-    // transform already preserves the on-screen data, so leave it alone; the
-    // coordinator owns that decision.
-    if (!DisplayCoordinator::planeDensitiesDiffer(cached, incoming, axes)) {
-        return std::nullopt;
-    }
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);
     const auto& oldRegion = cached.physicalRegion;
@@ -5275,22 +5341,29 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
         } else {
             // Preserve/Refit/GeometryAware from the cached-vs-incoming request
             // pair; the rationale lives with the decision in the coordinator.
-            const auto transformPolicy = DisplayCoordinator::rasterTransformPolicy(
-                state.hasCachedRequest, state.cachedRequest, display.request,
-                state.visibleRegion.has_value());
-            // Preserve keeps the scene transform, which is only equivalent to
-            // keeping what the user sees while the raster's pixels-per-data
-            // density is unchanged. A zoomed re-slice can arrive denser: the
-            // full-domain raster is capped at maxSliceOutputDimension while a
-            // subregion fits under the cap, so preserving the scene transform
-            // would show the crop over-zoomed with part of it off screen
-            // (issue #45). When the density changes, preserve the visible *data*
-            // window instead: capture the viewport in physical coordinates
-            // through the old plane's geometry before the swap, then re-frame
-            // that window through the new plane's geometry after it. Equal
-            // densities (pan, uncapped zoom) keep the plain Preserve behavior.
+            const auto& metadata = m_dataset->metadata();
+            const DisplayCoordinator::RasterGeometry incomingGeometry{
+                metadata.physicalDomain, metadata.dimension,
+                metadata.coordinateSystem, display.request.normalDirection,
+                display.sphericalDisplay};
+            const auto transformPolicy
+                = DisplayCoordinator::rasterTransformPolicy(
+                    state.rasterGeometry, incomingGeometry);
+            // Preserve Custom mode by capturing the visible physical window
+            // through the old plane and re-framing it through the new one.
+            // This is required when pixel density changes (issue #45), and it
+            // also protects same-density sequence replacements from scene or
+            // scrollbar recentering while the pixmap item is replaced.
             std::optional<QRectF> dataWindowInNewScene;
-            if (transformPolicy == ImageTransformPolicy::Preserve) {
+            const auto axes = displayAxes(state.normal);
+            const bool ownerChanged = state.hasCachedRequest
+                && state.cachedRequest.dataset != display.request.dataset;
+            const bool densityChanged = DisplayCoordinator::planeDensitiesDiffer(
+                *state.plane, display.slice.plane, axes);
+            if (transformPolicy == ImageTransformPolicy::Preserve
+                && state.view->transformMode()
+                    == ImageView::TransformMode::Custom
+                && (ownerChanged || densityChanged)) {
                 dataWindowInNewScene = preservedDataWindow(
                     state, display.slice.plane);
             }
@@ -5299,6 +5372,7 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
             if (dataWindowInNewScene) {
                 state.view->zoomToRect(*dataWindowInNewScene);
             }
+            state.rasterGeometry = incomingGeometry;
         }
     }
     // Fresh immutable snapshots: replace the pointers, never mutate the

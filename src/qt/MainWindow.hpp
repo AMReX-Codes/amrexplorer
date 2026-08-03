@@ -154,6 +154,10 @@ public:
     // Test-only: apply a panel-local scale, drive the exact data-region pan
     // handlers used by Shift+left drag, and inspect the resulting transform.
     void setActiveViewScaleForTest(int factor);
+    void selectFixedScaleForTest(int factor);
+    [[nodiscard]] bool fixedScaleStateMatchesForTest(int factor) const;
+    void wheelZoomAndPanActiveViewForTest();
+    [[nodiscard]] QRectF activeViewVisibleDataWindowForTest() const;
     void panActiveViewForTest(double sceneDeltaX, double sceneDeltaY);
     [[nodiscard]] qreal activeViewScaleForTest() const;
     // Test-only: compare the current transform with ImageView's own fitted
@@ -262,6 +266,7 @@ private:
         int coordinateSystem = 0;
         SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
         RealBox displayRegion;
+        std::optional<DisplayCoordinator::RasterGeometry> rasterGeometry;
         double displayMinimum = 0.0;
         double displayMaximum = 1.0;
         bool displayLogarithmic = false;

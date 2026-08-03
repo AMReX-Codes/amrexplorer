@@ -332,41 +332,49 @@ int main()
 
     // --- rasterTransformPolicy ----------------------------------------------
     {
-        const auto cached = makeRequest(1, 1, 0.0);
+        const DisplayCoordinator::RasterGeometry geometry{
+            makeRequest(1, 1, 0.0).visibleRegion, 2, 0, 1,
+            amrvis::SphericalDisplay::RZ};
 
         require(DisplayCoordinator::rasterTransformPolicy(
-                false, cached, cached, true)
+                std::nullopt, geometry)
                 == ImageTransformPolicy::GeometryAware,
             "no cache should be geometry-aware");
 
-        // Zoomed panel-local refresh (same dataset + normal): preserve, even
-        // when the region moved (pan) or shrank (zoom).
+        // A fresh DatasetId is irrelevant when the physical raster geometry is
+        // compatible, so same-geometry sequence frames preserve the mode.
         require(DisplayCoordinator::rasterTransformPolicy(
-                true, cached, makeRequest(1, 1, 0.5), true)
+                geometry, geometry)
                 == ImageTransformPolicy::Preserve,
-            "a zoomed same-panel refresh should preserve");
-        require(DisplayCoordinator::rasterTransformPolicy(
-                true, cached, cached, false)
-                == ImageTransformPolicy::GeometryAware,
-            "an unzoomed same-panel refresh should be geometry-aware");
+            "compatible physical geometry should preserve");
 
-        // A different dataset whose region differs must refit even when the
-        // raster dimensions coincide (the equal-size frame-step trap).
+        auto incompatible = geometry;
+        incompatible.physicalDomain.upper[0] = 2.0;
         require(DisplayCoordinator::rasterTransformPolicy(
-                true, cached, makeRequest(2, 1, 0.5), true)
+                geometry, incompatible)
                 == ImageTransformPolicy::Refit,
-            "a cross-dataset region change should refit");
-        // A different normal must refit regardless of dataset.
+            "a physical-domain change should refit");
+
+        incompatible = geometry;
+        incompatible.coordinateSystem = 1;
         require(DisplayCoordinator::rasterTransformPolicy(
-                true, cached, makeRequest(1, 2, 0.0), true)
+                geometry, incompatible)
                 == ImageTransformPolicy::Refit,
-            "an orientation change should refit");
-        // A different dataset with an identical region and normal keeps the
-        // geometry-aware default (same pixel-to-data mapping).
+            "a coordinate-system change should refit");
+
+        incompatible = geometry;
+        incompatible.normalDirection = 2;
         require(DisplayCoordinator::rasterTransformPolicy(
-                true, cached, makeRequest(2, 1, 0.0), true)
-                == ImageTransformPolicy::GeometryAware,
-            "a same-region dataset swap should stay geometry-aware");
+                geometry, incompatible)
+                == ImageTransformPolicy::Refit,
+            "a normal-direction change should refit");
+
+        incompatible = geometry;
+        incompatible.sphericalDisplay = amrvis::SphericalDisplay::ThetaR;
+        require(DisplayCoordinator::rasterTransformPolicy(
+                geometry, incompatible)
+                == ImageTransformPolicy::Refit,
+            "a displayed-orientation change should refit");
     }
 
     return 0;

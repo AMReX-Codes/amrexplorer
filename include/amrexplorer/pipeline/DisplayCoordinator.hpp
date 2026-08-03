@@ -23,6 +23,21 @@ namespace amrvis {
 
 class DisplayCoordinator {
 public:
+    // Physical facts that determine whether an existing view transform still
+    // denotes the same data-space window after a raster replacement. Dataset
+    // ids are deliberately absent: sequence frames receive fresh ids even
+    // when their physical geometry is identical.
+    struct RasterGeometry {
+        RealBox physicalDomain;
+        int dimension = 0;
+        int coordinateSystem = 0;
+        int normalDirection = 0;
+        SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
+
+        friend bool operator==(const RasterGeometry&, const RasterGeometry&)
+            = default;
+    };
+
     // What the cached full-domain range is valid for. Sequence frames load
     // fresh datasets with new ids, so keying on the dataset invalidates the
     // cache across frames (see sequence-frame-range-cache-goes-stale).
@@ -59,14 +74,13 @@ public:
         std::span<const ScalarPlane* const> planes, bool logarithmic);
 
     // How the view should treat its transform when `incoming` replaces the
-    // raster produced by `cached`. A zoomed panel-local refresh (same
-    // dataset and orientation) preserves; a replacement whose region or
-    // orientation differs refits even if the dimensions coincide; everything
-    // else refits only on a dimension change. Moved verbatim from the GUI's
-    // showSlice (see the raster-colorbar and rubber-band issues).
+    // raster produced by `cached`. Compatible physical geometry preserves the
+    // ImageView mode across ordinary refreshes and sequence-frame ids. A
+    // physical-domain, coordinate-system, dimensional, normal-direction, or
+    // displayed-orientation change refits deterministically.
     [[nodiscard]] static ImageTransformPolicy rasterTransformPolicy(
-        bool hasCachedRequest, const SliceRequest& cached,
-        const SliceRequest& incoming, bool zoomed);
+        const std::optional<RasterGeometry>& cached,
+        const RasterGeometry& incoming);
 
     // Realigns an arrived result to a replacement display range (the reused
     // full-domain range): overwrites minimum/maximum and, when

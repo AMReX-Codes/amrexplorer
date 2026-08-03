@@ -99,15 +99,15 @@ ImageView::ImageView(QWidget* parent)
 void ImageView::setImage(
     const QImage& image, ImageTransformPolicy transformPolicy)
 {
-    // Refit only when the image changes size (initial open, a zoom into a new
-    // region, a differently-sized dataset). When only the colors are remapped
-    // at the same size -- toggling Log, or changing field, level, or range --
-    // keep the user's current zoom/pan. Compatible panel-local cropped-region
-    // refreshes explicitly preserve the transform even when the replacement
-    // raster dimensions differ.
-    const bool refit = transformPolicy == ImageTransformPolicy::Refit
-        || (transformPolicy == ImageTransformPolicy::GeometryAware
-            && (m_image.isNull() || m_image.size() != image.size()));
+    const bool sizeChanged = m_image.isNull() || m_image.size() != image.size();
+    // An explicitly incompatible raster resets Custom mode. Fixed scale is a
+    // user-selected persistent mode and therefore survives every replacement,
+    // including a delayed result whose policy was computed before the scale
+    // selection. Fit likewise remains a mode and refits every replacement.
+    if (transformPolicy == ImageTransformPolicy::Refit
+        && m_transformMode == TransformMode::Custom) {
+        m_transformMode = TransformMode::Fit;
+    }
     m_scene->clear();
     m_gridItems.clear();
     m_overlayItems.clear();
@@ -123,8 +123,13 @@ void ImageView::setImage(
     m_item = m_scene->addPixmap(QPixmap::fromImage(m_image));
     m_scene->setSceneRect(m_item->boundingRect());
     setBackgroundBrush(viewportBackground());
-    if (refit) {
-        m_fitOnResize = true;
+    if (m_transformMode == TransformMode::Fit) {
+        fitImage();
+    } else if (m_transformMode == TransformMode::FixedScale) {
+        applyFixedScale();
+    } else if (transformPolicy == ImageTransformPolicy::GeometryAware
+        && sizeChanged) {
+        m_transformMode = TransformMode::Fit;
         fitImage();
     }
     applyCrosshairs();
@@ -430,6 +435,8 @@ void ImageView::setPlaceholder(const QString& text)
     label->setDefaultTextColor(palette().windowText().color());
     m_scene->setSceneRect(label->boundingRect());
     resetTransform();
+    m_transformMode = TransformMode::Fit;
+    m_fixedScaleFactor = 1;
 }
 
 bool ImageView::hasImage() const noexcept
@@ -494,7 +501,7 @@ QImage ImageView::composedImage(qreal scaleFactor) const
 void ImageView::fitToWindow()
 {
     if (hasImage()) {
-        m_fitOnResize = true;
+        m_transformMode = TransformMode::Fit;
         fitImage();
     }
 }
@@ -504,10 +511,18 @@ void ImageView::setFixedScale(int factor)
     if (!hasImage() || factor < 1) {
         return;
     }
-    m_fitOnResize = false;
-    resetTransform();
-    const auto scaleFactor = static_cast<double>(factor);
-    scale(scaleFactor, scaleFactor);
+    m_transformMode = TransformMode::FixedScale;
+    m_fixedScaleFactor = factor;
+    applyFixedScale();
+}
+
+void ImageView::zoomBy(qreal factor)
+{
+    if (!hasImage() || !(factor > 0.0)) {
+        return;
+    }
+    scale(factor, factor);
+    m_transformMode = TransformMode::Custom;
 }
 
 void ImageView::zoomToRect(const QRectF& sceneRect)
@@ -515,7 +530,7 @@ void ImageView::zoomToRect(const QRectF& sceneRect)
     if (!hasImage() || sceneRect.isEmpty()) {
         return;
     }
-    m_fitOnResize = false;
+    m_transformMode = TransformMode::Custom;
     fitInView(sceneRect, Qt::KeepAspectRatio);
 }
 
@@ -524,7 +539,7 @@ void ImageView::panViewport(const QPoint& delta)
     if (!hasImage() || (delta.x() == 0 && delta.y() == 0)) {
         return;
     }
-    m_fitOnResize = false;
+    m_transformMode = TransformMode::Custom;
     auto* const hBar = horizontalScrollBar();
     auto* const vBar = verticalScrollBar();
     if (hBar->maximum() > hBar->minimum()
@@ -560,7 +575,7 @@ void ImageView::mousePressEvent(QMouseEvent* event)
             m_panActive = true;
             m_lastPanPosition = event->position().toPoint();
             m_panAccumulated = QPointF();
-            m_fitOnResize = false;
+            m_transformMode = TransformMode::Custom;
             setCursor(Qt::ClosedHandCursor);
             emit panDragBegan();
             event->accept();
@@ -699,7 +714,7 @@ void ImageView::mouseMoveEvent(QMouseEvent* event)
 void ImageView::resizeEvent(QResizeEvent* event)
 {
     QGraphicsView::resizeEvent(event);
-    if (m_fitOnResize) {
+    if (m_transformMode == TransformMode::Fit) {
         fitImage();
     }
 }
@@ -717,8 +732,7 @@ void ImageView::wheelEvent(QWheelEvent* event)
     }
     constexpr double zoomStep = 1.15;
     const auto factor = vertical > 0 ? zoomStep : 1.0 / zoomStep;
-    scale(factor, factor);
-    m_fitOnResize = false;
+    zoomBy(factor);
     event->accept();
 }
 
@@ -798,6 +812,15 @@ void ImageView::fitImage()
     if (m_item != nullptr) {
         resetTransform();
         fitInView(m_item, Qt::KeepAspectRatio);
+    }
+}
+
+void ImageView::applyFixedScale()
+{
+    if (m_item != nullptr) {
+        resetTransform();
+        const auto factor = static_cast<qreal>(m_fixedScaleFactor);
+        scale(factor, factor);
     }
 }
 

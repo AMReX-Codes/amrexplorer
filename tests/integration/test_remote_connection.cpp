@@ -311,6 +311,92 @@ int main(int argc, char* argv[])
         "wrong response payload did not fail the connection");
     wrongPayloadPeer.get();
 
+    auto delayedRangeListener = listenOnLoopback(0);
+    auto delayedRangePeer = std::async(std::launch::async, [&] {
+        auto peer = acceptConnection(delayedRangeListener.socket);
+        static_cast<void>(acceptHello(peer));
+        const auto frame = readFrame(peer, defaultMaximumFrameBytes);
+        require(frame.has_value(), "client omitted delayed range request");
+        const auto requestEnvelope = codec::decode(*frame);
+        const auto requestInfo = codec::inspect(*requestEnvelope);
+        require(requestInfo.payload == PayloadKind::RangeRequest,
+            "client sent the wrong delayed plotfile request");
+        std::this_thread::sleep_for(250ms);
+        writeFrame(peer,
+            codec::encode(requestInfo.requestId,
+                codec::toWire(std::optional<ValueRange>{{1.0, 2.0}},
+                    CacheMetrics{})),
+            defaultMaximumFrameBytes);
+    });
+    ConnectionOptions shortPayloadWait;
+    shortPayloadWait.requestTimeout = 100ms;
+    Connection delayedRangeConnection(
+        "127.0.0.1", delayedRangeListener.port, shortPayloadWait);
+    const auto delayedRange = delayedRangeConnection.requestRange(
+        DatasetId{1}, RangeRequest{.field = FieldId{0}});
+    require(delayedRange && delayedRange->minimum == 1.0
+            && delayedRange->maximum == 2.0,
+        "plotfile response inherited the control-request deadline");
+    delayedRangePeer.get();
+
+    auto cancellableRangeListener = listenOnLoopback(0);
+    std::promise<void> rangeAcceptedPromise;
+    auto rangeAccepted = rangeAcceptedPromise.get_future();
+    auto cancellableRangePeer = std::async(std::launch::async, [&] {
+        auto peer = acceptConnection(cancellableRangeListener.socket);
+        static_cast<void>(acceptHello(peer));
+        const auto rangeFrame = readFrame(peer, defaultMaximumFrameBytes);
+        require(rangeFrame.has_value(),
+            "client omitted cancellable range request");
+        const auto rangeEnvelope = codec::decode(*rangeFrame);
+        const auto rangeInfo = codec::inspect(*rangeEnvelope);
+        require(rangeInfo.payload == PayloadKind::RangeRequest,
+            "client sent the wrong cancellable plotfile request");
+        rangeAcceptedPromise.set_value();
+
+        const auto cancelFrame = readFrame(peer, defaultMaximumFrameBytes);
+        require(cancelFrame.has_value(),
+            "client omitted cancellation for indefinite plotfile wait");
+        const auto cancelEnvelope = codec::decode(*cancelFrame);
+        const auto cancelInfo = codec::inspect(*cancelEnvelope);
+        const auto* cancel = cancelEnvelope->payload.AsCancelRequest();
+        require(cancelInfo.payload == PayloadKind::CancelRequest
+                && cancel != nullptr
+                && cancel->target_request_id == rangeInfo.requestId,
+            "client cancelled the wrong indefinite plotfile request");
+        codec::fb::CancelAcknowledgedT acknowledged;
+        acknowledged.target_request_id = rangeInfo.requestId;
+        writeFrame(peer,
+            codec::encode(cancelInfo.requestId, std::move(acknowledged)),
+            defaultMaximumFrameBytes);
+        writeFrame(peer,
+            codec::encode(rangeInfo.requestId,
+                codec::toWire(
+                    ErrorData{ErrorCode::Cancelled, "request cancelled"})),
+            defaultMaximumFrameBytes);
+    });
+    Connection cancellableRangeConnection(
+        "127.0.0.1", cancellableRangeListener.port, shortPayloadWait);
+    StopSource rangeCancellation;
+    auto cancelledRange = std::async(std::launch::async, [&] {
+        try {
+            static_cast<void>(cancellableRangeConnection.requestRange(
+                DatasetId{1}, RangeRequest{.field = FieldId{0}},
+                rangeCancellation.get_token()));
+        } catch (const ReadCancelled&) {
+            return true;
+        }
+        return false;
+    });
+    require(rangeAccepted.wait_for(1s) == std::future_status::ready,
+        "cancellable range request was not sent");
+    std::this_thread::sleep_for(250ms);
+    rangeCancellation.request_stop();
+    require(cancelledRange.wait_for(1s) == std::future_status::ready
+            && cancelledRange.get(),
+        "indefinite plotfile wait ignored explicit cancellation");
+    cancellableRangePeer.get();
+
     auto fanoutListener = listenOnLoopback(0);
     auto fanoutPeer = std::async(std::launch::async, [&] {
         auto peer = acceptConnection(fanoutListener.socket);

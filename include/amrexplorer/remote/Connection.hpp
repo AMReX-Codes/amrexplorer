@@ -20,6 +20,9 @@ struct ConnectionOptions {
     std::string softwareVersion = "unknown";
     std::uint32_t maximumFrameBytes = defaultMaximumFrameBytes;
     std::chrono::milliseconds connectionTimeout{10000};
+    // Bounds request writes, lightweight control responses, and cancellation
+    // acknowledgement. Plotfile-operation responses have no wall-clock
+    // deadline and remain governed by cancellation or disconnect instead.
     std::chrono::milliseconds requestTimeout{30000};
 };
 

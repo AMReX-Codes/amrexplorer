@@ -461,6 +461,10 @@ private:
             send(bytes, deadline);
         } catch (...) {
             erasePending(cancelId);
+            // Like an ordinary transaction write, a failed cancellation write
+            // may have left a partial frame on the stream. No later request
+            // can safely reuse this connection.
+            close();
         }
     }
 

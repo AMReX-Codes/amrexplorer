@@ -9,6 +9,7 @@
 #include <future>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -19,6 +20,7 @@
 #include <winsock2.h>
 #else
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #endif
 
@@ -141,6 +143,49 @@ int main()
     requireRejected(
         [&] { writeFrame(client, std::vector<std::uint8_t>(65), 64); },
         "an oversized frame was accepted");
+
+    amrvis::StopSource stoppedWrite;
+    stoppedWrite.request_stop();
+    bool writeCancellationObserved = false;
+    try {
+        writeFrame(client, std::vector<std::uint8_t>{1}, 64,
+            std::chrono::steady_clock::now() + std::chrono::seconds(1),
+            stoppedWrite.get_token());
+    } catch (const amrvis::ReadCancelled&) {
+        writeCancellationObserved = true;
+    }
+    require(writeCancellationObserved,
+        "a cancelled deadline-aware frame write was not interrupted");
+
+#ifndef _WIN32
+    // A peer that stops reading must not hold a writer forever. AF_UNIX keeps
+    // this deterministic without loopback TCP receive-window autotuning.
+    int blockedDescriptors[2]{};
+    require(::socketpair(AF_UNIX, SOCK_STREAM, 0, blockedDescriptors) == 0,
+        "could not create the blocked-write socket pair");
+    Socket blockedWriter(blockedDescriptors[0]);
+    Socket blockedPeer(blockedDescriptors[1]);
+    const auto writerFlags = ::fcntl(blockedDescriptors[0], F_GETFL, 0);
+    require(writerFlags >= 0
+            && ::fcntl(blockedDescriptors[0], F_SETFL,
+                   writerFlags | O_NONBLOCK) == 0,
+        "could not make the blocked writer nonblocking");
+    int sendBufferBytes = 4096;
+    require(::setsockopt(blockedDescriptors[0], SOL_SOCKET, SO_SNDBUF,
+                &sendBufferBytes, sizeof(sendBufferBytes)) == 0,
+        "could not reduce the test send buffer");
+    bool timedOut = false;
+    try {
+        writeFrame(blockedWriter,
+            std::vector<std::uint8_t>(4U * 1024U * 1024U),
+            4U * 1024U * 1024U,
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(50));
+    } catch (const std::runtime_error& error) {
+        timedOut = std::string(error.what()).find("timed out")
+            != std::string::npos;
+    }
+    require(timedOut, "a peer-blocked frame write ignored its deadline");
+#endif
 
     // A TCP-segment boundary may tear the four-byte header without making the
     // frame malformed. readFrame must assemble it exactly.

@@ -16,9 +16,11 @@
 #include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -58,6 +60,10 @@ bool interrupted(int error)
     return error == WSAEINTR;
 }
 
+bool wouldBlock(int error)
+{
+    return error == WSAEWOULDBLOCK;
+}
 void closeNative(NativeSocket socket)
 {
     ::closesocket(socket);
@@ -79,6 +85,10 @@ bool interrupted(int error)
     return error == EINTR;
 }
 
+bool wouldBlock(int error)
+{
+    return error == EAGAIN || error == EWOULDBLOCK;
+}
 void closeNative(NativeSocket socket)
 {
     ::close(socket);
@@ -93,6 +103,23 @@ NativeSocket native(Socket::Native descriptor)
 [[noreturn]] void throwSocketError(
     const std::string& operation, int error = lastSocketError());
 
+void setNonBlocking(NativeSocket socket, bool enabled)
+{
+#ifdef _WIN32
+    u_long mode = enabled ? 1UL : 0UL;
+    if (::ioctlsocket(socket, FIONBIO, &mode) != 0) {
+        throwSocketError("ioctlsocket(FIONBIO)");
+    }
+#else
+    const auto flags = ::fcntl(socket, F_GETFL, 0);
+    if (flags < 0
+        || ::fcntl(socket, F_SETFL,
+               enabled ? flags | O_NONBLOCK : flags & ~O_NONBLOCK)
+            != 0) {
+        throwSocketError("fcntl(O_NONBLOCK)");
+    }
+#endif
+}
 void setIntegerSocketOption(NativeSocket descriptor, int level, int option,
     int value, const char* name)
 {
@@ -114,6 +141,10 @@ void configureConnectedSocket(NativeSocket descriptor)
 #endif
     setIntegerSocketOption(
         descriptor, IPPROTO_TCP, TCP_NODELAY, 1, "TCP_NODELAY");
+    // Keep connected sockets nonblocking. All frame reads/writes wait through
+    // poll/select first, which makes their deadline and shutdown paths
+    // authoritative instead of allowing a kernel send/recv to block forever.
+    setNonBlocking(descriptor, true);
 }
 
 [[noreturn]] void throwSocketError(
@@ -128,11 +159,104 @@ void configureConnectedSocket(NativeSocket descriptor)
 #endif
 }
 
+void waitForReadable(NativeSocket socket,
+    std::chrono::steady_clock::time_point deadline)
+{
+    using namespace std::chrono_literals;
+    for (;;) {
+        const auto now = std::chrono::steady_clock::now();
+        if (deadline != std::chrono::steady_clock::time_point::max()
+            && now >= deadline) {
+            throw std::runtime_error("wire frame read timed out");
+        }
+        auto wait = 50ms;
+        if (deadline != std::chrono::steady_clock::time_point::max()) {
+            wait = std::min(wait,
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - now));
+            wait = std::max(wait, 1ms);
+        }
+#ifdef _WIN32
+        timeval timeout{};
+        timeout.tv_sec = static_cast<long>(wait.count() / 1000);
+        timeout.tv_usec = static_cast<decltype(timeout.tv_usec)>(
+            (wait.count() % 1000) * 1000);
+        fd_set readable;
+        FD_ZERO(&readable);
+        FD_SET(socket, &readable);
+        const auto ready = ::select(0, &readable, nullptr, nullptr, &timeout);
+#else
+        pollfd descriptor{socket, POLLIN, 0};
+        const auto ready
+            = ::poll(&descriptor, 1, static_cast<int>(wait.count()));
+#endif
+        if (ready > 0) {
+            return;
+        }
+        if (ready == 0) {
+            continue;
+        }
+        const auto error = lastSocketError();
+        if (!interrupted(error)) {
+            throwSocketError("socket readiness wait", error);
+        }
+    }
+}
+
+void waitForWritable(NativeSocket socket,
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation)
+{
+    using namespace std::chrono_literals;
+    for (;;) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            throw std::runtime_error("wire frame write timed out");
+        }
+        auto wait = 50ms;
+        if (deadline != std::chrono::steady_clock::time_point::max()) {
+            wait = std::min(wait,
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - now));
+            wait = std::max(wait, 1ms);
+        }
+#ifdef _WIN32
+        timeval timeout{};
+        timeout.tv_sec = static_cast<long>(wait.count() / 1000);
+        timeout.tv_usec = static_cast<decltype(timeout.tv_usec)>(
+            (wait.count() % 1000) * 1000);
+        fd_set writable;
+        FD_ZERO(&writable);
+        FD_SET(socket, &writable);
+        const auto ready = ::select(0, nullptr, &writable, nullptr, &timeout);
+#else
+        pollfd descriptor{socket, POLLOUT, 0};
+        const auto ready = ::poll(
+            &descriptor, 1, static_cast<int>(wait.count()));
+#endif
+        if (ready > 0) {
+            return;
+        }
+        if (ready == 0) {
+            continue;
+        }
+        const auto error = lastSocketError();
+        if (!interrupted(error)) {
+            throwSocketError("socket write readiness wait", error);
+        }
+    }
+}
+
 bool readExact(NativeSocket descriptor, std::span<std::uint8_t> destination,
-    bool allowCleanEof)
+    bool allowCleanEof,
+    std::chrono::steady_clock::time_point deadline)
 {
     std::size_t completed = 0;
     while (completed < destination.size()) {
+        waitForReadable(descriptor, deadline);
 #ifdef _WIN32
         const auto remaining = std::min<std::size_t>(
             destination.size() - completed,
@@ -152,7 +276,7 @@ bool readExact(NativeSocket descriptor, std::span<std::uint8_t> destination,
         }
         if (count < 0) {
             const auto error = lastSocketError();
-            if (interrupted(error)) {
+            if (interrupted(error) || wouldBlock(error)) {
                 continue;
             }
             throwSocketError("recv", error);
@@ -163,35 +287,47 @@ bool readExact(NativeSocket descriptor, std::span<std::uint8_t> destination,
 }
 
 void writeExact(
-    NativeSocket descriptor, std::span<const std::uint8_t> source)
+    NativeSocket descriptor, std::span<const std::uint8_t> source);
+
+void writeExact(NativeSocket descriptor,
+    std::span<const std::uint8_t> source,
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation)
 {
     std::size_t completed = 0;
     while (completed < source.size()) {
+        waitForWritable(descriptor, deadline, cancellation);
 #ifdef _WIN32
         const auto remaining = std::min<std::size_t>(
-            source.size() - completed,
-            static_cast<std::size_t>(std::numeric_limits<int>::max()));
+            source.size() - completed, 64U * 1024U);
         const auto count = ::send(descriptor,
             reinterpret_cast<const char*>(source.data() + completed),
             static_cast<int>(remaining), 0);
 #else
+        constexpr int noSignal =
 #ifdef MSG_NOSIGNAL
-        constexpr int flags = MSG_NOSIGNAL;
-#else
-        constexpr int flags = 0;
+            MSG_NOSIGNAL |
 #endif
+            MSG_DONTWAIT;
         const auto count = ::send(descriptor, source.data() + completed,
-            source.size() - completed, flags);
+            source.size() - completed, noSignal);
 #endif
         if (count < 0) {
             const auto error = lastSocketError();
-            if (interrupted(error)) {
+            if (interrupted(error) || wouldBlock(error)) {
                 continue;
             }
             throwSocketError("send", error);
         }
         completed += static_cast<std::size_t>(count);
     }
+}
+
+void writeExact(
+    NativeSocket descriptor, std::span<const std::uint8_t> source)
+{
+    writeExact(descriptor, source,
+        std::chrono::steady_clock::time_point::max(), {});
 }
 
 } // namespace
@@ -365,11 +501,38 @@ void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
     writeExact(native(socket.descriptor()), payload);
 }
 
+void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
+    std::uint32_t maximumBytes,
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation)
+{
+    if (payload.empty() || payload.size() > maximumBytes
+        || payload.size() > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("wire frame size is outside the allowed range");
+    }
+    const auto networkSize = htonl(static_cast<std::uint32_t>(payload.size()));
+    const auto* sizeBytes
+        = reinterpret_cast<const std::uint8_t*>(&networkSize);
+    writeExact(native(socket.descriptor()),
+        std::span<const std::uint8_t>(sizeBytes, sizeof(networkSize)),
+        deadline, cancellation);
+    writeExact(native(socket.descriptor()), payload, deadline, cancellation);
+}
+
 std::optional<std::vector<std::uint8_t>> readFrame(
     const Socket& socket, std::uint32_t maximumBytes)
 {
+    return readFrame(socket, maximumBytes,
+        std::chrono::steady_clock::time_point::max());
+}
+
+std::optional<std::vector<std::uint8_t>> readFrame(const Socket& socket,
+    std::uint32_t maximumBytes,
+    std::chrono::steady_clock::time_point deadline)
+{
     std::array<std::uint8_t, sizeof(std::uint32_t)> sizeBytes{};
-    if (!readExact(native(socket.descriptor()), sizeBytes, true)) {
+    if (!readExact(
+            native(socket.descriptor()), sizeBytes, true, deadline)) {
         return std::nullopt;
     }
     std::uint32_t networkSize = 0;
@@ -379,8 +542,8 @@ std::optional<std::vector<std::uint8_t>> readFrame(
         throw std::runtime_error("wire frame size is outside the allowed range");
     }
     std::vector<std::uint8_t> payload(size);
-    static_cast<void>(
-        readExact(native(socket.descriptor()), payload, false));
+    static_cast<void>(readExact(
+        native(socket.descriptor()), payload, false, deadline));
     return payload;
 }
 

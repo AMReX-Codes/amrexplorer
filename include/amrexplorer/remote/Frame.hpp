@@ -1,5 +1,8 @@
 #pragma once
 
+#include <amrexplorer/core/StopToken.hpp>
+
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -45,8 +48,15 @@ struct Listener {
 
 void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
     std::uint32_t maximumBytes = defaultMaximumFrameBytes);
+void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
+    std::uint32_t maximumBytes,
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation = {});
 [[nodiscard]] std::optional<std::vector<std::uint8_t>> readFrame(
     const Socket& socket,
     std::uint32_t maximumBytes = defaultMaximumFrameBytes);
+[[nodiscard]] std::optional<std::vector<std::uint8_t>> readFrame(
+    const Socket& socket, std::uint32_t maximumBytes,
+    std::chrono::steady_clock::time_point deadline);
 
 } // namespace amrvis::remote

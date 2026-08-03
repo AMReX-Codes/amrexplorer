@@ -20,10 +20,10 @@ struct ServerOptions {
     // small frame cap. Both limits are removed after a valid hello.
     std::chrono::milliseconds handshakeTimeout{5000};
     std::uint32_t maximumHandshakeFrameBytes = 64U * 1024U;
-    // Bounds each response write. A peer that stops reading is disconnected
-    // when this deadline expires so it cannot retain a worker or serialize
-    // later responses behind the session write mutex.
-    std::chrono::milliseconds responseWriteTimeout{5000};
+    // A response may take arbitrarily long while bytes continue moving. A peer
+    // that makes no write progress for this interval is disconnected so it
+    // cannot retain a worker or the session write mutex indefinitely.
+    std::chrono::milliseconds responseWriteStallTimeout{30000};
     std::string softwareVersion = "unknown";
 };
 

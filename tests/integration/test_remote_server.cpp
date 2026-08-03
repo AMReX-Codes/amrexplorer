@@ -363,7 +363,8 @@ int main(int argc, char* argv[])
     stalledOptions.workerCount = 1;
     stalledOptions.maximumDatasets = 1;
     stalledOptions.maximumConnections = 2;
-    stalledOptions.responseWriteTimeout = std::chrono::milliseconds{100};
+    stalledOptions.responseWriteStallTimeout
+        = std::chrono::milliseconds{100};
     Server stalledServer(stalledOptions);
     RunningServer stalledRunning(stalledServer);
     auto stalledSocket = connectTo("127.0.0.1", stalledServer.port());

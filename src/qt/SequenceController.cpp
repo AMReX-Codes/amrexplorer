@@ -104,6 +104,7 @@ void SequenceController::startLoad(int index, std::uint64_t generation)
     const auto path = m_frames[static_cast<std::size_t>(index)];
     const auto datasetId = DatasetId{
         sequenceDatasetIdBase + ++m_datasetCounter};
+    m_loadStopSource.request_stop();
     m_loadStopSource = StopSource{};
     const auto cancellation = m_loadStopSource.get_token();
     const auto loader = m_loader;

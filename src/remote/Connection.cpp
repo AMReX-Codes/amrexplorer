@@ -25,6 +25,11 @@ std::runtime_error disconnectedError(const std::string& reason)
         reason.empty() ? "remote connection is closed" : reason);
 }
 
+enum class ResponseWait {
+    Bounded,
+    Indefinite
+};
+
 } // namespace
 
 class Connection::Impl {
@@ -80,16 +85,32 @@ public:
 
     template <typename Payload>
     std::unique_ptr<NativeEnvelope> transact(Payload payload,
-        PayloadKind expected, StopToken cancellation)
+        PayloadKind expected, StopToken cancellation,
+        ResponseWait responseWait = ResponseWait::Bounded)
     {
+        const auto writeDeadline
+            = deadlineAfter(m_requestTimeout, "request timeout");
         return transact(std::move(payload), expected, cancellation,
-            deadlineAfter(m_requestTimeout, "request timeout"));
+            writeDeadline,
+            responseWait == ResponseWait::Indefinite
+                ? std::chrono::steady_clock::time_point::max()
+                : writeDeadline);
     }
 
     template <typename Payload>
     std::unique_ptr<NativeEnvelope> transact(Payload payload,
         PayloadKind expected, StopToken cancellation,
         std::chrono::steady_clock::time_point deadline)
+    {
+        return transact(std::move(payload), expected, cancellation,
+            deadline, deadline);
+    }
+
+    template <typename Payload>
+    std::unique_ptr<NativeEnvelope> transact(Payload payload,
+        PayloadKind expected, StopToken cancellation,
+        std::chrono::steady_clock::time_point writeDeadline,
+        std::chrono::steady_clock::time_point responseDeadline)
     {
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
@@ -113,7 +134,7 @@ public:
         try {
             auto bytes = codec::encode(
                 requestId, std::move(payload), m_selectedMinorVersion);
-            send(bytes, deadline, cancellation);
+            send(bytes, writeDeadline, cancellation);
         } catch (...) {
             erasePending(requestId);
             // A failed write may have emitted only part of the frame. Retire
@@ -137,15 +158,20 @@ public:
                     throw ReadCancelled();
                 }
                 cancellationSent = true;
-                sendCancellation(requestId, deadline);
+                responseDeadline
+                    = deadlineAfter(m_requestTimeout, "cancellation timeout");
+                sendCancellation(requestId, responseDeadline);
             }
             if (future.wait_for(std::chrono::milliseconds::zero())
                 == std::future_status::ready) {
                 break;
             }
-            if (std::chrono::steady_clock::now() >= deadline) {
+            if (std::chrono::steady_clock::now() >= responseDeadline) {
                 erasePending(requestId);
                 close();
+                if (cancellationSent) {
+                    throw ReadCancelled();
+                }
                 throw std::runtime_error(
                     expected == PayloadKind::HelloResponse
                         ? "remote handshake timed out"
@@ -171,7 +197,8 @@ public:
     {
         const auto response = transact(codec::toWire(
             OpenDatasetData{path, cacheBudgetBytes}),
-            PayloadKind::DatasetOpened, cancellation);
+            PayloadKind::DatasetOpened, cancellation,
+            ResponseWait::Indefinite);
         const auto* payload = response->payload.AsDatasetOpened();
         if (payload == nullptr) {
             throw std::runtime_error("server omitted dataset-open payload");
@@ -199,7 +226,8 @@ public:
                 using Request = std::decay_t<decltype(typed)>;
                 if constexpr (std::is_same_v<Request, SliceRequest>) {
                     const auto response = transact(codec::toWire(typed),
-                        PayloadKind::SliceViewResponse, cancellation);
+                        PayloadKind::SliceViewResponse, cancellation,
+                        ResponseWait::Indefinite);
                     const auto* payload
                         = response->payload.AsSliceViewResponse();
                     if (payload == nullptr) {
@@ -211,7 +239,8 @@ public:
                     return codec::fromWire(*payload);
                 } else {
                     const auto response = transact(codec::toWire(typed),
-                        PayloadKind::LineViewResponse, cancellation);
+                        PayloadKind::LineViewResponse, cancellation,
+                        ResponseWait::Indefinite);
                     const auto* payload
                         = response->payload.AsLineViewResponse();
                     if (payload == nullptr) {
@@ -230,7 +259,8 @@ public:
         const DatasetPageRequest& request, StopToken cancellation)
     {
         const auto response = transact(codec::toWire(request),
-            PayloadKind::DatasetPageResponse, cancellation);
+            PayloadKind::DatasetPageResponse, cancellation,
+            ResponseWait::Indefinite);
         const auto* payload = response->payload.AsDatasetPageResponse();
         if (payload == nullptr) {
             throw std::runtime_error("server omitted dataset-page payload");
@@ -244,7 +274,8 @@ public:
         const RangeRequest& request, StopToken cancellation)
     {
         const auto response = transact(codec::toWire(dataset, request),
-            PayloadKind::RangeResponse, cancellation);
+            PayloadKind::RangeResponse, cancellation,
+            ResponseWait::Indefinite);
         const auto* payload = response->payload.AsRangeResponse();
         if (payload == nullptr) {
             throw std::runtime_error("server omitted range payload");
@@ -259,7 +290,8 @@ public:
     {
         const auto response = transact(
             codec::toWire(dataset, species, fraction, seed),
-            PayloadKind::ParticleSampleResponse, cancellation);
+            PayloadKind::ParticleSampleResponse, cancellation,
+            ResponseWait::Indefinite);
         const auto* payload = response->payload.AsParticleSampleResponse();
         if (payload == nullptr) {
             throw std::runtime_error(

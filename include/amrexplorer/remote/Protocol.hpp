@@ -17,7 +17,7 @@
 namespace amrvis::remote {
 
 inline constexpr std::uint16_t protocolMajor = 1;
-inline constexpr std::uint16_t protocolMinor = 0;
+inline constexpr std::uint16_t protocolMinorVersion = 0;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,
@@ -63,7 +63,7 @@ enum class ErrorCode : std::uint16_t {
 
 struct EnvelopeInfo {
     std::uint16_t protocolMajor = 0;
-    std::uint16_t protocolMinor = 0;
+    std::uint16_t protocolMinorVersion = 0;
     std::uint64_t requestId = 0;
     PayloadKind payload = PayloadKind::None;
 };
@@ -71,8 +71,8 @@ struct EnvelopeInfo {
 struct HelloRequestData {
     std::string clientName;
     std::string softwareVersion;
-    std::uint16_t minimumMinor = 0;
-    std::uint16_t maximumMinor = 0;
+    std::uint16_t minimumMinorVersion = 0;
+    std::uint16_t maximumMinorVersion = 0;
     std::uint32_t maximumFrameBytes = 0;
     std::string sessionToken;
     std::vector<std::uint64_t> capabilities;
@@ -81,7 +81,7 @@ struct HelloRequestData {
 struct HelloResponseData {
     std::string serverName;
     std::string softwareVersion;
-    std::uint16_t selectedMinor = 0;
+    std::uint16_t selectedMinorVersion = 0;
     std::uint32_t maximumFrameBytes = 0;
     std::uint32_t maximumDatasets = 0;
     std::uint32_t maximumOutstandingRequests = 0;

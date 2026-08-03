@@ -77,10 +77,10 @@ std::array<int, 2> viewportBoundedOutputSize(
         // Radius and angle have heterogeneous units. Use their finest-level
         // sample counts as the normalized display aspect instead of comparing
         // raw physical extents with unrelated dimensions.
-        const auto normalized = finestNativeOutputSize(
-            metadata, region, normal);
-        extentX = static_cast<double>(normalized[0]);
-        extentY = static_cast<double>(normalized[1]);
+        const auto& finest = metadata.levels[static_cast<std::size_t>(
+            std::max(0, metadata.finestLevel))];
+        extentX /= finest.cellSize[static_cast<std::size_t>(axes[0])];
+        extentY /= finest.cellSize[static_cast<std::size_t>(axes[1])];
     }
     if (!(extentX > 0.0) || !(extentY > 0.0)) {
         return {1, 1};

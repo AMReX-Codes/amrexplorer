@@ -161,6 +161,18 @@ int main()
     require(amrvis::finestNativeOutputSize(fine3d, box, 2) == (std::array<int, 2>{10, 20}),
         "normal z did not size from the x and y extents");
 
+    // Spherical aspect uses the unclamped finest-level sample counts. An
+    // 8192x1024 logical plane must remain 8:1 even though native output is
+    // independently capped at 4096 per axis.
+    auto spherical = makeMetadata(2, 1.0);
+    spherical.coordinateSystem = 2;
+    spherical.levels[0].cellSize = {{1.0 / 8192.0, 1.0 / 1024.0, 1.0}};
+    const amrvis::RealBox sphericalRegion{
+        {{0.0, 0.0, 0.0}}, {{1.0, 1.0, 0.0}}};
+    require(amrvis::viewportBoundedOutputSize(
+                spherical, sphericalRegion, 2, {800, 800})
+            == (std::array<int, 2>{800, 100}),
+        "spherical viewport aspect was computed from clamped sample counts");
     // --- slicePlaneAxes ---------------------------------------------------
     require(amrvis::slicePlaneAxes(2, 0) == (std::array<int, 2>{0, 1}),
         "2-D plane axes are not x,y");

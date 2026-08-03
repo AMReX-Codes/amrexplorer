@@ -45,6 +45,7 @@ struct Listener {
     std::uint16_t port, int backlog = 16);
 [[nodiscard]] Socket acceptConnection(
     const Socket& listener, StopToken cancellation = {});
+[[nodiscard]] bool isNumericAddress(const std::string& host) noexcept;
 // Connections accept numeric IPv4/IPv6 addresses only. Remote deployments use
 // a loopback SSH tunnel, and avoiding hostname resolution keeps the deadline
 // and cancellation guarantees portable.

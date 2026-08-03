@@ -23,10 +23,9 @@ int main()
     require(ipv4 && ipv4->host == "127.0.0.1" && ipv4->port == 48192
             && ipv4->token.empty(),
         "IPv4 endpoint was rejected");
-    const auto hostname = parseRemoteEndpoint("login.example.org:22");
-    require(hostname && hostname->host == "login.example.org"
-            && hostname->port == 22,
-        "hostname endpoint was rejected");
+    require(!parseRemoteEndpoint("login.example.org:22")
+            && !parseRemoteEndpoint("localhost:41419"),
+        "hostname endpoint was accepted by the numeric-only parser");
     const auto ipv6 = parseRemoteEndpoint("[::1]:48192");
     require(ipv6 && ipv6->host == "::1" && ipv6->port == 48192,
         "bracketed IPv6 endpoint was rejected");
@@ -47,5 +46,9 @@ int main()
             && !parseRemoteEndpoint("[::1]:0")
             && !parseRemoteEndpoint("[::1]:65536"),
         "malformed bracketed endpoint was accepted");
+    require(!parseRemoteEndpoint("127.0.0.999:48192")
+            && !parseRemoteEndpoint("[1::2::3]:48192")
+            && !parseRemoteEndpoint("[12345::1]:48192"),
+        "malformed numeric host was accepted");
     return 0;
 }

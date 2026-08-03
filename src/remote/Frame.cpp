@@ -64,11 +64,6 @@ bool interrupted(int error)
     return error == WSAEINTR;
 }
 
-bool wouldBlock(int error)
-{
-    return error == WSAEWOULDBLOCK;
-}
-
 bool transientAcceptFailure(int error)
 {
     return interrupted(error) || error == WSAECONNABORTED;
@@ -79,6 +74,12 @@ bool connectInProgress(int error)
     return error == WSAEWOULDBLOCK || error == WSAEINPROGRESS
         || error == WSAEINVAL;
 }
+
+bool wouldBlock(int error)
+{
+    return error == WSAEWOULDBLOCK;
+}
+
 void closeNative(NativeSocket socket)
 {
     ::closesocket(socket);
@@ -100,11 +101,6 @@ bool interrupted(int error)
     return error == EINTR;
 }
 
-bool wouldBlock(int error)
-{
-    return error == EAGAIN || error == EWOULDBLOCK;
-}
-
 bool transientAcceptFailure(int error)
 {
     return interrupted(error) || error == ECONNABORTED;
@@ -114,6 +110,12 @@ bool connectInProgress(int error)
 {
     return error == EINPROGRESS || error == EWOULDBLOCK;
 }
+
+bool wouldBlock(int error)
+{
+    return error == EAGAIN || error == EWOULDBLOCK;
+}
+
 void closeNative(NativeSocket socket)
 {
     ::close(socket);
@@ -201,6 +203,7 @@ int waitForConnect(NativeSocket socket,
         return error;
     }
 }
+
 void setIntegerSocketOption(NativeSocket descriptor, int level, int option,
     int value, const char* name)
 {

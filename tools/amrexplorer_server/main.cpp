@@ -32,6 +32,8 @@ void printUsage(std::ostream& output)
         << "  --threads COUNT      worker threads; 0 selects hardware concurrency\n"
         << "  --max-frame-mib MIB  maximum negotiated frame size\n"
         << "  --max-datasets COUNT maximum open datasets per connection\n"
+        << "  --write-stall-timeout-seconds SECONDS\n"
+        << "                       disconnect after no write progress\n"
         << "  --help               show this help\n";
 }
 
@@ -127,6 +129,16 @@ int main(int argc, char* argv[])
                         "--max-datasets must be greater than zero");
                 }
                 options.maximumDatasets = maximumDatasets;
+            } else if (option == "--write-stall-timeout-seconds") {
+                const auto seconds = parseUnsigned<std::uint32_t>(
+                    value, "--write-stall-timeout-seconds");
+                if (seconds == 0) {
+                    throw std::invalid_argument(
+                        "--write-stall-timeout-seconds must be greater than "
+                        "zero");
+                }
+                options.responseWriteStallTimeout = std::chrono::seconds{
+                    static_cast<std::chrono::seconds::rep>(seconds)};
             } else {
                 throw std::invalid_argument("unknown option: " + option);
             }

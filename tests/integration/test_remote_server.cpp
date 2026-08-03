@@ -167,9 +167,11 @@ int main(int argc, char* argv[])
     RunningServer running(server);
 
     auto socket = connectTo("127.0.0.1", server.port());
+    constexpr std::uint32_t reducedFrameBytes = 1U * 1024U * 1024U;
+    auto reducedFrameHello = helloRequest();
+    reducedFrameHello.maximumFrameBytes = reducedFrameBytes;
     auto envelope = exchange(socket, 1,
-        codec::toWire(helloRequest()),
-        defaultMaximumFrameBytes);
+        codec::toWire(reducedFrameHello), reducedFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
         "server rejected a compatible handshake");
     const auto hello = codec::fromWire(
@@ -190,6 +192,23 @@ int main(int argc, char* argv[])
     require(opened.catalog.dimension == 2
             && opened.catalog.levels.size() == 2,
         "server returned an incomplete dataset catalog");
+
+    DatasetPageRequest smallPage;
+    smallPage.dataset = opened.id;
+    smallPage.field = FieldId{0};
+    smallPage.level = 0;
+    smallPage.region = opened.catalog.physicalDomain;
+    smallPage.normalAxis = 1;
+    smallPage.maximumExtent = datasetPageMaxExtent;
+    envelope = exchange(socket, 9, codec::toWire(smallPage),
+        hello.maximumFrameBytes);
+    require(codec::inspect(*envelope).payload
+                == PayloadKind::DatasetPageResponse,
+        "server rejected a small dataset page under a reduced frame limit");
+    const auto page
+        = codec::fromWire(*envelope->payload.AsDatasetPageResponse());
+    require(page.nx == 4 && page.ny == 4 && page.values.size() == 16,
+        "server returned the wrong reduced-frame dataset page");
 
     DatasetPageRequest reversedPage;
     reversedPage.dataset = opened.id;

@@ -39,9 +39,10 @@ amrvis::remote::codec::Bytes preCapabilitiesHelloFixture()
     // Omitting the final capabilities field produces the same table layout as
     // the pre-capabilities protocol 1.0 schema.
     const auto hello = codec::fb::CreateHelloRequest(builder, client, version,
-        0, amrvis::remote::protocolMinor, 4096, token);
+        0, amrvis::remote::protocolMinorVersion, 4096, token);
     const auto envelope = codec::fb::CreateEnvelope(builder,
-        amrvis::remote::protocolMajor, amrvis::remote::protocolMinor, 41,
+        amrvis::remote::protocolMajor,
+        amrvis::remote::protocolMinorVersion, 41,
         codec::fb::Payload::HelloRequest, hello.Union());
     codec::fb::FinishEnvelopeBuffer(builder, envelope);
     return {builder.GetBufferPointer(),
@@ -56,7 +57,8 @@ int main()
     using namespace amrvis::remote;
 
     HelloRequestData hello{
-        "codec test", "1", 0, protocolMinor, 4096, "test-token", {7, 9}};
+        "codec test", "1", 0, protocolMinorVersion, 4096, "test-token",
+        {7, 9}};
     auto bytes = codec::encode(7, codec::toWire(hello));
     auto envelope = codec::decode(bytes);
     require(codec::inspect(*envelope).requestId == 7,
@@ -184,7 +186,8 @@ int main()
     flatbuffers::FlatBufferBuilder zeroIdBuilder;
     const auto zeroIdHello = codec::fb::CreateHelloRequest(zeroIdBuilder);
     const auto zeroIdEnvelope = codec::fb::CreateEnvelope(zeroIdBuilder,
-        protocolMajor, protocolMinor, 0, codec::fb::Payload::HelloRequest,
+        protocolMajor, protocolMinorVersion, 0,
+        codec::fb::Payload::HelloRequest,
         zeroIdHello.Union());
     codec::fb::FinishEnvelopeBuffer(zeroIdBuilder, zeroIdEnvelope);
     const auto zeroIdBytes = std::span<const std::uint8_t>(

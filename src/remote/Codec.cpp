@@ -256,7 +256,7 @@ EnvelopeInfo inspect(const NativeEnvelope& envelope)
     if (envelope.request_id == 0 || envelope.payload.type == fb::Payload::NONE) {
         throw std::invalid_argument("wire envelope is incomplete");
     }
-    return {envelope.protocol_major, envelope.protocol_minor,
+    return {envelope.protocol_major, envelope.protocol_minor_version,
         envelope.request_id, payloadKind(envelope.payload.type)};
 }
 
@@ -367,8 +367,8 @@ fb::HelloRequestT toWire(const HelloRequestData& value)
     fb::HelloRequestT wire;
     wire.client_name = value.clientName;
     wire.software_version = value.softwareVersion;
-    wire.minimum_minor = value.minimumMinor;
-    wire.maximum_minor = value.maximumMinor;
+    wire.minimum_minor_version = value.minimumMinorVersion;
+    wire.maximum_minor_version = value.maximumMinorVersion;
     wire.maximum_frame_bytes = value.maximumFrameBytes;
     wire.session_token = value.sessionToken;
     wire.capabilities = value.capabilities;
@@ -380,8 +380,8 @@ HelloRequestData fromWire(const fb::HelloRequestT& value)
     HelloRequestData result;
     result.clientName = value.client_name;
     result.softwareVersion = value.software_version;
-    result.minimumMinor = value.minimum_minor;
-    result.maximumMinor = value.maximum_minor;
+    result.minimumMinorVersion = value.minimum_minor_version;
+    result.maximumMinorVersion = value.maximum_minor_version;
     result.maximumFrameBytes = value.maximum_frame_bytes;
     result.sessionToken = value.session_token;
     result.capabilities = value.capabilities;
@@ -393,7 +393,7 @@ fb::HelloResponseT toWire(const HelloResponseData& value)
     fb::HelloResponseT wire;
     wire.server_name = value.serverName;
     wire.software_version = value.softwareVersion;
-    wire.selected_minor = value.selectedMinor;
+    wire.selected_minor_version = value.selectedMinorVersion;
     wire.maximum_frame_bytes = value.maximumFrameBytes;
     wire.maximum_datasets = value.maximumDatasets;
     wire.maximum_outstanding_requests = value.maximumOutstandingRequests;
@@ -407,7 +407,7 @@ HelloResponseData fromWire(const fb::HelloResponseT& value)
     HelloResponseData result;
     result.serverName = value.server_name;
     result.softwareVersion = value.software_version;
-    result.selectedMinor = value.selected_minor;
+    result.selectedMinorVersion = value.selected_minor_version;
     result.maximumFrameBytes = value.maximum_frame_bytes;
     result.maximumDatasets = value.maximum_datasets;
     result.maximumOutstandingRequests = value.maximum_outstanding_requests;

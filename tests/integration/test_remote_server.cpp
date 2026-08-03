@@ -191,6 +191,20 @@ int main(int argc, char* argv[])
             && opened.catalog.levels.size() == 2,
         "server returned an incomplete dataset catalog");
 
+    DatasetPageRequest reversedPage;
+    reversedPage.dataset = opened.id;
+    reversedPage.field = FieldId{0};
+    reversedPage.level = 0;
+    reversedPage.region = opened.catalog.physicalDomain;
+    std::swap(reversedPage.region.lower[0], reversedPage.region.upper[0]);
+    reversedPage.normalAxis = 1;
+    envelope = exchange(socket, 10, codec::toWire(reversedPage),
+        hello.maximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
+            && codec::fromWire(*envelope->payload.AsErrorResponse()).code
+                == ErrorCode::InvalidRequest,
+        "server did not reject a reversed dataset-page region");
+
     envelope = exchange(socket, 8,
         codec::toWire(opened.id, "Oversized", 1.0, 0),
         hello.maximumFrameBytes);
@@ -358,6 +372,84 @@ int main(int argc, char* argv[])
         "server did not enforce the configured connection limit");
     require(connectionLimitedRunning.stopWithin(std::chrono::seconds{2}),
         "connection-limited server shutdown exceeded its deadline");
+
+    ServerOptions handshakeTimeoutOptions;
+    handshakeTimeoutOptions.workerCount = 1;
+    handshakeTimeoutOptions.maximumConnections = 1;
+    handshakeTimeoutOptions.handshakeTimeout
+        = std::chrono::milliseconds{100};
+    Server handshakeTimeoutServer(handshakeTimeoutOptions);
+    RunningServer handshakeTimeoutRunning(handshakeTimeoutServer);
+    auto silentSocket
+        = connectTo("127.0.0.1", handshakeTimeoutServer.port());
+    const auto silentStart = std::chrono::steady_clock::now();
+    require(readWithDeadline(silentSocket, defaultMaximumFrameBytes,
+                std::chrono::seconds{2})
+            == nullptr,
+        "silent unauthenticated connection did not time out");
+    require(std::chrono::steady_clock::now() - silentStart
+            < std::chrono::seconds{1},
+        "silent unauthenticated connection exceeded its handshake deadline");
+    auto recoveredSocket
+        = connectTo("127.0.0.1", handshakeTimeoutServer.port());
+    envelope = exchange(recoveredSocket, 1,
+        codec::toWire(helloRequest(handshakeTimeoutServer.token())),
+        defaultMaximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
+        "authorized client could not reclaim a timed-out connection slot");
+    std::this_thread::sleep_for(std::chrono::milliseconds{200});
+    codec::fb::PingRequestT delayedPing;
+    delayedPing.nonce = 17;
+    envelope = exchange(recoveredSocket, 2, std::move(delayedPing),
+        defaultMaximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::PongResponse,
+        "server retained the handshake deadline after authentication");
+    require(handshakeTimeoutRunning.stopWithin(std::chrono::seconds{2}),
+        "handshake-timeout server shutdown exceeded its deadline");
+
+    ServerOptions handshakeFrameOptions;
+    handshakeFrameOptions.workerCount = 1;
+    handshakeFrameOptions.maximumConnections = 1;
+    handshakeFrameOptions.sessionToken = "bounded-handshake-token";
+    const auto normalHelloBytes = codec::encode(
+        1, codec::toWire(helloRequest(handshakeFrameOptions.sessionToken)));
+    handshakeFrameOptions.maximumHandshakeFrameBytes
+        = static_cast<std::uint32_t>(normalHelloBytes.size() + 16);
+    Server handshakeFrameServer(handshakeFrameOptions);
+    RunningServer handshakeFrameRunning(handshakeFrameServer);
+    auto oversizedHello = helloRequest(handshakeFrameServer.token());
+    oversizedHello.clientName.assign(
+        handshakeFrameOptions.maximumHandshakeFrameBytes, 'x');
+    auto oversizedHelloBytes
+        = codec::encode(1, codec::toWire(std::move(oversizedHello)));
+    require(oversizedHelloBytes.size()
+            > handshakeFrameOptions.maximumHandshakeFrameBytes,
+        "oversized hello fixture did not exceed the handshake frame cap");
+    auto oversizedHelloSocket
+        = connectTo("127.0.0.1", handshakeFrameServer.port());
+    writeFrame(oversizedHelloSocket, oversizedHelloBytes,
+        defaultMaximumFrameBytes);
+    require(readWithDeadline(oversizedHelloSocket,
+                defaultMaximumFrameBytes, std::chrono::seconds{2})
+            == nullptr,
+        "server accepted a hello above the pre-authentication frame cap");
+    auto boundedHandshakeSocket
+        = connectTo("127.0.0.1", handshakeFrameServer.port());
+    envelope = exchange(boundedHandshakeSocket, 1,
+        codec::toWire(helloRequest(handshakeFrameServer.token())),
+        defaultMaximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
+        "server rejected a hello within the pre-authentication frame cap");
+    envelope = exchange(boundedHandshakeSocket, 2,
+        codec::toWire(OpenDatasetData{
+            std::string(
+                handshakeFrameOptions.maximumHandshakeFrameBytes * 2U, 'x'),
+            16ULL * 1024ULL * 1024ULL}),
+        defaultMaximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse,
+        "server retained the handshake frame cap after authentication");
+    require(handshakeFrameRunning.stopWithin(std::chrono::seconds{2}),
+        "handshake-frame server shutdown exceeded its deadline");
 
     ServerOptions boundedOptions;
     boundedOptions.workerCount = 1;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <amrexplorer/remote/Frame.hpp>
+
 #include <charconv>
 #include <cstdint>
 #include <optional>
@@ -69,6 +71,9 @@ inline std::optional<RemoteEndpoint> parseRemoteEndpoint(std::string_view text)
         return std::nullopt;
     }
     if (host.empty()) {
+        return std::nullopt;
+    }
+    if (!remote::isNumericAddress(std::string(host))) {
         return std::nullopt;
     }
     unsigned int port = 0;

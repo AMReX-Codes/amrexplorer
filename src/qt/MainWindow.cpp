@@ -1181,7 +1181,7 @@ void MainWindow::createMenus()
         const auto endpoint = parseRemoteEndpoint(text.toStdString());
         if (!endpoint) {
             QMessageBox::warning(this, tr("Invalid endpoint"),
-                tr("Enter an endpoint as HOST:PORT."));
+                tr("Enter a numeric endpoint as IPv4:PORT or [IPv6]:PORT."));
             return false;
         }
         auto token = endpoint->token;
@@ -1190,7 +1190,7 @@ void MainWindow::createMenus()
             const auto tokenText = QInputDialog::getText(this,
                 tr("Connect to Remote Server"),
                 tr("Session token (printed by the server at startup):"),
-                QLineEdit::Normal, QString(), &tokenAccepted);
+                QLineEdit::Password, QString(), &tokenAccepted);
             if (!tokenAccepted) {
                 return false;
             }

@@ -365,7 +365,7 @@ if(TARGET amrexplorer_qt)
     target_include_directories(test_remote_endpoint
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
     target_link_libraries(test_remote_endpoint
-        PRIVATE amrexplorer::warnings)
+        PRIVATE amrexplorer::remote amrexplorer::warnings)
     add_test(NAME remote_endpoint COMMAND test_remote_endpoint)
 
     add_executable(test_remote_connect_arguments

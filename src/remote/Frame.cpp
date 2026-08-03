@@ -554,6 +554,27 @@ Socket acceptConnection(const Socket& listener, StopToken cancellation)
     }
 }
 
+bool isNumericAddress(const std::string& host) noexcept
+{
+    try {
+        ensureSockets();
+    } catch (...) {
+        return false;
+    }
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_flags = AI_NUMERICHOST;
+    addrinfo* addresses = nullptr;
+    if (::getaddrinfo(host.c_str(), nullptr, &hints, &addresses) != 0) {
+        return false;
+    }
+    std::unique_ptr<addrinfo, decltype(&::freeaddrinfo)> addressOwner(
+        addresses, &::freeaddrinfo);
+    return addresses != nullptr;
+}
+
 Socket connectTo(const std::string& host, std::uint16_t port)
 {
     return connectTo(host, port,

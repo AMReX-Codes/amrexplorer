@@ -97,6 +97,18 @@ int main(int argc, char* argv[])
             "127.0.0.1", server.port());
         require(connection->serverInfo().workerCount == 3,
             "handshake did not report worker count");
+        amrvis::StopSource cancelledOpen;
+        cancelledOpen.request_stop();
+        bool openCancellationObserved = false;
+        try {
+            static_cast<void>(amrvis::LocalDatasetSession(
+                std::filesystem::path(argv[1]), amrvis::DatasetId{1000},
+                16ULL * 1024ULL * 1024ULL, cancelledOpen.get_token()));
+        } catch (const amrvis::ReadCancelled&) {
+            openCancellationObserved = true;
+        }
+        require(openCancellationObserved,
+            "local dataset open ignored its cancellation token");
         auto dataset = amrvis::remote::RemoteDatasetSession::open(
             connection, std::filesystem::path(argv[1]).string(),
             16ULL * 1024ULL * 1024ULL);

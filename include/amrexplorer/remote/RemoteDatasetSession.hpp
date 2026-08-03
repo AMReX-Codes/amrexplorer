@@ -24,6 +24,8 @@ public:
     [[nodiscard]] const std::string& fileVersion() const noexcept override;
     [[nodiscard]] const std::vector<ParticleSpeciesMetadata>& particleSpecies()
         const noexcept override;
+    [[nodiscard]] std::optional<std::uint32_t> maximumResponseBytes()
+        const noexcept override;
 
     [[nodiscard]] ViewDataResult requestView(
         const ViewDataRequest& request, StopToken cancellation = {}) override;

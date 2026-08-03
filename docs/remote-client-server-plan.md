@@ -258,14 +258,14 @@ allocation.
 
 Every message will retain:
 
-- protocol major and minor version;
+- protocol major version and minor version;
 - nonzero request ID;
 - typed payload union.
 
 Protocol policy:
 
 - a major change may break compatibility;
-- a minor change must be additive;
+- a minor version change must be additive;
 - the handshake selects a minor version supported by both peers;
 - the server only sends messages valid for the negotiated version;
 - unknown or invalid client requests receive a typed error when the envelope
@@ -281,7 +281,7 @@ cross-major migration path is promised.
 The first request must be `HelloRequest`. It will carry:
 
 - client name and software version;
-- supported protocol major and minor range;
+- supported protocol major version and minor version range;
 - maximum accepted frame size;
 - supported optional capabilities.
 
@@ -661,7 +661,7 @@ minimum compatible version separately from the FetchContent fallback version.
   unions, zero/oversized frames, invalid vector lengths, overflowed sizes, and
   semantically invalid requests.
 - Test fragmented reads/writes and connection closure between length and body.
-- Test protocol major rejection and minor negotiation.
+- Test protocol major version rejection and minor version negotiation.
 - Test typed error mapping.
 
 ### 11.2 Dataset-session equivalence tests

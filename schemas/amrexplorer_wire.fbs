@@ -74,8 +74,8 @@ table CacheState {
 table HelloRequest {
   client_name:string (id: 0);
   software_version:string (id: 1);
-  minimum_minor:ushort (id: 2);
-  maximum_minor:ushort (id: 3);
+  minimum_minor_version:ushort (id: 2);
+  maximum_minor_version:ushort (id: 3);
   maximum_frame_bytes:uint (id: 4);
   session_token:string (id: 5);
   capabilities:[ulong] (id: 6);
@@ -84,7 +84,7 @@ table HelloRequest {
 table HelloResponse {
   server_name:string (id: 0);
   software_version:string (id: 1);
-  selected_minor:ushort (id: 2);
+  selected_minor_version:ushort (id: 2);
   maximum_frame_bytes:uint (id: 3);
   maximum_datasets:uint (id: 4);
   maximum_outstanding_requests:uint (id: 5);
@@ -334,7 +334,7 @@ union Payload {
 
 table Envelope {
   protocol_major:ushort = 1 (id: 0);
-  protocol_minor:ushort = 0 (id: 1);
+  protocol_minor_version:ushort = 0 (id: 1);
   request_id:ulong (id: 2);
   payload:Payload (id: 4);
 }

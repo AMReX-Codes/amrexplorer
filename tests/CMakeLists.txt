@@ -130,10 +130,18 @@ if(TARGET amrexplorer_remote)
             "${remote_server_fixture_dir}")
     set_tests_properties(remote_server_fixture PROPERTIES
         FIXTURES_SETUP remote_server_materialized)
+    set(remote_server_private_fixture_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_server_private")
+    add_test(NAME remote_server_private_fixture
+        COMMAND "$<TARGET_FILE:fixture_materializer>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "${remote_server_private_fixture_dir}")
+    set_tests_properties(remote_server_private_fixture PROPERTIES
+        FIXTURES_SETUP remote_server_private_materialized)
     add_test(NAME remote_server
-        COMMAND test_remote_server "${remote_server_fixture_dir}")
+        COMMAND test_remote_server "${remote_server_private_fixture_dir}")
     set_tests_properties(remote_server PROPERTIES
-        FIXTURES_REQUIRED remote_server_materialized
+        FIXTURES_REQUIRED remote_server_private_materialized
         TIMEOUT 30)
 endif()
 

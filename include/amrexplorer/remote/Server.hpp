@@ -2,6 +2,7 @@
 
 #include <amrexplorer/remote/Frame.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -15,6 +16,10 @@ struct ServerOptions {
     std::uint32_t maximumDatasets = 8;
     std::uint32_t maximumOutstandingRequests = 64;
     std::uint32_t maximumConnections = 32;
+    // Bounds the unauthenticated hello read with one absolute deadline and a
+    // small frame cap. Both limits are removed after a valid hello.
+    std::chrono::milliseconds handshakeTimeout{5000};
+    std::uint32_t maximumHandshakeFrameBytes = 64U * 1024U;
     std::string softwareVersion = "unknown";
 };
 

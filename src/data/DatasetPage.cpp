@@ -63,6 +63,17 @@ DatasetPage extractDatasetPage(PlotfileDataset& dataset,
     const auto& level
         = metadata.levels[static_cast<std::size_t>(request.level)];
     const auto axes = inPlaneAxes(metadata.dimension, request.normalAxis);
+    for (const auto axis : axes) {
+        const auto entry = static_cast<std::size_t>(axis);
+        const auto lower = request.region.lower[entry];
+        const auto upper = request.region.upper[entry];
+        if (!std::isfinite(lower) || !std::isfinite(upper)
+            || !(lower < upper)) {
+            throw std::invalid_argument(
+                "dataset page region must have positive finite in-plane "
+                "extent");
+        }
+    }
 
     DatasetPage page;
     std::array<std::int64_t, 2> lower{};

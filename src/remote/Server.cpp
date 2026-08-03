@@ -149,6 +149,8 @@ public:
         : m_socket(std::move(socket))
         , m_workers(workers)
         , m_options(options)
+        , m_handshakeDeadline(
+              std::chrono::steady_clock::now() + options.handshakeTimeout)
         , m_maximumFrameBytes(options.maximumFrameBytes)
     {
     }
@@ -157,8 +159,12 @@ public:
     {
         try {
             while (!m_stopping.load()) {
-                const auto frame
-                    = readFrame(m_socket, m_maximumFrameBytes.load());
+                const auto frame = m_handshakeComplete
+                    ? readFrame(m_socket, m_maximumFrameBytes.load())
+                    : readFrame(m_socket,
+                          std::min(m_options.maximumFrameBytes,
+                              m_options.maximumHandshakeFrameBytes),
+                          m_handshakeDeadline);
                 if (!frame) {
                     break;
                 }
@@ -412,7 +418,7 @@ private:
         bool reservationActive = true;
         try {
             dataset = std::make_shared<LocalDatasetSession>(
-                request->path, id, request->cache_budget_bytes);
+                request->path, id, request->cache_budget_bytes, cancellation);
             OpenedDataset opened;
             opened.id = id;
             opened.catalog = dataset->metadata();
@@ -702,9 +708,7 @@ private:
         }
         const auto cells = static_cast<std::uint64_t>(request.outputSize[0])
             * static_cast<std::uint64_t>(request.outputSize[1]);
-        constexpr std::uint64_t bytesPerCell
-            = sizeof(float) + sizeof(std::uint8_t) + sizeof(std::int16_t);
-        if (!fitsResponse(cells * bytesPerCell)) {
+        if (!fitsResponse(cells * sliceResponseBytesPerCell)) {
             throw RemoteError(ErrorCode::ResourceLimitExceeded,
                 "slice viewport cannot fit in one negotiated frame");
         }
@@ -818,6 +822,7 @@ private:
     Socket m_socket;
     ThreadPool& m_workers;
     ServerOptions m_options;
+    std::chrono::steady_clock::time_point m_handshakeDeadline;
     std::atomic<std::uint32_t> m_maximumFrameBytes;
     std::atomic_bool m_stopping{false};
     std::uint16_t m_selectedMinor = 0;
@@ -843,7 +848,10 @@ public:
         if (m_options.maximumConnections == 0
             || m_options.maximumDatasets == 0
             || m_options.maximumOutstandingRequests == 0
-            || m_options.maximumFrameBytes == 0) {
+            || m_options.maximumFrameBytes == 0
+            || m_options.maximumHandshakeFrameBytes == 0
+            || m_options.handshakeTimeout
+                <= std::chrono::milliseconds::zero()) {
             throw std::invalid_argument(
                 "server resource limits must be greater than zero");
         }

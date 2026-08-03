@@ -6,6 +6,14 @@
 #include <stdexcept>
 
 namespace amrvis {
+namespace {
+
+class LogarithmicRangeError final : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+} // namespace
 
 std::optional<std::pair<double, double>> finiteRange(const ScalarPlane& plane)
 {
@@ -93,7 +101,8 @@ RangeMode effectiveRangeMode(
 }
 
 std::optional<std::pair<double, double>> fabDataRange(
-    const std::shared_ptr<DatasetSession>& dataset, FieldId field)
+    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
+    StopToken cancellation)
 {
     if (!dataset->metadata().isFab) {
         return std::nullopt;
@@ -102,7 +111,7 @@ std::optional<std::pair<double, double>> fabDataRange(
         .field = field,
         .maximumLevel = 0,
         .composition = CompositionPolicy::ExactLevel,
-        .scope = RangeScope::File});
+        .scope = RangeScope::File}, cancellation);
     if (!range) {
         return std::nullopt;
     }
@@ -113,12 +122,12 @@ std::pair<double, double> resolveRange(
     const std::shared_ptr<DatasetSession>& dataset, FieldId field,
     int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const ScalarPlane& plane)
+    bool logarithmic, const ScalarPlane& plane, StopToken cancellation)
 {
     auto selectedRange = userRange;
     if (rangeMode == RangeMode::Level || rangeMode == RangeMode::File) {
         if (rangeMode == RangeMode::File) {
-            selectedRange = fabDataRange(dataset, field);
+            selectedRange = fabDataRange(dataset, field, cancellation);
         }
         if (!selectedRange) {
             const auto statistics = dataset->requestRange(RangeRequest{
@@ -127,7 +136,7 @@ std::pair<double, double> resolveRange(
                 .composition = composition,
                 .scope = rangeMode == RangeMode::File
                     ? RangeScope::File
-                    : RangeScope::Level});
+                    : RangeScope::Level}, cancellation);
             if (statistics) {
                 selectedRange
                     = std::pair{statistics->minimum, statistics->maximum};
@@ -153,7 +162,8 @@ std::pair<double, double> resolveRange(
         throw std::runtime_error("user scalar range must have positive extent");
     }
     if (logarithmic && !(minimum > 0.0)) {
-        throw std::runtime_error("logarithmic scalar range must be positive");
+        throw LogarithmicRangeError(
+            "logarithmic scalar range must be positive");
     }
     return {minimum, maximum};
 }
@@ -162,19 +172,20 @@ ResolvedRange resolveDisplayRange(
     const std::shared_ptr<DatasetSession>& dataset, FieldId field,
     int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const ScalarPlane& plane)
+    bool logarithmic, const ScalarPlane& plane, StopToken cancellation)
 {
     if (logarithmic) {
         try {
             const auto [minimum, maximum] = resolveRange(dataset, field,
-                maximumLevel, composition, rangeMode, userRange, true, plane);
+                maximumLevel, composition, rangeMode, userRange, true, plane,
+                cancellation);
             return {minimum, maximum, true};
-        } catch (const std::exception&) {
+        } catch (const LogarithmicRangeError&) {
             // Log is not viable for this range; fall back to linear below.
         }
     }
     const auto [minimum, maximum] = resolveRange(dataset, field, maximumLevel,
-        composition, rangeMode, userRange, false, plane);
+        composition, rangeMode, userRange, false, plane, cancellation);
     return {minimum, maximum, false};
 }
 

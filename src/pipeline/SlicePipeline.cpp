@@ -207,7 +207,7 @@ SliceDisplayResult executeSlice(const std::shared_ptr<DatasetSession>& dataset,
     result.slice = requestSlice(*dataset, request, cancellation);
     const auto range = resolveDisplayRange(dataset, request.field,
         request.maximumLevel, request.composition, rangeMode, userRange,
-        logarithmic, result.slice.plane);
+        logarithmic, result.slice.plane, cancellation);
     result.minimum = range.minimum;
     result.maximum = range.maximum;
     result.logarithmic = range.logarithmic;
@@ -370,7 +370,7 @@ SliceDisplayResult refreshCachedSlice(
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField,
-    int contourCount, bool rasterDirty)
+    int contourCount, bool rasterDirty, StopToken cancellation)
 {
     SliceDisplayResult result;
     result.request = request;
@@ -381,7 +381,7 @@ SliceDisplayResult refreshCachedSlice(
     result.slice.plane = std::move(displayPlane);
     const auto range = resolveDisplayRange(dataset, request.field,
         request.maximumLevel, request.composition, rangeMode, userRange,
-        logarithmic, result.slice.plane);
+        logarithmic, result.slice.plane, cancellation);
     result.minimum = range.minimum;
     result.maximum = range.maximum;
     result.logarithmic = range.logarithmic;

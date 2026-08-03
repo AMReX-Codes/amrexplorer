@@ -5150,12 +5150,13 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             contourFineFactor = state.contourFineFactor,
             vectors = state.vectorSegments,
             rangeMode, userRange, logarithmic, palette, displayMode,
-            vectorUField, vectorVField, contourCount, rasterDirty]() mutable {
+            vectorUField, vectorVField, contourCount, rasterDirty,
+            cancellation]() mutable {
             return refreshCachedSlice(dataset, request, *displayPlane,
                 *contourPlane, *contourFinePlane,
                 contourFineFactor, std::move(vectors), rangeMode, userRange,
                 logarithmic, palette, displayMode, vectorUField, vectorVField,
-                contourCount, rasterDirty);
+                contourCount, rasterDirty, cancellation);
         });
     } else {
         future = QtConcurrent::run(

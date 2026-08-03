@@ -47,6 +47,7 @@ class QLineF;
 class QMenu;
 class QPlainTextEdit;
 class QProgressDialog;
+class QProgressBar;
 class QPushButton;
 class QStackedWidget;
 class QTimer;
@@ -212,6 +213,9 @@ public:
         const QColor& color);
     [[nodiscard]] std::size_t particleSampleCountForTest() const;
     [[nodiscard]] std::size_t particleOverlayCountForTest();
+    [[nodiscard]] bool particleLoadingForTest() const noexcept;
+    [[nodiscard]] bool particleLoadingUiActiveForTest() const;
+    [[nodiscard]] bool particleLoadingUiSettledForTest() const;
 
 signals:
     void datasetOpenFinished(bool success);
@@ -624,6 +628,7 @@ private:
     QAction* m_syncRubberBandZoomAction = nullptr;
     QAction* m_contoursAction = nullptr;
     QAction* m_particlesAction = nullptr;
+    QProgressBar* m_particleProgress = nullptr;
     QAction* m_datasetAction = nullptr;
     QAction* m_exportAnimationAction = nullptr;
 
@@ -662,6 +667,7 @@ private:
     std::uint64_t m_particleSeed = 0;
     int m_particlePointSize = 3;
     bool m_particleSelectionInitialized = false;
+    bool m_particleLoading = false;
     StopSource m_particleStopSource;
     std::uint64_t m_particleGeneration = 0;
     std::filesystem::path m_datasetPath;

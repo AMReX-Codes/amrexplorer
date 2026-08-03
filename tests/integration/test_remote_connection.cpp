@@ -173,13 +173,13 @@ int main(int argc, char* argv[])
         const auto frame = readFrame(peer, defaultMaximumFrameBytes);
         require(frame.has_value(),
             "client omitted negotiated minor version ping request");
-        const auto request = codec::decode(*frame);
-        const auto info = codec::inspect(*request);
+        const auto requestEnvelope = codec::decode(*frame);
+        const auto info = codec::inspect(*requestEnvelope);
         require(info.payload == PayloadKind::PingRequest
                 && info.protocolMinorVersion == selectedMinorVersion,
             "client did not use the negotiated protocol minor version");
         codec::fb::PongResponseT pong;
-        pong.nonce = request->payload.AsPingRequest()->nonce;
+        pong.nonce = requestEnvelope->payload.AsPingRequest()->nonce;
         writeFrame(peer,
             codec::encode(
                 info.requestId, std::move(pong), selectedMinorVersion),
@@ -198,10 +198,10 @@ int main(int argc, char* argv[])
         const auto frame = readFrame(peer, defaultMaximumFrameBytes);
         require(frame.has_value(),
             "client omitted wrong-minor-version test request");
-        const auto request = codec::decode(*frame);
-        const auto info = codec::inspect(*request);
+        const auto requestEnvelope = codec::decode(*frame);
+        const auto info = codec::inspect(*requestEnvelope);
         codec::fb::PongResponseT pong;
-        pong.nonce = request->payload.AsPingRequest()->nonce;
+        pong.nonce = requestEnvelope->payload.AsPingRequest()->nonce;
         writeFrame(peer,
             codec::encode(info.requestId, std::move(pong),
                 static_cast<std::uint16_t>(protocolMinorVersion + 1)),

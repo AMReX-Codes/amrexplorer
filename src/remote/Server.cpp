@@ -794,7 +794,9 @@ private:
             }
             std::scoped_lock lock(m_writeMutex);
             if (!m_stopping.load()) {
-                writeFrame(m_socket, bytes, m_maximumFrameBytes.load());
+                writeFrame(m_socket, bytes, m_maximumFrameBytes.load(),
+                    std::chrono::steady_clock::now()
+                        + m_options.responseWriteTimeout);
             }
         } catch (...) {
             stop();
@@ -812,7 +814,9 @@ private:
             }
             std::scoped_lock lock(m_writeMutex);
             if (!m_stopping.load()) {
-                writeFrame(m_socket, bytes, m_maximumFrameBytes.load());
+                writeFrame(m_socket, bytes, m_maximumFrameBytes.load(),
+                    std::chrono::steady_clock::now()
+                        + m_options.responseWriteTimeout);
             }
         } catch (...) {
             stop();
@@ -851,6 +855,8 @@ public:
             || m_options.maximumFrameBytes == 0
             || m_options.maximumHandshakeFrameBytes == 0
             || m_options.handshakeTimeout
+                <= std::chrono::milliseconds::zero()
+            || m_options.responseWriteTimeout
                 <= std::chrono::milliseconds::zero()) {
             throw std::invalid_argument(
                 "server resource limits must be greater than zero");

@@ -573,7 +573,7 @@ private:
         const auto responseSize = [&] {
             return codec::encode(envelope.request_id,
                 codec::toWire(result, dataset->cacheMetrics()),
-                m_selectedMinor).size();
+                m_selectedMinorVersion).size();
         };
         // The planner uses a conservative per-box budget. Keep an exact final
         // guard so FlatBuffers layout changes can only shed optional overlays,

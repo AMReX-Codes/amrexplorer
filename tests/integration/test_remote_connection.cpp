@@ -71,7 +71,9 @@ amrvis::SliceRequest sliceRequest(
     return request;
 }
 
-std::uint64_t acceptHello(amrvis::remote::Socket& peer)
+std::uint64_t acceptHello(amrvis::remote::Socket& peer,
+    std::uint16_t selectedMinorVersion
+    = amrvis::remote::protocolMinorVersion)
 {
     using namespace amrvis::remote;
     const auto frame = readFrame(peer, defaultMaximumFrameBytes);
@@ -82,12 +84,13 @@ std::uint64_t acceptHello(amrvis::remote::Socket& peer)
     HelloResponseData hello;
     hello.serverName = "test peer";
     hello.softwareVersion = "test";
-    hello.selectedMinor = protocolMinor;
+    hello.selectedMinorVersion = selectedMinorVersion;
     hello.maximumFrameBytes = defaultMaximumFrameBytes;
     hello.maximumDatasets = 8;
     hello.maximumOutstandingRequests = 8;
     hello.workerCount = 1;
-    writeFrame(peer, codec::encode(request->request_id, codec::toWire(hello)),
+    writeFrame(peer, codec::encode(request->request_id,
+                         codec::toWire(hello), selectedMinorVersion),
         defaultMaximumFrameBytes);
     return request->request_id;
 }
@@ -159,6 +162,34 @@ int main(int argc, char* argv[])
     connection.close();
     require(!connection.connected(),
         "connection remained live after close");
+
+    auto negotiatedMinorVersionListener = listenOnLoopback(0);
+    constexpr auto selectedMinorVersion = protocolMinorVersion == 0
+        ? std::uint16_t{0}
+        : static_cast<std::uint16_t>(protocolMinorVersion - 1);
+    auto negotiatedMinorVersionPeer = std::async(std::launch::async, [&] {
+        auto peer = acceptConnection(negotiatedMinorVersionListener.socket);
+        static_cast<void>(acceptHello(peer, selectedMinorVersion));
+        const auto frame = readFrame(peer, defaultMaximumFrameBytes);
+        require(frame.has_value(),
+            "client omitted negotiated minor version ping request");
+        const auto request = codec::decode(*frame);
+        const auto info = codec::inspect(*request);
+        require(info.payload == PayloadKind::PingRequest
+                && info.protocolMinorVersion == selectedMinorVersion,
+            "client did not use the negotiated protocol minor version");
+        codec::fb::PongResponseT pong;
+        pong.nonce = request->payload.AsPingRequest()->nonce;
+        writeFrame(peer,
+            codec::encode(
+                info.requestId, std::move(pong), selectedMinorVersion),
+            defaultMaximumFrameBytes);
+    });
+    Connection negotiatedMinorVersionConnection(
+        "127.0.0.1", negotiatedMinorVersionListener.port);
+    negotiatedMinorVersionConnection.ping();
+    negotiatedMinorVersionConnection.close();
+    negotiatedMinorVersionPeer.get();
 
     StopSource preCancelled;
     preCancelled.request_stop();

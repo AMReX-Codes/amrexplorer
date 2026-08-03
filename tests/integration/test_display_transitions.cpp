@@ -290,6 +290,14 @@ public:
         const amrvis::RangeRequest& request,
         amrvis::StopToken cancellation = {}) override
     {
+        ++m_rangeRequests;
+        if (cancellation.stop_requested()) {
+            m_rangeCancellationObserved = true;
+            throw amrvis::ReadCancelled();
+        }
+        if (m_failRanges) {
+            throw std::runtime_error("range transport failed");
+        }
         return m_delegate->requestRange(request, cancellation);
     }
     [[nodiscard]] bool rangeAvailable(
@@ -320,10 +328,27 @@ public:
         return m_gridBoxRequests;
     }
     void clearGridBoxRequests() { m_gridBoxRequests.clear(); }
+    void failRanges(bool enabled) { m_failRanges = enabled; }
+    void resetRangeObservations()
+    {
+        m_rangeRequests = 0;
+        m_rangeCancellationObserved = false;
+    }
+    [[nodiscard]] std::size_t rangeRequests() const noexcept
+    {
+        return m_rangeRequests;
+    }
+    [[nodiscard]] bool rangeCancellationObserved() const noexcept
+    {
+        return m_rangeCancellationObserved;
+    }
 
 private:
     std::shared_ptr<amrvis::DatasetSession> m_delegate;
     std::vector<bool> m_gridBoxRequests;
+    bool m_failRanges = false;
+    std::size_t m_rangeRequests = 0;
+    bool m_rangeCancellationObserved = false;
 };
 
 } // namespace
@@ -630,6 +655,46 @@ int main()
         const auto baseLoad = load2d(spec);
         const auto& d0 = baseLoad.displays.front();
         const auto& metadata = baseLoad.dataset->metadata();
+
+        // A remote range failure is not a logarithmic-domain failure: it must
+        // propagate after one RPC instead of being retried as linear.
+        auto recording
+            = std::make_shared<RecordingSession>(baseLoad.dataset);
+        recording->failRanges(true);
+        bool rangeFailurePreserved = false;
+        try {
+            static_cast<void>(amrvis::resolveDisplayRange(recording,
+                d0.request.field, d0.request.maximumLevel,
+                d0.request.composition, amrvis::RangeMode::File,
+                std::nullopt, true, d0.slice.plane));
+        } catch (const std::runtime_error& error) {
+            rangeFailurePreserved
+                = std::string(error.what()) == "range transport failed";
+        }
+        require(rangeFailurePreserved && recording->rangeRequests() == 1,
+            "log fallback retried or replaced a remote range failure");
+
+        // Cached re-ranging forwards the slice worker's cancellation token to
+        // the same RPC seam.
+        recording->failRanges(false);
+        recording->resetRangeObservations();
+        amrvis::StopSource stoppedRange;
+        stoppedRange.request_stop();
+        bool rangeCancellationPreserved = false;
+        try {
+            static_cast<void>(amrvis::refreshCachedSlice(recording,
+                d0.request, d0.slice.plane, d0.contourPlane,
+                d0.contourFinePlane, d0.contourFineFactor, {},
+                amrvis::RangeMode::File, std::nullopt, true, palette,
+                amrvis::DisplayMode::RasterContours, 0, 0, 4, true,
+                stoppedRange.get_token()));
+        } catch (const amrvis::ReadCancelled&) {
+            rangeCancellationPreserved = true;
+        }
+        require(rangeCancellationPreserved
+                && recording->rangeRequests() == 1
+                && recording->rangeCancellationObserved(),
+            "cached range RPC ignored slice cancellation");
 
         // Log toggle re-ranges, re-renders, and re-contours the cached planes.
         const auto log = amrvis::refreshCachedSlice(baseLoad.dataset,

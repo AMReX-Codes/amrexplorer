@@ -1038,8 +1038,10 @@ std::array<int, 2> MainWindow::sliceOutputSize(
     const auto viewportPixels = viewportPixelSize(state);
     const auto target = state.visibleRegion.value_or(
         datasetSampleBounds(*m_openMetadata));
-    return viewportBoundedOutputSize(
-        *m_openMetadata, target, state.normal, viewportPixels);
+    return frameBudgetBoundedOutputSize(
+        viewportBoundedOutputSize(
+            *m_openMetadata, target, state.normal, viewportPixels),
+        m_dataset ? m_dataset->maximumResponseBytes() : std::nullopt);
 }
 
 std::array<int, 2> MainWindow::viewportPixelSize(
@@ -4737,8 +4739,12 @@ void MainWindow::requestInitialSlice(
         spec.outputSizes.clear();
         spec.outputSizes.reserve(views.size());
         for (const auto* state : views) {
-            spec.outputSizes.push_back(
-                sliceOutputSize(*state, isRemote));
+            auto outputSize = sliceOutputSize(*state, isRemote);
+            if (preparedSession) {
+                outputSize = frameBudgetBoundedOutputSize(outputSize,
+                    preparedSession->maximumResponseBytes());
+            }
+            spec.outputSizes.push_back(outputSize);
         }
     }
     const auto restoredSpec = initialSpec;

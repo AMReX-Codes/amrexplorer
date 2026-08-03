@@ -77,13 +77,16 @@ If you reach the remote machine through a separate login gateway, add
 (local) $ ssh -N -J user@gateway -L 41419:localhost:41419 user@remote
 ```
 
-**Step 3 — On your local machine, open the dataset.** Give the port and token
-from step 1 as `127.0.0.1:PORT#TOKEN`, and the plotfile path as it appears on
-the remote machine:
+**Step 3 — On your local machine, open the dataset.** Read the token from step
+1 into a silent shell variable, then pass it to AMReXplorer through standard
+input. This keeps the token out of process listings and shell history. Give the
+plotfile path as it appears on the remote machine:
 
 ```text
-(local) $ amrexplorer --connect 127.0.0.1:41419#58f50743dff4f653b58c3a1fe5858904 \
-    /remote/path/plt00010
+(local) $ read -rs AMREXPLORER_TOKEN && printf '\n'
+(local) $ amrexplorer --connect 127.0.0.1:41419 --token-stdin \
+    /remote/path/plt00010 <<<"$AMREXPLORER_TOKEN"
+(local) $ unset AMREXPLORER_TOKEN
 ```
 
 To open several plotfiles as a sequence, list more than one path.
@@ -100,8 +103,10 @@ number, even though the server's port changes each run:
 
 ```text
 (local) $ ssh -N -L 9000:localhost:41419 user@remote
-(local) $ amrexplorer --connect 127.0.0.1:9000#58f50743dff4f653b58c3a1fe5858904 \
-    /remote/path/plt00010
+(local) $ read -rs AMREXPLORER_TOKEN && printf '\n'
+(local) $ amrexplorer --connect 127.0.0.1:9000 --token-stdin \
+    /remote/path/plt00010 <<<"$AMREXPLORER_TOKEN"
+(local) $ unset AMREXPLORER_TOKEN
 ```
 
 ## User interface overview

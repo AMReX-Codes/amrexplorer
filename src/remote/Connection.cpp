@@ -111,9 +111,13 @@ public:
         }
         try {
             auto bytes = codec::encode(requestId, std::move(payload));
-            send(bytes);
+            send(bytes, deadline, cancellation);
         } catch (...) {
             erasePending(requestId);
+            // A failed write may have emitted only part of the frame. Retire
+            // the connection rather than allowing a later request to append
+            // bytes to a corrupted stream.
+            close();
             throw;
         }
 
@@ -131,7 +135,7 @@ public:
                     throw ReadCancelled();
                 }
                 cancellationSent = true;
-                sendCancellation(requestId);
+                sendCancellation(requestId, deadline);
             }
             if (future.wait_for(std::chrono::milliseconds::zero())
                 == std::future_status::ready) {
@@ -316,14 +320,16 @@ public:
     void close() noexcept
     {
         {
-            std::scoped_lock sendLock(m_sendMutex);
             std::scoped_lock lock(m_stateMutex);
             if (!m_connected && !m_socket.valid()) {
                 return;
             }
             m_connected = false;
-            m_socket.shutdown();
         }
+        // shutdown() is safe concurrently with send() and is deliberately not
+        // serialized by m_sendMutex: it is what interrupts a peer-blocked
+        // writer so that cancellation and application shutdown can finish.
+        m_socket.shutdown();
         if (m_receiver.joinable()
             && m_receiver.get_id() != std::this_thread::get_id()) {
             m_receiver.join();
@@ -421,17 +427,21 @@ private:
         }
     }
 
-    void send(const codec::Bytes& bytes)
+    void send(const codec::Bytes& bytes,
+        std::chrono::steady_clock::time_point deadline,
+        StopToken cancellation = {})
     {
         std::scoped_lock lock(m_sendMutex);
         {
             std::scoped_lock stateLock(m_stateMutex);
             ensureConnected();
         }
-        writeFrame(m_socket, bytes, m_maximumFrameBytes.load());
+        writeFrame(m_socket, bytes, m_maximumFrameBytes.load(),
+            deadline, cancellation);
     }
 
-    void sendCancellation(std::uint64_t target)
+    void sendCancellation(std::uint64_t target,
+        std::chrono::steady_clock::time_point deadline)
     {
         const auto cancelId = nextRequestId();
         auto pending = std::make_shared<Pending>();
@@ -448,7 +458,7 @@ private:
         request.target_request_id = target;
         try {
             auto bytes = codec::encode(cancelId, std::move(request));
-            send(bytes);
+            send(bytes, deadline);
         } catch (...) {
             erasePending(cancelId);
         }

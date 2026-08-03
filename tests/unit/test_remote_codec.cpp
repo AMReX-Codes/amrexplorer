@@ -208,6 +208,11 @@ int main()
         "inconsistent slice vectors were accepted");
 
     auto openedWire = codec::toWire(opened);
+    openedWire.dimension = 4;
+    requireRejected([&] { static_cast<void>(codec::fromWire(openedWire)); },
+        "out-of-range dataset dimension was accepted");
+
+    openedWire = codec::toWire(opened);
     openedWire.finest_level = -1;
     requireRejected([&] { static_cast<void>(codec::fromWire(openedWire)); },
         "negative finest level was accepted");

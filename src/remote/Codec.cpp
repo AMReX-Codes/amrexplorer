@@ -487,6 +487,10 @@ fb::DatasetOpenedT toWire(const OpenedDataset& value)
 
 OpenedDataset fromWire(const fb::DatasetOpenedT& value)
 {
+    if (value.dimension < 1 || value.dimension > 3) {
+        throw std::invalid_argument(
+            "wire dataset dimension is outside [1, 3]");
+    }
     if (value.finest_level < 0) {
         throw std::invalid_argument("wire finest level is negative");
     }

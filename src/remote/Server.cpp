@@ -764,8 +764,6 @@ private:
         }
         const auto cells = static_cast<std::uint64_t>(request.outputSize[0])
             * static_cast<std::uint64_t>(request.outputSize[1]);
-        constexpr std::uint64_t bytesPerCell
-            = sizeof(float) + sizeof(std::uint8_t) + sizeof(std::int16_t);
         // A grid box carries its vector offset, table/vtable, level, RealBox
         // table, six doubles, and alignment. This conservative charge keeps
         // collection bounded before serialization; the exact guard above is
@@ -777,7 +775,7 @@ private:
             return 0;
         }
         const auto available = frameBytes - responseOverheadReserveBytes;
-        const auto rasterBytes = cells * bytesPerCell;
+        const auto rasterBytes = cells * sliceResponseBytesPerCell;
         if (available <= rasterBytes) {
             return 0;
         }
@@ -896,7 +894,8 @@ private:
     }
 
     Socket m_socket;
-    static constexpr std::uint64_t responseOverheadReserveBytes = 512;
+    static constexpr std::uint64_t responseOverheadReserveBytes
+        = sliceResponseOverheadBytes;
     ThreadPool& m_workers;
     ServerOptions m_options;
     std::chrono::steady_clock::time_point m_handshakeDeadline;

@@ -15,9 +15,10 @@ public:
     explicit LocalDatasetSession(
         std::shared_ptr<PlotfileDataset> dataset, std::string fileVersion = {});
     LocalDatasetSession(const std::filesystem::path& path, DatasetId id,
-        std::uint64_t cacheBudgetBytes);
+        std::uint64_t cacheBudgetBytes, StopToken cancellation = {});
     LocalDatasetSession(std::filesystem::path dataRoot, DatasetId id,
-        std::uint64_t cacheBudgetBytes, PlotfileMetadataResult metadata);
+        std::uint64_t cacheBudgetBytes, PlotfileMetadataResult metadata,
+        StopToken cancellation = {});
 
     [[nodiscard]] DatasetId id() const noexcept override;
     [[nodiscard]] const DatasetMetadata& metadata() const noexcept override;

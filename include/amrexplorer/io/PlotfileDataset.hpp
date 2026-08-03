@@ -24,9 +24,11 @@ public:
     };
 
     PlotfileDataset(
-        std::filesystem::path plotfile, DatasetId id, std::uint64_t cacheBudgetBytes);
+        std::filesystem::path plotfile, DatasetId id,
+        std::uint64_t cacheBudgetBytes, StopToken cancellation = {});
     PlotfileDataset(std::filesystem::path dataRoot, DatasetId id,
-        std::uint64_t cacheBudgetBytes, PlotfileMetadataResult metadata);
+        std::uint64_t cacheBudgetBytes, PlotfileMetadataResult metadata,
+        StopToken cancellation = {});
 
     [[nodiscard]] const DatasetMetadata& metadata() const noexcept;
     [[nodiscard]] const MetadataReadMetrics& metadataReadMetrics() const noexcept;

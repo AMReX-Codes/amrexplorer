@@ -51,7 +51,7 @@ public:
 };
 
 [[nodiscard]] std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
-    const std::filesystem::path& plotfile);
+    const std::filesystem::path& plotfile, StopToken cancellation = {});
 
 // Selection is a stable hash of the complete AMReX idcpu. File order, grid,
 // level, and current file ownership do not affect it; lower fractions are

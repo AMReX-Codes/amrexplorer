@@ -176,6 +176,18 @@ int main(int argc, char* argv[])
         require(rejectedNonCheckpoint,
             "non-checkpoint particle data was not rejected explicitly");
 
+        amrvis::StopSource stoppedDiscovery;
+        stoppedDiscovery.request_stop();
+        bool discoveryCancellationObserved = false;
+        try {
+            static_cast<void>(amrvis::discoverParticleSpecies(
+                root, stoppedDiscovery.get_token()));
+        } catch (const amrvis::ReadCancelled&) {
+            discoveryCancellationObserved = true;
+        }
+        require(discoveryCancellationObserved,
+            "particle discovery ignored cancellation");
+
         writeFixture(root, identities, 0.0, true);
         const auto expanded = amrvis::readParticleSample(root, "Tracer", 1.0);
         require(expanded.points.size() == all.points.size()
@@ -350,10 +362,8 @@ int main(int argc, char* argv[])
         try {
             static_cast<void>(amrvis::loadParticleSamples(preparedDataset,
                 selectedSpecies, 1.0, 0, stopped.get_token()));
-        } catch (const amrvis::ParticleReadError& error) {
-            batchCancellationObserved
-                = std::string(error.what()).find("cancelled")
-                != std::string::npos;
+        } catch (const amrvis::ReadCancelled&) {
+            batchCancellationObserved = true;
         }
         require(batchCancellationObserved,
             "batch sampling did not forward cancellation");

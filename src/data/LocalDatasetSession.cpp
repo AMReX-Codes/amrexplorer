@@ -17,8 +17,12 @@
 namespace amrvis {
 namespace {
 
-std::string readFileVersion(const std::filesystem::path& path)
+std::string readFileVersion(
+    const std::filesystem::path& path, StopToken cancellation)
 {
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
+    }
     std::ifstream header(path / "Header");
     std::string version;
     std::getline(header, version);
@@ -74,17 +78,18 @@ LocalDatasetSession::LocalDatasetSession(
 }
 
 LocalDatasetSession::LocalDatasetSession(const std::filesystem::path& path,
-    DatasetId id, std::uint64_t cacheBudgetBytes)
+    DatasetId id, std::uint64_t cacheBudgetBytes, StopToken cancellation)
     : LocalDatasetSession(std::make_shared<PlotfileDataset>(
-          path, id, cacheBudgetBytes), readFileVersion(path))
+          path, id, cacheBudgetBytes, cancellation),
+          readFileVersion(path, cancellation))
 {
 }
 
 LocalDatasetSession::LocalDatasetSession(std::filesystem::path dataRoot,
     DatasetId id, std::uint64_t cacheBudgetBytes,
-    PlotfileMetadataResult metadata)
+    PlotfileMetadataResult metadata, StopToken cancellation)
     : LocalDatasetSession(std::make_shared<PlotfileDataset>(dataRoot, id,
-          cacheBudgetBytes, metadata),
+          cacheBudgetBytes, metadata, cancellation),
           metadata.fileVersion)
 {
 }

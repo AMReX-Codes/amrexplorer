@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdexcept>
 #include <version>
 
 #if !defined(AMREXPLORER_TEST_FORCE_FALLBACK_STOP_TOKEN) \
@@ -89,3 +90,13 @@ private:
 } // namespace amrvis
 
 #endif
+
+namespace amrvis {
+
+// Common cancellation outcome for metadata, block, particle, and remote I/O.
+class ReadCancelled : public std::runtime_error {
+public:
+    ReadCancelled() : std::runtime_error("read cancelled") {}
+};
+
+} // namespace amrvis

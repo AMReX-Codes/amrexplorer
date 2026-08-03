@@ -40,6 +40,14 @@ public:
     [[nodiscard]] virtual const std::string& fileVersion() const noexcept = 0;
     [[nodiscard]] virtual const std::vector<ParticleSpeciesMetadata>&
     particleSpecies() const noexcept = 0;
+    // The largest encoded response accepted by this session. Local sessions
+    // have no transport frame budget; remote sessions expose the negotiated
+    // value so request planning can stay below it.
+    [[nodiscard]] virtual std::optional<std::uint32_t> maximumResponseBytes()
+        const noexcept
+    {
+        return std::nullopt;
+    }
 
     [[nodiscard]] virtual ViewDataResult requestView(
         const ViewDataRequest& request, StopToken cancellation = {}) = 0;

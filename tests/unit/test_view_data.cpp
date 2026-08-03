@@ -40,6 +40,9 @@ int main()
     require(std::ranges::any_of(gapped.line.valid,
                 [](std::uint8_t valid) { return valid == 0; }),
         "downsampling discarded an AMR coverage gap");
+    require(std::ranges::any_of(gapped.line.valid,
+                [](std::uint8_t valid) { return valid != 0; }),
+        "downsampling discarded every valid sample in a mixed bucket");
 
     const auto extrema = amrvis::boundLineToViewport(
         lineResult({2.0F, -4.0F, 7.0F, 1.0F}, {1, 1, 1, 1}), 1);

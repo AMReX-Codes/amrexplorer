@@ -51,8 +51,27 @@ LineQueryResult boundLineToViewport(LineQueryResult result, int outputWidth)
             result.line.valid.begin() + static_cast<std::ptrdiff_t>(end), 0);
         if (invalid != result.line.valid.begin()
                 + static_cast<std::ptrdiff_t>(end)) {
-            append(static_cast<std::size_t>(
-                std::distance(result.line.valid.begin(), invalid)));
+            const auto invalidIndex = static_cast<std::size_t>(
+                std::distance(result.line.valid.begin(), invalid));
+            const auto validSample = std::find_if(
+                result.line.valid.begin()
+                    + static_cast<std::ptrdiff_t>(begin),
+                result.line.valid.begin() + static_cast<std::ptrdiff_t>(end),
+                [](std::uint8_t valid) { return valid != 0; });
+            if (validSample == result.line.valid.begin()
+                    + static_cast<std::ptrdiff_t>(end)) {
+                append(invalidIndex);
+                continue;
+            }
+            const auto validIndex = static_cast<std::size_t>(
+                std::distance(result.line.valid.begin(), validSample));
+            if (invalidIndex < validIndex) {
+                append(invalidIndex);
+                append(validIndex);
+            } else {
+                append(validIndex);
+                append(invalidIndex);
+            }
             continue;
         }
         auto minimum = begin;

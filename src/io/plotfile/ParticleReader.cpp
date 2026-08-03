@@ -347,7 +347,7 @@ void readGrid(std::istream& input, const GridRecord& grid,
     std::array<std::int32_t, 2> idWords{};
     for (std::uint64_t firstIndex = 0; firstIndex < grid.count;) {
         if (cancellation.stop_requested()) {
-            throw ParticleReadError("particle read cancelled");
+            throw ReadCancelled();
         }
         const auto count = chunkRecordCount(
             grid.count - firstIndex, intRecordBytes);
@@ -357,7 +357,7 @@ void readGrid(std::istream& input, const GridRecord& grid,
         for (std::size_t relativeIndex = 0;
              relativeIndex < count; ++relativeIndex) {
             if (cancellation.stop_requested()) {
-                throw ParticleReadError("particle read cancelled");
+                throw ReadCancelled();
             }
             const auto recordOffset = static_cast<std::size_t>(
                 static_cast<std::uint64_t>(relativeIndex) * intRecordBytes);
@@ -377,7 +377,7 @@ void readGrid(std::istream& input, const GridRecord& grid,
     std::size_t selectedIndex = 0;
     for (std::uint64_t firstIndex = 0; firstIndex < grid.count;) {
         if (cancellation.stop_requested()) {
-            throw ParticleReadError("particle read cancelled");
+            throw ReadCancelled();
         }
         const auto count = chunkRecordCount(
             grid.count - firstIndex, realRecordBytes);
@@ -416,11 +416,14 @@ void readGrid(std::istream& input, const GridRecord& grid,
 } // namespace
 
 std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
-    const std::filesystem::path& plotfile)
+    const std::filesystem::path& plotfile, StopToken cancellation)
 {
     std::vector<ParticleSpeciesMetadata> result;
     std::error_code error;
     for (const auto& entry : std::filesystem::directory_iterator(plotfile, error)) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         if (!entry.is_directory()) {
             continue;
         }
@@ -437,6 +440,9 @@ std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
             continue;
         }
     }
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
+    }
     std::ranges::sort(result, {}, &ParticleSpeciesMetadata::name);
     return result;
 }
@@ -447,6 +453,9 @@ ParticleSample readParticleSample(
 {
     if (!std::isfinite(fraction) || fraction < 0.0 || fraction > 1.0) {
         throw std::invalid_argument("particle sample fraction must be between 0 and 1");
+    }
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
     }
     const auto speciesPath = plotfile / species;
     const auto header = parseHeader(speciesPath / "Header", species);

@@ -1,6 +1,7 @@
 #include <amrexplorer/remote/Frame.hpp>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -185,6 +186,58 @@ int main()
             != std::string::npos;
     }
     require(timedOut, "a peer-blocked frame write ignored its deadline");
+
+    // A slow peer that keeps draining bytes must be allowed to take longer
+    // than one stall interval to receive the complete frame.
+    int slowDescriptors[2]{};
+    require(::socketpair(AF_UNIX, SOCK_STREAM, 0, slowDescriptors) == 0,
+        "could not create the slow-reader socket pair");
+    Socket slowWriter(slowDescriptors[0]);
+    Socket slowPeer(slowDescriptors[1]);
+    const auto slowWriterFlags = ::fcntl(slowDescriptors[0], F_GETFL, 0);
+    require(slowWriterFlags >= 0
+            && ::fcntl(slowDescriptors[0], F_SETFL,
+                   slowWriterFlags | O_NONBLOCK) == 0,
+        "could not make the slow writer nonblocking");
+    require(::setsockopt(slowDescriptors[0], SOL_SOCKET, SO_SNDBUF,
+                &sendBufferBytes, sizeof(sendBufferBytes)) == 0,
+        "could not reduce the slow-writer send buffer");
+    constexpr std::size_t slowPayloadBytes = 512U * 1024U;
+    constexpr auto writeStallTimeout = std::chrono::milliseconds{50};
+    std::atomic<std::size_t> slowBytesRead{0};
+    std::thread slowReader([&] {
+        std::array<std::uint8_t, 4096> bytes{};
+        while (slowBytesRead.load()
+            < slowPayloadBytes + sizeof(std::uint32_t)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{5});
+            const auto count = ::recv(slowDescriptors[1], bytes.data(),
+                bytes.size(), 0);
+            if (count <= 0) {
+                break;
+            }
+            slowBytesRead += static_cast<std::size_t>(count);
+        }
+    });
+    bool slowWriteCompleted = true;
+    const auto slowWriteStart = std::chrono::steady_clock::now();
+    try {
+        writeFrameWithStallTimeout(slowWriter,
+            std::vector<std::uint8_t>(slowPayloadBytes), slowPayloadBytes,
+            writeStallTimeout);
+    } catch (const std::exception&) {
+        slowWriteCompleted = false;
+    }
+    const auto slowWriteElapsed
+        = std::chrono::steady_clock::now() - slowWriteStart;
+    slowWriter.shutdown();
+    slowReader.join();
+    require(slowWriteCompleted,
+        "a progressing slow-reader frame write was timed out");
+    require(slowBytesRead.load()
+            == slowPayloadBytes + sizeof(std::uint32_t),
+        "the slow reader did not receive the complete frame");
+    require(slowWriteElapsed > writeStallTimeout,
+        "the slow-reader regression did not exceed one stall interval");
 #endif
 
     // A TCP-segment boundary may tear the four-byte header without making the

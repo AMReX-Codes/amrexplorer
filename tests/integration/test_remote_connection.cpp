@@ -191,6 +191,32 @@ int main(int argc, char* argv[])
     negotiatedMinorVersionConnection.close();
     negotiatedMinorVersionPeer.get();
 
+    auto wrongMinorVersionListener = listenOnLoopback(0);
+    auto wrongMinorVersionPeer = std::async(std::launch::async, [&] {
+        auto peer = acceptConnection(wrongMinorVersionListener.socket);
+        static_cast<void>(acceptHello(peer));
+        const auto frame = readFrame(peer, defaultMaximumFrameBytes);
+        require(frame.has_value(),
+            "client omitted wrong-minor-version test request");
+        const auto request = codec::decode(*frame);
+        const auto info = codec::inspect(*request);
+        codec::fb::PongResponseT pong;
+        pong.nonce = request->payload.AsPingRequest()->nonce;
+        writeFrame(peer,
+            codec::encode(info.requestId, std::move(pong),
+                static_cast<std::uint16_t>(protocolMinorVersion + 1)),
+            defaultMaximumFrameBytes);
+    });
+    Connection wrongMinorVersionConnection(
+        "127.0.0.1", wrongMinorVersionListener.port);
+    auto wrongMinorVersionCall = std::async(std::launch::async,
+        [&] { wrongMinorVersionConnection.ping(); });
+    require(throwsWithin(wrongMinorVersionCall, 1s),
+        "non-negotiated response minor version was accepted");
+    require(!wrongMinorVersionConnection.connected(),
+        "non-negotiated response minor version did not fail the connection");
+    wrongMinorVersionPeer.get();
+
     StopSource preCancelled;
     preCancelled.request_stop();
     try {

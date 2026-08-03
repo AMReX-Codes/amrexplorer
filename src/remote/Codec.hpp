@@ -19,14 +19,14 @@ using NativeEnvelope = fb::EnvelopeT;
 
 template <typename Payload>
 Bytes encode(std::uint64_t requestId, Payload payload,
-    std::uint16_t minor = protocolMinor)
+    std::uint16_t minorVersion = protocolMinorVersion)
 {
     if (requestId == 0) {
         throw std::invalid_argument("wire request ID must be non-zero");
     }
     NativeEnvelope envelope;
     envelope.protocol_major = protocolMajor;
-    envelope.protocol_minor = minor;
+    envelope.protocol_minor_version = minorVersion;
     envelope.request_id = requestId;
     envelope.payload.Set(std::move(payload));
     flatbuffers::FlatBufferBuilder builder;

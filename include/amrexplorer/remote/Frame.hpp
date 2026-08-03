@@ -52,6 +52,12 @@ void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
     std::uint32_t maximumBytes,
     std::chrono::steady_clock::time_point deadline,
     StopToken cancellation = {});
+// Writes may take arbitrarily long while the peer continues accepting bytes.
+// The operation fails only when no bytes can be written for stallTimeout.
+void writeFrameWithStallTimeout(const Socket& socket,
+    std::span<const std::uint8_t> payload, std::uint32_t maximumBytes,
+    std::chrono::milliseconds stallTimeout,
+    StopToken cancellation = {});
 [[nodiscard]] std::optional<std::vector<std::uint8_t>> readFrame(
     const Socket& socket,
     std::uint32_t maximumBytes = defaultMaximumFrameBytes);

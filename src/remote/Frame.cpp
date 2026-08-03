@@ -205,7 +205,7 @@ void waitForReadable(NativeSocket socket,
 
 void waitForWritable(NativeSocket socket,
     std::chrono::steady_clock::time_point deadline,
-    StopToken cancellation)
+    StopToken cancellation, const char* timeoutMessage)
 {
     using namespace std::chrono_literals;
     for (;;) {
@@ -214,7 +214,7 @@ void waitForWritable(NativeSocket socket,
         }
         const auto now = std::chrono::steady_clock::now();
         if (now >= deadline) {
-            throw std::runtime_error("wire frame write timed out");
+            throw std::runtime_error(timeoutMessage);
         }
         auto wait = 50ms;
         if (deadline != std::chrono::steady_clock::time_point::max()) {
@@ -292,11 +292,17 @@ void writeExact(
 void writeExact(NativeSocket descriptor,
     std::span<const std::uint8_t> source,
     std::chrono::steady_clock::time_point deadline,
-    StopToken cancellation)
+    StopToken cancellation,
+    std::optional<std::chrono::milliseconds> stallTimeout = std::nullopt)
 {
     std::size_t completed = 0;
+    auto progressDeadline = stallTimeout
+        ? std::chrono::steady_clock::now() + *stallTimeout
+        : std::chrono::steady_clock::time_point::max();
     while (completed < source.size()) {
-        waitForWritable(descriptor, deadline, cancellation);
+        waitForWritable(descriptor, std::min(deadline, progressDeadline),
+            cancellation, stallTimeout ? "wire frame write stalled"
+                                       : "wire frame write timed out");
 #ifdef _WIN32
         const auto remaining = std::min<std::size_t>(
             source.size() - completed, 64U * 1024U);
@@ -319,7 +325,15 @@ void writeExact(NativeSocket descriptor,
             }
             throwSocketError("send", error);
         }
+        if (count == 0) {
+            throw std::runtime_error(
+                "connection closed during wire frame write");
+        }
         completed += static_cast<std::size_t>(count);
+        if (stallTimeout) {
+            progressDeadline
+                = std::chrono::steady_clock::now() + *stallTimeout;
+        }
     }
 }
 
@@ -517,6 +531,30 @@ void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
         std::span<const std::uint8_t>(sizeBytes, sizeof(networkSize)),
         deadline, cancellation);
     writeExact(native(socket.descriptor()), payload, deadline, cancellation);
+}
+
+void writeFrameWithStallTimeout(const Socket& socket,
+    std::span<const std::uint8_t> payload, std::uint32_t maximumBytes,
+    std::chrono::milliseconds stallTimeout, StopToken cancellation)
+{
+    if (payload.empty() || payload.size() > maximumBytes
+        || payload.size() > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("wire frame size is outside the allowed range");
+    }
+    if (stallTimeout <= std::chrono::milliseconds::zero()) {
+        throw std::invalid_argument(
+            "wire frame write stall timeout must be greater than zero");
+    }
+    const auto networkSize = htonl(static_cast<std::uint32_t>(payload.size()));
+    const auto* sizeBytes
+        = reinterpret_cast<const std::uint8_t*>(&networkSize);
+    writeExact(native(socket.descriptor()),
+        std::span<const std::uint8_t>(sizeBytes, sizeof(networkSize)),
+        std::chrono::steady_clock::time_point::max(), cancellation,
+        stallTimeout);
+    writeExact(native(socket.descriptor()), payload,
+        std::chrono::steady_clock::time_point::max(), cancellation,
+        stallTimeout);
 }
 
 std::optional<std::vector<std::uint8_t>> readFrame(

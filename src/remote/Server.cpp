@@ -247,7 +247,7 @@ private:
             handleHello(*envelope);
             return;
         }
-        if (info.protocolMinor != m_selectedMinor) {
+        if (info.protocolMinorVersion != m_selectedMinorVersion) {
             sendError(info.requestId, {ErrorCode::UnsupportedProtocol,
                 "message uses a non-negotiated protocol minor version"});
             stop();
@@ -307,21 +307,22 @@ private:
     {
         const auto* request = envelope.payload.AsHelloRequest();
         if (request == nullptr || request->maximum_frame_bytes == 0
-            || request->minimum_minor > protocolMinor
-            || request->maximum_minor < request->minimum_minor) {
+            || request->minimum_minor_version > protocolMinorVersion
+            || request->maximum_minor_version
+                < request->minimum_minor_version) {
             sendError(envelope.request_id, {ErrorCode::UnsupportedProtocol,
                 "client protocol range is unsupported"});
             stop();
             return;
         }
-        m_selectedMinor
-            = std::min<std::uint16_t>(protocolMinor, request->maximum_minor);
+        m_selectedMinorVersion = std::min<std::uint16_t>(
+            protocolMinorVersion, request->maximum_minor_version);
         m_maximumFrameBytes = std::min(
             m_options.maximumFrameBytes, request->maximum_frame_bytes);
         HelloResponseData response;
         response.serverName = "AMReXplorer server";
         response.softwareVersion = m_options.softwareVersion;
-        response.selectedMinor = m_selectedMinor;
+        response.selectedMinorVersion = m_selectedMinorVersion;
         response.maximumFrameBytes = m_maximumFrameBytes.load();
         response.maximumDatasets = m_options.maximumDatasets;
         response.maximumOutstandingRequests
@@ -462,7 +463,7 @@ private:
             }
             opened.cache = dataset->cacheMetrics();
             if (codec::encode(envelope.request_id, codec::toWire(opened),
-                    m_selectedMinor)
+                    m_selectedMinorVersion)
                     .size()
                 > m_maximumFrameBytes.load()) {
                 throw RemoteError(ErrorCode::ResourceLimitExceeded,
@@ -796,8 +797,8 @@ private:
     void send(std::uint64_t requestId, Payload payload) noexcept
     {
         try {
-            const auto bytes
-                = codec::encode(requestId, std::move(payload), m_selectedMinor);
+            const auto bytes = codec::encode(
+                requestId, std::move(payload), m_selectedMinorVersion);
             if (bytes.size() > m_maximumFrameBytes.load()) {
                 sendError(requestId, {ErrorCode::ResourceLimitExceeded,
                     "response cannot fit in one negotiated frame"});
@@ -818,7 +819,7 @@ private:
     {
         try {
             const auto bytes = codec::encode(
-                requestId, codec::toWire(error), m_selectedMinor);
+                requestId, codec::toWire(error), m_selectedMinorVersion);
             if (bytes.size() > m_maximumFrameBytes.load()) {
                 stop();
                 return;
@@ -840,7 +841,7 @@ private:
     std::chrono::steady_clock::time_point m_handshakeDeadline;
     std::atomic<std::uint32_t> m_maximumFrameBytes;
     std::atomic_bool m_stopping{false};
-    std::uint16_t m_selectedMinor = 0;
+    std::uint16_t m_selectedMinorVersion = 0;
     bool m_handshakeComplete = false;
     std::atomic<std::uint64_t> m_nextDatasetId{1};
     std::mutex m_writeMutex;

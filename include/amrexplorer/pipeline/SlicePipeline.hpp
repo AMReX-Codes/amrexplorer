@@ -236,7 +236,7 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField,
-    int contourCount, bool rasterDirty);
+    int contourCount, bool rasterDirty, StopToken cancellation = {});
 
 // Re-extract contour polylines from an already-populated fine plane after the
 // display range is replaced downstream of appendContours/refreshCachedSlice —

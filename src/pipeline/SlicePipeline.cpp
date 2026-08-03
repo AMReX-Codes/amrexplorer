@@ -95,6 +95,43 @@ std::array<int, 2> viewportBoundedOutputSize(
             1, viewportSize[1])};
 }
 
+std::array<int, 2> frameBudgetBoundedOutputSize(
+    std::array<int, 2> outputSize,
+    std::optional<std::uint32_t> maximumResponseBytes)
+{
+    if (!maximumResponseBytes) {
+        return outputSize;
+    }
+    const auto frameBytes = static_cast<std::uint64_t>(*maximumResponseBytes);
+    const auto maximumCells = frameBytes > sliceResponseOverheadBytes
+        ? (frameBytes - sliceResponseOverheadBytes) / sliceResponseBytesPerCell
+        : 0;
+    const auto requestedCells = static_cast<std::uint64_t>(outputSize[0])
+        * static_cast<std::uint64_t>(outputSize[1]);
+    if (maximumCells == 0) {
+        return {1, 1};
+    }
+    if (requestedCells <= maximumCells) {
+        return outputSize;
+    }
+    const auto scale = std::sqrt(static_cast<double>(maximumCells)
+        / static_cast<double>(requestedCells));
+    auto bounded = std::array<int, 2>{
+        std::max(1, static_cast<int>(std::floor(outputSize[0] * scale))),
+        std::max(1, static_cast<int>(std::floor(outputSize[1] * scale)))};
+    while (static_cast<std::uint64_t>(bounded[0])
+            * static_cast<std::uint64_t>(bounded[1]) > maximumCells) {
+        if (bounded[0] >= bounded[1] && bounded[0] > 1) {
+            --bounded[0];
+        } else if (bounded[1] > 1) {
+            --bounded[1];
+        } else {
+            break;
+        }
+    }
+    return bounded;
+}
+
 bool sameSliceSpec(const SliceRequest& lhs, const SliceRequest& rhs)
 {
     return lhs.dataset == rhs.dataset && lhs.field == rhs.field
@@ -294,6 +331,8 @@ SliceDisplayResult executeSliceWithFallback(
     std::uint32_t vectorUField, std::uint32_t vectorVField, int contourCount,
     StopToken cancellation)
 {
+    request.outputSize = frameBudgetBoundedOutputSize(
+        request.outputSize, dataset->maximumResponseBytes());
     int fallbackFrom = -1;
     int fallbackTo = -1;
     for (;;) {
@@ -376,6 +415,8 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     contourRequest.outputSize = {
         std::min(std::max(dataWidth, 512), 1024),
         std::min(std::max(dataHeight, 512), 1024)};
+    contourRequest.outputSize = frameBudgetBoundedOutputSize(
+        contourRequest.outputSize, dataset->maximumResponseBytes());
     contourRequest.sampling = SamplingPolicy::Linear;
     auto contour = requestSlice(*dataset, contourRequest, cancellation);
     result.contourPlane = std::move(contour.plane);
@@ -595,6 +636,8 @@ InitialSliceResult executeSessionFrameLoad(
                     request.outputSize[0], 1, maxSliceOutputDimension);
                 request.outputSize[1] = std::clamp(
                     request.outputSize[1], 1, maxSliceOutputDimension);
+                request.outputSize = frameBudgetBoundedOutputSize(
+                    request.outputSize, result.dataset->maximumResponseBytes());
                 request.composition = selectedLevel.composition;
                 request.maximumLevel = attemptMaximumLevel;
                 request.sphericalSupersample = spec.sphericalSupersample;

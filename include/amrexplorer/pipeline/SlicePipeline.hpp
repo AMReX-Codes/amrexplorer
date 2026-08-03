@@ -169,6 +169,9 @@ inline constexpr int maxSliceOutputDimension = maxViewOutputDimension;
 [[nodiscard]] std::array<int, 2> viewportBoundedOutputSize(
     const DatasetMetadata& metadata, const RealBox& region, int normal,
     std::array<int, 2> viewportSize);
+[[nodiscard]] std::array<int, 2> frameBudgetBoundedOutputSize(
+    std::array<int, 2> outputSize,
+    std::optional<std::uint32_t> maximumResponseBytes);
 
 // The cache-key comparison for a cached slice: everything a cached slice
 // depends on. Range, log scale, palette, and contour count are deliberately

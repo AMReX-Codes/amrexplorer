@@ -161,6 +161,18 @@ int main()
     require(amrvis::finestNativeOutputSize(fine3d, box, 2) == (std::array<int, 2>{10, 20}),
         "normal z did not size from the x and y extents");
 
+    // A negotiated frame cap shrinks the raster uniformly until the server's
+    // conservative response model fits.
+    const auto budgeted = amrvis::frameBudgetBoundedOutputSize(
+        {800, 800}, 4U * 1024U * 1024U);
+    const auto budgetCells = static_cast<std::uint64_t>(budgeted[0])
+        * static_cast<std::uint64_t>(budgeted[1]);
+    require(budgeted[0] == budgeted[1] && budgeted[0] < 800,
+        "frame-budget sizing did not preserve a square raster aspect");
+    require(budgetCells * amrvis::sliceResponseBytesPerCell
+            + amrvis::sliceResponseOverheadBytes <= 4U * 1024U * 1024U,
+        "frame-budget sizing still exceeds the negotiated response cap");
+
     // Spherical aspect uses the unclamped finest-level sample counts. An
     // 8192x1024 logical plane must remain 8:1 even though native output is
     // independently capped at 4096 per axis.
@@ -173,6 +185,7 @@ int main()
                 spherical, sphericalRegion, 2, {800, 800})
             == (std::array<int, 2>{800, 100}),
         "spherical viewport aspect was computed from clamped sample counts");
+
     // --- slicePlaneAxes ---------------------------------------------------
     require(amrvis::slicePlaneAxes(2, 0) == (std::array<int, 2>{0, 1}),
         "2-D plane axes are not x,y");

@@ -580,9 +580,12 @@ Document the normal workflow:
 # Remote machine (prints: LISTENING 127.0.0.1 8642 TOKEN <token>)
 amrexplorer-server --port 8642
 
-# Local machine (supply the token as HOST:PORT#TOKEN)
+# Local machine (read the token without placing it in argv or shell history)
 ssh -N -L 8642:127.0.0.1:8642 user@remote
-amrexplorer --connect 127.0.0.1:8642#<token> /remote/path/to/plt00010
+read -rs AMREXPLORER_TOKEN && printf '\n'
+amrexplorer --connect 127.0.0.1:8642 --token-stdin \
+    /remote/path/to/plt00010 <<<"$AMREXPLORER_TOKEN"
+unset AMREXPLORER_TOKEN
 ```
 
 On a shared host prefer `--port 0` (kernel-assigned, printed on the
@@ -613,8 +616,13 @@ cancelling their work.
 Preserve all current local and smoke-test forms. Add:
 
 ```text
-amrexplorer --connect HOST:PORT REMOTE_PATH [REMOTE_PATH ...]
+amrexplorer --connect HOST:PORT --token-stdin \
+    REMOTE_PATH [REMOTE_PATH ...]
 ```
+
+`--token-stdin` reads one token line from standard input so the bearer token is
+not exposed in the long-lived GUI process arguments or recorded literally in
+shell history.
 
 One path opens a dataset and multiple paths open a sequence, matching the
 current local positional behavior. Invalid endpoints or conflicting options

@@ -368,6 +368,15 @@ if(TARGET amrexplorer_qt)
         PRIVATE amrexplorer::warnings)
     add_test(NAME remote_endpoint COMMAND test_remote_endpoint)
 
+    add_executable(test_remote_connect_arguments
+        unit/test_remote_connect_arguments.cpp)
+    target_include_directories(test_remote_connect_arguments
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_remote_connect_arguments
+        PRIVATE amrexplorer::remote amrexplorer::warnings)
+    add_test(NAME remote_connect_arguments
+        COMMAND test_remote_connect_arguments)
+
     add_test(
         NAME qt_remote_slice_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen

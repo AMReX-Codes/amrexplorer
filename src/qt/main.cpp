@@ -1,5 +1,6 @@
 #include "MainWindow.hpp"
 #include "FabSelectorDock.hpp"
+#include "RemoteConnectArguments.hpp"
 #include "RemoteEndpoint.hpp"
 
 #include <QAction>
@@ -37,6 +38,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -672,41 +674,31 @@ int main(int argc, char* argv[])
                     "127.0.0.1", server->port(), {path, path},
                     server->token());
             });
-    } else if (argc >= 4
-        && std::string_view(argv[1]) == "--connect") {
-        const auto endpoint = amrvis::qt::parseRemoteEndpoint(argv[2]);
-        if (!endpoint) {
-            qCritical("invalid remote endpoint; expected HOST:PORT[#TOKEN]");
-            return 2;
-        }
-        if (endpoint->token.empty()) {
-            qCritical("missing session token; expected HOST:PORT#TOKEN");
-            return 2;
-        }
-        std::vector<std::string> paths;
-        paths.reserve(static_cast<std::size_t>(argc - 3));
-        for (int index = 3; index < argc; ++index) {
-            if (std::string_view(argv[index]).empty()) {
-                qCritical("remote paths must not be empty");
-                return 2;
-            }
-            paths.emplace_back(argv[index]);
-        }
-        QTimer::singleShot(0, &window,
-            [&window, endpoint = *endpoint, paths = std::move(paths)] {
-                if (paths.size() == 1) {
-                    window.openRemoteDataset(endpoint.host, endpoint.port,
-                        paths.front(), endpoint.token);
-                } else {
-                    window.openRemoteSequence(endpoint.host, endpoint.port,
-                        paths, endpoint.token);
-                }
-            });
     } else if (argc >= 2
         && std::string_view(argv[1]) == "--connect") {
-        qCritical("usage: amrexplorer --connect HOST:PORT#TOKEN REMOTE_PATH "
-                  "[REMOTE_PATH ...]");
-        return 2;
+        std::vector<std::string_view> arguments;
+        arguments.reserve(static_cast<std::size_t>(argc - 2));
+        for (int index = 2; index < argc; ++index) {
+            arguments.emplace_back(argv[index]);
+        }
+        auto parsed
+            = amrvis::qt::parseRemoteConnectArguments(arguments, std::cin);
+        if (!parsed.request) {
+            qCritical("%s", parsed.error.c_str());
+            return 2;
+        }
+        QTimer::singleShot(0, &window,
+            [&window, request = std::move(*parsed.request)] {
+                if (request.paths.size() == 1) {
+                    window.openRemoteDataset(request.endpoint.host,
+                        request.endpoint.port, request.paths.front(),
+                        request.endpoint.token);
+                } else {
+                    window.openRemoteSequence(request.endpoint.host,
+                        request.endpoint.port, request.paths,
+                        request.endpoint.token);
+                }
+            });
     } else if (argc == 3 && std::string_view(argv[1]) == "--smoke-test") {
         const std::filesystem::path path(argv[2]);
         QObject::connect(&window, &amrvis::qt::MainWindow::datasetOpenFinished,

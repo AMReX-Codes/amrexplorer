@@ -22,6 +22,7 @@ add_executable(amrexplorer_qt
     MainWindow.hpp
     NumberFormat.cpp
     NumberFormat.hpp
+    RemoteConnectArguments.hpp
     RemoteEndpoint.hpp
     ScientificDoubleSpinBox.cpp
     ScientificDoubleSpinBox.hpp

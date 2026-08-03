@@ -176,7 +176,7 @@ int main(int argc, char* argv[])
         auto rogue = connectTo("127.0.0.1", server.port());
         auto rejected = exchange(rogue, 1,
             codec::toWire(HelloRequestData{
-                "rogue client", "test", 0, protocolMinor,
+                "rogue client", "test", 0, protocolMinorVersion,
                 defaultMaximumFrameBytes, server.token() + "x", {}}),
             defaultMaximumFrameBytes);
         require(codec::inspect(*rejected).payload

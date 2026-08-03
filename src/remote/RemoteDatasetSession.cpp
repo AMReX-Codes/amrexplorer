@@ -70,6 +70,12 @@ RemoteDatasetSession::particleSpecies() const noexcept
     return m_particleSpecies;
 }
 
+std::optional<std::uint32_t>
+RemoteDatasetSession::maximumResponseBytes() const noexcept
+{
+    return m_connection->serverInfo().maximumFrameBytes;
+}
+
 ViewDataResult RemoteDatasetSession::requestView(
     const ViewDataRequest& request, StopToken cancellation)
 {

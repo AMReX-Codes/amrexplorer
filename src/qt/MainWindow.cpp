@@ -66,6 +66,7 @@
 #include <QPointer>
 #include <QProcess>
 #include <QProgressDialog>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QRect>
 #include <QRegularExpressionValidator>
@@ -731,6 +732,8 @@ MainWindow::MainWindow(QWidget* parent)
             m_initialStopSource.request_stop();
             m_linePlotStopSource.request_stop();
             m_particleStopSource.request_stop();
+            m_particleLoading = false;
+            m_particleProgress->setVisible(false);
             m_pendingAllViews = false;
             m_pendingViews.clear();
             m_sliceDebounce->stop();
@@ -877,6 +880,13 @@ MainWindow::MainWindow(QWidget* parent)
     setupPanShortcuts();
 
     m_probeLabel = new QLabel(statusBar());
+    m_particleProgress = new QProgressBar(statusBar());
+    m_particleProgress->setRange(0, 0);
+    m_particleProgress->setFormat(tr("Loading particles..."));
+    m_particleProgress->setAccessibleName(tr("Loading particle sample"));
+    m_particleProgress->setFixedWidth(170);
+    m_particleProgress->setVisible(false);
+    statusBar()->addPermanentWidget(m_particleProgress);
     statusBar()->addPermanentWidget(m_probeLabel);
     statusBar()->showMessage(tr("No dataset open"));
     updateDiagnostics();
@@ -2522,7 +2532,8 @@ void MainWindow::configureParticleControls(bool preserveSelection)
         m_particleColors.try_emplace(
             species[speciesIndex].name, defaultParticleColor(speciesIndex));
     }
-    m_particlesAction->setEnabled(!species.empty());
+    m_particlesAction->setEnabled(
+        !species.empty() && !m_particleLoading);
 }
 
 void MainWindow::applyParticleSelection(
@@ -2606,6 +2617,21 @@ std::size_t MainWindow::particleOverlayCountForTest()
     return count;
 }
 
+bool MainWindow::particleLoadingForTest() const noexcept
+{
+    return m_particleLoading;
+}
+
+bool MainWindow::particleLoadingUiActiveForTest() const
+{
+    return m_particleProgress->isVisible() && !m_particlesAction->isEnabled();
+}
+
+bool MainWindow::particleLoadingUiSettledForTest() const
+{
+    return !m_particleProgress->isVisible() && m_particlesAction->isEnabled();
+}
+
 void MainWindow::requestParticleReload()
 {
     m_particleStopSource.request_stop();
@@ -2620,9 +2646,15 @@ void MainWindow::requestParticleReload()
     m_particleSamples.clear();
     updateParticleOverlays();
     if (!dataset || selectedSpecies.empty()) {
+        m_particleLoading = false;
+        m_particleProgress->setVisible(false);
+        configureParticleControls(true);
         return;
     }
 
+    m_particleLoading = true;
+    m_particleProgress->setVisible(true);
+    m_particlesAction->setEnabled(false);
     ++m_activeRequests;
     statusBar()->showMessage(tr("Loading particle sample..."));
     updateDiagnostics();
@@ -2653,6 +2685,11 @@ void MainWindow::requestParticleReload()
                         tr("Particles were not loaded: %1")
                             .arg(exceptionMessage(error)));
                 }
+            }
+            if (particleGeneration == m_particleGeneration) {
+                m_particleLoading = false;
+                m_particleProgress->setVisible(false);
+                configureParticleControls(true);
             }
             updateDiagnostics();
             watcher->deleteLater();
@@ -4489,6 +4526,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_particleSamples.clear();
     m_selectedParticleSpecies.clear();
     m_particleSelectionInitialized = false;
+    m_particleLoading = false;
+    m_particleProgress->setVisible(false);
     ++m_particleGeneration;
     setWindowTitle(tr("AMReXplorer"));
     {
@@ -5934,6 +5973,8 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
     m_particleSamples.clear();
     m_selectedParticleSpecies.clear();
     m_particleSelectionInitialized = false;
+    m_particleLoading = false;
+    m_particleProgress->setVisible(false);
     ++m_particleGeneration;
 
     auto sorted = frames;

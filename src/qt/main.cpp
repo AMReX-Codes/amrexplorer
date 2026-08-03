@@ -675,6 +675,11 @@ int main(int argc, char* argv[])
                     return;
                 }
                 window.setParticleSelectionForTest({"Tracer"}, 1.0, 37);
+                if (!window.particleLoadingForTest()
+                    || !window.particleLoadingUiActiveForTest()) {
+                    application.exit(2);
+                    return;
+                }
                 poll->start();
             });
         QObject::connect(poll, &QTimer::timeout, &application,
@@ -685,7 +690,9 @@ int main(int argc, char* argv[])
                 }
                 if (window.particleSampleCountForTest() == 0
                     || window.particleOverlayCountForTest() == 0
-                    || window.particleSeedForTest() != 37) {
+                    || window.particleSeedForTest() != 37
+                    || window.particleLoadingForTest()
+                    || !window.particleLoadingUiSettledForTest()) {
                     return;
                 }
                 poll->stop();

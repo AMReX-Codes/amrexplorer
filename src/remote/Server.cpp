@@ -68,8 +68,20 @@ public:
     {
         count = std::max(1U, count);
         m_threads.reserve(count);
-        for (unsigned int index = 0; index < count; ++index) {
-            m_threads.emplace_back([this] { worker(); });
+        try {
+            for (unsigned int index = 0; index < count; ++index) {
+                m_threads.emplace_back([this] { worker(); });
+            }
+        } catch (...) {
+            // A later std::thread construction can fail after earlier workers
+            // have started waiting. Wake those workers before constructor
+            // unwinding destroys and joins their JoiningThread wrappers.
+            {
+                std::scoped_lock lock(m_mutex);
+                m_stopping = true;
+            }
+            m_ready.notify_all();
+            throw;
         }
     }
 

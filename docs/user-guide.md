@@ -63,6 +63,15 @@ LISTENING 127.0.0.1 41419 TOKEN 58f50743dff4f653b58c3a1fe5858904
 The port and token are new every time you start the server, so use the values
 from your own output (here, port `41419`), not the ones printed above.
 
+Response transfers are not limited by total duration: they may take as long as
+needed while bytes continue moving. By default, the server disconnects a client
+only after a response makes no write progress for 30 seconds. On a link that can
+pause for longer, increase that interval explicitly:
+
+```text
+(remote) $ amrexplorer-server --write-stall-timeout-seconds 120
+```
+
 **Step 2 — On your local machine, open an SSH tunnel** using the port from
 step 1. Leave this running while you work:
 

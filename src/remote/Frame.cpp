@@ -565,17 +565,22 @@ Socket connectTo(const std::string& host, std::uint16_t port,
     if (cancellation.stop_requested()) {
         throw ReadCancelled();
     }
+    if (std::chrono::steady_clock::now() >= deadline) {
+        throw std::runtime_error("connection attempt timed out");
+    }
     addrinfo hints{};
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_flags = AI_NUMERICHOST;
     addrinfo* addresses = nullptr;
     const auto service = std::to_string(port);
     const auto status
         = ::getaddrinfo(host.c_str(), service.c_str(), &hints, &addresses);
     if (status != 0) {
-        throw std::runtime_error(
-            "getaddrinfo: " + std::string(gai_strerror(status)));
+        throw std::runtime_error("remote host must be a numeric IPv4 or IPv6 "
+                                 "address: "
+            + std::string(gai_strerror(status)));
     }
     if (addresses == nullptr) {
         throw std::runtime_error(
@@ -583,10 +588,6 @@ Socket connectTo(const std::string& host, std::uint16_t port,
     }
     std::unique_ptr<addrinfo, decltype(&::freeaddrinfo)> addressOwner(
         addresses, &::freeaddrinfo);
-    if (std::chrono::steady_clock::now() >= deadline) {
-        throw std::runtime_error("connection attempt timed out");
-    }
-
     int lastError = 0;
     for (auto* address = addresses; address != nullptr;
          address = address->ai_next) {

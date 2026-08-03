@@ -594,18 +594,17 @@ private:
             throw RemoteError(ErrorCode::ResourceLimitExceeded,
                 "dataset page extent is outside the server limit");
         }
-        constexpr std::uint64_t bytesPerCell
-            = sizeof(float) + sizeof(std::uint8_t);
-        const auto maximumCells
-            = static_cast<std::uint64_t>(request.maximumExtent)
-            * static_cast<std::uint64_t>(request.maximumExtent);
-        if (!fitsResponse(maximumCells * bytesPerCell)) {
-            throw RemoteError(ErrorCode::ResourceLimitExceeded,
-                "dataset page cannot fit in one negotiated frame");
-        }
         const auto dataset = requireDataset(request.dataset);
         const auto page
             = dataset->requestDatasetPage(request, cancellation);
+        const auto vectorBytes
+            = static_cast<std::uint64_t>(page.values.size()) * sizeof(float)
+            + static_cast<std::uint64_t>(page.covered.size())
+                * sizeof(std::uint8_t);
+        if (!fitsResponse(vectorBytes)) {
+            throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                "dataset page cannot fit in one negotiated frame");
+        }
         send(envelope.request_id,
             codec::toWire(page, dataset->cacheMetrics()));
     }

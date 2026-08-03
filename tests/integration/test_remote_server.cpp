@@ -120,7 +120,7 @@ std::unique_ptr<amrvis::remote::codec::NativeEnvelope> readWithDeadline(
 amrvis::remote::HelloRequestData helloRequest()
 {
     using namespace amrvis::remote;
-    return {"server integration test", "test", 0, protocolMinor,
+    return {"server integration test", "test", 0, protocolMinorVersion,
         defaultMaximumFrameBytes, {}, {}};
 }
 
@@ -176,7 +176,7 @@ int main(int argc, char* argv[])
         "server rejected a compatible handshake");
     const auto hello = codec::fromWire(
         *envelope->payload.AsHelloResponse());
-    require(hello.selectedMinor == protocolMinor
+    require(hello.selectedMinorVersion == protocolMinorVersion
             && hello.workerCount == options.workerCount,
         "server handshake reported the wrong limits");
 

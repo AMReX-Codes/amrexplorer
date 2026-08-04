@@ -172,11 +172,14 @@ public:
         try {
             while (!m_stopping.load()) {
                 const auto frame = m_handshakeComplete
-                    ? readFrame(m_socket, m_maximumFrameBytes.load())
+                    ? readFrame(m_socket, m_maximumFrameBytes.load(),
+                          std::chrono::steady_clock::time_point::max(),
+                          m_lifecycleStop.get_token())
                     : readFrame(m_socket,
                           std::min(m_options.maximumFrameBytes,
                               m_options.maximumHandshakeFrameBytes),
-                          m_handshakeDeadline);
+                          m_handshakeDeadline,
+                          m_lifecycleStop.get_token());
                 if (!frame) {
                     break;
                 }
@@ -186,6 +189,13 @@ public:
         } catch (...) {
         }
         stop();
+        // The reader has exited and lifecycle cancellation makes any
+        // in-flight writer leave its bounded readiness loop. Serialize with
+        // that writer before releasing the socket handle so closesocket never
+        // overlaps another Winsock operation.
+        std::scoped_lock lock(m_writeMutex);
+        m_socket.shutdown();
+        m_socket.close();
     }
 
     void stop() noexcept
@@ -193,7 +203,7 @@ public:
         if (m_stopping.exchange(true)) {
             return;
         }
-        m_socket.shutdown();
+        m_lifecycleStop.request_stop();
         std::vector<StopSource> stops;
         std::vector<std::shared_ptr<LocalDatasetSession>> datasets;
         {
@@ -808,7 +818,8 @@ private:
             if (!m_stopping.load()) {
                 writeFrameWithStallTimeout(m_socket, bytes,
                     m_maximumFrameBytes.load(),
-                    m_options.responseWriteStallTimeout);
+                    m_options.responseWriteStallTimeout, {},
+                    m_lifecycleStop.get_token());
             }
         } catch (...) {
             stop();
@@ -828,7 +839,8 @@ private:
             if (!m_stopping.load()) {
                 writeFrameWithStallTimeout(m_socket, bytes,
                     m_maximumFrameBytes.load(),
-                    m_options.responseWriteStallTimeout);
+                    m_options.responseWriteStallTimeout, {},
+                    m_lifecycleStop.get_token());
             }
         } catch (...) {
             stop();
@@ -841,6 +853,7 @@ private:
     std::chrono::steady_clock::time_point m_handshakeDeadline;
     std::atomic<std::uint32_t> m_maximumFrameBytes;
     std::atomic_bool m_stopping{false};
+    StopSource m_lifecycleStop;
     std::uint16_t m_selectedMinorVersion = 0;
     bool m_handshakeComplete = false;
     std::atomic<std::uint64_t> m_nextDatasetId{1};
@@ -897,7 +910,8 @@ public:
         auto retryDelay = std::chrono::milliseconds{10};
         while (!m_stopping.load()) {
             try {
-                auto socket = acceptConnection(m_listener.socket);
+                auto socket = acceptConnection(
+                    m_listener.socket, m_acceptStop.get_token());
                 auto session = std::make_shared<Session>(
                     std::move(socket), m_workers, m_options);
                 std::scoped_lock lock(m_sessionsMutex);
@@ -941,6 +955,7 @@ public:
                     retryDelay * 2, std::chrono::milliseconds{250});
             }
         }
+        m_listener.socket.close();
     }
 
     void requestStop() noexcept
@@ -948,8 +963,7 @@ public:
         if (m_stopping.exchange(true)) {
             return;
         }
-        m_listener.socket.shutdown();
-        m_listener.socket.close();
+        m_acceptStop.request_stop();
         std::vector<std::shared_ptr<Session>> sessions;
         {
             std::scoped_lock lock(m_sessionsMutex);
@@ -980,6 +994,7 @@ private:
     Listener m_listener;
     ThreadPool m_workers;
     std::atomic_bool m_stopping{false};
+    StopSource m_acceptStop;
     std::mutex m_sessionsMutex;
     std::vector<SessionWorker> m_sessions;
     mutable std::mutex m_errorMutex;

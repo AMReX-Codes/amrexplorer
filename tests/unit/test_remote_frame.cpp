@@ -158,6 +158,47 @@ int main()
     require(writeCancellationObserved,
         "a cancelled deadline-aware frame write was not interrupted");
 
+    const auto cancelledAcceptListener = listenOnLoopback(0);
+    amrvis::StopSource stoppedAccept;
+    auto cancelledAccept = std::async(std::launch::async, [&] {
+        try {
+            static_cast<void>(acceptConnection(
+                cancelledAcceptListener.socket, stoppedAccept.get_token()));
+        } catch (const amrvis::ReadCancelled&) {
+            return true;
+        }
+        return false;
+    });
+    stoppedAccept.request_stop();
+    require(cancelledAccept.wait_for(std::chrono::seconds(1))
+                == std::future_status::ready
+            && cancelledAccept.get(),
+        "a cancelled listener accept was not interrupted");
+
+    const auto cancelledReadListener = listenOnLoopback(0);
+    auto cancelledReadPeer = std::async(std::launch::async, [&] {
+        return acceptConnection(cancelledReadListener.socket);
+    });
+    auto cancelledReadClient
+        = connectTo("127.0.0.1", cancelledReadListener.port);
+    auto cancelledReadServer = cancelledReadPeer.get();
+    amrvis::StopSource stoppedRead;
+    auto cancelledRead = std::async(std::launch::async, [&] {
+        try {
+            static_cast<void>(readFrame(cancelledReadClient, 64,
+                std::chrono::steady_clock::time_point::max(),
+                stoppedRead.get_token()));
+        } catch (const amrvis::ReadCancelled&) {
+            return true;
+        }
+        return false;
+    });
+    stoppedRead.request_stop();
+    require(cancelledRead.wait_for(std::chrono::seconds(1))
+                == std::future_status::ready
+            && cancelledRead.get(),
+        "a cancelled frame read was not interrupted");
+
 #ifndef _WIN32
     // A peer that stops reading must not hold a writer forever. AF_UNIX keeps
     // this deterministic without loopback TCP receive-window autotuning.

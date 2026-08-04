@@ -43,7 +43,8 @@ struct Listener {
 
 [[nodiscard]] Listener listenOnLoopback(
     std::uint16_t port, int backlog = 16);
-[[nodiscard]] Socket acceptConnection(const Socket& listener);
+[[nodiscard]] Socket acceptConnection(
+    const Socket& listener, StopToken cancellation = {});
 [[nodiscard]] Socket connectTo(const std::string& host, std::uint16_t port);
 
 void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
@@ -51,18 +52,19 @@ void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
 void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
     std::uint32_t maximumBytes,
     std::chrono::steady_clock::time_point deadline,
-    StopToken cancellation = {});
+    StopToken cancellation = {}, StopToken lifecycle = {});
 // Writes may take arbitrarily long while the peer continues accepting bytes.
 // The operation fails only when no bytes can be written for stallTimeout.
 void writeFrameWithStallTimeout(const Socket& socket,
     std::span<const std::uint8_t> payload, std::uint32_t maximumBytes,
     std::chrono::milliseconds stallTimeout,
-    StopToken cancellation = {});
+    StopToken cancellation = {}, StopToken lifecycle = {});
 [[nodiscard]] std::optional<std::vector<std::uint8_t>> readFrame(
     const Socket& socket,
     std::uint32_t maximumBytes = defaultMaximumFrameBytes);
 [[nodiscard]] std::optional<std::vector<std::uint8_t>> readFrame(
     const Socket& socket, std::uint32_t maximumBytes,
-    std::chrono::steady_clock::time_point deadline);
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation = {});
 
 } // namespace amrvis::remote

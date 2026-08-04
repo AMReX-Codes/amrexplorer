@@ -160,10 +160,14 @@ void configureConnectedSocket(NativeSocket descriptor)
 }
 
 void waitForReadable(NativeSocket socket,
-    std::chrono::steady_clock::time_point deadline)
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation)
 {
     using namespace std::chrono_literals;
     for (;;) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         const auto now = std::chrono::steady_clock::now();
         if (deadline != std::chrono::steady_clock::time_point::max()
             && now >= deadline) {
@@ -205,11 +209,12 @@ void waitForReadable(NativeSocket socket,
 
 void waitForWritable(NativeSocket socket,
     std::chrono::steady_clock::time_point deadline,
-    StopToken cancellation, const char* timeoutMessage)
+    StopToken cancellation, StopToken lifecycle,
+    const char* timeoutMessage)
 {
     using namespace std::chrono_literals;
     for (;;) {
-        if (cancellation.stop_requested()) {
+        if (cancellation.stop_requested() || lifecycle.stop_requested()) {
             throw ReadCancelled();
         }
         const auto now = std::chrono::steady_clock::now();
@@ -252,11 +257,12 @@ void waitForWritable(NativeSocket socket,
 
 bool readExact(NativeSocket descriptor, std::span<std::uint8_t> destination,
     bool allowCleanEof,
-    std::chrono::steady_clock::time_point deadline)
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation)
 {
     std::size_t completed = 0;
     while (completed < destination.size()) {
-        waitForReadable(descriptor, deadline);
+        waitForReadable(descriptor, deadline, cancellation);
 #ifdef _WIN32
         const auto remaining = std::min<std::size_t>(
             destination.size() - completed,
@@ -292,7 +298,7 @@ void writeExact(
 void writeExact(NativeSocket descriptor,
     std::span<const std::uint8_t> source,
     std::chrono::steady_clock::time_point deadline,
-    StopToken cancellation,
+    StopToken cancellation, StopToken lifecycle,
     std::optional<std::chrono::milliseconds> stallTimeout = std::nullopt)
 {
     std::size_t completed = 0;
@@ -301,8 +307,9 @@ void writeExact(NativeSocket descriptor,
         : std::chrono::steady_clock::time_point::max();
     while (completed < source.size()) {
         waitForWritable(descriptor, std::min(deadline, progressDeadline),
-            cancellation, stallTimeout ? "wire frame write stalled"
-                                       : "wire frame write timed out");
+            cancellation, lifecycle,
+            stallTimeout ? "wire frame write stalled"
+                         : "wire frame write timed out");
 #ifdef _WIN32
         const auto remaining = std::min<std::size_t>(
             source.size() - completed, 64U * 1024U);
@@ -341,7 +348,7 @@ void writeExact(
     NativeSocket descriptor, std::span<const std::uint8_t> source)
 {
     writeExact(descriptor, source,
-        std::chrono::steady_clock::time_point::max(), {});
+        std::chrono::steady_clock::time_point::max(), {}, {});
 }
 
 } // namespace
@@ -429,6 +436,7 @@ Listener listenOnLoopback(std::uint16_t port, int backlog)
     if (::listen(native(socket.descriptor()), backlog) != 0) {
         throwSocketError("listen");
     }
+    setNonBlocking(native(socket.descriptor()), true);
 
     SocketLength size = static_cast<SocketLength>(sizeof(address));
     if (::getsockname(native(socket.descriptor()),
@@ -439,10 +447,15 @@ Listener listenOnLoopback(std::uint16_t port, int backlog)
     return {std::move(socket), ntohs(address.sin_port)};
 }
 
-Socket acceptConnection(const Socket& listener)
+Socket acceptConnection(const Socket& listener, StopToken cancellation)
 {
     ensureSockets();
     for (;;) {
+        waitForReadable(native(listener.descriptor()),
+            std::chrono::steady_clock::time_point::max(), cancellation);
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         const auto descriptor
             = ::accept(native(listener.descriptor()), nullptr, nullptr);
         if (descriptor != invalidSocket) {
@@ -451,7 +464,7 @@ Socket acceptConnection(const Socket& listener)
             return socket;
         }
         const auto error = lastSocketError();
-        if (!interrupted(error)) {
+        if (!interrupted(error) && !wouldBlock(error)) {
             throwSocketError("accept", error);
         }
     }
@@ -518,7 +531,7 @@ void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
 void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
     std::uint32_t maximumBytes,
     std::chrono::steady_clock::time_point deadline,
-    StopToken cancellation)
+    StopToken cancellation, StopToken lifecycle)
 {
     if (payload.empty() || payload.size() > maximumBytes
         || payload.size() > std::numeric_limits<std::uint32_t>::max()) {
@@ -529,13 +542,15 @@ void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
         = reinterpret_cast<const std::uint8_t*>(&networkSize);
     writeExact(native(socket.descriptor()),
         std::span<const std::uint8_t>(sizeBytes, sizeof(networkSize)),
-        deadline, cancellation);
-    writeExact(native(socket.descriptor()), payload, deadline, cancellation);
+        deadline, cancellation, lifecycle);
+    writeExact(native(socket.descriptor()), payload, deadline, cancellation,
+        lifecycle);
 }
 
 void writeFrameWithStallTimeout(const Socket& socket,
     std::span<const std::uint8_t> payload, std::uint32_t maximumBytes,
-    std::chrono::milliseconds stallTimeout, StopToken cancellation)
+    std::chrono::milliseconds stallTimeout, StopToken cancellation,
+    StopToken lifecycle)
 {
     if (payload.empty() || payload.size() > maximumBytes
         || payload.size() > std::numeric_limits<std::uint32_t>::max()) {
@@ -550,10 +565,10 @@ void writeFrameWithStallTimeout(const Socket& socket,
         = reinterpret_cast<const std::uint8_t*>(&networkSize);
     writeExact(native(socket.descriptor()),
         std::span<const std::uint8_t>(sizeBytes, sizeof(networkSize)),
-        std::chrono::steady_clock::time_point::max(), cancellation,
+        std::chrono::steady_clock::time_point::max(), cancellation, lifecycle,
         stallTimeout);
     writeExact(native(socket.descriptor()), payload,
-        std::chrono::steady_clock::time_point::max(), cancellation,
+        std::chrono::steady_clock::time_point::max(), cancellation, lifecycle,
         stallTimeout);
 }
 
@@ -561,16 +576,18 @@ std::optional<std::vector<std::uint8_t>> readFrame(
     const Socket& socket, std::uint32_t maximumBytes)
 {
     return readFrame(socket, maximumBytes,
-        std::chrono::steady_clock::time_point::max());
+        std::chrono::steady_clock::time_point::max(), {});
 }
 
 std::optional<std::vector<std::uint8_t>> readFrame(const Socket& socket,
     std::uint32_t maximumBytes,
-    std::chrono::steady_clock::time_point deadline)
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation)
 {
     std::array<std::uint8_t, sizeof(std::uint32_t)> sizeBytes{};
     if (!readExact(
-            native(socket.descriptor()), sizeBytes, true, deadline)) {
+            native(socket.descriptor()), sizeBytes, true, deadline,
+            cancellation)) {
         return std::nullopt;
     }
     std::uint32_t networkSize = 0;
@@ -581,7 +598,7 @@ std::optional<std::vector<std::uint8_t>> readFrame(const Socket& socket,
     }
     std::vector<std::uint8_t> payload(size);
     static_cast<void>(readExact(
-        native(socket.descriptor()), payload, false, deadline));
+        native(socket.descriptor()), payload, false, deadline, cancellation));
     return payload;
 }
 

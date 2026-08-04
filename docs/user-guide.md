@@ -76,14 +76,14 @@ pause for longer, increase that interval explicitly:
 step 1. Leave this running while you work:
 
 ```text
-(local) $ ssh -N -L 41419:localhost:41419 user@remote
+(local) $ ssh -N -L 41419:127.0.0.1:41419 user@remote
 ```
 
 If you reach the remote machine through a separate login gateway, add
 `-J user@gateway`:
 
 ```text
-(local) $ ssh -N -J user@gateway -L 41419:localhost:41419 user@remote
+(local) $ ssh -N -J user@gateway -L 41419:127.0.0.1:41419 user@remote
 ```
 
 **Step 3 — On your local machine, open the dataset.** Read the token from step
@@ -111,7 +111,7 @@ match the server. Choose a fixed local port and step 3 always uses the same
 number, even though the server's port changes each run:
 
 ```text
-(local) $ ssh -N -L 9000:localhost:41419 user@remote
+(local) $ ssh -N -L 9000:127.0.0.1:41419 user@remote
 (local) $ read -rs AMREXPLORER_TOKEN && printf '\n'
 (local) $ amrexplorer --connect 127.0.0.1:9000 --token-stdin \
     /remote/path/plt00010 <<<"$AMREXPLORER_TOKEN"

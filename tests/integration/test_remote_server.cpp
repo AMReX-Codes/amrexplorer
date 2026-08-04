@@ -4,7 +4,9 @@
 #include <amrexplorer/remote/Frame.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -16,6 +18,24 @@
 #include <utility>
 
 namespace {
+
+std::atomic<const char*> activeStage{"before main"};
+
+void reportStage(const char* stage)
+{
+    activeStage.store(stage, std::memory_order_relaxed);
+    std::cerr << "[remote_server stage] " << stage << '\n';
+    std::cerr.flush();
+}
+
+[[noreturn]] void reportTerminate() noexcept
+{
+    std::fprintf(stderr,
+        "[remote_server terminate] std::terminate invoked during: %s\n",
+        activeStage.load(std::memory_order_relaxed));
+    std::fflush(stderr);
+    std::_Exit(134);
+}
 
 void require(bool condition, const char* message)
 {
@@ -151,6 +171,9 @@ int main(int argc, char* argv[])
 {
     using namespace amrvis;
     using namespace amrvis::remote;
+
+    std::set_terminate(reportTerminate);
+    reportStage("test setup");
 
     if (argc != 2) {
         std::cerr << "usage: test_remote_server MATERIALIZED_PLOTFILE\n";
@@ -356,9 +379,11 @@ int main(int argc, char* argv[])
         "duplicate live request ID did not receive a bounded error");
     require(duplicateRunning.stopWithin(std::chrono::seconds{2}),
         "duplicate-ID server shutdown exceeded its deadline");
+    reportStage("duplicate-ID server stopped");
 
     // A large response to a peer that stops reading must time out, retire that
     // session, and release the shared worker for another connection.
+    reportStage("stalled-response server setup");
     ServerOptions stalledOptions;
     stalledOptions.workerCount = 1;
     stalledOptions.maximumDatasets = 1;
@@ -382,6 +407,7 @@ int main(int argc, char* argv[])
     writeFrame(stalledSocket,
         codec::encode(3, codec::toWire(stalledSlice)),
         stalledHello.maximumFrameBytes);
+    reportStage("stalled response requested");
 
     auto healthySocket = connectTo("127.0.0.1", stalledServer.port());
     envelope = exchange(healthySocket, 1, codec::toWire(helloRequest()),
@@ -392,6 +418,7 @@ int main(int argc, char* argv[])
         healthyHello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
         "stalled response retained the shared server worker");
+    reportStage("healthy client reclaimed worker");
     bool stalledRetired = false;
     try {
         stalledRetired = readWithDeadline(stalledSocket,
@@ -402,8 +429,10 @@ int main(int argc, char* argv[])
     }
     require(stalledRetired,
         "server did not retire the stalled response session");
+    reportStage("stalled session retired");
     require(stalledRunning.stopWithin(std::chrono::seconds{2}),
         "stalled-response server shutdown exceeded its deadline");
+    reportStage("stalled-response server stopped");
 
     codec::fb::CloseDatasetRequestT close;
     close.dataset_id = opened.id.value;
@@ -413,6 +442,7 @@ int main(int argc, char* argv[])
         "server did not close the dataset");
     require(running.stopWithin(std::chrono::seconds{2}),
         "server shutdown exceeded its deadline");
+    reportStage("primary server stopped");
 
     ServerOptions connectionOptions;
     connectionOptions.workerCount = 1;
@@ -439,6 +469,7 @@ int main(int argc, char* argv[])
         "server did not enforce the configured connection limit");
     require(connectionLimitedRunning.stopWithin(std::chrono::seconds{2}),
         "connection-limited server shutdown exceeded its deadline");
+    reportStage("connection-limited server stopped");
 
     ServerOptions handshakeTimeoutOptions;
     handshakeTimeoutOptions.workerCount = 1;
@@ -473,6 +504,7 @@ int main(int argc, char* argv[])
         "server retained the handshake deadline after authentication");
     require(handshakeTimeoutRunning.stopWithin(std::chrono::seconds{2}),
         "handshake-timeout server shutdown exceeded its deadline");
+    reportStage("handshake-timeout server stopped");
 
     ServerOptions handshakeFrameOptions;
     handshakeFrameOptions.workerCount = 1;
@@ -516,6 +548,7 @@ int main(int argc, char* argv[])
         "server retained the handshake frame cap after authentication");
     require(handshakeFrameRunning.stopWithin(std::chrono::seconds{2}),
         "handshake-frame server shutdown exceeded its deadline");
+    reportStage("handshake-frame server stopped");
 
     ServerOptions boundedOptions;
     boundedOptions.workerCount = 1;
@@ -547,7 +580,9 @@ int main(int argc, char* argv[])
     }
     require(boundedRunning.stopWithin(std::chrono::seconds{2}),
         "small-frame server shutdown exceeded its deadline");
+    reportStage("small-frame server stopped");
     std::filesystem::remove_all(
         std::filesystem::path(argv[1]) / "Oversized");
+    reportStage("test complete");
     return 0;
 }

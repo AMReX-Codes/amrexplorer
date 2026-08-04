@@ -335,6 +335,23 @@ add_test(NAME tool_line_repro
 set_tests_properties(tool_line_repro PROPERTIES TIMEOUT 60)
 
 if(TARGET amrexplorer_qt)
+    add_executable(test_sequence_controller
+        unit/test_sequence_controller.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/SequenceController.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/SequenceController.hpp"
+    )
+    set_target_properties(test_sequence_controller PROPERTIES AUTOMOC ON)
+    target_include_directories(test_sequence_controller
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_sequence_controller
+        PRIVATE
+            amrexplorer::pipeline
+            amrexplorer::warnings
+            Qt6::Concurrent
+            Qt6::Core
+    )
+    add_test(NAME sequence_controller COMMAND test_sequence_controller)
+
     add_executable(test_remote_endpoint unit/test_remote_endpoint.cpp)
     target_include_directories(test_remote_endpoint
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")

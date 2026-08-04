@@ -1,8 +1,9 @@
 # Remote client/server architecture plan
 
-Status: proposed.
+Status: implemented and validated by the remote client/server PR stack; the
+PR #119 review remediation completed on 2026-08-01.
 
-This document proposes a production implementation with a shared local/remote
+The implementation follows the design below: a shared local/remote
 dataset-session boundary, viewport- and page-bounded queries, a verified
 FlatBuffers protocol and portable framed transport, a concurrent loopback
 server, a single-reader client, remote Qt/CLI workflows, remote sequences and
@@ -88,7 +89,11 @@ rasterize the current view.
 ### Out of scope for protocol 1.0
 
 - Directly exposing the server on an untrusted network.
-- Application-level authentication, authorization, or TLS.
+- Application-level authorization or TLS. (A mandatory per-session access
+  token *is* enforced — see §5.3 — so that a shared loopback interface does not
+  let other local users on the server host connect through the owning user's
+  account. It is not user authentication or transport encryption; SSH still
+  provides those.)
 - Remote filesystem browsing.
 - Server-side rendering, palettes, contours, glyph generation, or image
   export for protocol 1.0.
@@ -283,7 +288,13 @@ The first request must be `HelloRequest`. It will carry:
 - client name and software version;
 - supported protocol major version and minor version range;
 - maximum accepted frame size;
+- the session access token printed by the server at startup;
 - supported optional capabilities.
+
+The server compares the token against the one it generated (constant-time,
+so a rejection does not leak how many bytes matched). A missing or wrong
+token is answered with an `Unauthorized` error and the connection is closed
+before any dataset request is served.
 
 `HelloResponse` will return:
 
@@ -491,11 +502,13 @@ amrexplorer-server [--port PORT] [--threads COUNT]
 ```
 
 The server will always bind to `127.0.0.1`. Port zero will remain available
-for tests and automation. The startup line will retain a machine-readable
-form:
+for tests and automation. At startup the server generates a random 128-bit
+session token (from the OS CSPRNG via `std::random_device`) that every client
+must echo in its handshake; the check is mandatory and cannot be disabled. The
+startup line carries it in a machine-readable form:
 
 ```text
-LISTENING 127.0.0.1 <port>
+LISTENING 127.0.0.1 <port> TOKEN <token>
 ```
 
 The server process will have:
@@ -564,13 +577,21 @@ No networking types will appear in the dataset or Qt-facing APIs.
 Document the normal workflow:
 
 ```bash
-# Remote machine
-amrexplorer-server --port 48192
+# Remote machine (prints: LISTENING 127.0.0.1 8642 TOKEN <token>)
+amrexplorer-server --port 8642
 
-# Local machine
-ssh -N -L 48192:127.0.0.1:48192 user@remote
-amrexplorer --connect 127.0.0.1:48192 /remote/path/to/plt00010
+# Local machine (read the token without placing it in argv or shell history)
+ssh -N -L 8642:127.0.0.1:8642 user@remote
+read -rs AMREXPLORER_TOKEN && printf '\n'
+amrexplorer --connect 127.0.0.1:8642 --token-stdin \
+    /remote/path/to/plt00010 <<<"$AMREXPLORER_TOKEN"
+unset AMREXPLORER_TOKEN
 ```
+
+On a shared host prefer `--port 0` (kernel-assigned, printed on the
+`LISTENING` line) and avoid the ephemeral range (32768–60999 on Linux). If the
+server host is reached through a login gateway that only relays the SSH
+session, forward through the compute host with `ssh -J gateway -L ... host`.
 
 ### 9.2 Desktop actions
 
@@ -595,8 +616,13 @@ cancelling their work.
 Preserve all current local and smoke-test forms. Add:
 
 ```text
-amrexplorer --connect HOST:PORT REMOTE_PATH [REMOTE_PATH ...]
+amrexplorer --connect HOST:PORT --token-stdin \
+    REMOTE_PATH [REMOTE_PATH ...]
 ```
+
+`--token-stdin` reads one token line from standard input so the bearer token is
+not exposed in the long-lived GUI process arguments or recorded literally in
+shell history.
 
 One path opens a dataset and multiple paths open a sequence, matching the
 current local positional behavior. Invalid endpoints or conflicting options
@@ -822,8 +848,8 @@ The architecture is complete when:
 - full FABs, whole levels, native-resolution lines, volume data, and volume
   geometry never cross the wire;
 - server resource limits prevent unbounded client-controlled allocation;
-- the server binds only to loopback and the SSH security boundary is
-  documented;
+- the server binds only to loopback, enforces a mandatory per-session access
+  token on the handshake, and the SSH security boundary is documented;
 - the server and client shut down without blocked receive or worker threads;
 - generated bindings come only from the checked-in schema at build time;
 - production tests replace the prototype demo, and the prototype is removed.
@@ -834,7 +860,9 @@ Please review these choices before implementation:
 
 1. `DatasetSession` is the shared local/remote boundary; block reads are not a
    public remote operation.
-2. The server is loopback-only and relies on SSH for all security.
+2. The server is loopback-only and relies on SSH for transport security, plus
+   a mandatory per-session token so a shared loopback interface does not expose
+   one user's server to another local user.
 3. Protocol 1.0 transfers only the cells, masks, clipped AMR
    coverage/geometry, requested components, and interpolation halo needed to
    rasterize the current 1-D/2-D view.

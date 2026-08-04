@@ -95,7 +95,9 @@ int main(int argc, char* argv[])
         ServerThread serverThread(server);
 
         auto connection = std::make_shared<amrvis::remote::Connection>(
-            "127.0.0.1", server.port());
+            "127.0.0.1", server.port(),
+            amrvis::remote::ConnectionOptions{
+                .sessionToken = server.token()});
         require(connection->serverInfo().workerCount == 3,
             "handshake did not report worker count");
         amrvis::StopSource cancelledOpen;
@@ -170,6 +172,7 @@ int main(int argc, char* argv[])
         // planner while the raster response still succeeds within the frame.
         amrvis::remote::ConnectionOptions smallFrameOptions;
         smallFrameOptions.maximumFrameBytes = 4096;
+        smallFrameOptions.sessionToken = server.token();
         auto smallFrameConnection
             = std::make_shared<amrvis::remote::Connection>(
                 "127.0.0.1", server.port(), smallFrameOptions);
@@ -303,7 +306,9 @@ int main(int argc, char* argv[])
 
         auto parallelConnection
             = std::make_shared<amrvis::remote::Connection>(
-                "127.0.0.1", server.port());
+                "127.0.0.1", server.port(),
+                amrvis::remote::ConnectionOptions{
+                    .sessionToken = server.token()});
         auto parallelDataset
             = amrvis::remote::RemoteDatasetSession::open(
                 parallelConnection,
@@ -335,7 +340,9 @@ int main(int argc, char* argv[])
         connection->close();
 
         auto reconnected = std::make_shared<amrvis::remote::Connection>(
-            "127.0.0.1", server.port());
+            "127.0.0.1", server.port(),
+            amrvis::remote::ConnectionOptions{
+                .sessionToken = server.token()});
         auto reopened = amrvis::remote::RemoteDatasetSession::open(
             reconnected, std::filesystem::path(argv[1]).string(),
             8ULL * 1024ULL * 1024ULL);

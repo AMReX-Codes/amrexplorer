@@ -25,6 +25,11 @@ struct ServerOptions {
     // cannot retain a worker or the session write mutex indefinitely.
     std::chrono::milliseconds responseWriteStallTimeout{30000};
     std::string softwareVersion = "unknown";
+    // Per-session access token. Clients must present a byte-identical token in
+    // their handshake or the connection is refused. Left empty, the server
+    // generates a fresh random token at construction; there is no way to
+    // disable the check. See token().
+    std::string sessionToken;
 };
 
 class Server {
@@ -37,6 +42,9 @@ public:
 
     [[nodiscard]] std::uint16_t port() const noexcept;
     [[nodiscard]] std::string lastError() const;
+    // The access token clients must present. Either the token supplied in
+    // ServerOptions or, when that was empty, the one generated at construction.
+    [[nodiscard]] const std::string& token() const noexcept;
     void run();
     void requestStop() noexcept;
 

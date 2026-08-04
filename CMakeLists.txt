@@ -17,6 +17,8 @@ option(AMREXPLORER_BUILD_MACOS_APP_BUNDLE
 option(AMREXPLORER_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(AMREXPLORER_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(AMREXPLORER_ENABLE_TSAN "Enable ThreadSanitizer (mutually exclusive with AMREXPLORER_ENABLE_SANITIZERS)" OFF)
+option(AMREXPLORER_FORCE_FETCH_FLATBUFFERS
+    "Skip installed FlatBuffers discovery and use the pinned fallback" OFF)
 
 if(AMREXPLORER_ENABLE_QT AND NOT AMREXPLORER_ENABLE_REMOTE)
     message(FATAL_ERROR
@@ -80,20 +82,41 @@ add_subdirectory(src/io)
 add_subdirectory(src/query)
 add_subdirectory(src/data)
 if(AMREXPLORER_ENABLE_REMOTE)
-    include(FetchContent)
-    set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(FLATBUFFERS_BUILD_GRPCTEST OFF CACHE BOOL "" FORCE)
-    set(FLATBUFFERS_BUILD_SHAREDLIB OFF CACHE BOOL "" FORCE)
-    set(FLATBUFFERS_BUILD_STATICLIB OFF CACHE BOOL "" FORCE)
-    set(FLATBUFFERS_BUILD_FLATC ON CACHE BOOL "" FORCE)
-    set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(flatbuffers
-        GIT_REPOSITORY https://github.com/google/flatbuffers.git
-        GIT_TAG v25.12.19
-        GIT_SHALLOW TRUE
-    )
-    FetchContent_MakeAvailable(flatbuffers)
+    if(NOT AMREXPLORER_FORCE_FETCH_FLATBUFFERS)
+        find_package(Flatbuffers CONFIG QUIET)
+    endif()
+    if(Flatbuffers_FOUND)
+        if(NOT TARGET flatbuffers::flatbuffers
+            OR NOT TARGET flatbuffers::flatc)
+            message(FATAL_ERROR
+                "The installed FlatBuffers package must provide both "
+                "flatbuffers::flatbuffers and flatbuffers::flatc")
+        endif()
+        set(AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET
+            flatbuffers::flatbuffers)
+        set(AMREXPLORER_FLATC_TARGET flatbuffers::flatc)
+        message(STATUS "Using installed FlatBuffers package")
+    else()
+        include(FetchContent)
+        set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(FLATBUFFERS_BUILD_GRPCTEST OFF CACHE BOOL "" FORCE)
+        set(FLATBUFFERS_BUILD_SHAREDLIB OFF CACHE BOOL "" FORCE)
+        set(FLATBUFFERS_BUILD_STATICLIB OFF CACHE BOOL "" FORCE)
+        set(FLATBUFFERS_BUILD_FLATC ON CACHE BOOL "" FORCE)
+        set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(flatbuffers
+            GIT_REPOSITORY https://github.com/google/flatbuffers.git
+            GIT_TAG v25.12.19
+            GIT_SHALLOW TRUE
+        )
+        FetchContent_MakeAvailable(flatbuffers)
+        set(AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET
+            FlatBuffers::FlatBuffers)
+        set(AMREXPLORER_FLATC_TARGET flatc)
+        message(STATUS "Using pinned FetchContent FlatBuffers fallback")
+    endif()
     add_subdirectory(src/remote)
+    add_subdirectory(tools/amrexplorer_server)
 endif()
 add_subdirectory(src/render2d)
 add_subdirectory(src/pipeline)

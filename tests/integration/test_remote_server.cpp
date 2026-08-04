@@ -12,6 +12,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -117,11 +118,11 @@ std::unique_ptr<amrvis::remote::codec::NativeEnvelope> readWithDeadline(
     return pending.get();
 }
 
-amrvis::remote::HelloRequestData helloRequest()
+amrvis::remote::HelloRequestData helloRequest(std::string sessionToken)
 {
     using namespace amrvis::remote;
     return {"server integration test", "test", 0, protocolMinorVersion,
-        defaultMaximumFrameBytes, {}, {}};
+        defaultMaximumFrameBytes, std::move(sessionToken), {}};
 }
 
 void writeOversizedParticleHeader(const std::filesystem::path& root)
@@ -166,12 +167,34 @@ int main(int argc, char* argv[])
     Server server(options);
     RunningServer running(server);
 
+    require(!server.token().empty(),
+        "server did not generate a session token");
+
+    // A handshake carrying the wrong token must be refused with Unauthorized,
+    // and the server must close that connection rather than serve it.
+    {
+        auto rogue = connectTo("127.0.0.1", server.port());
+        auto rejected = exchange(rogue, 1,
+            codec::toWire(HelloRequestData{
+                "rogue client", "test", 0, protocolMinorVersion,
+                defaultMaximumFrameBytes, server.token() + "x", {}}),
+            defaultMaximumFrameBytes);
+        require(codec::inspect(*rejected).payload
+                == PayloadKind::ErrorResponse,
+            "server accepted a bad token");
+        require(codec::fromWire(*rejected->payload.AsErrorResponse()).code
+                == ErrorCode::Unauthorized,
+            "bad token returned the wrong error code");
+        require(!readFrame(rogue, defaultMaximumFrameBytes).has_value(),
+            "server left the rejected connection open");
+    }
+
     auto socket = connectTo("127.0.0.1", server.port());
     constexpr std::uint32_t reducedFrameBytes = 1U * 1024U * 1024U;
-    auto reducedFrameHello = helloRequest();
-    reducedFrameHello.maximumFrameBytes = reducedFrameBytes;
+    auto authorizedHello = helloRequest(server.token());
+    authorizedHello.maximumFrameBytes = reducedFrameBytes;
     auto envelope = exchange(socket, 1,
-        codec::toWire(reducedFrameHello), reducedFrameBytes);
+        codec::toWire(authorizedHello), reducedFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
         "server rejected a compatible handshake");
     const auto hello = codec::fromWire(
@@ -298,7 +321,8 @@ int main(int argc, char* argv[])
     RunningServer duplicateRunning(duplicateServer);
     auto duplicateSocket
         = connectTo("127.0.0.1", duplicateServer.port());
-    envelope = exchange(duplicateSocket, 1, codec::toWire(helloRequest()),
+    envelope = exchange(duplicateSocket, 1,
+        codec::toWire(helloRequest(duplicateServer.token())),
         defaultMaximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
         "server rejected the duplicate-ID test connection");
@@ -368,7 +392,8 @@ int main(int argc, char* argv[])
     Server stalledServer(stalledOptions);
     RunningServer stalledRunning(stalledServer);
     auto stalledSocket = connectTo("127.0.0.1", stalledServer.port());
-    envelope = exchange(stalledSocket, 1, codec::toWire(helloRequest()),
+    envelope = exchange(stalledSocket, 1,
+        codec::toWire(helloRequest(stalledServer.token())),
         defaultMaximumFrameBytes);
     const auto stalledHello
         = codec::fromWire(*envelope->payload.AsHelloResponse());
@@ -384,7 +409,8 @@ int main(int argc, char* argv[])
         stalledHello.maximumFrameBytes);
 
     auto healthySocket = connectTo("127.0.0.1", stalledServer.port());
-    envelope = exchange(healthySocket, 1, codec::toWire(helloRequest()),
+    envelope = exchange(healthySocket, 1,
+        codec::toWire(helloRequest(stalledServer.token())),
         defaultMaximumFrameBytes);
     const auto healthyHello
         = codec::fromWire(*envelope->payload.AsHelloResponse());
@@ -421,7 +447,8 @@ int main(int argc, char* argv[])
     RunningServer connectionLimitedRunning(connectionLimitedServer);
     auto allowedSocket
         = connectTo("127.0.0.1", connectionLimitedServer.port());
-    envelope = exchange(allowedSocket, 1, codec::toWire(helloRequest()),
+    envelope = exchange(allowedSocket, 1,
+        codec::toWire(helloRequest(connectionLimitedServer.token())),
         defaultMaximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
         "server rejected the allowed connection");
@@ -460,7 +487,7 @@ int main(int argc, char* argv[])
     auto recoveredSocket
         = connectTo("127.0.0.1", handshakeTimeoutServer.port());
     envelope = exchange(recoveredSocket, 1,
-        codec::toWire(helloRequest()),
+        codec::toWire(helloRequest(handshakeTimeoutServer.token())),
         defaultMaximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
         "authorized client could not reclaim a timed-out connection slot");
@@ -477,13 +504,14 @@ int main(int argc, char* argv[])
     ServerOptions handshakeFrameOptions;
     handshakeFrameOptions.workerCount = 1;
     handshakeFrameOptions.maximumConnections = 1;
+    handshakeFrameOptions.sessionToken = "bounded-handshake-token";
     const auto normalHelloBytes = codec::encode(
-        1, codec::toWire(helloRequest()));
+        1, codec::toWire(helloRequest(handshakeFrameOptions.sessionToken)));
     handshakeFrameOptions.maximumHandshakeFrameBytes
         = static_cast<std::uint32_t>(normalHelloBytes.size() + 16);
     Server handshakeFrameServer(handshakeFrameOptions);
     RunningServer handshakeFrameRunning(handshakeFrameServer);
-    auto oversizedHello = helloRequest();
+    auto oversizedHello = helloRequest(handshakeFrameServer.token());
     oversizedHello.clientName.assign(
         handshakeFrameOptions.maximumHandshakeFrameBytes, 'x');
     auto oversizedHelloBytes
@@ -509,7 +537,7 @@ int main(int argc, char* argv[])
     auto boundedHandshakeSocket
         = connectTo("127.0.0.1", handshakeFrameServer.port());
     envelope = exchange(boundedHandshakeSocket, 1,
-        codec::toWire(helloRequest()),
+        codec::toWire(helloRequest(handshakeFrameServer.token())),
         defaultMaximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse,
         "server rejected a hello within the pre-authentication frame cap");
@@ -531,7 +559,7 @@ int main(int argc, char* argv[])
     Server boundedServer(boundedOptions);
     RunningServer boundedRunning(boundedServer);
     auto boundedSocket = connectTo("127.0.0.1", boundedServer.port());
-    auto boundedHello = helloRequest();
+    auto boundedHello = helloRequest(boundedServer.token());
     boundedHello.maximumFrameBytes = boundedOptions.maximumFrameBytes;
     envelope = exchange(boundedSocket, 1, codec::toWire(boundedHello),
         boundedOptions.maximumFrameBytes);

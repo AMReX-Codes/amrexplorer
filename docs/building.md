@@ -24,6 +24,10 @@ cmake --preset headless    # No Qt, core library + tools + tests → build-headl
 cmake --build --preset headless
 ctest --preset headless
 
+cmake --preset remote      # Headless remote server + protocol tests → build-remote/
+cmake --build --preset remote
+ctest --preset remote
+
 cmake --preset sanitizers  # Headless + ASan + UBSan → build-sanitizers/
 cmake --build --preset sanitizers
 ctest --preset sanitizers
@@ -48,6 +52,15 @@ The clang preset mirrors the CI clang job (which builds with
 `-DAMREXPLORER_WARNINGS_AS_ERRORS=ON`): run it before pushing to catch
 Clang-only diagnostics that a GCC build stays silent about, such as
 `-Wunused-const-variable`.
+
+Remote support is enabled by default with Qt and can be selected explicitly
+with `-DAMREXPLORER_ENABLE_REMOTE=ON`. The checked-in FlatBuffers schema is
+compiled into the build tree; generated bindings are not checked in. CMake
+first searches for an installed FlatBuffers config package that provides
+`flatbuffers::flatbuffers` and `flatbuffers::flatc`. If none is available, it
+fetches the pinned fallback. Use `CMAKE_PREFIX_PATH` to select a package-manager
+installation, or `-DAMREXPLORER_FORCE_FETCH_FLATBUFFERS=ON` to force the
+fallback path.
 
 On macOS, Qt builds produce `build/src/qt/amrexplorer.app` by default. The bundle
 contains its executable at `Contents/MacOS/amrexplorer` and can be installed into a

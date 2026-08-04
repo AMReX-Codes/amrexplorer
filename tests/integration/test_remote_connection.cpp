@@ -126,7 +126,8 @@ int main(int argc, char* argv[])
     Server server(options);
     RunningServer running(server);
 
-    Connection connection("127.0.0.1", server.port());
+    Connection connection("127.0.0.1", server.port(),
+        ConnectionOptions{.sessionToken = server.token()});
     require(connection.connected()
             && connection.serverInfo().workerCount == options.workerCount,
         "connection did not complete the protocol handshake");

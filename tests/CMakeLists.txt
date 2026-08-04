@@ -106,7 +106,7 @@ if(TARGET amrexplorer_remote)
     target_link_libraries(test_remote_codec
         PRIVATE
             amrexplorer::remote
-            FlatBuffers::FlatBuffers
+            ${AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET}
             amrexplorer::warnings
     )
     add_test(NAME remote_codec COMMAND test_remote_codec)
@@ -118,7 +118,7 @@ if(TARGET amrexplorer_remote)
     target_link_libraries(test_remote_server
         PRIVATE
             amrexplorer::remote
-            FlatBuffers::FlatBuffers
+            ${AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET}
             amrexplorer::warnings
             Threads::Threads
     )
@@ -168,7 +168,7 @@ if(TARGET amrexplorer_remote)
     target_link_libraries(test_remote_connection
         PRIVATE
             amrexplorer::remote
-            FlatBuffers::FlatBuffers
+            ${AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET}
             amrexplorer::warnings
             Threads::Threads
     )
@@ -192,6 +192,15 @@ if(TARGET amrexplorer_remote)
     set_tests_properties(remote_session PROPERTIES
         FIXTURES_REQUIRED remote_server_materialized
         TIMEOUT 30)
+
+    add_test(NAME remote_server_help
+        COMMAND "$<TARGET_FILE:amrexplorer_server>" --help)
+    set_tests_properties(remote_server_help PROPERTIES
+        PASS_REGULAR_EXPRESSION "usage: amrexplorer-server")
+    add_test(NAME remote_server_rejects_zero_datasets
+        COMMAND "${CMAKE_COMMAND}"
+            "-DAMREXPLORER_SERVER=$<TARGET_FILE:amrexplorer_server>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/server_cli_failure_driver.cmake")
 endif()
 
 add_executable(test_vismf_index unit/test_vismf_index.cpp)
@@ -356,8 +365,17 @@ if(TARGET amrexplorer_qt)
     target_include_directories(test_remote_endpoint
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
     target_link_libraries(test_remote_endpoint
-        PRIVATE amrexplorer::warnings)
+        PRIVATE amrexplorer::remote amrexplorer::warnings)
     add_test(NAME remote_endpoint COMMAND test_remote_endpoint)
+
+    add_executable(test_remote_connect_arguments
+        unit/test_remote_connect_arguments.cpp)
+    target_include_directories(test_remote_connect_arguments
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_remote_connect_arguments
+        PRIVATE amrexplorer::remote amrexplorer::warnings)
+    add_test(NAME remote_connect_arguments
+        COMMAND test_remote_connect_arguments)
 
     add_test(
         NAME qt_remote_slice_smoke
@@ -409,6 +427,15 @@ if(TARGET amrexplorer_qt)
             --remote-silent-hello-close-smoke-test
     )
     set_tests_properties(qt_remote_silent_hello_close_smoke PROPERTIES
+        TIMEOUT 10)
+
+    add_test(
+        NAME qt_remote_silent_verification_close_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-silent-verification-close-smoke-test
+    )
+    set_tests_properties(qt_remote_silent_verification_close_smoke PROPERTIES
         TIMEOUT 10)
 
     add_test(

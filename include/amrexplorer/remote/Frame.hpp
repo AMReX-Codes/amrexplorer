@@ -45,7 +45,13 @@ struct Listener {
     std::uint16_t port, int backlog = 16);
 [[nodiscard]] Socket acceptConnection(
     const Socket& listener, StopToken cancellation = {});
+// Connections accept numeric IPv4/IPv6 addresses only. Remote deployments use
+// a loopback SSH tunnel, and avoiding hostname resolution keeps the deadline
+// and cancellation guarantees portable.
 [[nodiscard]] Socket connectTo(const std::string& host, std::uint16_t port);
+[[nodiscard]] Socket connectTo(const std::string& host, std::uint16_t port,
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation = {});
 
 void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
     std::uint32_t maximumBytes = defaultMaximumFrameBytes);

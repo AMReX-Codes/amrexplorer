@@ -1,10 +1,14 @@
 #include <amrexplorer/remote/Frame.hpp>
 
+#include <amrexplorer/io/PlotfileBlockReader.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
@@ -60,15 +64,22 @@ bool interrupted(int error)
     return error == WSAEINTR;
 }
 
+bool transientAcceptFailure(int error)
+{
+    return interrupted(error) || error == WSAECONNABORTED;
+}
+
+bool connectInProgress(int error)
+{
+    return error == WSAEWOULDBLOCK || error == WSAEINPROGRESS
+        || error == WSAEINVAL;
+}
+
 bool wouldBlock(int error)
 {
     return error == WSAEWOULDBLOCK;
 }
 
-bool transientAcceptFailure(int error)
-{
-    return interrupted(error) || error == WSAECONNABORTED;
-}
 void closeNative(NativeSocket socket)
 {
     ::closesocket(socket);
@@ -90,15 +101,21 @@ bool interrupted(int error)
     return error == EINTR;
 }
 
+bool transientAcceptFailure(int error)
+{
+    return interrupted(error) || error == ECONNABORTED;
+}
+
+bool connectInProgress(int error)
+{
+    return error == EINPROGRESS || error == EWOULDBLOCK;
+}
+
 bool wouldBlock(int error)
 {
     return error == EAGAIN || error == EWOULDBLOCK;
 }
 
-bool transientAcceptFailure(int error)
-{
-    return interrupted(error) || error == ECONNABORTED;
-}
 void closeNative(NativeSocket socket)
 {
     ::close(socket);
@@ -130,6 +147,63 @@ void setNonBlocking(NativeSocket socket, bool enabled)
     }
 #endif
 }
+
+int waitForConnect(NativeSocket socket,
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation)
+{
+    using namespace std::chrono_literals;
+    for (;;) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            throw std::runtime_error("connection attempt timed out");
+        }
+        auto wait = 50ms;
+        if (deadline != std::chrono::steady_clock::time_point::max()) {
+            wait = std::min(wait,
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - now));
+        }
+#ifdef _WIN32
+        timeval timeout{};
+        timeout.tv_sec = static_cast<long>(wait.count() / 1000);
+        timeout.tv_usec = static_cast<decltype(timeout.tv_usec)>(
+            (wait.count() % 1000) * 1000);
+        fd_set writable;
+        FD_ZERO(&writable);
+        FD_SET(socket, &writable);
+        const auto ready = ::select(0, nullptr, &writable, nullptr, &timeout);
+#else
+        pollfd descriptor{socket, POLLOUT, 0};
+        const auto ready = ::poll(&descriptor, 1, static_cast<int>(wait.count()));
+#endif
+        if (ready == 0) {
+            continue;
+        }
+        if (ready < 0) {
+            const auto error = lastSocketError();
+            if (interrupted(error)) {
+                continue;
+            }
+            return error;
+        }
+        int error = 0;
+        SocketLength size = static_cast<SocketLength>(sizeof(error));
+#ifdef _WIN32
+        auto* bytes = reinterpret_cast<char*>(&error);
+#else
+        auto* bytes = &error;
+#endif
+        if (::getsockopt(socket, SOL_SOCKET, SO_ERROR, bytes, &size) != 0) {
+            return lastSocketError();
+        }
+        return error;
+    }
+}
+
 void setIntegerSocketOption(NativeSocket descriptor, int level, int option,
     int value, const char* name)
 {
@@ -482,24 +556,41 @@ Socket acceptConnection(const Socket& listener, StopToken cancellation)
 
 Socket connectTo(const std::string& host, std::uint16_t port)
 {
+    return connectTo(host, port,
+        std::chrono::steady_clock::time_point::max(), {});
+}
+
+Socket connectTo(const std::string& host, std::uint16_t port,
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation)
+{
     ensureSockets();
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+        throw std::runtime_error("connection attempt timed out");
+    }
     addrinfo hints{};
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_flags = AI_NUMERICHOST;
     addrinfo* addresses = nullptr;
     const auto service = std::to_string(port);
     const auto status
         = ::getaddrinfo(host.c_str(), service.c_str(), &hints, &addresses);
     if (status != 0) {
-        throw std::runtime_error(
-            "getaddrinfo: " + std::string(gai_strerror(status)));
+        throw std::runtime_error("remote host must be a numeric IPv4 or IPv6 "
+                                 "address: "
+            + std::string(gai_strerror(status)));
     }
     if (addresses == nullptr) {
         throw std::runtime_error(
             "getaddrinfo succeeded without returning a usable address");
     }
-
+    std::unique_ptr<addrinfo, decltype(&::freeaddrinfo)> addressOwner(
+        addresses, &::freeaddrinfo);
     int lastError = 0;
     for (auto* address = addresses; address != nullptr;
          address = address->ai_next) {
@@ -510,16 +601,26 @@ Socket connectTo(const std::string& host, std::uint16_t port)
             lastError = lastSocketError();
             continue;
         }
-        if (::connect(native(socket.descriptor()), address->ai_addr,
+        const auto descriptor = native(socket.descriptor());
+        setNonBlocking(descriptor, true);
+        if (::connect(descriptor, address->ai_addr,
                 static_cast<SocketLength>(address->ai_addrlen))
             == 0) {
-            ::freeaddrinfo(addresses);
-            configureConnectedSocket(native(socket.descriptor()));
+            setNonBlocking(descriptor, false);
+            configureConnectedSocket(descriptor);
             return socket;
         }
         lastError = lastSocketError();
+        if (!connectInProgress(lastError)) {
+            continue;
+        }
+        lastError = waitForConnect(descriptor, deadline, cancellation);
+        if (lastError == 0) {
+            setNonBlocking(descriptor, false);
+            configureConnectedSocket(descriptor);
+            return socket;
+        }
     }
-    ::freeaddrinfo(addresses);
     throwSocketError("connect", lastError);
 }
 

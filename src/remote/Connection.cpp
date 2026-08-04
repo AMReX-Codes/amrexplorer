@@ -360,16 +360,14 @@ public:
             }
             m_connected = false;
         }
-        // shutdown() is safe concurrently with send() and is deliberately not
-        // serialized by m_sendMutex: it is what interrupts a peer-blocked
-        // writer so that cancellation and application shutdown can finish.
-        m_socket.shutdown();
+        m_lifecycleStop.request_stop();
         if (m_receiver.joinable()
             && m_receiver.get_id() != std::this_thread::get_id()) {
             m_receiver.join();
         }
         {
             std::scoped_lock lock(m_sendMutex);
+            m_socket.shutdown();
             m_socket.close();
         }
         failPending("remote connection closed");
@@ -412,7 +410,9 @@ private:
         try {
             for (;;) {
                 const auto frame
-                    = readFrame(m_socket, m_maximumFrameBytes.load());
+                    = readFrame(m_socket, m_maximumFrameBytes.load(),
+                          std::chrono::steady_clock::time_point::max(),
+                          m_lifecycleStop.get_token());
                 if (!frame) {
                     throw std::runtime_error("remote server closed connection");
                 }
@@ -460,6 +460,9 @@ private:
                 }
                 pending->promise.set_value(std::move(envelope));
             }
+        } catch (const ReadCancelled&) {
+            // close() owns pending-request failure and socket teardown after
+            // the receiver has cooperatively left the readiness loop.
         } catch (const std::exception& error) {
             {
                 std::scoped_lock lock(m_stateMutex);
@@ -468,7 +471,7 @@ private:
                     m_disconnectReason = error.what();
                 }
             }
-            m_socket.shutdown();
+            m_lifecycleStop.request_stop();
             failPending(error.what());
         }
     }
@@ -483,7 +486,7 @@ private:
             ensureConnected();
         }
         writeFrame(m_socket, bytes, m_maximumFrameBytes.load(),
-            deadline, cancellation);
+            deadline, cancellation, m_lifecycleStop.get_token());
     }
 
     void sendCancellation(std::uint64_t target,
@@ -568,6 +571,7 @@ private:
     std::uint16_t m_selectedMinorVersion = protocolMinorVersion;
     std::atomic<std::uint32_t> m_maximumFrameBytes;
     std::chrono::milliseconds m_requestTimeout;
+    StopSource m_lifecycleStop;
     std::atomic<std::uint64_t> m_nextRequestId{1};
     std::atomic<std::uint64_t> m_nextPingNonce{1};
     mutable std::mutex m_stateMutex;

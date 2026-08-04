@@ -315,7 +315,8 @@ template <typename Real>
 void readGrid(std::istream& input, const GridRecord& grid,
     std::uint64_t dataFileSize, const ParsedHeader& header, double fraction,
     std::uint64_t seed, StopToken cancellation,
-    std::vector<ParticlePoint>& output, ParticleReadMetrics& metrics)
+    std::size_t maximumPoints, std::vector<ParticlePoint>& output,
+    ParticleReadMetrics& metrics)
 {
     const auto intValues = static_cast<std::uint64_t>(
         2 + header.metadata.intComponentCount);
@@ -366,6 +367,12 @@ void readGrid(std::istream& input, const GridRecord& grid,
             const auto idcpu = decodeIdCpu(
                 idWords[0], idWords[1], header.expandedIds);
             if (idcpu.has_value() && selected(*idcpu, fraction, seed)) {
+                if (output.size() >= maximumPoints
+                    || selectedParticles.size()
+                        >= maximumPoints - output.size()) {
+                    throw ParticleSampleLimitExceeded(
+                        "particle sample exceeds its point limit");
+                }
                 selectedParticles.push_back(
                     {firstIndex + relativeIndex, *idcpu});
             }
@@ -449,7 +456,8 @@ std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
 
 ParticleSample readParticleSample(
     const std::filesystem::path& plotfile, const std::string& species,
-    double fraction, std::uint64_t seed, StopToken cancellation)
+    double fraction, std::uint64_t seed, StopToken cancellation,
+    std::size_t maximumPoints)
 {
     if (!std::isfinite(fraction) || fraction < 0.0 || fraction > 1.0) {
         throw std::invalid_argument("particle sample fraction must be between 0 and 1");
@@ -473,7 +481,7 @@ ParticleSample readParticleSample(
         * static_cast<long double>(fraction);
     result.points.reserve(static_cast<std::size_t>(std::min<long double>(
         expected + 16.0L,
-        static_cast<long double>(std::numeric_limits<std::size_t>::max()))));
+        static_cast<long double>(maximumPoints))));
     const auto dataPaths
         = particleDataPaths(speciesPath, header.grids, result.io);
     std::map<DataFileKey, std::vector<const GridRecord*>> gridsByFile;
@@ -502,11 +510,11 @@ ParticleSample readParticleSample(
             if (header.metadata.precision == ParticleRealPrecision::Single) {
                 readGrid<float>(input, *grid,
                     static_cast<std::uint64_t>(dataFileSize), header, fraction,
-                    seed, cancellation, result.points, result.io);
+                    seed, cancellation, maximumPoints, result.points, result.io);
             } else {
                 readGrid<double>(input, *grid,
                     static_cast<std::uint64_t>(dataFileSize), header, fraction,
-                    seed, cancellation, result.points, result.io);
+                    seed, cancellation, maximumPoints, result.points, result.io);
             }
         }
     }

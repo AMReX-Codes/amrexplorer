@@ -202,6 +202,14 @@ ParticleSample LocalDatasetSession::requestParticleSample(
         species, fraction, seed, cancellation);
 }
 
+ParticleSample LocalDatasetSession::requestParticleSample(
+    const std::string& species, double fraction, std::uint64_t seed,
+    std::size_t maximumPoints, StopToken cancellation)
+{
+    return requireDataset()->requestParticleSample(
+        species, fraction, seed, cancellation, maximumPoints);
+}
+
 CacheMetrics LocalDatasetSession::cacheMetrics() const
 {
     return requireDataset()->cacheMetrics();

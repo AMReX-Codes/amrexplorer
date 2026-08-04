@@ -142,7 +142,8 @@ bool sameSliceSpec(const SliceRequest& lhs, const SliceRequest& rhs)
         && lhs.maximumLevel == rhs.maximumLevel
         && lhs.outputSize == rhs.outputSize
         && lhs.sampling == rhs.sampling
-        && lhs.composition == rhs.composition;
+        && lhs.composition == rhs.composition
+        && lhs.includeGridBoxes == rhs.includeGridBoxes;
 }
 
 std::array<int, 2> slicePlaneAxes(int dimension, int normalDirection)
@@ -299,6 +300,9 @@ void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
     SliceRequest request, FieldId uField, FieldId vField, int count,
     StopToken cancellation, SliceDisplayResult& result)
 {
+    // The primary scalar request already carries the optional box list.
+    // Auxiliary vector-component planes contribute values only.
+    request.includeGridBoxes = false;
     request.field = uField;
     auto uSlice = requestSlice(*dataset, request, cancellation);
     request.field = vField;
@@ -412,6 +416,9 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     // that contour staircases are invisible — at least 512 samples on the
     // shorter axis, capped at 1024. Two Chaikin passes finish the polylines.
     auto contourRequest = request;
+    // The primary scalar request already carries the optional box list.
+    // The higher-resolution contour plane contributes values only.
+    contourRequest.includeGridBoxes = false;
     contourRequest.outputSize = {
         std::min(std::max(dataWidth, 512), 1024),
         std::min(std::max(dataHeight, 512), 1024)};
@@ -639,6 +646,7 @@ InitialSliceResult executeSessionFrameLoad(
                 request.outputSize = frameBudgetBoundedOutputSize(
                     request.outputSize, result.dataset->maximumResponseBytes());
                 request.composition = selectedLevel.composition;
+                request.includeGridBoxes = spec.includeGridBoxes;
                 request.maximumLevel = attemptMaximumLevel;
                 request.sphericalSupersample = spec.sphericalSupersample;
                 request.sphericalDisplay = spec.sphericalDisplay;

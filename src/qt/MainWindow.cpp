@@ -1370,8 +1370,21 @@ void MainWindow::createMenus()
     m_boxesAction->setShortcuts(
         {QKeySequence(Qt::Key_B), QKeySequence(Qt::SHIFT | Qt::Key_B)});
     m_boxesAction->setEnabled(false);
-    connect(m_boxesAction, &QAction::toggled, this, [this](bool) {
+    connect(m_boxesAction, &QAction::toggled, this, [this](bool visible) {
+        if (visible) {
+            for (auto* state : currentViews()) {
+                state->gridBoxes.clear();
+                // The displayed raster remains valid, but the next request
+                // must fetch geometry even if the last one also had boxes.
+                if (state->hasCachedRequest) {
+                    state->cachedRequest.includeGridBoxes = false;
+                }
+            }
+        }
         updateGridBoxes();
+        if (visible && m_controlsReady) {
+            scheduleSliceRequest(false);
+        }
         saveSettings();
     });
     m_slicePlanesAction = new QAction(tr("&Slice Planes"), this);
@@ -1936,6 +1949,17 @@ bool MainWindow::fabStateClearedForTest() const
         && m_fabSelectorDock->entries().empty()
         && !m_fabSelectorDock->isVisible()
         && !windowTitle().endsWith(QStringLiteral(" FAB"));
+}
+
+void MainWindow::setGridBoxesVisibleForTest(bool visible)
+{
+    m_boxesAction->setChecked(visible);
+}
+
+std::size_t MainWindow::activeViewGridBoxCountForTest() const
+{
+    return m_activeView == nullptr
+        ? 0 : m_activeView->view->gridBoxCount();
 }
 
 void MainWindow::rubberBandZoomActiveViewForTest()
@@ -4479,6 +4503,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         state->fieldName.clear();
         state->visibleRegion.reset();
         state->vectorSegments.clear();
+        state->gridBoxes.clear();
         state->cachedRequest = {};
         state->hasCachedRequest = false;
         state->cachedMode = DisplayMode::Raster;
@@ -4723,6 +4748,7 @@ void MainWindow::requestInitialSlice(
     if (!initialSpec) {
         spec.palette = m_palette;
         spec.displayMode = m_displayMode;
+        spec.includeGridBoxes = m_boxesAction->isChecked();
         spec.vectorUField =
             static_cast<std::uint32_t>(std::max(m_vectorUField, 0));
         spec.vectorVField =
@@ -5140,6 +5166,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
         level, metadata.finestLevel);
     request.composition = composition;
     request.maximumLevel = maximumLevel;
+    request.includeGridBoxes = m_boxesAction->isChecked();
     request.sphericalSupersample = m_sphericalSupersample;
     request.sphericalDisplay = m_sphericalDisplay;
 
@@ -5355,7 +5382,6 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
 
     const auto& metadata = m_dataset->metadata();
     const auto& plane = *state.plane;
-    const auto normal = metadata.dimension == 3 ? state.normal : -1;
     const auto axes = displayAxes(state.normal);
     const auto rawLevel = m_levelSelector->currentData().toInt();
     const auto [composition, maximumLevel] = decodeLevelData(
@@ -5372,79 +5398,67 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
         - plane.physicalRegion.lower[yAxis];
     const bool spherical = displayIsSpherical();
     const auto mapping = planeMapping(state);
-    for (int levelIndex = firstLevel; levelIndex <= lastLevel; ++levelIndex) {
-        const auto& level = metadata.levels[static_cast<std::size_t>(levelIndex)];
-        for (const auto& box : level.boxes) {
-            const auto physicalBox = sampleBounds(
-                level, box, metadata.dimension);
-            if (normal >= 0) {
-                // Only boxes intersecting this view's slice position show.
-                const auto direction = static_cast<std::size_t>(normal);
-                const auto normalLower = physicalBox.lower[direction];
-                const auto normalUpper = physicalBox.upper[direction];
-                const auto slicePosition
-                    = m_slicePosition3d[static_cast<std::size_t>(normal)];
-                if (slicePosition < normalLower || slicePosition >= normalUpper) {
-                    continue;
-                }
-            }
-
-            const auto xLower = physicalBox.lower[xAxis];
-            const auto xUpper = physicalBox.upper[xAxis];
-            const auto yLower = physicalBox.lower[yAxis];
-            const auto yUpper = physicalBox.upper[yAxis];
-            const auto color = levelIndex == firstLevel
-                ? QColor(Qt::white)
-                : QColor::fromRgb(static_cast<QRgb>(
-                    m_palette.levelColor(levelIndex, lastLevel)));
-            if (spherical) {
-                // xAxis is r, yAxis is theta. Branch on the state's mode (the
-                // raster on screen), not m_sphericalDisplay (the menu
-                // selection): between a mode change and the re-rendered
-                // arrival the two disagree, and the overlay must match the
-                // displayed raster.
-                if (!(xUpper > xLower) || !(yUpper > yLower)) {
-                    continue;
-                }
-                if (state.sphericalDisplay == SphericalDisplay::RZ) {
-                    // Warped wedge: a curved annular sector.
-                    GridBoxOverlay overlay;
-                    overlay.color = color;
-                    overlay.path = sphericalSectorPath(
-                        mapping, xLower, xUpper, yLower, yUpper);
-                    overlays.push_back(std::move(overlay));
-                } else {
-                    // Logical r-theta / theta-r: an axis-aligned rectangle.
-                    QRectF rect(mapping.sceneFromLogical(xLower, yLower),
-                        mapping.sceneFromLogical(xUpper, yUpper));
-                    rect = rect.normalized();
-                    if (!rect.isEmpty()) {
-                        overlays.push_back({rect, color, QPainterPath{}});
-                    }
-                }
+    for (const auto& gridBox : state.gridBoxes) {
+        const auto levelIndex = gridBox.level;
+        if (levelIndex < firstLevel || levelIndex > lastLevel) {
+            continue;
+        }
+        const auto& physicalBox = gridBox.physicalRegion;
+        const auto xLower = physicalBox.lower[xAxis];
+        const auto xUpper = physicalBox.upper[xAxis];
+        const auto yLower = physicalBox.lower[yAxis];
+        const auto yUpper = physicalBox.upper[yAxis];
+        const auto color = levelIndex == firstLevel
+            ? QColor(Qt::white)
+            : QColor::fromRgb(static_cast<QRgb>(
+                m_palette.levelColor(levelIndex, lastLevel)));
+        if (spherical) {
+            // xAxis is r, yAxis is theta. Branch on the state's mode (the
+            // raster on screen), not m_sphericalDisplay (the menu
+            // selection): between a mode change and the re-rendered
+            // arrival the two disagree, and the overlay must match the
+            // displayed raster.
+            if (!(xUpper > xLower) || !(yUpper > yLower)) {
                 continue;
             }
-            const auto pixelX0 = std::round(
-                (xLower - plane.physicalRegion.lower[xAxis])
-                    / xExtent * plane.width);
-            const auto pixelX1 = std::round(
-                (xUpper - plane.physicalRegion.lower[xAxis])
-                    / xExtent * plane.width);
-            const auto pixelY0 = std::round(plane.height
-                - (yUpper - plane.physicalRegion.lower[yAxis])
-                    / yExtent * plane.height);
-            const auto pixelY1 = std::round(plane.height
-                - (yLower - plane.physicalRegion.lower[yAxis])
-                    / yExtent * plane.height);
-            if (pixelX0 == pixelX1 || pixelY0 == pixelY1) {
-                continue;
+            if (state.sphericalDisplay == SphericalDisplay::RZ) {
+                // Warped wedge: a curved annular sector.
+                GridBoxOverlay overlay;
+                overlay.color = color;
+                overlay.path = sphericalSectorPath(
+                    mapping, xLower, xUpper, yLower, yUpper);
+                overlays.push_back(std::move(overlay));
+            } else {
+                // Logical r-theta / theta-r: an axis-aligned rectangle.
+                QRectF rect(mapping.sceneFromLogical(xLower, yLower),
+                    mapping.sceneFromLogical(xUpper, yUpper));
+                rect = rect.normalized();
+                if (!rect.isEmpty()) {
+                    overlays.push_back({rect, color, QPainterPath{}});
+                }
             }
-            QRectF rectangle(QPointF(pixelX0, pixelY0), QPointF(pixelX1, pixelY1));
-            rectangle = rectangle.normalized().intersected(
-                QRectF(0.0, 0.0, plane.width, plane.height));
-            if (!rectangle.isEmpty()) {
-                overlays.push_back({rectangle, color, QPainterPath{}});
-            }
+            continue;
+        }
+        const auto pixelX0 = std::round(
+            (xLower - plane.physicalRegion.lower[xAxis])
+                / xExtent * plane.width);
+        const auto pixelX1 = std::round(
+            (xUpper - plane.physicalRegion.lower[xAxis])
+                / xExtent * plane.width);
+        const auto pixelY0 = std::round(plane.height
+            - (yUpper - plane.physicalRegion.lower[yAxis])
+                / yExtent * plane.height);
+        const auto pixelY1 = std::round(plane.height
+            - (yLower - plane.physicalRegion.lower[yAxis])
+                / yExtent * plane.height);
+        if (pixelX0 == pixelX1 || pixelY0 == pixelY1) {
+            continue;
+        }
+        QRectF rectangle(QPointF(pixelX0, pixelY0), QPointF(pixelX1, pixelY1));
+        rectangle = rectangle.normalized().intersected(
+            QRectF(0.0, 0.0, plane.width, plane.height));
+        if (!rectangle.isEmpty()) {
+            overlays.push_back({rectangle, color, QPainterPath{}});
         }
     }
     state.view->setGridBoxes(overlays);
@@ -5727,6 +5741,9 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     state.displayMaximum = display.maximum;
     state.displayLogarithmic = display.logarithmic;
     state.vectorSegments = display.vectors;
+    if (display.slice.gridBoxesIncluded) {
+        state.gridBoxes = display.slice.gridBoxes;
+    }
     // Cache key for the re-render-from-cache path (see requestSlice).
     state.cachedRequest = display.request;
     state.hasCachedRequest = true;
@@ -6398,6 +6415,7 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     }
     spec.particleFraction = m_particleFraction;
     spec.particleSeed = m_particleSeed;
+    spec.includeGridBoxes = m_boxesAction->isChecked();
     const auto views = currentViews();
     spec.visibleRegions.reserve(views.size());
     if (m_remoteSequence) {

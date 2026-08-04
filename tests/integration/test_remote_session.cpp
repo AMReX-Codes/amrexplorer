@@ -63,6 +63,7 @@ amrvis::SliceRequest sliceRequest(
             + request.visibleRegion.upper[normal]);
     request.maximumLevel = dataset.metadata().finestLevel;
     request.outputSize = {width, height};
+    request.includeGridBoxes = true;
     return request;
 }
 
@@ -150,6 +151,41 @@ int main(int argc, char* argv[])
                 && slice.plane.physicalRegion
                     == localSlice.plane.physicalRegion,
             "local and remote slice values differ");
+        require(slice.gridBoxesIncluded && !slice.gridBoxes.empty(),
+            "remote slice omitted view-local grid geometry");
+        for (const auto& box : slice.gridBoxes) {
+            require(box.physicalRegion.lower[0]
+                        >= slice.plane.physicalRegion.lower[0]
+                    && box.physicalRegion.upper[0]
+                        <= slice.plane.physicalRegion.upper[0]
+                    && box.physicalRegion.lower[1]
+                        >= slice.plane.physicalRegion.lower[1]
+                    && box.physicalRegion.upper[1]
+                        <= slice.plane.physicalRegion.upper[1],
+                "remote grid geometry escaped the requested viewport");
+        }
+
+        // Negotiate a deliberately small frame and make the raster consume
+        // nearly all of it. The optional overlay list must be truncated by the
+        // planner while the raster response still succeeds within the frame.
+        amrvis::remote::ConnectionOptions smallFrameOptions;
+        smallFrameOptions.maximumFrameBytes = 4096;
+        auto smallFrameConnection
+            = std::make_shared<amrvis::remote::Connection>(
+                "127.0.0.1", server.port(), smallFrameOptions);
+        auto smallFrameDataset
+            = amrvis::remote::RemoteDatasetSession::open(
+                smallFrameConnection,
+                std::filesystem::path(argv[1]).string(),
+                16ULL * 1024ULL * 1024ULL);
+        const auto boundedOverlay = std::get<amrvis::SliceQueryResult>(
+            smallFrameDataset->requestView(
+                sliceRequest(*smallFrameDataset, 22, 22)));
+        require(boundedOverlay.plane.values.size() == 22U * 22U
+                && boundedOverlay.gridBoxesIncluded
+                && boundedOverlay.gridBoxesTruncated
+                && boundedOverlay.gridBoxes.size() <= 1,
+            "frame-bounded slice did not preserve its raster while truncating overlays");
 
         amrvis::LineViewRequest line;
         line.query.dataset = dataset->id();

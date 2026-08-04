@@ -160,12 +160,23 @@ int main()
     slice.plane.values = {1.0F, 2.0F};
     slice.plane.valid = {1, 1};
     slice.plane.sourceLevel = {0, 1};
+    slice.gridBoxesIncluded = true;
+    slice.gridBoxesTruncated = true;
+    slice.gridBoxes.push_back(
+        {1, RealBox{Real3{{0.5, 0.0, 0.0}},
+                Real3{{1.0, 1.0, 0.0}}}});
     bytes = codec::encode(
         10, codec::toWire(slice, CacheMetrics{}));
     envelope = codec::decode(bytes);
     const auto decoded = codec::fromWire(
         *envelope->payload.AsSliceViewResponse());
-    require(decoded.plane.values == slice.plane.values,
+    require(decoded.plane.values == slice.plane.values
+            && decoded.gridBoxesIncluded
+            && decoded.gridBoxesTruncated
+            && decoded.gridBoxes.size() == 1
+            && decoded.gridBoxes.front().level == 1
+            && decoded.gridBoxes.front().physicalRegion
+                == slice.gridBoxes.front().physicalRegion,
         "bounded slice response did not round-trip");
 
     auto wrongIdentifier = bytes;

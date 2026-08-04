@@ -167,6 +167,12 @@ table SliceViewRequest {
   height:int (id: 8);
   sampling:SamplingPolicy (id: 9);
   composition:CompositionPolicy (id: 10);
+  include_grid_boxes:bool (id: 11);
+}
+
+table SliceGridBox {
+  level:int (id: 0);
+  physical_region:RealBox (id: 1);
 }
 
 table SliceViewResponse {
@@ -181,6 +187,9 @@ table SliceViewResponse {
   cache_hits:ulong (id: 8);
   payload_bytes_read:ulong (id: 9);
   cache:CacheState (id: 10);
+  grid_boxes_included:bool (id: 11);
+  grid_boxes:[SliceGridBox] (id: 12);
+  grid_boxes_truncated:bool (id: 13);
 }
 
 table LineViewRequest {

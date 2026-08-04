@@ -26,7 +26,7 @@ struct ConnectionOptions {
     std::chrono::milliseconds requestTimeout{30000};
 };
 
-class Connection {
+class Connection : public std::enable_shared_from_this<Connection> {
 public:
     Connection(std::string host, std::uint16_t port,
         ConnectionOptions options = {}, StopToken cancellation = {});
@@ -42,6 +42,7 @@ public:
     [[nodiscard]] OpenedDataset openDataset(const std::string& path,
         std::uint64_t cacheBudgetBytes, StopToken cancellation = {});
     void closeDataset(DatasetId dataset, StopToken cancellation = {});
+    void closeDatasetBestEffort(DatasetId dataset) noexcept;
     [[nodiscard]] ViewDataResult requestView(
         const ViewDataRequest& request, StopToken cancellation = {});
     [[nodiscard]] DatasetPage requestDatasetPage(

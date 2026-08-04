@@ -93,6 +93,8 @@ public:
     void openDataset(const std::filesystem::path& path, bool metadataOnly = false);
     void openRemoteDataset(
         std::string host, std::uint16_t port, std::string remotePath);
+    void openRemoteSequence(std::string host, std::uint16_t port,
+        const std::vector<std::string>& remotePaths);
     // Opens a plotfile sequence (the legacy "-a" file animation): frames are
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.
@@ -148,6 +150,7 @@ public:
     [[nodiscard]] bool allViewsUseViewportBoundedOutputForTest() const;
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
+    [[nodiscard]] bool fabStateClearedForTest() const;
 
     // Test-only: rubber-band the central half of the active 3-D panel through
     // the same handler used by ImageView::rubberBandSelected.
@@ -395,6 +398,8 @@ private:
     [[nodiscard]] std::array<int, 2> displayAxes(int normal) const;
     [[nodiscard]] std::array<int, 2> nativeOutputSize(
         const PlaneViewState& state) const;
+    [[nodiscard]] std::array<int, 2> viewportPixelSize(
+        const PlaneViewState& state) const;
     [[nodiscard]] std::array<int, 2> sliceOutputSize(
         const PlaneViewState& state, bool forceRemote = false) const;
     // True when the active dataset is displayed as a warped 2-D spherical
@@ -518,6 +523,9 @@ private:
         Sequence
     };
     void choosePlotfileSequence();
+    // Establishes the shared local/remote sequence invariants after the frame
+    // list has been validated.
+    void prepareSequence(std::size_t frameCount);
     void closeSequence();
     void goToSequenceFrame(int index, bool forceRestart = false);
     void toggleSequencePlayback();
@@ -673,6 +681,8 @@ private:
     std::filesystem::path m_datasetPath;
     std::string m_remoteHost;
     std::uint16_t m_remotePort = 0;
+    bool m_remoteSequence = false;
+    std::uint64_t m_remoteSequenceConnectionGeneration = 0;
     struct MultiFabReturnState {
         std::filesystem::path path;
         std::filesystem::path dataRoot;

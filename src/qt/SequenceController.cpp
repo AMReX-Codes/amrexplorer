@@ -2,6 +2,7 @@
 
 #include "CacheConfig.hpp"
 
+#include <QException>
 #include <QFutureWatcher>
 #include <QTimer>
 #include <QtConcurrent>
@@ -16,6 +17,21 @@ namespace {
 // stale cross-dataset cache entry can never alias a frame's blocks.
 constexpr std::uint64_t sequenceDatasetIdBase = 0x4000000000000000ULL;
 
+QString exceptionMessage(const std::exception& error)
+{
+    const auto* unhandled = dynamic_cast<const QUnhandledException*>(&error);
+    if (unhandled != nullptr && unhandled->exception()) {
+        try {
+            std::rethrow_exception(unhandled->exception());
+        } catch (const std::exception& inner) {
+            return QString::fromUtf8(inner.what());
+        } catch (...) {
+            return QStringLiteral("unknown non-std exception");
+        }
+    }
+    return QString::fromUtf8(error.what());
+}
+
 } // namespace
 
 SequenceController::SequenceController(Hooks hooks, QObject* parent)
@@ -24,9 +40,11 @@ SequenceController::SequenceController(Hooks hooks, QObject* parent)
 {
 }
 
-void SequenceController::open(std::vector<std::filesystem::path> frames)
+void SequenceController::open(
+    std::vector<std::filesystem::path> frames, FrameLoader loader)
 {
     m_frames = std::move(frames);
+    m_loader = std::move(loader);
     goToFrame(0);
 }
 
@@ -36,6 +54,7 @@ void SequenceController::close()
     m_loadStopSource.request_stop();
     ++m_loadGeneration;
     m_frames.clear();
+    m_loader = {};
     m_index = -1;
     m_inFlight = false;
 }
@@ -101,8 +120,10 @@ void SequenceController::startLoad(int index, std::uint64_t generation)
     const auto path = m_frames[static_cast<std::size_t>(index)];
     const auto datasetId = DatasetId{
         sequenceDatasetIdBase + ++m_datasetCounter};
+    m_loadStopSource.request_stop();
     m_loadStopSource = StopSource{};
     const auto cancellation = m_loadStopSource.get_token();
+    const auto loader = m_loader;
     emit loadActivityChanged(+1);
     emit statusMessage(tr("Loading frame %1...").arg(
         QString::fromStdString(path.filename().string())));
@@ -125,8 +146,7 @@ void SequenceController::startLoad(int index, std::uint64_t generation)
             } catch (const std::exception& error) {
                 if (generation == m_loadGeneration && index == m_index) {
                     m_inFlight = false;
-                    emit frameLoadFailed(
-                        QString::fromUtf8(error.what()));
+                    emit frameLoadFailed(exceptionMessage(error));
                 } else {
                     emit staleResultDropped();
                 }
@@ -134,7 +154,10 @@ void SequenceController::startLoad(int index, std::uint64_t generation)
             watcher->deleteLater();
         });
     watcher->setFuture(QtConcurrent::run(
-        [path, datasetId, spec = std::move(spec), cancellation] {
+        [path, datasetId, spec = std::move(spec), cancellation, loader] {
+        if (loader) {
+            return loader(path, datasetId, spec, cancellation);
+        }
         return executeFrameLoad(path, datasetId, spec, initialCacheBudget(),
             cancellation);
     }));
@@ -147,7 +170,7 @@ void SequenceController::finishLoad(
         m_hooks.displayFrame(result, defaultPositions);
     } catch (const std::exception& error) {
         m_inFlight = false;
-        emit frameLoadFailed(QString::fromUtf8(error.what()));
+        emit frameLoadFailed(exceptionMessage(error));
         return;
     }
     m_inFlight = false;
@@ -179,6 +202,7 @@ void SequenceController::startPrefetch(int frameIndex)
         sequenceDatasetIdBase + ++m_datasetCounter};
     m_prefetchStopSource = StopSource{};
     const auto cancellation = m_prefetchStopSource.get_token();
+    const auto loader = m_loader;
     emit loadActivityChanged(+1);
 
     auto* watcher = new QFutureWatcher<InitialSliceResult>(this);
@@ -205,7 +229,10 @@ void SequenceController::startPrefetch(int frameIndex)
             watcher->deleteLater();
         });
     watcher->setFuture(QtConcurrent::run(
-        [path, datasetId, spec = std::move(spec), cancellation] {
+        [path, datasetId, spec = std::move(spec), cancellation, loader] {
+        if (loader) {
+            return loader(path, datasetId, spec, cancellation);
+        }
         return executeFrameLoad(path, datasetId, spec, initialCacheBudget(),
             cancellation);
     }));

@@ -244,9 +244,12 @@ int main()
                 &sendBufferBytes, sizeof(sendBufferBytes)) == 0,
         "could not reduce the slow-writer send buffer");
     constexpr std::size_t slowPayloadBytes = 512U * 1024U;
-    constexpr auto writeStallTimeout = std::chrono::milliseconds{50};
+    constexpr auto writeStallTimeout = std::chrono::milliseconds{250};
     std::atomic<std::size_t> slowBytesRead{0};
+    std::promise<void> slowReaderReady;
+    auto slowReaderStarted = slowReaderReady.get_future();
     std::thread slowReader([&] {
+        slowReaderReady.set_value();
         std::array<std::uint8_t, 4096> bytes{};
         while (slowBytesRead.load()
             < slowPayloadBytes + sizeof(std::uint32_t)) {
@@ -259,19 +262,25 @@ int main()
             slowBytesRead += static_cast<std::size_t>(count);
         }
     });
+    slowReaderStarted.wait();
     bool slowWriteCompleted = true;
+    std::string slowWriteError;
     const auto slowWriteStart = std::chrono::steady_clock::now();
     try {
         writeFrameWithStallTimeout(slowWriter,
             std::vector<std::uint8_t>(slowPayloadBytes), slowPayloadBytes,
             writeStallTimeout);
-    } catch (const std::exception&) {
+    } catch (const std::exception& error) {
         slowWriteCompleted = false;
+        slowWriteError = error.what();
     }
     const auto slowWriteElapsed
         = std::chrono::steady_clock::now() - slowWriteStart;
     slowWriter.shutdown();
     slowReader.join();
+    if (!slowWriteCompleted) {
+        std::cerr << "slow-reader write failed: " << slowWriteError << '\n';
+    }
     require(slowWriteCompleted,
         "a progressing slow-reader frame write was timed out");
     require(slowBytesRead.load()

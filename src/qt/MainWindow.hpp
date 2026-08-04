@@ -30,6 +30,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -46,6 +47,7 @@ class QLineF;
 class QMenu;
 class QPlainTextEdit;
 class QProgressDialog;
+class QProgressBar;
 class QPushButton;
 class QStackedWidget;
 class QTimer;
@@ -89,6 +91,8 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
 
     void openDataset(const std::filesystem::path& path, bool metadataOnly = false);
+    void openRemoteDataset(
+        std::string host, std::uint16_t port, std::string remotePath);
     // Opens a plotfile sequence (the legacy "-a" file animation): frames are
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.
@@ -140,10 +144,15 @@ public:
     // i.e. the raster and color bar agree. See
     // raster-colorbar-mismatch-on-2d-visible-zoom.
     [[nodiscard]] bool activeViewRasterMatchesDisplayRangeForTest();
+    [[nodiscard]] bool activeViewUsesViewportBoundedOutputForTest() const;
+    [[nodiscard]] bool allViewsUseViewportBoundedOutputForTest() const;
+    [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
+        double expectedAspect) const;
 
     // Test-only: rubber-band the central half of the active 3-D panel through
     // the same handler used by ImageView::rubberBandSelected.
     void rubberBandZoomActiveViewForTest();
+    void rubberBandZoomRectangularActiveViewForTest();
 
     // Test-only: true when every current panel has a strict visible subregion.
     // Used to lock down synchronized 3-D rubber-band zoom.
@@ -204,6 +213,9 @@ public:
         const QColor& color);
     [[nodiscard]] std::size_t particleSampleCountForTest() const;
     [[nodiscard]] std::size_t particleOverlayCountForTest();
+    [[nodiscard]] bool particleLoadingForTest() const noexcept;
+    [[nodiscard]] bool particleLoadingUiActiveForTest() const;
+    [[nodiscard]] bool particleLoadingUiSettledForTest() const;
 
 signals:
     void datasetOpenFinished(bool success);
@@ -292,13 +304,17 @@ private:
     void openDatasetImpl(const std::filesystem::path& path, bool metadataOnly,
         std::optional<PlotfileMetadataResult> preparedMetadata,
         std::filesystem::path dataRoot, bool preserveFabSelector,
-        std::optional<FrameSliceSpec> initialSpec);
+        std::optional<FrameSliceSpec> initialSpec,
+        std::optional<std::tuple<std::string, std::uint16_t, std::string>>
+            remoteOpen = std::nullopt);
+
     // Clears standalone FAB/MultiFab view state (mode flag, MultiFab-return
     // record, source metadata/paths) and hides the FAB selector dock. Any path
     // that replaces the displayed dataset with a non-FAB one -- a plain dataset
     // open, or a plotfile sequence -- must call this or stale FAB state leaks
     // into the new view (see open-sequence-stale-fab-state).
     void resetFabState();
+
     void viewFab(std::size_t entry);
     void backToMultiFab();
     // A fresh independent top-level window (WA_DeleteOnClose) for the
@@ -377,6 +393,10 @@ private:
     // state. Shared by setActiveView and showSlice's active-view branch.
     void syncActiveViewColorControls(const PlaneViewState& state);
     [[nodiscard]] std::array<int, 2> displayAxes(int normal) const;
+    [[nodiscard]] std::array<int, 2> nativeOutputSize(
+        const PlaneViewState& state) const;
+    [[nodiscard]] std::array<int, 2> sliceOutputSize(
+        const PlaneViewState& state, bool forceRemote = false) const;
     // True when the active dataset is displayed as a warped 2-D spherical
     // (r, theta) plane. Gates the coordinate-warp overlay, probe, and label
     // paths; all other datasets keep their Cartesian behavior.
@@ -477,7 +497,8 @@ private:
         std::uint64_t generation,
         std::optional<PlotfileMetadataResult> preparedMetadata = std::nullopt,
         std::filesystem::path dataRoot = {},
-        std::optional<FrameSliceSpec> initialSpec = std::nullopt);
+        std::optional<FrameSliceSpec> initialSpec = std::nullopt,
+        std::shared_ptr<DatasetSession> preparedSession = {});
     void configureSliceControls();
     // Enable the dataset-dependent field/level/range/menu controls once a
     // dataset (single or sequence frame) is loaded. Shared by
@@ -607,6 +628,7 @@ private:
     QAction* m_syncRubberBandZoomAction = nullptr;
     QAction* m_contoursAction = nullptr;
     QAction* m_particlesAction = nullptr;
+    QProgressBar* m_particleProgress = nullptr;
     QAction* m_datasetAction = nullptr;
     QAction* m_exportAnimationAction = nullptr;
 
@@ -645,9 +667,12 @@ private:
     std::uint64_t m_particleSeed = 0;
     int m_particlePointSize = 3;
     bool m_particleSelectionInitialized = false;
+    bool m_particleLoading = false;
     StopSource m_particleStopSource;
     std::uint64_t m_particleGeneration = 0;
     std::filesystem::path m_datasetPath;
+    std::string m_remoteHost;
+    std::uint16_t m_remotePort = 0;
     struct MultiFabReturnState {
         std::filesystem::path path;
         std::filesystem::path dataRoot;

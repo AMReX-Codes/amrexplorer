@@ -119,6 +119,7 @@ struct FrameSliceSpec {
     bool defaultPositions = true;
     std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
     std::vector<std::optional<RealBox>> visibleRegions;  // per view, normal order
+    std::vector<std::array<int, 2>> outputSizes;  // per view, viewport pixels
     bool particleSelectionInitialized = false;
     std::vector<std::string> particleSpecies;
     double particleFraction = 1.0;
@@ -235,7 +236,7 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField,
-    int contourCount, bool rasterDirty);
+    int contourCount, bool rasterDirty, StopToken cancellation = {});
 
 // Re-extract contour polylines from an already-populated fine plane after the
 // display range is replaced downstream of appendContours/refreshCachedSlice —

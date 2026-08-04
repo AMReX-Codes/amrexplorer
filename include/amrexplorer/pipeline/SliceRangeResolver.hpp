@@ -52,7 +52,8 @@ struct ResolvedRange {
 // The finite extrema of a standalone FAB's payload, or nullopt for non-FAB
 // datasets / all-non-finite data.
 [[nodiscard]] std::optional<std::pair<double, double>> fabDataRange(
-    const std::shared_ptr<DatasetSession>& dataset, FieldId field);
+    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
+    StopToken cancellation = {});
 
 // The display range for a slice: the user's explicit range, the level/file
 // metadata range, or the finite extrema of the plane itself, padded so
@@ -63,7 +64,7 @@ struct ResolvedRange {
     const std::shared_ptr<DatasetSession>& dataset, FieldId field,
     int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const ScalarPlane& plane);
+    bool logarithmic, const ScalarPlane& plane, StopToken cancellation = {});
 
 // Like resolveRange, but if a logarithmic scale is requested and the range is
 // not strictly positive it falls back to a linear range and reports
@@ -74,6 +75,6 @@ struct ResolvedRange {
     const std::shared_ptr<DatasetSession>& dataset, FieldId field,
     int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const ScalarPlane& plane);
+    bool logarithmic, const ScalarPlane& plane, StopToken cancellation = {});
 
 } // namespace amrvis

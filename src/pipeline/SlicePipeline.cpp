@@ -207,7 +207,7 @@ SliceDisplayResult executeSlice(const std::shared_ptr<DatasetSession>& dataset,
     result.slice = requestSlice(*dataset, request, cancellation);
     const auto range = resolveDisplayRange(dataset, request.field,
         request.maximumLevel, request.composition, rangeMode, userRange,
-        logarithmic, result.slice.plane);
+        logarithmic, result.slice.plane, cancellation);
     result.minimum = range.minimum;
     result.maximum = range.maximum;
     result.logarithmic = range.logarithmic;
@@ -370,7 +370,7 @@ SliceDisplayResult refreshCachedSlice(
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField,
-    int contourCount, bool rasterDirty)
+    int contourCount, bool rasterDirty, StopToken cancellation)
 {
     SliceDisplayResult result;
     result.request = request;
@@ -381,7 +381,7 @@ SliceDisplayResult refreshCachedSlice(
     result.slice.plane = std::move(displayPlane);
     const auto range = resolveDisplayRange(dataset, request.field,
         request.maximumLevel, request.composition, rangeMode, userRange,
-        logarithmic, result.slice.plane);
+        logarithmic, result.slice.plane, cancellation);
     result.minimum = range.minimum;
     result.maximum = range.maximum;
     result.logarithmic = range.logarithmic;
@@ -543,8 +543,14 @@ InitialSliceResult executeSessionFrameLoad(
                     region.upper[index] = upper;
                 }
                 request.visibleRegion = region;
-                request.outputSize = finestNativeOutputSize(
-                    metadata, request.visibleRegion, request.normalDirection);
+                request.outputSize = entry < spec.outputSizes.size()
+                    ? spec.outputSizes[entry]
+                    : finestNativeOutputSize(metadata, request.visibleRegion,
+                        request.normalDirection);
+                request.outputSize[0] = std::clamp(
+                    request.outputSize[0], 1, maxSliceOutputDimension);
+                request.outputSize[1] = std::clamp(
+                    request.outputSize[1], 1, maxSliceOutputDimension);
                 request.composition = selectedLevel.composition;
                 request.maximumLevel = attemptMaximumLevel;
                 request.sphericalSupersample = spec.sphericalSupersample;

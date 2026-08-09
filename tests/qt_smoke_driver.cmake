@@ -15,6 +15,7 @@
 #                 rubber-zoom-local | rubber-overzoom | pan-zoom |
 #                 range-cache | fab-zoom | cache-budget |
 #                 fixed-scale-1 | fixed-scale-4 | sequence-transform-preserve |
+#                 remote-fixed-scale |
 #                 sequence-density-preserve |
 #                 sequence-equal-size-transform-preserve |
 #                 sequence-geometry-refit
@@ -80,6 +81,10 @@ elseif(MODE STREQUAL "fixed-scale-1" OR MODE STREQUAL "fixed-scale-4")
     endif()
     run_or_die("${AMREXPLORER_QT}" --fixed-scale-arrival-smoke-test
         "${WORK}/plt" "${factor}")
+elseif(MODE STREQUAL "remote-fixed-scale")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --remote-fixed-scale-smoke-test
+        "${WORK}/plt")
 elseif(MODE STREQUAL "sequence-transform-preserve")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")

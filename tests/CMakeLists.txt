@@ -388,6 +388,29 @@ if(TARGET amrexplorer_qt)
         TIMEOUT 30)
 
     add_test(
+        NAME qt_remote_fixed_scale_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-fixed-scale-smoke-test "${remote_server_fixture_dir}"
+    )
+    set_tests_properties(qt_remote_fixed_scale_smoke PROPERTIES
+        FIXTURES_REQUIRED remote_server_materialized
+        TIMEOUT 30)
+
+    add_test(
+        NAME qt_remote_fixed_scale_wide_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_wide"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_fixed_scale_wide"
+            -DMODE=remote-fixed-scale
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_remote_fixed_scale_wide_smoke PROPERTIES
+        TIMEOUT 30)
+
+    add_test(
         NAME qt_remote_rubber_aspect_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:amrexplorer_qt>"

@@ -15,6 +15,7 @@
 #include <QLineEdit>
 #include <QLoggingCategory>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QProcess>
 #include <QPushButton>
 #include <QStandardPaths>
@@ -490,7 +491,214 @@ int main(int argc, char* argv[])
     std::shared_ptr<amrvis::remote::Server> smokeServer;
     std::optional<std::thread> smokeServerThread;
     std::optional<std::thread> smokePeerThread;
-    if (argc == 3
+    if ((argc == 8 || argc == 10)
+        && std::string_view(argv[1])
+            == "--fixed-scale-local-remote-repro") {
+        if (std::string_view(argv[2]) != "--connect"
+            || std::string_view(argv[4]) != "--token-stdin"
+            || std::string_view(argv[5]) != "--remote-path"
+            || (argc == 10 && std::string_view(argv[7]) != "--screenshot")) {
+            qCritical("usage: amrexplorer --fixed-scale-local-remote-repro "
+                "--connect HOST:PORT --token-stdin --remote-path "
+                "REMOTE_PLOTFILE [--screenshot OUTPUT.png] LOCAL_PLOTFILE");
+            return 2;
+        }
+        const auto endpoint = amrvis::qt::parseRemoteEndpoint(argv[3]);
+        std::string token;
+        if (!endpoint || !std::getline(std::cin, token) || token.empty()) {
+            qCritical("invalid endpoint or empty token");
+            return 2;
+        }
+        if (!token.empty() && token.back() == '\r') {
+            token.pop_back();
+        }
+        struct FixedScaleProbe {
+            int phase = 0;
+            bool localShowsWholeImage = false;
+            std::array<int, 2> localImage{};
+            std::array<int, 2> localViewport{};
+            QRectF localWindow;
+            QImage localViewportImage;
+        };
+        auto probe = std::make_shared<FixedScaleProbe>();
+        const auto remotePath = std::string(argv[6]);
+        const auto screenshotPath = argc == 10
+            ? QString::fromLocal8Bit(argv[8]) : QString();
+        const auto localPath = std::filesystem::path(argv[argc - 1]);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application,
+            [&window, &application, endpoint = *endpoint,
+                token = std::move(token), remotePath, screenshotPath,
+                probe](bool success) {
+                if (!success) {
+                    application.exit(probe->phase == 0 ? 2 : 3);
+                    return;
+                }
+                window.selectFixedScaleForTest(1);
+                if (probe->phase == 0) {
+                    probe->localShowsWholeImage
+                        = window.activeViewShowsWholeImageForTest();
+                    probe->localImage = window.activeViewImageSizeForTest();
+                    probe->localViewport
+                        = window.activeViewViewportSizeForTest();
+                    probe->localWindow
+                        = window.activeViewVisibleDataWindowForTest();
+                    probe->localViewportImage
+                        = window.activeViewViewportImageForTest();
+                    probe->phase = 1;
+                    QTimer::singleShot(0, &window,
+                        [&window, endpoint, token, remotePath] {
+                            window.openRemoteDataset(endpoint.host,
+                                endpoint.port, remotePath, token);
+                        });
+                    return;
+                }
+                const auto remoteShowsWholeImage
+                    = window.activeViewShowsWholeImageForTest();
+                const auto remoteImage = window.activeViewImageSizeForTest();
+                const auto remoteViewport
+                    = window.activeViewViewportSizeForTest();
+                const auto remoteWindow
+                    = window.activeViewVisibleDataWindowForTest();
+                const auto remoteViewportImage
+                    = window.activeViewViewportImageForTest();
+                const auto printWindow = [](const QRectF& value) {
+                    std::cout << std::setprecision(17)
+                              << value.x() << ',' << value.y() << ','
+                              << value.width() << ',' << value.height();
+                };
+                std::cout << "local 1x: image=" << probe->localImage[0]
+                          << 'x' << probe->localImage[1]
+                          << " viewport=" << probe->localViewport[0]
+                          << 'x' << probe->localViewport[1]
+                          << " whole-image-visible="
+                          << (probe->localShowsWholeImage ? "yes" : "no")
+                          << " data-window=";
+                printWindow(probe->localWindow);
+                std::cout << "\nremote 1x: image=" << remoteImage[0]
+                          << 'x' << remoteImage[1]
+                          << " viewport=" << remoteViewport[0]
+                          << 'x' << remoteViewport[1]
+                          << " whole-image-visible="
+                          << (remoteShowsWholeImage ? "yes" : "no")
+                          << " data-window=";
+                printWindow(remoteWindow);
+                std::cout << '\n';
+                const auto fillsViewport = [](const std::array<int, 2>& image,
+                                               const std::array<int, 2>& viewport) {
+                    return image[0] <= viewport[0] && image[1] <= viewport[1]
+                        && (std::abs(image[0] - viewport[0]) <= 1
+                            || std::abs(image[1] - viewport[1]) <= 1);
+                };
+                const auto localActsFit = probe->localShowsWholeImage
+                    && fillsViewport(probe->localImage, probe->localViewport);
+                const auto remoteActsFit = remoteShowsWholeImage
+                    && fillsViewport(remoteImage, remoteViewport);
+                const auto scaleMatches = probe->localImage == remoteImage
+                    && probe->localShowsWholeImage == remoteShowsWholeImage
+                    && localActsFit == remoteActsFit;
+                if (!screenshotPath.isEmpty()) {
+                    constexpr int headingHeight = 36;
+                    constexpr int gap = 12;
+                    const auto width = probe->localViewportImage.width()
+                        + remoteViewportImage.width() + gap;
+                    const auto height = headingHeight + std::max(
+                        probe->localViewportImage.height(),
+                        remoteViewportImage.height());
+                    QImage comparison(width, height,
+                        QImage::Format_ARGB32_Premultiplied);
+                    comparison.fill(QColor(30, 30, 30));
+                    QPainter painter(&comparison);
+                    painter.setPen(Qt::white);
+                    painter.drawText(QRect(0, 0,
+                        probe->localViewportImage.width(), headingHeight),
+                        Qt::AlignCenter, QStringLiteral("Local - 1x"));
+                    painter.drawText(QRect(
+                        probe->localViewportImage.width() + gap, 0,
+                        remoteViewportImage.width(), headingHeight),
+                        Qt::AlignCenter, QStringLiteral("Remote - 1x"));
+                    painter.drawImage(0, headingHeight,
+                        probe->localViewportImage);
+                    painter.drawImage(
+                        probe->localViewportImage.width() + gap,
+                        headingHeight, remoteViewportImage);
+                    painter.end();
+                    if (!comparison.save(screenshotPath, "PNG")) {
+                        std::cerr << "failed to save screenshot comparison to "
+                                  << screenshotPath.toStdString() << '\n';
+                        application.exit(5);
+                        return;
+                    }
+                    std::cout << "screenshot="
+                              << screenshotPath.toStdString() << '\n';
+                }
+                std::cout << (scaleMatches ? "MATCH" : "MISMATCH")
+                          << ": remote 1x "
+                          << (scaleMatches
+                                ? "has the same native extent as local 1x"
+                                : "does not have the same scale semantics as local 1x")
+                          << '\n';
+                application.exit(scaleMatches ? 0 : 1);
+            });
+        QTimer::singleShot(30000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window,
+            [&window, localPath] { window.openDataset(localPath); });
+    } else if (argc == 3
+        && std::string_view(argv[1])
+            == "--remote-fixed-scale-smoke-test") {
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        auto fixedScalePhase = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, fixedScalePhase](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application, fixedScalePhase] {
+                        if (!window.fixedScaleStateMatchesForTest(1)
+                            || !window.activeViewUsesNativeOutputForTest()) {
+                            application.exit(1);
+                            return;
+                        }
+                        const auto phase = (*fixedScalePhase)++;
+                        if (phase == 0
+                            && window.activeViewIsZoomedForTest()) {
+                            window.panActiveViewForTest(-8.0, 0.0);
+                            return;
+                        }
+                        if (phase == 1
+                            && window.activeViewIsZoomedForTest()) {
+                            window.resize(
+                                window.width() + 80, window.height() + 40);
+                            return;
+                        }
+                        application.exit(0);
+                    });
+                window.selectFixedScaleForTest(1);
+                if (window.activeViewUsesNativeOutputForTest()) {
+                    QTimer::singleShot(0, &application,
+                        [&window, &application] {
+                            application.exit(
+                                window.fixedScaleStateMatchesForTest(1)
+                                ? 0 : 1);
+                        });
+                }
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                window.openRemoteDataset(
+                    "127.0.0.1", server->port(), path, server->token());
+            });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--remote-slice-smoke-test") {
         smokeServer = std::make_shared<amrvis::remote::Server>();
         smokeServerThread.emplace(

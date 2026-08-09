@@ -10,6 +10,7 @@
 #include <QPoint>
 #include <QPointF>
 #include <QRectF>
+#include <QSize>
 
 #include <optional>
 #include <vector>
@@ -74,7 +75,8 @@ public:
     // rasters whose data regions are incompatible.
     void setImage(const QImage& image,
         ImageTransformPolicy transformPolicy =
-            ImageTransformPolicy::GeometryAware);
+            ImageTransformPolicy::GeometryAware,
+        QSize logicalSize = {});
     void setGridBoxes(const std::vector<GridBoxOverlay>& boxes);
     void setOverlaySegments(const std::vector<OverlaySegment>& segments);
     // Smooth contour polylines, rendered as cosmetic-pen path items at the
@@ -181,6 +183,10 @@ private:
     QGraphicsScene* m_scene = nullptr;
     QGraphicsPixmapItem* m_item = nullptr;
     QImage m_image;
+    // Raster dimensions at local/native density. Remote Fit rasters may have
+    // a different sampled size; fixed scales use this logical size so 1x
+    // remains one native output pixel per screen pixel.
+    QSize m_logicalSize;
     // Rect items (Cartesian) or path items (spherical sectors); QGraphicsItem*
     // so both kinds share the list.
     std::vector<QGraphicsItem*> m_gridItems;

@@ -97,7 +97,8 @@ ImageView::ImageView(QWidget* parent)
 }
 
 void ImageView::setImage(
-    const QImage& image, ImageTransformPolicy transformPolicy)
+    const QImage& image, ImageTransformPolicy transformPolicy,
+    QSize logicalSize)
 {
     const bool sizeChanged = m_image.isNull() || m_image.size() != image.size();
     // An explicitly incompatible raster resets Custom mode. Fixed scale is a
@@ -120,6 +121,7 @@ void ImageView::setImage(
     m_lineGuide = nullptr;
     m_lineDragButton = Qt::NoButton;
     m_image = image;
+    m_logicalSize = logicalSize.isValid() ? logicalSize : image.size();
     m_item = m_scene->addPixmap(QPixmap::fromImage(m_image));
     m_scene->setSceneRect(m_item->boundingRect());
     setBackgroundBrush(viewportBackground());
@@ -430,6 +432,7 @@ void ImageView::setPlaceholder(const QString& text)
     m_lineDragButton = Qt::NoButton;
     m_item = nullptr;
     m_image = {};
+    m_logicalSize = {};
     setBackgroundBrush(palette().window());
     auto* label = m_scene->addText(text);
     label->setDefaultTextColor(palette().windowText().color());
@@ -820,7 +823,10 @@ void ImageView::applyFixedScale()
     if (m_item != nullptr) {
         resetTransform();
         const auto factor = static_cast<qreal>(m_fixedScaleFactor);
-        scale(factor, factor);
+        const auto logicalWidth = std::max(1, m_logicalSize.width());
+        const auto logicalHeight = std::max(1, m_logicalSize.height());
+        scale(factor * logicalWidth / m_image.width(),
+            factor * logicalHeight / m_image.height());
     }
 }
 

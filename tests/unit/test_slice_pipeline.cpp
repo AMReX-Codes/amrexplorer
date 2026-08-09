@@ -186,6 +186,18 @@ int main()
             == (std::array<int, 2>{800, 100}),
         "spherical viewport aspect was computed from clamped sample counts");
 
+    // A viewport request may downsample a large native plane, but it must not
+    // supersample a small one. Fixed 1x uses the native raster as its logical
+    // scale, so enlarging 10x10 to the viewport would make it act like Fit.
+    require(amrvis::nativeBoundedViewportOutputSize(
+                fine2d, square, 2, {800, 600})
+            == (std::array<int, 2>{10, 10}),
+        "remote viewport sizing supersampled a small native raster");
+    const auto largeViewport = amrvis::nativeBoundedViewportOutputSize(
+        fine2d, huge, 2, {800, 600});
+    require(largeViewport == (std::array<int, 2>{600, 600}),
+        "remote viewport sizing did not retain bounded downsampling");
+
     // --- slicePlaneAxes ---------------------------------------------------
     require(amrvis::slicePlaneAxes(2, 0) == (std::array<int, 2>{0, 1}),
         "2-D plane axes are not x,y");

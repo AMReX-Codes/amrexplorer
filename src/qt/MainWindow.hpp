@@ -21,6 +21,7 @@
 #include <QImage>
 #include <QMainWindow>
 #include <QRectF>
+#include <QSize>
 #include <QStringList>
 
 #include <array>
@@ -147,6 +148,7 @@ public:
     // raster-colorbar-mismatch-on-2d-visible-zoom.
     [[nodiscard]] bool activeViewRasterMatchesDisplayRangeForTest();
     [[nodiscard]] bool activeViewUsesViewportBoundedOutputForTest() const;
+    [[nodiscard]] bool activeViewUsesNativeOutputForTest() const;
     [[nodiscard]] bool allViewsUseViewportBoundedOutputForTest() const;
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
@@ -196,6 +198,9 @@ public:
     // activeViewIsFitToWindowForTest, which refits as a side effect).
     void setSphericalSupersampleForTest(int factor);
     [[nodiscard]] int activeViewImageWidthForTest() const;
+    [[nodiscard]] std::array<int, 2> activeViewImageSizeForTest() const;
+    [[nodiscard]] std::array<int, 2> activeViewViewportSizeForTest() const;
+    [[nodiscard]] QImage activeViewViewportImageForTest() const;
     [[nodiscard]] bool activeViewFitsWindowForTest() const;
 
     // Test-only: shrink the open dataset's cache budget to force cache-pressure
@@ -402,6 +407,8 @@ private:
         const PlaneViewState& state) const;
     [[nodiscard]] std::array<int, 2> sliceOutputSize(
         const PlaneViewState& state, bool forceRemote = false) const;
+    [[nodiscard]] QSize logicalImageSize(const PlaneViewState& state,
+        const ScalarPlane& plane, const QImage& image) const;
     // True when the active dataset is displayed as a warped 2-D spherical
     // (r, theta) plane. Gates the coordinate-warp overlay, probe, and label
     // paths; all other datasets keep their Cartesian behavior.
@@ -433,6 +440,11 @@ private:
         const QPoint& viewportDelta);
     void endPanDrag(PlaneViewState& state, const QPointF& totalSceneDelta);
     void flushPanDrag(bool finalize);
+    void applyFixedScale(int factor);
+    void updateRemoteFixedScaleDemand(PlaneViewState& state, int factor,
+        std::optional<std::array<double, 2>> center = std::nullopt);
+    [[nodiscard]] std::array<double, 2> viewCenterInData(
+        const PlaneViewState& state) const;
     void applyPanStep(PlaneViewState& state, const QPointF& direction);
     void setupPanShortcuts();
     [[nodiscard]] std::optional<RealBox> shiftedPanRegion(

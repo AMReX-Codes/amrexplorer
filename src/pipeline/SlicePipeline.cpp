@@ -95,6 +95,23 @@ std::array<int, 2> viewportBoundedOutputSize(
             1, viewportSize[1])};
 }
 
+std::array<int, 2> nativeBoundedViewportOutputSize(
+    const DatasetMetadata& metadata, const RealBox& region, int normal,
+    std::array<int, 2> viewportSize)
+{
+    const auto viewport = viewportBoundedOutputSize(
+        metadata, region, normal, viewportSize);
+    const auto native = finestNativeOutputSize(metadata, region, normal);
+    const auto scale = std::min({1.0,
+        static_cast<double>(native[0]) / viewport[0],
+        static_cast<double>(native[1]) / viewport[1]});
+    return {
+        std::clamp(static_cast<int>(std::lround(viewport[0] * scale)),
+            1, native[0]),
+        std::clamp(static_cast<int>(std::lround(viewport[1] * scale)),
+            1, native[1])};
+}
+
 std::array<int, 2> frameBudgetBoundedOutputSize(
     std::array<int, 2> outputSize,
     std::optional<std::uint32_t> maximumResponseBytes)
@@ -628,7 +645,7 @@ InitialSliceResult executeSessionFrameLoad(
                                     request.visibleRegion,
                                     request.normalDirection));
                 if (spec.outputSizesAreViewportBounds && hasOutputSize) {
-                    request.outputSize = viewportBoundedOutputSize(metadata,
+                    request.outputSize = nativeBoundedViewportOutputSize(metadata,
                         request.visibleRegion, request.normalDirection,
                         request.outputSize);
                 }

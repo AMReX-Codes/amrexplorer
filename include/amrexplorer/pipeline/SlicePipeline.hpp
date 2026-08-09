@@ -169,6 +169,12 @@ inline constexpr int maxSliceOutputDimension = maxViewOutputDimension;
 [[nodiscard]] std::array<int, 2> viewportBoundedOutputSize(
     const DatasetMetadata& metadata, const RealBox& region, int normal,
     std::array<int, 2> viewportSize);
+// Viewport-bounded remote raster size that never invents more samples than
+// the region's finest-native raster. This preserves Fit's bounded transport
+// without making a small native image behave as though it had been enlarged.
+[[nodiscard]] std::array<int, 2> nativeBoundedViewportOutputSize(
+    const DatasetMetadata& metadata, const RealBox& region, int normal,
+    std::array<int, 2> viewportSize);
 [[nodiscard]] std::array<int, 2> frameBudgetBoundedOutputSize(
     std::array<int, 2> outputSize,
     std::optional<std::uint32_t> maximumResponseBytes);

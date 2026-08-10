@@ -643,7 +643,6 @@ void ImageView::mousePressEvent(QMouseEvent* event)
             m_panActive = true;
             m_lastPanPosition = event->position().toPoint();
             m_panAccumulated = QPointF();
-            m_transformMode = TransformMode::Custom;
             setCursor(Qt::ClosedHandCursor);
             emit panDragBegan();
             event->accept();

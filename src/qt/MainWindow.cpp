@@ -60,6 +60,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
 #include <QPlainTextEdit>
@@ -2186,11 +2187,29 @@ void MainWindow::wheelZoomAndPanActiveViewForTest()
     m_activeView->view->panViewport(QPoint(11, -7));
 }
 
-void MainWindow::scrollActiveViewForTest(int dx, int dy)
+void MainWindow::shiftDragActiveViewForTest(int dx, int dy)
 {
-    if (m_activeView != nullptr && m_activeView->view->hasImage()) {
-        m_activeView->view->panViewport(QPoint(dx, dy));
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return;
     }
+    auto* const viewport = m_activeView->view->viewport();
+    if (viewport == nullptr) {
+        return;
+    }
+    const QPoint start = viewport->rect().center();
+    const QPoint finish = start + QPoint(dx, dy);
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(start),
+        viewport->mapToGlobal(start), Qt::LeftButton, Qt::LeftButton,
+        Qt::ShiftModifier);
+    QApplication::sendEvent(viewport, &press);
+    QMouseEvent move(QEvent::MouseMove, QPointF(finish),
+        viewport->mapToGlobal(finish), Qt::NoButton, Qt::LeftButton,
+        Qt::ShiftModifier);
+    QApplication::sendEvent(viewport, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(finish),
+        viewport->mapToGlobal(finish), Qt::LeftButton, Qt::NoButton,
+        Qt::ShiftModifier);
+    QApplication::sendEvent(viewport, &release);
 }
 
 bool MainWindow::activeViewScrollBarsVisibleForTest() const

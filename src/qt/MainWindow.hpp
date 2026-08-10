@@ -164,9 +164,9 @@ public:
     // everything its viewport shows of the domain backed by the raster —
     // full bleed with no unfetched gaps.
     [[nodiscard]] bool allViewsFixedScaleRasterCoversViewportForTest() const;
-    // Test-only: scroll the active view's viewport by whole pixels, the same
-    // path Shift+drag panning takes over scroll bars.
-    void scrollActiveViewForTest(int dx, int dy);
+    // Test-only: send a real Shift+left drag through the active view's
+    // viewport, exercising the same event path as interactive panning.
+    void shiftDragActiveViewForTest(int dx, int dy);
     [[nodiscard]] bool activeViewScrollBarsVisibleForTest() const;
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;

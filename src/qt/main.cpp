@@ -750,10 +750,11 @@ int main(int argc, char* argv[])
                                         return;
                                     }
                                     *phase = 2;
-                                    // Three cells' worth of pixels at 32x:
-                                    // the newly visible cells must be
-                                    // fetched, giving exactly one settle.
-                                    window.scrollActiveViewForTest(-96, 0);
+                                    // Five cells' worth of pixels at 32x,
+                                    // sent through the real Shift+left mouse
+                                    // event path: the newly visible cells must
+                                    // be fetched, giving exactly one settle.
+                                    window.shiftDragActiveViewForTest(-160, 0);
                                 });
                             return;
                         }

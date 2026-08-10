@@ -1,6 +1,7 @@
 #include <amrexplorer/data/LocalDatasetSession.hpp>
 
 #include <amrexplorer/core/Statistics.hpp>
+#include <amrexplorer/data/SessionValidation.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/query/LineQuery.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
@@ -125,6 +126,7 @@ ViewDataResult LocalDatasetSession::requestView(
     const ViewDataRequest& request, StopToken cancellation)
 {
     const auto dataset = requireDataset();
+    validateSessionViewRequest(m_metadata, m_id, request);
     return std::visit(
         [&](const auto& typedRequest) -> ViewDataResult {
             using Request = std::decay_t<decltype(typedRequest)>;
@@ -145,6 +147,7 @@ DatasetPage LocalDatasetSession::requestDatasetPage(
     const DatasetPageRequest& request, StopToken cancellation)
 {
     const auto dataset = requireDataset();
+    validateSessionDatasetPageRequest(m_metadata, m_id, request);
     return extractDatasetPage(*dataset, request, cancellation);
 }
 
@@ -152,13 +155,7 @@ std::optional<ValueRange> LocalDatasetSession::requestRange(
     const RangeRequest& request, StopToken cancellation)
 {
     const auto dataset = requireDataset();
-    if (request.field.value >= m_metadata.fields.size()) {
-        throw std::invalid_argument("range field is unavailable");
-    }
-    if (request.maximumLevel < 0
-        || request.maximumLevel > m_metadata.finestLevel) {
-        throw std::invalid_argument("range level is unavailable");
-    }
+    validateSessionRangeRequest(m_metadata, request);
     if (m_metadata.isFab && request.scope == RangeScope::File) {
         BlockRequest block;
         block.dataset = m_id;
@@ -198,6 +195,8 @@ ParticleSample LocalDatasetSession::requestParticleSample(
     const std::string& species, double fraction, std::uint64_t seed,
     StopToken cancellation)
 {
+    validateSessionParticleRequest(
+        m_metadata, m_particleSpecies, species, fraction);
     return requireDataset()->requestParticleSample(
         species, fraction, seed, cancellation);
 }

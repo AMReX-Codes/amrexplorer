@@ -1,6 +1,7 @@
 add_library(amrexplorer_data
     DatasetPage.cpp
     LocalDatasetSession.cpp
+    SessionValidation.cpp
     ViewData.cpp
 )
 add_library(amrexplorer::data ALIAS amrexplorer_data)

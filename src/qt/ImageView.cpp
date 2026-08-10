@@ -606,22 +606,20 @@ void ImageView::panViewport(const QPoint& delta)
     }
     auto* const hBar = horizontalScrollBar();
     auto* const vBar = verticalScrollBar();
-    if (hBar->maximum() > hBar->minimum()
-        || vBar->maximum() > vBar->minimum()) {
-        // Scrolling leaves the transform — and therefore the display mode —
-        // untouched: a fixed scale panned by its scroll bars is still that
-        // fixed scale, locally and on a virtual canvas alike.
-        hBar->setValue(hBar->value() - delta.x());
-        vBar->setValue(vBar->value() - delta.y());
+    if (hBar->maximum() == hBar->minimum()
+        && vBar->maximum() == vBar->minimum()) {
+        // Neither axis has anywhere to scroll: the scene already fits the
+        // viewport. Translating instead would slide a fully visible image
+        // off-centre and demote the display mode to Custom — a change
+        // MainWindow never hears about, since panning raises no mode signal
+        // the way an explicit zoom does, leaving the Scale button stale.
         return;
     }
-    const auto sx = transform().m11();
-    const auto sy = transform().m22();
-    if (sx == 0.0 || sy == 0.0) {
-        return;
-    }
-    m_transformMode = TransformMode::Custom;
-    translate(delta.x() / sx, delta.y() / sy);
+    // Scrolling leaves the transform — and therefore the display mode —
+    // untouched: a fixed scale panned by its scroll bars is still that fixed
+    // scale, locally and on a virtual canvas alike.
+    hBar->setValue(hBar->value() - delta.x());
+    vBar->setValue(vBar->value() - delta.y());
 }
 
 void ImageView::mouseDoubleClickEvent(QMouseEvent* event)

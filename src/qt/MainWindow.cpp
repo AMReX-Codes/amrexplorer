@@ -16,7 +16,6 @@
 #include "Theme.hpp"
 #include "UserGuideDialog.hpp"
 
-#include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/io/FabCatalog.hpp>
 #include <amrexplorer/io/FitsWriter.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
@@ -25,8 +24,6 @@
 #include <amrexplorer/core/Statistics.hpp>
 #include <amrexplorer/pipeline/ParticleProjection.hpp>
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
-#include <amrexplorer/query/LineQuery.hpp>
-#include <amrexplorer/query/SliceQuery.hpp>
 #include <amrexplorer/render2d/Contours.hpp>
 #include <amrexplorer/render2d/Palette.hpp>
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
@@ -306,7 +303,7 @@ QString cacheBudgetDescription(std::uint64_t bytes)
 }
 
 QString cacheFallbackMessage(
-    const PlotfileDataset& dataset, int fromLevel, int toLevel)
+    const DatasetSession& dataset, int fromLevel, int toLevel)
 {
     const auto budget = cacheBudgetDescription(
         dataset.cacheMetrics().budgetBytes);
@@ -3152,6 +3149,8 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
             metadata.dimension, state.normal, slicePosition,
             dataset->id(), FieldId{field}, maximumLevel, composition);
     }
+    const auto outputWidth = horizontal ? state.view->image().width()
+                                        : state.view->image().height();
     const auto fieldName = metadata.fields[field].name;
     const auto dimension = metadata.dimension;
     // The other in-plane axis carries the cursor's fixed coordinate.
@@ -3227,8 +3226,11 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
             watcher->deleteLater();
         });
     watcher->setFuture(QtConcurrent::run(
-        [dataset, request, cancellation] {
-            return LineQuery(*dataset).execute(request, cancellation);
+        [dataset, request, outputWidth, cancellation] {
+            auto result = dataset->requestView(
+                ViewDataRequest{LineViewRequest{request, outputWidth}},
+                cancellation);
+            return std::get<LineQueryResult>(std::move(result));
         }));
 }
 
@@ -4815,7 +4817,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
 
     const auto requestedRangeMode = static_cast<RangeMode>(
         m_rangeMode->currentData().toInt());
-    const auto rangeMode = effectiveRangeMode(metadata, request.field,
+    const auto rangeMode = effectiveRangeMode(dataset, request.field,
         maximumLevel, composition, requestedRangeMode);
     std::optional<std::pair<double, double>> userRange;
     if (rangeMode == RangeMode::User) {
@@ -5906,11 +5908,10 @@ void MainWindow::updateRangeModeAvailability()
     const FieldId field{m_fieldSelector->currentData().toUInt()};
     const auto [composition, maximumLevel] = decodeLevelData(
         m_levelSelector->currentData().toInt(), metadata.finestLevel);
-    const auto fileAvailable = metadata.isFab
-        || selectedMetadataRange(metadata, field,
-            maximumLevel, composition, RangeMode::File).has_value();
-    const auto levelAvailable = selectedMetadataRange(metadata, field,
-        maximumLevel, composition, RangeMode::Level).has_value();
+    const auto fileAvailable = m_dataset->rangeAvailable(
+        RangeRequest{field, maximumLevel, composition, RangeScope::File});
+    const auto levelAvailable = m_dataset->rangeAvailable(
+        RangeRequest{field, maximumLevel, composition, RangeScope::Level});
 
     auto* model = qobject_cast<QStandardItemModel*>(m_rangeMode->model());
     if (model == nullptr) {

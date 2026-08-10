@@ -14,6 +14,7 @@ target_include_directories(amrexplorer_pipeline
 target_link_libraries(amrexplorer_pipeline
     PUBLIC
         amrexplorer::core
+        amrexplorer::data
         amrexplorer::io
         amrexplorer::query
         amrexplorer::render2d

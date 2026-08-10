@@ -10,6 +10,7 @@
 #include <QPoint>
 #include <QPointF>
 #include <QRectF>
+#include <QSize>
 
 #include <optional>
 #include <vector>
@@ -60,6 +61,12 @@ class ImageView final : public QGraphicsView {
     Q_OBJECT
 
 public:
+    enum class TransformMode {
+        Fit,
+        FixedScale,
+        Custom
+    };
+
     explicit ImageView(QWidget* parent = nullptr);
 
     // Preserve keeps the current panel-local transform when replacing a raster
@@ -68,7 +75,8 @@ public:
     // rasters whose data regions are incompatible.
     void setImage(const QImage& image,
         ImageTransformPolicy transformPolicy =
-            ImageTransformPolicy::GeometryAware);
+            ImageTransformPolicy::GeometryAware,
+        QSize logicalSize = {});
     void setGridBoxes(const std::vector<GridBoxOverlay>& boxes);
     void setOverlaySegments(const std::vector<OverlaySegment>& segments);
     // Smooth contour polylines, rendered as cosmetic-pen path items at the
@@ -98,9 +106,20 @@ public:
     void setCellHighlightPath(const std::optional<QPainterPath>& scenePath);
     void setPlaceholder(const QString& text);
     [[nodiscard]] bool hasImage() const noexcept;
-    // True while the view auto-fits the whole image to the window (i.e. the
-    // user has not zoomed or set a fixed scale). Cleared by zoom/pan/scale.
-    [[nodiscard]] bool isFitToWindow() const noexcept { return m_fitOnResize; }
+    // Fit, fixed integer scale, and custom zoom/pan are durable display modes,
+    // not incidental properties of the current QTransform.
+    [[nodiscard]] TransformMode transformMode() const noexcept
+    {
+        return m_transformMode;
+    }
+    [[nodiscard]] bool isFitToWindow() const noexcept
+    {
+        return m_transformMode == TransformMode::Fit;
+    }
+    [[nodiscard]] int fixedScaleFactor() const noexcept
+    {
+        return m_fixedScaleFactor;
+    }
     [[nodiscard]] const QImage& image() const noexcept;
     [[nodiscard]] std::size_t pointOverlayCount() const noexcept;
     [[nodiscard]] const std::vector<QColor>& pointOverlayColors() const noexcept;
@@ -111,6 +130,7 @@ public:
     [[nodiscard]] QImage composedImage(qreal scaleFactor = 1.0) const;
     void fitToWindow();
     void setFixedScale(int factor);
+    void zoomBy(qreal factor);
     void zoomToRect(const QRectF& sceneRect);
     // Shift+left-drag pans the viewport (scroll bars, or the view transform
     // when the scene fits the window). When zoomed into a subregion, the
@@ -155,6 +175,7 @@ protected:
 
 private:
     void fitImage();
+    void applyFixedScale();
     void showLineGuide(const QPoint& viewPosition);
     void updateLineGuide(const QPoint& viewPosition);
     void applyCrosshairs();
@@ -162,6 +183,10 @@ private:
     QGraphicsScene* m_scene = nullptr;
     QGraphicsPixmapItem* m_item = nullptr;
     QImage m_image;
+    // Raster dimensions at local/native density. Remote Fit rasters may have
+    // a different sampled size; fixed scales use this logical size so 1x
+    // remains one native output pixel per screen pixel.
+    QSize m_logicalSize;
     // Rect items (Cartesian) or path items (spherical sectors); QGraphicsItem*
     // so both kinds share the list.
     std::vector<QGraphicsItem*> m_gridItems;
@@ -188,7 +213,8 @@ private:
     QGraphicsLineItem* m_lineGuide = nullptr;
     bool m_sliceMoveEnabled = false;
     bool m_lineToolEnabled = true;
-    bool m_fitOnResize = true;
+    TransformMode m_transformMode = TransformMode::Fit;
+    int m_fixedScaleFactor = 1;
 };
 
 } // namespace amrvis::qt

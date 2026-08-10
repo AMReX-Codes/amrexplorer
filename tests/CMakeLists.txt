@@ -621,35 +621,74 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_sequence_spec_change_smoke PROPERTIES TIMEOUT 30)
-    # A preserved physical crop rendered at a different raster resolution in
-    # the next sequence frame must refit instead of retaining a stale transform.
+    foreach(factor IN ITEMS 1 4)
+        add_test(
+            NAME qt_fixed_scale_${factor}x_arrival_smoke
+            COMMAND "${CMAKE_COMMAND}"
+                "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+                "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+                "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+                "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_fixed_scale_${factor}x"
+                "-DMODE=fixed-scale-${factor}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+        )
+        set_tests_properties(
+            qt_fixed_scale_${factor}x_arrival_smoke PROPERTIES TIMEOUT 30)
+    endforeach()
     add_test(
-        NAME qt_sequence_zoom_refit_smoke
+        NAME qt_sequence_transform_preserve_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_transform_preserve"
+            -DMODE=sequence-transform-preserve
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(
+        qt_sequence_transform_preserve_smoke PROPERTIES TIMEOUT 30)
+    # A compatible physical crop rendered at a different raster resolution in
+    # the next sequence frame preserves its visible data window.
+    add_test(
+        NAME qt_sequence_density_preserve_smoke
         COMMAND "${CMAKE_COMMAND}"
             "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
             "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
             "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
             "-DSECOND_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_nonuniform"
-            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_zoom_refit"
-            -DMODE=sequence-zoom-refit
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_density_preserve"
+            -DMODE=sequence-density-preserve
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
-    set_tests_properties(qt_sequence_zoom_refit_smoke PROPERTIES TIMEOUT 30)
+    set_tests_properties(
+        qt_sequence_density_preserve_smoke PROPERTIES TIMEOUT 30)
     # Regression test for the sequence timing edge: if frame stepping cancels
     # a rubber-band crop before its raster lands, the next frame's cropped
     # raster can have the same pixel dimensions as the cached full-domain
     # raster. The incompatible full-domain transform must still be discarded.
     add_test(
-        NAME qt_sequence_equal_size_zoom_refit_smoke
+        NAME qt_sequence_equal_size_transform_preserve_smoke
         COMMAND "${CMAKE_COMMAND}"
             "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
             "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
             "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
             "-DSECOND_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_refined_2d"
-            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_equal_size_zoom_refit"
-            -DMODE=sequence-equal-size-zoom-refit
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_equal_size_transform_preserve"
+            -DMODE=sequence-equal-size-transform-preserve
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(
-        qt_sequence_equal_size_zoom_refit_smoke PROPERTIES TIMEOUT 30)
+        qt_sequence_equal_size_transform_preserve_smoke PROPERTIES TIMEOUT 30)
+    add_test(
+        NAME qt_sequence_geometry_refit_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_geometry_refit"
+            -DMODE=sequence-geometry-refit
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(
+        qt_sequence_geometry_refit_smoke PROPERTIES TIMEOUT 30)
 endif()

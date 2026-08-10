@@ -1091,10 +1091,87 @@ int main(int argc, char* argv[])
             window.openSequence({first, second});
         });
     } else if (argc == 4
-        && std::string_view(argv[1]) == "--sequence-zoom-refit-smoke-test") {
+        && std::string_view(argv[1])
+            == "--fixed-scale-arrival-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        const int factor = std::stoi(argv[3]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, factor](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                window.selectFixedScaleForTest(factor);
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application, factor] {
+                        application.exit(
+                            window.fixedScaleStateMatchesForTest(factor)
+                                ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+                // Force an asynchronous replacement raster after selecting the
+                // scale, reproducing the delayed-arrival race.
+                window.enableVisibleRasterForTest();
+            }, Qt::SingleShotConnection);
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--sequence-transform-preserve-smoke-test") {
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        auto before = std::make_shared<QRectF>();
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application, before](int index) {
+                if (index == 0) {
+                    window.wheelZoomAndPanActiveViewForTest();
+                    *before = window.activeViewVisibleDataWindowForTest();
+                    window.stepSequence(1);
+                    return;
+                }
+                if (index != 1) {
+                    return;
+                }
+                const auto after
+                    = window.activeViewVisibleDataWindowForTest();
+                const auto close = [](double lhs, double rhs) {
+                    return std::fabs(lhs - rhs) <= 3.0e-2
+                        * std::max({1.0, std::fabs(lhs), std::fabs(rhs)});
+                };
+                const bool preserved = !window.activeViewFitsWindowForTest()
+                        && close(before->left(), after.left())
+                        && close(before->top(), after.top())
+                        && close(before->width(), after.width())
+                        && close(before->height(), after.height());
+                if (!preserved) {
+                    std::fprintf(stderr,
+                        "transform preservation mismatch: fit=%d "
+                        "before=(%.17g,%.17g %.17gx%.17g) "
+                        "after=(%.17g,%.17g %.17gx%.17g)\n",
+                        window.activeViewFitsWindowForTest() ? 1 : 0,
+                        before->x(), before->y(), before->width(),
+                        before->height(), after.x(), after.y(), after.width(),
+                        after.height());
+                }
+                application.exit(preserved ? 0 : 1);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(2); });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--sequence-density-preserve-smoke-test") {
         // Preserve a physical crop while moving from an 8x8 frame to an 8x12
-        // frame. The incoming raster has a different geometry and must be
-        // fitted instead of inheriting the first raster's pixel transform.
+        // frame. Pixel density changes, but the physical geometry is
+        // compatible, so Custom mode must preserve the data window.
         const std::filesystem::path first(argv[2]);
         const std::filesystem::path second(argv[3]);
         auto zoomSettled = std::make_shared<bool>(false);
@@ -1114,7 +1191,7 @@ int main(int argc, char* argv[])
                     application.exit(
                         *zoomSettled
                             && window.activeViewIsZoomedForTest()
-                            && window.activeViewIsFitToWindowForTest()
+                            && !window.activeViewIsFitToWindowForTest()
                         ? 0 : 1);
                 }
             });
@@ -1125,13 +1202,13 @@ int main(int argc, char* argv[])
         });
     } else if (argc == 4
         && std::string_view(argv[1])
-            == "--sequence-equal-size-zoom-refit-smoke-test") {
+            == "--sequence-equal-size-transform-preserve-smoke-test") {
         // Exercise the timing edge directly: the first frame's full-domain
         // raster is 8x8. Rubber-band zoom changes the view transform and queues
         // a 4x4 crop, but stepping immediately cancels that work. The second
         // frame is 16x16, so its central-half crop is also 8x8. A size-only
-        // transform policy mistakes that cropped raster for the cached full
-        // raster and leaves only part of the new image visible.
+        // transform policy must use physical compatibility rather than the
+        // fresh dataset id or equal raster dimensions.
         const std::filesystem::path first(argv[2]);
         const std::filesystem::path second(argv[3]);
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
@@ -1142,12 +1219,36 @@ int main(int argc, char* argv[])
                 } else if (index == 1) {
                     application.exit(
                         window.activeViewIsZoomedForTest()
-                            && window.activeViewIsFitToWindowForTest()
+                            && !window.activeViewIsFitToWindowForTest()
                         ? 0 : 1);
                 }
             });
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
             &application, [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--sequence-geometry-refit-smoke-test") {
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+            &application, [&window, &application](int index) {
+                if (index == 0) {
+                    window.wheelZoomAndPanActiveViewForTest();
+                    window.stepSequence(1);
+                } else if (index == 1) {
+                    application.exit(
+                        window.activeViewIsFitToWindowForTest() ? 0 : 1);
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(2); });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(3); });
         QTimer::singleShot(0, &window, [&window, first, second] {
             window.openSequence({first, second});
         });

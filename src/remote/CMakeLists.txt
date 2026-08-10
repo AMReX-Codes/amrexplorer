@@ -24,6 +24,7 @@ add_custom_command(
 add_library(amrexplorer_remote
     Codec.cpp
     Codec.hpp
+    Connection.cpp
     Frame.cpp
     Server.cpp
     "${amrexplorer_wire_generated}"

@@ -112,6 +112,15 @@ int main()
 {
     using namespace amrvis::remote;
 
+    const auto numericOnlyListener = listenOnLoopback(0);
+    requireRejected(
+        [&] {
+            static_cast<void>(connectTo("localhost",
+                numericOnlyListener.port,
+                std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+        },
+        "hostname resolution remained in the deadline-bounded connect path");
+
     const auto listener = listenOnLoopback(0);
     std::exception_ptr serverFailure;
     std::thread server([&] {

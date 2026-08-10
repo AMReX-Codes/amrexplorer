@@ -153,6 +153,8 @@ public:
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
     [[nodiscard]] bool fabStateClearedForTest() const;
+    void setGridBoxesVisibleForTest(bool visible);
+    [[nodiscard]] std::size_t activeViewGridBoxCountForTest() const;
 
     // Test-only: rubber-band the central half of the active 3-D panel through
     // the same handler used by ImageView::rubberBandSelected.
@@ -290,6 +292,7 @@ private:
         double displayMaximum = 1.0;
         bool displayLogarithmic = false;
         std::vector<VectorSegment> vectorSegments;
+        std::vector<SliceGridBox> gridBoxes;
         // Cache key of the slice that produced the planes above: a UI change
         // that leaves every key field untouched (palette/log/range/contour
         // count) is satisfied from the cached planes instead of querying

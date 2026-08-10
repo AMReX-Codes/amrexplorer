@@ -612,6 +612,7 @@ fb::SliceViewRequestT toWire(const SliceRequest& value)
     wire.height = value.outputSize[1];
     wire.sampling = toWireSampling(value.sampling);
     wire.composition = toWireComposition(value.composition);
+    wire.include_grid_boxes = value.includeGridBoxes;
     return wire;
 }
 
@@ -633,6 +634,7 @@ SliceRequest fromWire(const fb::SliceViewRequestT& value)
     result.outputSize = {value.width, value.height};
     result.sampling = sampling;
     result.composition = composition;
+    result.includeGridBoxes = value.include_grid_boxes;
     return result;
 }
 
@@ -646,6 +648,15 @@ fb::SliceViewResponseT toWire(
     wire.values = value.plane.values;
     wire.valid = value.plane.valid;
     wire.source_level = value.plane.sourceLevel;
+    wire.grid_boxes_included = value.gridBoxesIncluded;
+    wire.grid_boxes_truncated = value.gridBoxesTruncated;
+    wire.grid_boxes.reserve(value.gridBoxes.size());
+    for (const auto& box : value.gridBoxes) {
+        auto converted = std::make_unique<fb::SliceGridBoxT>();
+        converted->level = box.level;
+        converted->physical_region = toWire(box.physicalRegion);
+        wire.grid_boxes.push_back(std::move(converted));
+    }
     wire.candidate_blocks = value.metrics.candidateBlocks;
     wire.blocks_read = value.metrics.blocksRead;
     wire.cache_hits = value.metrics.cacheHits;
@@ -672,6 +683,16 @@ SliceQueryResult fromWire(const fb::SliceViewResponseT& value)
     result.plane.values = value.values;
     result.plane.valid = value.valid;
     result.plane.sourceLevel = value.source_level;
+    result.gridBoxesIncluded = value.grid_boxes_included;
+    result.gridBoxesTruncated = value.grid_boxes_truncated;
+    result.gridBoxes.reserve(value.grid_boxes.size());
+    for (const auto& box : value.grid_boxes) {
+        if (!box) {
+            throw std::invalid_argument("wire slice grid box is missing");
+        }
+        result.gridBoxes.push_back(
+            SliceGridBox{box->level, fromWire(box->physical_region.get())});
+    }
     result.metrics = {value.candidate_blocks, value.blocks_read,
         value.cache_hits, value.payload_bytes_read};
     return result;

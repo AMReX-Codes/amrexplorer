@@ -5,7 +5,9 @@
 
 #include <array>
 #include <compare>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -53,6 +55,10 @@ struct SliceRequest {
     std::array<int, 2> outputSize{0, 0};
     SamplingPolicy sampling = SamplingPolicy::PiecewiseConstant;
     CompositionPolicy composition = CompositionPolicy::FinestAvailable;
+    bool includeGridBoxes = false;
+    // Collection bound supplied by the execution boundary. Local queries keep
+    // the default; the remote server replaces it with a frame-derived limit.
+    std::size_t maximumGridBoxes = std::numeric_limits<std::size_t>::max();
     // 2-D spherical display only: how finely the (r, theta) raster is
     // resampled into physical (R, Z). Higher values trace the curved cell
     // boundaries more smoothly at the cost of a larger warped raster. A pure
@@ -84,4 +90,3 @@ struct LineRequest {
     const LineRequest& request, int datasetDimension);
 
 } // namespace amrvis
-

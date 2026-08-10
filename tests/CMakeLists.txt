@@ -412,6 +412,17 @@ if(TARGET amrexplorer_qt)
         TIMEOUT 10)
 
     add_test(
+        NAME qt_remote_grid_boxes_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-grid-boxes-smoke-test
+            "${remote_server_fixture_dir}"
+    )
+    set_tests_properties(qt_remote_grid_boxes_smoke PROPERTIES
+        FIXTURES_REQUIRED remote_server_materialized
+        TIMEOUT 30)
+
+    add_test(
         NAME qt_remote_sequence_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:amrexplorer_qt>"

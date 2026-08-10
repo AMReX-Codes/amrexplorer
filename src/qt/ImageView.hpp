@@ -121,6 +121,10 @@ public:
         return m_fixedScaleFactor;
     }
     [[nodiscard]] const QImage& image() const noexcept;
+    [[nodiscard]] std::size_t gridBoxCount() const noexcept
+    {
+        return m_gridItems.size();
+    }
     [[nodiscard]] std::size_t pointOverlayCount() const noexcept;
     [[nodiscard]] const std::vector<QColor>& pointOverlayColors() const noexcept;
     // Renders the scene (base image plus grid boxes and any other overlays)

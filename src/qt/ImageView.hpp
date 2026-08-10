@@ -162,9 +162,11 @@ public:
     // The rect is in image (raster-pixel) coordinates — identical to scene
     // coordinates in the classic scene, offset-corrected on a virtual canvas.
     void zoomToRect(const QRectF& imageRect);
-    // Shift+left-drag pans the viewport (scroll bars, or the view transform
-    // when the scene fits the window). When zoomed into a subregion, the
-    // drag shifts the visible data window (see panDrag* signals).
+    // Scrolls the viewport for Shift+left-drag and the arrow keys. The delta
+    // is how far the content moves, matching the sense MainWindow's
+    // shiftedPanRegion uses, and is a no-op when the scene already fits the
+    // window. When zoomed into a subregion, the drag shifts the visible data
+    // window instead (see panDrag* signals).
     void panViewport(const QPoint& delta);
     // When enabled (the 3-D slice views): a plain right click emits
     // sliceMoveRequested; a Shift+middle/right click or drag, or a right

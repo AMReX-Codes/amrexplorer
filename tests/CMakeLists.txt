@@ -574,6 +574,23 @@ if(TARGET amrexplorer_qt)
             "$<TARGET_FILE:test_line_plot_hover>"
     )
 
+    add_executable(test_image_view_pan
+        unit/test_image_view_pan.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/ImageView.cpp"
+    )
+    set_target_properties(test_image_view_pan PROPERTIES AUTOMOC ON)
+    target_include_directories(test_image_view_pan
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
+    )
+    target_link_libraries(test_image_view_pan
+        PRIVATE amrexplorer::core amrexplorer::warnings Qt6::Widgets
+    )
+    add_test(
+        NAME image_view_pan
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_image_view_pan>"
+    )
+
     add_test(
         NAME qt_metadata_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen

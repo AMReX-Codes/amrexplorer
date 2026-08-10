@@ -3737,10 +3737,16 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
         return;
     }
 
-    const auto scale = state.view->transform().m11();
+    // shiftedPanRegion above and panViewport here share one convention: the
+    // delta says how far the *content* moves. Handing both the same unnegated
+    // sceneDelta is what keeps an arrow key moving the view rather than the
+    // image once the pan falls through to the scroll bars. The axes convert
+    // independently because a fixed scale over a raster whose aspect differs
+    // from the logical size yields an anisotropic transform.
+    const auto transform = state.view->transform();
     state.view->panViewport(QPoint(
-        static_cast<int>(std::round(-sceneDelta.x() * scale)),
-        static_cast<int>(std::round(-sceneDelta.y() * scale))));
+        static_cast<int>(std::round(sceneDelta.x() * transform.m11())),
+        static_cast<int>(std::round(sceneDelta.y() * transform.m22()))));
 }
 
 std::optional<RealBox> MainWindow::shiftedPanRegion(

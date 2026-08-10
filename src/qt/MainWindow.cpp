@@ -60,6 +60,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
 #include <QPlainTextEdit>
@@ -70,6 +71,7 @@
 #include <QPushButton>
 #include <QRect>
 #include <QRegularExpressionValidator>
+#include <QScrollBar>
 #include <QSettings>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -300,6 +302,36 @@ QString exceptionMessage(const std::exception& error)
     }
     return QString::fromUtf8(error.what());
 }
+
+// Recovers a remote error code from a worker exception, unwrapping the
+// QUnhandledException that Qt Concurrent wraps around a thrown std exception.
+// Returns nullopt for local failures and any non-remote error.
+std::optional<remote::ErrorCode> remoteErrorCode(const std::exception& error)
+{
+    const auto* unhandled = dynamic_cast<const QUnhandledException*>(&error);
+    if (unhandled != nullptr && unhandled->exception()) {
+        try {
+            std::rethrow_exception(unhandled->exception());
+        } catch (const remote::RemoteError& remoteError) {
+            return remoteError.code();
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+    if (const auto* remoteError
+            = dynamic_cast<const remote::RemoteError*>(&error)) {
+        return remoteError->code();
+    }
+    return std::nullopt;
+}
+
+// Result of the cheap connect-time handshake used to validate an endpoint and
+// token before any dataset is opened.
+struct RemoteVerifyOutcome {
+    bool ok = false;
+    bool unauthorized = false;
+    QString message;
+};
 
 // QString face of the pipeline's formatter, for the GUI-side messages; hides
 // amrvis::cacheBudgetDescription for unqualified calls in this namespace.
@@ -941,11 +973,8 @@ void MainWindow::wireView(PlaneViewState& state)
                     remote::RemoteDatasetSession>(m_dataset)) {
                 return;
             }
-            if (state.view->transformMode()
-                    == ImageView::TransformMode::FixedScale
-                && !displayIsSpherical()) {
-                updateRemoteFixedScaleDemand(
-                    state, state.view->fixedScaleFactor());
+            if (remoteDemandCanvas(state)) {
+                updateRemoteFixedScaleDemand(state);
                 return;
             }
             if (!state.hasCachedRequest
@@ -953,6 +982,8 @@ void MainWindow::wireView(PlaneViewState& state)
                 scheduleSliceRequest(state);
             }
         });
+    connect(view, &ImageView::canvasScrolled, this,
+        [this, &state] { updateRemoteFixedScaleDemand(state); });
 }
 
 std::vector<MainWindow::PlaneViewState*> MainWindow::currentViews()
@@ -1155,11 +1186,22 @@ void MainWindow::createMenus()
         [this] { choosePlotfileSequence(); });
 
     const auto configureRemoteEndpoint = [this]() {
-        const auto current = m_remotePort == 0
-            ? QStringLiteral("127.0.0.1:48192")
-            : QStringLiteral("%1:%2")
-                  .arg(QString::fromStdString(m_remoteHost))
-                  .arg(m_remotePort);
+        // Prefill the loopback host and the last port used (this session, or
+        // the one saved from a previous run against a still-running server).
+        // The token is never persisted, so it is always entered fresh.
+        QString current;
+        if (m_remotePort != 0) {
+            current = QStringLiteral("%1:%2")
+                          .arg(QString::fromStdString(m_remoteHost))
+                          .arg(m_remotePort);
+        } else {
+            const auto savedPort = makeSettings()
+                    .value(QStringLiteral("remote/port"), 0U)
+                    .toUInt();
+            current = (savedPort > 0 && savedPort <= 65535)
+                ? QStringLiteral("127.0.0.1:%1").arg(savedPort)
+                : QStringLiteral("127.0.0.1:");
+        }
         bool accepted = false;
         const auto text = QInputDialog::getText(this,
             tr("Connect to Remote Server"), tr("Host and port:"),
@@ -1170,20 +1212,45 @@ void MainWindow::createMenus()
         const auto endpoint = parseRemoteEndpoint(text.toStdString());
         if (!endpoint) {
             QMessageBox::warning(this, tr("Invalid endpoint"),
-                tr("Enter an endpoint as HOST:PORT."));
+                tr("Enter a numeric endpoint as IPv4:PORT or [IPv6]:PORT."));
             return false;
         }
-        m_remoteHost = endpoint->first;
-        m_remotePort = endpoint->second;
-        statusBar()->showMessage(
-            tr("Remote endpoint set to %1").arg(text));
+        auto token = endpoint->token;
+        if (token.empty()) {
+            bool tokenAccepted = false;
+            const auto tokenText = QInputDialog::getText(this,
+                tr("Connect to Remote Server"),
+                tr("Session token (printed by the server at startup):"),
+                QLineEdit::Password, QString(), &tokenAccepted);
+            if (!tokenAccepted) {
+                return false;
+            }
+            token = tokenText.trimmed().toStdString();
+        }
+        if (token.empty()) {
+            QMessageBox::warning(this, tr("Missing token"),
+                tr("A session token is required to connect."));
+            return false;
+        }
+        m_remoteHost = endpoint->host;
+        m_remotePort = endpoint->port;
+        m_remoteToken = std::move(token);
+        saveRemoteSettings();
+        statusBar()->showMessage(tr("Remote endpoint set to %1:%2")
+                .arg(QString::fromStdString(m_remoteHost))
+                .arg(m_remotePort));
         updateDiagnostics();
         return true;
     };
     auto* connectRemoteAction = new QAction(
         tr("&Connect to Remote Server..."), this);
     connect(connectRemoteAction, &QAction::triggered, this,
-        [configureRemoteEndpoint] { configureRemoteEndpoint(); });
+        [this, configureRemoteEndpoint] {
+            if (configureRemoteEndpoint()) {
+                verifyRemoteEndpoint(
+                    m_remoteHost, m_remotePort, m_remoteToken);
+            }
+        });
 
     auto* openRemoteAction = new QAction(
         tr("Open Remote &Plotfile..."), this);
@@ -1198,13 +1265,13 @@ void MainWindow::createMenus()
                 tr("Server-visible plotfile path:"), QLineEdit::Normal,
                 QString(), &accepted);
             if (accepted && !path.trimmed().isEmpty()) {
-                openRemoteDataset(
-                    m_remoteHost, m_remotePort, path.toStdString());
+                openRemoteDataset(m_remoteHost, m_remotePort,
+                    path.toStdString(), m_remoteToken);
             }
         });
 
     auto* openRemoteSequenceAction = new QAction(
-        tr("Open Remote Plotfile &Sequence..."), this);
+        tr("Open &Remote Plotfile Sequence..."), this);
     connect(openRemoteSequenceAction, &QAction::triggered, this,
         [this, configureRemoteEndpoint] {
             if (m_remotePort == 0 && !configureRemoteEndpoint()) {
@@ -1226,7 +1293,8 @@ void MainWindow::createMenus()
                     paths.push_back(path.toStdString());
                 }
             }
-            openRemoteSequence(m_remoteHost, m_remotePort, paths);
+            openRemoteSequence(
+                m_remoteHost, m_remotePort, paths, m_remoteToken);
         });
 
     auto* openFabAction = new QAction(tr("Open &FAB..."), this);
@@ -1967,6 +2035,35 @@ bool MainWindow::allViewsUseViewportBoundedOutputForTest() const
             [&](const auto* state) { return check(*state); });
 }
 
+bool MainWindow::allViewsFixedScaleRasterCoversViewportForTest() const
+{
+    const auto check = [](const PlaneViewState& state) {
+        const auto* view = state.view;
+        if (view == nullptr || !view->hasImage()
+            || view->transformMode() != ImageView::TransformMode::FixedScale
+            || view->viewport() == nullptr) {
+            return false;
+        }
+        const auto raster = QRectF(view->mapFromScene(
+            view->imageSceneRect()).boundingRect());
+        const auto domain = QRectF(view->mapFromScene(
+            view->sceneRect()).boundingRect());
+        // Everything the viewport shows of the domain must be backed by the
+        // raster; one pixel of slack absorbs the integer mapping round-off.
+        const auto shown = QRectF(view->viewport()->rect())
+            .intersected(domain).adjusted(1.0, 1.0, -1.0, -1.0);
+        return shown.isEmpty() || raster.contains(shown);
+    };
+    if (m_viewDimension == 2) {
+        return check(m_view2d);
+    }
+    const std::array<const PlaneViewState*, 3> threeDimensional{
+        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+    return m_viewDimension == 3
+        && std::all_of(threeDimensional.begin(), threeDimensional.end(),
+            [&](const auto* state) { return check(*state); });
+}
+
 bool MainWindow::activeViewHasPhysicalAspectForTest(
     double expectedAspect) const
 {
@@ -2090,6 +2187,46 @@ void MainWindow::wheelZoomAndPanActiveViewForTest()
     m_activeView->view->panViewport(QPoint(11, -7));
 }
 
+void MainWindow::shiftDragActiveViewForTest(int dx, int dy)
+{
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return;
+    }
+    auto* const viewport = m_activeView->view->viewport();
+    if (viewport == nullptr) {
+        return;
+    }
+    const QPoint start = viewport->rect().center();
+    const QPoint finish = start + QPoint(dx, dy);
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(start),
+        viewport->mapToGlobal(start), Qt::LeftButton, Qt::LeftButton,
+        Qt::ShiftModifier);
+    QApplication::sendEvent(viewport, &press);
+    QMouseEvent move(QEvent::MouseMove, QPointF(finish),
+        viewport->mapToGlobal(finish), Qt::NoButton, Qt::LeftButton,
+        Qt::ShiftModifier);
+    QApplication::sendEvent(viewport, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(finish),
+        viewport->mapToGlobal(finish), Qt::LeftButton, Qt::NoButton,
+        Qt::ShiftModifier);
+    QApplication::sendEvent(viewport, &release);
+}
+
+bool MainWindow::activeViewScrollBarsVisibleForTest() const
+{
+    if (m_activeView == nullptr) {
+        return false;
+    }
+    // Scroll range, not widget visibility: under the as-needed policy a
+    // non-empty range is what shows the bars, and the range updates
+    // synchronously while the widgets only follow on the next layout pass.
+    const auto* view = m_activeView->view;
+    return view->horizontalScrollBar()->maximum()
+            > view->horizontalScrollBar()->minimum()
+        || view->verticalScrollBar()->maximum()
+            > view->verticalScrollBar()->minimum();
+}
+
 QRectF MainWindow::activeViewVisibleDataWindowForTest() const
 {
     if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
@@ -2127,8 +2264,15 @@ void MainWindow::panActiveViewForTest(
         return;
     }
     const QPointF delta(sceneDeltaX, sceneDeltaY);
+    // A real drag reports the mouse movement in viewport pixels alongside
+    // the scene delta; the view-only pan path (virtual canvases included)
+    // scrolls by exactly those pixels.
+    const auto* view = m_activeView->view;
+    const QPoint viewportDelta(
+        static_cast<int>(std::round(sceneDeltaX * view->transform().m11())),
+        static_cast<int>(std::round(sceneDeltaY * view->transform().m22())));
     beginPanDrag(*m_activeView);
-    updatePanDrag(*m_activeView, delta, QPoint());
+    updatePanDrag(*m_activeView, delta, viewportDelta);
     endPanDrag(*m_activeView, delta);
 }
 
@@ -2155,10 +2299,9 @@ bool MainWindow::activeViewShowsWholeImageForTest() const
     auto* view = m_activeView->view;
     const auto visible = view->mapToScene(
         view->viewport()->rect()).boundingRect();
-    const auto image = view->image();
     // Half-a-scene-pixel slack absorbs fitInView rounding at the borders.
-    const QRectF imageRect(QPointF(0.0, 0.0), QSizeF(image.size()));
-    return visible.adjusted(-0.5, -0.5, 0.5, 0.5).contains(imageRect);
+    return visible.adjusted(-0.5, -0.5, 0.5, 0.5).contains(
+        view->imageSceneRect());
 }
 
 void MainWindow::viewFabForTest(std::size_t index)
@@ -2923,6 +3066,7 @@ void MainWindow::showAboutDialog()
 void MainWindow::resetViewZoom(PlaneViewState& state)
 {
     state.visibleRegion.reset();
+    state.view->setVirtualCanvas(std::nullopt);
     state.view->fitToWindow();
     m_resetZoomAction->setChecked(true);
     if (m_scaleButton != nullptr) {
@@ -3252,6 +3396,10 @@ void MainWindow::applyRubberBandZoom(
             visible, datasetSampleBounds(metadata), finest.cellSize, axes);
     }
     state.visibleRegion = visible;
+    // Rubber-band zoom leaves the virtual canvas: as with local data, the
+    // selection is re-rendered as a standalone raster fitted to the pane,
+    // with no domain-spanning scroll bars.
+    state.view->setVirtualCanvas(std::nullopt);
     // Zoom to the requested region mapped back to scene pixels, so the view
     // transform matches the region the requested slice will actually cover.
     const QRectF requestedScene(
@@ -3269,7 +3417,10 @@ void MainWindow::beginPanDrag(PlaneViewState& state)
     m_panView = &state;
     m_panSceneDelta = QPointF();
     m_panLastScheduledDelta = QPointF();
-    m_panDataRefresh = state.visibleRegion.has_value();
+    // A virtual canvas pans by scrolling (which fetches on its own); the
+    // region-shifting refresh is for classic rasters of a zoomed subregion.
+    m_panDataRefresh = state.visibleRegion.has_value()
+        && !state.view->virtualCanvasActive();
     if (m_panDataRefresh) {
         m_panStartRegion = *state.visibleRegion;
         m_panPlaneWidth = state.plane->width;
@@ -3349,6 +3500,21 @@ std::array<double, 2> MainWindow::viewCenterInData(
     }
     const auto scene = state.view->mapToScene(
         state.view->viewport()->rect().center());
+    if (state.view->virtualCanvasActive() && m_dataset
+        && !m_dataset->metadata().levels.empty()) {
+        // Virtual canvas: scene units are finest cells over the whole domain,
+        // counted from the domain's physical top-left.
+        const auto& metadata = m_dataset->metadata();
+        const auto domain = datasetSampleBounds(metadata);
+        const auto& finest = metadata.levels[static_cast<std::size_t>(
+            std::max(0, metadata.finestLevel))];
+        const auto sceneRect = state.view->sceneRect();
+        const auto cellX = std::clamp(scene.x(), 0.0, sceneRect.width());
+        const auto cellY = std::clamp(scene.y(), 0.0, sceneRect.height());
+        return {
+            domain.lower[xAxis] + cellX * finest.cellSize[xAxis],
+            domain.upper[yAxis] - cellY * finest.cellSize[yAxis]};
+    }
     const auto sceneX = std::clamp(
         scene.x(), 0.0, static_cast<double>(plane.width));
     const auto sceneY = std::clamp(
@@ -3360,6 +3526,72 @@ std::array<double, 2> MainWindow::viewCenterInData(
             * (region.upper[yAxis] - region.lower[yAxis])};
 }
 
+bool MainWindow::remoteDemandCanvas(const PlaneViewState& state) const
+{
+    return m_dataset != nullptr
+        && std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)
+            != nullptr
+        && !displayIsSpherical() && state.view != nullptr
+        && state.view->virtualCanvasActive();
+}
+
+std::optional<ImageView::VirtualPlacement> MainWindow::virtualPlacementFor(
+    const PlaneViewState& state, const RealBox& region) const
+{
+    if (!m_dataset || m_dataset->metadata().levels.empty()) {
+        return std::nullopt;
+    }
+    const auto& metadata = m_dataset->metadata();
+    const auto domain = datasetSampleBounds(metadata);
+    const auto& finest = metadata.levels[static_cast<std::size_t>(
+        std::max(0, metadata.finestLevel))];
+    const auto axes = displayAxes(state.normal);
+    const auto xAxis = static_cast<std::size_t>(axes[0]);
+    const auto yAxis = static_cast<std::size_t>(axes[1]);
+    const auto dx = finest.cellSize[xAxis];
+    const auto dy = finest.cellSize[yAxis];
+    if (!(dx > 0.0) || !(dy > 0.0)) {
+        return std::nullopt;
+    }
+    // Scene y grows downward: the region's upper physical y is its top row.
+    const QRectF itemCells(
+        (region.lower[xAxis] - domain.lower[xAxis]) / dx,
+        (domain.upper[yAxis] - region.upper[yAxis]) / dy,
+        (region.upper[xAxis] - region.lower[xAxis]) / dx,
+        (region.upper[yAxis] - region.lower[yAxis]) / dy);
+    const QSizeF domainCells(
+        (domain.upper[xAxis] - domain.lower[xAxis]) / dx,
+        (domain.upper[yAxis] - domain.lower[yAxis]) / dy);
+    if (itemCells.isEmpty() || domainCells.isEmpty()) {
+        return std::nullopt;
+    }
+    return ImageView::VirtualPlacement{itemCells, domainCells};
+}
+
+void MainWindow::centerViewOnData(
+    PlaneViewState& state, const std::array<double, 2>& dataCenter)
+{
+    if (!m_dataset || m_dataset->metadata().levels.empty()
+        || !state.view->virtualCanvasActive()) {
+        return;
+    }
+    const auto& metadata = m_dataset->metadata();
+    const auto domain = datasetSampleBounds(metadata);
+    const auto& finest = metadata.levels[static_cast<std::size_t>(
+        std::max(0, metadata.finestLevel))];
+    const auto axes = displayAxes(state.normal);
+    const auto xAxis = static_cast<std::size_t>(axes[0]);
+    const auto yAxis = static_cast<std::size_t>(axes[1]);
+    const auto dx = finest.cellSize[xAxis];
+    const auto dy = finest.cellSize[yAxis];
+    if (!(dx > 0.0) || !(dy > 0.0)) {
+        return;
+    }
+    state.view->centerOn(
+        (dataCenter[0] - domain.lower[xAxis]) / dx,
+        (domain.upper[yAxis] - dataCenter[1]) / dy);
+}
+
 void MainWindow::applyFixedScale(int factor)
 {
     const auto views = currentViews();
@@ -3368,24 +3600,32 @@ void MainWindow::applyFixedScale(int factor)
     for (const auto* state : views) {
         centers.push_back(viewCenterInData(*state));
     }
-    const bool remoteDataset = std::dynamic_pointer_cast<
-        remote::RemoteDatasetSession>(m_dataset) != nullptr;
+    const bool demandDriven = std::dynamic_pointer_cast<
+            remote::RemoteDatasetSession>(m_dataset) != nullptr
+        && !displayIsSpherical();
     for (std::size_t index = 0; index < views.size(); ++index) {
         auto& state = *views[index];
+        if (demandDriven) {
+            // Host the raster on a whole-domain virtual canvas so the scroll
+            // bars span the domain exactly as they do for a local fixed
+            // scale; the canvas scroll state then decides which cells to
+            // fetch (see updateRemoteFixedScaleDemand).
+            state.view->setVirtualCanvas(virtualPlacementFor(
+                state, state.plane->physicalRegion));
+        } else {
+            state.view->setVirtualCanvas(std::nullopt);
+        }
         state.view->setFixedScale(factor);
-        if (remoteDataset && !displayIsSpherical()) {
-            updateRemoteFixedScaleDemand(state, factor, centers[index]);
+        if (remoteDemandCanvas(state)) {
+            centerViewOnData(state, centers[index]);
+            updateRemoteFixedScaleDemand(state);
         }
     }
 }
 
-void MainWindow::updateRemoteFixedScaleDemand(PlaneViewState& state,
-    int factor, std::optional<std::array<double, 2>> center)
+void MainWindow::updateRemoteFixedScaleDemand(PlaneViewState& state)
 {
-    if (!m_dataset || factor < 1 || state.view == nullptr
-        || state.view->viewport() == nullptr
-        || !std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)
-        || displayIsSpherical()) {
+    if (!remoteDemandCanvas(state) || state.view->viewport() == nullptr) {
         return;
     }
     const auto& metadata = m_dataset->metadata();
@@ -3393,30 +3633,47 @@ void MainWindow::updateRemoteFixedScaleDemand(PlaneViewState& state,
         return;
     }
     const auto domain = datasetSampleBounds(metadata);
-    const auto axes = displayAxes(state.normal);
     const auto& finest = metadata.levels[static_cast<std::size_t>(
         std::max(0, metadata.finestLevel))];
-    const auto dataCenter = center.value_or(viewCenterInData(state));
+    const auto axes = displayAxes(state.normal);
+    // What the canvas currently shows, in finest cells; fetch that window.
+    // The raster cannot change the scroll bars (the scene spans the domain
+    // regardless of what is loaded), so this can never feed back on itself.
+    const auto visible = state.view->mapToScene(
+        state.view->viewport()->rect()).boundingRect();
+    const auto sceneRect = state.view->sceneRect();
+    if (visible.isEmpty() || sceneRect.isEmpty()) {
+        return;
+    }
+    const std::array<double, 2> visibleLower{visible.left(), visible.top()};
+    const std::array<double, 2> visibleSpan{visible.width(), visible.height()};
+    const std::array<double, 2> domainSpanCells{
+        sceneRect.width(), sceneRect.height()};
     auto target = domain;
-    const std::array viewport{
-        std::max(1, state.view->viewport()->width()),
-        std::max(1, state.view->viewport()->height())};
     for (std::size_t entry = 0; entry < axes.size(); ++entry) {
         const auto axis = static_cast<std::size_t>(axes[entry]);
-        const auto domainSpan = domain.upper[axis] - domain.lower[axis];
-        const auto requestedCells = std::max(1,
-            static_cast<int>(std::ceil(
-                static_cast<double>(viewport[entry]) / factor)));
-        const auto span = std::min(domainSpan,
-            requestedCells * finest.cellSize[axis]);
-        auto lower = dataCenter[entry] - 0.5 * span;
-        lower = std::clamp(lower, domain.lower[axis],
-            domain.upper[axis] - span);
-        target.lower[axis] = lower;
-        target.upper[axis] = lower + span;
+        const auto dx = finest.cellSize[axis];
+        const auto domainCells = std::max(1.0,
+            std::round(domainSpanCells[entry]));
+        // A constant one-cell slack keeps the fetched size independent of
+        // the scroll phase, so a pan replaces the raster with an equal-size
+        // one and the display transform is provably unaffected.
+        const auto cells = std::min(domainCells,
+            std::ceil(std::max(1.0, visibleSpan[entry])) + 1.0);
+        if (cells >= domainCells) {
+            continue;
+        }
+        const auto first = std::clamp(std::floor(visibleLower[entry]),
+            0.0, domainCells - cells);
+        if (entry == 0) {
+            target.lower[axis] = domain.lower[axis] + first * dx;
+            target.upper[axis] = target.lower[axis] + cells * dx;
+        } else {
+            // Scene y counts cells down from the domain's physical top.
+            target.upper[axis] = domain.upper[axis] - first * dx;
+            target.lower[axis] = target.upper[axis] - cells * dx;
+        }
     }
-    target = snapToNearestCellGrid(
-        target, domain, finest.cellSize, axes);
     if (target == domain) {
         state.visibleRegion.reset();
     } else {
@@ -3457,7 +3714,8 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
     const auto stepY = std::max(1.0, static_cast<double>(state.plane->height) * 0.05);
     const QPointF sceneDelta(direction.x() * stepX, direction.y() * stepY);
 
-    if (state.visibleRegion.has_value() && m_dataset) {
+    if (state.visibleRegion.has_value() && m_dataset
+        && !state.view->virtualCanvasActive()) {
         const auto region = shiftedPanRegion(state, *state.visibleRegion,
             state.plane->width, state.plane->height, sceneDelta);
         if (!region.has_value()) {
@@ -3814,6 +4072,8 @@ void MainWindow::cancelInFlight()
     }
     m_initialStopSource.request_stop();
     m_metadataStopSource.request_stop();
+    m_remoteVerifyStopSource.request_stop();
+    ++m_remoteVerifyGeneration;
     m_sequenceController->cancelActiveWork();
     m_linePlotStopSource.request_stop();
     m_particleStopSource.request_stop();
@@ -3915,10 +4175,22 @@ void MainWindow::restoreSettings()
         }
     }
     applySpeed();
+
     const auto geometry = settings.value(QStringLiteral("geometry")).toByteArray();
     if (!geometry.isEmpty()) {
         restoreGeometry(geometry);
     }
+}
+
+void MainWindow::saveRemoteSettings()
+{
+    // Only the port is persisted, purely to prefill the Connect dialog after a
+    // client restart against a still-running server. The token is a secret and
+    // is deliberately never written to disk; the host is always loopback via
+    // the SSH tunnel.
+    auto settings = makeSettings();
+    settings.setValue(QStringLiteral("remote/port"),
+        static_cast<uint>(m_remotePort));
 }
 
 void MainWindow::saveSettings()
@@ -4625,15 +4897,84 @@ void MainWindow::resetFabState()
     m_fabSelectorDock->setVisible(false);
 }
 
-void MainWindow::openRemoteDataset(
-    std::string host, std::uint16_t port, std::string remotePath)
+void MainWindow::verifyRemoteEndpoint(
+    std::string host, std::uint16_t port, std::string token)
+{
+    m_remoteVerifyStopSource.request_stop();
+    m_remoteVerifyStopSource = StopSource{};
+    const auto cancellation = m_remoteVerifyStopSource.get_token();
+    const auto generation = ++m_remoteVerifyGeneration;
+    statusBar()->showMessage(tr("Verifying connection to %1:%2...")
+            .arg(QString::fromStdString(host))
+            .arg(port));
+    auto* watcher = new QFutureWatcher<RemoteVerifyOutcome>(this);
+    connect(watcher, &QFutureWatcher<RemoteVerifyOutcome>::finished, this,
+        [this, watcher, host, port, token, generation] {
+            const auto outcome = watcher->result();
+            watcher->deleteLater();
+            if (m_closing || generation != m_remoteVerifyGeneration) {
+                return;
+            }
+            // Skip a stale check whose endpoint the user has since changed.
+            if (host != m_remoteHost || port != m_remotePort
+                || token != m_remoteToken) {
+                return;
+            }
+            if (outcome.ok) {
+                statusBar()->showMessage(
+                    tr("Connected to %1:%2 — session token accepted")
+                        .arg(QString::fromStdString(host))
+                        .arg(port));
+            } else if (outcome.unauthorized) {
+                statusBar()->showMessage(tr("Remote authentication failed"));
+                QMessageBox::warning(this, tr("Remote authentication failed"),
+                    tr("The server at %1:%2 rejected the session token.\n\n"
+                       "Enter the token exactly as the server printed it after "
+                       "\"TOKEN\" on its startup line. A new token is generated "
+                       "each time the server starts.")
+                        .arg(QString::fromStdString(host))
+                        .arg(port));
+            } else {
+                statusBar()->showMessage(tr("Could not reach remote server"));
+                reportBackgroundError(tr("Could not connect to %1:%2: %3")
+                        .arg(QString::fromStdString(host))
+                        .arg(port)
+                        .arg(outcome.message));
+            }
+            updateDiagnostics();
+        });
+    watcher->setFuture(QtConcurrent::run(
+        [host, port, token, cancellation]() -> RemoteVerifyOutcome {
+            try {
+                remote::Connection connection(host, port,
+                    remote::ConnectionOptions{
+                        .clientName = "AMReXplorer Qt",
+                        .softwareVersion = AMREXPLORER_VERSION,
+                        .sessionToken = token},
+                    cancellation);
+                connection.ping(cancellation);
+                return {true, false, {}};
+            } catch (const remote::RemoteError& error) {
+                return {false,
+                    error.code() == remote::ErrorCode::Unauthorized,
+                    QString::fromUtf8(error.what())};
+            } catch (const std::exception& error) {
+                return {false, false, QString::fromUtf8(error.what())};
+            }
+        }));
+}
+
+void MainWindow::openRemoteDataset(std::string host, std::uint16_t port,
+    std::string remotePath, std::string token)
 {
     m_remoteHost = host;
     m_remotePort = port;
+    m_remoteToken = token;
     const auto displayPath = std::filesystem::path(remotePath);
     openDatasetImpl(displayPath, false, std::nullopt, {}, false,
         std::nullopt,
-        std::tuple{std::move(host), port, std::move(remotePath)});
+        std::tuple{std::move(host), port, std::move(remotePath),
+            std::move(token)});
 }
 
 void MainWindow::openDatasetImpl(const std::filesystem::path& path,
@@ -4641,7 +4982,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     std::optional<PlotfileMetadataResult> preparedMetadata,
     std::filesystem::path dataRoot, bool preserveFabSelector,
     std::optional<FrameSliceSpec> initialSpec,
-    std::optional<std::tuple<std::string, std::uint16_t, std::string>>
+    std::optional<
+        std::tuple<std::string, std::uint16_t, std::string, std::string>>
         remoteOpen)
 {
     if (!preserveFabSelector) {
@@ -4822,8 +5164,23 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                 }
             } catch (const std::exception& error) {
                 if (generation == m_generation) {
-                    reportBackgroundError(
-                        tr("Cannot open dataset: %1").arg(exceptionMessage(error)));
+                    if (remoteErrorCode(error)
+                        == remote::ErrorCode::Unauthorized) {
+                        QMessageBox::warning(this,
+                            tr("Remote authentication failed"),
+                            tr("The server at %1:%2 rejected the session "
+                               "token.\n\nEnter the token exactly as the "
+                               "server printed it after \"TOKEN\" on its "
+                               "startup line, via File → Connect to "
+                               "Remote Server… (or paste it as "
+                               "HOST:PORT#TOKEN). A new token is generated "
+                               "each time the server starts.")
+                                .arg(QString::fromStdString(m_remoteHost))
+                                .arg(m_remotePort));
+                    } else {
+                        reportBackgroundError(tr("Cannot open dataset: %1")
+                                .arg(exceptionMessage(error)));
+                    }
                     emit datasetOpenFinished(false);
                 } else {
                     ++m_staleResults;
@@ -4838,11 +5195,12 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
             remoteOpen = std::move(remoteOpen)]() mutable {
         OpenedDataset opened;
         if (remoteOpen) {
-            auto& [host, port, remotePath] = *remoteOpen;
+            auto& [host, port, remotePath, token] = *remoteOpen;
             auto connection = std::make_shared<remote::Connection>(
                 host, port, remote::ConnectionOptions{
                     .clientName = "AMReXplorer Qt",
-                    .softwareVersion = AMREXPLORER_VERSION},
+                    .softwareVersion = AMREXPLORER_VERSION,
+                    .sessionToken = token},
                 cancellation);
             opened.session = remote::RemoteDatasetSession::open(
                 std::move(connection), remotePath,
@@ -5879,8 +6237,16 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
                     state, display.slice.plane);
             }
             const auto image = displayImageFor(display.image);
+            // A view on a virtual canvas keeps it: the raster lands at its
+            // cell offset while the scroll position stays put.
+            std::optional<ImageView::VirtualPlacement> placement;
+            if (state.view->virtualCanvasActive() && !displayIsSpherical()) {
+                placement = virtualPlacementFor(
+                    state, display.slice.plane.physicalRegion);
+            }
             state.view->setImage(image, transformPolicy,
-                logicalImageSize(state, display.slice.plane, image));
+                logicalImageSize(state, display.slice.plane, image),
+                placement);
             if (dataWindowInNewScene) {
                 state.view->zoomToRect(*dataWindowInNewScene);
             }
@@ -6049,10 +6415,19 @@ void MainWindow::syncVisibleRanges()
                             = std::move(update.contourPolylines);
                     }
                     if (!outcome.images[index].isNull()) {
+                        // Same plane, re-colored: a virtual canvas keeps its
+                        // placement so the scroll position stays put.
+                        std::optional<ImageView::VirtualPlacement> placement;
+                        if (state->view->virtualCanvasActive()
+                            && !displayIsSpherical()) {
+                            placement = virtualPlacementFor(
+                                *state, state->plane->physicalRegion);
+                        }
                         state->view->setImage(outcome.images[index],
                             ImageTransformPolicy::GeometryAware,
                             logicalImageSize(*state, *state->plane,
-                                outcome.images[index]));
+                                outcome.images[index]),
+                            placement);
                         // setImage clears the scene overlays; restore them.
                         updateGridBoxes(*state);
                         updateOverlay(*state);
@@ -6229,7 +6604,7 @@ void MainWindow::prepareSequence(std::size_t frameCount)
 }
 
 void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
-    const std::vector<std::string>& remotePaths)
+    const std::vector<std::string>& remotePaths, std::string token)
 {
     if (remotePaths.size() < 2
         || std::any_of(remotePaths.begin(), remotePaths.end(),
@@ -6242,6 +6617,7 @@ void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
 
     m_remoteHost = host;
     m_remotePort = port;
+    m_remoteToken = token;
     prepareSequence(remotePaths.size());
     m_remoteSequence = true;
 
@@ -6256,7 +6632,8 @@ void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
         std::uint64_t generation = 0;
     };
     auto shared = std::make_shared<SharedRemoteConnection>();
-    auto loader = [shared, host = std::move(host), port](
+    auto loader = [shared, host = std::move(host), port,
+                      token = std::move(token)](
                       const std::filesystem::path& path, DatasetId,
                       const FrameSliceSpec& spec, StopToken cancellation) {
         std::shared_ptr<remote::Connection> connection;
@@ -6273,7 +6650,8 @@ void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
             auto candidate = std::make_shared<remote::Connection>(host, port,
                 remote::ConnectionOptions{
                     .clientName = "AMReXplorer Qt sequence",
-                    .softwareVersion = AMREXPLORER_VERSION},
+                    .softwareVersion = AMREXPLORER_VERSION,
+                    .sessionToken = token},
                 cancellation);
             {
                 std::scoped_lock lock(shared->mutex);

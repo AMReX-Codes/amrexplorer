@@ -98,7 +98,7 @@ ImageView::ImageView(QWidget* parent)
 
 void ImageView::setImage(
     const QImage& image, ImageTransformPolicy transformPolicy,
-    QSize logicalSize)
+    QSize logicalSize, const std::optional<VirtualPlacement>& placement)
 {
     const bool sizeChanged = m_image.isNull() || m_image.size() != image.size();
     // An explicitly incompatible raster resets Custom mode. Fixed scale is a
@@ -123,18 +123,66 @@ void ImageView::setImage(
     m_image = image;
     m_logicalSize = logicalSize.isValid() ? logicalSize : image.size();
     m_item = m_scene->addPixmap(QPixmap::fromImage(m_image));
-    m_scene->setSceneRect(m_item->boundingRect());
+    m_placement = placement;
+    applyPlacement();
     setBackgroundBrush(viewportBackground());
     if (m_transformMode == TransformMode::Fit) {
         fitImage();
     } else if (m_transformMode == TransformMode::FixedScale) {
         applyFixedScale();
     } else if (transformPolicy == ImageTransformPolicy::GeometryAware
-        && sizeChanged) {
+        && sizeChanged && !m_placement.has_value()) {
         m_transformMode = TransformMode::Fit;
         fitImage();
     }
     applyCrosshairs();
+}
+
+void ImageView::setVirtualCanvas(
+    const std::optional<VirtualPlacement>& placement)
+{
+    if (!hasImage()) {
+        m_placement.reset();
+        return;
+    }
+    m_placement = placement;
+    applyPlacement();
+    if (m_transformMode == TransformMode::FixedScale) {
+        applyFixedScale();
+    }
+}
+
+QRectF ImageView::imageSceneRect() const
+{
+    return m_item == nullptr ? QRectF() : m_item->sceneBoundingRect();
+}
+
+// Position the raster item and size the scene. On a virtual canvas the scene
+// spans the whole domain in finest-cell units and the item maps its pixels
+// onto its fetched cell window; the classic scene is the raster at the
+// origin. Neither the view transform nor the scroll bars are touched here, so
+// a raster replacement on an unchanged canvas never moves the view.
+void ImageView::applyPlacement()
+{
+    if (m_item == nullptr) {
+        return;
+    }
+    if (m_placement.has_value()) {
+        const auto& cells = m_placement->itemCells;
+        QTransform toCells;
+        if (m_image.width() > 0 && m_image.height() > 0) {
+            toCells.scale(cells.width() / m_image.width(),
+                cells.height() / m_image.height());
+        }
+        m_item->setTransform(toCells);
+        m_item->setPos(cells.topLeft());
+        m_scene->setSceneRect(
+            QRectF(QPointF(0.0, 0.0), m_placement->domainCells));
+    } else {
+        m_item->setTransform(QTransform());
+        m_item->setPos(QPointF());
+        m_scene->setSceneRect(m_item->boundingRect());
+    }
 }
 
 void ImageView::setGridBoxes(const std::vector<GridBoxOverlay>& boxes)
@@ -148,6 +196,9 @@ void ImageView::setGridBoxes(const std::vector<GridBoxOverlay>& boxes)
         return;
     }
     m_gridItems.reserve(boxes.size());
+    // All overlays are children of the raster item: their raster-pixel
+    // coordinates then hold on a virtual canvas, where the item carries the
+    // pixel-to-cell transform and its offset within the domain.
     for (const auto& box : boxes) {
         QPen pen(box.color);
         pen.setCosmetic(true);
@@ -157,16 +208,16 @@ void ImageView::setGridBoxes(const std::vector<GridBoxOverlay>& boxes)
             // view default) so the arcs stay smooth; the crisp-rect trick only
             // helps axis-aligned edges.
             auto* item = m_scene->addPath(box.path, pen);
+            item->setParentItem(m_item);
             item->setBrush(Qt::NoBrush);
             item->setZValue(1.0);
             m_gridItems.push_back(item);
             continue;
         }
-        auto* item = new CrispRectItem(box.rectangle);
+        auto* item = new CrispRectItem(box.rectangle, m_item);
         item->setPen(pen);
         item->setBrush(Qt::NoBrush);
         item->setZValue(1.0);
-        m_scene->addItem(item);
         m_gridItems.push_back(item);
     }
 }
@@ -187,6 +238,7 @@ void ImageView::setOverlaySegments(const std::vector<OverlaySegment>& segments)
         pen.setCosmetic(true);
         pen.setWidthF(segment.width);
         auto* item = m_scene->addLine(segment.line, pen);
+        item->setParentItem(m_item);
         item->setZValue(2.0);
         m_overlayItems.push_back(item);
     }
@@ -208,6 +260,7 @@ void ImageView::setOverlayPaths(const std::vector<OverlayPath>& paths)
         pen.setCosmetic(true);
         pen.setWidthF(overlay.width);
         auto* item = m_scene->addPath(overlay.path, pen);
+        item->setParentItem(m_item);
         item->setZValue(2.0);
         m_pathItems.push_back(item);
     }
@@ -230,9 +283,10 @@ void ImageView::setPointOverlays(const std::vector<PointOverlay>& overlays)
             continue;
         }
         auto* item = new PointCloudItem(
-            overlay.points, m_scene->sceneRect(), overlay.color, overlay.size);
+            overlay.points, m_item->boundingRect(), overlay.color,
+            overlay.size);
+        item->setParentItem(m_item);
         item->setZValue(3.0);
-        m_scene->addItem(item);
         m_pointItems.push_back(item);
         m_pointOverlayColors.push_back(overlay.color);
     }
@@ -277,6 +331,7 @@ void ImageView::applyCrosshairs()
         pen.setCosmetic(true);
         pen.setWidth(2);
         auto* item = m_scene->addLine(line, pen);
+        item->setParentItem(m_item);
         item->setZValue(1.5);
         return item;
     };
@@ -303,8 +358,10 @@ void ImageView::setCellHighlight(const std::optional<QRectF>& sceneRect)
     QPen pen(Qt::red);
     pen.setCosmetic(true);
     pen.setWidth(2);
-    m_cellHighlightItem = m_scene->addRect(*sceneRect, pen, Qt::NoBrush);
-    m_cellHighlightItem->setZValue(4.0);
+    auto* item = m_scene->addRect(*sceneRect, pen, Qt::NoBrush);
+    item->setParentItem(m_item);
+    item->setZValue(4.0);
+    m_cellHighlightItem = item;
 }
 
 void ImageView::setCellHighlightPath(const std::optional<QPainterPath>& scenePath)
@@ -320,8 +377,10 @@ void ImageView::setCellHighlightPath(const std::optional<QPainterPath>& scenePat
     QPen pen(Qt::red);
     pen.setCosmetic(true);
     pen.setWidth(2);
-    m_cellHighlightItem = m_scene->addPath(*scenePath, pen, Qt::NoBrush);
-    m_cellHighlightItem->setZValue(4.0);
+    auto* item = m_scene->addPath(*scenePath, pen, Qt::NoBrush);
+    item->setParentItem(m_item);
+    item->setZValue(4.0);
+    m_cellHighlightItem = item;
 }
 
 void ImageView::setAxisIndicator(const QString& horizontal,
@@ -433,6 +492,7 @@ void ImageView::setPlaceholder(const QString& text)
     m_item = nullptr;
     m_image = {};
     m_logicalSize = {};
+    m_placement.reset();
     setBackgroundBrush(palette().window());
     auto* label = m_scene->addText(text);
     label->setDefaultTextColor(palette().windowText().color());
@@ -490,8 +550,10 @@ QImage ImageView::composedImage(qreal scaleFactor) const
     if (m_cellHighlightItem != nullptr) {
         m_cellHighlightItem->setVisible(false);
     }
+    // The raster's scene footprint, not the image rect: on a virtual canvas
+    // the item sits at its cell offset, and the export must follow it.
     m_scene->render(&painter, QRectF(0.0, 0.0, outWidth, outHeight),
-        QRectF(m_image.rect()));
+        m_item->sceneBoundingRect());
     if (m_lineGuide != nullptr) {
         m_lineGuide->setVisible(guideVisible);
     }
@@ -528,13 +590,13 @@ void ImageView::zoomBy(qreal factor)
     m_transformMode = TransformMode::Custom;
 }
 
-void ImageView::zoomToRect(const QRectF& sceneRect)
+void ImageView::zoomToRect(const QRectF& imageRect)
 {
-    if (!hasImage() || sceneRect.isEmpty()) {
+    if (!hasImage() || imageRect.isEmpty()) {
         return;
     }
     m_transformMode = TransformMode::Custom;
-    fitInView(sceneRect, Qt::KeepAspectRatio);
+    fitInView(m_item->mapRectToScene(imageRect), Qt::KeepAspectRatio);
 }
 
 void ImageView::panViewport(const QPoint& delta)
@@ -542,11 +604,13 @@ void ImageView::panViewport(const QPoint& delta)
     if (!hasImage() || (delta.x() == 0 && delta.y() == 0)) {
         return;
     }
-    m_transformMode = TransformMode::Custom;
     auto* const hBar = horizontalScrollBar();
     auto* const vBar = verticalScrollBar();
     if (hBar->maximum() > hBar->minimum()
         || vBar->maximum() > vBar->minimum()) {
+        // Scrolling leaves the transform — and therefore the display mode —
+        // untouched: a fixed scale panned by its scroll bars is still that
+        // fixed scale, locally and on a virtual canvas alike.
         hBar->setValue(hBar->value() - delta.x());
         vBar->setValue(vBar->value() - delta.y());
         return;
@@ -556,6 +620,7 @@ void ImageView::panViewport(const QPoint& delta)
     if (sx == 0.0 || sy == 0.0) {
         return;
     }
+    m_transformMode = TransformMode::Custom;
     translate(delta.x() / sx, delta.y() / sy);
 }
 
@@ -578,7 +643,6 @@ void ImageView::mousePressEvent(QMouseEvent* event)
             m_panActive = true;
             m_lastPanPosition = event->position().toPoint();
             m_panAccumulated = QPointF();
-            m_transformMode = TransformMode::Custom;
             setCursor(Qt::ClosedHandCursor);
             emit panDragBegan();
             event->accept();
@@ -669,8 +733,9 @@ void ImageView::mouseReleaseEvent(QMouseEvent* event)
     const auto drag = releasePosition - m_pressPosition;
     constexpr int minimumDrag = 4;
     if (std::abs(drag.x()) > minimumDrag && std::abs(drag.y()) > minimumDrag) {
-        emit rubberBandSelected(QRectF(mapToScene(m_pressPosition),
-            mapToScene(releasePosition)).normalized());
+        emit rubberBandSelected(QRectF(
+            m_item->mapFromScene(mapToScene(m_pressPosition)),
+            m_item->mapFromScene(mapToScene(releasePosition))).normalized());
         return;
     }
     const auto imagePosition = m_item->mapFromScene(mapToScene(releasePosition));
@@ -723,6 +788,14 @@ void ImageView::resizeEvent(QResizeEvent* event)
     emit viewportResized(viewport()->size());
 }
 
+void ImageView::scrollContentsBy(int dx, int dy)
+{
+    QGraphicsView::scrollContentsBy(dx, dy);
+    if (m_placement.has_value()) {
+        emit canvasScrolled();
+    }
+}
+
 void ImageView::wheelEvent(QWheelEvent* event)
 {
     if (!hasImage()) {
@@ -742,7 +815,9 @@ void ImageView::wheelEvent(QWheelEvent* event)
 
 void ImageView::showLineGuide(const QPoint& viewPosition)
 {
-    const auto scenePosition = mapToScene(viewPosition);
+    // The guide is a child of the raster item, so it is built in image
+    // (raster-pixel) coordinates like every other overlay.
+    const auto imagePosition = m_item->mapFromScene(mapToScene(viewPosition));
     const auto width = static_cast<double>(m_image.width());
     const auto height = static_cast<double>(m_image.height());
 
@@ -765,10 +840,10 @@ void ImageView::showLineGuide(const QPoint& viewPosition)
 
     QLineF line;
     if (horizontal) {
-        const auto y = std::clamp(scenePosition.y(), 0.0, height);
+        const auto y = std::clamp(imagePosition.y(), 0.0, height);
         line = QLineF(0.0, y, width, y);
     } else {
-        const auto x = std::clamp(scenePosition.x(), 0.0, width);
+        const auto x = std::clamp(imagePosition.x(), 0.0, width);
         line = QLineF(x, 0.0, x, height);
     }
     if (m_lineGuide == nullptr) {
@@ -776,6 +851,7 @@ void ImageView::showLineGuide(const QPoint& viewPosition)
         pen.setStyle(Qt::DashLine);
         pen.setCosmetic(true);
         m_lineGuide = m_scene->addLine(line, pen);
+        m_lineGuide->setParentItem(m_item);
         m_lineGuide->setZValue(3.0);
     } else {
         m_lineGuide->setLine(line);
@@ -821,13 +897,27 @@ void ImageView::fitImage()
 
 void ImageView::applyFixedScale()
 {
-    if (m_item != nullptr) {
-        resetTransform();
-        const auto factor = static_cast<qreal>(m_fixedScaleFactor);
+    if (m_item == nullptr) {
+        return;
+    }
+    const auto factor = static_cast<qreal>(m_fixedScaleFactor);
+    QTransform desired;
+    if (m_placement.has_value()) {
+        // Virtual canvas: scene units are finest cells and the item transform
+        // already maps raster pixels onto cells, so the view scales cells to
+        // screen pixels directly.
+        desired = QTransform::fromScale(factor, factor);
+    } else {
         const auto logicalWidth = std::max(1, m_logicalSize.width());
         const auto logicalHeight = std::max(1, m_logicalSize.height());
-        scale(factor * logicalWidth / m_image.width(),
-            factor * logicalHeight / m_image.height());
+        desired = QTransform::fromScale(
+            factor * logicalWidth / std::max(1, m_image.width()),
+            factor * logicalHeight / std::max(1, m_image.height()));
+    }
+    // Equal-transform replacements must not touch the view: re-setting the
+    // same matrix would recenter the scroll position on a virtual canvas.
+    if (transform() != desired) {
+        setTransform(desired);
     }
 }
 

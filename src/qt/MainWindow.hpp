@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DatasetWindow.hpp"
+#include "ImageView.hpp"
 #include "NumberFormat.hpp"
 #include "SetContoursDialog.hpp"
 
@@ -92,10 +93,19 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
 
     void openDataset(const std::filesystem::path& path, bool metadataOnly = false);
-    void openRemoteDataset(
-        std::string host, std::uint16_t port, std::string remotePath);
+    void openRemoteDataset(std::string host, std::uint16_t port,
+        std::string remotePath, std::string token);
     void openRemoteSequence(std::string host, std::uint16_t port,
-        const std::vector<std::string>& remotePaths);
+        const std::vector<std::string>& remotePaths, std::string token);
+    // Cheap connect-time check: runs a handshake (and ping) off the GUI thread
+    // to confirm the endpoint is reachable and the token is accepted, without
+    // opening a dataset.
+    void verifyRemoteEndpoint(
+        std::string host, std::uint16_t port, std::string token);
+    // Persists only the remote port, to prefill the Connect dialog after a
+    // client restart against a still-running server. The token is never
+    // written to disk.
+    void saveRemoteSettings();
     // Opens a plotfile sequence (the legacy "-a" file animation): frames are
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.
@@ -150,6 +160,14 @@ public:
     [[nodiscard]] bool activeViewUsesViewportBoundedOutputForTest() const;
     [[nodiscard]] bool activeViewUsesNativeOutputForTest() const;
     [[nodiscard]] bool allViewsUseViewportBoundedOutputForTest() const;
+    // Test-only: true when every current panel is in fixed-scale mode with
+    // everything its viewport shows of the domain backed by the raster —
+    // full bleed with no unfetched gaps.
+    [[nodiscard]] bool allViewsFixedScaleRasterCoversViewportForTest() const;
+    // Test-only: send a real Shift+left drag through the active view's
+    // viewport, exercising the same event path as interactive panning.
+    void shiftDragActiveViewForTest(int dx, int dy);
+    [[nodiscard]] bool activeViewScrollBarsVisibleForTest() const;
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
     [[nodiscard]] bool fabStateClearedForTest() const;
@@ -316,7 +334,8 @@ private:
         std::optional<PlotfileMetadataResult> preparedMetadata,
         std::filesystem::path dataRoot, bool preserveFabSelector,
         std::optional<FrameSliceSpec> initialSpec,
-        std::optional<std::tuple<std::string, std::uint16_t, std::string>>
+        std::optional<
+            std::tuple<std::string, std::uint16_t, std::string, std::string>>
             remoteOpen = std::nullopt);
 
     // Clears standalone FAB/MultiFab view state (mode flag, MultiFab-return
@@ -444,8 +463,17 @@ private:
     void endPanDrag(PlaneViewState& state, const QPointF& totalSceneDelta);
     void flushPanDrag(bool finalize);
     void applyFixedScale(int factor);
-    void updateRemoteFixedScaleDemand(PlaneViewState& state, int factor,
-        std::optional<std::array<double, 2>> center = std::nullopt);
+    // Fetch whatever finest cells the virtual canvas currently shows (plus a
+    // constant one-cell slack so scroll pans replace equal-size rasters).
+    void updateRemoteFixedScaleDemand(PlaneViewState& state);
+    // True when this view runs the demand-driven remote fixed scale, i.e. a
+    // virtual whole-domain canvas holding a fetched raster window.
+    [[nodiscard]] bool remoteDemandCanvas(const PlaneViewState& state) const;
+    [[nodiscard]] std::optional<ImageView::VirtualPlacement>
+    virtualPlacementFor(
+        const PlaneViewState& state, const RealBox& region) const;
+    void centerViewOnData(
+        PlaneViewState& state, const std::array<double, 2>& dataCenter);
     [[nodiscard]] std::array<double, 2> viewCenterInData(
         const PlaneViewState& state) const;
     void applyPanStep(PlaneViewState& state, const QPointF& direction);
@@ -673,6 +701,8 @@ private:
     bool m_pendingRasterDirty = false;
     StopSource m_initialStopSource;
     StopSource m_metadataStopSource;
+    StopSource m_remoteVerifyStopSource;
+    std::uint64_t m_remoteVerifyGeneration = 0;
     DisplayMode m_displayMode = DisplayMode::Raster;
     int m_contourCount = 15;
     // 2-D spherical warp supersample factor (see SliceRequest::sphericalSupersample).
@@ -696,6 +726,7 @@ private:
     std::filesystem::path m_datasetPath;
     std::string m_remoteHost;
     std::uint16_t m_remotePort = 0;
+    std::string m_remoteToken;
     bool m_remoteSequence = false;
     std::uint64_t m_remoteSequenceConnectionGeneration = 0;
     struct MultiFabReturnState {

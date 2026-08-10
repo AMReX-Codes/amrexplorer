@@ -44,6 +44,80 @@ appears as its r-z plane with no axisymmetric weighting or revolution. **2-D
 spherical (r, θ)** plotfiles are handled specially and can be shown in true
 physical space — see [2-D spherical coordinates](#2-d-spherical-coordinates).
 
+## Remote datasets
+
+AMReXplorer can display plotfiles that live on another machine, such as an HPC
+login node. You run a small server on that machine, connect it to your desktop
+through an SSH tunnel, and then open the data. The commands below are labelled
+`(remote) $` for the machine that holds the plotfiles and `(local) $` for your
+own desktop.
+
+**Step 1 — On the remote machine, start the server.** It prints a port number
+and an access token that you will use in the next two steps:
+
+```text
+(remote) $ amrexplorer-server
+LISTENING 127.0.0.1 41419 TOKEN 58f50743dff4f653b58c3a1fe5858904
+```
+
+The port and token are new every time you start the server, so use the values
+from your own output (here, port `41419`), not the ones printed above.
+
+Response transfers are not limited by total duration: they may take as long as
+needed while bytes continue moving. By default, the server disconnects a client
+only after a response makes no write progress for 30 seconds. On a link that can
+pause for longer, increase that interval explicitly:
+
+```text
+(remote) $ amrexplorer-server --write-stall-timeout-seconds 120
+```
+
+**Step 2 — On your local machine, open an SSH tunnel** using the port from
+step 1. Leave this running while you work:
+
+```text
+(local) $ ssh -N -L 41419:127.0.0.1:41419 user@remote
+```
+
+If you reach the remote machine through a separate login gateway, add
+`-J user@gateway`:
+
+```text
+(local) $ ssh -N -J user@gateway -L 41419:127.0.0.1:41419 user@remote
+```
+
+**Step 3 — On your local machine, open the dataset.** Read the token from step
+1 into a silent shell variable, then pass it to AMReXplorer through standard
+input. This keeps the token out of process listings and shell history. Give the
+plotfile path as it appears on the remote machine:
+
+```text
+(local) $ read -rs AMREXPLORER_TOKEN && printf '\n'
+(local) $ amrexplorer --connect 127.0.0.1:41419 --token-stdin \
+    /remote/path/plt00010 <<<"$AMREXPLORER_TOKEN"
+(local) $ unset AMREXPLORER_TOKEN
+```
+
+To open several plotfiles as a sequence, list more than one path.
+
+The same thing is available from the menus: **File > Connect to Remote
+Server...** (enter `127.0.0.1:PORT`, then the token when prompted), followed by
+**Open Remote Plotfile...** or **Open Remote Plotfile Sequence...** and the
+remote path.
+
+**Tip — use a fixed local port.** In the tunnel command the first number is a
+port on your own machine and can be any value you pick; only the second has to
+match the server. Choose a fixed local port and step 3 always uses the same
+number, even though the server's port changes each run:
+
+```text
+(local) $ ssh -N -L 9000:127.0.0.1:41419 user@remote
+(local) $ read -rs AMREXPLORER_TOKEN && printf '\n'
+(local) $ amrexplorer --connect 127.0.0.1:9000 --token-stdin \
+    /remote/path/plt00010 <<<"$AMREXPLORER_TOKEN"
+(local) $ unset AMREXPLORER_TOKEN
+```
+
 ## User interface overview
 
 ![AMReXplorer displaying a three-dimensional plotfile](images/user-guide-overview.png)
@@ -262,6 +336,11 @@ provides:
 
 Frame changes preserve the active field, level, range, log, palette, and
 visible-region settings when those settings are valid for the next plotfile.
+Fit mode refits each frame, while a fixed integer scale is reapplied to the new
+frame. A custom view created with wheel zoom or panning preserves the same
+visible physical region across frames with compatible geometry. AMReXplorer
+refits when the domain, coordinate system, panel orientation, or raster mapping
+changes and the previous physical view is no longer compatible.
 
 ## Exporting images and animations
 

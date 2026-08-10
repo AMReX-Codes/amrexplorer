@@ -60,6 +60,16 @@
       }
     },
     {
+      "name": "remote",
+      "inherits": "headless",
+      "displayName": "Headless remote server and protocol",
+      "binaryDir": "${sourceDir}/build-remote",
+      "cacheVariables": {
+        "AMREXPLORER_ENABLE_REMOTE": "ON",
+        "AMREXPLORER_BUILD_TESTS": "ON"
+      }
+    },
+    {
       "name": "tsan",
       "inherits": "headless",
       "displayName": "Headless ThreadSanitizer build",
@@ -118,6 +128,10 @@
       "configurePreset": "sanitizers"
     },
     {
+      "name": "remote",
+      "configurePreset": "remote"
+    },
+    {
       "name": "tsan",
       "configurePreset": "tsan"
     },
@@ -167,6 +181,13 @@
         "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1",
         "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
       },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "remote",
+      "configurePreset": "remote",
       "output": {
         "outputOnFailure": true
       }

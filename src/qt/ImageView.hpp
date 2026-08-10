@@ -67,16 +67,40 @@ public:
         Custom
     };
 
+    // Virtual-canvas placement for the demand-driven remote fixed scale: the
+    // scene spans the whole dataset domain in finest-cell units while the
+    // pixmap item covers only the fetched window at its cell offset. The
+    // scroll bars then represent the full domain — the same look and reach a
+    // local whole-domain raster gives — and scrolling emits canvasScrolled so
+    // the owner can fetch the newly visible window.
+    struct VirtualPlacement {
+        QRectF itemCells;   // fetched window in finest cells within the domain
+        QSizeF domainCells; // whole domain in finest cells
+    };
+
     explicit ImageView(QWidget* parent = nullptr);
 
     // Preserve keeps the current panel-local transform when replacing a raster
     // after rubber-band zoom or pan. GeometryAware refits only when the raster
     // dimensions change. Refit discards the transform even for equal-size
-    // rasters whose data regions are incompatible.
+    // rasters whose data regions are incompatible. A placement keeps the
+    // virtual canvas: the scene rect and view transform are left untouched so
+    // replacing the raster never moves the scroll position.
     void setImage(const QImage& image,
         ImageTransformPolicy transformPolicy =
             ImageTransformPolicy::GeometryAware,
-        QSize logicalSize = {});
+        QSize logicalSize = {},
+        const std::optional<VirtualPlacement>& placement = std::nullopt);
+    // Enter or leave the virtual canvas for the raster already on display,
+    // repositioning it without waiting for the next render.
+    void setVirtualCanvas(const std::optional<VirtualPlacement>& placement);
+    [[nodiscard]] bool virtualCanvasActive() const noexcept
+    {
+        return m_placement.has_value();
+    }
+    // The raster item's footprint in scene coordinates (the image rect in the
+    // classic raster-at-origin scene; the fetched cell window when virtual).
+    [[nodiscard]] QRectF imageSceneRect() const;
     void setGridBoxes(const std::vector<GridBoxOverlay>& boxes);
     void setOverlaySegments(const std::vector<OverlaySegment>& segments);
     // Smooth contour polylines, rendered as cosmetic-pen path items at the
@@ -135,7 +159,9 @@ public:
     void fitToWindow();
     void setFixedScale(int factor);
     void zoomBy(qreal factor);
-    void zoomToRect(const QRectF& sceneRect);
+    // The rect is in image (raster-pixel) coordinates — identical to scene
+    // coordinates in the classic scene, offset-corrected on a virtual canvas.
+    void zoomToRect(const QRectF& imageRect);
     // Shift+left-drag pans the viewport (scroll bars, or the view transform
     // when the scene fits the window). When zoomed into a subregion, the
     // drag shifts the visible data window (see panDrag* signals).
@@ -157,7 +183,11 @@ public:
 signals:
     void probeMoved(int x, int y);
     void probeClicked(int x, int y);
-    void rubberBandSelected(const QRectF& sceneRect);
+    // In image (raster-pixel) coordinates; see zoomToRect.
+    void rubberBandSelected(const QRectF& imageRect);
+    // The viewport scrolled over a virtual canvas — the owner should check
+    // whether newly visible cells need fetching.
+    void canvasScrolled();
     void panDragBegan();
     // Total scene-coordinate offset since the drag began, plus the latest
     // viewport-pixel step (for view-only panning).
@@ -177,10 +207,12 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void drawForeground(QPainter* painter, const QRectF& rect) override;
+    void scrollContentsBy(int dx, int dy) override;
 
 private:
     void fitImage();
     void applyFixedScale();
+    void applyPlacement();
     void showLineGuide(const QPoint& viewPosition);
     void updateLineGuide(const QPoint& viewPosition);
     void applyCrosshairs();
@@ -192,6 +224,7 @@ private:
     // a different sampled size; fixed scales use this logical size so 1x
     // remains one native output pixel per screen pixel.
     QSize m_logicalSize;
+    std::optional<VirtualPlacement> m_placement;
     // Rect items (Cartesian) or path items (spherical sectors); QGraphicsItem*
     // so both kinds share the list.
     std::vector<QGraphicsItem*> m_gridItems;

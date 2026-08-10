@@ -699,6 +699,81 @@ int main(int argc, char* argv[])
                     "127.0.0.1", server->port(), path, server->token());
             });
     } else if (argc == 3
+        && std::string_view(argv[1])
+            == "--remote-fixed-scale-flicker-smoke-test") {
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        // Regression: in a window far too small for the whole domain at 32x,
+        // the demand-driven fixed scale must settle with the viewport fully
+        // backed by fetched raster, stay quiet with no input (the demand used
+        // to re-issue itself endlessly through the as-needed scrollbars,
+        // flickering through one remote render per flip), and then refetch
+        // exactly once when the virtual scroll bars pan to unfetched cells.
+        auto phase = std::make_shared<int>(0);
+        auto settles = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application,
+            [&window, &application, phase, settles](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application,
+                    [&window, &application, phase, settles] {
+                        ++*settles;
+                        if (*phase == 0) {
+                            *phase = 1;
+                            if (!window.fixedScaleStateMatchesForTest(32)
+                                || !window
+                        .allViewsFixedScaleRasterCoversViewportForTest()) {
+                                application.exit(1);
+                                return;
+                            }
+                            // A quiet period several render round-trips long:
+                            // any settle in here means the demand feeds back
+                            // on itself.
+                            const auto armed = *settles;
+                            QTimer::singleShot(2000, &application,
+                                [&window, &application, phase, settles,
+                                    armed] {
+                                    if (*settles != armed
+                                        || !window
+                        .allViewsFixedScaleRasterCoversViewportForTest()) {
+                                        application.exit(1);
+                                        return;
+                                    }
+                                    *phase = 2;
+                                    // Three cells' worth of pixels at 32x:
+                                    // the newly visible cells must be
+                                    // fetched, giving exactly one settle.
+                                    window.scrollActiveViewForTest(-96, 0);
+                                });
+                            return;
+                        }
+                        if (*phase == 2) {
+                            *phase = 3;
+                            application.exit(
+                                window.fixedScaleStateMatchesForTest(32)
+                                    && window
+                        .allViewsFixedScaleRasterCoversViewportForTest()
+                                    ? 0 : 1);
+                        }
+                    });
+                window.selectFixedScaleForTest(32);
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                window.resize(420, 301);
+                window.openRemoteDataset(
+                    "127.0.0.1", server->port(), path, server->token());
+            });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--remote-slice-smoke-test") {
         smokeServer = std::make_shared<amrvis::remote::Server>();
         smokeServerThread.emplace(

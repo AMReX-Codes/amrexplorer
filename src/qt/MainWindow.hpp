@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DatasetWindow.hpp"
+#include "ImageView.hpp"
 #include "NumberFormat.hpp"
 #include "SetContoursDialog.hpp"
 
@@ -159,6 +160,13 @@ public:
     [[nodiscard]] bool activeViewUsesViewportBoundedOutputForTest() const;
     [[nodiscard]] bool activeViewUsesNativeOutputForTest() const;
     [[nodiscard]] bool allViewsUseViewportBoundedOutputForTest() const;
+    // Test-only: true when every current panel is in fixed-scale mode with
+    // everything its viewport shows of the domain backed by the raster —
+    // full bleed with no unfetched gaps.
+    [[nodiscard]] bool allViewsFixedScaleRasterCoversViewportForTest() const;
+    // Test-only: scroll the active view's viewport by whole pixels, the same
+    // path Shift+drag panning takes over scroll bars.
+    void scrollActiveViewForTest(int dx, int dy);
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
     [[nodiscard]] bool fabStateClearedForTest() const;
@@ -454,8 +462,17 @@ private:
     void endPanDrag(PlaneViewState& state, const QPointF& totalSceneDelta);
     void flushPanDrag(bool finalize);
     void applyFixedScale(int factor);
-    void updateRemoteFixedScaleDemand(PlaneViewState& state, int factor,
-        std::optional<std::array<double, 2>> center = std::nullopt);
+    // Fetch whatever finest cells the virtual canvas currently shows (plus a
+    // constant one-cell slack so scroll pans replace equal-size rasters).
+    void updateRemoteFixedScaleDemand(PlaneViewState& state);
+    // True when this view runs the demand-driven remote fixed scale, i.e. a
+    // virtual whole-domain canvas holding a fetched raster window.
+    [[nodiscard]] bool remoteDemandCanvas(const PlaneViewState& state) const;
+    [[nodiscard]] std::optional<ImageView::VirtualPlacement>
+    virtualPlacementFor(
+        const PlaneViewState& state, const RealBox& region) const;
+    void centerViewOnData(
+        PlaneViewState& state, const std::array<double, 2>& dataCenter);
     [[nodiscard]] std::array<double, 2> viewCenterInData(
         const PlaneViewState& state) const;
     void applyPanStep(PlaneViewState& state, const QPointF& direction);

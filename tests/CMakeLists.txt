@@ -397,6 +397,23 @@ if(TARGET amrexplorer_qt)
         FIXTURES_REQUIRED remote_server_materialized
         TIMEOUT 30)
 
+    # The wide fixture has enough finest cells (8192 across) that a 32x
+    # raster can never cover the viewport width, the regime where the
+    # demand/scrollbar feedback loop lived; the shared 8x8 fixture is
+    # domain-clamped at every scale and cannot reach it.
+    add_test(
+        NAME qt_remote_fixed_scale_flicker_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_wide"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_fixed_scale_flicker"
+            -DMODE=remote-fixed-scale-flicker
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_remote_fixed_scale_flicker_smoke PROPERTIES
+        TIMEOUT 30)
+
     add_test(
         NAME qt_remote_fixed_scale_wide_smoke
         COMMAND "${CMAKE_COMMAND}"

@@ -465,8 +465,15 @@ int main(int argc, char* argv[])
     // Installed before QApplication so it also covers construction-time output.
     g_previousMessageHandler = qInstallMessageHandler(filterWaylandPopupWarning);
 
-    // Disable Wayland warnings
-    QLoggingCategory::setFilterRules(QStringLiteral("qt.qpa.wayland.textinput=false"));
+    // Disable Wayland warnings, and the spurious "Failed to register with host
+    // portal" message Qt prints at startup: it reads the portal's Settings
+    // interface before calling host.portal.Registry.Register, so
+    // xdg-desktop-portal has already associated an app ID with the connection
+    // and rejects the registration. Nothing is lost -- the portal derived the
+    // app ID it needs, which is why the call failed in the first place.
+    QLoggingCategory::setFilterRules(
+        QStringLiteral("qt.qpa.wayland.textinput=false\n"
+                       "qt.qpa.services.warning=false"));
 
     QApplication application(argc, argv);
     // Advertise the desktop entry name and WM class as "amrexplorer" so Linux

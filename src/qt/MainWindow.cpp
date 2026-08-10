@@ -100,6 +100,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -495,9 +496,7 @@ MainWindow::MainWindow(QWidget* parent)
         auto* action = scaleMenu->addAction(tr("%1x").arg(factor));
         connect(action, &QAction::triggered, this, [this, factor] {
             m_scaleButton->setText(tr("%1x").arg(factor));
-            for (auto* state : currentViews()) {
-                state->view->setFixedScale(factor);
-            }
+            applyFixedScale(factor);
         });
     }
     m_syncRubberBandZoomAction =
@@ -942,6 +941,13 @@ void MainWindow::wireView(PlaneViewState& state)
                     remote::RemoteDatasetSession>(m_dataset)) {
                 return;
             }
+            if (state.view->transformMode()
+                    == ImageView::TransformMode::FixedScale
+                && !displayIsSpherical()) {
+                updateRemoteFixedScaleDemand(
+                    state, state.view->fixedScaleFactor());
+                return;
+            }
             if (!state.hasCachedRequest
                 || state.cachedRequest.outputSize != sliceOutputSize(state)) {
                 scheduleSliceRequest(state);
@@ -1034,42 +1040,53 @@ std::array<int, 2> MainWindow::sliceOutputSize(
     if (!m_openMetadata || m_openMetadata->levels.empty()) {
         return {1, 1};
     }
+    const auto viewportPixels = viewportPixelSize(state);
+    const auto target = state.visibleRegion.value_or(
+        datasetSampleBounds(*m_openMetadata));
+    std::array<int, 2> outputSize{};
+    if (state.view->transformMode() == ImageView::TransformMode::FixedScale) {
+        outputSize = finestNativeOutputSize(
+            *m_openMetadata, target, state.normal);
+    } else if (!state.visibleRegion.has_value()) {
+        outputSize = nativeBoundedViewportOutputSize(
+            *m_openMetadata, target, state.normal, viewportPixels);
+    } else {
+        // Rubber-band selections intentionally retain their exact physical
+        // aspect. Their fractional edges need not have the rounded native-cell
+        // aspect used to suppress Fit supersampling on a whole-domain view.
+        outputSize = viewportBoundedOutputSize(
+            *m_openMetadata, target, state.normal, viewportPixels);
+    }
+    return frameBudgetBoundedOutputSize(
+        outputSize,
+        m_dataset ? m_dataset->maximumResponseBytes() : std::nullopt);
+}
+
+std::array<int, 2> MainWindow::viewportPixelSize(
+    const PlaneViewState& state) const
+{
     const auto* viewport = state.view == nullptr ? nullptr : state.view->viewport();
     if (viewport == nullptr || viewport->width() < 1 || viewport->height() < 1) {
         return {1, 1};
     }
     const auto scale = state.view->devicePixelRatioF();
-    const std::array<int, 2> viewportPixels{
+    return {
         std::clamp(static_cast<int>(std::lround(viewport->width() * scale)),
             1, maxSliceOutputDimension),
         std::clamp(static_cast<int>(std::lround(viewport->height() * scale)),
             1, maxSliceOutputDimension)};
-    const auto target = state.visibleRegion.value_or(
-        datasetSampleBounds(*m_openMetadata));
-    const auto axes = displayAxes(state.normal);
-    auto extentX = target.upper[static_cast<std::size_t>(axes[0])]
-        - target.lower[static_cast<std::size_t>(axes[0])];
-    auto extentY = target.upper[static_cast<std::size_t>(axes[1])]
-        - target.lower[static_cast<std::size_t>(axes[1])];
-    if (isSpherical2D(*m_openMetadata)) {
-        // Radius and angle have heterogeneous units, so their raw physical
-        // extents do not define a meaningful display aspect. Normalize both
-        // axes to their finest-level sample counts before fitting the viewport.
-        const auto normalized = finestNativeOutputSize(
-            *m_openMetadata, target, state.normal);
-        extentX = static_cast<double>(normalized[0]);
-        extentY = static_cast<double>(normalized[1]);
+}
+
+QSize MainWindow::logicalImageSize(const PlaneViewState& state,
+    const ScalarPlane& plane, const QImage& image) const
+{
+    if (!m_openMetadata || m_openMetadata->levels.empty()
+        || displayIsSpherical()) {
+        return image.size();
     }
-    if (!(extentX > 0.0) || !(extentY > 0.0)) {
-        return {1, 1};
-    }
-    const auto fit = std::min(
-        static_cast<double>(viewportPixels[0]) / extentX,
-        static_cast<double>(viewportPixels[1]) / extentY);
-    return {std::clamp(static_cast<int>(std::lround(extentX * fit)),
-                1, viewportPixels[0]),
-        std::clamp(static_cast<int>(std::lround(extentY * fit)),
-            1, viewportPixels[1])};
+    const auto native = finestNativeOutputSize(
+        *m_openMetadata, plane.physicalRegion, state.normal);
+    return {native[0], native[1]};
 }
 
 bool MainWindow::displayIsSpherical() const
@@ -1186,6 +1203,32 @@ void MainWindow::createMenus()
             }
         });
 
+    auto* openRemoteSequenceAction = new QAction(
+        tr("Open Remote Plotfile &Sequence..."), this);
+    connect(openRemoteSequenceAction, &QAction::triggered, this,
+        [this, configureRemoteEndpoint] {
+            if (m_remotePort == 0 && !configureRemoteEndpoint()) {
+                return;
+            }
+            bool accepted = false;
+            const auto text = QInputDialog::getMultiLineText(this,
+                tr("Open Remote Plotfile Sequence"),
+                tr("Server-visible paths, one per line, in playback order:"),
+                QString(), &accepted);
+            if (!accepted) {
+                return;
+            }
+            std::vector<std::string> paths;
+            for (const auto& line : text.split(
+                     QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+                const auto path = line.trimmed();
+                if (!path.isEmpty()) {
+                    paths.push_back(path.toStdString());
+                }
+            }
+            openRemoteSequence(m_remoteHost, m_remotePort, paths);
+        });
+
     auto* openFabAction = new QAction(tr("Open &FAB..."), this);
     connect(openFabAction, &QAction::triggered, this,
         [this] { chooseStandaloneDataset(tr("Open AMReX FAB"), true); });
@@ -1242,6 +1285,7 @@ void MainWindow::createMenus()
     fileMenu->addSeparator();
     fileMenu->addAction(connectRemoteAction);
     fileMenu->addAction(openRemoteAction);
+    fileMenu->addAction(openRemoteSequenceAction);
     fileMenu->addSeparator();
     fileMenu->addAction(openFabAction);
     fileMenu->addAction(openMultiFabAction);
@@ -1272,9 +1316,7 @@ void MainWindow::createMenus()
             if (m_scaleButton != nullptr) {
                 m_scaleButton->setText(tr("%1x").arg(factor));
             }
-            for (auto* state : currentViews()) {
-                state->view->setFixedScale(factor);
-            }
+            applyFixedScale(factor);
         });
         scaleMenu->addAction(action);
     }
@@ -1878,6 +1920,17 @@ bool MainWindow::activeViewUsesViewportBoundedOutputForTest() const
         && m_activeView->plane->height == expected[1];
 }
 
+bool MainWindow::activeViewUsesNativeOutputForTest() const
+{
+    if (m_activeView == nullptr || m_activeView->plane->width <= 0
+        || m_activeView->plane->height <= 0) {
+        return false;
+    }
+    const auto expected = nativeOutputSize(*m_activeView);
+    return m_activeView->plane->width == expected[0]
+        && m_activeView->plane->height == expected[1];
+}
+
 bool MainWindow::allViewsUseViewportBoundedOutputForTest() const
 {
     if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)) {
@@ -1913,6 +1966,15 @@ bool MainWindow::activeViewHasPhysicalAspectForTest(
         / m_activeView->plane->height;
     return std::abs(actualAspect - expectedAspect)
         <= 0.02 * expectedAspect;
+}
+
+bool MainWindow::fabStateClearedForTest() const
+{
+    return !m_fabMode && !m_multifabReturn && !m_fabSourceMetadata
+        && m_fabSourcePath.empty() && m_fabDataRoot.empty()
+        && m_fabSelectorDock->entries().empty()
+        && !m_fabSelectorDock->isVisible()
+        && !windowTitle().endsWith(QStringLiteral(" FAB"));
 }
 
 void MainWindow::rubberBandZoomActiveViewForTest()
@@ -2100,6 +2162,32 @@ int MainWindow::activeViewImageWidthForTest() const
         return 0;
     }
     return m_activeView->view->image().width();
+}
+
+std::array<int, 2> MainWindow::activeViewImageSizeForTest() const
+{
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return {0, 0};
+    }
+    const auto image = m_activeView->view->image();
+    return {image.width(), image.height()};
+}
+
+std::array<int, 2> MainWindow::activeViewViewportSizeForTest() const
+{
+    if (m_activeView == nullptr || m_activeView->view->viewport() == nullptr) {
+        return {0, 0};
+    }
+    const auto* viewport = m_activeView->view->viewport();
+    return {viewport->width(), viewport->height()};
+}
+
+QImage MainWindow::activeViewViewportImageForTest() const
+{
+    if (m_activeView == nullptr || m_activeView->view->viewport() == nullptr) {
+        return {};
+    }
+    return m_activeView->view->viewport()->grab().toImage();
 }
 
 bool MainWindow::activeViewFitsWindowForTest() const
@@ -3222,6 +3310,101 @@ void MainWindow::flushPanDrag(bool finalize)
     scheduleSliceRequest(*m_panView, false);
 }
 
+std::array<double, 2> MainWindow::viewCenterInData(
+    const PlaneViewState& state) const
+{
+    const auto& plane = *state.plane;
+    const auto axes = displayAxes(state.normal);
+    const auto xAxis = static_cast<std::size_t>(axes[0]);
+    const auto yAxis = static_cast<std::size_t>(axes[1]);
+    const auto& region = plane.physicalRegion;
+    if (plane.width <= 0 || plane.height <= 0 || state.view == nullptr
+        || state.view->viewport() == nullptr) {
+        return {0.5 * (region.lower[xAxis] + region.upper[xAxis]),
+            0.5 * (region.lower[yAxis] + region.upper[yAxis])};
+    }
+    const auto scene = state.view->mapToScene(
+        state.view->viewport()->rect().center());
+    const auto sceneX = std::clamp(
+        scene.x(), 0.0, static_cast<double>(plane.width));
+    const auto sceneY = std::clamp(
+        scene.y(), 0.0, static_cast<double>(plane.height));
+    return {
+        region.lower[xAxis] + sceneX / plane.width
+            * (region.upper[xAxis] - region.lower[xAxis]),
+        region.upper[yAxis] - sceneY / plane.height
+            * (region.upper[yAxis] - region.lower[yAxis])};
+}
+
+void MainWindow::applyFixedScale(int factor)
+{
+    const auto views = currentViews();
+    std::vector<std::array<double, 2>> centers;
+    centers.reserve(views.size());
+    for (const auto* state : views) {
+        centers.push_back(viewCenterInData(*state));
+    }
+    const bool remoteDataset = std::dynamic_pointer_cast<
+        remote::RemoteDatasetSession>(m_dataset) != nullptr;
+    for (std::size_t index = 0; index < views.size(); ++index) {
+        auto& state = *views[index];
+        state.view->setFixedScale(factor);
+        if (remoteDataset && !displayIsSpherical()) {
+            updateRemoteFixedScaleDemand(state, factor, centers[index]);
+        }
+    }
+}
+
+void MainWindow::updateRemoteFixedScaleDemand(PlaneViewState& state,
+    int factor, std::optional<std::array<double, 2>> center)
+{
+    if (!m_dataset || factor < 1 || state.view == nullptr
+        || state.view->viewport() == nullptr
+        || !std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)
+        || displayIsSpherical()) {
+        return;
+    }
+    const auto& metadata = m_dataset->metadata();
+    if (metadata.levels.empty()) {
+        return;
+    }
+    const auto domain = datasetSampleBounds(metadata);
+    const auto axes = displayAxes(state.normal);
+    const auto& finest = metadata.levels[static_cast<std::size_t>(
+        std::max(0, metadata.finestLevel))];
+    const auto dataCenter = center.value_or(viewCenterInData(state));
+    auto target = domain;
+    const std::array viewport{
+        std::max(1, state.view->viewport()->width()),
+        std::max(1, state.view->viewport()->height())};
+    for (std::size_t entry = 0; entry < axes.size(); ++entry) {
+        const auto axis = static_cast<std::size_t>(axes[entry]);
+        const auto domainSpan = domain.upper[axis] - domain.lower[axis];
+        const auto requestedCells = std::max(1,
+            static_cast<int>(std::ceil(
+                static_cast<double>(viewport[entry]) / factor)));
+        const auto span = std::min(domainSpan,
+            requestedCells * finest.cellSize[axis]);
+        auto lower = dataCenter[entry] - 0.5 * span;
+        lower = std::clamp(lower, domain.lower[axis],
+            domain.upper[axis] - span);
+        target.lower[axis] = lower;
+        target.upper[axis] = lower + span;
+    }
+    target = snapToNearestCellGrid(
+        target, domain, finest.cellSize, axes);
+    if (target == domain) {
+        state.visibleRegion.reset();
+    } else {
+        state.visibleRegion = target;
+    }
+    if (!state.hasCachedRequest
+        || state.cachedRequest.visibleRegion != target
+        || state.cachedRequest.outputSize != sliceOutputSize(state)) {
+        scheduleSliceRequest(state, true);
+    }
+}
+
 void MainWindow::setupPanShortcuts()
 {
     const auto bind = [this](Qt::Key key, double x, double y) {
@@ -3257,10 +3440,16 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
             return;
         }
         state.visibleRegion = *region;
-        state.view->fitToWindow();
-        m_resetZoomAction->setChecked(true);
-        if (m_scaleButton != nullptr) {
-            m_scaleButton->setText(tr("Fit"));
+        const bool remoteFixed = std::dynamic_pointer_cast<
+            remote::RemoteDatasetSession>(m_dataset) != nullptr
+            && state.view->transformMode()
+                == ImageView::TransformMode::FixedScale;
+        if (!remoteFixed) {
+            state.view->fitToWindow();
+            m_resetZoomAction->setChecked(true);
+            if (m_scaleButton != nullptr) {
+                m_scaleButton->setText(tr("Fit"));
+            }
         }
         scheduleSliceRequest(state, false);
         return;
@@ -4716,8 +4905,12 @@ void MainWindow::requestInitialSlice(
         spec.outputSizes.clear();
         spec.outputSizes.reserve(views.size());
         for (const auto* state : views) {
-            spec.outputSizes.push_back(
-                sliceOutputSize(*state, isRemote));
+            auto outputSize = sliceOutputSize(*state, isRemote);
+            if (preparedSession) {
+                outputSize = frameBudgetBoundedOutputSize(outputSize,
+                    preparedSession->maximumResponseBytes());
+            }
+            spec.outputSizes.push_back(outputSize);
         }
     }
     const auto restoredSpec = initialSpec;
@@ -5671,8 +5864,9 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
                 dataWindowInNewScene = preservedDataWindow(
                     state, display.slice.plane);
             }
-            state.view->setImage(
-                displayImageFor(display.image), transformPolicy);
+            const auto image = displayImageFor(display.image);
+            state.view->setImage(image, transformPolicy,
+                logicalImageSize(state, display.slice.plane, image));
             if (dataWindowInNewScene) {
                 state.view->zoomToRect(*dataWindowInNewScene);
             }
@@ -5838,7 +6032,10 @@ void MainWindow::syncVisibleRanges()
                             = std::move(update.contourPolylines);
                     }
                     if (!outcome.images[index].isNull()) {
-                        state->view->setImage(outcome.images[index]);
+                        state->view->setImage(outcome.images[index],
+                            ImageTransformPolicy::GeometryAware,
+                            logicalImageSize(*state, *state->plane,
+                                outcome.images[index]));
                         // setImage clears the scene overlays; restore them.
                         updateGridBoxes(*state);
                         updateOverlay(*state);
@@ -5965,18 +6162,6 @@ void MainWindow::choosePlotfileSequence()
 
 void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
 {
-    // Sweep and sequence playback are mutually exclusive.
-    setPlaybackMode(PlaybackMode::None);
-    closeSequence();
-    resetRangeState();
-    m_particleStopSource.request_stop();
-    m_particleSamples.clear();
-    m_selectedParticleSpecies.clear();
-    m_particleSelectionInitialized = false;
-    m_particleLoading = false;
-    m_particleProgress->setVisible(false);
-    ++m_particleGeneration;
-
     auto sorted = frames;
     std::sort(sorted.begin(), sorted.end(),
         [](const auto& lhs, const auto& rhs) {
@@ -5993,16 +6178,29 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
         return;
     }
 
-    // A sequence replaces any standalone FAB/MultiFab with plotfile frames.
-    // openSequence does not go through openDatasetImpl, so clear the FAB view
-    // state here too; otherwise m_fabMode keeps every frame's title suffixed
-    // "— FAB" and the stale selector dock's clicks reopen the old file (see
-    // open-sequence-stale-fab-state). Only after the validity check above, so a
-    // rejected selection leaves the current FAB view untouched. The first
-    // frame's display refreshes the title with m_fabMode now false.
-    resetFabState();
+    prepareSequence(sorted.size());
+    m_sequenceController->open(std::move(sorted));
+}
 
-    m_animationPanel->setSequenceFrameCount(static_cast<int>(sorted.size()));
+void MainWindow::prepareSequence(std::size_t frameCount)
+{
+    // A sequence replaces any standalone FAB/MultiFab with plotfile frames.
+    // Both local and remote entry points bypass openDatasetImpl, so establish
+    // their complete state transition in one place after validation.
+    setPlaybackMode(PlaybackMode::None);
+    closeSequence();
+    resetRangeState();
+    resetFabState();
+    m_particleStopSource.request_stop();
+    m_particleSamples.clear();
+    m_selectedParticleSpecies.clear();
+    m_particleSelectionInitialized = false;
+    m_particleLoading = false;
+    m_particleProgress->setVisible(false);
+    ++m_particleGeneration;
+    m_remoteSequenceConnectionGeneration = 0;
+
+    m_animationPanel->setSequenceFrameCount(static_cast<int>(frameCount));
     m_animationPanel->setSequenceVisible(true);
     updateAnimationDockVisibility();
     // Line plot curves are snapshots of the previous dataset; drop the window.
@@ -6011,7 +6209,77 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
     if (linePlotWindow != nullptr) {
         linePlotWindow->close();
     }
-    m_sequenceController->open(std::move(sorted));
+}
+
+void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
+    const std::vector<std::string>& remotePaths)
+{
+    if (remotePaths.size() < 2
+        || std::any_of(remotePaths.begin(), remotePaths.end(),
+            [](const auto& path) { return path.empty(); })) {
+        emit sequenceFrameFailed();
+        QMessageBox::warning(this, tr("Cannot open remote sequence"),
+            tr("Enter two or more server-visible plotfile paths."));
+        return;
+    }
+
+    m_remoteHost = host;
+    m_remotePort = port;
+    prepareSequence(remotePaths.size());
+    m_remoteSequence = true;
+
+    std::vector<std::filesystem::path> frames;
+    frames.reserve(remotePaths.size());
+    for (const auto& path : remotePaths) {
+        frames.emplace_back(path);
+    }
+    struct SharedRemoteConnection {
+        std::mutex mutex;
+        std::shared_ptr<remote::Connection> connection;
+        std::uint64_t generation = 0;
+    };
+    auto shared = std::make_shared<SharedRemoteConnection>();
+    auto loader = [shared, host = std::move(host), port](
+                      const std::filesystem::path& path, DatasetId,
+                      const FrameSliceSpec& spec, StopToken cancellation) {
+        std::shared_ptr<remote::Connection> connection;
+        std::uint64_t connectionGeneration = 0;
+        {
+            std::scoped_lock lock(shared->mutex);
+            connection = shared->connection;
+            connectionGeneration = shared->generation;
+        }
+        if (!connection || !connection->connected()) {
+            // Connect outside the shared-state mutex. Foreground loads and
+            // prefetches may overlap, and neither should inherit the other's
+            // network wait or lose its own cancellation deadline.
+            auto candidate = std::make_shared<remote::Connection>(host, port,
+                remote::ConnectionOptions{
+                    .clientName = "AMReXplorer Qt sequence",
+                    .softwareVersion = AMREXPLORER_VERSION},
+                cancellation);
+            {
+                std::scoped_lock lock(shared->mutex);
+                if (!shared->connection || !shared->connection->connected()) {
+                    shared->connection = std::move(candidate);
+                    ++shared->generation;
+                }
+                connection = shared->connection;
+                connectionGeneration = shared->generation;
+            }
+            // If another load won the connection race, release this redundant
+            // connection only after dropping the shared-state mutex.
+            candidate.reset();
+        }
+        auto session = remote::RemoteDatasetSession::open(
+            std::move(connection), path.string(), initialCacheBudget(),
+            cancellation);
+        auto result = executeSessionFrameLoad(
+            std::move(session), spec, cancellation);
+        result.connectionGeneration = connectionGeneration;
+        return result;
+    };
+    m_sequenceController->open(std::move(frames), std::move(loader));
 }
 
 void MainWindow::closeSequence()
@@ -6020,6 +6288,7 @@ void MainWindow::closeSequence()
         setPlaybackMode(PlaybackMode::None);
     }
     m_sequenceController->close();
+    m_remoteSequence = false;
     m_animationPanel->setSequenceVisible(false);
     updateAnimationDockVisibility();
 }
@@ -6048,6 +6317,16 @@ void MainWindow::goToSequenceFrame(int index, bool forceRestart)
 void MainWindow::displayFrameResult(InitialSliceResult& result,
     bool defaultPositions)
 {
+    if (result.connectionGeneration != 0
+        && result.connectionGeneration
+            != m_remoteSequenceConnectionGeneration) {
+        // DatasetId is allocated by the server and can restart at one after a
+        // reconnect. Drop every dataset-scoped display range before publishing
+        // a frame from a new connection generation so an old ID cannot alias.
+        m_displayCoordinator.invalidateRangeCache();
+        m_pendingRangeStore.reset();
+        m_remoteSequenceConnectionGeneration = result.connectionGeneration;
+    }
     m_dataset = result.dataset;
     m_particleSamples = std::move(result.particles);
     configureParticleControls(true);
@@ -6291,8 +6570,15 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     spec.particleSeed = m_particleSeed;
     const auto views = currentViews();
     spec.visibleRegions.reserve(views.size());
+    if (m_remoteSequence) {
+        spec.outputSizesAreViewportBounds = true;
+        spec.outputSizes.reserve(views.size());
+    }
     for (const auto* state : views) {
         spec.visibleRegions.push_back(state->visibleRegion);
+        if (m_remoteSequence) {
+            spec.outputSizes.push_back(viewportPixelSize(*state));
+        }
     }
     return spec;
 }

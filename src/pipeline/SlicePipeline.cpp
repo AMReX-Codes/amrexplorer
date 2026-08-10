@@ -60,6 +60,95 @@ std::array<int, 2> finestNativeOutputSize(
     return {cells(axes[0]), cells(axes[1])};
 }
 
+std::array<int, 2> viewportBoundedOutputSize(
+    const DatasetMetadata& metadata, const RealBox& region, int normal,
+    std::array<int, 2> viewportSize)
+{
+    viewportSize[0] = std::clamp(
+        viewportSize[0], 1, maxSliceOutputDimension);
+    viewportSize[1] = std::clamp(
+        viewportSize[1], 1, maxSliceOutputDimension);
+    const auto axes = slicePlaneAxes(metadata.dimension, normal);
+    auto extentX = region.upper[static_cast<std::size_t>(axes[0])]
+        - region.lower[static_cast<std::size_t>(axes[0])];
+    auto extentY = region.upper[static_cast<std::size_t>(axes[1])]
+        - region.lower[static_cast<std::size_t>(axes[1])];
+    if (isSpherical2D(metadata)) {
+        // Radius and angle have heterogeneous units. Use their finest-level
+        // sample counts as the normalized display aspect instead of comparing
+        // raw physical extents with unrelated dimensions.
+        const auto& finest = metadata.levels[static_cast<std::size_t>(
+            std::max(0, metadata.finestLevel))];
+        extentX /= finest.cellSize[static_cast<std::size_t>(axes[0])];
+        extentY /= finest.cellSize[static_cast<std::size_t>(axes[1])];
+    }
+    if (!(extentX > 0.0) || !(extentY > 0.0)) {
+        return {1, 1};
+    }
+    const auto fit = std::min(
+        static_cast<double>(viewportSize[0]) / extentX,
+        static_cast<double>(viewportSize[1]) / extentY);
+    return {
+        std::clamp(static_cast<int>(std::lround(extentX * fit)),
+            1, viewportSize[0]),
+        std::clamp(static_cast<int>(std::lround(extentY * fit)),
+            1, viewportSize[1])};
+}
+
+std::array<int, 2> nativeBoundedViewportOutputSize(
+    const DatasetMetadata& metadata, const RealBox& region, int normal,
+    std::array<int, 2> viewportSize)
+{
+    const auto viewport = viewportBoundedOutputSize(
+        metadata, region, normal, viewportSize);
+    const auto native = finestNativeOutputSize(metadata, region, normal);
+    const auto scale = std::min({1.0,
+        static_cast<double>(native[0]) / viewport[0],
+        static_cast<double>(native[1]) / viewport[1]});
+    return {
+        std::clamp(static_cast<int>(std::lround(viewport[0] * scale)),
+            1, native[0]),
+        std::clamp(static_cast<int>(std::lround(viewport[1] * scale)),
+            1, native[1])};
+}
+
+std::array<int, 2> frameBudgetBoundedOutputSize(
+    std::array<int, 2> outputSize,
+    std::optional<std::uint32_t> maximumResponseBytes)
+{
+    if (!maximumResponseBytes) {
+        return outputSize;
+    }
+    const auto frameBytes = static_cast<std::uint64_t>(*maximumResponseBytes);
+    const auto maximumCells = frameBytes > sliceResponseOverheadBytes
+        ? (frameBytes - sliceResponseOverheadBytes) / sliceResponseBytesPerCell
+        : 0;
+    const auto requestedCells = static_cast<std::uint64_t>(outputSize[0])
+        * static_cast<std::uint64_t>(outputSize[1]);
+    if (maximumCells == 0) {
+        return {1, 1};
+    }
+    if (requestedCells <= maximumCells) {
+        return outputSize;
+    }
+    const auto scale = std::sqrt(static_cast<double>(maximumCells)
+        / static_cast<double>(requestedCells));
+    auto bounded = std::array<int, 2>{
+        std::max(1, static_cast<int>(std::floor(outputSize[0] * scale))),
+        std::max(1, static_cast<int>(std::floor(outputSize[1] * scale)))};
+    while (static_cast<std::uint64_t>(bounded[0])
+            * static_cast<std::uint64_t>(bounded[1]) > maximumCells) {
+        if (bounded[0] >= bounded[1] && bounded[0] > 1) {
+            --bounded[0];
+        } else if (bounded[1] > 1) {
+            --bounded[1];
+        } else {
+            break;
+        }
+    }
+    return bounded;
+}
+
 bool sameSliceSpec(const SliceRequest& lhs, const SliceRequest& rhs)
 {
     return lhs.dataset == rhs.dataset && lhs.field == rhs.field
@@ -259,6 +348,8 @@ SliceDisplayResult executeSliceWithFallback(
     std::uint32_t vectorUField, std::uint32_t vectorVField, int contourCount,
     StopToken cancellation)
 {
+    request.outputSize = frameBudgetBoundedOutputSize(
+        request.outputSize, dataset->maximumResponseBytes());
     int fallbackFrom = -1;
     int fallbackTo = -1;
     for (;;) {
@@ -341,6 +432,8 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     contourRequest.outputSize = {
         std::min(std::max(dataWidth, 512), 1024),
         std::min(std::max(dataHeight, 512), 1024)};
+    contourRequest.outputSize = frameBudgetBoundedOutputSize(
+        contourRequest.outputSize, dataset->maximumResponseBytes());
     contourRequest.sampling = SamplingPolicy::Linear;
     auto contour = requestSlice(*dataset, contourRequest, cancellation);
     result.contourPlane = std::move(contour.plane);
@@ -543,14 +636,25 @@ InitialSliceResult executeSessionFrameLoad(
                     region.upper[index] = upper;
                 }
                 request.visibleRegion = region;
+                const auto hasOutputSize = !spec.outputSizes.empty();
                 request.outputSize = entry < spec.outputSizes.size()
                     ? spec.outputSizes[entry]
-                    : finestNativeOutputSize(metadata, request.visibleRegion,
-                        request.normalDirection);
+                    : (spec.outputSizesAreViewportBounds && hasOutputSize
+                              ? spec.outputSizes.back()
+                              : finestNativeOutputSize(metadata,
+                                    request.visibleRegion,
+                                    request.normalDirection));
+                if (spec.outputSizesAreViewportBounds && hasOutputSize) {
+                    request.outputSize = nativeBoundedViewportOutputSize(metadata,
+                        request.visibleRegion, request.normalDirection,
+                        request.outputSize);
+                }
                 request.outputSize[0] = std::clamp(
                     request.outputSize[0], 1, maxSliceOutputDimension);
                 request.outputSize[1] = std::clamp(
                     request.outputSize[1], 1, maxSliceOutputDimension);
+                request.outputSize = frameBudgetBoundedOutputSize(
+                    request.outputSize, result.dataset->maximumResponseBytes());
                 request.composition = selectedLevel.composition;
                 request.maximumLevel = attemptMaximumLevel;
                 request.sphericalSupersample = spec.sphericalSupersample;
@@ -666,10 +770,10 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
     if (preparedMetadata) {
         dataset = std::make_shared<LocalDatasetSession>(
             std::move(dataRoot), datasetId, cacheBudgetBytes,
-            std::move(*preparedMetadata));
+            std::move(*preparedMetadata), cancellation);
     } else {
         dataset = std::make_shared<LocalDatasetSession>(
-            path, datasetId, cacheBudgetBytes);
+            path, datasetId, cacheBudgetBytes, cancellation);
     }
     return executeSessionFrameLoad(
         std::move(dataset), spec, cancellation);

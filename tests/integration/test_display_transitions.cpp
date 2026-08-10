@@ -12,6 +12,7 @@
 // Qt zoom/pan smoke tests.)
 
 #include <amrexplorer/data/LocalDatasetSession.hpp>
+#include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/pipeline/DisplayCoordinator.hpp>
 #include <amrexplorer/pipeline/ParticleProjection.hpp>
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
@@ -258,6 +259,40 @@ int main()
     const amrvis::Palette palette;
     constexpr std::uint64_t bigBudget = 1ULL << 20;
     std::uint64_t nextId = 1;
+
+    // Frame cancellation must reach both local-session constructors instead
+    // of allowing stale metadata/particle discovery to finish first.
+    {
+        amrvis::StopSource cancelled;
+        cancelled.request_stop();
+        bool unpreparedCancelled = false;
+        try {
+            static_cast<void>(amrvis::executeFrameLoad(base / "missing",
+                amrvis::DatasetId{nextId++}, {}, bigBudget,
+                cancelled.get_token()));
+        } catch (const amrvis::ReadCancelled&) {
+            unpreparedCancelled = true;
+        }
+        require(unpreparedCancelled,
+            "unprepared frame construction ignored cancellation");
+
+        auto prepared = amrvis::PlotfileMetadataReader{}.read(root2d);
+        auto noFields
+            = std::make_shared<amrvis::DatasetMetadata>(*prepared.metadata);
+        noFields->fields.clear();
+        prepared.metadata = std::move(noFields);
+        bool preparedCancelled = false;
+        try {
+            static_cast<void>(amrvis::executeFrameLoad(root2d,
+                amrvis::DatasetId{nextId++}, {}, bigBudget,
+                cancelled.get_token(), std::move(prepared), root2d));
+        } catch (const amrvis::ReadCancelled&) {
+            preparedCancelled = true;
+        }
+        require(preparedCancelled,
+            "prepared frame construction ignored cancellation");
+    }
+
     const auto load2d = [&](amrvis::FrameSliceSpec spec) {
         return amrvis::executeFrameLoad(
             root2d, amrvis::DatasetId{nextId++}, spec, bigBudget, {});

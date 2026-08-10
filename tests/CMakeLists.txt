@@ -335,6 +335,23 @@ add_test(NAME tool_line_repro
 set_tests_properties(tool_line_repro PROPERTIES TIMEOUT 60)
 
 if(TARGET amrexplorer_qt)
+    add_executable(test_sequence_controller
+        unit/test_sequence_controller.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/SequenceController.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/SequenceController.hpp"
+    )
+    set_target_properties(test_sequence_controller PROPERTIES AUTOMOC ON)
+    target_include_directories(test_sequence_controller
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_sequence_controller
+        PRIVATE
+            amrexplorer::pipeline
+            amrexplorer::warnings
+            Qt6::Concurrent
+            Qt6::Core
+    )
+    add_test(NAME sequence_controller COMMAND test_sequence_controller)
+
     add_executable(test_remote_endpoint unit/test_remote_endpoint.cpp)
     target_include_directories(test_remote_endpoint
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
@@ -393,6 +410,16 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_remote_silent_hello_close_smoke PROPERTIES
         TIMEOUT 10)
+
+    add_test(
+        NAME qt_remote_sequence_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-sequence-smoke-test "${remote_server_fixture_dir}"
+    )
+    set_tests_properties(qt_remote_sequence_smoke PROPERTIES
+        FIXTURES_REQUIRED remote_server_materialized
+        TIMEOUT 30)
 
     add_executable(test_user_guide_dialog
         unit/test_user_guide_dialog.cpp
@@ -775,6 +802,18 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_sequence_after_fab_smoke_2d PROPERTIES TIMEOUT 30)
+    add_test(
+        NAME qt_remote_sequence_after_fab_smoke_2d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_sequence_after_fab"
+            -DMODE=remote-sequence-after-fab
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_remote_sequence_after_fab_smoke_2d PROPERTIES
+        TIMEOUT 30)
     # A normal slice-affecting control change while a foreground frame is
     # loading invalidates that frame specification. The replacement load must
     # complete instead of leaving sequence playback latched in-flight.

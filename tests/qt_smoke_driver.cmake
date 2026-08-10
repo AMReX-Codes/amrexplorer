@@ -5,7 +5,8 @@
 #   AMREXPLORER_QT     path to the amrexplorer_qt executable
 #   SOURCE        fixture source directory (e.g. tests/data/plotfile_2d)
 #   WORK          directory the materialized copies are written into
-#   MODE          slice | sequence | sequence-after-fab | missing-range |
+#   MODE          slice | sequence | sequence-after-fab |
+#                 remote-sequence-after-fab | missing-range |
 #                 non-finite | raw-fab |
 #                 multifab-fab | quit | quit-on-failure | window-close-pool |
 #                 export-quit |
@@ -58,6 +59,12 @@ elseif(MODE STREQUAL "sequence-after-fab")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
     run_or_die("${AMREXPLORER_QT}" --sequence-after-fab-smoke-test
+        "${WORK}/plt/Level_0/Cell_D_00000" "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "remote-sequence-after-fab")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --remote-sequence-after-fab-smoke-test
         "${WORK}/plt/Level_0/Cell_D_00000" "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "sequence-spec-change")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")

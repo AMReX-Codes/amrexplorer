@@ -92,6 +92,10 @@ struct InitialSliceResult {
     // retried with a lower composite maximum level.
     int cacheFallbackFromLevel = -1;
     int cacheFallbackToLevel = -1;
+    // Nonzero for remote sequence frames. Server-local dataset identifiers can
+    // restart after reconnect, so GUI caches also key their lifetime to this
+    // client-side connection generation.
+    std::uint64_t connectionGeneration = 0;
 };
 
 // Everything needed to render one frame's slice(s) off the GUI thread. The
@@ -120,6 +124,10 @@ struct FrameSliceSpec {
     std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
     std::vector<std::optional<RealBox>> visibleRegions;  // per view, normal order
     std::vector<std::array<int, 2>> outputSizes;  // per view, viewport pixels
+    // When true, outputSizes are viewport bounds rather than exact raster
+    // dimensions; the frame loader preserves the physical aspect ratio within
+    // each bound after it has opened the frame and knows its geometry.
+    bool outputSizesAreViewportBounds = false;
     bool particleSelectionInitialized = false;
     std::vector<std::string> particleSpecies;
     double particleFraction = 1.0;
@@ -155,6 +163,21 @@ inline constexpr int maxSliceOutputDimension = maxViewOutputDimension;
 // fixed scales magnify it through the view zoom.
 [[nodiscard]] std::array<int, 2> finestNativeOutputSize(
     const DatasetMetadata& metadata, const RealBox& region, int normal);
+
+// Fits a physical slice region into a pixel bound without distorting its
+// in-plane aspect ratio.
+[[nodiscard]] std::array<int, 2> viewportBoundedOutputSize(
+    const DatasetMetadata& metadata, const RealBox& region, int normal,
+    std::array<int, 2> viewportSize);
+// Viewport-bounded remote raster size that never invents more samples than
+// the region's finest-native raster. This preserves Fit's bounded transport
+// without making a small native image behave as though it had been enlarged.
+[[nodiscard]] std::array<int, 2> nativeBoundedViewportOutputSize(
+    const DatasetMetadata& metadata, const RealBox& region, int normal,
+    std::array<int, 2> viewportSize);
+[[nodiscard]] std::array<int, 2> frameBudgetBoundedOutputSize(
+    std::array<int, 2> outputSize,
+    std::optional<std::uint32_t> maximumResponseBytes);
 
 // The cache-key comparison for a cached slice: everything a cached slice
 // depends on. Range, log scale, palette, and contour count are deliberately

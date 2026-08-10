@@ -21,6 +21,7 @@
 #include <QImage>
 #include <QMainWindow>
 #include <QRectF>
+#include <QSize>
 #include <QStringList>
 
 #include <array>
@@ -93,6 +94,8 @@ public:
     void openDataset(const std::filesystem::path& path, bool metadataOnly = false);
     void openRemoteDataset(
         std::string host, std::uint16_t port, std::string remotePath);
+    void openRemoteSequence(std::string host, std::uint16_t port,
+        const std::vector<std::string>& remotePaths);
     // Opens a plotfile sequence (the legacy "-a" file animation): frames are
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.
@@ -145,9 +148,11 @@ public:
     // raster-colorbar-mismatch-on-2d-visible-zoom.
     [[nodiscard]] bool activeViewRasterMatchesDisplayRangeForTest();
     [[nodiscard]] bool activeViewUsesViewportBoundedOutputForTest() const;
+    [[nodiscard]] bool activeViewUsesNativeOutputForTest() const;
     [[nodiscard]] bool allViewsUseViewportBoundedOutputForTest() const;
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
+    [[nodiscard]] bool fabStateClearedForTest() const;
 
     // Test-only: rubber-band the central half of the active 3-D panel through
     // the same handler used by ImageView::rubberBandSelected.
@@ -193,6 +198,9 @@ public:
     // activeViewIsFitToWindowForTest, which refits as a side effect).
     void setSphericalSupersampleForTest(int factor);
     [[nodiscard]] int activeViewImageWidthForTest() const;
+    [[nodiscard]] std::array<int, 2> activeViewImageSizeForTest() const;
+    [[nodiscard]] std::array<int, 2> activeViewViewportSizeForTest() const;
+    [[nodiscard]] QImage activeViewViewportImageForTest() const;
     [[nodiscard]] bool activeViewFitsWindowForTest() const;
 
     // Test-only: shrink the open dataset's cache budget to force cache-pressure
@@ -395,8 +403,12 @@ private:
     [[nodiscard]] std::array<int, 2> displayAxes(int normal) const;
     [[nodiscard]] std::array<int, 2> nativeOutputSize(
         const PlaneViewState& state) const;
+    [[nodiscard]] std::array<int, 2> viewportPixelSize(
+        const PlaneViewState& state) const;
     [[nodiscard]] std::array<int, 2> sliceOutputSize(
         const PlaneViewState& state, bool forceRemote = false) const;
+    [[nodiscard]] QSize logicalImageSize(const PlaneViewState& state,
+        const ScalarPlane& plane, const QImage& image) const;
     // True when the active dataset is displayed as a warped 2-D spherical
     // (r, theta) plane. Gates the coordinate-warp overlay, probe, and label
     // paths; all other datasets keep their Cartesian behavior.
@@ -428,6 +440,11 @@ private:
         const QPoint& viewportDelta);
     void endPanDrag(PlaneViewState& state, const QPointF& totalSceneDelta);
     void flushPanDrag(bool finalize);
+    void applyFixedScale(int factor);
+    void updateRemoteFixedScaleDemand(PlaneViewState& state, int factor,
+        std::optional<std::array<double, 2>> center = std::nullopt);
+    [[nodiscard]] std::array<double, 2> viewCenterInData(
+        const PlaneViewState& state) const;
     void applyPanStep(PlaneViewState& state, const QPointF& direction);
     void setupPanShortcuts();
     [[nodiscard]] std::optional<RealBox> shiftedPanRegion(
@@ -518,6 +535,9 @@ private:
         Sequence
     };
     void choosePlotfileSequence();
+    // Establishes the shared local/remote sequence invariants after the frame
+    // list has been validated.
+    void prepareSequence(std::size_t frameCount);
     void closeSequence();
     void goToSequenceFrame(int index, bool forceRestart = false);
     void toggleSequencePlayback();
@@ -673,6 +693,8 @@ private:
     std::filesystem::path m_datasetPath;
     std::string m_remoteHost;
     std::uint16_t m_remotePort = 0;
+    bool m_remoteSequence = false;
+    std::uint64_t m_remoteSequenceConnectionGeneration = 0;
     struct MultiFabReturnState {
         std::filesystem::path path;
         std::filesystem::path dataRoot;

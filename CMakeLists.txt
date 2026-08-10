@@ -71,6 +71,7 @@ add_subdirectory(src/cache)
 add_subdirectory(src/io)
 add_subdirectory(src/query)
 add_subdirectory(src/data)
+add_subdirectory(src/remote)
 add_subdirectory(src/render2d)
 add_subdirectory(src/pipeline)
 

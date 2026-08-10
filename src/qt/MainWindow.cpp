@@ -70,6 +70,7 @@
 #include <QPushButton>
 #include <QRect>
 #include <QRegularExpressionValidator>
+#include <QScrollBar>
 #include <QSettings>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -2192,6 +2193,21 @@ void MainWindow::scrollActiveViewForTest(int dx, int dy)
     }
 }
 
+bool MainWindow::activeViewScrollBarsVisibleForTest() const
+{
+    if (m_activeView == nullptr) {
+        return false;
+    }
+    // Scroll range, not widget visibility: under the as-needed policy a
+    // non-empty range is what shows the bars, and the range updates
+    // synchronously while the widgets only follow on the next layout pass.
+    const auto* view = m_activeView->view;
+    return view->horizontalScrollBar()->maximum()
+            > view->horizontalScrollBar()->minimum()
+        || view->verticalScrollBar()->maximum()
+            > view->verticalScrollBar()->minimum();
+}
+
 QRectF MainWindow::activeViewVisibleDataWindowForTest() const
 {
     if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
@@ -3361,6 +3377,10 @@ void MainWindow::applyRubberBandZoom(
             visible, datasetSampleBounds(metadata), finest.cellSize, axes);
     }
     state.visibleRegion = visible;
+    // Rubber-band zoom leaves the virtual canvas: as with local data, the
+    // selection is re-rendered as a standalone raster fitted to the pane,
+    // with no domain-spanning scroll bars.
+    state.view->setVirtualCanvas(std::nullopt);
     // Zoom to the requested region mapped back to scene pixels, so the view
     // transform matches the region the requested slice will actually cover.
     const QRectF requestedScene(

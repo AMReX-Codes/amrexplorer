@@ -708,8 +708,11 @@ int main(int argc, char* argv[])
         // the demand-driven fixed scale must settle with the viewport fully
         // backed by fetched raster, stay quiet with no input (the demand used
         // to re-issue itself endlessly through the as-needed scrollbars,
-        // flickering through one remote render per flip), and then refetch
-        // exactly once when the virtual scroll bars pan to unfetched cells.
+        // flickering through one remote render per flip), refetch exactly
+        // once when the virtual scroll bars pan to unfetched cells, and drop
+        // the domain-spanning scroll bars on a rubber-band zoom, whose
+        // selection is re-rendered fitted to the pane exactly as for local
+        // data.
         auto phase = std::make_shared<int>(0);
         auto settles = std::make_shared<int>(0);
         QObject::connect(&window,
@@ -756,10 +759,29 @@ int main(int argc, char* argv[])
                         }
                         if (*phase == 2) {
                             *phase = 3;
-                            application.exit(
-                                window.fixedScaleStateMatchesForTest(32)
-                                    && window
+                            // The scrolled fixed scale keeps the fetched
+                            // raster under the whole viewport, with the
+                            // domain-spanning scroll bars present.
+                            if (!window.fixedScaleStateMatchesForTest(32)
+                                || !window
                         .allViewsFixedScaleRasterCoversViewportForTest()
+                                || !window
+                                    .activeViewScrollBarsVisibleForTest()) {
+                                application.exit(1);
+                                return;
+                            }
+                            window.rubberBandZoomActiveViewForTest();
+                            return;
+                        }
+                        if (*phase == 3) {
+                            *phase = 4;
+                            // The re-rendered selection stands alone, fitted
+                            // to the pane without scroll bars, as for local
+                            // data.
+                            application.exit(
+                                window.activeViewIsZoomedForTest()
+                                    && !window
+                                        .activeViewScrollBarsVisibleForTest()
                                     ? 0 : 1);
                         }
                     });

@@ -167,6 +167,7 @@ public:
     // Test-only: scroll the active view's viewport by whole pixels, the same
     // path Shift+drag panning takes over scroll bars.
     void scrollActiveViewForTest(int dx, int dy);
+    [[nodiscard]] bool activeViewScrollBarsVisibleForTest() const;
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
     [[nodiscard]] bool fabStateClearedForTest() const;

@@ -22,6 +22,7 @@
 #include <QtConcurrentRun>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -31,6 +32,28 @@
 
 namespace amrvis::qt {
 namespace {
+
+int datasetPageMaximumExtent(const DatasetSession& dataset)
+{
+    const auto maximumResponseBytes = dataset.maximumResponseBytes();
+    if (!maximumResponseBytes) {
+        return datasetPageMaxExtent;
+    }
+    // Dataset pages carry the same per-cell float value and byte coverage
+    // vectors as slice responses. Reserve the shared envelope allowance, then
+    // choose the largest square page that fits the negotiated frame.
+    const auto frameBytes
+        = static_cast<std::uint64_t>(*maximumResponseBytes);
+    const auto maximumCells = frameBytes > sliceResponseOverheadBytes
+        ? (frameBytes - sliceResponseOverheadBytes)
+            / sliceResponseBytesPerCell
+        : 0;
+    const auto extent = maximumCells == 0
+        ? 1
+        : static_cast<int>(std::floor(
+            std::sqrt(static_cast<double>(maximumCells))));
+    return std::clamp(extent, 1, datasetPageMaxExtent);
+}
 
 // Qt Concurrent masks worker exceptions behind QUnhandledException, so the
 // underlying library error text must be unwrapped before it is shown.
@@ -208,7 +231,8 @@ std::vector<DatasetWindow::LevelData> DatasetWindow::extractLevels(
         pageRequest.region = request.region;
         pageRequest.normalAxis = request.normalAxis;
         pageRequest.slicePosition = request.slicePosition;
-        pageRequest.maximumExtent = datasetExtractMaxExtent;
+        pageRequest.maximumExtent
+            = datasetPageMaximumExtent(*request.dataset);
         auto extract = request.dataset->requestDatasetPage(
             pageRequest, cancellation);
         // Levels the region misses geometrically get no tab.

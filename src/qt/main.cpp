@@ -1,5 +1,6 @@
 #include "MainWindow.hpp"
 #include "FabSelectorDock.hpp"
+#include "RemoteEndpoint.hpp"
 
 #include <QAction>
 #include <QApplication>
@@ -24,6 +25,8 @@
 #include <QTimer>
 
 #include <amrexplorer/render2d/Contours.hpp>
+#include <amrexplorer/remote/Frame.hpp>
+#include <amrexplorer/remote/Server.hpp>
 
 #include <algorithm>
 #include <array>
@@ -35,6 +38,7 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -481,7 +485,128 @@ int main(int argc, char* argv[])
     ensureDesktopEntry();
     amrvis::qt::MainWindow window;
     window.show();
-    if (argc == 3 && std::string_view(argv[1]) == "--smoke-test") {
+    std::shared_ptr<amrvis::remote::Server> smokeServer;
+    std::optional<std::thread> smokeServerThread;
+    std::optional<std::thread> smokePeerThread;
+    if (argc == 3
+        && std::string_view(argv[1]) == "--remote-slice-smoke-test") {
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                application.exit(success
+                        && window.activeViewUsesViewportBoundedOutputForTest()
+                    ? 0 : 1);
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                window.openRemoteDataset(
+                    "127.0.0.1", server->port(), path);
+            });
+    } else if (argc == 3
+        && std::string_view(argv[1])
+            == "--remote-initial-geometry-smoke-test") {
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                if (window.allViewsUseViewportBoundedOutputForTest()) {
+                    application.exit(0);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(
+                            window.allViewsUseViewportBoundedOutputForTest()
+                            ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                window.openRemoteDataset(
+                    "127.0.0.1", server->port(), path);
+            });
+    } else if (argc == 2
+        && std::string_view(argv[1])
+            == "--remote-silent-hello-close-smoke-test") {
+        auto listener = std::make_shared<amrvis::remote::Listener>(
+            amrvis::remote::listenOnLoopback(0));
+        smokePeerThread.emplace([listener, &window] {
+            auto peer = amrvis::remote::acceptConnection(listener->socket);
+            // Wait until the client has entered the hello transaction before
+            // closing the window. A second read then remains silent until the
+            // cancelled Connection constructor releases its socket.
+            static_cast<void>(amrvis::remote::readFrame(peer));
+            QMetaObject::invokeMethod(&window,
+                [&window] { window.close(); }, Qt::QueuedConnection);
+            static_cast<void>(amrvis::remote::readFrame(peer));
+        });
+        QTimer::singleShot(5000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, port = listener->port] {
+                window.openRemoteDataset(
+                    "127.0.0.1", port, "/not-opened-before-hello");
+            });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--remote-rubber-aspect-smoke-test") {
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application] {
+                        application.exit(window.activeViewIsZoomedForTest()
+                                && window.activeViewHasPhysicalAspectForTest(
+                                    9.0 / 4.0)
+                            ? 0 : 1);
+                    }, Qt::SingleShotConnection);
+                window.rubberBandZoomRectangularActiveViewForTest();
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                window.openRemoteDataset(
+                    "127.0.0.1", server->port(), path);
+            });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--connect") {
+        const auto endpoint = amrvis::qt::parseRemoteEndpoint(argv[2]);
+        if (!endpoint || std::string_view(argv[3]).empty()) {
+            qCritical("usage: amrexplorer --connect HOST:PORT REMOTE_PATH");
+            return 2;
+        }
+        QTimer::singleShot(0, &window,
+            [&window, endpoint = *endpoint, path = std::string(argv[3])] {
+                window.openRemoteDataset(
+                    endpoint.first, endpoint.second, path);
+            });
+    } else if (argc >= 2
+        && std::string_view(argv[1]) == "--connect") {
+        qCritical("usage: amrexplorer --connect HOST:PORT REMOTE_PATH");
+        return 2;
+    } else if (argc == 3 && std::string_view(argv[1]) == "--smoke-test") {
         const std::filesystem::path path(argv[2]);
         QObject::connect(&window, &amrvis::qt::MainWindow::datasetOpenFinished,
             &application, [&application](bool success) {
@@ -550,6 +675,11 @@ int main(int argc, char* argv[])
                     return;
                 }
                 window.setParticleSelectionForTest({"Tracer"}, 1.0, 37);
+                if (!window.particleLoadingForTest()
+                    || !window.particleLoadingUiActiveForTest()) {
+                    application.exit(2);
+                    return;
+                }
                 poll->start();
             });
         QObject::connect(poll, &QTimer::timeout, &application,
@@ -560,7 +690,9 @@ int main(int argc, char* argv[])
                 }
                 if (window.particleSampleCountForTest() == 0
                     || window.particleOverlayCountForTest() == 0
-                    || window.particleSeedForTest() != 37) {
+                    || window.particleSeedForTest() != 37
+                    || window.particleLoadingForTest()
+                    || !window.particleLoadingUiSettledForTest()) {
                     return;
                 }
                 poll->stop();
@@ -1355,5 +1487,15 @@ int main(int argc, char* argv[])
             }
         });
     }
-    return application.exec();
+    const auto result = application.exec();
+    if (smokeServer) {
+        smokeServer->requestStop();
+    }
+    if (smokeServerThread) {
+        smokeServerThread->join();
+    }
+    if (smokePeerThread) {
+        smokePeerThread->join();
+    }
+    return result;
 }

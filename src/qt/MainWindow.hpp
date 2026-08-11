@@ -212,6 +212,15 @@ public:
     // handlers used by Shift+left drag, and inspect the resulting transform.
     void setActiveViewScaleForTest(int factor);
     void selectFixedScaleForTest(int factor);
+    // Test-only: send a real wheel event through the active view's viewport,
+    // exercising the same zoomBy path a user's scroll wheel takes. Positive
+    // notches zoom in.
+    void wheelActiveViewForTest(int notches);
+    // Test-only: true when the active view still hosts a whole-domain virtual
+    // canvas. A wheel zoom leaves the canvas in place and only changes the
+    // scale, so every scene-to-physical reader has to cope with a canvas in
+    // Custom mode.
+    [[nodiscard]] bool activeViewVirtualCanvasActiveForTest() const;
     [[nodiscard]] bool fixedScaleStateMatchesForTest(int factor) const;
     void wheelZoomAndPanActiveViewForTest();
     [[nodiscard]] QRectF activeViewVisibleDataWindowForTest() const;

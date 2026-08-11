@@ -862,6 +862,94 @@ int main(int argc, char* argv[])
             });
     } else if (argc == 3
         && std::string_view(argv[1])
+            == "--remote-canvas-wheel-smoke-test") {
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        // Regression for virtual-canvas-survives-wheel-zoom. A wheel notch over
+        // a remote fixed scale leaves the whole-domain virtual canvas installed
+        // while switching the transform mode to Custom, so the next slice
+        // arrival with a changed density or owner reaches preservedDataWindow --
+        // which reads scene units as raster pixels of the cached plane, and on
+        // a canvas they are finest cells over the whole domain. The window it
+        // computed was then fed to zoomToRect. The view must stay where the
+        // wheel put it: still on the canvas, still showing a window inside the
+        // domain, and still centred where it was zoomed about.
+        auto phase = std::make_shared<int>(0);
+        auto before = std::make_shared<QRectF>();
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, phase, before](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application,
+                    [&window, &application, phase, before] {
+                        if (*phase == 0) {
+                            *phase = 1;
+                            if (!window
+                                    .activeViewVirtualCanvasActiveForTest()) {
+                                qCritical("no virtual canvas at fixed scale");
+                                application.exit(1);
+                                return;
+                            }
+                            *before = window
+                                .activeViewVisibleDataWindowForTest();
+                            window.wheelActiveViewForTest(1);
+                            return;
+                        }
+                        if (*phase != 1) {
+                            return;
+                        }
+                        *phase = 2;
+                        const auto after
+                            = window.activeViewVisibleDataWindowForTest();
+                        // The canvas survives the zoom by design: it is what
+                        // lets the demand fetch keep working, and dropping it
+                        // would strand the scroll bars mid-domain.
+                        if (!window.activeViewVirtualCanvasActiveForTest()) {
+                            qCritical("the wheel zoom dropped the canvas");
+                            application.exit(1);
+                            return;
+                        }
+                        // A window with no extent is what the raster-pixel
+                        // reading of cell-space scene coordinates produced.
+                        if (after.width() <= 0.0 || after.height() <= 0.0) {
+                            qCritical("the wheel zoom left a %gx%g window",
+                                after.width(), after.height());
+                            application.exit(1);
+                            return;
+                        }
+                        if (after.width() >= before->width()) {
+                            qCritical("zooming in did not narrow the window");
+                            application.exit(1);
+                            return;
+                        }
+                        // Zoomed about the viewport centre, so the centre is
+                        // what must not move.
+                        const auto drift = std::abs(
+                            after.center().x() - before->center().x());
+                        if (drift > 0.05 * after.width()) {
+                            qCritical("the wheel zoom moved the centre by %g",
+                                drift);
+                            application.exit(1);
+                            return;
+                        }
+                        application.exit(0);
+                    });
+                window.selectFixedScaleForTest(32);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                window.openRemoteDataset(
+                    "127.0.0.1", server->port(), path, server->token());
+            });
+    } else if (argc == 3 && std::string_view(argv[1])
             == "--remote-fixed-scale-flicker-smoke-test") {
         smokeServer = std::make_shared<amrvis::remote::Server>();
         smokeServerThread.emplace(

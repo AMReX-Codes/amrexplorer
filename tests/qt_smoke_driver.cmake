@@ -19,7 +19,8 @@
 #                 local-remote-fixed-scale-window |
 #                 sequence-density-preserve |
 #                 sequence-equal-size-transform-preserve |
-#                 sequence-geometry-refit | sequence-noop | sequence-failure
+#                 sequence-geometry-refit | sequence-noop | sequence-failure |
+#                 remote-canvas-wheel
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -106,6 +107,10 @@ elseif(MODE STREQUAL "remote-fixed-scale")
 elseif(MODE STREQUAL "remote-fixed-scale-flicker")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --remote-fixed-scale-flicker-smoke-test
+        "${WORK}/plt")
+elseif(MODE STREQUAL "remote-canvas-wheel")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --remote-canvas-wheel-smoke-test
         "${WORK}/plt")
 elseif(MODE STREQUAL "local-remote-fixed-scale-window")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")

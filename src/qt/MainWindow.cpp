@@ -34,6 +34,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QWheelEvent>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QColorDialog>
@@ -2225,6 +2226,25 @@ void MainWindow::selectFixedScaleForTest(int factor)
             return;
         }
     }
+}
+
+void MainWindow::wheelActiveViewForTest(int notches)
+{
+    if (m_activeView == nullptr || m_activeView->view->viewport() == nullptr) {
+        return;
+    }
+    auto* viewport = m_activeView->view->viewport();
+    const auto centre = viewport->rect().center();
+    QWheelEvent event(QPointF(centre), viewport->mapToGlobal(QPointF(centre)),
+        QPoint(), QPoint(0, notches * 120), ::Qt::NoButton, ::Qt::NoModifier,
+        ::Qt::NoScrollPhase, false);
+    QApplication::sendEvent(viewport, &event);
+}
+
+bool MainWindow::activeViewVirtualCanvasActiveForTest() const
+{
+    return m_activeView != nullptr
+        && m_activeView->view->virtualCanvasActive();
 }
 
 bool MainWindow::fixedScaleStateMatchesForTest(int factor) const
@@ -6211,6 +6231,23 @@ std::optional<QRectF> MainWindow::preservedDataWindow(
     // apply. Spherical never re-slices a subregion (zoom is view-only), so the
     // plain Preserve transform is already correct.
     if (displayIsSpherical()) {
+        return std::nullopt;
+    }
+    // A virtual canvas needs no re-frame, and would be mismapped by one. Its
+    // scene is the whole domain in finest cells and is anchored to the domain,
+    // not to the raster: applyPlacement re-positions the incoming raster within
+    // that unchanged scene and deliberately leaves the view where it is, so the
+    // visible window is already preserved. The arithmetic below assumes scene
+    // units are raster pixels of the cached plane, which on a canvas they are
+    // not.
+    //
+    // Its call site tests transformMode() == Custom, which used to be taken as
+    // excluding the canvas, since applyFixedScale installs one in FixedScale
+    // mode. That does not hold: ImageView::zoomBy sets Custom and leaves the
+    // placement alone, so one wheel notch over a remote fixed scale reaches
+    // here with cell-space coordinates. The guard belongs on the canvas itself
+    // rather than on a mode that only usually implies its absence.
+    if (state.view->virtualCanvasActive()) {
         return std::nullopt;
     }
     const auto& cached = *state.plane;

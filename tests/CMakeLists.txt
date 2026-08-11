@@ -443,6 +443,23 @@ if(TARGET amrexplorer_qt)
     set_tests_properties(qt_remote_fixed_scale_flicker_smoke PROPERTIES
         TIMEOUT 30)
 
+    # Regression for virtual-canvas-survives-wheel-zoom: a wheel notch over a
+    # remote fixed scale switches the transform mode to Custom while leaving the
+    # whole-domain canvas installed, so every scene-to-physical reader has to
+    # cope with that pairing. The view must stay where the wheel put it rather
+    # than jumping to whatever cell-space coordinates read as raster pixels.
+    add_test(
+        NAME qt_remote_canvas_wheel_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_wide"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_canvas_wheel"
+            -DMODE=remote-canvas-wheel
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_remote_canvas_wheel_smoke PROPERTIES TIMEOUT 30)
+
     # Local and remote must agree on what a scrolled fixed scale shows.
     # Scrolling is what separates the two coordinate spaces: local scales a
     # whole-domain raster while remote scales a whole-domain virtual canvas of

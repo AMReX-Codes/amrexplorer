@@ -32,7 +32,7 @@ cmake --preset sanitizers  # Headless + ASan + UBSan → build-sanitizers/
 cmake --build --preset sanitizers
 ctest --preset sanitizers
 
-cmake --preset tsan        # Headless + ThreadSanitizer → build-tsan/
+cmake --preset tsan        # Headless + remote + ThreadSanitizer → build-tsan/
 cmake --build --preset tsan
 ctest --preset tsan
 
@@ -43,10 +43,14 @@ ctest --preset qt-sanitizers
 
 The sanitizer preset enables AddressSanitizer and UndefinedBehaviorSanitizer.
 The tsan preset enables ThreadSanitizer (mutually exclusive with the ASan
-build), covering the concurrent block-read, cache, and stop-token paths.
-The qt-sanitizers preset runs the full suite — including the offscreen Qt
-smoke tests — under ASan/UBSan with leak detection. A `windows` preset
-(usable only on Windows hosts) mirrors the CI MSVC job.
+build), covering the concurrent block-read, cache, and stop-token paths. It
+also enables remote support, so the client receiver thread, per-session reader
+threads, and the shared server worker pool are checked by the `remote_*` tests
+in the same run. The qt-sanitizers preset runs the full suite — including the
+offscreen Qt smoke tests and, because Qt implies remote, the remote tests —
+under ASan/UBSan with leak detection; the headless `sanitizers` preset stays
+local-only to avoid duplicating that coverage. A `windows` preset (usable only
+on Windows hosts) mirrors the CI MSVC job.
 
 The clang preset mirrors the CI clang job (which builds with
 `-DAMREXPLORER_WARNINGS_AS_ERRORS=ON`): run it before pushing to catch

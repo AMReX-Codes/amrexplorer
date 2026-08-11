@@ -811,6 +811,15 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_sequenceController, &SequenceController::frameLoadFailed,
         this, [this](const QString& message) {
             statusBar()->showMessage(tr("Frame load failed"));
+            // Stop playing. Playback wraps, so without this it comes back to
+            // the same unreadable frame -- or the same disconnected server --
+            // every cycle, raising a diagnostic each time. The user is left on
+            // the failed frame and can step or play again once they have dealt
+            // with it. A sweep is left alone; only sequence playback can hit a
+            // frame load.
+            if (m_playbackMode == PlaybackMode::Sequence) {
+                setPlaybackMode(PlaybackMode::None);
+            }
             // During animation export the failure is reported by the export
             // handler; avoid a second dialog.
             const bool wasExporting = m_animationExporter->active();
@@ -1975,6 +1984,18 @@ void MainWindow::zoomActiveViewForTest()
     }
     m_activeView->visibleRegion = subregion;
     scheduleSliceRequest(*m_activeView, true);
+}
+
+bool MainWindow::animationDockVisibleForTest() const
+{
+    return m_animationDock != nullptr && m_animationDock->isVisible();
+}
+
+void MainWindow::setAnimationDockVisibleForTest(bool visible)
+{
+    if (m_animationDock != nullptr) {
+        m_animationDock->setVisible(visible);
+    }
 }
 
 QString MainWindow::viewPlaceholderForTest()
@@ -4789,7 +4810,10 @@ void MainWindow::beginAnimationExport(const QString& path, bool includeColorBar)
     m_exportAnimationAction->setEnabled(false);
     setPlaybackMode(PlaybackMode::None);
 
-    goToSequenceFrame(0);
+    // forceRestart because the export drives itself off sequenceFrameDisplayed,
+    // and an export started while frame 0 is already on screen would otherwise
+    // be suppressed as a no-op and never receive the signal that advances it.
+    goToSequenceFrame(0, true);
 }
 
 std::optional<DatasetRequest> MainWindow::buildDatasetRequest() const
@@ -6773,7 +6797,16 @@ void MainWindow::updateAnimationDockVisibility()
     const auto sequenceActive = m_sequenceController->hasSequence();
     const auto threeD = m_dataset != nullptr
         && m_dataset->metadata().dimension == 3;
-    m_animationDock->setVisible(sequenceActive || threeD);
+    const auto applies = sequenceActive || threeD;
+    // Only act on a transition. This runs again for every sequence frame, by
+    // way of configureSequenceControls, and forcing the dock visible there
+    // reopened it after the user hid it mid-playback. Whether the panel applies
+    // at all is ours to decide; whether it is shown while it applies is theirs.
+    if (applies == m_animationDockApplies) {
+        return;
+    }
+    m_animationDockApplies = applies;
+    m_animationDock->setVisible(applies);
 }
 
 void MainWindow::stepSequence(int direction)

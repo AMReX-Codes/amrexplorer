@@ -1915,6 +1915,88 @@ int main(int argc, char* argv[])
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 4
+        && std::string_view(argv[1]) == "--sequence-noop-smoke-test") {
+        // Two sequence annoyances at once, because both are observed on the
+        // same frame step. On frame 0: hide the Animation dock, then ask for
+        // frame 0 again the way an idle slider press-and-release does. That
+        // must not reload -- a reload would close the inspection windows,
+        // cancel work, and re-render the frame already on screen -- so the
+        // second displayed frame must be frame 1, not another frame 0. And on
+        // reaching frame 1, the dock must still be hidden: a frame refresh has
+        // no business reasserting the user's dock choice.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        auto displays = std::make_shared<std::vector<int>>();
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed, &application,
+            [&window, &application, displays](int index) {
+                displays->push_back(index);
+                if (displays->size() == 1) {
+                    if (index != 0) {
+                        qCritical("sequence started on frame %d", index);
+                        application.exit(1);
+                        return;
+                    }
+                    window.setAnimationDockVisibleForTest(false);
+                    window.requestSequenceFrameForTest(0);
+                    window.stepSequence(1);
+                    return;
+                }
+                if (index != 1 || displays->size() != 2) {
+                    qCritical("a no-op frame request reloaded the frame");
+                    application.exit(1);
+                    return;
+                }
+                if (window.animationDockVisibleForTest()) {
+                    qCritical("a frame refresh reopened the Animation dock");
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--sequence-failure-smoke-test") {
+        // Playback wraps, so a frame that cannot be read comes back around
+        // forever, raising a diagnostic every cycle. Start playing a sequence
+        // whose second frame is unreadable and require playback to have
+        // stopped by the time the failure is reported.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed, &application,
+            [&window](int index) {
+                if (index == 0 && !window.sequencePlayingForTest()) {
+                    window.toggleSequencePlaybackForTest();
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed, &application,
+            [&window, &application] {
+                // Queued: the failure handler stops playback around this
+                // signal, so read the state once that handler has finished.
+                QTimer::singleShot(0, &window, [&window, &application] {
+                    if (window.sequencePlayingForTest()) {
+                        qCritical("playback kept running past a failed frame");
+                        application.exit(1);
+                        return;
+                    }
+                    application.exit(0);
+                });
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
         && std::string_view(argv[1]) == "--sequence-smoke-test") {
         // Opens the two-frame sequence, waits for the first frame to display,
         // steps to frame 1 through the same slot the step button uses, and

@@ -19,7 +19,7 @@
 #                 local-remote-fixed-scale-window |
 #                 sequence-density-preserve |
 #                 sequence-equal-size-transform-preserve |
-#                 sequence-geometry-refit
+#                 sequence-geometry-refit | sequence-noop | sequence-failure
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -53,6 +53,23 @@ elseif(MODE STREQUAL "sequence")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
     run_or_die("${AMREXPLORER_QT}" --sequence-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "sequence-noop")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --sequence-noop-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "sequence-failure")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    # Drop the second frame's payloads only: its metadata still reads, so the
+    # sequence opens and frame 0 displays, and the failure lands on the frame
+    # step that playback makes.
+    file(GLOB brokenPayloads "${WORK}/plt00010/Level_*/*_D_*")
+    foreach(payload ${brokenPayloads})
+        file(REMOVE "${payload}")
+    endforeach()
+    run_or_die("${AMREXPLORER_QT}" --sequence-failure-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "sequence-after-fab")
     # Open a raw FAB first, then a plotfile sequence: the sequence must clear

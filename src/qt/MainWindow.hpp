@@ -117,6 +117,19 @@ public:
     // dialogs, writing frames and MP4s under path's directory. Test-only entry
     // used by the export-quit smoke test to reach the encoder deterministically.
     void startAnimationExportForTest(const QString& path, bool includeColorBar);
+    // Test-only sequence probes: whether the Animation dock is on screen, and
+    // whether sequence playback is still running. A frame refresh must not
+    // reassert the first, and a failed frame must clear the second.
+    [[nodiscard]] bool animationDockVisibleForTest() const;
+    [[nodiscard]] bool sequencePlayingForTest() const noexcept
+    {
+        return m_playbackMode == PlaybackMode::Sequence;
+    }
+    void setAnimationDockVisibleForTest(bool visible);
+    void toggleSequencePlaybackForTest() { toggleSequencePlayback(); }
+    // The slot an idle frame-slider press-and-release lands in, which must not
+    // restart a frame that is already on screen.
+    void requestSequenceFrameForTest(int index) { goToSequenceFrame(index); }
 
     // Test-only: move each 3-D plane to slicePositions (per axis, so the three
     // panels sample different data with different local ranges), switch to
@@ -670,6 +683,10 @@ private:
     QDockWidget* m_diagnosticsDock = nullptr;
     QDockWidget* m_colorBarDock = nullptr;
     QDockWidget* m_animationDock = nullptr;
+    // Whether the Animation panel currently applies at all (a sequence is open
+    // or the data is 3-D), so updateAnimationDockVisibility can act on the
+    // transition rather than reasserting visibility on every sequence frame.
+    bool m_animationDockApplies = false;
     FabSelectorDock* m_fabSelectorDock = nullptr;
     QToolBar* m_sliceToolbar = nullptr;
     QToolBar* m_rangeToolbar = nullptr;

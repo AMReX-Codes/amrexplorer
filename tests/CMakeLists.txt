@@ -947,6 +947,34 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_sequence_smoke PROPERTIES TIMEOUT 30)
+    # Regression for sequence-ui-annoyances: an idle frame request must not
+    # reload the frame already on screen, and a frame refresh must not reopen
+    # the Animation dock the user hid.
+    add_test(
+        NAME qt_sequence_noop_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_noop"
+            -DMODE=sequence-noop
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_sequence_noop_smoke PROPERTIES TIMEOUT 30)
+    # ...and playback must stop on a frame it cannot read, rather than wrapping
+    # back onto it every cycle.
+    add_test(
+        NAME qt_sequence_failure_stops_playback_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_failure"
+            -DMODE=sequence-failure
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_sequence_failure_stops_playback_smoke
+        PROPERTIES TIMEOUT 30)
     # Regression for open-sequence-stale-fab-state: opening a plotfile sequence
     # after a raw FAB must clear the FAB view state (dock hidden, no "— FAB"
     # title), since openSequence does not go through openDatasetImpl.

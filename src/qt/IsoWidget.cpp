@@ -113,7 +113,7 @@ void IsoWidget::paintEvent(QPaintEvent* event)
     QPainter painter(this);
     painter.fillRect(event->rect(), viewportBackground());
     if (!m_hasGeometry) {
-        painter.setPen(QColor(0x88, 0x88, 0x88));
+        painter.setPen(viewportForeground());
         painter.drawText(rect(), Qt::AlignCenter, tr("3-D overview"));
         return;
     }

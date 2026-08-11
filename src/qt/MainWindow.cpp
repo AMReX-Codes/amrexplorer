@@ -913,8 +913,8 @@ MainWindow::MainWindow(QWidget* parent)
         });
     connect(m_levelSelector, qOverload<int>(&QComboBox::currentIndexChanged),
         this, [this](int) { syncMenuChecks(); });
-    connect(m_rangeMode, qOverload<int>(&QComboBox::currentIndexChanged),
-        this, [this](int) { saveSettings(); });
+    // No saveSettings here: range mode is deliberately not persisted (see
+    // saveSettings), so the call only ever rewrote unrelated keys.
     connect(m_logarithmic, &QCheckBox::toggled,
         this, [this](bool) { saveSettings(); });
 
@@ -1539,9 +1539,9 @@ void MainWindow::createMenus()
         if (visible && m_controlsReady) {
             scheduleSliceRequest(false);
         }
-        saveSettings();
+        saveSettings();  // overlay/boxes
     });
-    m_slicePlanesAction = new QAction(tr("&Slice Planes"), this);
+    m_slicePlanesAction = new QAction(tr("Sl&ice Planes"), this);
     m_slicePlanesAction->setCheckable(true);
     m_slicePlanesAction->setEnabled(false);
     connect(m_slicePlanesAction, &QAction::toggled, this,
@@ -1552,7 +1552,7 @@ void MainWindow::createMenus()
     connect(m_contoursAction, &QAction::triggered,
         this, [this] { showContoursDialog(); });
 
-    m_particlesAction = new QAction(tr("&Particles..."), this);
+    m_particlesAction = new QAction(tr("Par&ticles..."), this);
     m_particlesAction->setEnabled(false);
     connect(m_particlesAction, &QAction::triggered,
         this, [this] { showParticlesDialog(); });
@@ -1923,7 +1923,9 @@ void MainWindow::applyContourSettings(
     if (mode == DisplayMode::VelocityVectors) {
         ensureVectorFieldDefaults();
     }
-    saveSettings();
+    // No saveSettings here either: nothing this function sets has a settings
+    // key. Contour mode, count, color, and the vector field choices are all
+    // dataset-dependent, so restoring them across sessions would be wrong.
     const auto involvesVectors = mode == DisplayMode::VelocityVectors
         || previousMode == DisplayMode::VelocityVectors;
     const auto inputsChanged = mode != previousMode || count != previousCount
@@ -3042,6 +3044,12 @@ void MainWindow::configureParticleControls(bool preserveSelection)
         m_particleColors.clear();
         m_particleSeed = 0;
         m_particleSelectionInitialized = false;
+        // The subset and point size reset with everything else. They used to
+        // survive, so a 0.05% subset chosen to make one dense dataset legible
+        // silently decimated the next one -- with no indication that it was a
+        // carried-over setting rather than the data.
+        m_particleFraction = 1.0;
+        m_particlePointSize = defaultParticlePointSize;
     }
     for (std::size_t speciesIndex = 0; speciesIndex < species.size();
          ++speciesIndex) {
@@ -4266,6 +4274,9 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
     setActiveView(state);
     const auto& plane = *state.plane;
     if (!m_controlsReady || !m_dataset || plane.width <= 0 || plane.height <= 0) {
+        // The drag that got here already painted a guide; a request that never
+        // starts still has to take it down.
+        state.view->clearLineGuide();
         return;
     }
     const auto dataset = m_dataset;
@@ -4337,12 +4348,15 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
                 watcher->deleteLater();
                 return;
             }
+            // The drag guide belongs to the request, not to its outcome: a
+            // failed, cancelled, or superseded query used to leave it painted
+            // until the next setImage replaced the whole scene.
+            view->clearLineGuide();
             try {
-                auto result = watcher->result();
+                auto result = watcher->future().takeResult();
                 if (generation != m_generation || cancellation.stop_requested()) {
                     ++m_staleResults;
                 } else {
-                    view->clearLineGuide();
                     appendLinePlotCurve(result.line, fieldName, dimension,
                         primaryFixedAxis, request.axis,
                         request.fixedCoordinates,
@@ -4610,6 +4624,12 @@ void MainWindow::restoreSettings()
         m_syncRubberBandZoomAction->setChecked(
             settings.value(QStringLiteral("zoom/syncRubberBand"), true).toBool());
     }
+    if (m_boxesAction != nullptr) {
+        // Blocked: the toggle handler re-slices, and nothing is loaded yet.
+        const QSignalBlocker boxesBlocker(m_boxesAction);
+        m_boxesAction->setChecked(
+            settings.value(QStringLiteral("overlay/boxes"), false).toBool());
+    }
     if (m_sphericalSupersampleGroup != nullptr) {
         const auto stored = settings.value(
             QStringLiteral("spherical/supersample"), m_sphericalSupersample).toInt();
@@ -4671,6 +4691,11 @@ void MainWindow::saveSettings()
         m_animationPanel->speedValue());
     settings.setValue(QStringLiteral("zoom/syncRubberBand"),
         m_syncRubberBandZoomAction->isChecked());
+    // The grid-box overlay is a display preference like the palette, and the
+    // toggle has always called saveSettings; it just had no key to write, so
+    // it looked persisted and was not.
+    settings.setValue(QStringLiteral("overlay/boxes"),
+        m_boxesAction->isChecked());
     settings.setValue(QStringLiteral("spherical/supersample"),
         m_sphericalSupersample);
     settings.setValue(QStringLiteral("spherical/display"),
@@ -5672,11 +5697,10 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         m_contoursDialog = nullptr;
         dialog->close();
     }
-    if (m_numberFormatDialog != nullptr) {
-        auto* dialog = m_numberFormatDialog;
-        m_numberFormatDialog = nullptr;
-        dialog->close();
-    }
+    // The Number Format dialog is deliberately *not* closed here. Unlike the
+    // contours dialog above, its setting is dataset-independent and persisted,
+    // so closing it on every open only discarded whatever the user had typed
+    // but not yet applied.
     m_datasetPath = path;
     m_lastBlocksRead = 0;
     m_lastCacheHits = 0;

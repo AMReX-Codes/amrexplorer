@@ -56,6 +56,10 @@ ColorBarWidget::ColorBarWidget(QWidget* parent)
     : QWidget(parent)
     , m_numberFormat(defaultNumberFormat())
 {
+    // panelWidth is the floor, not the width: a wide user format (say
+    // "%.10e") produces tick labels past 150 px, and a fixed width clipped
+    // them on screen while exports -- which size themselves with
+    // preferredWidth -- came out fine. Grow to fit whatever the labels need.
     setFixedWidth(panelWidth);
     setMinimumHeight(280);
 }
@@ -72,18 +76,21 @@ void ColorBarWidget::setFieldRange(QString fieldName, double minimum, double max
     m_minimum = minimum;
     m_maximum = maximum;
     m_hasRange = true;
+    applyPreferredWidth();
     update();
 }
 
 void ColorBarWidget::setNumberFormat(QString format)
 {
     m_numberFormat = std::move(format);
+    applyPreferredWidth();
     update();
 }
 
 void ColorBarWidget::setLogarithmic(bool logarithmic)
 {
     m_logarithmic = logarithmic;
+    applyPreferredWidth();
     update();
 }
 
@@ -91,7 +98,13 @@ void ColorBarWidget::clearRange()
 {
     m_fieldName.clear();
     m_hasRange = false;
+    applyPreferredWidth();
     update();
+}
+
+void ColorBarWidget::applyPreferredWidth()
+{
+    setFixedWidth(std::max(panelWidth, preferredWidth()));
 }
 
 void ColorBarWidget::paintBar(QPainter* painter, const QRect& target) const

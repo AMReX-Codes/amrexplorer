@@ -901,7 +901,8 @@ private:
     std::unordered_map<std::string, QColor> m_particleColors;
     double m_particleFraction = 1.0;
     std::uint64_t m_particleSeed = 0;
-    int m_particlePointSize = 3;
+    static constexpr int defaultParticlePointSize = 3;
+    int m_particlePointSize = defaultParticlePointSize;
     bool m_particleSelectionInitialized = false;
     bool m_particleLoading = false;
     StopSource m_particleStopSource;

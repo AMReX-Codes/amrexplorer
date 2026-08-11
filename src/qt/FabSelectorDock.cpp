@@ -6,6 +6,7 @@
 #include <QInputDialog>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QModelIndex>
@@ -318,6 +319,12 @@ bool FabSelectorDock::eventFilter(QObject* watched, QEvent* event)
 {
     if (watched == m_filter
         && event->type() == QEvent::MouseButtonRelease) {
+        // Left button only. Accepting any button meant a right-click opened
+        // the find-point dialog and swallowed the context menu with it.
+        const auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->button() != Qt::LeftButton) {
+            return false;
+        }
         promptForPoint();
         return true;
     }

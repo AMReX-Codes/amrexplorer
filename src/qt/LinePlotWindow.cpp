@@ -27,12 +27,18 @@
 namespace amrvis::qt {
 namespace {
 
+// Eight curve colors picked against viewportBackground(), the mid-gray this
+// plot actually fills with. The previous set was chosen for a black background
+// -- white, cyan, yellow and Qt::gray all sit close to 0x888888 in luminance,
+// and the seventh curve in particular was very nearly invisible. These are all
+// darker than the background and mutually distinguishable.
 const std::array<QColor, 8>& curveColors()
 {
     static const std::array<QColor, 8> colors{
-        QColor(Qt::red), QColor(Qt::green), QColor(Qt::cyan), QColor(Qt::yellow),
-        QColor(Qt::magenta), QColor(Qt::white), QColor(Qt::gray),
-        QColor(0x66, 0xB2, 0xFF)};
+        QColor(0xB0, 0x00, 0x00), QColor(0x00, 0x5F, 0x00),
+        QColor(0x00, 0x30, 0xB0), QColor(0x7A, 0x4A, 0x00),
+        QColor(0x8B, 0x00, 0x8B), QColor(0x10, 0x10, 0x10),
+        QColor(0x00, 0x6E, 0x6E), QColor(0x7F, 0x3F, 0xBF)};
     return colors;
 }
 
@@ -270,7 +276,7 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
     const auto range = displayedRange();
     m_paintedRange = range;
     if (!range.has_value()) {
-        painter.setPen(Qt::white);
+        painter.setPen(viewportForeground());
         painter.drawText(rect(), Qt::AlignCenter,
             tr("Shift+middle click or horizontal right drag for X, "
                "Shift+right click or vertical right drag for Y"));
@@ -289,13 +295,15 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
         return plot.bottom() - (value - yMinimum) / (yMaximum - yMinimum) * plot.height();
     };
 
-    const QPen gridPen(QColor(96, 96, 96));
+    // Darker than the mid-gray fill so the rules read; the previous
+    // 96,96,96 was only a shade off the background.
+    const QPen gridPen(QColor(0x55, 0x55, 0x55));
     constexpr int tickCount = 5;
     const auto drawXTick = [&](double value, const QString& label) {
         const auto x = mapX(value);
         painter.setPen(gridPen);
         painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
-        painter.setPen(Qt::white);
+        painter.setPen(viewportForeground());
         painter.drawText(QRectF(x - 40.0, plot.bottom() + 4.0, 80.0, 16.0),
             Qt::AlignHCenter | Qt::AlignTop, label);
     };
@@ -325,12 +333,12 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
         const auto y = mapY(yValue);
         painter.setPen(gridPen);
         painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
-        painter.setPen(Qt::white);
+        painter.setPen(viewportForeground());
         painter.drawText(QRectF(0.0, y - 8.0, plot.left() - 6.0, 16.0),
             Qt::AlignRight | Qt::AlignVCenter,
             formatNumber(yValue, m_numberFormat));
     }
-    painter.setPen(Qt::white);
+    painter.setPen(viewportForeground());
     painter.drawRect(plot);
 
     if (m_curves == nullptr) {

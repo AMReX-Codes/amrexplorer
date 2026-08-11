@@ -323,6 +323,25 @@ std::map<DataFileKey, std::filesystem::path> particleDataPaths(
     return result;
 }
 
+// Bytes one particle occupies in a DATA file: the two identity words and the
+// integer components, then the position and the real components. readGrid
+// derives the same two figures per grid to prove a grid fits its file; here
+// they turn the files on disk into an upper bound on how many particles can
+// exist at all.
+std::uint64_t particleBytesOnDisk(const ParsedHeader& header)
+{
+    const auto intValues = static_cast<std::uint64_t>(
+        2 + header.metadata.intComponentCount);
+    const auto realValues = static_cast<std::uint64_t>(
+        header.metadata.dimension + header.metadata.realComponentCount);
+    const auto realBytes
+        = header.metadata.precision == ParticleRealPrecision::Single
+        ? sizeof(float)
+        : sizeof(double);
+    return checkedProduct(intValues, sizeof(std::int32_t), "integer record")
+        + checkedProduct(realValues, realBytes, "real record");
+}
+
 template <typename Real>
 void readGrid(std::istream& input, const GridRecord& grid,
     std::uint64_t dataFileSize, const ParsedHeader& header, double fraction,
@@ -489,13 +508,38 @@ ParticleSample readParticleSample(
     if (fraction == 0.0 || header.metadata.particleCount == 0) {
         return result;
     }
-    const auto expected = static_cast<long double>(header.metadata.particleCount)
+    const auto dataPaths
+        = particleDataPaths(speciesPath, header.grids, result.io);
+    std::map<DataFileKey, std::uint64_t> dataFileSizes;
+    std::uint64_t totalDataBytes = 0;
+    for (const auto& [key, dataPath] : dataPaths) {
+        std::error_code sizeError;
+        const auto dataFileSize = std::filesystem::file_size(dataPath, sizeError);
+        if (sizeError
+            || dataFileSize > std::numeric_limits<std::uint64_t>::max()) {
+            throw ParticleReadError(
+                "cannot determine particle data file size for '"
+                + dataPath.string() + "'");
+        }
+        dataFileSizes.emplace(key, static_cast<std::uint64_t>(dataFileSize));
+        totalDataBytes += static_cast<std::uint64_t>(dataFileSize);
+    }
+    // The Header's particleCount is not evidence -- it is a number in a text
+    // file, and parseHeader only checks it against the grid table, which is
+    // text from the same file. The DATA files are the evidence: readGrid
+    // already refuses a grid whose records do not fit in them, so a forged
+    // count cannot yield points, only a reserve. Bound the reserve by what
+    // those bytes can hold. A valid sample is unaffected, because its own
+    // points are exactly what the files do hold.
+    const auto storedPointCeiling = totalDataBytes / particleBytesOnDisk(header);
+    const auto expected = std::min<long double>(
+                              static_cast<long double>(
+                                  header.metadata.particleCount),
+                              static_cast<long double>(storedPointCeiling))
         * static_cast<long double>(fraction);
     result.points.reserve(static_cast<std::size_t>(std::min<long double>(
         expected + 16.0L,
         static_cast<long double>(maximumPoints))));
-    const auto dataPaths
-        = particleDataPaths(speciesPath, header.grids, result.io);
     std::map<DataFileKey, std::vector<const GridRecord*>> gridsByFile;
     for (const auto& grid : header.grids) {
         if (grid.count != 0) {
@@ -509,23 +553,14 @@ ParticleSample readParticleSample(
             throw ParticleReadError(
                 "cannot open particle data file '" + dataPath.string() + "'");
         }
-        std::error_code sizeError;
-        const auto dataFileSize = std::filesystem::file_size(dataPath, sizeError);
-        if (sizeError
-            || dataFileSize > std::numeric_limits<std::uint64_t>::max()) {
-            throw ParticleReadError(
-                "cannot determine particle data file size for '"
-                + dataPath.string() + "'");
-        }
+        const auto dataFileSize = dataFileSizes.at(key);
         ++result.io.dataFilesOpened;
         for (const auto* grid : grids) {
             if (header.metadata.precision == ParticleRealPrecision::Single) {
-                readGrid<float>(input, *grid,
-                    static_cast<std::uint64_t>(dataFileSize), header, fraction,
+                readGrid<float>(input, *grid, dataFileSize, header, fraction,
                     seed, cancellation, maximumPoints, result.points, result.io);
             } else {
-                readGrid<double>(input, *grid,
-                    static_cast<std::uint64_t>(dataFileSize), header, fraction,
+                readGrid<double>(input, *grid, dataFileSize, header, fraction,
                     seed, cancellation, maximumPoints, result.points, result.io);
             }
         }

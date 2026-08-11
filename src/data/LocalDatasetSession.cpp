@@ -205,6 +205,11 @@ ParticleSample LocalDatasetSession::requestParticleSample(
     const std::string& species, double fraction, std::uint64_t seed,
     std::size_t maximumPoints, StopToken cancellation)
 {
+    // The bounded overload serves the remote path, whose species and fraction
+    // arrive off the wire -- it needs this validation at least as much as the
+    // local one above, which is the caller that already had it.
+    validateSessionParticleRequest(
+        m_metadata, m_particleSpecies, species, fraction);
     return requireDataset()->requestParticleSample(
         species, fraction, seed, cancellation, maximumPoints);
 }

@@ -124,6 +124,36 @@ int main()
             "particle grid total is outside supported bounds");
     }
 
+    // A forged particleCount over an empty DATA file. The Header is internally
+    // consistent -- its one grid record accounts for every claimed particle --
+    // so nothing in the text contradicts it, and the reserve was previously
+    // taken from it directly: a trillion points is 32 TB of ParticlePoint.
+    // The files on disk are the only evidence of how many particles exist, and
+    // reading now fails on the truncated grid rather than on the allocation.
+    {
+        const auto plotfile = scratch / "forged_count";
+        writeSpeciesHeader(plotfile,
+            headerThroughFinestLevel(1'000'000'000'000ULL, 0) + "1\n"
+                + "0 1000000000000 0\n");
+        std::ofstream(plotfile / "Tracer" / "Level_0" / "DATA_00000",
+            std::ios::binary | std::ios::trunc);
+        bool threw = false;
+        try {
+            (void)amrvis::readParticleSample(plotfile, "Tracer", 1.0);
+        } catch (const amrvis::ParticleReadError& error) {
+            threw = true;
+            require(std::string(error.what()).find("truncated particle grid")
+                    != std::string::npos,
+                "a forged particle count was rejected for the wrong reason");
+        } catch (const std::exception& other) {
+            std::cerr << "FAILED: a forged particle count threw the wrong "
+                         "exception: "
+                      << other.what() << '\n';
+            ++g_failures;
+        }
+        require(threw, "a forged particle count over an empty DATA file");
+    }
+
     std::filesystem::remove_all(scratch);
     if (g_failures != 0) {
         std::cerr << g_failures << " particle Header check(s) failed\n";

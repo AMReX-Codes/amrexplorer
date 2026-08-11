@@ -25,8 +25,10 @@ namespace amrvis::detail {
 // opaque, so it is read from a stream that has no idea where the text ends.
 // Real ones are a few hundred bytes -- a FAB's "FAB " plus a RealDescriptor, a
 // Box and a component count; a plotfile's version string -- and this ceiling
-// leaves two orders of magnitude of room. Named for headers generally, not for
-// FAB: readBoundedLine is used for both.
+// leaves two orders of magnitude of room. Named for headers generally though
+// both callers are currently FAB-path: the plotfile text readers are the
+// follow-up in text-header-readers-unbounded, and renaming this twice to say
+// so would be churn.
 inline constexpr std::size_t maximumHeaderLineBytes = 16U * 1024U;
 
 // std::getline with a ceiling, and otherwise its semantics: false when nothing

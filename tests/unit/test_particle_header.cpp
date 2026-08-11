@@ -133,9 +133,17 @@ int main()
     // shift -- a silent misparse, which is worse than the allocation it
     // replaced. It has to be rejected outright.
     {
+        // No whitespace between the token and the fields after it, and exactly
+        // the ceiling's worth of it: width() stops at 4096 and the residue then
+        // parses cleanly as intComponentCount, checkpoint, particleCount,
+        // nextId, finestLevel, one grid count and one grid record. Without the
+        // rejection this Header is *accepted* and returns an empty sample --
+        // no throw at all, which is the failure mode the fix exists for. A
+        // token followed by a newline would only ever produce a different
+        // error message, which is not the same property.
         std::string body = "Version_Two_Dot_Zero_double\n2\n1\n";
-        body += std::string(8192, 'A');
-        body += "\n0\n1\n0\n1000\n0\n1\n0 0 0\n";
+        body += std::string(4096, 'A');
+        body += "0 1 0 1000 0 1 0 0 0\n";
         expectRejected(scratch / "long_token", body,
             "a component name past the token ceiling",
             "exceeds the supported length");

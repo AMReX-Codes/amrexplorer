@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <optional>
@@ -13,6 +14,7 @@
 #include <set>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 
 namespace amrvis {
 namespace {
@@ -22,6 +24,12 @@ namespace {
 constexpr int maximumComponents = maximumParticleComponents;
 constexpr int maximumLevels = 1'000;
 constexpr int maximumGridsPerLevel = 10'000'000;
+// The per-level cap leaves their sum unbounded: a Header declaring the maximum
+// on each of the maximum levels asks for ten billion GridRecords -- hundreds of
+// gigabytes reserved from a few kilobytes of text, before a single record is
+// read. Real particle plotfiles stay orders of magnitude below one level's cap,
+// so the whole table is held to the same number.
+constexpr std::uint64_t maximumGridsTotal = maximumGridsPerLevel;
 constexpr std::uint64_t particleReadChunkBytes = 1024U * 1024U;
 
 struct GridRecord {
@@ -44,13 +52,34 @@ struct SelectedParticle {
     std::uint64_t id = 0;
 };
 
+// Longest string token a Header may contain -- a version string or a component
+// name. Extracting a string with >> is otherwise unbounded: it reads until
+// whitespace, so a Header holding one enormous whitespace-free run allocates
+// all of it before any count or cap is consulted. width() is how the standard
+// bounds that, and it is reset by the extraction.
+constexpr int maximumHeaderTokenBytes = 4096;
+
 template <typename T>
 T readRequired(std::istream& input, std::string_view description)
 {
     T value{};
+    if constexpr (std::is_same_v<T, std::string>) {
+        input >> std::setw(maximumHeaderTokenBytes);
+    }
     if (!(input >> value)) {
         throw ParticleReadError(
             "malformed particle Header while reading " + std::string(description));
+    }
+    if constexpr (std::is_same_v<T, std::string>) {
+        // width() stops the extraction but does not fail it: >> sets failbit
+        // only when it extracts nothing, so hitting the limit would leave the
+        // rest of the token in the stream to be read as the next field, and
+        // every field after it would shift. Bounding the allocation must not
+        // buy that -- a token this long is malformed, so say so.
+        if (value.size() >= static_cast<std::size_t>(maximumHeaderTokenBytes)) {
+            throw ParticleReadError("particle Header " + std::string(description)
+                + " exceeds the supported length");
+        }
     }
     return value;
 }
@@ -187,7 +216,30 @@ ParsedHeader parseHeader(
         }
         totalGrids += static_cast<std::uint64_t>(count);
     }
-    result.grids.reserve(static_cast<std::size_t>(totalGrids));
+    if (totalGrids > maximumGridsTotal) {
+        throw ParticleReadError(
+            "particle grid total is outside supported bounds");
+    }
+    // The cap above rejects the absurd; this bounds what is merely large. A
+    // declared count is a claim, and the file's own size is the evidence
+    // against it: every grid record still to come needs at least "0 0 0\n" --
+    // three numbers, two separators, a newline -- so the Header cannot
+    // describe more than its bytes allow. Without this a Header of a few
+    // dozen bytes could still reserve the cap's worth, a quarter of a
+    // gigabyte, which is the same trade the point reserve below refuses to
+    // make. A failure to stat falls back to the count, which the cap bounds.
+    constexpr std::uint64_t minimumBytesPerGridRecord = 6;
+    std::error_code headerSizeError;
+    const auto headerBytes = std::filesystem::file_size(path, headerSizeError);
+    if (!headerSizeError) {
+        const auto describableGrids
+            = static_cast<std::uint64_t>(headerBytes) / minimumBytesPerGridRecord;
+        result.grids.reserve(
+            static_cast<std::size_t>(std::min(totalGrids, describableGrids)));
+    }
+    // No fallback reserve when the size is unknown: this is an optimization,
+    // and the safe answer for an optimization that cannot be bounded is to
+    // skip it, not to take the largest allocation the cap still permits.
     std::uint64_t recordedParticles = 0;
     for (int level = 0; level <= result.finestLevel; ++level) {
         for (int grid = 0; grid < gridCounts[static_cast<std::size_t>(level)]; ++grid) {
@@ -313,6 +365,37 @@ std::map<DataFileKey, std::filesystem::path> particleDataPaths(
     return result;
 }
 
+// Bytes one particle occupies in a DATA file: the two identity words and the
+// integer components, then the position and the real components. One
+// definition, used by readGrid to prove a grid fits its file and by
+// particleBytesOnDisk to turn the files into an upper bound on how many
+// particles can exist -- the two must not drift, since one validates what the
+// other sizes.
+struct ParticleRecordBytes {
+    std::uint64_t integers = 0;
+    std::uint64_t reals = 0;
+};
+
+ParticleRecordBytes particleRecordBytes(
+    const ParsedHeader& header, std::size_t realSize)
+{
+    const auto intValues = static_cast<std::uint64_t>(
+        2 + header.metadata.intComponentCount);
+    const auto realValues = static_cast<std::uint64_t>(
+        header.metadata.dimension + header.metadata.realComponentCount);
+    return {checkedProduct(intValues, sizeof(std::int32_t), "integer record"),
+        checkedProduct(realValues, realSize, "real record")};
+}
+
+std::uint64_t particleBytesOnDisk(const ParsedHeader& header)
+{
+    const auto bytes = particleRecordBytes(header,
+        header.metadata.precision == ParticleRealPrecision::Single
+            ? sizeof(float)
+            : sizeof(double));
+    return bytes.integers + bytes.reals;
+}
+
 template <typename Real>
 void readGrid(std::istream& input, const GridRecord& grid,
     std::uint64_t dataFileSize, const ParsedHeader& header, double fraction,
@@ -320,14 +403,8 @@ void readGrid(std::istream& input, const GridRecord& grid,
     std::size_t maximumPoints, std::vector<ParticlePoint>& output,
     ParticleReadMetrics& metrics)
 {
-    const auto intValues = static_cast<std::uint64_t>(
-        2 + header.metadata.intComponentCount);
-    const auto intRecordBytes = checkedProduct(
-        intValues, sizeof(std::int32_t), "integer record");
-    const auto realValues = static_cast<std::uint64_t>(
-        header.metadata.dimension + header.metadata.realComponentCount);
-    const auto realRecordBytes = checkedProduct(
-        realValues, sizeof(Real), "real record");
+    const auto [intRecordBytes, realRecordBytes]
+        = particleRecordBytes(header, sizeof(Real));
 
     const auto integerBytes
         = checkedProduct(grid.count, intRecordBytes, "integer data");
@@ -437,9 +514,17 @@ std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
             continue;
         }
         const auto headerPath = entry.path() / "Header";
+        // Bounded like every other Header token: this runs before the try
+        // below, and its catch is deliberately narrow -- a malformed species
+        // is skipped, an out-of-memory machine is not something to swallow --
+        // so an unbounded read here would take the whole open down.
         std::ifstream probe(headerPath);
         std::string version;
-        if (!(probe >> version) || !version.starts_with("Version_")) {
+        probe >> std::setw(maximumHeaderTokenBytes);
+        if (!(probe >> version)
+            || version.size() >= static_cast<std::size_t>(
+                   maximumHeaderTokenBytes)
+            || !version.starts_with("Version_")) {
             continue;
         }
         try {
@@ -479,13 +564,42 @@ ParticleSample readParticleSample(
     if (fraction == 0.0 || header.metadata.particleCount == 0) {
         return result;
     }
-    const auto expected = static_cast<long double>(header.metadata.particleCount)
-        * static_cast<long double>(fraction);
-    result.points.reserve(static_cast<std::size_t>(std::min<long double>(
-        expected + 16.0L,
-        static_cast<long double>(maximumPoints))));
     const auto dataPaths
         = particleDataPaths(speciesPath, header.grids, result.io);
+    std::map<DataFileKey, std::uint64_t> dataFileSizes;
+    std::uint64_t totalDataBytes = 0;
+    for (const auto& [key, dataPath] : dataPaths) {
+        // One stat per DATA file, so this window grows with their count; the
+        // read loop below polls per grid and this must not be the one stretch
+        // that ignores a cancelled request.
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
+        std::error_code sizeError;
+        const auto dataFileSize = std::filesystem::file_size(dataPath, sizeError);
+        if (sizeError) {
+            throw ParticleReadError(
+                "cannot determine particle data file size for '"
+                + dataPath.string() + "'");
+        }
+        dataFileSizes.emplace(key, static_cast<std::uint64_t>(dataFileSize));
+        totalDataBytes += static_cast<std::uint64_t>(dataFileSize);
+    }
+    // The Header's particleCount is not evidence -- it is a number in a text
+    // file, and parseHeader only checks it against the grid table, which is
+    // text from the same file. The DATA files are the evidence: readGrid
+    // already refuses a grid whose records do not fit in them, so a forged
+    // count cannot yield points, only a reserve. Bound the reserve by what
+    // those bytes can hold. A valid sample is unaffected, because its own
+    // points are exactly what the files do hold.
+    const auto storedPointCeiling = totalDataBytes / particleBytesOnDisk(header);
+    const auto plausiblePoints
+        = std::min(header.metadata.particleCount, storedPointCeiling);
+    const auto expected
+        = static_cast<long double>(plausiblePoints) * fraction + 16.0L;
+    result.points.reserve(static_cast<std::size_t>(
+        std::min<long double>(expected,
+            static_cast<long double>(maximumPoints))));
     std::map<DataFileKey, std::vector<const GridRecord*>> gridsByFile;
     for (const auto& grid : header.grids) {
         if (grid.count != 0) {
@@ -499,23 +613,14 @@ ParticleSample readParticleSample(
             throw ParticleReadError(
                 "cannot open particle data file '" + dataPath.string() + "'");
         }
-        std::error_code sizeError;
-        const auto dataFileSize = std::filesystem::file_size(dataPath, sizeError);
-        if (sizeError
-            || dataFileSize > std::numeric_limits<std::uint64_t>::max()) {
-            throw ParticleReadError(
-                "cannot determine particle data file size for '"
-                + dataPath.string() + "'");
-        }
+        const auto dataFileSize = dataFileSizes.at(key);
         ++result.io.dataFilesOpened;
         for (const auto* grid : grids) {
             if (header.metadata.precision == ParticleRealPrecision::Single) {
-                readGrid<float>(input, *grid,
-                    static_cast<std::uint64_t>(dataFileSize), header, fraction,
+                readGrid<float>(input, *grid, dataFileSize, header, fraction,
                     seed, cancellation, maximumPoints, result.points, result.io);
             } else {
-                readGrid<double>(input, *grid,
-                    static_cast<std::uint64_t>(dataFileSize), header, fraction,
+                readGrid<double>(input, *grid, dataFileSize, header, fraction,
                     seed, cancellation, maximumPoints, result.points, result.io);
             }
         }

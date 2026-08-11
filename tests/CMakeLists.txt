@@ -175,9 +175,11 @@ if(TARGET amrexplorer_remote)
         FIXTURES_SETUP remote_server_spherical_materialized)
     add_test(NAME remote_server
         COMMAND test_remote_server "${remote_server_private_fixture_dir}")
-    # The live-socket trickle case samples and encodes a large slice before the
-    # write it measures even begins. RUN_SERIAL keeps it from competing with the
-    # other sanitized tests for shared cores; 90 s leaves room on top of that.
+    # The trickle case now paces the write through the test hook instead of
+    # provoking one with a 50 MiB response, so this costs a couple of seconds
+    # rather than the ten to twelve it used to under the sanitizer presets.
+    # RUN_SERIAL stays: the case still asserts against a stall interval, and
+    # keeping it off shared cores is cheap for a test this short.
     set_tests_properties(remote_server PROPERTIES
         FIXTURES_REQUIRED remote_server_private_materialized
         RUN_SERIAL TRUE
@@ -233,6 +235,10 @@ add_test(NAME vismf_index COMMAND test_vismf_index)
 add_executable(test_plotfile_header unit/test_plotfile_header.cpp)
 target_link_libraries(test_plotfile_header PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME plotfile_header COMMAND test_plotfile_header)
+
+add_executable(test_particle_header unit/test_particle_header.cpp)
+target_link_libraries(test_particle_header PRIVATE amrexplorer::io amrexplorer::warnings)
+add_test(NAME particle_header COMMAND test_particle_header)
 
 add_executable(test_fits_writer unit/test_fits_writer.cpp)
 target_link_libraries(test_fits_writer PRIVATE amrexplorer::io amrexplorer::warnings)

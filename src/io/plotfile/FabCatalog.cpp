@@ -209,7 +209,8 @@ FabRecord inspectFabRecord(
     }
     input.seekg(static_cast<std::streamoff>(offset));
     std::string line;
-    if (!std::getline(input, line) || !line.starts_with("FAB ")) {
+    if (!detail::readBoundedLine<MetadataReadError>(input, line)
+        || !line.starts_with("FAB ")) {
         throw MetadataReadError("expected FAB header at byte "
             + std::to_string(offset));
     }

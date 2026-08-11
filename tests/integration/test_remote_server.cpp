@@ -7,6 +7,7 @@
 #include <amrexplorer/remote/Frame.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -17,6 +18,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <ranges>
 #include <cerrno>
 #include <span>
 #include <stdexcept>
@@ -136,6 +138,7 @@ std::unique_ptr<amrvis::remote::codec::NativeEnvelope> readWithDeadline(
     return pending.get();
 }
 
+#ifdef AMREXPLORER_SERVER_TEST_HOOKS
 // One recv, no framing: the trickle-reader test accepts a few kibibytes at a
 // time rather than a whole frame. These sockets are non-blocking, so an empty
 // receive buffer reports EAGAIN, which means "nothing yet" and must not be
@@ -161,6 +164,7 @@ long readRaw(const amrvis::remote::Socket& socket,
     return static_cast<long>(count);
 #endif
 }
+#endif
 
 amrvis::remote::HelloRequestData helloRequest(std::string sessionToken)
 {
@@ -190,6 +194,36 @@ void writeOversizedParticleHeader(const std::filesystem::path& root)
         "could not write oversized particle Header");
 }
 
+#ifdef AMREXPLORER_SERVER_TEST_HOOKS
+// Set by the before-write hook and read by the pacing hook, which run on the
+// same worker thread around one response write. This is how pacing is aimed at
+// a single request rather than at every response the server writes.
+thread_local bool g_paceThisWrite = false;
+#endif
+
+// A species Header whose ten levels each declare two million grids. Every count
+// is under the per-level cap, so only the whole-table cap rejects it. The point
+// here is *where* it is read: species discovery runs at dataset open, inside the
+// long-lived server, so before that cap this cost the server hundreds of
+// megabytes for a few dozen bytes of text supplied by whoever can write a
+// server-visible directory.
+void writeCraftedGridTable(const std::filesystem::path& root)
+{
+    const auto species = root / "GridBomb";
+    std::filesystem::create_directories(species);
+    std::ofstream header(species / "Header");
+    require(static_cast<bool>(header),
+        "could not create crafted grid-table Header");
+    header << "Version_Two_Dot_Zero_double\n"
+           << "2\n0\n0\n1\n"
+           << "0\n1\n9\n";
+    for (int level = 0; level < 10; ++level) {
+        header << "2000000\n";
+    }
+    require(static_cast<bool>(header),
+        "could not write crafted grid-table Header");
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -202,6 +236,7 @@ int main(int argc, char* argv[])
         return 2;
     }
     writeOversizedParticleHeader(argv[1]);
+    writeCraftedGridTable(argv[1]);
 
     ServerOptions options;
     options.workerCount = 2;
@@ -329,6 +364,33 @@ int main(int argc, char* argv[])
             && codec::fromWire(*envelope->payload.AsErrorResponse()).code
                 == ErrorCode::ResourceLimitExceeded,
         "oversized particle request reached the particle reader");
+
+    // The crafted grid table was already read once, by species discovery during
+    // the open above -- an open that succeeded, which is the property under
+    // test: a crafted species costs the server a rejected species, not its
+    // memory. The species is simply absent from the catalog, and asking for it
+    // by name is an ordinary bounded error rather than anything the server has
+    // to survive.
+    // "Oversized" proves the absence below means something: its Header is
+    // well-formed, only its particle count is beyond one frame, so discovery
+    // does list it. A species missing from this list was rejected by the
+    // parser, not overlooked by the test.
+    require(std::ranges::any_of(opened.particleSpecies,
+                [](const auto& candidate) {
+                    return candidate.name == "Oversized";
+                }),
+        "a well-formed particle species was not discovered");
+    require(std::ranges::none_of(opened.particleSpecies,
+                [](const auto& candidate) {
+                    return candidate.name == "GridBomb";
+                }),
+        "a crafted particle grid table was advertised to the client");
+    envelope = exchange(socket, 13,
+        codec::toWire(opened.id, "GridBomb", 1.0, 0), hello.maximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
+            && codec::fromWire(*envelope->payload.AsErrorResponse()).code
+                == ErrorCode::InvalidRequest,
+        "a crafted particle species was not refused by name");
 
     SliceRequest request;
     request.dataset = opened.id;
@@ -687,34 +749,44 @@ int main(int argc, char* argv[])
     require(boundedRunning.stopWithin(std::chrono::seconds{2}),
         "small-frame server shutdown exceeded its deadline");
 
+#ifdef AMREXPLORER_SERVER_TEST_HOOKS
     // A peer that keeps accepting a trickle of bytes renews the no-progress
     // deadline forever, so the stall timeout alone would let it hold a pooled
     // worker and this session's write mutex indefinitely. The whole-response
     // budget must retire it within a bound the operator can compute, and a
     // second connection must keep working while it is still being retired.
-    // The reader below drains 256 KiB every 100 ms. TCP reports a socket
-    // writable again only once about half the send buffer is free, so progress
-    // comes in bursts rather than every tick -- but it keeps coming, roughly
-    // twice a second, which is what makes this a trickle rather than a stall.
-    // Against the three-second stall grace configured here, the no-progress
-    // timeout can therefore never fire, and a server without the whole-response
-    // budget would never retire this session at all: the upper bound below is
-    // the regression assertion. test_remote_frame pins down which limit fires,
-    // deterministically, on a socket whose buffers it controls.
+    //
+    // The trickle is injected rather than provoked. Producing one from a real
+    // socket needs a response too big to fit in the kernel's buffers, which
+    // meant a 2048x2048 slice -- and the sampling and encoding of it were paid
+    // before the write this case actually measures even began. Pacing the write
+    // to one byte per 50 ms gives the same property from a 16x16 response:
+    // progress lands well inside every 500 ms stall interval, so the
+    // no-progress timeout can never fire, while one byte per 50 ms is orders of
+    // magnitude under the floor, so only the whole-response budget can end it.
+    // A server without that budget would never retire this session at all.
+    // test_remote_frame still pins down which limit fires, on a socket whose
+    // buffers it controls.
     {
         ServerOptions trickleOptions;
         trickleOptions.workerCount = 2;
         trickleOptions.maximumDatasets = 2;
         trickleOptions.maximumConnections = 4;
-        // Long enough that the bursty progress below always lands inside it.
-        trickleOptions.responseWriteStallTimeout = std::chrono::seconds{3};
-        // 32 MiB/s over the ~50 MiB response below: three seconds of grace plus
-        // about 1.6 s of transfer allowance. The floor is high only to keep the
-        // test quick; the small responses this server also serves are
-        // unaffected, since their transfer allowance rounds to nothing next to
-        // the grace.
-        trickleOptions.responseWriteMinimumBytesPerSecond
-            = 32ULL * 1024ULL * 1024ULL;
+        // Ten stall intervals fit inside the paced write below, so a stall
+        // firing instead of the budget would be a defect, not a slow runner.
+        trickleOptions.responseWriteStallTimeout
+            = std::chrono::milliseconds{500};
+        // 8 KiB/s over a response of a few kibibytes: half a second of grace
+        // plus well under a second of transfer allowance.
+        //
+        // Retirement lands at stallTimeout + payloadBytes / minBytesPerSecond,
+        // so the margin the `elapsed > stallTimeout` assertion below rests on
+        // is the transfer term alone. It cannot go negative, and elapsed only
+        // grows under load, so this is not a flake; but shrinking the response
+        // or raising the floor shrinks that term, and past some point the
+        // assertion stops distinguishing the budget from the stall in any
+        // meaningful way. Retune the two together, not one at a time.
+        trickleOptions.responseWriteMinimumBytesPerSecond = 8ULL * 1024ULL;
         Server trickleServer(trickleOptions);
         RunningServer trickleRunning(trickleServer);
 
@@ -736,21 +808,32 @@ int main(int argc, char* argv[])
         const auto trickleOpened = codec::fromWire(
             *envelope->payload.AsDatasetOpened());
 
-        // Ask for a response far larger than the kernel socket buffers, then
-        // read it a few kibibytes at a time. Loopback send and receive buffers
-        // autotune into the megabytes, so a response of a few hundred kilobytes
-        // is absorbed whole and the server's write never even blocks; 2048x2048
-        // samples is about 50 MiB and cannot be.
-        SliceRequest large;
-        large.dataset = trickleOpened.id;
-        large.field = FieldId{0};
-        large.normalDirection = 1;
-        large.visibleRegion = trickleOpened.catalog.physicalDomain;
-        large.physicalPosition = 0.5
-            * (large.visibleRegion.lower[1] + large.visibleRegion.upper[1]);
-        large.maximumLevel = trickleOpened.catalog.finestLevel;
-        large.outputSize = {2048, 2048};
-        writeFrame(slow, codec::encode(3, codec::toWire(large)),
+        // Both hooks run on the worker thread serving one response, in this
+        // order, so the first can tell the second whether this is the write to
+        // pace. Without that, pacing would also throttle the neighbour's
+        // responses below and retire that healthy session too.
+        constexpr std::uint64_t pacedRequestId = 4242;
+        testing::setBeforeResponseWrite([](std::uint64_t requestId) {
+            g_paceThisWrite = requestId == pacedRequestId;
+        });
+        testing::setWriteChunkLimit([](std::size_t requested) {
+            if (!g_paceThisWrite) {
+                return requested;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{50});
+            return std::size_t{1};
+        });
+
+        SliceRequest paced;
+        paced.dataset = trickleOpened.id;
+        paced.field = FieldId{0};
+        paced.normalDirection = 1;
+        paced.visibleRegion = trickleOpened.catalog.physicalDomain;
+        paced.physicalPosition = 0.5
+            * (paced.visibleRegion.lower[1] + paced.visibleRegion.upper[1]);
+        paced.maximumLevel = trickleOpened.catalog.finestLevel;
+        paced.outputSize = {16, 16};
+        writeFrame(slow, codec::encode(pacedRequestId, codec::toWire(paced)),
             defaultMaximumFrameBytes);
 
         std::atomic_bool draining{true};
@@ -758,11 +841,9 @@ int main(int argc, char* argv[])
         auto retired = std::async(std::launch::async,
             [&slow, &draining, &drained] {
                 const auto start = std::chrono::steady_clock::now();
-                // Big enough that the drain reliably restores writability,
-                // small enough (about 2.5 MiB/s) to stay far under the floor.
-                std::vector<std::uint8_t> chunk(256U * 1024U);
+                std::vector<std::uint8_t> chunk(4U * 1024U);
                 while (draining.load()) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds{100});
+                    std::this_thread::sleep_for(std::chrono::milliseconds{20});
                     const auto count = readRaw(slow, chunk);
                     if (count == 0) {
                         break;  // the server retired the session
@@ -814,14 +895,19 @@ int main(int argc, char* argv[])
                       << " bytes without the session being retired\n";
             slow.shutdown();
             retired.wait();
+            testing::clearWriteChunkLimit();
+            testing::clearBeforeResponseWrite();
             require(false, "the trickle-reading session was never retired");
         }
         draining.store(false);
         const auto elapsed = retired.get();
+        testing::clearWriteChunkLimit();
+        testing::clearBeforeResponseWrite();
         require(elapsed < retirementBound,
             "the trickle-reading session outlived its retirement bound");
         // The write outlived the stall grace while still moving bytes, so it was
-        // the whole-response budget that retired it.
+        // the whole-response budget that retired it: the pacing above never let
+        // 500 ms pass without progress.
         if (elapsed <= trickleOptions.responseWriteStallTimeout) {
             std::cerr << "trickle session ended after "
                       << std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -835,8 +921,11 @@ int main(int argc, char* argv[])
         require(trickleRunning.stopWithin(std::chrono::seconds{5}),
             "trickle server shutdown exceeded its deadline");
     }
+#endif
 
     std::filesystem::remove_all(
         std::filesystem::path(argv[1]) / "Oversized");
+    std::filesystem::remove_all(
+        std::filesystem::path(argv[1]) / "GridBomb");
     return 0;
 }

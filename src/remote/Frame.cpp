@@ -2,6 +2,10 @@
 
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
 
+#ifdef AMREXPLORER_SERVER_TEST_HOOKS
+#include "ServerTestHooks.hpp"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -402,9 +406,12 @@ void writeExact(NativeSocket descriptor,
                 : "wire frame write stayed below the minimum throughput";
         }
         waitForWritable(descriptor, limit, cancellation, lifecycle, reason);
+        auto offered = source.size() - completed;
+#ifdef AMREXPLORER_SERVER_TEST_HOOKS
+        offered = testing::writeChunkLimit(offered);
+#endif
 #ifdef _WIN32
-        const auto remaining = std::min<std::size_t>(
-            source.size() - completed, 64U * 1024U);
+        const auto remaining = std::min<std::size_t>(offered, 64U * 1024U);
         const auto count = ::send(descriptor,
             reinterpret_cast<const char*>(source.data() + completed),
             static_cast<int>(remaining), 0);
@@ -414,8 +421,8 @@ void writeExact(NativeSocket descriptor,
             MSG_NOSIGNAL |
 #endif
             MSG_DONTWAIT;
-        const auto count = ::send(descriptor, source.data() + completed,
-            source.size() - completed, noSignal);
+        const auto count = ::send(
+            descriptor, source.data() + completed, offered, noSignal);
 #endif
         if (count < 0) {
             const auto error = lastSocketError();

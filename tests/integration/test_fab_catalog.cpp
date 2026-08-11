@@ -318,6 +318,34 @@ int main()
                 == v1Fab.metadata->levels[0].domain,
         "v1 selected FAB block box disagrees with its domain");
 
+    // A file that opens "FAB " and never supplies a newline. The header read is
+    // the first thing to touch it, and before it was bounded it accumulated the
+    // whole remaining file into one std::string before the parse could reject
+    // it -- and scanFabFile does that per record. The specific message is the
+    // assertion: any other rejection would mean the ceiling never fired.
+    {
+        const auto endless = root / "endless_header";
+        {
+            std::ofstream output(endless, std::ios::binary);
+            require(static_cast<bool>(output),
+                "could not create the endless-header fixture");
+            output << "FAB ";
+            // Just past the ceiling, not a megabyte past it: the property is
+            // "longer than the limit", and this runs under the sanitizers.
+            output << std::string(32U * 1024U, 'x');
+        }
+        bool threw = false;
+        try {
+            (void)amrvis::scanFabFile(endless);
+        } catch (const amrvis::MetadataReadError& error) {
+            threw = true;
+            require(std::string(error.what()).find("exceeds the supported length")
+                    != std::string::npos,
+                "an endless FAB header was rejected for the wrong reason");
+        }
+        require(threw, "an endless FAB header was accepted");
+    }
+
     std::filesystem::remove_all(root);
     return 0;
 }

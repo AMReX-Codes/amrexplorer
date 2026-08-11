@@ -53,7 +53,8 @@ FabHeader readFabHeader(
         throw BlockReadError("cannot seek to indexed FAB offset");
     }
     std::string line;
-    if (!std::getline(input, line) || !line.starts_with("FAB ")) {
+    if (!detail::readBoundedLine<BlockReadError>(input, line)
+        || !line.starts_with("FAB ")) {
         throw BlockReadError("indexed FAB does not have a supported header");
     }
     const auto descriptorStart = line.find('(', 4);

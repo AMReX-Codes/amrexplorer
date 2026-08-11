@@ -126,8 +126,25 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
+      # The test hooks are on here for one reason: the whole-response write
+      # budget's regression lives in remote_server's trickle case, which needs
+      # them, and this is the only job that covers that budget on Windows.
+      # test_remote_frame proves it deterministically everywhere else, but its
+      # socket-pair cases are POSIX-only.
+      #
+      # The cost was weighed and accepted: no job now builds Windows in the
+      # configuration a user gets. That is tolerable because the hook seam is
+      # purely additive -- a hooks-off build compiles a strict subset -- and
+      # because linux, macos, qt-sanitizers and sanitizers all still build with
+      # hooks off. The one thing it could hide is a header that reaches some
+      # translation unit only by way of ServerTestHooks.hpp. Giving
+      # test_remote_frame a Windows socket pair would let this go back to OFF
+      # and cover the budget both ways; that is the way out if it ever matters.
       - name: Configure
-        run: cmake --preset windows -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
+        run: >-
+          cmake --preset windows
+          -DAMREXPLORER_ENABLE_SERVER_TEST_HOOKS=ON
+          -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
 
       - name: Build
         run: cmake --build --preset windows --parallel 4

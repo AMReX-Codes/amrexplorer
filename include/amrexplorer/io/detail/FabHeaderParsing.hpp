@@ -13,12 +13,60 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <istream>
 #include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace amrvis::detail {
+
+// A header line is text at the head of a file the reader otherwise treats as
+// opaque, so it is read from a stream that has no idea where the text ends.
+// Real ones are a few hundred bytes -- a FAB's "FAB " plus a RealDescriptor, a
+// Box and a component count; a plotfile's version string -- and this ceiling
+// leaves two orders of magnitude of room. Named for headers generally though
+// both callers are currently FAB-path: the plotfile text readers are the
+// follow-up in text-header-readers-unbounded, and renaming this twice to say
+// so would be churn.
+inline constexpr std::size_t maximumHeaderLineBytes = 16U * 1024U;
+
+// std::getline with a ceiling, and otherwise its semantics: false when nothing
+// could be read, the line without its terminator otherwise, and the stream left
+// positioned just past the newline. The ceiling is the point: a file that opens
+// "FAB " and never supplies a newline makes plain getline accumulate the whole
+// remaining file into the string before the parse can reject it. An overlong
+// line is malformed by definition, so it throws the caller's error type rather
+// than returning a truncated one that might parse.
+template <typename Error>
+[[nodiscard]] bool readBoundedLine(std::istream& input, std::string& line,
+    std::size_t limit = maximumHeaderLineBytes)
+{
+    line.clear();
+    for (;;) {
+        const auto character = input.get();
+        if (character == std::char_traits<char>::eof()) {
+            // istream::get() sets failbit *and* eofbit when it runs out;
+            // std::getline sets failbit only if it extracted nothing. Drop the
+            // failbit when characters were read, so this really is a drop-in.
+            // Both current callers happen not to notice -- they only call
+            // tellg(), whose sentry sets failbit for an eof stream regardless
+            // -- but a caller that checks the stream would see the difference.
+            if (line.empty()) {
+                return false;
+            }
+            input.clear(input.rdstate() & ~std::ios::failbit);
+            return true;
+        }
+        if (character == '\n') {
+            return true;
+        }
+        if (line.size() >= limit) {
+            throw Error("header line exceeds the supported length");
+        }
+        line.push_back(static_cast<char>(character));
+    }
+}
 
 // Every integer in the text, in order; any non-numeric characters act as
 // separators. Never throws — callers validate the count/shape themselves.

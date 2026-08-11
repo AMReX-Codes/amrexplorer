@@ -414,6 +414,29 @@ if(TARGET amrexplorer_qt)
     set_tests_properties(qt_remote_fixed_scale_flicker_smoke PROPERTIES
         TIMEOUT 30)
 
+    # Local and remote must agree on what a scrolled fixed scale shows.
+    # Scrolling is what separates the two coordinate spaces: local scales a
+    # whole-domain raster while remote scales a whole-domain virtual canvas of
+    # finest cells with the fetched raster placed inside it. The assertion
+    # covers both the reported physical window and the painted viewport pixels.
+    # The refined fixture is the fixture for this: its 16 finest cells overflow
+    # the test window at 32x, and unlike plotfile_2d_wide its whole domain
+    # still fits in one native raster, so a fixed scale means the same number
+    # of view pixels per finest cell on both sides (see
+    # agent-notes/issues/fixed-scale-clamped-native-raster.md).
+    add_test(
+        NAME qt_local_remote_fixed_scale_window_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_refined_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_local_remote_fixed_scale_window"
+            -DMODE=local-remote-fixed-scale-window
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_local_remote_fixed_scale_window_smoke PROPERTIES
+        TIMEOUT 60)
+
     add_test(
         NAME qt_remote_fixed_scale_wide_smoke
         COMMAND "${CMAKE_COMMAND}"

@@ -2237,9 +2237,14 @@ QRectF MainWindow::activeViewVisibleDataWindowForTest() const
     if (plane.width < 1 || plane.height < 1) {
         return {};
     }
-    const auto visible = view->mapToScene(
-        view->viewport()->rect()).boundingRect().intersected(
-            QRectF(0.0, 0.0, plane.width, plane.height));
+    // Raster pixels, not scene units: a remote fixed scale hosts the fetched
+    // raster on a whole-domain virtual canvas whose scene coordinates are
+    // finest cells, so intersecting the viewport's scene rect with the pixel
+    // rect directly would report a window in the wrong space (and offset by
+    // the fetched window's position in the domain) whenever the canvas
+    // scrolls.
+    const auto visible = view->visibleImageRect().intersected(
+        QRectF(0.0, 0.0, plane.width, plane.height));
     const auto axes = displayAxes(m_activeView->normal);
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);

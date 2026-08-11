@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -143,9 +144,12 @@ int main()
     LevelMetadata level;
     level.level = 0;
     level.domain = IntBox{
-        Int3{{0, 0, 0}}, Int3{{3, 3, 3}}, Int3{{0, 0, 0}}};
+        Int3{{0, 0, 0}}, Int3{{3, 3, 3}}, Int3{{1, 0, 0}}};
     level.boxes.push_back(
         IntBox{Int3{{0, 0, 0}}, Int3{{1, 3, 3}}, Int3{{1, 0, 0}}});
+    // A one-cell box: an IntBox is allowed equal corners, unlike a RealBox.
+    level.boxes.push_back(
+        IntBox{Int3{{2, 2, 2}}, Int3{{2, 2, 2}}, Int3{{1, 0, 0}}});
     opened.catalog.levels.push_back(level);
     bytes = codec::encode(8, codec::toWire(opened));
     envelope = codec::decode(bytes);
@@ -270,5 +274,116 @@ int main()
     nonFinite.values = {0.0, std::numeric_limits<double>::quiet_NaN(), 1.0};
     requireRejected([&] { static_cast<void>(codec::fromWire(&nonFinite)); },
         "non-finite geometry was accepted");
+
+    // The decoded catalog must prove what a local reader proves. Each of these
+    // is structurally valid wire that no local open would have produced.
+    openedWire = codec::toWire(opened);
+    openedWire.levels.front()->boxes.front()->centering
+        = codec::toWire(Int3{{0, 0, 0}});
+    requireRejected([&] { static_cast<void>(codec::fromWire(openedWire)); },
+        "a level box disagreeing with its domain centering was accepted");
+
+    openedWire = codec::toWire(opened);
+    openedWire.levels.front()->boxes.front()->upper
+        = codec::toWire(Int3{{9, 3, 3}});
+    requireRejected([&] { static_cast<void>(codec::fromWire(openedWire)); },
+        "a level box outside the level domain was accepted");
+
+    openedWire = codec::toWire(opened);
+    openedWire.levels.front()->boxes.front()->lower
+        = codec::toWire(Int3{{2, 0, 0}});
+    openedWire.levels.front()->boxes.front()->upper
+        = codec::toWire(Int3{{1, 3, 3}});
+    requireRejected([&] { static_cast<void>(codec::fromWire(openedWire)); },
+        "a reversed 3-D level box was accepted");
+
+    openedWire = codec::toWire(opened);
+    openedWire.levels.front()->cell_size = codec::toWire(Real3{{0.0, 1.0, 1.0}});
+    requireRejected([&] { static_cast<void>(codec::fromWire(openedWire)); },
+        "a zero cell size was accepted");
+
+    openedWire = codec::toWire(opened);
+    openedWire.levels.front()->level = 3;
+    requireRejected([&] { static_cast<void>(codec::fromWire(openedWire)); },
+        "a level numbered other than its index was accepted");
+
+    openedWire = codec::toWire(opened);
+    openedWire.physical_domain = codec::toWire(
+        RealBox{Real3{{1.0, 0.0, 0.0}}, Real3{{0.0, 1.0, 1.0}}});
+    requireRejected([&] { static_cast<void>(codec::fromWire(openedWire)); },
+        "a reversed physical domain was accepted");
+
+    // A 2-D catalog is free to be degenerate on the inactive third axis, and a
+    // reversed box there must stay acceptable: only active axes carry meaning.
+    OpenedDataset flat;
+    flat.id = DatasetId{4};
+    flat.catalog.dimension = 2;
+    flat.catalog.finestLevel = 0;
+    flat.catalog.physicalDomain = RealBox{
+        Real3{{0.0, 0.0, 1.0}}, Real3{{1.0, 1.0, 0.0}}};
+    LevelMetadata flatLevel;
+    flatLevel.level = 0;
+    flatLevel.domain = IntBox{
+        Int3{{0, 0, 7}}, Int3{{3, 3, 2}}, Int3{{0, 0, 0}}};
+    flatLevel.boxes.push_back(flatLevel.domain);
+    flat.catalog.levels.push_back(flatLevel);
+    const auto flatDecoded = codec::fromWire(codec::toWire(flat));
+    require(flatDecoded.catalog.levels.size() == 1
+            && flatDecoded.catalog.levels.front().boxes.front()
+                == flatLevel.domain,
+        "a 2-D catalog with a degenerate inactive axis was rejected");
+
+    // A named species with a dimension outside [1, 3] cannot describe points.
+    auto badSpecies = codec::toWire(opened);
+    badSpecies.particle_species.push_back(
+        std::make_unique<codec::fb::ParticleSpeciesCatalogT>());
+    badSpecies.particle_species.back()->name = "electrons";
+    badSpecies.particle_species.back()->dimension = 4;
+    requireRejected([&] { static_cast<void>(codec::fromWire(badSpecies)); },
+        "a particle species with an impossible dimension was accepted");
+
+    // The local parser refuses component counts outside [0, 100000]; so must the
+    // wire, or a species that cannot exist reaches the client.
+    for (const int realCount : {-1, maximumParticleComponents + 1}) {
+        auto badComponents = codec::toWire(opened);
+        badComponents.particle_species.push_back(
+            std::make_unique<codec::fb::ParticleSpeciesCatalogT>());
+        badComponents.particle_species.back()->name = "electrons";
+        badComponents.particle_species.back()->dimension = 3;
+        badComponents.particle_species.back()->real_component_count
+            = realCount;
+        requireRejected(
+            [&] { static_cast<void>(codec::fromWire(badComponents)); },
+            "an out-of-range real component count was accepted");
+    }
+    for (const int intCount : {-2, maximumParticleComponents + 1}) {
+        auto badComponents = codec::toWire(opened);
+        badComponents.particle_species.push_back(
+            std::make_unique<codec::fb::ParticleSpeciesCatalogT>());
+        badComponents.particle_species.back()->name = "electrons";
+        badComponents.particle_species.back()->dimension = 3;
+        badComponents.particle_species.back()->int_component_count = intCount;
+        requireRejected(
+            [&] { static_cast<void>(codec::fromWire(badComponents)); },
+            "an out-of-range integer component count was accepted");
+    }
+
+    ParticleSample sample;
+    sample.species = {"electrons", 3, 0, 0, 4, ParticleRealPrecision::Double};
+    sample.points.push_back({1, Real3{{0.25, 0.5, 0.75}}});
+    auto particleWire = codec::toWire(sample, CacheMetrics{});
+    const auto particleDecoded = codec::fromWire(particleWire);
+    require(particleDecoded.points.size() == 1
+            && particleDecoded.points.front().position
+                == sample.points.front().position,
+        "a particle sample did not round-trip");
+    particleWire = codec::toWire(sample, CacheMetrics{});
+    particleWire.positions[1] = std::numeric_limits<double>::quiet_NaN();
+    requireRejected([&] { static_cast<void>(codec::fromWire(particleWire)); },
+        "a non-finite particle position was accepted");
+    particleWire = codec::toWire(sample, CacheMetrics{});
+    particleWire.positions[2] = std::numeric_limits<double>::infinity();
+    requireRejected([&] { static_cast<void>(codec::fromWire(particleWire)); },
+        "an infinite particle position was accepted");
     return 0;
 }

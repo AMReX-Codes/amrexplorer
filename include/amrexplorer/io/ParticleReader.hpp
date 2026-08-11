@@ -18,6 +18,11 @@ enum class ParticleRealPrecision : std::uint8_t {
     Double
 };
 
+// Component counts a species header may declare. The local parser refuses
+// anything outside this, so the wire has to as well: a negative count reaching
+// the client would describe a species that cannot exist.
+inline constexpr int maximumParticleComponents = 100'000;
+
 struct ParticleSpeciesMetadata {
     std::string name;
     int dimension = 0;
@@ -25,6 +30,10 @@ struct ParticleSpeciesMetadata {
     int intComponentCount = 0;
     std::uint64_t particleCount = 0;
     ParticleRealPrecision precision = ParticleRealPrecision::Double;
+
+    friend bool operator==(
+        const ParticleSpeciesMetadata&, const ParticleSpeciesMetadata&)
+        = default;
 };
 
 struct ParticlePoint {

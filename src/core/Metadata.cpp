@@ -9,6 +9,24 @@
 
 namespace amrvis {
 
+std::array<int, 2> planeAxes(int dimension, int normalAxis) noexcept
+{
+    if (dimension != 3) {
+        return {0, 1};
+    }
+    std::array<int, 2> axes{0, 1};
+    std::size_t next = 0;
+    for (int axis = 0; axis < 3 && next < axes.size(); ++axis) {
+        if (axis != normalAxis) {
+            axes[next++] = axis;
+        }
+    }
+    // A normal outside [0, 2] leaves {0, 1}, which is what an unvalidated
+    // request must not be able to turn into an out-of-bounds write. Callers
+    // validate the normal separately; this only keeps the helper total.
+    return axes;
+}
+
 bool isNodal(const IntBox& box, int axis) noexcept
 {
     return box.centering[static_cast<std::size_t>(axis)] != 0;

@@ -84,6 +84,14 @@ struct MetadataIssue {
 
 [[nodiscard]] std::vector<MetadataIssue> validateMetadata(const DatasetMetadata& metadata);
 
+// The two in-plane axes of a slice or page whose normal is normalAxis: always
+// {0, 1} below three dimensions, otherwise the two axes other than the normal.
+// These are the axes a plane region must have positive extent in; the third axis
+// of a 3-D plane region carries the slice position and may be degenerate, which
+// is why a plane region cannot simply be checked with RealBox::valid.
+[[nodiscard]] std::array<int, 2> planeAxes(
+    int dimension, int normalAxis) noexcept;
+
 [[nodiscard]] bool isNodal(const IntBox& box, int axis) noexcept;
 [[nodiscard]] Centering centeringFromIndexType(
     const Int3& indexType, int dimension) noexcept;

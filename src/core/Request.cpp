@@ -1,5 +1,8 @@
 #include <amrexplorer/core/Request.hpp>
 
+#include <cmath>
+#include <cstddef>
+
 namespace amrvis {
 
 std::vector<std::string> validateBlockRequest(const BlockRequest& request)
@@ -69,6 +72,22 @@ std::vector<std::string> validateLineRequest(
     }
     if (request.maximumLevel < 0) {
         errors.emplace_back("maximum level must be non-negative");
+    }
+    // Only the line axis of an optional region is meaningful -- LineQuery reads
+    // the extent along that axis and nothing else -- so the off-axis entries are
+    // free to be degenerate and RealBox::valid is the wrong check here. Without
+    // this, a reversed or non-finite region silently produced a line running
+    // from its upper bound to its lower one.
+    if (request.region && request.axis >= 0
+        && request.axis < datasetDimension) {
+        const auto axis = static_cast<std::size_t>(request.axis);
+        const auto lower = request.region->lower[axis];
+        const auto upper = request.region->upper[axis];
+        if (!std::isfinite(lower) || !std::isfinite(upper)
+            || !(lower < upper)) {
+            errors.emplace_back(
+                "line region must have finite positive extent along its axis");
+        }
     }
     return errors;
 }

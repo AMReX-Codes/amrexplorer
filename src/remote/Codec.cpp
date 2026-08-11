@@ -595,6 +595,33 @@ OpenedDataset fromWire(const fb::DatasetOpenedT& value)
         value.metadata_metrics->payload_bytes_read};
     result.fileVersion = value.file_version;
     result.cache = fromWire(value.cache.get());
+    // Structural checks above prove the wire is well formed; this proves the
+    // catalog is a dataset. Both local readers throw on any validateMetadata
+    // issue, so every catalog a server can serve has already satisfied this --
+    // running it here makes the remote path reject exactly what a local open
+    // would, instead of publishing a session whose box ordering, containment,
+    // level numbering, or cell sizes are impossible.
+    const auto issues = validateMetadata(result.catalog);
+    if (!issues.empty()) {
+        throw std::invalid_argument("wire dataset catalog is invalid at "
+            + issues.front().path + ": " + issues.front().message);
+    }
+    for (const auto& species : result.particleSpecies) {
+        if (species.name.empty()) {
+            throw std::invalid_argument("wire particle species has no name");
+        }
+        if (species.dimension < 1 || species.dimension > 3) {
+            throw std::invalid_argument(
+                "wire particle species dimension is outside [1, 3]");
+        }
+        if (species.realComponentCount < 0
+            || species.realComponentCount > maximumParticleComponents
+            || species.intComponentCount < 0
+            || species.intComponentCount > maximumParticleComponents) {
+            throw std::invalid_argument(
+                "wire particle species component count is outside its bounds");
+        }
+    }
     return result;
 }
 
@@ -912,11 +939,17 @@ fb::ParticleSampleResponseT toWire(
 
 ParticleSample fromWire(const fb::ParticleSampleResponseT& value)
 {
-    if (!value.species
-        || value.positions.size() != value.ids.size() * 3) {
+    // Divide rather than multiply: ids.size() * 3 is unreachable for a vector
+    // that fits in memory, but the wire is not the place to rely on that.
+    if (!value.species || value.positions.size() % 3 != 0
+        || value.positions.size() / 3 != value.ids.size()) {
         throw std::invalid_argument(
             "wire particle sample vectors are inconsistent");
     }
+    // NaN or infinity here would reach projection and scene-coordinate
+    // arithmetic, where it silently poisons overlay geometry.
+    requireFiniteValues(value.positions,
+        "wire particle positions contain a non-finite value");
     ParticleSample result;
     result.species = {value.species->name, value.species->dimension,
         value.species->real_component_count,

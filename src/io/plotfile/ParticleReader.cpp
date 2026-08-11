@@ -17,7 +17,9 @@
 namespace amrvis {
 namespace {
 
-constexpr int maximumComponents = 100'000;
+// Shared with the wire decoder through the header, so both refuse the same
+// counts (see maximumParticleComponents).
+constexpr int maximumComponents = maximumParticleComponents;
 constexpr int maximumLevels = 1'000;
 constexpr int maximumGridsPerLevel = 10'000'000;
 constexpr std::uint64_t particleReadChunkBytes = 1024U * 1024U;

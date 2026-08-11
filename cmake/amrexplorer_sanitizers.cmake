@@ -4,13 +4,19 @@ function(amrexplorer_enable_sanitizers)
             "AMREXPLORER_ENABLE_SANITIZERS currently supports GNU, Clang, and AppleClang")
     endif()
 
+    # float-cast-overflow is named explicitly because GCC leaves it out of the
+    # undefined group, unlike Clang: without it both sanitizer jobs run straight
+    # over an out-of-range floating-point to integer conversion, which is how one
+    # reached review in a validator reading doubles off the wire. Naming it costs
+    # nothing on either compiler (Clang already had it) and the check is what
+    # catches the next one.
     add_compile_options(
-        -fsanitize=address,undefined
+        -fsanitize=address,undefined,float-cast-overflow
         -fno-omit-frame-pointer
         -fno-sanitize-recover=all
     )
     add_link_options(
-        -fsanitize=address,undefined
+        -fsanitize=address,undefined,float-cast-overflow
         -fno-omit-frame-pointer
         -fno-sanitize-recover=all
     )

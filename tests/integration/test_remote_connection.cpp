@@ -1,11 +1,14 @@
 #include "../../src/remote/Codec.hpp"
 
+#include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/data/ViewData.hpp>
 #include <amrexplorer/remote/Connection.hpp>
+#include <amrexplorer/remote/RemoteDatasetSession.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
 #include <cstdlib>
 #include <exception>
+#include <memory>
 #include <filesystem>
 #include <future>
 #include <iostream>
@@ -93,6 +96,29 @@ std::uint64_t acceptHello(amrvis::remote::Socket& peer,
                          codec::toWire(hello), selectedMinorVersion),
         defaultMaximumFrameBytes);
     return request->request_id;
+}
+
+amrvis::remote::OpenedDataset plausibleCatalog()
+{
+    using namespace amrvis;
+    using amrvis::remote::OpenedDataset;
+    OpenedDataset opened;
+    opened.id = DatasetId{3};
+    opened.catalog.dimension = 2;
+    opened.catalog.finestLevel = 0;
+    opened.catalog.hasPhysicalGeometry = true;
+    opened.catalog.physicalDomain = RealBox{
+        Real3{{0.0, 0.0, 0.0}}, Real3{{1.0, 1.0, 1.0}}};
+    opened.catalog.fields.push_back({"density", Centering::Cell, {}});
+    LevelMetadata level;
+    level.level = 0;
+    level.domain = IntBox{
+        Int3{{0, 0, 0}}, Int3{{3, 3, 0}}, Int3{{0, 0, 0}}};
+    level.boxes.push_back(level.domain);
+    opened.catalog.levels.push_back(level);
+    opened.fileRangeAvailable = {1};
+    opened.levelRangeAvailable = {1};
+    return opened;
 }
 
 bool throwsWithin(std::future<void>& operation,
@@ -435,6 +461,154 @@ int main(int argc, char* argv[])
     require(throwsWithin(timedRequest, 1s),
         "silent request did not honor the request deadline");
     requestTimeoutPeer.get();
+
+    // A peer whose catalog cannot describe a dataset fails while the response is
+    // being decoded, before there is any result to validate. The connection must
+    // still be retired: it is also holding a server-side dataset handle for a
+    // session that is about to be abandoned.
+    auto badCatalogListener = listenOnLoopback(0);
+    auto badCatalogPeer = std::async(std::launch::async, [&] {
+        auto peer = acceptConnection(badCatalogListener.socket);
+        static_cast<void>(acceptHello(peer));
+        const auto frame = readFrame(peer, defaultMaximumFrameBytes);
+        require(frame.has_value(), "client omitted the open request");
+        const auto opening = codec::decode(*frame);
+        require(codec::inspect(*opening).payload
+                == PayloadKind::OpenDatasetRequest,
+            "client did not open a dataset first");
+        auto wire = codec::toWire(plausibleCatalog());
+        // Structurally valid, and impossible: the box leaves its domain.
+        wire.levels.front()->boxes.front()->upper
+            = codec::toWire(amrvis::Int3{{99, 3, 0}});
+        writeFrame(peer, codec::encode(opening->request_id, std::move(wire)),
+            defaultMaximumFrameBytes);
+        // Hold this end open so that a closed connection can only be the
+        // client's own doing, then drain until it goes.
+        static_cast<void>(readFrame(peer, defaultMaximumFrameBytes));
+    });
+    auto badCatalogConnection = std::make_shared<Connection>(
+        "127.0.0.1", badCatalogListener.port);
+    bool catalogRefused = false;
+    try {
+        static_cast<void>(RemoteDatasetSession::open(
+            badCatalogConnection, "/remote/plt", 16ULL * 1024ULL * 1024ULL));
+    } catch (const std::exception&) {
+        catalogRefused = true;
+    }
+    require(catalogRefused, "an impossible catalog was accepted");
+    require(!badCatalogConnection->connected(),
+        "the connection survived an impossible catalog");
+    badCatalogConnection->close();
+    badCatalogPeer.get();
+
+    // The same policy for a failure found after decoding: a slice whose
+    // provenance the catalog has no room for.
+    auto badSliceListener = listenOnLoopback(0);
+    auto badSlicePeer = std::async(std::launch::async, [&] {
+        auto peer = acceptConnection(badSliceListener.socket);
+        static_cast<void>(acceptHello(peer));
+        const auto openFrame = readFrame(peer, defaultMaximumFrameBytes);
+        require(openFrame.has_value(), "client omitted the open request");
+        const auto openRequest = codec::decode(*openFrame);
+        writeFrame(peer,
+            codec::encode(openRequest->request_id,
+                codec::toWire(plausibleCatalog())),
+            defaultMaximumFrameBytes);
+        const auto sliceFrame = readFrame(peer, defaultMaximumFrameBytes);
+        require(sliceFrame.has_value(), "client omitted the slice request");
+        const auto sliceEnvelope = codec::decode(*sliceFrame);
+        const auto* asked = sliceEnvelope->payload.AsSliceViewRequest();
+        require(asked != nullptr, "client did not request a slice");
+        amrvis::SliceQueryResult answer;
+        answer.plane.width = asked->width;
+        answer.plane.height = asked->height;
+        answer.plane.physicalRegion = codec::fromWire(
+            asked->visible_region.get());
+        const auto samples = static_cast<std::size_t>(asked->width)
+            * static_cast<std::size_t>(asked->height);
+        answer.plane.values.assign(samples, 1.0F);
+        answer.plane.valid.assign(samples, 1);
+        // The catalog has one level; this sample claims a fourth.
+        answer.plane.sourceLevel.assign(samples, 3);
+        writeFrame(peer,
+            codec::encode(sliceEnvelope->request_id,
+                codec::toWire(answer, amrvis::CacheMetrics{})),
+            defaultMaximumFrameBytes);
+        static_cast<void>(readFrame(peer, defaultMaximumFrameBytes));
+    });
+    auto badSliceConnection = std::make_shared<Connection>(
+        "127.0.0.1", badSliceListener.port);
+    auto badSliceDataset = RemoteDatasetSession::open(
+        badSliceConnection, "/remote/plt", 16ULL * 1024ULL * 1024ULL);
+    amrvis::SliceRequest impossibleProvenance;
+    impossibleProvenance.dataset = badSliceDataset->id();
+    impossibleProvenance.field = amrvis::FieldId{0};
+    impossibleProvenance.normalDirection = 1;
+    impossibleProvenance.visibleRegion
+        = badSliceDataset->metadata().physicalDomain;
+    impossibleProvenance.physicalPosition = 0.5;
+    impossibleProvenance.maximumLevel = 0;
+    impossibleProvenance.outputSize = {2, 2};
+    bool sliceRefused = false;
+    try {
+        static_cast<void>(badSliceDataset->requestView(impossibleProvenance));
+    } catch (const std::exception&) {
+        sliceRefused = true;
+    }
+    require(sliceRefused, "a slice with impossible provenance was accepted");
+    require(!badSliceConnection->connected(),
+        "the connection survived a slice with impossible provenance");
+    badSliceConnection->close();
+    badSlicePeer.get();
+
+    // The other side of that policy: a cache-budget refusal is the server
+    // answering properly, and the client's recovery clears the cache and retries
+    // on this same session, so the connection has to survive it. It is the one
+    // server error code Connection does not raise as a RemoteError.
+    auto budgetListener = listenOnLoopback(0);
+    auto budgetPeer = std::async(std::launch::async, [&] {
+        auto peer = acceptConnection(budgetListener.socket);
+        static_cast<void>(acceptHello(peer));
+        const auto openFrame = readFrame(peer, defaultMaximumFrameBytes);
+        require(openFrame.has_value(), "client omitted the open request");
+        const auto openRequest = codec::decode(*openFrame);
+        writeFrame(peer,
+            codec::encode(openRequest->request_id,
+                codec::toWire(plausibleCatalog())),
+            defaultMaximumFrameBytes);
+        const auto sliceFrame = readFrame(peer, defaultMaximumFrameBytes);
+        require(sliceFrame.has_value(), "client omitted the slice request");
+        const auto sliceEnvelope = codec::decode(*sliceFrame);
+        writeFrame(peer,
+            codec::encode(sliceEnvelope->request_id,
+                codec::toWire(ErrorData{ErrorCode::CacheBudgetExceeded,
+                    "cache budget exceeded"})),
+            defaultMaximumFrameBytes);
+        static_cast<void>(readFrame(peer, defaultMaximumFrameBytes));
+    });
+    auto budgetConnection = std::make_shared<Connection>(
+        "127.0.0.1", budgetListener.port);
+    auto budgetDataset = RemoteDatasetSession::open(
+        budgetConnection, "/remote/plt", 16ULL * 1024ULL * 1024ULL);
+    amrvis::SliceRequest budgetSlice;
+    budgetSlice.dataset = budgetDataset->id();
+    budgetSlice.field = amrvis::FieldId{0};
+    budgetSlice.normalDirection = 1;
+    budgetSlice.visibleRegion = budgetDataset->metadata().physicalDomain;
+    budgetSlice.physicalPosition = 0.5;
+    budgetSlice.maximumLevel = 0;
+    budgetSlice.outputSize = {2, 2};
+    bool budgetReported = false;
+    try {
+        static_cast<void>(budgetDataset->requestView(budgetSlice));
+    } catch (const amrvis::CacheBudgetExceeded&) {
+        budgetReported = true;
+    }
+    require(budgetReported, "a cache-budget refusal did not reach the caller");
+    require(budgetConnection->connected(),
+        "a cache-budget refusal retired the connection");
+    budgetConnection->close();
+    budgetPeer.get();
     return 0;
 }
 #include <chrono>

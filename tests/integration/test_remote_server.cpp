@@ -287,6 +287,37 @@ int main(int argc, char* argv[])
                 == ErrorCode::InvalidRequest,
         "server did not reject a reversed dataset-page region");
 
+    // The server owns its own trust boundary: a client that skips the
+    // client-side check must still be refused. Only the line axis of a region is
+    // meaningful, so this reverses exactly that axis.
+    LineViewRequest reversedLine;
+    reversedLine.query.dataset = opened.id;
+    reversedLine.query.field = FieldId{0};
+    reversedLine.query.axis = 0;
+    reversedLine.query.fixedCoordinates = {0.0, 0.5, 0.0};
+    reversedLine.query.maximumLevel = opened.catalog.finestLevel;
+    reversedLine.query.region = opened.catalog.physicalDomain;
+    std::swap(reversedLine.query.region->lower[0],
+        reversedLine.query.region->upper[0]);
+    reversedLine.outputWidth = 8;
+    envelope = exchange(socket, 11, codec::toWire(reversedLine),
+        hello.maximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
+            && codec::fromWire(*envelope->payload.AsErrorResponse()).code
+                == ErrorCode::InvalidRequest,
+        "server did not reject a reversed line region");
+
+    // A region degenerate off the line axis is legitimate: a line plot along x
+    // fixes y and z.
+    LineViewRequest flatLine = reversedLine;
+    flatLine.query.region = opened.catalog.physicalDomain;
+    flatLine.query.region->lower[1] = flatLine.query.region->upper[1];
+    envelope = exchange(socket, 12, codec::toWire(flatLine),
+        hello.maximumFrameBytes);
+    require(codec::inspect(*envelope).payload
+            == PayloadKind::LineViewResponse,
+        "server rejected a line region degenerate off its axis");
+
     envelope = exchange(socket, 8,
         codec::toWire(opened.id, "Oversized", 1.0, 0),
         hello.maximumFrameBytes);

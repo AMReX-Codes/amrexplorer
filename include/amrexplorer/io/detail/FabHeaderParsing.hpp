@@ -13,12 +13,46 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <istream>
 #include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace amrvis::detail {
+
+// A FAB header is one line of text at the head of an otherwise binary file, so
+// it is read from a stream that has no idea where the text ends. Real headers
+// are a few hundred bytes -- "FAB " plus a RealDescriptor, a Box, and a
+// component count -- and this ceiling leaves two orders of magnitude of room.
+inline constexpr std::size_t maximumFabHeaderLineBytes = 16U * 1024U;
+
+// std::getline with a ceiling, and otherwise its semantics: false when nothing
+// could be read, the line without its terminator otherwise, and the stream left
+// positioned just past the newline. The ceiling is the point: a file that opens
+// "FAB " and never supplies a newline makes plain getline accumulate the whole
+// remaining file into the string before the parse can reject it. An overlong
+// line is malformed by definition, so it throws the caller's error type rather
+// than returning a truncated one that might parse.
+template <typename Error>
+[[nodiscard]] bool readBoundedLine(std::istream& input, std::string& line,
+    std::size_t limit = maximumFabHeaderLineBytes)
+{
+    line.clear();
+    for (;;) {
+        const auto character = input.get();
+        if (character == std::char_traits<char>::eof()) {
+            return !line.empty();
+        }
+        if (character == '\n') {
+            return true;
+        }
+        if (line.size() >= limit) {
+            throw Error("FAB header line exceeds the supported length");
+        }
+        line.push_back(static_cast<char>(character));
+    }
+}
 
 // Every integer in the text, in order; any non-numeric characters act as
 // separators. Never throws — callers validate the count/shape themselves.

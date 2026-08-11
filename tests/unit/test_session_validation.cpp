@@ -1,0 +1,387 @@
+#include <amrexplorer/core/Metadata.hpp>
+#include <amrexplorer/data/SessionValidation.hpp>
+
+#include <cstdlib>
+#include <iostream>
+#include <string>
+#include <vector>
+
+namespace {
+
+void require(bool condition, const char* message)
+{
+    if (!condition) {
+        std::cerr << "FAILED: " << message << '\n';
+        std::exit(1);
+    }
+}
+
+template <typename Function>
+void requireRejected(Function&& function, const char* message)
+{
+    try {
+        function();
+    } catch (const std::exception&) {
+        return;
+    }
+    require(false, message);
+}
+
+template <typename Function>
+void requireAccepted(Function&& function, const char* message)
+{
+    try {
+        function();
+        return;
+    } catch (const std::exception& error) {
+        std::cerr << "rejected with: " << error.what() << '\n';
+    }
+    require(false, message);
+}
+
+amrvis::DatasetMetadata dataset(int dimension)
+{
+    amrvis::DatasetMetadata metadata;
+    metadata.dimension = dimension;
+    metadata.finestLevel = 1;
+    metadata.hasPhysicalGeometry = true;
+    metadata.physicalDomain = amrvis::RealBox{
+        amrvis::Real3{{0.0, 0.0, 0.0}}, amrvis::Real3{{1.0, 1.0, 1.0}}};
+    metadata.fields.push_back({"density", amrvis::Centering::Cell, {}});
+    for (int level = 0; level < 2; ++level) {
+        amrvis::LevelMetadata entry;
+        entry.level = level;
+        entry.domain = amrvis::IntBox{amrvis::Int3{{0, 0, 0}},
+            amrvis::Int3{{3, 3, 3}}, amrvis::Int3{{0, 0, 0}}};
+        metadata.levels.push_back(entry);
+    }
+    return metadata;
+}
+
+amrvis::SliceRequest sliceRequest(int dimension)
+{
+    amrvis::SliceRequest request;
+    request.dataset = amrvis::DatasetId{1};
+    request.field = amrvis::FieldId{0};
+    request.normalDirection = dimension == 3 ? 2 : 1;
+    request.visibleRegion = amrvis::RealBox{
+        amrvis::Real3{{0.0, 0.0, 0.0}}, amrvis::Real3{{1.0, 1.0, 1.0}}};
+    request.physicalPosition = 0.5;
+    request.maximumLevel = 1;
+    request.outputSize = {2, 2};
+    return request;
+}
+
+amrvis::SliceQueryResult sliceResult(const amrvis::RealBox& region)
+{
+    amrvis::SliceQueryResult result;
+    result.plane.width = 2;
+    result.plane.height = 2;
+    result.plane.physicalRegion = region;
+    result.plane.values = {1.0F, 2.0F, 3.0F, 4.0F};
+    result.plane.valid = {1, 1, 1, 1};
+    result.plane.sourceLevel = {0, 1, -1, 0};
+    return result;
+}
+
+amrvis::LineViewRequest lineRequest(int dimension, int axis)
+{
+    amrvis::LineViewRequest request;
+    request.query.dataset = amrvis::DatasetId{1};
+    request.query.field = amrvis::FieldId{0};
+    request.query.axis = axis;
+    request.query.maximumLevel = 1;
+    request.outputWidth = 8;
+    static_cast<void>(dimension);
+    return request;
+}
+
+amrvis::LineQueryResult lineResult(int axis)
+{
+    amrvis::LineQueryResult result;
+    result.line.axis = axis;
+    result.line.positions = {0.25, 0.75};
+    result.line.values = {1.0F, 2.0F};
+    result.line.valid = {1, 1};
+    result.line.sourceLevel = {1, -1};
+    return result;
+}
+
+amrvis::DatasetPageRequest pageRequest(int dimension)
+{
+    amrvis::DatasetPageRequest request;
+    request.dataset = amrvis::DatasetId{1};
+    request.field = amrvis::FieldId{0};
+    request.level = 0;
+    request.region = amrvis::RealBox{
+        amrvis::Real3{{0.0, 0.0, 0.0}}, amrvis::Real3{{1.0, 1.0, 1.0}}};
+    request.normalAxis = dimension == 3 ? 2 : 1;
+    request.slicePosition = 0.5;
+    request.maximumExtent = 8;
+    return request;
+}
+
+// A default-constructed page is the empty one: no cells, inverted bounds.
+amrvis::DatasetPage page(int nx, int ny)
+{
+    amrvis::DatasetPage result;
+    if (nx <= 0 || ny <= 0) {
+        return result;
+    }
+    result.nx = nx;
+    result.ny = ny;
+    result.lower = {0, 0};
+    result.upper = {nx - 1, ny - 1};
+    const auto samples
+        = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny);
+    result.values.assign(samples, 0.0F);
+    result.covered.assign(samples, 1);
+    return result;
+}
+
+} // namespace
+
+int main()
+{
+    using namespace amrvis;
+
+    // planeAxes: the in-plane pair, and total for a normal it cannot honour.
+    require((planeAxes(2, 1) == std::array<int, 2>{0, 1}),
+        "a 2-D plane does not use both axes");
+    require((planeAxes(3, 0) == std::array<int, 2>{1, 2})
+            && (planeAxes(3, 1) == std::array<int, 2>{0, 2})
+            && (planeAxes(3, 2) == std::array<int, 2>{0, 1}),
+        "3-D plane axes are wrong for some normal");
+    require((planeAxes(3, 9) == std::array<int, 2>{0, 1}),
+        "an out-of-range normal did not fall back to a safe pair");
+
+    // A line region is meaningful only along the line axis, in both 2-D and
+    // 3-D: reversed or non-finite there is a malformed request, while the
+    // off-axis entries stay free to be degenerate.
+    for (const int dimension : {2, 3}) {
+        auto request = lineRequest(dimension, 0);
+        request.query.region = RealBox{
+            Real3{{0.25, 0.5, 0.5}}, Real3{{0.75, 0.5, 0.5}}};
+        require(validateLineRequest(request.query, dimension).empty(),
+            "a line region degenerate off its axis was rejected");
+
+        request.query.region = RealBox{
+            Real3{{0.75, 0.0, 0.0}}, Real3{{0.25, 1.0, 1.0}}};
+        require(!validateLineRequest(request.query, dimension).empty(),
+            "a reversed line region was accepted");
+
+        request.query.region = RealBox{
+            Real3{{0.5, 0.0, 0.0}}, Real3{{0.5, 1.0, 1.0}}};
+        require(!validateLineRequest(request.query, dimension).empty(),
+            "a zero-extent line region was accepted");
+
+        request.query.region = RealBox{
+            Real3{{std::nan(""), 0.0, 0.0}}, Real3{{1.0, 1.0, 1.0}}};
+        require(!validateLineRequest(request.query, dimension).empty(),
+            "a non-finite line region was accepted");
+
+        request.query.region.reset();
+        require(validateLineRequest(request.query, dimension).empty(),
+            "a line request without a region was rejected");
+    }
+
+    // The page region, at the trust boundary rather than inside the builder.
+    for (const int dimension : {2, 3}) {
+        const auto metadata = dataset(dimension);
+        auto request = pageRequest(dimension);
+        requireAccepted([&] {
+            validateSessionDatasetPageRequest(
+                metadata, DatasetId{1}, request);
+        }, "a valid dataset page request was rejected");
+
+        auto reversed = request;
+        reversed.region.lower[0] = 1.0;
+        reversed.region.upper[0] = 0.0;
+        requireRejected([&] {
+            validateSessionDatasetPageRequest(
+                metadata, DatasetId{1}, reversed);
+        }, "a reversed page region was accepted");
+
+        auto degenerate = request;
+        degenerate.region.upper[1] = degenerate.region.lower[1];
+        requireRejected([&] {
+            validateSessionDatasetPageRequest(
+                metadata, DatasetId{1}, degenerate);
+        }, "a page region with no in-plane extent was accepted");
+    }
+
+    // In 3-D the normal axis of a page region may be degenerate: it carries the
+    // slice position, not an extent.
+    {
+        const auto metadata = dataset(3);
+        auto request = pageRequest(3);
+        request.region.upper[2] = request.region.lower[2];
+        requireAccepted([&] {
+            validateSessionDatasetPageRequest(
+                metadata, DatasetId{1}, request);
+        }, "a 3-D page region degenerate on its normal axis was rejected");
+    }
+
+    // Slice results: provenance and plane extent against the catalog.
+    for (const int dimension : {2, 3}) {
+        const auto metadata = dataset(dimension);
+        const auto request = sliceRequest(dimension);
+        const ViewDataRequest view = request;
+        auto region = request.visibleRegion;
+        if (dimension == 3) {
+            // The normal axis of a slice region is degenerate by construction.
+            region.upper[2] = region.lower[2];
+        }
+        requireAccepted([&] {
+            validateSessionViewResult(metadata, view, sliceResult(region));
+        }, "a valid slice result was rejected");
+
+        auto reversed = region;
+        reversed.upper[0] = reversed.lower[0] - 1.0;
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, sliceResult(reversed));
+        }, "a slice result with a reversed plane region was accepted");
+
+        auto beyond = sliceResult(region);
+        beyond.plane.sourceLevel = {0, 1, 2, 0};
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, beyond);
+        }, "a slice source level past the finest level was accepted");
+
+        auto sentinel = sliceResult(region);
+        sentinel.plane.sourceLevel = {0, 1, -2, 0};
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, sentinel);
+        }, "a slice source level below the no-data sentinel was accepted");
+
+        auto ragged = sliceResult(region);
+        ragged.plane.values.pop_back();
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, ragged);
+        }, "a slice result with a short value vector was accepted");
+
+        auto grid = sliceResult(region);
+        grid.gridBoxes.push_back({2, region});
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, grid);
+        }, "a grid box on a nonexistent level was accepted");
+
+        grid = sliceResult(region);
+        grid.gridBoxes.push_back({-1, region});
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, grid);
+        }, "a grid box with no level was accepted");
+
+        grid = sliceResult(region);
+        grid.gridBoxes.push_back({1, reversed});
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, grid);
+        }, "a grid box with a reversed region was accepted");
+
+        // A line answer to a slice request is not an answer at all.
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, lineResult(0));
+        }, "a line result answered a slice request");
+    }
+
+    // Line results.
+    {
+        const auto metadata = dataset(3);
+        const ViewDataRequest view = lineRequest(3, 1);
+        requireAccepted([&] {
+            validateSessionViewResult(metadata, view, lineResult(1));
+        }, "a valid line result was rejected");
+
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, lineResult(0));
+        }, "a line result along the wrong axis was accepted");
+
+        auto beyond = lineResult(1);
+        beyond.line.sourceLevel = {1, 4};
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, beyond);
+        }, "a line source level past the finest level was accepted");
+
+        auto ragged = lineResult(1);
+        ragged.line.valid.pop_back();
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, ragged);
+        }, "a line result with a short validity vector was accepted");
+    }
+
+    // Dataset page results.
+    {
+        const auto metadata = dataset(2);
+        const auto request = pageRequest(2);
+        requireAccepted([&] {
+            validateSessionDatasetPageResult(metadata, request, page(4, 4));
+        }, "a valid dataset page was rejected");
+        requireAccepted([&] {
+            validateSessionDatasetPageResult(metadata, request, page(0, 0));
+        }, "an empty dataset page was rejected");
+
+        auto oversized = page(4, 4);
+        oversized.nx = request.maximumExtent + 1;
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, oversized);
+        }, "a page larger than the requested extent was accepted");
+
+        auto reversed = page(4, 4);
+        reversed.lower[1] = reversed.upper[1] + 1;
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, reversed);
+        }, "a page with reversed index bounds was accepted");
+
+        auto mismatched = page(4, 4);
+        mismatched.upper[0] += 1;
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, mismatched);
+        }, "a page whose bounds outrun its extent was accepted");
+
+        auto ragged = page(4, 4);
+        ragged.covered.pop_back();
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, ragged);
+        }, "a page with a short coverage vector was accepted");
+    }
+
+    // Particle samples against the catalog they claim to sample.
+    {
+        const std::vector<ParticleSpeciesMetadata> species{
+            {"electrons", 3, 0, 0, 2, ParticleRealPrecision::Double}};
+        ParticleSample sample;
+        sample.species = species.front();
+        sample.points.push_back({1, Real3{{0.5, 0.5, 0.5}}});
+        requireAccepted([&] {
+            validateSessionParticleSampleResult(
+                species, "electrons", sample);
+        }, "a valid particle sample was rejected");
+
+        auto renamed = sample;
+        renamed.species.name = "ions";
+        requireRejected([&] {
+            validateSessionParticleSampleResult(
+                species, "electrons", renamed);
+        }, "a sample of the wrong species was accepted");
+
+        requireRejected([&] {
+            validateSessionParticleSampleResult(species, "ions", sample);
+        }, "a sample of an uncatalogued species was accepted");
+
+        auto flattened = sample;
+        flattened.species.dimension = 0;
+        requireRejected([&] {
+            validateSessionParticleSampleResult(
+                species, "electrons", flattened);
+        }, "a sample with an impossible dimension was accepted");
+
+        auto overfull = sample;
+        overfull.points.push_back({2, Real3{{0.25, 0.25, 0.25}}});
+        overfull.points.push_back({3, Real3{{0.75, 0.75, 0.75}}});
+        requireRejected([&] {
+            validateSessionParticleSampleResult(
+                species, "electrons", overfull);
+        }, "a sample larger than its species was accepted");
+    }
+    return 0;
+}

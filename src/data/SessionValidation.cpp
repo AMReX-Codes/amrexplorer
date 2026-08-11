@@ -2,9 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <variant>
+#include <vector>
 
 namespace amrvis {
 namespace {
@@ -36,6 +40,36 @@ void requireComponent(const DatasetMetadata& metadata, FieldId field,
     if (static_cast<std::size_t>(component) >= count) {
         throw std::invalid_argument(
             std::string(operation) + " component is unavailable");
+    }
+}
+
+// A plane region is only meaningful in its two in-plane axes: the third axis of
+// a 3-D region carries the slice position and is free to be degenerate.
+void requirePlaneRegion(const RealBox& region, int dimension, int normalAxis,
+    const char* what)
+{
+    for (const auto axis : planeAxes(dimension, normalAxis)) {
+        const auto entry = static_cast<std::size_t>(axis);
+        const auto lower = region.lower[entry];
+        const auto upper = region.upper[entry];
+        if (!std::isfinite(lower) || !std::isfinite(upper)
+            || !(lower < upper)) {
+            throw std::invalid_argument(std::string(what)
+                + " must have finite positive in-plane extent");
+        }
+    }
+}
+
+// -1 marks a sample no level covered; anything else must name a real level.
+void requireSourceLevels(const std::vector<std::int16_t>& levels,
+    int finestLevel, const char* what)
+{
+    for (const auto level : levels) {
+        if (level < -1 || level > finestLevel) {
+            throw std::invalid_argument(
+                std::string(what) + " reports a source level the dataset "
+                                    "does not have");
+        }
     }
 }
 
@@ -113,6 +147,11 @@ void validateSessionDatasetPageRequest(const DatasetMetadata& metadata,
         throw std::invalid_argument(
             "dataset page slice position must be finite");
     }
+    // extractDatasetPage applies the same rule, but only once the request has
+    // already reached it. Checking here rejects a malformed region at the trust
+    // boundary, and lets the remote client refuse one before a round trip.
+    requirePlaneRegion(request.region, metadata.dimension, request.normalAxis,
+        "dataset page region");
 }
 
 void validateSessionRangeRequest(
@@ -143,6 +182,121 @@ void validateSessionParticleRequest(const DatasetMetadata& metadata,
     if (!std::isfinite(fraction) || !(fraction > 0.0) || fraction > 1.0) {
         throw std::invalid_argument(
             "particle sample fraction must be in (0, 1]");
+    }
+}
+
+void validateSessionViewResult(const DatasetMetadata& metadata,
+    const ViewDataRequest& request, const ViewDataResult& result)
+{
+    if (request.index() != result.index()) {
+        throw std::invalid_argument(
+            "view result does not answer the request that was made");
+    }
+    if (const auto* slice = std::get_if<SliceQueryResult>(&result)) {
+        const auto& query = std::get<SliceRequest>(request);
+        const auto& plane = slice->plane;
+        if (plane.width < 1 || plane.height < 1) {
+            throw std::invalid_argument("slice result has an empty raster");
+        }
+        const auto samples = static_cast<std::size_t>(plane.width)
+            * static_cast<std::size_t>(plane.height);
+        if (plane.values.size() != samples || plane.valid.size() != samples
+            || plane.sourceLevel.size() != samples) {
+            throw std::invalid_argument(
+                "slice result raster and sample vectors disagree");
+        }
+        requirePlaneRegion(plane.physicalRegion, metadata.dimension,
+            query.normalDirection, "slice result region");
+        requireSourceLevels(
+            plane.sourceLevel, metadata.finestLevel, "slice result");
+        for (const auto& box : slice->gridBoxes) {
+            // A grid box, unlike a sample, always comes from a real level:
+            // there is no sentinel for "no level drew this box".
+            if (box.level < 0 || box.level > metadata.finestLevel) {
+                throw std::invalid_argument(
+                    "slice result grid box names a level the dataset does "
+                    "not have");
+            }
+            requirePlaneRegion(box.physicalRegion, metadata.dimension,
+                query.normalDirection, "slice result grid box");
+        }
+        return;
+    }
+    const auto& line = std::get<LineQueryResult>(result).line;
+    const auto& query = std::get<LineViewRequest>(request).query;
+    if (line.axis != query.axis) {
+        throw std::invalid_argument("line result is along the wrong axis");
+    }
+    if (line.values.size() != line.positions.size()
+        || line.valid.size() != line.positions.size()
+        || line.sourceLevel.size() != line.positions.size()) {
+        throw std::invalid_argument("line result vectors disagree");
+    }
+    requireSourceLevels(
+        line.sourceLevel, metadata.finestLevel, "line result");
+}
+
+void validateSessionDatasetPageResult(const DatasetMetadata& metadata,
+    const DatasetPageRequest& request, const DatasetPage& page)
+{
+    static_cast<void>(metadata);
+    if (page.nx < 0 || page.ny < 0) {
+        throw std::invalid_argument("dataset page extent is negative");
+    }
+    // The client sizes its table from the extent it asked for; a page larger
+    // than that would overrun what the caller prepared for.
+    if (page.nx > request.maximumExtent || page.ny > request.maximumExtent) {
+        throw std::invalid_argument(
+            "dataset page is larger than the requested extent");
+    }
+    // An empty page is the default-constructed one, whose bounds are
+    // deliberately inverted (lower {0, 0}, upper {-1, -1}) to say "no cells";
+    // only a page that claims cells has to have bounds that describe them, and
+    // the extent it reports must be exactly the span of those bounds.
+    if (page.nx > 0 && page.ny > 0) {
+        for (std::size_t entry = 0; entry < page.lower.size(); ++entry) {
+            const auto extent = entry == 0 ? page.nx : page.ny;
+            if (page.lower[entry] > page.upper[entry]) {
+                throw std::invalid_argument(
+                    "dataset page index bounds are reversed");
+            }
+            if (page.upper[entry] - page.lower[entry] + 1 != extent) {
+                throw std::invalid_argument(
+                    "dataset page extent does not match its index bounds");
+            }
+        }
+    }
+    const auto samples = static_cast<std::size_t>(page.nx)
+        * static_cast<std::size_t>(page.ny);
+    if (page.values.size() != samples || page.covered.size() != samples) {
+        throw std::invalid_argument(
+            "dataset page extent and sample vectors disagree");
+    }
+}
+
+void validateSessionParticleSampleResult(
+    const std::vector<ParticleSpeciesMetadata>& species,
+    const std::string& requested, const ParticleSample& sample)
+{
+    if (sample.species.name != requested) {
+        throw std::invalid_argument(
+            "particle sample describes the wrong species");
+    }
+    const auto known = std::find_if(species.begin(), species.end(),
+        [&](const auto& entry) { return entry.name == requested; });
+    if (known == species.end()) {
+        throw std::invalid_argument(
+            "particle sample describes a species the catalog does not list");
+    }
+    if (sample.species.dimension < 1 || sample.species.dimension > 3) {
+        throw std::invalid_argument(
+            "particle sample dimension is outside [1, 3]");
+    }
+    // A sample is a subset of the species, so it cannot hold more points than
+    // the catalog says exist.
+    if (sample.points.size() > known->particleCount) {
+        throw std::invalid_argument(
+            "particle sample holds more points than the species contains");
     }
 }
 

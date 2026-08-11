@@ -14,24 +14,6 @@
 #include <stdexcept>
 
 namespace amrvis {
-namespace {
-
-std::array<int, 2> inPlaneAxes(int dimension, int normalAxis) noexcept
-{
-    if (dimension != 3) {
-        return {0, 1};
-    }
-    std::array<int, 2> axes{0, 1};
-    std::size_t next = 0;
-    for (int axis = 0; axis < 3; ++axis) {
-        if (axis != normalAxis) {
-            axes[next++] = axis;
-        }
-    }
-    return axes;
-}
-
-} // namespace
 
 DatasetPage extractDatasetPage(PlotfileDataset& dataset,
     const DatasetPageRequest& request, StopToken cancellation)
@@ -62,7 +44,7 @@ DatasetPage extractDatasetPage(PlotfileDataset& dataset,
 
     const auto& level
         = metadata.levels[static_cast<std::size_t>(request.level)];
-    const auto axes = inPlaneAxes(metadata.dimension, request.normalAxis);
+    const auto axes = planeAxes(metadata.dimension, request.normalAxis);
     for (const auto axis : axes) {
         const auto entry = static_cast<std::size_t>(axis);
         const auto lower = request.region.lower[entry];

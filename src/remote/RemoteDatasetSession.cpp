@@ -7,6 +7,23 @@
 #include <variant>
 
 namespace amrvis::remote {
+namespace {
+
+// A response that cannot describe this dataset means the peer is not speaking
+// the protocol we negotiated, so the connection goes rather than just the one
+// request: leaving it open would let the next response be trusted again.
+template <typename Check>
+void refuseUnlessValid(Connection& connection, Check&& check)
+{
+    try {
+        check();
+    } catch (...) {
+        connection.close();
+        throw;
+    }
+}
+
+} // namespace
 
 std::shared_ptr<RemoteDatasetSession> RemoteDatasetSession::open(
     std::shared_ptr<Connection> connection, const std::string& path,
@@ -81,7 +98,11 @@ ViewDataResult RemoteDatasetSession::requestView(
 {
     requireOpen();
     validateSessionViewRequest(m_metadata, m_id, request);
-    return m_connection->requestView(request, cancellation);
+    auto result = m_connection->requestView(request, cancellation);
+    refuseUnlessValid(*m_connection, [&] {
+        validateSessionViewResult(m_metadata, request, result);
+    });
+    return result;
 }
 
 DatasetPage RemoteDatasetSession::requestDatasetPage(
@@ -89,7 +110,11 @@ DatasetPage RemoteDatasetSession::requestDatasetPage(
 {
     requireOpen();
     validateSessionDatasetPageRequest(m_metadata, m_id, request);
-    return m_connection->requestDatasetPage(request, cancellation);
+    auto page = m_connection->requestDatasetPage(request, cancellation);
+    refuseUnlessValid(*m_connection, [&] {
+        validateSessionDatasetPageResult(m_metadata, request, page);
+    });
+    return page;
 }
 
 std::optional<ValueRange> RemoteDatasetSession::requestRange(
@@ -138,8 +163,13 @@ ParticleSample RemoteDatasetSession::requestParticleSample(
     requireOpen();
     validateSessionParticleRequest(
         m_metadata, m_particleSpecies, species, fraction);
-    return m_connection->requestParticleSample(
+    auto sample = m_connection->requestParticleSample(
         m_id, species, fraction, seed, cancellation);
+    refuseUnlessValid(*m_connection, [&] {
+        validateSessionParticleSampleResult(
+            m_particleSpecies, species, sample);
+    });
+    return sample;
 }
 
 CacheMetrics RemoteDatasetSession::cacheMetrics() const

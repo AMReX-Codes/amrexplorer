@@ -35,10 +35,10 @@ struct LevelBlocks {
 // so the blocks of the bracketing cell centers are loaded too.
 IntBox requestIndexBox(const RealBox& region, const SliceRequest& request,
     const DatasetMetadata& metadata, const LevelMetadata& level,
-    const std::array<int, 2>& planeAxes)
+    const std::array<int, 2>& axes)
 {
     auto result = level.domain;
-    for (const auto axis : planeAxes) {
+    for (const auto axis : axes) {
         const auto i = static_cast<std::size_t>(axis);
         result.lower[i] = physicalToIndex(
             region.lower[i], metadata, level, axis);
@@ -56,22 +56,6 @@ IntBox requestIndexBox(const RealBox& region, const SliceRequest& request,
     }
     return result;
 }
-
-std::array<int, 2> planeAxes(int dimension, int normalDirection)
-{
-    if (dimension == 2) {
-        return {0, 1};
-    }
-    std::array<int, 2> axes{};
-    std::size_t next = 0;
-    for (int axis = 0; axis < 3; ++axis) {
-        if (axis != normalDirection) {
-            axes[next++] = axis;
-        }
-    }
-    return axes;
-}
-
 
 } // namespace
 

@@ -156,9 +156,12 @@ if(TARGET amrexplorer_remote)
         FIXTURES_SETUP remote_server_spherical_materialized)
     add_test(NAME remote_server
         COMMAND test_remote_server "${remote_server_private_fixture_dir}")
+    # The trickle-reader case waits out a whole-response write budget on a
+    # ~28 MiB response, so this test is several seconds even without a
+    # sanitizer. 90 s leaves room for TSan and ASan.
     set_tests_properties(remote_server PROPERTIES
         FIXTURES_REQUIRED remote_server_private_materialized
-        TIMEOUT 30)
+        TIMEOUT 90)
 
     add_executable(test_remote_connection
         integration/test_remote_connection.cpp)

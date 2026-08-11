@@ -60,11 +60,29 @@ void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
     std::uint32_t maximumBytes,
     std::chrono::steady_clock::time_point deadline,
     StopToken cancellation = {}, StopToken lifecycle = {});
-// Writes may take arbitrarily long while the peer continues accepting bytes.
-// The operation fails only when no bytes can be written for stallTimeout.
-void writeFrameWithStallTimeout(const Socket& socket,
+// How long one frame write may take. Two limits, because either alone can be
+// defeated: stallTimeout bounds a period of no progress at all, and total()
+// bounds the whole write, so a peer that accepts a few bytes just before every
+// stall deadline -- renewing it forever -- is still retired. The whole-write
+// bound is deliberately generous: the stall interval as a fixed grace plus the
+// time the payload needs at an assumed floor throughput, so a slow but healthy
+// link is not mistaken for a wedged peer.
+struct FrameWriteBudget {
+    std::chrono::milliseconds stallTimeout{30000};
+    // Bytes per second. Must be positive: zero would restore the unbounded
+    // case. Lower it for a genuinely slow link rather than removing the bound.
+    std::uint64_t minimumBytesPerSecond = 64U * 1024U;
+
+    [[nodiscard]] std::chrono::milliseconds total(
+        std::size_t payloadBytes) const noexcept;
+};
+
+// Writes may take arbitrarily long while the peer continues accepting bytes, up
+// to budget.total(payload.size()). Fails on a stall, on falling below the
+// budget's floor throughput, on cancellation, or on a socket error.
+void writeFrameWithBudget(const Socket& socket,
     std::span<const std::uint8_t> payload, std::uint32_t maximumBytes,
-    std::chrono::milliseconds stallTimeout,
+    const FrameWriteBudget& budget,
     StopToken cancellation = {}, StopToken lifecycle = {});
 [[nodiscard]] std::optional<std::vector<std::uint8_t>> readFrame(
     const Socket& socket,

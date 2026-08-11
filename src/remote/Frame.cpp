@@ -390,10 +390,18 @@ void writeExact(NativeSocket descriptor,
         ? std::chrono::steady_clock::now() + *stallTimeout
         : std::chrono::steady_clock::time_point::max();
     while (completed < source.size()) {
-        waitForWritable(descriptor, std::min(deadline, progressDeadline),
-            cancellation, lifecycle,
-            stallTimeout ? "wire frame write stalled"
-                         : "wire frame write timed out");
+        // Whichever limit bites first, and the message that explains it: with a
+        // stall timeout the absolute deadline is the whole-write budget, so
+        // hitting it means the peer stayed under the floor throughput rather
+        // than stopping outright.
+        const auto limit = std::min(deadline, progressDeadline);
+        const auto* reason = "wire frame write timed out";
+        if (stallTimeout) {
+            reason = limit == progressDeadline
+                ? "wire frame write stalled"
+                : "wire frame write stayed below the minimum throughput";
+        }
+        waitForWritable(descriptor, limit, cancellation, lifecycle, reason);
 #ifdef _WIN32
         const auto remaining = std::min<std::size_t>(
             source.size() - completed, 64U * 1024U);
@@ -679,29 +687,57 @@ void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
         lifecycle);
 }
 
-void writeFrameWithStallTimeout(const Socket& socket,
+std::chrono::milliseconds FrameWriteBudget::total(
+    std::size_t payloadBytes) const noexcept
+{
+    // Fixed grace plus the payload's time at the floor throughput, rounded up.
+    // The floor is clamped rather than trusted: a zero would mean no bound at
+    // all, which is the defect this budget exists to close.
+    const std::uint64_t floor = minimumBytesPerSecond > 0
+        ? minimumBytesPerSecond : 1;
+    const auto transfer
+        = (static_cast<std::uint64_t>(payloadBytes) * 1000ULL + floor - 1ULL)
+        / floor;
+    const std::uint64_t grace = stallTimeout > std::chrono::milliseconds::zero()
+        ? static_cast<std::uint64_t>(stallTimeout.count()) : 0ULL;
+    // Thirty days is beyond any real transfer and keeps now() + total() far
+    // from overflowing a steady_clock time point.
+    constexpr std::uint64_t cap = 30ULL * 24ULL * 60ULL * 60ULL * 1000ULL;
+    const auto bounded = std::min<std::uint64_t>(cap, transfer);
+    const auto total = grace > cap - bounded ? cap : grace + bounded;
+    return std::chrono::milliseconds(
+        static_cast<std::chrono::milliseconds::rep>(total));
+}
+
+void writeFrameWithBudget(const Socket& socket,
     std::span<const std::uint8_t> payload, std::uint32_t maximumBytes,
-    std::chrono::milliseconds stallTimeout, StopToken cancellation,
+    const FrameWriteBudget& budget, StopToken cancellation,
     StopToken lifecycle)
 {
     if (payload.empty() || payload.size() > maximumBytes
         || payload.size() > std::numeric_limits<std::uint32_t>::max()) {
         throw std::runtime_error("wire frame size is outside the allowed range");
     }
-    if (stallTimeout <= std::chrono::milliseconds::zero()) {
+    if (budget.stallTimeout <= std::chrono::milliseconds::zero()) {
         throw std::invalid_argument(
             "wire frame write stall timeout must be greater than zero");
     }
+    if (budget.minimumBytesPerSecond == 0) {
+        throw std::invalid_argument(
+            "wire frame write minimum throughput must be greater than zero");
+    }
+    // One deadline for the whole frame, so the four-byte header cannot buy the
+    // payload extra time.
+    const auto deadline
+        = std::chrono::steady_clock::now() + budget.total(payload.size());
     const auto networkSize = htonl(static_cast<std::uint32_t>(payload.size()));
     const auto* sizeBytes
         = reinterpret_cast<const std::uint8_t*>(&networkSize);
     writeExact(native(socket.descriptor()),
         std::span<const std::uint8_t>(sizeBytes, sizeof(networkSize)),
-        std::chrono::steady_clock::time_point::max(), cancellation, lifecycle,
-        stallTimeout);
-    writeExact(native(socket.descriptor()), payload,
-        std::chrono::steady_clock::time_point::max(), cancellation, lifecycle,
-        stallTimeout);
+        deadline, cancellation, lifecycle, budget.stallTimeout);
+    writeExact(native(socket.descriptor()), payload, deadline, cancellation,
+        lifecycle, budget.stallTimeout);
 }
 
 std::optional<std::vector<std::uint8_t>> readFrame(

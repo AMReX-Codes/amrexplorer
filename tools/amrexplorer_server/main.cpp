@@ -33,7 +33,15 @@ void printUsage(std::ostream& output)
         << "  --max-frame-mib MIB  maximum negotiated frame size\n"
         << "  --max-datasets COUNT maximum open datasets per connection\n"
         << "  --write-stall-timeout-seconds SECONDS\n"
-        << "                       disconnect after no write progress\n"
+        << "                       disconnect after no write progress; also the\n"
+        << "                       fixed grace in the whole-response budget\n"
+        << "  --write-min-kib-per-second KIB\n"
+        << "                       floor throughput for the whole-response\n"
+        << "                       budget: a response must finish within the\n"
+        << "                       stall grace plus size / this rate, so a peer\n"
+        << "                       reading a trickle cannot hold a worker\n"
+        << "                       forever. Lower it for a slow link; it cannot\n"
+        << "                       be zero\n"
         << "  --help               show this help\n";
 }
 
@@ -139,6 +147,19 @@ int main(int argc, char* argv[])
                 }
                 options.responseWriteStallTimeout = std::chrono::seconds{
                     static_cast<std::chrono::seconds::rep>(seconds)};
+            } else if (option == "--write-min-kib-per-second") {
+                const auto kibibytes = parseUnsigned<std::uint64_t>(
+                    value, "--write-min-kib-per-second");
+                constexpr std::uint64_t oneKibibyte = 1024ULL;
+                if (kibibytes == 0
+                    || kibibytes > std::numeric_limits<std::uint64_t>::max()
+                            / oneKibibyte) {
+                    throw std::invalid_argument(
+                        "--write-min-kib-per-second is outside its allowed "
+                        "range");
+                }
+                options.responseWriteMinimumBytesPerSecond
+                    = kibibytes * oneKibibyte;
             } else {
                 throw std::invalid_argument("unknown option: " + option);
             }

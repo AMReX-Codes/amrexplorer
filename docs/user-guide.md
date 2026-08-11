@@ -63,14 +63,28 @@ LISTENING 127.0.0.1 41419 TOKEN 58f50743dff4f653b58c3a1fe5858904
 The port and token are new every time you start the server, so use the values
 from your own output (here, port `41419`), not the ones printed above.
 
-Response transfers are not limited by total duration: they may take as long as
-needed while bytes continue moving. By default, the server disconnects a client
-only after a response makes no write progress for 30 seconds. On a link that can
-pause for longer, increase that interval explicitly:
+Two limits bound how long the server will spend writing one response, and a
+client that exceeds either is disconnected. The first is a pause: by default, no
+write progress at all for 30 seconds. The second is the whole response, because a
+client that accepts a few bytes before each pause deadline would otherwise renew
+it forever and keep a worker busy indefinitely. A response must finish within
 
 ```text
-(remote) $ amrexplorer-server --write-stall-timeout-seconds 120
+write-stall-timeout-seconds + response size / write-min-kib-per-second
 ```
+
+whose default floor of 64 KiB/s is far below any usable SSH tunnel — a 64 MiB
+response is allowed about 17 minutes. On a link that pauses for longer than 30
+seconds, or that is genuinely slower than the floor, raise the pause interval and
+lower the floor:
+
+```text
+(remote) $ amrexplorer-server --write-stall-timeout-seconds 120 \
+    --write-min-kib-per-second 8
+```
+
+The floor cannot be zero, since that would remove the whole-response bound; the
+smallest value, `1`, allows roughly 18 hours for a 64 MiB response.
 
 **Step 2 — On your local machine, open an SSH tunnel** using the port from
 step 1. Leave this running while you work:

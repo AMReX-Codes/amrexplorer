@@ -260,6 +260,81 @@ int main(int argc, char* argv[])
                         && range->maximum == localRange->maximum)),
             "local and remote range values differ");
 
+        // A range is immutable for its key, so asking again must not cost a
+        // round trip. The counter is the assertion: timing would prove nothing
+        // over loopback, and the point of the memo is the transaction, not the
+        // latency. The UI resolves a range after every slice in the default
+        // File mode, which is why this repetition is the common case rather
+        // than a contrived one.
+        const amrvis::RangeRequest fileRange{
+            .field = amrvis::FieldId{0},
+            .maximumLevel = dataset->metadata().finestLevel,
+            .composition = amrvis::CompositionPolicy::FinestAvailable,
+            .scope = amrvis::RangeScope::File};
+        {
+            const auto before = connection->transactionCount();
+            for (int repeat = 0; repeat < 5; ++repeat) {
+                const auto repeated = dataset->requestRange(fileRange);
+                require(repeated.has_value() == range.has_value()
+                        && (!repeated
+                            || (repeated->minimum == range->minimum
+                                && repeated->maximum == range->maximum)),
+                    "a memoized range differs from the one it answers for");
+            }
+            require(connection->transactionCount() == before,
+                "repeated identical range resolves still transacted");
+        }
+
+        // Distinct keys stay distinct: Level scope is a different question from
+        // File scope even for the same field and level.
+        {
+            auto levelScope = fileRange;
+            levelScope.scope = amrvis::RangeScope::Level;
+            const auto before = connection->transactionCount();
+            static_cast<void>(dataset->requestRange(levelScope));
+            require(connection->transactionCount() > before,
+                "a distinct range key was answered from another key's memo");
+            const auto after = connection->transactionCount();
+            static_cast<void>(dataset->requestRange(levelScope));
+            require(connection->transactionCount() == after,
+                "the distinct range key was not memoized in its turn");
+        }
+
+        // Concurrent identical misses coalesce rather than each transacting.
+        {
+            auto uncached = fileRange;
+            uncached.composition = amrvis::CompositionPolicy::ExactLevel;
+            uncached.maximumLevel = 0;
+            const auto before = connection->transactionCount();
+            auto first = std::async(std::launch::async,
+                [&] { return dataset->requestRange(uncached); });
+            auto second = std::async(std::launch::async,
+                [&] { return dataset->requestRange(uncached); });
+            const auto firstValue = first.get();
+            const auto secondValue = second.get();
+            require(firstValue.has_value() == secondValue.has_value(),
+                "concurrent range resolves disagreed");
+            require(connection->transactionCount() <= before + 2,
+                "concurrent identical range misses burst transactions");
+        }
+
+        // A cancelled resolve records nothing, so the retry after it succeeds.
+        {
+            auto retried = fileRange;
+            retried.field = amrvis::FieldId{
+                dataset->metadata().fields.size() > 1 ? 1U : 0U};
+            amrvis::StopSource cancelled;
+            cancelled.request_stop();
+            try {
+                static_cast<void>(
+                    dataset->requestRange(retried, cancelled.get_token()));
+            } catch (const amrvis::ReadCancelled&) {
+                // expected
+            }
+            const auto recovered = dataset->requestRange(retried);
+            static_cast<void>(recovered);
+        }
+
         const amrvis::RangeRequest invalidRange{
             .field = amrvis::FieldId{999},
             .maximumLevel = 0,

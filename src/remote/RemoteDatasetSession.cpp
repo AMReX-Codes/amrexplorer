@@ -3,6 +3,7 @@
 #include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/data/SessionValidation.hpp>
 
+#include <chrono>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -139,14 +140,65 @@ DatasetPage RemoteDatasetSession::requestDatasetPage(
     });
 }
 
+RemoteDatasetSession::RangeKey RemoteDatasetSession::rangeKey(
+    const RangeRequest& request) noexcept
+{
+    return {request.field.value, request.maximumLevel,
+        static_cast<std::uint8_t>(request.composition),
+        static_cast<std::uint8_t>(request.scope)};
+}
+
 std::optional<ValueRange> RemoteDatasetSession::requestRange(
     const RangeRequest& request, StopToken cancellation)
 {
     requireOpen();
     validateSessionRangeRequest(m_metadata, request);
-    return refusingInvalidResponses(*m_connection, [&] {
-        return m_connection->requestRange(m_id, request, cancellation);
-    });
+    const auto key = rangeKey(request);
+    {
+        std::unique_lock lock(m_rangeMutex);
+        for (;;) {
+            if (const auto found = m_ranges.find(key);
+                found != m_ranges.end()) {
+                return found->second;
+            }
+            if (!m_rangeInFlight.contains(key)) {
+                // Nobody is asking; this call becomes the one that does.
+                m_rangeInFlight.insert(key);
+                break;
+            }
+            // Someone else is. Wait for them, but stay answerable to our own
+            // cancellation rather than to theirs -- a short wait keeps this
+            // responsive without a second signalling path.
+            if (cancellation.stop_requested()) {
+                throw ReadCancelled();
+            }
+            m_rangeReady.wait_for(lock, std::chrono::milliseconds{10});
+            // Loop: either the answer is cached now, or the leader failed and
+            // left the key free, in which case this call takes the work over.
+        }
+    }
+    const auto retire = [&] {
+        std::scoped_lock lock(m_rangeMutex);
+        m_rangeInFlight.erase(key);
+        m_rangeReady.notify_all();
+    };
+    std::optional<ValueRange> result;
+    try {
+        result = refusingInvalidResponses(*m_connection, [&] {
+            return m_connection->requestRange(m_id, request, cancellation);
+        });
+    } catch (...) {
+        // Nothing is recorded for a failure, so a retry is free to succeed.
+        retire();
+        throw;
+    }
+    {
+        std::scoped_lock lock(m_rangeMutex);
+        m_ranges.emplace(key, result);
+        m_rangeInFlight.erase(key);
+    }
+    m_rangeReady.notify_all();
+    return result;
 }
 
 bool RemoteDatasetSession::rangeAvailable(

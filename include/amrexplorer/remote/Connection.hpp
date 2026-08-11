@@ -60,6 +60,10 @@ public:
     [[nodiscard]] CacheMetrics setCacheBudget(DatasetId dataset,
         std::uint64_t bytes, StopToken cancellation = {});
     [[nodiscard]] CacheMetrics latestCache(DatasetId dataset) const;
+    // Request/response pairs this connection has started, monotonically. The
+    // number itself is not meaningful; the difference across an operation is,
+    // which is how a test proves that a repeated query costs no round trip.
+    [[nodiscard]] std::uint64_t transactionCount() const noexcept;
     void ping(StopToken cancellation = {});
 
     void close() noexcept;

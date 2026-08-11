@@ -32,6 +32,10 @@ std::string readFileVersion(
     // including inside the long-lived server, and a Header whose first line
     // never ends would otherwise be pulled into memory whole. A version string
     // is a few dozen bytes; anything past the ceiling is not one.
+    //
+    // Empty rather than a throw, unlike the FAB readers: this string is
+    // informational, the caller already treats an unreadable Header as an
+    // empty version, and one unparsable line should not fail the open.
     try {
         static_cast<void>(
             detail::readBoundedLine<MetadataReadError>(header, version));

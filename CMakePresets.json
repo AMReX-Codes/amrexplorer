@@ -103,7 +103,7 @@
     },
     {
       "name": "windows",
-      "displayName": "Windows MSVC Debug build (mirrors the CI job)",
+      "displayName": "Windows MSVC Release build (mirrors the CI job)",
       "generator": "Visual Studio 17 2022",
       "architecture": { "value": "x64" },
       "binaryDir": "${sourceDir}/build-windows",
@@ -157,7 +157,7 @@
     {
       "name": "windows",
       "configurePreset": "windows",
-      "configuration": "Debug"
+      "configuration": "Release"
     }
   ],
   "testPresets": [
@@ -231,7 +231,7 @@
     {
       "name": "windows",
       "configurePreset": "windows",
-      "configuration": "Debug",
+      "configuration": "Release",
       "output": {
         "outputOnFailure": true
       }

@@ -49,8 +49,8 @@ threads, and the shared server worker pool are checked by the `remote_*` tests
 in the same run. The qt-sanitizers preset runs the full suite — including the
 offscreen Qt smoke tests and, because Qt implies remote, the remote tests —
 under ASan/UBSan with leak detection; the headless `sanitizers` preset stays
-local-only to avoid duplicating that coverage. A `windows` preset (usable only
-on Windows hosts) mirrors the CI MSVC job.
+local-only to avoid duplicating that coverage. A `windows` Release preset
+(usable only on Windows hosts) mirrors the CI MSVC job.
 
 The clang preset mirrors the CI clang job (which builds with
 `-DAMREXPLORER_WARNINGS_AS_ERRORS=ON`): run it before pushing to catch

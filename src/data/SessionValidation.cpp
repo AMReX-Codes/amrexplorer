@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -154,6 +155,30 @@ void validateSessionDatasetPageRequest(const DatasetMetadata& metadata,
     // boundary, and lets the remote client refuse one before a round trip.
     requirePlaneRegion(request.region, metadata.dimension, request.normalAxis,
         "dataset page region");
+    // The builder turns these coordinates into indices, and a coordinate too far
+    // out to be one makes it throw. Refusing here means no page can ever be a
+    // legitimate answer to such a request, which is what lets the result
+    // validator treat an unconvertible request as the peer's fault.
+    const auto& level
+        = metadata.levels[static_cast<std::size_t>(request.level)];
+    try {
+        for (const auto axis : planeAxes(metadata.dimension,
+                 request.normalAxis)) {
+            const auto entry = static_cast<std::size_t>(axis);
+            static_cast<void>(
+                sampleIndex(level, axis, request.region.lower[entry]));
+            static_cast<void>(sampleIndex(level, axis,
+                std::nextafter(request.region.upper[entry],
+                    -std::numeric_limits<double>::infinity())));
+        }
+        if (metadata.dimension == 3) {
+            static_cast<void>(sampleIndex(
+                level, request.normalAxis, request.slicePosition));
+        }
+    } catch (const std::out_of_range&) {
+        throw std::invalid_argument(
+            "dataset page region is too far out to index at this level");
+    }
 }
 
 void validateSessionRangeRequest(
@@ -232,12 +257,59 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
         // The overlay is switched by the request: the query copies the flag and
         // collects nothing when it is off, and the window installs whatever the
         // flag says arrived.
+        if (slice->gridBoxesIncluded != query.includeGridBoxes) {
+            // The query copies the flag from the request, so a disagreement is
+            // never an answer to it -- and the window installs the overlay only
+            // when the flag is set, keeping the previous one otherwise.
+            throw std::invalid_argument(
+                "slice result disagrees with the request about grid boxes");
+        }
         if (!query.includeGridBoxes
-            && (slice->gridBoxesIncluded || !slice->gridBoxes.empty()
-                || slice->gridBoxesTruncated)) {
+            && (!slice->gridBoxes.empty() || slice->gridBoxesTruncated)) {
             throw std::invalid_argument(
                 "slice result carries grid boxes that were not requested");
         }
+        // Expected boxes per level, built once and reused: each catalog box of
+        // that level, in physical space, clipped to the visible region on the
+        // plane axes -- exactly the geometry the query derives. The
+        // slice-intersection and non-degeneracy filters it also applies are
+        // deliberately *not* mirrored, so this stays a superset: it can only
+        // reject a box that corresponds to no catalog box at all, never one the
+        // query legitimately chose to keep or drop.
+        std::vector<std::pair<int, std::vector<RealBox>>> expectedByLevel;
+        const auto expectedFor = [&](int level) -> const std::vector<RealBox>& {
+            const auto known = std::find_if(expectedByLevel.begin(),
+                expectedByLevel.end(),
+                [level](const auto& entry) { return entry.first == level; });
+            if (known != expectedByLevel.end()) {
+                return known->second;
+            }
+            std::vector<RealBox> boxes;
+            const auto& source
+                = metadata.levels[static_cast<std::size_t>(level)];
+            boxes.reserve(source.boxes.size());
+            for (const auto& indexBox : source.boxes) {
+                auto physical
+                    = sampleBounds(source, indexBox, metadata.dimension);
+                for (const auto axis : planeAxes(
+                         metadata.dimension, query.normalDirection)) {
+                    const auto entry = static_cast<std::size_t>(axis);
+                    physical.lower[entry] = std::max(physical.lower[entry],
+                        query.visibleRegion.lower[entry]);
+                    physical.upper[entry] = std::min(physical.upper[entry],
+                        query.visibleRegion.upper[entry]);
+                }
+                boxes.push_back(physical);
+            }
+            std::sort(boxes.begin(), boxes.end(),
+                [](const RealBox& left, const RealBox& right) {
+                    return left.lower.values < right.lower.values
+                        || (left.lower.values == right.lower.values
+                            && left.upper.values < right.upper.values);
+                });
+            expectedByLevel.emplace_back(level, std::move(boxes));
+            return expectedByLevel.back().second;
+        };
         for (const auto& box : slice->gridBoxes) {
             // A grid box, unlike a sample, always comes from a real level:
             // there is no sentinel for "no level drew this box".
@@ -250,20 +322,18 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
             }
             requirePlaneRegion(box.physicalRegion, metadata.dimension,
                 query.normalDirection, "slice result grid box");
-            // Every box is clipped to the visible region on the plane axes
-            // before it is collected, so one reaching outside it never came
-            // from this request.
-            for (const auto axis : planeAxes(
-                     metadata.dimension, query.normalDirection)) {
-                const auto entry = static_cast<std::size_t>(axis);
-                if (box.physicalRegion.lower[entry]
-                        < query.visibleRegion.lower[entry]
-                    || box.physicalRegion.upper[entry]
-                        > query.visibleRegion.upper[entry]) {
-                    throw std::invalid_argument(
-                        "slice result grid box lies outside the visible "
-                        "region");
-                }
+            const auto& expected = expectedFor(box.level);
+            const auto found = std::lower_bound(expected.begin(),
+                expected.end(), box.physicalRegion,
+                [](const RealBox& left, const RealBox& right) {
+                    return left.lower.values < right.lower.values
+                        || (left.lower.values == right.lower.values
+                            && left.upper.values < right.upper.values);
+                });
+            if (found == expected.end()
+                || !(*found == box.physicalRegion)) {
+                throw std::invalid_argument(
+                    "slice result grid box matches no box in the catalog");
             }
         }
         return;
@@ -299,37 +369,45 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
     if (metadata.levels.empty()) {
         return;
     }
-    // The walk advances along the axis and emits at most one sample per index,
-    // in order, and boundLineToViewport appends each bucket's picks in index
-    // order too, so the positions arrive sorted. Unsorted ones would plot as a
-    // line folded back over itself.
+    // Sorted, not strictly sorted. The walk emits one sample per cell in
+    // increasing order and boundLineToViewport appends each bucket's picks in
+    // index order, so non-decreasing is certain; strict increase across a level
+    // transition, where a coarse cell can share a centre with a fine one under
+    // an odd refinement ratio, is not something the producer guarantees on paper.
+    // A duplicated position plots as a vertical step, which is cosmetic; a false
+    // rejection here retires the connection, which is not.
     if (!std::is_sorted(line.positions.begin(), line.positions.end())) {
         throw std::invalid_argument("line result positions are not ordered");
     }
-    // And they lie in the extent the sampling level spans: physical bounds when
-    // the dataset has geometry, index bounds when its positions are indices.
-    // A region narrows this further; the level extent is the outer limit either
-    // way, which is what makes this check independent of the region's own rule.
+    // Positions lie in the extent LineQuery walks, which is the requested region
+    // when there is one and the sampling level's span otherwise -- with the
+    // producer's own end tolerance. Note that a region is free to reach outside
+    // the domain: the walk then emits invalid samples out there, and bounding
+    // this by the domain instead would reject a legitimate answer.
     const auto& level = metadata.levels[static_cast<std::size_t>(
         std::clamp(query.maximumLevel, 0, metadata.finestLevel))];
     const auto axis = static_cast<std::size_t>(
         std::clamp(query.axis, 0, metadata.dimension - 1));
-    double lowest = 0.0;
-    double highest = 0.0;
-    if (line.positionsAreIndices) {
-        lowest = static_cast<double>(level.domain.lower[axis]);
-        highest = static_cast<double>(level.domain.upper[axis]);
-    } else {
-        const auto bounds
-            = sampleBounds(level, level.domain, metadata.dimension);
-        lowest = bounds.lower[axis];
-        highest = bounds.upper[axis];
-    }
+    const auto bounds = sampleBounds(level, level.domain, metadata.dimension);
+    const auto lowest = query.region ? query.region->lower[axis]
+                                     : bounds.lower[axis];
+    const auto highest = query.region ? query.region->upper[axis]
+                                      : bounds.upper[axis];
+    const auto tolerance = 1.0e-9 * level.cellSize[axis];
     for (const auto position : line.positions) {
-        if (!std::isfinite(position) || position < lowest
-            || position > highest) {
+        if (!std::isfinite(position)) {
+            throw std::invalid_argument("line result position is not finite");
+        }
+        // An index position is in range when the sample it names is: the
+        // producer tests the centre, not the index. Index positions only occur
+        // on a single-level dataset, so this level is the one that emitted it.
+        const auto centre = line.positionsAreIndices
+            ? samplePosition(level, static_cast<int>(query.axis),
+                  static_cast<int>(position))
+            : position;
+        if (centre < lowest - tolerance || centre > highest + tolerance) {
             throw std::invalid_argument(
-                "line result position lies outside the sampled level");
+                "line result position lies outside the requested extent");
         }
     }
 }
@@ -376,7 +454,6 @@ void validateSessionDatasetPageResult(const DatasetMetadata& metadata,
         std::int64_t upper = 0;
     };
     std::array<Window, 2> expected{};
-    bool derived = false;
     bool expectEmpty = false;
     try {
         for (std::size_t entry = 0; entry < 2; ++entry) {
@@ -398,10 +475,13 @@ void validateSessionDatasetPageResult(const DatasetMetadata& metadata,
             expected[entry].lower = std::max(rawLower, domainLower);
             expected[entry].upper = std::min(rawUpper, domainUpper);
         }
-        derived = true;
-    } catch (const std::exception&) {
-        derived = false;
+    } catch (const std::out_of_range&) {
+        // The request validator refuses a region this far out, so the builder
+        // could only have answered with an error: a page is impossible here.
+        throw std::invalid_argument(
+            "dataset page answers a request that cannot be indexed");
     }
+    constexpr bool derived = true;
     if (derived && expectEmpty && (page.nx != 0 || page.ny != 0)) {
         throw std::invalid_argument(
             "dataset page is not empty although the request misses the level");
@@ -448,6 +528,15 @@ void validateSessionDatasetPageResult(const DatasetMetadata& metadata,
                 if (upper > expected[entry].upper) {
                     throw std::invalid_argument(
                         "dataset page reaches past the requested region");
+                }
+                const auto requestedSpan = expected[entry].upper
+                    - expected[entry].lower + 1;
+                const auto expectTruncation = requestedSpan
+                    > static_cast<std::int64_t>(request.maximumExtent);
+                if (truncated != expectTruncation) {
+                    throw std::invalid_argument(
+                        "dataset page truncation flag does not match the "
+                        "requested span");
                 }
                 if (truncated
                     && extent

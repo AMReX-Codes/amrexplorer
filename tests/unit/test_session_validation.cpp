@@ -56,6 +56,8 @@ amrvis::DatasetMetadata dataset(int dimension)
         entry.level = level;
         entry.domain = amrvis::IntBox{amrvis::Int3{{0, 0, 0}},
             amrvis::Int3{{3, 3, 3}}, amrvis::Int3{{0, 0, 0}}};
+        // One box covering the level, so a grid overlay has something to be.
+        entry.boxes.push_back(entry.domain);
         metadata.levels.push_back(entry);
     }
     return metadata;
@@ -76,9 +78,11 @@ amrvis::SliceRequest sliceRequest(int dimension)
     return request;
 }
 
-amrvis::SliceQueryResult sliceResult(const amrvis::RealBox& region)
+amrvis::SliceQueryResult sliceResult(
+    const amrvis::RealBox& region, bool gridBoxesIncluded = true)
 {
     amrvis::SliceQueryResult result;
+    result.gridBoxesIncluded = gridBoxesIncluded;
     result.plane.width = 2;
     result.plane.height = 2;
     result.plane.physicalRegion = region;
@@ -323,18 +327,22 @@ int main()
         const ViewDataRequest withoutView = without;
         requireAccepted([&] {
             validateSessionViewResult(
-                metadata, withoutView, sliceResult(region));
+                metadata, withoutView, sliceResult(region, false));
         }, "a slice without overlays was rejected");
-        auto unrequested = sliceResult(region);
-        unrequested.gridBoxesIncluded = true;
         requireRejected([&] {
-            validateSessionViewResult(metadata, withoutView, unrequested);
+            validateSessionViewResult(
+                metadata, withoutView, sliceResult(region, true));
         }, "an unrequested overlay flag was accepted");
-        unrequested = sliceResult(region);
+        auto unrequested = sliceResult(region, false);
         unrequested.gridBoxes.push_back({1, region});
         requireRejected([&] {
             validateSessionViewResult(metadata, withoutView, unrequested);
         }, "an unrequested grid box was accepted");
+        // The flag runs both ways: dropping it would leave the window showing
+        // the overlay from the previous slice.
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, sliceResult(region, false));
+        }, "a missing overlay flag was accepted for a request that asked");
 
         auto outside = sliceResult(region);
         auto beyondWindow = region;
@@ -344,17 +352,27 @@ int main()
             validateSessionViewResult(metadata, view, outside);
         }, "a grid box outside the visible region was accepted");
 
-        // A grid box may keep its own extent on the normal axis: only the plane
-        // axes are clipped to the visible region.
+        // The catalog says where the boxes are: an invented one inside the
+        // window corresponds to no box of that level.
+        auto invented = sliceResult(region);
+        auto smaller = region;
+        smaller.upper[0] -= 0.5;
+        invented.gridBoxes.push_back({1, smaller});
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, invented);
+        }, "a grid box matching no catalog box was accepted");
+
         if (dimension == 3) {
-            auto normalExtent = sliceResult(region);
+            // All three axes are compared, so the normal extent has to be the
+            // catalog box's own rather than anything plausible.
+            auto stretched = sliceResult(region);
             auto box = region;
             box.lower[2] -= 1.0;
             box.upper[2] += 1.0;
-            normalExtent.gridBoxes.push_back({1, box});
-            requireAccepted([&] {
-                validateSessionViewResult(metadata, view, normalExtent);
-            }, "a grid box with its own normal-axis extent was rejected");
+            stretched.gridBoxes.push_back({1, box});
+            requireRejected([&] {
+                validateSessionViewResult(metadata, view, stretched);
+            }, "a grid box with an invented normal extent was accepted");
         }
 
         // A line answer to a slice request is not an answer at all.
@@ -426,6 +444,37 @@ int main()
             validateSessionViewResult(metadata, view, beyondExtent);
         }, "a line position outside the sampled level was accepted");
 
+        // A region narrows the extent, so a sample outside it is not an answer
+        // to this request even though the level contains it.
+        auto narrowed = lineRequest(3, 1);
+        narrowed.query.region = RealBox{
+            Real3{{1.0, 1.0, 1.0}}, Real3{{2.0, 2.0, 2.0}}};
+        const ViewDataRequest narrowedView = narrowed;
+        auto inside = lineResult(1);
+        inside.line.positions = {1.5, 1.75};
+        requireAccepted([&] {
+            validateSessionViewResult(metadata, narrowedView, inside);
+        }, "a line inside the requested region was rejected");
+        auto strays = lineResult(1);
+        strays.line.positions = {0.5, 3.5};
+        requireRejected([&] {
+            validateSessionViewResult(metadata, narrowedView, strays);
+        }, "a line straying outside the requested region was accepted");
+
+        // And a region may legitimately reach past the domain: the walk then
+        // reports invalid samples out there, which must not be refused.
+        auto wide = lineRequest(3, 1);
+        wide.query.region = RealBox{
+            Real3{{-2.0, -2.0, -2.0}}, Real3{{6.0, 6.0, 6.0}}};
+        const ViewDataRequest wideView = wide;
+        auto outsideDomain = lineResult(1);
+        outsideDomain.line.positions = {-1.5, 5.5};
+        outsideDomain.line.valid = {0, 0};
+        outsideDomain.line.sourceLevel = {-1, -1};
+        requireAccepted([&] {
+            validateSessionViewResult(metadata, wideView, outsideDomain);
+        }, "invalid samples outside the domain were refused");
+
         auto nonFinite = lineResult(1);
         nonFinite.line.positions = {0.25, std::nan("")};
         requireRejected([&] {
@@ -457,6 +506,14 @@ int main()
         requireRejected([&] {
             validateSessionViewResult(metadata, view, beyondDomain);
         }, "an index position outside the level domain was accepted");
+
+        // A duplicated position is cosmetic, not a lie, and strict increase is
+        // not something the producer promises across a level transition.
+        auto repeated = indexed;
+        repeated.line.positions = {1.0, 1.0};
+        requireAccepted([&] {
+            validateSessionViewResult(metadata, view, repeated);
+        }, "a repeated line position was refused");
     }
 
     // Dataset page results.
@@ -505,6 +562,19 @@ int main()
             validateSessionDatasetPageResult(metadata, request, truncated);
         }, "a truncation claim below the extent limit was accepted");
 
+        // The requested span here is exactly the limit, which the builder does
+        // not treat as truncation.
+        auto exact = request;
+        exact.maximumExtent = 4;
+        auto claimed = page(4, 4);
+        claimed.truncatedX = true;
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, exact, claimed);
+        }, "truncation was accepted for a span equal to the limit");
+        requireAccepted([&] {
+            validateSessionDatasetPageResult(metadata, exact, page(4, 4));
+        }, "a page filling the limit exactly was rejected");
+
         auto limited = request;
         limited.maximumExtent = 2;
         auto atLimit = page(2, 2);
@@ -528,6 +598,20 @@ int main()
         requireRejected([&] {
             validateSessionDatasetPageResult(metadata, away, page(4, 4));
         }, "a populated page was accepted where the region misses the level");
+
+        // A region too far out to index cannot be answered with a page at all:
+        // the request is refused before it is sent, and a page claiming to
+        // answer one is impossible rather than merely unverifiable.
+        auto unindexable = request;
+        unindexable.region.lower[0] = 1.0e100;
+        unindexable.region.upper[0] = 2.0e100;
+        requireRejected([&] {
+            validateSessionDatasetPageRequest(
+                metadata, DatasetId{1}, unindexable);
+        }, "a region too far out to index was accepted");
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, unindexable, page(4, 4));
+        }, "a page answering an unindexable request was accepted");
 
         auto ragged = page(4, 4);
         ragged.covered.pop_back();

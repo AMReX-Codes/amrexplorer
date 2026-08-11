@@ -460,6 +460,25 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_remote_canvas_wheel_smoke PROPERTIES TIMEOUT 30)
 
+    # Regression for fixed-scale-switch-lands-off-center-remotely: selecting a
+    # fixed scale keeps looking at the same place. Local does that implicitly
+    # through the view's transformation anchor while remote re-centres on the
+    # centre viewCenterInData reports, so the two agree only if that centre is
+    # the true one. It was a fraction of a raster pixel off, which is thirteen
+    # finest cells on this domain.
+    add_test(
+        NAME qt_remote_fixed_scale_centre_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_wide"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_fixed_scale_centre"
+            -DMODE=fixed-scale-centre
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_remote_fixed_scale_centre_smoke
+        PROPERTIES TIMEOUT 30)
+
     # Local and remote must agree on what a scrolled fixed scale shows.
     # Scrolling is what separates the two coordinate spaces: local scales a
     # whole-domain raster while remote scales a whole-domain virtual canvas of

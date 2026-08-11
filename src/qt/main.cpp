@@ -2252,6 +2252,70 @@ int main(int argc, char* argv[])
             [&application] { application.exit(3); });
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path); });
+    } else if (argc == 3 && std::string_view(argv[1])
+            == "--fixed-scale-centre-smoke-test") {
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        // Regression for fixed-scale-switch-lands-off-center-remotely.
+        // Selecting a fixed scale is supposed to keep looking at the same
+        // place. Local does that implicitly, through the view's own
+        // transformation anchor; remote has to re-centre explicitly, on the
+        // centre viewCenterInData reports. Those two only agree if that centre
+        // is the true one -- and it was a fraction of a raster pixel off, which
+        // is many finest cells on a domain this wide. Open the same dataset
+        // remotely, switch to 1x without touching the view, and require the
+        // resulting window to be centred on the domain, which is where a
+        // fitted view was looking.
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, phase](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application, phase] {
+                        if (*phase != 0) {
+                            return;
+                        }
+                        *phase = 1;
+                        const auto shown
+                            = window.activeViewVisibleDataWindowForTest();
+                        const auto domain
+                            = window.datasetPhysicalDomainForTest();
+                        if (!(shown.width() > 0.0)) {
+                            qCritical("no visible window after the switch");
+                            application.exit(1);
+                            return;
+                        }
+                        const auto drift = std::abs(
+                            shown.center().x() - domain.center().x());
+                        const auto cellSize
+                            = window.activeViewFinestCellSizeForTest();
+                        // One finest cell of slack: the fetch window is
+                        // quantised to whole cells, and nothing more than that
+                        // is explainable.
+                        if (drift > cellSize) {
+                            qCritical("the switch left the view %g off centre "
+                                      "(%g finest cells)",
+                                drift, cellSize > 0.0 ? drift / cellSize : 0.0);
+                            application.exit(1);
+                            return;
+                        }
+                        application.exit(0);
+                    });
+                window.selectFixedScaleForTest(1);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                window.openRemoteDataset(
+                    "127.0.0.1", server->port(), path, server->token());
+            });
     } else if (argc == 4
         && std::string_view(argv[1]) == "--effective-scale-smoke-test") {
         // A domain wider than maxSliceOutputDimension finest cells cannot have

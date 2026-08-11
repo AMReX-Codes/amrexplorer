@@ -226,6 +226,9 @@ public:
         return effectiveFixedScale(factor);
     }
     [[nodiscard]] double activeViewFinestCellSizeForTest() const;
+    // The dataset's physical domain in the active view's two display axes, so
+    // a test can say where "centred" is.
+    [[nodiscard]] QRectF datasetPhysicalDomainForTest() const;
     // Test-only: send a real wheel event through the active view's viewport,
     // exercising the same zoomBy path a user's scroll wheel takes. Positive
     // notches zoom in.

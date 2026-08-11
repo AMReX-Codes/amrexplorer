@@ -2247,6 +2247,20 @@ QString MainWindow::scaleUiLabelForTest() const
     return m_scaleButton == nullptr ? QString() : m_scaleButton->text();
 }
 
+QRectF MainWindow::datasetPhysicalDomainForTest() const
+{
+    if (!m_openMetadata || m_openMetadata->levels.empty()
+        || m_activeView == nullptr) {
+        return {};
+    }
+    const auto domain = datasetSampleBounds(*m_openMetadata);
+    const auto axes = displayAxes(m_activeView->normal);
+    const auto x = static_cast<std::size_t>(axes[0]);
+    const auto y = static_cast<std::size_t>(axes[1]);
+    return QRectF(QPointF(domain.lower[x], domain.lower[y]),
+        QPointF(domain.upper[x], domain.upper[y]));
+}
+
 double MainWindow::activeViewFinestCellSizeForTest() const
 {
     if (!m_openMetadata || m_openMetadata->levels.empty()
@@ -3716,8 +3730,17 @@ std::array<double, 2> MainWindow::viewCenterInData(
         return {0.5 * (region.lower[xAxis] + region.upper[xAxis]),
             0.5 * (region.lower[yAxis] + region.upper[yAxis])};
     }
+    // The centre of the mapped viewport, not the mapping of the viewport's
+    // centre *point*: QRect::center() is integral and rounds down, so on a
+    // 640-pixel-wide viewport it answers 319 where the geometric centre is 320.
+    // That half-to-one pixel is nothing at native resolution and a lot when one
+    // raster pixel spans many finest cells -- on an 8192-cell domain fitted to
+    // 640 pixels it is about 13 cells, which is what made a remote fixed-scale
+    // switch land off the centre a local one keeps. This is also the reading
+    // preservedDataWindow and updateRemoteFixedScaleDemand already use, so all
+    // three now agree on where the view is looking.
     const auto scene = state.view->mapToScene(
-        state.view->viewport()->rect().center());
+        state.view->viewport()->rect()).boundingRect().center();
     if (state.view->virtualCanvasActive() && m_dataset
         && !m_dataset->metadata().levels.empty()) {
         // Virtual canvas: scene units are finest cells over the whole domain,

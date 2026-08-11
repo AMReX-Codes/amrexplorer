@@ -104,6 +104,9 @@ if(TARGET amrexplorer_remote)
         PRIVATE amrexplorer::remote amrexplorer::warnings Threads::Threads
     )
     add_test(NAME remote_frame COMMAND test_remote_frame)
+    # Timing-sensitive: it measures how long a write survives a slow reader, so
+    # it must not be scheduled against other tests competing for the same cores.
+    set_tests_properties(remote_frame PROPERTIES RUN_SERIAL TRUE)
 
     add_executable(test_remote_codec unit/test_remote_codec.cpp)
     target_include_directories(test_remote_codec PRIVATE
@@ -162,11 +165,14 @@ if(TARGET amrexplorer_remote)
         FIXTURES_SETUP remote_server_spherical_materialized)
     add_test(NAME remote_server
         COMMAND test_remote_server "${remote_server_private_fixture_dir}")
-    # The trickle-reader case waits out a whole-response write budget on a
-    # ~28 MiB response, so this test is several seconds even without a
-    # sanitizer. 90 s leaves room for TSan and ASan.
+    # Several timing cases, and one of them samples and encodes a ~28 MiB slice
+    # before the write it measures even begins: about 8 s here, 16 s under TSan,
+    # and considerably more on a shared two-core runner. RUN_SERIAL keeps it from
+    # competing with the other sanitized tests for those cores, which is what the
+    # hosted timeouts came down to; 90 s leaves room on top of that.
     set_tests_properties(remote_server PROPERTIES
         FIXTURES_REQUIRED remote_server_private_materialized
+        RUN_SERIAL TRUE
         TIMEOUT 90)
 
     add_executable(test_remote_connection

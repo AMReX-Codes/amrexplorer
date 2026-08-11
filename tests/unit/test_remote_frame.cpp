@@ -255,7 +255,11 @@ int main()
                 &sendBufferBytes, sizeof(sendBufferBytes)) == 0,
         "could not reduce the slow-writer send buffer");
     constexpr std::size_t slowPayloadBytes = 512U * 1024U;
-    constexpr auto writeStallTimeout = std::chrono::milliseconds{250};
+    // The reader below drains every 15 ms and the frame needs 128 drains, so
+    // this case runs about 1.9 s -- longer than one stall interval, which is
+    // what proves the deadline renews, while tolerating a 1.5 s scheduling gap.
+    // A hosted macOS runner exceeded the 250 ms this used to allow.
+    constexpr auto writeStallTimeout = std::chrono::milliseconds{1500};
     // 4 KiB every 5 ms is about 800 KiB/s, comfortably above this floor, so the
     // whole-write budget must not retire a reader that is merely slow.
     constexpr FrameWriteBudget slowBudget{writeStallTimeout, 64U * 1024U};
@@ -267,7 +271,7 @@ int main()
         std::array<std::uint8_t, 4096> bytes{};
         while (slowBytesRead.load()
             < slowPayloadBytes + sizeof(std::uint32_t)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds{5});
+            std::this_thread::sleep_for(std::chrono::milliseconds{15});
             const auto count = ::recv(slowDescriptors[1], bytes.data(),
                 bytes.size(), 0);
             if (count <= 0) {
@@ -306,7 +310,8 @@ int main()
     // The defect the whole-write budget closes: a peer that accepts a few bytes
     // just before every stall deadline renews it forever, so the stall timeout
     // alone never retires the write. The reader below empties the writer's whole
-    // 4 KiB send buffer every 150 ms, against a 250 ms stall interval: draining
+    // 4 KiB send buffer every 150 ms, against a one-second stall interval:
+    // draining
     // more than the buffer holds is what makes the socket reliably writable
     // again, so progress always lands before the stall deadline, and because the
     // stall interval is longer than the read interval the stall deadline can
@@ -329,9 +334,13 @@ int main()
     constexpr std::size_t tricklePayloadBytes = 256U * 1024U;
     // 8 KiB/s floor over a 256 KiB payload: 32 s of transfer allowance would
     // make the test slow, so scale both down -- the policy is a ratio, and a
-    // 2 MiB/s floor with this payload gives 250 ms grace + 128 ms.
+    // 2 MiB/s floor with this payload gives 1 s of grace + 128 ms. The grace is
+    // the reader's scheduling slack as well: it drains every 150 ms, so a gap
+    // has to reach a second before the stall interval can fire instead of the
+    // budget under test.
+    constexpr auto trickleStallTimeout = std::chrono::milliseconds{1000};
     constexpr FrameWriteBudget trickleBudget{
-        writeStallTimeout, 2U * 1024U * 1024U};
+        trickleStallTimeout, 2U * 1024U * 1024U};
     const auto trickleBound = trickleBudget.total(tricklePayloadBytes);
     std::atomic_bool trickleStop{false};
     std::thread trickleReader([&] {
@@ -372,7 +381,7 @@ int main()
         "the trickle-reader write did not end near its advertised bound");
     // The stall interval alone could not have done this: the reader never went
     // quiet for that long.
-    require(trickleBound > writeStallTimeout,
+    require(trickleBound > trickleStallTimeout,
         "the trickle bound is not longer than one stall interval");
 
     // The floor is a hard requirement of the budget, not a suggestion: zero
@@ -380,7 +389,7 @@ int main()
     bool rejectedZeroFloor = false;
     try {
         writeFrameWithBudget(trickleWriter, std::vector<std::uint8_t>(8), 8,
-            FrameWriteBudget{writeStallTimeout, 0});
+            FrameWriteBudget{trickleStallTimeout, 0});
     } catch (const std::invalid_argument&) {
         rejectedZeroFloor = true;
     }

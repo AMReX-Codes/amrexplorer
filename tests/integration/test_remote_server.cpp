@@ -479,6 +479,16 @@ int main(int argc, char* argv[])
         codec::encode(3, codec::toWire(stalledSlice)),
         stalledHello.maximumFrameBytes);
 
+    // Nobody reads for several stall intervals. This has to be explicit:
+    // readWithDeadline below drains as fast as it can, and the healthy
+    // connection's exchanges are themselves queued behind the single worker this
+    // response occupies, so without the pause the two race -- and a machine that
+    // finishes the healthy exchange quickly starts draining before the stall
+    // deadline passes, renewing progress and completing the write. That is the
+    // "server did not retire the stalled response session" failure.
+    std::this_thread::sleep_for(
+        stalledOptions.responseWriteStallTimeout * 5);
+
     auto healthySocket = connectTo("127.0.0.1", stalledServer.port());
     envelope = exchange(healthySocket, 1,
         codec::toWire(helloRequest(stalledServer.token())),

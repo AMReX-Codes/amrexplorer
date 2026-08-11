@@ -2253,6 +2253,49 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path); });
     } else if (argc == 4
+        && std::string_view(argv[1]) == "--scale-state-smoke-test") {
+        // The toolbar Scale button and View > Scale are one state shown twice.
+        // Pick 4x from the *toolbar* menu -- the path that used to leave the
+        // View-menu radio unchecked -- and require the full agreement
+        // fixedScaleStateMatchesForTest asserts. Then open a second dataset,
+        // which arrives fitted, and require the report to have come back to
+        // Fit rather than still claiming 4x.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, phase, second](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                if (*phase == 0) {
+                    *phase = 1;
+                    window.selectToolbarFixedScaleForTest(4);
+                    if (!window.fixedScaleStateMatchesForTest(4)) {
+                        qCritical("a toolbar scale pick left the state split");
+                        application.exit(1);
+                        return;
+                    }
+                    QTimer::singleShot(0, &window, [&window, second] {
+                        window.openDataset(second);
+                    });
+                    return;
+                }
+                if (window.scaleUiLabelForTest() != QStringLiteral("Fit")) {
+                    qCritical("a new dataset kept the old scale report '%s'",
+                        qUtf8Printable(window.scaleUiLabelForTest()));
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, first] { window.openDataset(first); });
+    } else if (argc == 4
         && std::string_view(argv[1])
             == "--sequence-transform-preserve-smoke-test") {
         const std::filesystem::path first(argv[2]);

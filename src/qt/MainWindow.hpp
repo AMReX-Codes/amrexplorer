@@ -212,6 +212,12 @@ public:
     // handlers used by Shift+left drag, and inspect the resulting transform.
     void setActiveViewScaleForTest(int factor);
     void selectFixedScaleForTest(int factor);
+    // The same choice made from the *toolbar* button's own menu rather than
+    // View > Scale. Both must leave the same state; only the View-menu path was
+    // covered before, which is why the toolbar's one-way sync went unnoticed.
+    void selectToolbarFixedScaleForTest(int factor);
+    // What the Scale button currently reports.
+    [[nodiscard]] QString scaleUiLabelForTest() const;
     // Test-only: send a real wheel event through the active view's viewport,
     // exercising the same zoomBy path a user's scroll wheel takes. Positive
     // notches zoom in.
@@ -585,6 +591,14 @@ private:
         std::filesystem::path dataRoot = {},
         std::optional<FrameSliceSpec> initialSpec = std::nullopt,
         std::shared_ptr<DatasetSession> preparedSession = {});
+    // The scale the toolbar button and the View > Scale radio group report.
+    // They are one state shown twice, so there is one setter: picking "4x" from
+    // the toolbar used to leave the View menu unchecked, and neither reset when
+    // a new dataset opened fitted, so the toolbar could claim "4x" over a
+    // fitted view. fixedScaleStateMatchesForTest asserts exactly this
+    // agreement.
+    enum class ScaleUiState : std::uint8_t { Fit, Fixed, Custom, Mixed };
+    void setScaleUiState(ScaleUiState state, int factor = 0);
     void configureSliceControls();
     // Enable the dataset-dependent field/level/range/menu controls once a
     // dataset (single or sequence frame) is loaded. Shared by

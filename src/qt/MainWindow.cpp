@@ -520,14 +520,14 @@ MainWindow::MainWindow(QWidget* parent)
     // the control.
     auto* resetZoomAction = scaleMenu->addAction(tr("Reset Zoom"));
     connect(resetZoomAction, &QAction::triggered, this, [this] {
-        m_scaleButton->setText(tr("Fit"));
+        setScaleUiState(ScaleUiState::Fit);
         resetZoomAllViews();
     });
     constexpr std::array<int, 6> scaleFactors{1, 2, 4, 8, 16, 32};
     for (const auto factor : scaleFactors) {
         auto* action = scaleMenu->addAction(tr("%1x").arg(factor));
         connect(action, &QAction::triggered, this, [this, factor] {
-            m_scaleButton->setText(tr("%1x").arg(factor));
+            setScaleUiState(ScaleUiState::Fixed, factor);
             applyFixedScale(factor);
         });
     }
@@ -1405,9 +1405,7 @@ void MainWindow::createMenus()
         action->setActionGroup(m_scaleGroup);
         action->setShortcut(QKeySequence(Qt::Key_1 + static_cast<int>(index)));
         connect(action, &QAction::triggered, this, [this, factor] {
-            if (m_scaleButton != nullptr) {
-                m_scaleButton->setText(tr("%1x").arg(factor));
-            }
+            setScaleUiState(ScaleUiState::Fixed, factor);
             applyFixedScale(factor);
         });
         scaleMenu->addAction(action);
@@ -2226,6 +2224,27 @@ void MainWindow::selectFixedScaleForTest(int factor)
             return;
         }
     }
+}
+
+void MainWindow::selectToolbarFixedScaleForTest(int factor)
+{
+    if (m_scaleButton == nullptr || m_scaleButton->menu() == nullptr) {
+        return;
+    }
+    const auto label = tr("%1x").arg(factor);
+    for (auto* action : m_scaleButton->menu()->actions()) {
+        auto text = action->text();
+        text.remove(QLatin1Char('&'));
+        if (text == label) {
+            action->trigger();
+            return;
+        }
+    }
+}
+
+QString MainWindow::scaleUiLabelForTest() const
+{
+    return m_scaleButton == nullptr ? QString() : m_scaleButton->text();
 }
 
 void MainWindow::wheelActiveViewForTest(int notches)
@@ -3161,15 +3180,60 @@ void MainWindow::showAboutDialog()
             .arg(QStringLiteral(AMREXPLORER_VERSION)));
 }
 
+void MainWindow::setScaleUiState(ScaleUiState state, int factor)
+{
+    QString label;
+    switch (state) {
+    case ScaleUiState::Fit:
+        label = tr("Fit");
+        break;
+    case ScaleUiState::Fixed:
+        label = tr("%1x").arg(factor);
+        break;
+    case ScaleUiState::Custom:
+        label = tr("Custom");
+        break;
+    case ScaleUiState::Mixed:
+        label = tr("Mixed");
+        break;
+    }
+    if (m_scaleButton != nullptr) {
+        m_scaleButton->setText(label);
+    }
+    if (m_scaleGroup == nullptr) {
+        return;
+    }
+    // Custom and Mixed have no radio item; leave the group with nothing checked.
+    if (state == ScaleUiState::Custom || state == ScaleUiState::Mixed) {
+        if (auto* checked = m_scaleGroup->checkedAction()) {
+            checked->setChecked(false);
+        }
+        return;
+    }
+    if (state == ScaleUiState::Fit) {
+        if (m_resetZoomAction != nullptr) {
+            m_resetZoomAction->setChecked(true);
+        }
+        return;
+    }
+    // setChecked, never trigger: the group's handlers call back into
+    // applyFixedScale, and this is reporting the scale, not choosing one.
+    for (auto* action : m_scaleGroup->actions()) {
+        auto text = action->text();
+        text.remove(QLatin1Char('&'));
+        if (text == label) {
+            action->setChecked(true);
+            return;
+        }
+    }
+}
+
 void MainWindow::resetViewZoom(PlaneViewState& state)
 {
     state.visibleRegion.reset();
     state.view->setVirtualCanvas(std::nullopt);
     state.view->fitToWindow();
-    m_resetZoomAction->setChecked(true);
-    if (m_scaleButton != nullptr) {
-        m_scaleButton->setText(tr("Fit"));
-    }
+    setScaleUiState(ScaleUiState::Fit);
     scheduleSliceRequest(state);
 }
 
@@ -3410,14 +3474,7 @@ void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
             return;
         }
         state.view->zoomToRect(selection);
-        if (m_scaleGroup != nullptr) {
-            if (auto* checked = m_scaleGroup->checkedAction()) {
-                checked->setChecked(false);
-            }
-        }
-        if (m_scaleButton != nullptr) {
-            m_scaleButton->setText(tr("Custom"));
-        }
+        setScaleUiState(ScaleUiState::Custom);
         return;
     }
     const auto clamped = sceneRect.normalized().intersected(
@@ -3442,15 +3499,9 @@ void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
     } else {
         applyRubberBandZoom(state, normalizedRect);
     }
-    if (m_scaleGroup != nullptr) {
-        if (auto* checked = m_scaleGroup->checkedAction()) {
-            checked->setChecked(false);
-        }
-    }
-    if (m_scaleButton != nullptr) {
-        m_scaleButton->setText(
-            views.size() > 1 && !synchronize ? tr("Mixed") : tr("Custom"));
-    }
+    setScaleUiState(views.size() > 1 && !synchronize
+            ? ScaleUiState::Mixed
+            : ScaleUiState::Custom);
 }
 
 void MainWindow::applyRubberBandZoom(
@@ -3808,10 +3859,7 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
                 == ImageView::TransformMode::FixedScale;
         if (!remoteFixed) {
             state.view->fitToWindow();
-            m_resetZoomAction->setChecked(true);
-            if (m_scaleButton != nullptr) {
-                m_scaleButton->setText(tr("Fit"));
-            }
+            setScaleUiState(ScaleUiState::Fit);
         }
         scheduleSliceRequest(state, false);
         return;
@@ -5083,6 +5131,11 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     setPlaybackMode(PlaybackMode::None);
     closeSequence();
     resetRangeState();
+    // The new dataset arrives fitted -- setPlaceholder below puts every view
+    // back to Fit -- so the scale report has to come back with it. Without
+    // this the toolbar kept claiming the previous dataset's "4x" over a fitted
+    // view of the new one.
+    setScaleUiState(ScaleUiState::Fit);
     // Invalidate every in-flight per-view slice and reset the view states.
     for (auto* state : allViewStates()) {
         state->stopSource.request_stop();

@@ -978,6 +978,19 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_sequence_noop_smoke PROPERTIES TIMEOUT 30)
+    # Regression for low-priority-ui-polish item 3: the toolbar Scale button and
+    # View > Scale are one state, and it resets when a dataset opens fitted.
+    add_test(
+        NAME qt_scale_state_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_scale_state"
+            -DMODE=scale-state
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_scale_state_smoke PROPERTIES TIMEOUT 30)
     # ...and playback must stop on a frame it cannot read, rather than wrapping
     # back onto it every cycle.
     add_test(

@@ -398,13 +398,30 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
         if (!std::isfinite(position)) {
             throw std::invalid_argument("line result position is not finite");
         }
-        // An index position is in range when the sample it names is: the
-        // producer tests the centre, not the index. Index positions only occur
-        // on a single-level dataset, so this level is the one that emitted it.
-        const auto centre = line.positionsAreIndices
-            ? samplePosition(level, static_cast<int>(query.axis),
-                  static_cast<int>(position))
-            : position;
+        auto centre = position;
+        if (line.positionsAreIndices) {
+            // The producer reports an int index widened to a double, so a value
+            // that is not integral is not an index at all -- 1.5 would otherwise
+            // be read as index 1 -- and one outside int's range cannot be
+            // converted back at all: narrowing 1e100 to int is undefined, which
+            // is the opposite of what a validation layer is for. Both bounds are
+            // exactly representable as doubles, so these comparisons are exact.
+            if (position != std::floor(position)
+                || position
+                    < static_cast<double>(std::numeric_limits<int>::min())
+                || position
+                    > static_cast<double>(std::numeric_limits<int>::max())) {
+                throw std::invalid_argument(
+                    "line result index position is not an index");
+            }
+            // An index position is in range when the sample it names is: the
+            // producer tests the centre, not the index. Index positions only
+            // occur on a single-level dataset, so this level is the one that
+            // emitted it. The axis is the clamped one, since samplePosition
+            // indexes fixed three-element geometry with it.
+            centre = samplePosition(level, static_cast<int>(axis),
+                static_cast<int>(position));
+        }
         if (centre < lowest - tolerance || centre > highest + tolerance) {
             throw std::invalid_argument(
                 "line result position lies outside the requested extent");

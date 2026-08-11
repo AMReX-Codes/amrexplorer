@@ -30,6 +30,21 @@ void requireRejected(Function&& function, const char* message)
 }
 
 template <typename Function>
+void requireRejectedWith(
+    Function&& function, const char* needle, const char* message)
+{
+    try {
+        function();
+    } catch (const std::exception& error) {
+        if (std::string(error.what()).find(needle) != std::string::npos) {
+            return;
+        }
+        std::cerr << "rejected for the wrong reason: " << error.what() << '\n';
+    }
+    require(false, message);
+}
+
+template <typename Function>
 void requireAccepted(Function&& function, const char* message)
 {
     try {
@@ -514,6 +529,32 @@ int main()
         requireAccepted([&] {
             validateSessionViewResult(metadata, view, repeated);
         }, "a repeated line position was refused");
+
+        // An index arrives as an int widened to a double. A fractional one is
+        // not an index, and one outside int's range cannot even be converted
+        // back -- doing so is undefined, so it has to be refused before the
+        // cast rather than after it (UBSan proves this pair).
+        auto fractional = indexed;
+        fractional.line.positions = {0.0, 1.5};
+        requireRejectedWith([&] {
+            validateSessionViewResult(metadata, view, fractional);
+        }, "not an index", "a fractional index position was accepted");
+
+        // The reason matters here: the guard has to refuse these *before* the
+        // conversion, and an out-of-range index that survived the cast would be
+        // rejected further down for lying outside the extent, which would look
+        // like a pass while the undefined conversion had already happened.
+        for (const double extreme : {1.0e100, -1.0e100}) {
+            auto beyondInt = indexed;
+            beyondInt.line.positions = {extreme};
+            beyondInt.line.values = {1.0F};
+            beyondInt.line.valid = {1};
+            beyondInt.line.sourceLevel = {0};
+            requireRejectedWith([&] {
+                validateSessionViewResult(metadata, view, beyondInt);
+            }, "not an index",
+                "an index position outside int's range was accepted");
+        }
     }
 
     // Dataset page results.

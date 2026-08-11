@@ -2035,6 +2035,20 @@ bool MainWindow::allViewsUseViewportBoundedOutputForTest() const
             [&](const auto* state) { return check(*state); });
 }
 
+int MainWindow::slicesInFlightForTest() const
+{
+    if (m_viewDimension == 2) {
+        return m_view2d.pendingRequests;
+    }
+    const std::array<const PlaneViewState*, 3> threeDimensional{
+        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+    int total = 0;
+    for (const auto* state : threeDimensional) {
+        total += state->pendingRequests;
+    }
+    return total;
+}
+
 bool MainWindow::allViewsFixedScaleRasterCoversViewportForTest() const
 {
     const auto check = [](const PlaneViewState& state) {
@@ -2237,9 +2251,20 @@ QRectF MainWindow::activeViewVisibleDataWindowForTest() const
     if (plane.width < 1 || plane.height < 1) {
         return {};
     }
-    const auto visible = view->mapToScene(
-        view->viewport()->rect()).boundingRect().intersected(
-            QRectF(0.0, 0.0, plane.width, plane.height));
+    // Raster pixels, not scene units: a remote fixed scale hosts the fetched
+    // raster on a whole-domain virtual canvas whose scene coordinates are
+    // finest cells, so intersecting the viewport's scene rect with the pixel
+    // rect directly would report a window in the wrong space (and offset by
+    // the fetched window's position in the domain) whenever the canvas
+    // scrolls.
+    //
+    // The second clamp is not redundant with the one inside visibleImageRect:
+    // that one clamps to the pixmap, while the normalization below divides by
+    // the plane's dimensions, and a supersampled spherical warp makes the
+    // pixmap larger than the plane. Clamping to the plane rect keeps the
+    // fractions in range there, exactly as this probe did before.
+    const auto visible = view->visibleImageRect().intersected(
+        QRectF(0.0, 0.0, plane.width, plane.height));
     const auto axes = displayAxes(m_activeView->normal);
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);

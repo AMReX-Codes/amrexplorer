@@ -164,6 +164,12 @@ public:
     // everything its viewport shows of the domain backed by the raster —
     // full bleed with no unfetched gaps.
     [[nodiscard]] bool allViewsFixedScaleRasterCoversViewportForTest() const;
+    // Test-only: slice requests currently on a worker across the current
+    // panels. Zero means the displayed raster is not about to be replaced by
+    // work already in flight, which is what a probe reading the raster (or the
+    // window it implies) needs before it measures. Pair it with a settle to
+    // absorb a request that only queues its successor.
+    [[nodiscard]] int slicesInFlightForTest() const;
     // Test-only: send a real Shift+left drag through the active view's
     // viewport, exercising the same event path as interactive panning.
     void shiftDragActiveViewForTest(int dx, int dy);

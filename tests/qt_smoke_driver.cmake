@@ -16,6 +16,7 @@
 #                 range-cache | fab-zoom | cache-budget |
 #                 fixed-scale-1 | fixed-scale-4 | sequence-transform-preserve |
 #                 remote-fixed-scale | remote-fixed-scale-flicker |
+#                 local-remote-fixed-scale-window |
 #                 sequence-density-preserve |
 #                 sequence-equal-size-transform-preserve |
 #                 sequence-geometry-refit
@@ -89,6 +90,10 @@ elseif(MODE STREQUAL "remote-fixed-scale-flicker")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --remote-fixed-scale-flicker-smoke-test
         "${WORK}/plt")
+elseif(MODE STREQUAL "local-remote-fixed-scale-window")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}"
+        --local-remote-fixed-scale-window-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "sequence-transform-preserve")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")

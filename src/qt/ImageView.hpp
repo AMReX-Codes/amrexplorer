@@ -101,6 +101,13 @@ public:
     // The raster item's footprint in scene coordinates (the image rect in the
     // classic raster-at-origin scene; the fetched cell window when virtual).
     [[nodiscard]] QRectF imageSceneRect() const;
+    // The visible part of the raster in raster-pixel coordinates, clamped to
+    // the raster. Scene coordinates are raster pixels only in the classic
+    // scene; on a virtual canvas they are whole-domain finest cells and the
+    // item carries both the pixel-to-cell scale and its offset within the
+    // domain, so callers that want pixels must come through here rather than
+    // intersect a scene rect with the image rect.
+    [[nodiscard]] QRectF visibleImageRect() const;
     void setGridBoxes(const std::vector<GridBoxOverlay>& boxes);
     void setOverlaySegments(const std::vector<OverlaySegment>& segments);
     // Smooth contour polylines, rendered as cosmetic-pen path items at the

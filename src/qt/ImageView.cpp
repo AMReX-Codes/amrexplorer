@@ -157,6 +157,19 @@ QRectF ImageView::imageSceneRect() const
     return m_item == nullptr ? QRectF() : m_item->sceneBoundingRect();
 }
 
+QRectF ImageView::visibleImageRect() const
+{
+    if (m_item == nullptr || viewport() == nullptr) {
+        return {};
+    }
+    // mapRectFromScene undoes the item's placement -- identity in the classic
+    // scene, the cell offset and pixel-to-cell scale on a virtual canvas -- so
+    // the result is in raster pixels either way.
+    return m_item->mapRectFromScene(
+        mapToScene(viewport()->rect()).boundingRect()).intersected(
+            m_item->boundingRect());
+}
+
 // Position the raster item and size the scene. On a virtual canvas the scene
 // spans the whole domain in finest-cell units and the item maps its pixels
 // onto its fetched cell window; the classic scene is the raster at the

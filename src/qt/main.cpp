@@ -39,6 +39,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -456,6 +457,92 @@ bool contourSyncMatches(amrvis::qt::MainWindow& window)
     return panelsWithLevels >= 2 && sharedLevelsDrawn >= 2;
 }
 
+// What one view shows, for a local-versus-remote comparison: the physical
+// window the probe reports, the viewport pixels, and the raster size.
+struct ViewCapture {
+    QRectF window;
+    QImage viewport;
+    std::array<int, 2> image{};
+};
+
+void printDataWindow(std::ostream& stream, const QRectF& window)
+{
+    stream << std::setprecision(17) << window.x() << ',' << window.y() << ','
+           << window.width() << ',' << window.height();
+}
+
+// Local and remote must agree on the physical window, but not to the last bit:
+// a local fixed scale scrolls a whole-domain raster while a remote one scrolls
+// a whole-domain virtual canvas of finest cells, and both scroll in whole
+// viewport pixels, so their integer scroll positions may differ by a rounding
+// step. Two viewport pixels of slack covers that; the coordinate-space
+// confusion this guards against is off by many cells.
+bool dataWindowsAgree(const QRectF& local, const QRectF& remote,
+    const std::array<int, 2>& viewportPixels)
+{
+    const auto slack = [](double extent, int pixels) {
+        return pixels > 0 ? 2.0 * std::fabs(extent) / pixels : 0.0;
+    };
+    const auto slackX = std::max(slack(local.width(), viewportPixels[0]),
+        1.0e-9 * std::fabs(local.width()));
+    const auto slackY = std::max(slack(local.height(), viewportPixels[1]),
+        1.0e-9 * std::fabs(local.height()));
+    return std::fabs(local.left() - remote.left()) <= slackX
+        && std::fabs(local.right() - remote.right()) <= slackX
+        && std::fabs(local.top() - remote.top()) <= slackY
+        && std::fabs(local.bottom() - remote.bottom()) <= slackY;
+}
+
+// Rendering happens client-side for both datasets, so equal data must paint
+// equal viewport pixels. Reports the first difference (raster order) and how
+// many pixels differ, or nullopt when the two viewports are identical.
+struct ViewportDifference {
+    QString summary;
+    std::size_t differingPixels = 0;
+};
+
+std::optional<ViewportDifference> viewportDifference(
+    const QImage& local, const QImage& remote)
+{
+    if (local.size() != remote.size() || local.isNull() || remote.isNull()) {
+        return ViewportDifference{
+            QStringLiteral("viewport sizes differ (local %1x%2, remote %3x%4)")
+                .arg(local.width())
+                .arg(local.height())
+                .arg(remote.width())
+                .arg(remote.height()),
+            0};
+    }
+    const auto left = local.convertToFormat(QImage::Format_ARGB32);
+    const auto right = remote.convertToFormat(QImage::Format_ARGB32);
+    std::optional<ViewportDifference> difference;
+    std::size_t differing = 0;
+    for (int y = 0; y < left.height(); ++y) {
+        for (int x = 0; x < left.width(); ++x) {
+            const auto localPixel = left.pixel(x, y);
+            const auto remotePixel = right.pixel(x, y);
+            if (localPixel == remotePixel) {
+                continue;
+            }
+            ++differing;
+            if (!difference) {
+                difference = ViewportDifference{
+                    QStringLiteral("first differing pixel at (%1,%2): "
+                                   "local=%3 remote=%4")
+                        .arg(x)
+                        .arg(y)
+                        .arg(localPixel, 8, 16, QLatin1Char('0'))
+                        .arg(remotePixel, 8, 16, QLatin1Char('0')),
+                    0};
+            }
+        }
+    }
+    if (difference) {
+        difference->differingPixels = differing;
+    }
+    return difference;
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -544,109 +631,176 @@ int main(int argc, char* argv[])
                 }
                 window.selectFixedScaleForTest(1);
                 if (probe->phase == 0) {
-                    probe->localShowsWholeImage
-                        = window.activeViewShowsWholeImageForTest();
-                    probe->localImage = window.activeViewImageSizeForTest();
-                    probe->localViewport
-                        = window.activeViewViewportSizeForTest();
-                    probe->localWindow
-                        = window.activeViewVisibleDataWindowForTest();
-                    probe->localViewportImage
-                        = window.activeViewViewportImageForTest();
                     probe->phase = 1;
-                    QTimer::singleShot(0, &window,
-                        [&window, endpoint, token, remotePath] {
+                    // Measure only after the as-needed scroll bars this scale
+                    // may have demanded are laid out: they shrink the viewport,
+                    // and the remote phase necessarily measures on the far side
+                    // of that layout pass. On a domain that fits there are no
+                    // bars and this only costs a tick.
+                    QTimer::singleShot(100, &window,
+                        [&window, probe, endpoint, token, remotePath] {
+                            probe->localShowsWholeImage
+                                = window.activeViewShowsWholeImageForTest();
+                            probe->localImage
+                                = window.activeViewImageSizeForTest();
+                            probe->localViewport
+                                = window.activeViewViewportSizeForTest();
+                            probe->localWindow
+                                = window.activeViewVisibleDataWindowForTest();
+                            probe->localViewportImage
+                                = window.activeViewViewportImageForTest();
                             window.openRemoteDataset(endpoint.host,
                                 endpoint.port, remotePath, token);
                         });
                     return;
                 }
-                const auto remoteShowsWholeImage
-                    = window.activeViewShowsWholeImageForTest();
-                const auto remoteImage = window.activeViewImageSizeForTest();
-                const auto remoteViewport
-                    = window.activeViewViewportSizeForTest();
-                const auto remoteWindow
-                    = window.activeViewVisibleDataWindowForTest();
-                const auto remoteViewportImage
-                    = window.activeViewViewportImageForTest();
-                const auto printWindow = [](const QRectF& value) {
-                    std::cout << std::setprecision(17)
-                              << value.x() << ',' << value.y() << ','
-                              << value.width() << ',' << value.height();
-                };
-                std::cout << "local 1x: image=" << probe->localImage[0]
-                          << 'x' << probe->localImage[1]
-                          << " viewport=" << probe->localViewport[0]
-                          << 'x' << probe->localViewport[1]
-                          << " whole-image-visible="
-                          << (probe->localShowsWholeImage ? "yes" : "no")
-                          << " data-window=";
-                printWindow(probe->localWindow);
-                std::cout << "\nremote 1x: image=" << remoteImage[0]
-                          << 'x' << remoteImage[1]
-                          << " viewport=" << remoteViewport[0]
-                          << 'x' << remoteViewport[1]
-                          << " whole-image-visible="
-                          << (remoteShowsWholeImage ? "yes" : "no")
-                          << " data-window=";
-                printWindow(remoteWindow);
-                std::cout << '\n';
-                const auto fillsViewport = [](const std::array<int, 2>& image,
-                                               const std::array<int, 2>& viewport) {
-                    return image[0] <= viewport[0] && image[1] <= viewport[1]
-                        && (std::abs(image[0] - viewport[0]) <= 1
-                            || std::abs(image[1] - viewport[1]) <= 1);
-                };
-                const auto localActsFit = probe->localShowsWholeImage
-                    && fillsViewport(probe->localImage, probe->localViewport);
-                const auto remoteActsFit = remoteShowsWholeImage
-                    && fillsViewport(remoteImage, remoteViewport);
-                const auto scaleMatches = probe->localImage == remoteImage
-                    && probe->localShowsWholeImage == remoteShowsWholeImage
-                    && localActsFit == remoteActsFit;
-                if (!screenshotPath.isEmpty()) {
-                    constexpr int headingHeight = 36;
-                    constexpr int gap = 12;
-                    const auto width = probe->localViewportImage.width()
-                        + remoteViewportImage.width() + gap;
-                    const auto height = headingHeight + std::max(
-                        probe->localViewportImage.height(),
-                        remoteViewportImage.height());
-                    QImage comparison(width, height,
-                        QImage::Format_ARGB32_Premultiplied);
-                    comparison.fill(QColor(30, 30, 30));
-                    QPainter painter(&comparison);
-                    painter.setPen(Qt::white);
-                    painter.drawText(QRect(0, 0,
-                        probe->localViewportImage.width(), headingHeight),
-                        Qt::AlignCenter, QStringLiteral("Local - 1x"));
-                    painter.drawText(QRect(
-                        probe->localViewportImage.width() + gap, 0,
-                        remoteViewportImage.width(), headingHeight),
-                        Qt::AlignCenter, QStringLiteral("Remote - 1x"));
-                    painter.drawImage(0, headingHeight,
-                        probe->localViewportImage);
-                    painter.drawImage(
-                        probe->localViewportImage.width() + gap,
-                        headingHeight, remoteViewportImage);
-                    painter.end();
-                    if (!comparison.save(screenshotPath, "PNG")) {
-                        std::cerr << "failed to save screenshot comparison to "
+                const auto measure = [&window, &application, probe,
+                                         screenshotPath] {
+                    const auto remoteShowsWholeImage
+                        = window.activeViewShowsWholeImageForTest();
+                    const auto remoteImage
+                        = window.activeViewImageSizeForTest();
+                    const auto remoteViewport
+                        = window.activeViewViewportSizeForTest();
+                    const auto remoteWindow
+                        = window.activeViewVisibleDataWindowForTest();
+                    const auto remoteViewportImage
+                        = window.activeViewViewportImageForTest();
+                    std::cout << "local 1x: image=" << probe->localImage[0]
+                              << 'x' << probe->localImage[1]
+                              << " viewport=" << probe->localViewport[0]
+                              << 'x' << probe->localViewport[1]
+                              << " whole-image-visible="
+                              << (probe->localShowsWholeImage ? "yes" : "no")
+                              << " data-window=";
+                    printDataWindow(std::cout, probe->localWindow);
+                    std::cout << "\nremote 1x: image=" << remoteImage[0]
+                              << 'x' << remoteImage[1]
+                              << " viewport=" << remoteViewport[0]
+                              << 'x' << remoteViewport[1]
+                              << " whole-image-visible="
+                              << (remoteShowsWholeImage ? "yes" : "no")
+                              << " data-window=";
+                    printDataWindow(std::cout, remoteWindow);
+                    std::cout << '\n';
+                    // The verdict is the visible physical window plus the
+                    // painted pixels -- a probe reporting the wrong window, or
+                    // a raster that differs where it is visible, is exactly
+                    // what this tool exists to catch. Backing-raster
+                    // dimensions are printed but deliberately not compared:
+                    // local keeps the whole domain while remote fetches only
+                    // the visible window, so they differ by design on any
+                    // domain larger than the viewport. Equal windows over
+                    // equal pixels already pin the scale -- a factor the two
+                    // sides disagreed on would move the window.
+                    const auto viewportMatches
+                        = probe->localViewport == remoteViewport;
+                    const auto windowMatches = viewportMatches
+                        && dataWindowsAgree(probe->localWindow, remoteWindow,
+                            probe->localViewport);
+                    const auto contentDifference = viewportDifference(
+                        probe->localViewportImage, remoteViewportImage);
+                    if (!screenshotPath.isEmpty()) {
+                        constexpr int headingHeight = 36;
+                        constexpr int gap = 12;
+                        const auto width = probe->localViewportImage.width()
+                            + remoteViewportImage.width() + gap;
+                        const auto height = headingHeight + std::max(
+                            probe->localViewportImage.height(),
+                            remoteViewportImage.height());
+                        QImage comparison(width, height,
+                            QImage::Format_ARGB32_Premultiplied);
+                        comparison.fill(QColor(30, 30, 30));
+                        QPainter painter(&comparison);
+                        painter.setPen(Qt::white);
+                        painter.drawText(QRect(0, 0,
+                            probe->localViewportImage.width(), headingHeight),
+                            Qt::AlignCenter, QStringLiteral("Local - 1x"));
+                        painter.drawText(QRect(
+                            probe->localViewportImage.width() + gap, 0,
+                            remoteViewportImage.width(), headingHeight),
+                            Qt::AlignCenter, QStringLiteral("Remote - 1x"));
+                        painter.drawImage(0, headingHeight,
+                            probe->localViewportImage);
+                        painter.drawImage(
+                            probe->localViewportImage.width() + gap,
+                            headingHeight, remoteViewportImage);
+                        painter.end();
+                        if (!comparison.save(screenshotPath, "PNG")) {
+                            std::cerr
+                                << "failed to save screenshot comparison to "
+                                << screenshotPath.toStdString() << '\n';
+                            application.exit(5);
+                            return;
+                        }
+                        std::cout << "screenshot="
                                   << screenshotPath.toStdString() << '\n';
-                        application.exit(5);
-                        return;
                     }
-                    std::cout << "screenshot="
-                              << screenshotPath.toStdString() << '\n';
-                }
-                std::cout << (scaleMatches ? "MATCH" : "MISMATCH")
-                          << ": remote 1x "
-                          << (scaleMatches
-                                ? "has the same native extent as local 1x"
-                                : "does not have the same scale semantics as local 1x")
-                          << '\n';
-                application.exit(scaleMatches ? 0 : 1);
+                    if (contentDifference) {
+                        std::cout << "raster-content: "
+                                  << contentDifference->summary.toStdString()
+                                  << " (" << contentDifference->differingPixels
+                                  << " differing pixels)\n";
+                    } else {
+                        std::cout << "raster-content: identical\n";
+                    }
+                    const auto matches = windowMatches && !contentDifference;
+                    std::cout << (matches ? "MATCH" : "MISMATCH")
+                              << ": remote 1x ";
+                    if (matches) {
+                        std::cout << "shows the same visible data window and "
+                                     "paints the same viewport pixels as "
+                                     "local 1x";
+                    } else if (!viewportMatches) {
+                        std::cout << "was measured against a different viewport "
+                                     "than local 1x, so the two are not "
+                                     "comparable";
+                    } else if (!windowMatches) {
+                        std::cout << "does not show the same physical data "
+                                     "window as local 1x";
+                    } else {
+                        std::cout << "does not paint the same viewport pixels "
+                                     "as local 1x";
+                    }
+                    std::cout << '\n';
+                    application.exit(matches ? 0 : 1);
+                };
+                // The remote fixed scale is demand-driven: selecting it can
+                // queue a native-resolution refetch of the visible window, and
+                // measuring a raster that is still being replaced reports a
+                // difference that is only a race. Poll instead of guessing a
+                // grace period: measure once nothing is on a worker and no
+                // settle arrived during the last tick, so a request that only
+                // queues its successor is waited out too. A switch that needed
+                // no new raster satisfies this on the first tick.
+                auto* const poll = new QTimer(&window);
+                poll->setInterval(100);
+                auto ticks = std::make_shared<int>(0);
+                auto settles = std::make_shared<int>(0);
+                auto settlesLastTick = std::make_shared<int>(-1);
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [settles] { ++*settles; });
+                QObject::connect(poll, &QTimer::timeout, &application,
+                    [&application, &window, measure, poll, ticks, settles,
+                        settlesLastTick] {
+                        const auto quiet = window.slicesInFlightForTest() == 0
+                            && *settles == *settlesLastTick;
+                        *settlesLastTick = *settles;
+                        if (quiet) {
+                            poll->stop();
+                            measure();
+                            return;
+                        }
+                        if (++*ticks >= 200) {
+                            poll->stop();
+                            std::cerr << "the remote view never stopped "
+                                         "fetching; refusing to compare an "
+                                         "in-flight raster\n";
+                            application.exit(6);
+                        }
+                    });
+                poll->start();
             });
         QTimer::singleShot(30000, &application,
             [&application] { application.exit(4); });
@@ -802,6 +956,200 @@ int main(int argc, char* argv[])
                 window.resize(420, 301);
                 window.openRemoteDataset(
                     "127.0.0.1", server->port(), path, server->token());
+            });
+    } else if (argc == 3
+        && std::string_view(argv[1])
+            == "--local-remote-fixed-scale-window-smoke-test") {
+        // The comparison the manual --fixed-scale-local-remote-repro cannot
+        // make, because its fixture fits the viewport whole: at 32x in a window
+        // too small for the domain, a local fixed scale scales a whole-domain
+        // raster while a remote one hosts the fetched raster on a whole-domain
+        // virtual canvas of finest cells. Both must report the same visible
+        // physical window and paint the same viewport pixels -- scrolling is
+        // what forces the two coordinate spaces apart, so an unscrolled canvas
+        // proves nothing.
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        constexpr int scaleFactor = 32;
+        // Drag hard against the top-left stop before measuring anything: the
+        // fixed-scale transform is applied with AnchorUnderMouse, so the scroll
+        // position it leaves behind is an artifact of the pointer, not of the
+        // data. Both sides clamp to the same stop -- the domain origin, since
+        // both scenes are the same number of view pixels across -- which leaves
+        // the pan below as the only thing positioning the view.
+        constexpr int anchorDrag = 512;
+        constexpr int panX = -96;   // three finest cells at 32x
+        constexpr int panY = -160;  // five finest cells at 32x
+        enum class Await { Scale, Anchor, Pan };
+        struct WindowProbe {
+            bool remotePhase = false;
+            Await await = Await::Scale;
+            int settles = 0;
+            int settlesAtLastTick = -1;
+            std::array<int, 2> viewport{};
+            ViewCapture localAnchored;
+            ViewCapture localPanned;
+        };
+        auto probe = std::make_shared<WindowProbe>();
+        const auto capture = [](const amrvis::qt::MainWindow& probed) {
+            return ViewCapture{probed.activeViewVisibleDataWindowForTest(),
+                probed.activeViewViewportImageForTest(),
+                probed.activeViewImageSizeForTest()};
+        };
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled, &application,
+            [probe] { ++probe->settles; });
+        // A remote step may or may not demand a refetch -- an anchor drag on an
+        // already-anchored canvas demands none -- so rather than wait for a
+        // settle that may never come, poll: a step completes once the fetched
+        // raster covers the viewport and no further settle has arrived. Both
+        // pans below uncover cells (the fetch keeps only one cell of slack), so
+        // no step can be measured against the raster it is replacing. The timer
+        // belongs to the window, which outlives every tick and owns it.
+        auto* const poll = new QTimer(&window);
+        poll->setInterval(100);
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, &application, probe, capture, poll] {
+                const auto covered
+                    = window.allViewsFixedScaleRasterCoversViewportForTest();
+                const auto stable = probe->settles == probe->settlesAtLastTick;
+                probe->settlesAtLastTick = probe->settles;
+                if (!covered || !stable) {
+                    return;
+                }
+                if (!window.fixedScaleStateMatchesForTest(scaleFactor)
+                    || !window.activeViewScrollBarsVisibleForTest()) {
+                    std::cerr << "the remote view is not in a scrolled fixed "
+                                 "scale\n";
+                    application.exit(1);
+                    return;
+                }
+                // Both phases must measure the same viewport, or the two
+                // visible windows are not comparable in the first place.
+                if (window.activeViewViewportSizeForTest() != probe->viewport) {
+                    const auto viewport
+                        = window.activeViewViewportSizeForTest();
+                    std::cerr << "viewport size changed between the local and "
+                                 "remote phases: local=" << probe->viewport[0]
+                              << 'x' << probe->viewport[1] << " remote="
+                              << viewport[0] << 'x' << viewport[1] << '\n';
+                    application.exit(1);
+                    return;
+                }
+                if (probe->await == Await::Scale) {
+                    probe->await = Await::Anchor;
+                    window.shiftDragActiveViewForTest(anchorDrag, anchorDrag);
+                    return;
+                }
+                const bool anchored = probe->await == Await::Anchor;
+                const auto& expected = anchored
+                    ? probe->localAnchored : probe->localPanned;
+                const auto* label = anchored ? "anchored" : "panned";
+                const auto actual = capture(window);
+                if (!dataWindowsAgree(expected.window, actual.window,
+                        probe->viewport)) {
+                    std::cerr << label << " local/remote data window mismatch: "
+                                 "local=";
+                    printDataWindow(std::cerr, expected.window);
+                    std::cerr << " remote=";
+                    printDataWindow(std::cerr, actual.window);
+                    // Raster sizes are not compared -- local holds the whole
+                    // domain while remote holds only the fetched window, which
+                    // is the point of the virtual canvas -- but they explain a
+                    // mismatch.
+                    std::cerr << " local-raster=" << expected.image[0] << 'x'
+                              << expected.image[1] << " remote-raster="
+                              << actual.image[0] << 'x' << actual.image[1]
+                              << '\n';
+                    application.exit(1);
+                    return;
+                }
+                if (const auto difference = viewportDifference(
+                        expected.viewport, actual.viewport)) {
+                    std::cerr << label << " viewport content differs: "
+                              << difference->summary.toStdString() << " ("
+                              << difference->differingPixels << " pixels)\n";
+                    application.exit(1);
+                    return;
+                }
+                if (anchored) {
+                    probe->await = Await::Pan;
+                    window.shiftDragActiveViewForTest(panX, panY);
+                    return;
+                }
+                poll->stop();
+                application.exit(0);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application,
+            [&window, &application, probe, capture, poll,
+                server = smokeServer,
+                path = std::string(argv[2])](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                window.selectFixedScaleForTest(scaleFactor);
+                if (probe->remotePhase) {
+                    poll->start();
+                    return;
+                }
+                if (!window.fixedScaleStateMatchesForTest(scaleFactor)
+                    || !window.activeViewScrollBarsVisibleForTest()) {
+                    std::cerr << "the local fixed scale did not overflow the "
+                                 "viewport; the fixture is too small for this "
+                                 "comparison\n";
+                    application.exit(1);
+                    return;
+                }
+                // Measure only after the as-needed scroll bars this scale just
+                // demanded have actually been laid out: they shrink the
+                // viewport, and the remote phase necessarily measures on the
+                // far side of that layout pass.
+                QTimer::singleShot(100, &window,
+                    [&window, &application, probe, capture, path, server] {
+                        probe->viewport
+                            = window.activeViewViewportSizeForTest();
+                        // The local raster spans the whole domain and is
+                        // already loaded, so every local step is synchronous.
+                        window.shiftDragActiveViewForTest(
+                            anchorDrag, anchorDrag);
+                        probe->localAnchored = capture(window);
+                        window.shiftDragActiveViewForTest(panX, panY);
+                        probe->localPanned = capture(window);
+                        if (!(probe->localPanned.window.left()
+                                > probe->localAnchored.window.left())
+                            || !(probe->localPanned.window.top()
+                                < probe->localAnchored.window.top())) {
+                            std::cerr << "the local pan did not move the view "
+                                         "on both axes: viewport="
+                                      << probe->viewport[0] << 'x'
+                                      << probe->viewport[1] << " raster="
+                                      << probe->localAnchored.image[0] << 'x'
+                                      << probe->localAnchored.image[1]
+                                      << " anchored=";
+                            printDataWindow(std::cerr,
+                                probe->localAnchored.window);
+                            std::cerr << " panned=";
+                            printDataWindow(std::cerr,
+                                probe->localPanned.window);
+                            std::cerr << '\n';
+                            application.exit(1);
+                            return;
+                        }
+                        probe->remotePhase = true;
+                        window.openRemoteDataset("127.0.0.1", server->port(),
+                            path, server->token());
+                    });
+            });
+        QTimer::singleShot(30000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::filesystem::path(argv[2])] {
+                window.resize(420, 301);
+                window.openDataset(path);
             });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--remote-slice-smoke-test") {

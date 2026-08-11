@@ -42,7 +42,17 @@ template <typename Error>
     for (;;) {
         const auto character = input.get();
         if (character == std::char_traits<char>::eof()) {
-            return !line.empty();
+            // istream::get() sets failbit *and* eofbit when it runs out;
+            // std::getline sets failbit only if it extracted nothing. Drop the
+            // failbit when characters were read, so this really is a drop-in.
+            // Both current callers happen not to notice -- they only call
+            // tellg(), whose sentry sets failbit for an eof stream regardless
+            // -- but a caller that checks the stream would see the difference.
+            if (line.empty()) {
+                return false;
+            }
+            input.clear(input.rdstate() & ~std::ios::failbit);
+            return true;
         }
         if (character == '\n') {
             return true;

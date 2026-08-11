@@ -39,6 +39,9 @@ public:
     ResponseWriteScope& operator=(const ResponseWriteScope&) = delete;
     ResponseWriteScope(ResponseWriteScope&&) = delete;
     ResponseWriteScope& operator=(ResponseWriteScope&&) = delete;
+
+private:
+    bool m_previous = false;
 };
 
 } // namespace amrvis::remote::testing

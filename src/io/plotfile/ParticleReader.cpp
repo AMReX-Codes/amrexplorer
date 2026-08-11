@@ -197,7 +197,22 @@ ParsedHeader parseHeader(
         throw ParticleReadError(
             "particle grid total is outside supported bounds");
     }
-    result.grids.reserve(static_cast<std::size_t>(totalGrids));
+    // The cap above rejects the absurd; this bounds what is merely large. A
+    // declared count is a claim, and the file's own size is the evidence
+    // against it: every grid record still to come needs at least "0 0 0\n" --
+    // three numbers, two separators, a newline -- so the Header cannot
+    // describe more than its bytes allow. Without this a Header of a few
+    // dozen bytes could still reserve the cap's worth, a quarter of a
+    // gigabyte, which is the same trade the point reserve below refuses to
+    // make. A failure to stat falls back to the count, which the cap bounds.
+    constexpr std::uint64_t minimumBytesPerGridRecord = 6;
+    std::error_code headerSizeError;
+    const auto headerBytes = std::filesystem::file_size(path, headerSizeError);
+    const auto describableGrids = headerSizeError
+        ? totalGrids
+        : static_cast<std::uint64_t>(headerBytes) / minimumBytesPerGridRecord;
+    result.grids.reserve(
+        static_cast<std::size_t>(std::min(totalGrids, describableGrids)));
     std::uint64_t recordedParticles = 0;
     for (int level = 0; level <= result.finestLevel; ++level) {
         for (int grid = 0; grid < gridCounts[static_cast<std::size_t>(level)]; ++grid) {
@@ -324,22 +339,34 @@ std::map<DataFileKey, std::filesystem::path> particleDataPaths(
 }
 
 // Bytes one particle occupies in a DATA file: the two identity words and the
-// integer components, then the position and the real components. readGrid
-// derives the same two figures per grid to prove a grid fits its file; here
-// they turn the files on disk into an upper bound on how many particles can
-// exist at all.
-std::uint64_t particleBytesOnDisk(const ParsedHeader& header)
+// integer components, then the position and the real components. One
+// definition, used by readGrid to prove a grid fits its file and by
+// particleBytesOnDisk to turn the files into an upper bound on how many
+// particles can exist -- the two must not drift, since one validates what the
+// other sizes.
+struct ParticleRecordBytes {
+    std::uint64_t integers = 0;
+    std::uint64_t reals = 0;
+};
+
+ParticleRecordBytes particleRecordBytes(
+    const ParsedHeader& header, std::size_t realSize)
 {
     const auto intValues = static_cast<std::uint64_t>(
         2 + header.metadata.intComponentCount);
     const auto realValues = static_cast<std::uint64_t>(
         header.metadata.dimension + header.metadata.realComponentCount);
-    const auto realBytes
-        = header.metadata.precision == ParticleRealPrecision::Single
-        ? sizeof(float)
-        : sizeof(double);
-    return checkedProduct(intValues, sizeof(std::int32_t), "integer record")
-        + checkedProduct(realValues, realBytes, "real record");
+    return {checkedProduct(intValues, sizeof(std::int32_t), "integer record"),
+        checkedProduct(realValues, realSize, "real record")};
+}
+
+std::uint64_t particleBytesOnDisk(const ParsedHeader& header)
+{
+    const auto bytes = particleRecordBytes(header,
+        header.metadata.precision == ParticleRealPrecision::Single
+            ? sizeof(float)
+            : sizeof(double));
+    return bytes.integers + bytes.reals;
 }
 
 template <typename Real>
@@ -349,14 +376,8 @@ void readGrid(std::istream& input, const GridRecord& grid,
     std::size_t maximumPoints, std::vector<ParticlePoint>& output,
     ParticleReadMetrics& metrics)
 {
-    const auto intValues = static_cast<std::uint64_t>(
-        2 + header.metadata.intComponentCount);
-    const auto intRecordBytes = checkedProduct(
-        intValues, sizeof(std::int32_t), "integer record");
-    const auto realValues = static_cast<std::uint64_t>(
-        header.metadata.dimension + header.metadata.realComponentCount);
-    const auto realRecordBytes = checkedProduct(
-        realValues, sizeof(Real), "real record");
+    const auto [intRecordBytes, realRecordBytes]
+        = particleRecordBytes(header, sizeof(Real));
 
     const auto integerBytes
         = checkedProduct(grid.count, intRecordBytes, "integer data");
@@ -515,8 +536,7 @@ ParticleSample readParticleSample(
     for (const auto& [key, dataPath] : dataPaths) {
         std::error_code sizeError;
         const auto dataFileSize = std::filesystem::file_size(dataPath, sizeError);
-        if (sizeError
-            || dataFileSize > std::numeric_limits<std::uint64_t>::max()) {
+        if (sizeError) {
             throw ParticleReadError(
                 "cannot determine particle data file size for '"
                 + dataPath.string() + "'");
@@ -532,14 +552,13 @@ ParticleSample readParticleSample(
     // those bytes can hold. A valid sample is unaffected, because its own
     // points are exactly what the files do hold.
     const auto storedPointCeiling = totalDataBytes / particleBytesOnDisk(header);
-    const auto expected = std::min<long double>(
-                              static_cast<long double>(
-                                  header.metadata.particleCount),
-                              static_cast<long double>(storedPointCeiling))
-        * static_cast<long double>(fraction);
-    result.points.reserve(static_cast<std::size_t>(std::min<long double>(
-        expected + 16.0L,
-        static_cast<long double>(maximumPoints))));
+    const auto plausiblePoints
+        = std::min(header.metadata.particleCount, storedPointCeiling);
+    const auto expected
+        = static_cast<long double>(plausiblePoints) * fraction + 16.0L;
+    result.points.reserve(static_cast<std::size_t>(
+        std::min<long double>(expected,
+            static_cast<long double>(maximumPoints))));
     std::map<DataFileKey, std::vector<const GridRecord*>> gridsByFile;
     for (const auto& grid : header.grids) {
         if (grid.count != 0) {

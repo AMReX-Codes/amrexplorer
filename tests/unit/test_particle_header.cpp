@@ -5,6 +5,8 @@
 // substring: a std::bad_alloc here would mean the bound was never applied.
 #include <amrexplorer/io/ParticleReader.hpp>
 
+#include <array>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -152,6 +154,49 @@ int main()
             ++g_failures;
         }
         require(threw, "a forged particle count over an empty DATA file");
+    }
+
+    // The other side of the reserve bound: a species whose DATA file really
+    // does hold what its Header claims comes back whole. Every case above is
+    // a rejection, so without this one the file-size pass and the ceiling
+    // arithmetic are only ever exercised on inputs that end in a throw.
+    //
+    // Note what this does and does not pin down. The ceiling feeds a reserve,
+    // which is capacity and not a limit, so an off-by-one there cannot change
+    // the result -- only the allocation. What this catches is the pass
+    // throwing, dividing by zero, or otherwise disturbing a valid read.
+    {
+        const auto plotfile = scratch / "valid_points";
+        constexpr int count = 4;
+        writeSpeciesHeader(plotfile,
+            headerThroughFinestLevel(count, 0) + "1\n"
+                + "0 " + std::to_string(count) + " 0\n");
+        // Two int32 identity words then dimension + 1 doubles, per particle,
+        // matching the 2-D single-real-component Header above.
+        std::ofstream data(plotfile / "Tracer" / "Level_0" / "DATA_00000",
+            std::ios::binary | std::ios::trunc);
+        for (int i = 0; i < count; ++i) {
+            const std::array<std::int32_t, 2> identity{i + 1, 0};
+            data.write(reinterpret_cast<const char*>(identity.data()),
+                sizeof(identity));
+        }
+        for (int i = 0; i < count; ++i) {
+            const std::array<double, 3> record{
+                0.5 * i, 0.25 * i, static_cast<double>(i)};
+            data.write(reinterpret_cast<const char*>(record.data()),
+                sizeof(record));
+        }
+        data.close();
+        try {
+            const auto sample
+                = amrvis::readParticleSample(plotfile, "Tracer", 1.0);
+            require(sample.points.size() == count,
+                "the reserve bound truncated a sample its files can hold");
+        } catch (const std::exception& error) {
+            std::cerr << "FAILED: a valid species was rejected: "
+                      << error.what() << '\n';
+            ++g_failures;
+        }
     }
 
     std::filesystem::remove_all(scratch);

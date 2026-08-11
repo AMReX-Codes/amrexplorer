@@ -73,13 +73,16 @@ std::size_t writeChunkLimit(std::size_t requested)
 }
 
 ResponseWriteScope::ResponseWriteScope() noexcept
+    : m_previous(inResponseWrite)
 {
     inResponseWrite = true;
 }
 
 ResponseWriteScope::~ResponseWriteScope()
 {
-    inResponseWrite = false;
+    // Restore, not clear: an inner scope closing must not switch pacing off
+    // for the remainder of an outer one.
+    inResponseWrite = m_previous;
 }
 
 } // namespace amrvis::remote::testing

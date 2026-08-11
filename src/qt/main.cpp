@@ -631,35 +631,31 @@ int main(int argc, char* argv[])
                 }
                 window.selectFixedScaleForTest(1);
                 if (probe->phase == 0) {
-                    probe->localShowsWholeImage
-                        = window.activeViewShowsWholeImageForTest();
-                    probe->localImage = window.activeViewImageSizeForTest();
-                    probe->localViewport
-                        = window.activeViewViewportSizeForTest();
-                    probe->localWindow
-                        = window.activeViewVisibleDataWindowForTest();
-                    probe->localViewportImage
-                        = window.activeViewViewportImageForTest();
                     probe->phase = 1;
-                    QTimer::singleShot(0, &window,
-                        [&window, endpoint, token, remotePath] {
+                    // Measure only after the as-needed scroll bars this scale
+                    // may have demanded are laid out: they shrink the viewport,
+                    // and the remote phase necessarily measures on the far side
+                    // of that layout pass. On a domain that fits there are no
+                    // bars and this only costs a tick.
+                    QTimer::singleShot(100, &window,
+                        [&window, probe, endpoint, token, remotePath] {
+                            probe->localShowsWholeImage
+                                = window.activeViewShowsWholeImageForTest();
+                            probe->localImage
+                                = window.activeViewImageSizeForTest();
+                            probe->localViewport
+                                = window.activeViewViewportSizeForTest();
+                            probe->localWindow
+                                = window.activeViewVisibleDataWindowForTest();
+                            probe->localViewportImage
+                                = window.activeViewViewportImageForTest();
                             window.openRemoteDataset(endpoint.host,
                                 endpoint.port, remotePath, token);
                         });
                     return;
                 }
-                // The remote fixed scale is demand-driven: selecting it can
-                // queue a native-resolution refetch, and comparing a raster
-                // that is still being replaced would report a difference that
-                // is only a race. Measure on the settle, or after a short grace
-                // period when the switch needed no new raster at all.
-                auto measured = std::make_shared<bool>(false);
                 const auto measure = [&window, &application, probe,
-                                         screenshotPath, measured] {
-                    if (*measured) {
-                        return;
-                    }
-                    *measured = true;
+                                         screenshotPath] {
                     const auto remoteShowsWholeImage
                         = window.activeViewShowsWholeImageForTest();
                     const auto remoteImage
@@ -687,28 +683,21 @@ int main(int argc, char* argv[])
                               << " data-window=";
                     printDataWindow(std::cout, remoteWindow);
                     std::cout << '\n';
-                    const auto fillsViewport
-                        = [](const std::array<int, 2>& image,
-                              const std::array<int, 2>& viewport) {
-                              return image[0] <= viewport[0]
-                                  && image[1] <= viewport[1]
-                                  && (std::abs(image[0] - viewport[0]) <= 1
-                                      || std::abs(image[1] - viewport[1]) <= 1);
-                          };
-                    const auto localActsFit = probe->localShowsWholeImage
-                        && fillsViewport(
-                            probe->localImage, probe->localViewport);
-                    const auto remoteActsFit = remoteShowsWholeImage
-                        && fillsViewport(remoteImage, remoteViewport);
-                    const auto scaleMatches = probe->localImage == remoteImage
-                        && probe->localShowsWholeImage == remoteShowsWholeImage
-                        && localActsFit == remoteActsFit;
-                    // The window and the pixels are part of the verdict, not
-                    // just of the printout: a probe reporting the wrong
-                    // physical window, or a raster that differs where it is
-                    // visible, is exactly what this tool exists to catch.
-                    const auto windowMatches = dataWindowsAgree(
-                        probe->localWindow, remoteWindow, probe->localViewport);
+                    // The verdict is the visible physical window plus the
+                    // painted pixels -- a probe reporting the wrong window, or
+                    // a raster that differs where it is visible, is exactly
+                    // what this tool exists to catch. Backing-raster
+                    // dimensions are printed but deliberately not compared:
+                    // local keeps the whole domain while remote fetches only
+                    // the visible window, so they differ by design on any
+                    // domain larger than the viewport. Equal windows over
+                    // equal pixels already pin the scale -- a factor the two
+                    // sides disagreed on would move the window.
+                    const auto viewportMatches
+                        = probe->localViewport == remoteViewport;
+                    const auto windowMatches = viewportMatches
+                        && dataWindowsAgree(probe->localWindow, remoteWindow,
+                            probe->localViewport);
                     const auto contentDifference = viewportDifference(
                         probe->localViewportImage, remoteViewportImage);
                     if (!screenshotPath.isEmpty()) {
@@ -755,16 +744,17 @@ int main(int argc, char* argv[])
                     } else {
                         std::cout << "raster-content: identical\n";
                     }
-                    const auto matches
-                        = scaleMatches && windowMatches && !contentDifference;
+                    const auto matches = windowMatches && !contentDifference;
                     std::cout << (matches ? "MATCH" : "MISMATCH")
                               << ": remote 1x ";
                     if (matches) {
-                        std::cout << "has the same native extent, visible data "
-                                     "window, and viewport pixels as local 1x";
-                    } else if (!scaleMatches) {
-                        std::cout << "does not have the same scale semantics as "
+                        std::cout << "shows the same visible data window and "
+                                     "paints the same viewport pixels as "
                                      "local 1x";
+                    } else if (!viewportMatches) {
+                        std::cout << "was measured against a different viewport "
+                                     "than local 1x, so the two are not "
+                                     "comparable";
                     } else if (!windowMatches) {
                         std::cout << "does not show the same physical data "
                                      "window as local 1x";
@@ -775,10 +765,42 @@ int main(int argc, char* argv[])
                     std::cout << '\n';
                     application.exit(matches ? 0 : 1);
                 };
+                // The remote fixed scale is demand-driven: selecting it can
+                // queue a native-resolution refetch of the visible window, and
+                // measuring a raster that is still being replaced reports a
+                // difference that is only a race. Poll instead of guessing a
+                // grace period: measure once nothing is on a worker and no
+                // settle arrived during the last tick, so a request that only
+                // queues its successor is waited out too. A switch that needed
+                // no new raster satisfies this on the first tick.
+                auto* const poll = new QTimer(&window);
+                poll->setInterval(100);
+                auto ticks = std::make_shared<int>(0);
+                auto settles = std::make_shared<int>(0);
+                auto settlesLastTick = std::make_shared<int>(-1);
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application, measure, Qt::SingleShotConnection);
-                QTimer::singleShot(750, &application, measure);
+                    &application, [settles] { ++*settles; });
+                QObject::connect(poll, &QTimer::timeout, &application,
+                    [&application, &window, measure, poll, ticks, settles,
+                        settlesLastTick] {
+                        const auto quiet = window.slicesInFlightForTest() == 0
+                            && *settles == *settlesLastTick;
+                        *settlesLastTick = *settles;
+                        if (quiet) {
+                            poll->stop();
+                            measure();
+                            return;
+                        }
+                        if (++*ticks >= 200) {
+                            poll->stop();
+                            std::cerr << "the remote view never stopped "
+                                         "fetching; refusing to compare an "
+                                         "in-flight raster\n";
+                            application.exit(6);
+                        }
+                    });
+                poll->start();
             });
         QTimer::singleShot(30000, &application,
             [&application] { application.exit(4); });

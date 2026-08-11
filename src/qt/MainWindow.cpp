@@ -2035,6 +2035,20 @@ bool MainWindow::allViewsUseViewportBoundedOutputForTest() const
             [&](const auto* state) { return check(*state); });
 }
 
+int MainWindow::slicesInFlightForTest() const
+{
+    if (m_viewDimension == 2) {
+        return m_view2d.pendingRequests;
+    }
+    const std::array<const PlaneViewState*, 3> threeDimensional{
+        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+    int total = 0;
+    for (const auto* state : threeDimensional) {
+        total += state->pendingRequests;
+    }
+    return total;
+}
+
 bool MainWindow::allViewsFixedScaleRasterCoversViewportForTest() const
 {
     const auto check = [](const PlaneViewState& state) {

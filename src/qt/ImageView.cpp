@@ -12,6 +12,7 @@
 #include <QPainter>
 #include <QResizeEvent>
 #include <QScrollBar>
+#include <QKeyEvent>
 #include <QWheelEvent>
 #include <QPen>
 
@@ -807,6 +808,36 @@ void ImageView::scrollContentsBy(int dx, int dy)
     if (m_placement.has_value()) {
         emit canvasScrolled();
     }
+}
+
+void ImageView::keyPressEvent(QKeyEvent* event)
+{
+    // Only while this view holds focus and has something to pan. Anything else
+    // -- including an arrow with a modifier, which belongs to whatever else may
+    // want it -- falls through to the base class.
+    if (hasImage() && event->modifiers() == Qt::NoModifier) {
+        switch (event->key()) {
+        case Qt::Key_Left:
+            emit panStepRequested(QPointF(1.0, 0.0));
+            event->accept();
+            return;
+        case Qt::Key_Right:
+            emit panStepRequested(QPointF(-1.0, 0.0));
+            event->accept();
+            return;
+        case Qt::Key_Up:
+            emit panStepRequested(QPointF(0.0, 1.0));
+            event->accept();
+            return;
+        case Qt::Key_Down:
+            emit panStepRequested(QPointF(0.0, -1.0));
+            event->accept();
+            return;
+        default:
+            break;
+        }
+    }
+    QGraphicsView::keyPressEvent(event);
 }
 
 void ImageView::wheelEvent(QWheelEvent* event)

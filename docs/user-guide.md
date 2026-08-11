@@ -202,7 +202,7 @@ The active panel is the one most recently clicked or manipulated.
 | Left click | Probe the value under the cursor |
 | Left drag | Zoom to a rectangular subregion; optionally sync all 3-D panels |
 | Shift+left drag | Pan the view |
-| Arrow keys | Pan the active panel by 5 percent |
+| Arrow keys | Pan the focused panel by 5 percent (click a panel to focus it) |
 | Mouse wheel | Zoom only the panel under the pointer |
 | Double click | Reset the zoom to the whole domain |
 | Shift+middle click | Plot a horizontal line through the selected sample |

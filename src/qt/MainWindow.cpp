@@ -73,7 +73,6 @@
 #include <QRegularExpressionValidator>
 #include <QScrollBar>
 #include <QSettings>
-#include <QShortcut>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -917,7 +916,6 @@ MainWindow::MainWindow(QWidget* parent)
     for (auto& state : m_planeViews) {
         wireView(state);
     }
-    setupPanShortcuts();
 
     m_probeLabel = new QLabel(statusBar());
     m_particleProgress = new QProgressBar(statusBar());
@@ -993,6 +991,10 @@ void MainWindow::wireView(PlaneViewState& state)
         });
     connect(view, &ImageView::canvasScrolled, this,
         [this, &state] { updateRemoteFixedScaleDemand(state); });
+    connect(view, &ImageView::panStepRequested, this,
+        [this, &state](const QPointF& direction) {
+            applyPanStep(state, direction);
+        });
 }
 
 std::array<MainWindow::PlaneViewState*, 4> MainWindow::allViewStates()
@@ -3091,7 +3093,8 @@ void MainWindow::showKeyboardMouseReference()
     add(tr("Left drag"),
         tr("Zoom to the rubber-band subregion; Scale controls panel sync"));
     add(tr("Shift+left drag"), tr("Pan the view"));
-    add(tr("Arrow keys"), tr("Pan the active panel (5% of the view per step)"));
+    add(tr("Arrow keys"),
+        tr("Pan the focused panel (5% of the view per step)"));
     add(tr("Shift+middle click"), tr("Line plot along the horizontal axis"));
     add(tr("Shift+right click"), tr("Line plot along the vertical axis"));
     add(tr("Right drag"), tr("Line plot (drag direction picks orientation)"));
@@ -3759,24 +3762,6 @@ void MainWindow::updateRemoteFixedScaleDemand(PlaneViewState& state)
         || state.cachedRequest.outputSize != sliceOutputSize(state)) {
         scheduleSliceRequest(state, true);
     }
-}
-
-void MainWindow::setupPanShortcuts()
-{
-    const auto bind = [this](Qt::Key key, double x, double y) {
-        auto* shortcut = new QShortcut(QKeySequence(key), this);
-        shortcut->setContext(Qt::WindowShortcut);
-        connect(shortcut, &QShortcut::activated, this, [this, x, y] {
-            if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
-                return;
-            }
-            applyPanStep(*m_activeView, QPointF(x, y));
-        });
-    };
-    bind(Qt::Key_Left, 1.0, 0.0);
-    bind(Qt::Key_Right, -1.0, 0.0);
-    bind(Qt::Key_Up, 0.0, 1.0);
-    bind(Qt::Key_Down, 0.0, -1.0);
 }
 
 void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
@@ -5339,6 +5324,14 @@ void MainWindow::requestInitialSlice(
     // The XY view starts out as the active one in 3-D.
     setActiveView(m_viewDimension == 3
         ? m_planeViews[2] : m_view2d);
+    // ...and takes keyboard focus, so the arrow-key pan works on a freshly
+    // opened dataset rather than only after the view has been clicked. This is
+    // the one place focus is taken: the other setActiveView callers run while
+    // the user may be in a toolbar widget, and panning must not cost them their
+    // place in it.
+    if (m_activeView != nullptr) {
+        m_activeView->view->setFocus(::Qt::OtherFocusReason);
+    }
     // Slice positions start at the domain midpoints unless a reversible FAB
     // transition is restoring the previous MultiFab view.
     const auto dataBounds = datasetSampleBounds(metadata);

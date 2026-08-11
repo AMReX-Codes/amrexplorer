@@ -165,14 +165,15 @@ public:
     // the reuse path that must re-render the raster to match the color bar.
     void zoomActiveViewForTest();
 
-    // Test-only: true when the active view's displayed raster is byte-identical
-    // to its plane re-rendered against the current display (color-bar) range —
-    // i.e. the raster and color bar agree. See
-    // raster-colorbar-mismatch-on-2d-visible-zoom.
     // Test-only: the placeholder every panel is showing, or an empty string if
     // any panel holds an image instead. A failed open must leave a settled
     // placeholder naming what failed, never the "Loading..." one it replaced.
     [[nodiscard]] QString viewPlaceholderForTest();
+
+    // Test-only: true when the active view's displayed raster is byte-identical
+    // to its plane re-rendered against the current display (color-bar) range —
+    // i.e. the raster and color bar agree. See
+    // raster-colorbar-mismatch-on-2d-visible-zoom.
     [[nodiscard]] bool activeViewRasterMatchesDisplayRangeForTest();
     [[nodiscard]] bool activeViewUsesViewportBoundedOutputForTest() const;
     [[nodiscard]] bool activeViewUsesNativeOutputForTest() const;
@@ -506,7 +507,6 @@ private:
     [[nodiscard]] std::array<double, 2> viewCenterInData(
         const PlaneViewState& state) const;
     void applyPanStep(PlaneViewState& state, const QPointF& direction);
-    void setupPanShortcuts();
     [[nodiscard]] std::optional<RealBox> shiftedPanRegion(
         const PlaneViewState& state, const RealBox& baseRegion,
         int planeWidth, int planeHeight, const QPointF& sceneDelta) const;

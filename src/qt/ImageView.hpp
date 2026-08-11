@@ -214,6 +214,12 @@ signals:
     void sliceMoveRequested(int imageX, int imageY, Qt::MouseButton button);
     void fitRequested();
     void viewportResized(const QSize& size);
+    // An arrow key pressed while this view has focus, as a unit direction in
+    // pan terms (+x scrolls the data right, +y scrolls it up). Panning is a
+    // view action, so it belongs to the focused view rather than to the window:
+    // a window-wide shortcut takes Up/Down away from every spin box and combo
+    // in the toolbars, which do not claim those keys through ShortcutOverride.
+    void panStepRequested(const QPointF& direction);
 
 protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
@@ -221,6 +227,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void drawForeground(QPainter* painter, const QRectF& rect) override;
     void scrollContentsBy(int dx, int dy) override;

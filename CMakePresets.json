@@ -15,7 +15,8 @@
         "CMAKE_BUILD_TYPE": "Release",
         "AMREXPLORER_ENABLE_QT": "ON",
         "AMREXPLORER_ENABLE_VTK": "OFF",
-        "AMREXPLORER_BUILD_TESTS": "ON"
+        "AMREXPLORER_BUILD_TESTS": "ON",
+        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS": "OFF"
       }
     },
     {
@@ -38,22 +39,32 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "AMREXPLORER_ENABLE_QT": "ON",
         "AMREXPLORER_ENABLE_VTK": "OFF",
-        "AMREXPLORER_BUILD_TESTS": "ON"
+        "AMREXPLORER_BUILD_TESTS": "ON",
+        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS": "OFF"
       }
     },
     {
       "name": "headless",
-      "inherits": "debug",
-      "displayName": "Headless core build",
+      "inherits": "default",
+      "displayName": "Headless Release build",
       "binaryDir": "${sourceDir}/build-headless",
       "cacheVariables": {
         "AMREXPLORER_ENABLE_QT": "OFF"
       }
     },
     {
+      "name": "headless-debug",
+      "hidden": true,
+      "inherits": "debug",
+      "binaryDir": "${sourceDir}/build-headless-debug",
+      "cacheVariables": {
+        "AMREXPLORER_ENABLE_QT": "OFF"
+      }
+    },
+    {
       "name": "sanitizers",
-      "inherits": "headless",
-      "displayName": "Headless ASan and UBSan build",
+      "inherits": "headless-debug",
+      "displayName": "Headless Debug with ASan and UBSan",
       "binaryDir": "${sourceDir}/build-sanitizers",
       "cacheVariables": {
         "AMREXPLORER_ENABLE_SANITIZERS": "ON"
@@ -62,27 +73,29 @@
     {
       "name": "remote",
       "inherits": "headless",
-      "displayName": "Headless remote server and protocol",
+      "displayName": "Headless Release remote server and protocol",
       "binaryDir": "${sourceDir}/build-remote",
       "cacheVariables": {
         "AMREXPLORER_ENABLE_REMOTE": "ON",
-        "AMREXPLORER_BUILD_TESTS": "ON"
+        "AMREXPLORER_BUILD_TESTS": "ON",
+        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS": "OFF"
       }
     },
     {
       "name": "tsan",
-      "inherits": "headless",
-      "displayName": "Headless ThreadSanitizer build (includes remote)",
+      "inherits": "headless-debug",
+      "displayName": "Headless Debug with ThreadSanitizer (includes remote)",
       "binaryDir": "${sourceDir}/build-tsan",
       "cacheVariables": {
         "AMREXPLORER_ENABLE_TSAN": "ON",
-        "AMREXPLORER_ENABLE_REMOTE": "ON"
+        "AMREXPLORER_ENABLE_REMOTE": "ON",
+        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS": "OFF"
       }
     },
     {
       "name": "qt-sanitizers",
       "inherits": "debug",
-      "displayName": "Qt + ASan and UBSan build (offscreen smoke tests)",
+      "displayName": "Qt Debug with ASan and UBSan (offscreen smoke tests)",
       "binaryDir": "${sourceDir}/build-qt-sanitizers",
       "cacheVariables": {
         "AMREXPLORER_ENABLE_SANITIZERS": "ON"
@@ -90,7 +103,7 @@
     },
     {
       "name": "windows",
-      "displayName": "Windows MSVC build (mirrors the CI job)",
+      "displayName": "Windows MSVC Release build (mirrors the CI job)",
       "generator": "Visual Studio 17 2022",
       "architecture": { "value": "x64" },
       "binaryDir": "${sourceDir}/build-windows",
@@ -103,7 +116,8 @@
         "CMAKE_PREFIX_PATH": "$env{QT_ROOT_DIR}",
         "AMREXPLORER_ENABLE_QT": "ON",
         "AMREXPLORER_ENABLE_VTK": "OFF",
-        "AMREXPLORER_BUILD_TESTS": "ON"
+        "AMREXPLORER_BUILD_TESTS": "ON",
+        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS": "OFF"
       }
     }
   ],

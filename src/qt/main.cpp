@@ -96,7 +96,7 @@ void ensureDesktopEntry()
     // other platforms the writes land in nonsensical locations and the
     // cache-refresh helpers do not exist, so do nothing.
     return;
-#endif
+#else
     static constexpr int kSizes[] = {16, 32, 64, 128, 256};
     const QString dataDir =
         QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
@@ -187,6 +187,7 @@ void ensureDesktopEntry()
     };
     runSilent("gtk-update-icon-cache -f '" + hicolorDir + "'");
     runSilent("update-desktop-database '" + dataDir + "/applications'");
+#endif
 }
 
 bool rangeSelectorMatches(

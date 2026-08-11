@@ -1,4 +1,7 @@
 #include "../../src/remote/Codec.hpp"
+#ifdef AMREXPLORER_SERVER_TEST_HOOKS
+#include "../../src/remote/ServerTestHooks.hpp"
+#endif
 
 #include <amrexplorer/data/ViewData.hpp>
 #include <amrexplorer/remote/Frame.hpp>
@@ -16,6 +19,7 @@
 #include <memory>
 #include <cerrno>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -452,14 +456,16 @@ int main(int argc, char* argv[])
     require(duplicateRunning.stopWithin(std::chrono::seconds{2}),
         "duplicate-ID server shutdown exceeded its deadline");
 
-    // A large response to a peer that stops reading must time out, retire that
-    // session, and release the shared worker for another connection.
+#ifdef AMREXPLORER_SERVER_TEST_HOOKS
+    // A response-write failure must retire that session and release the shared
+    // worker for another connection. Frame's socket-pair test proves the real
+    // write timeout; this integration test injects the same failure at the
+    // server boundary so worker ordering is deterministic and independent of
+    // response size, socket buffers, and scheduler timing.
     ServerOptions stalledOptions;
     stalledOptions.workerCount = 1;
     stalledOptions.maximumDatasets = 1;
     stalledOptions.maximumConnections = 2;
-    stalledOptions.responseWriteStallTimeout
-        = std::chrono::milliseconds{100};
     Server stalledServer(stalledOptions);
     RunningServer stalledRunning(stalledServer);
     auto stalledSocket = connectTo("127.0.0.1", stalledServer.port());
@@ -474,10 +480,29 @@ int main(int argc, char* argv[])
         = codec::fromWire(*envelope->payload.AsDatasetOpened());
     SliceRequest stalledSlice = duplicateSlice;
     stalledSlice.dataset = stalledOpened.id;
-    stalledSlice.outputSize = {2048, 2048};
+    stalledSlice.outputSize = {2, 2};
+
+    std::promise<void> stalledWriteEnteredPromise;
+    auto stalledWriteEntered = stalledWriteEnteredPromise.get_future();
+    std::promise<void> releaseStalledWritePromise;
+    const auto releaseStalledWrite
+        = releaseStalledWritePromise.get_future().share();
+    std::atomic_bool injectedWriteFailure{false};
+    testing::setBeforeResponseWrite(
+        [&](std::uint64_t requestId) {
+            if (requestId == 3 && !injectedWriteFailure.exchange(true)) {
+                stalledWriteEnteredPromise.set_value();
+                releaseStalledWrite.wait();
+                throw std::runtime_error(
+                    "injected stalled response write failure");
+            }
+        });
     writeFrame(stalledSocket,
         codec::encode(3, codec::toWire(stalledSlice)),
         stalledHello.maximumFrameBytes);
+    require(stalledWriteEntered.wait_for(std::chrono::seconds{10})
+            == std::future_status::ready,
+        "stalled response never reached the server write boundary");
 
     auto healthySocket = connectTo("127.0.0.1", stalledServer.port());
     envelope = exchange(healthySocket, 1,
@@ -485,8 +510,15 @@ int main(int argc, char* argv[])
         defaultMaximumFrameBytes);
     const auto healthyHello
         = codec::fromWire(*envelope->payload.AsHelloResponse());
-    envelope = exchange(healthySocket, 2, codec::toWire(duplicateOpen),
+    writeFrame(healthySocket,
+        codec::encode(2, codec::toWire(duplicateOpen)),
         healthyHello.maximumFrameBytes);
+    testing::clearBeforeResponseWrite();
+    releaseStalledWritePromise.set_value();
+    envelope = readWithDeadline(healthySocket,
+        healthyHello.maximumFrameBytes, std::chrono::seconds{10});
+    require(envelope != nullptr && envelope->request_id == 2,
+        "healthy request received no bounded response");
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
         "stalled response retained the shared server worker");
     bool stalledRetired = false;
@@ -501,6 +533,7 @@ int main(int argc, char* argv[])
         "server did not retire the stalled response session");
     require(stalledRunning.stopWithin(std::chrono::seconds{2}),
         "stalled-response server shutdown exceeded its deadline");
+#endif
 
     codec::fb::CloseDatasetRequestT close;
     close.dataset_id = opened.id.value;

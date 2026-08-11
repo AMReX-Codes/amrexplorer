@@ -1,6 +1,9 @@
 #include <amrexplorer/remote/Server.hpp>
 
 #include "Codec.hpp"
+#ifdef AMREXPLORER_SERVER_TEST_HOOKS
+#include "ServerTestHooks.hpp"
+#endif
 
 #include <amrexplorer/data/LocalDatasetSession.hpp>
 
@@ -906,6 +909,9 @@ private:
             }
             std::scoped_lock lock(m_writeMutex);
             if (!m_stopping.load()) {
+#ifdef AMREXPLORER_SERVER_TEST_HOOKS
+                testing::notifyBeforeResponseWrite(requestId);
+#endif
                 writeFrameWithBudget(m_socket, bytes,
                     m_maximumFrameBytes.load(), writeBudget(), {},
                     m_lifecycleStop.get_token());

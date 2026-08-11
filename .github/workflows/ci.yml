@@ -100,7 +100,10 @@ jobs:
           sudo apt-get install --yes cmake g++ ninja-build
 
       - name: Configure
-        run: cmake --preset remote -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
+        run: >-
+          cmake --preset remote
+          -DAMREXPLORER_ENABLE_SERVER_TEST_HOOKS=ON
+          -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
 
       - name: Build
         run: cmake --build --preset remote --parallel 4
@@ -190,7 +193,10 @@ jobs:
           sudo apt-get install --yes cmake g++ ninja-build
 
       - name: Configure
-        run: cmake --preset tsan -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
+        run: >-
+          cmake --preset tsan
+          -DAMREXPLORER_ENABLE_SERVER_TEST_HOOKS=ON
+          -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
 
       - name: Build
         run: cmake --build --preset tsan --parallel 4

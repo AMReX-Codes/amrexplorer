@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 
 namespace amrvis {
 
@@ -66,7 +67,17 @@ struct RealBox {
         }
         for (int axis = 0; axis < dimension; ++axis) {
             const auto i = static_cast<std::size_t>(axis);
-            if (!(lower[i] < upper[i])) {
+            // Ordered *and* finite. C++ streams parse "inf", so a corrupt
+            // header can hand us lower = -inf, upper = +inf, which is ordered
+            // and passes an ordering-only test -- and then upper - lower is
+            // inf, and any extent derived from it is inf or NaN. Written as a
+            // pair of comparisons rather than std::isfinite because that is not
+            // constexpr before C++23 and this function is used in constant
+            // expressions. NaN fails the ordering test on its own.
+            constexpr auto infinity
+                = std::numeric_limits<double>::infinity();
+            if (!(lower[i] < upper[i]) || !(lower[i] > -infinity)
+                || !(upper[i] < infinity)) {
                 return false;
             }
         }
@@ -130,10 +141,18 @@ struct RealBox {
         if (!(dx > 0.0)) {
             continue;
         }
-        const auto cells = std::max(1.0,
-            std::round((region.upper[i] - region.lower[i]) / dx));
         const auto domainCells = std::max(0.0,
             std::round((domain.upper[i] - origin) / dx));
+        // Never more cells than the domain holds. Past that the clamp below
+        // collapses to [0, 0], which pins first at zero while upper still
+        // lands at origin + cells*dx -- outside the domain, translating the
+        // view to the corner. The only caller clamps its region into the
+        // domain before calling, so this is not reachable today; the sibling
+        // snapToCellBoundaries clamps its upper edge for the same reason, and
+        // a geometry helper should not depend on its caller for that.
+        const auto cells = std::min(
+            std::max(1.0, std::round((region.upper[i] - region.lower[i]) / dx)),
+            std::max(1.0, domainCells));
         const auto first = std::clamp(
             std::round((region.lower[i] - origin) / dx),
             0.0, std::max(0.0, domainCells - cells));

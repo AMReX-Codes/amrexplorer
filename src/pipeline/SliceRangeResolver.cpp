@@ -15,7 +15,36 @@ public:
 
 } // namespace
 
-std::optional<std::pair<double, double>> finiteRange(const ScalarPlane& plane)
+std::pair<double, double> paddedIfDegenerate(
+    double minimum, double maximum, bool logarithmic) noexcept
+{
+    if (minimum != maximum) {
+        return {minimum, maximum};
+    }
+    if (logarithmic && minimum > 0.0) {
+        return {minimum / (1.0 + 1.0e-6), maximum * (1.0 + 1.0e-6)};
+    }
+    // Relative to the value, not an absolute floor. The old
+    // max(abs(minimum), 1.0) * 1e-6 padded a uniform plane of 1e-7 by 1e-6 --
+    // ten times the value itself, straddling zero, which then disqualified the
+    // plane from logarithmic display. A constant of 5.0 meanwhile stayed
+    // logarithmic, so the same control behaved differently on data that
+    // differed only in scale.
+    //
+    // The floor is the smallest padding that can still separate the two
+    // endpoints in double precision near this magnitude: for a value of zero
+    // that is the smallest normal, and otherwise one ulp is far too small to
+    // survive later arithmetic, so a relative 1e-6 is used with the normal as
+    // a backstop.
+    constexpr auto relative = 1.0e-6;
+    const auto magnitude = std::abs(minimum);
+    const auto padding = std::max(magnitude * relative,
+        std::numeric_limits<double>::min());
+    return {minimum - padding, maximum + padding};
+}
+
+std::optional<std::pair<double, double>> finiteRange(
+    const ScalarPlane& plane, bool logarithmic)
 {
     auto minimum = std::numeric_limits<double>::infinity();
     auto maximum = -std::numeric_limits<double>::infinity();
@@ -33,12 +62,7 @@ std::optional<std::pair<double, double>> finiteRange(const ScalarPlane& plane)
     if (!std::isfinite(minimum) || !std::isfinite(maximum)) {
         return std::nullopt;
     }
-    if (minimum == maximum) {
-        const auto padding = std::max(std::abs(minimum), 1.0) * 1.0e-6;
-        minimum -= padding;
-        maximum += padding;
-    }
-    return std::pair{minimum, maximum};
+    return paddedIfDegenerate(minimum, maximum, logarithmic);
 }
 
 std::optional<ValueRange> selectedMetadataRange(
@@ -145,19 +169,11 @@ std::pair<double, double> resolveRange(
     }
     auto [minimum, maximum] = selectedRange
         ? *selectedRange
-        : finiteRange(plane).value_or(logarithmic
+        : finiteRange(plane, logarithmic).value_or(logarithmic
               ? std::pair{1.0, 10.0}
               : std::pair{0.0, 1.0});
-    if (minimum == maximum) {
-        if (logarithmic && minimum > 0.0) {
-            minimum /= 1.0 + 1.0e-6;
-            maximum *= 1.0 + 1.0e-6;
-        } else {
-            const auto padding = std::max(std::abs(minimum), 1.0) * 1.0e-6;
-            minimum -= padding;
-            maximum += padding;
-        }
-    }
+    std::tie(minimum, maximum)
+        = paddedIfDegenerate(minimum, maximum, logarithmic);
     if (!(minimum < maximum)) {
         throw std::runtime_error("user scalar range must have positive extent");
     }

@@ -991,6 +991,21 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_scale_state_smoke PROPERTIES TIMEOUT 30)
+    # Regression for fixed-scale-clamped-native-raster: plotfile_2d_wide is
+    # 8192 finest cells across, twice the largest whole-domain raster, so a
+    # local 32x really applies 16x. The UI must say so, and the number it says
+    # must be the one the view is using.
+    add_test(
+        NAME qt_effective_scale_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_wide"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_effective_scale"
+            -DMODE=effective-scale
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_effective_scale_smoke PROPERTIES TIMEOUT 30)
     # ...and playback must stop on a frame it cannot read, rather than wrapping
     # back onto it every cycle.
     add_test(

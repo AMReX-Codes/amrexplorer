@@ -218,6 +218,14 @@ public:
     void selectToolbarFixedScaleForTest(int factor);
     // What the Scale button currently reports.
     [[nodiscard]] QString scaleUiLabelForTest() const;
+    // The magnification the UI claims for this factor (0 when it is literal),
+    // and the finest cell size along the active view's horizontal axis, so a
+    // test can check the claim against the window the view actually shows.
+    [[nodiscard]] double effectiveFixedScaleForTest(int factor) const
+    {
+        return effectiveFixedScale(factor);
+    }
+    [[nodiscard]] double activeViewFinestCellSizeForTest() const;
     // Test-only: send a real wheel event through the active view's viewport,
     // exercising the same zoomBy path a user's scroll wheel takes. Positive
     // notches zoom in.
@@ -599,6 +607,15 @@ private:
     // agreement.
     enum class ScaleUiState : std::uint8_t { Fit, Fixed, Custom, Mixed };
     void setScaleUiState(ScaleUiState state, int factor = 0);
+    // View pixels per finest cell that a chosen fixed scale actually achieves,
+    // which is the factor itself unless the whole-domain raster hit
+    // maxSliceOutputDimension. Past that clamp one raster pixel is more than one
+    // finest cell and the view scales the clamped raster by the factor anyway,
+    // so the same menu item means different magnifications on different
+    // domains -- and something different again remotely, where the fetch is
+    // demand-driven and never clamped. Zero when there is nothing to report.
+    // See agent-notes/issues/fixed-scale-clamped-native-raster.md.
+    [[nodiscard]] double effectiveFixedScale(int factor) const;
     void configureSliceControls();
     // Enable the dataset-dependent field/level/range/menu controls once a
     // dataset (single or sequence frame) is loaded. Shared by

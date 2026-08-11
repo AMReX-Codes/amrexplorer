@@ -210,6 +210,18 @@ The active panel is the one most recently clicked or manipulated.
 | Right drag | Plot a line; the drag direction chooses the orientation |
 | Right click in a 3-D slice | Move the other two slice planes to the clicked point |
 
+**Fixed scales and very wide domains.** The **Scale** control offers fixed
+zooms from 1x to 32x, where the factor is screen pixels per finest-level cell.
+For a local dataset this is applied to a single whole-domain image, and that
+image is limited to 4096 cells along each axis. A domain wider than that cannot
+be shown at finest resolution all at once, so one image pixel covers more than
+one cell and the fixed scale magnifies by less than the factor says. When that
+happens the Scale button reports what it actually applied — `32x→16x` on a
+domain 8192 cells across — and its tool tip explains why. Rubber-band zoom is
+unaffected: selecting a subregion re-reads that region at finest resolution.
+Remote datasets are also unaffected, because they fetch only the visible window
+and never build a whole-domain image.
+
 The line-plot window can accumulate curves, which is useful when comparing
 variables, levels, or positions. Its horizontal axis uses physical coordinates
 for plotfiles and integer indices for standalone FABs and MultiFabs.

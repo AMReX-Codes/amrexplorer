@@ -2253,6 +2253,72 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path); });
     } else if (argc == 4
+        && std::string_view(argv[1]) == "--effective-scale-smoke-test") {
+        // A domain wider than maxSliceOutputDimension finest cells cannot have
+        // a whole-domain raster at finest resolution, so a local fixed scale
+        // magnifies it by less than the factor says. The UI has to state what
+        // it actually applied, and the number it states has to be the one the
+        // view is really using -- checked here against the visible window.
+        const std::filesystem::path path(argv[2]);
+        const int factor = std::stoi(argv[3]);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, factor](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                window.selectFixedScaleForTest(factor);
+                // Measure past the layout pass the new scale's scroll bars
+                // demand: they shrink the viewport, and the window below is
+                // read in viewport pixels.
+                QTimer::singleShot(200, &window,
+                    [&window, &application, factor] {
+                        const auto claimed
+                            = window.effectiveFixedScaleForTest(factor);
+                        if (!(claimed > 0.0)) {
+                            qCritical("no reduced scale reported on a domain "
+                                      "past the raster clamp");
+                            application.exit(1);
+                            return;
+                        }
+                        const auto label = window.scaleUiLabelForTest();
+                        if (!label.contains(QStringLiteral("→"))) {
+                            qCritical("the Scale button reports '%s', which "
+                                      "does not state the applied scale",
+                                qUtf8Printable(label));
+                            application.exit(1);
+                            return;
+                        }
+                        // What the view really does: viewport pixels per
+                        // finest cell across the window it shows.
+                        const auto window_ = window
+                            .activeViewVisibleDataWindowForTest();
+                        const auto viewport
+                            = window.activeViewViewportSizeForTest();
+                        const auto cellSize
+                            = window.activeViewFinestCellSizeForTest();
+                        if (!(window_.width() > 0.0) || !(cellSize > 0.0)) {
+                            application.exit(1);
+                            return;
+                        }
+                        const auto cells = window_.width() / cellSize;
+                        const auto actual
+                            = static_cast<double>(viewport[0]) / cells;
+                        if (std::abs(actual - claimed) > 0.05 * claimed) {
+                            qCritical("the UI claims %gx but the view applies "
+                                      "%gx", claimed, actual);
+                            application.exit(1);
+                            return;
+                        }
+                        application.exit(0);
+                    });
+            }, ::Qt::SingleShotConnection);
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 4
         && std::string_view(argv[1]) == "--scale-state-smoke-test") {
         // The toolbar Scale button and View > Scale are one state shown twice.
         // Pick 4x from the *toolbar* menu -- the path that used to leave the

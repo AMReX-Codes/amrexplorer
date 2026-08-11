@@ -2247,6 +2247,18 @@ QString MainWindow::scaleUiLabelForTest() const
     return m_scaleButton == nullptr ? QString() : m_scaleButton->text();
 }
 
+double MainWindow::activeViewFinestCellSizeForTest() const
+{
+    if (!m_openMetadata || m_openMetadata->levels.empty()
+        || m_activeView == nullptr) {
+        return 0.0;
+    }
+    const auto& finest = m_openMetadata->levels[static_cast<std::size_t>(
+        std::max(0, m_openMetadata->finestLevel))];
+    return finest.cellSize[static_cast<std::size_t>(
+        displayAxes(m_activeView->normal)[0])];
+}
+
 void MainWindow::wheelActiveViewForTest(int notches)
 {
     if (m_activeView == nullptr || m_activeView->view->viewport() == nullptr) {
@@ -3180,6 +3192,43 @@ void MainWindow::showAboutDialog()
             .arg(QStringLiteral(AMREXPLORER_VERSION)));
 }
 
+double MainWindow::effectiveFixedScale(int factor) const
+{
+    // The remote path hosts a whole-domain virtual canvas in finest cells and
+    // fetches only the visible window at finest resolution, so its factor is
+    // always literal. Only the local whole-domain raster can be clamped.
+    if (!m_openMetadata || m_openMetadata->levels.empty() || factor <= 0
+        || std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)
+            != nullptr) {
+        return 0.0;
+    }
+    const auto& metadata = *m_openMetadata;
+    const auto& finest = metadata.levels[static_cast<std::size_t>(
+        std::max(0, metadata.finestLevel))];
+    const auto domain = datasetSampleBounds(metadata);
+    auto worst = static_cast<double>(factor);
+    bool clamped = false;
+    for (const auto axis : displayAxes(m_activeView == nullptr
+             ? 2 : m_activeView->normal)) {
+        const auto i = static_cast<std::size_t>(axis);
+        const auto cellSize = finest.cellSize[i];
+        if (!(cellSize > 0.0)) {
+            continue;
+        }
+        const auto cells = std::round(
+            (domain.upper[i] - domain.lower[i]) / cellSize);
+        if (!(cells > maxSliceOutputDimension)) {
+            continue;
+        }
+        clamped = true;
+        // One raster pixel now spans cells/maxSliceOutputDimension finest
+        // cells, and the view scales raster pixels by the factor.
+        worst = std::min(worst,
+            factor * maxSliceOutputDimension / cells);
+    }
+    return clamped ? worst : 0.0;
+}
+
 void MainWindow::setScaleUiState(ScaleUiState state, int factor)
 {
     QString label;
@@ -3187,9 +3236,16 @@ void MainWindow::setScaleUiState(ScaleUiState state, int factor)
     case ScaleUiState::Fit:
         label = tr("Fit");
         break;
-    case ScaleUiState::Fixed:
+    case ScaleUiState::Fixed: {
         label = tr("%1x").arg(factor);
+        // Say what the factor really came to when the raster clamp reduced it,
+        // so "32x" never silently means two different magnifications.
+        const auto effective = effectiveFixedScale(factor);
+        if (effective > 0.0) {
+            label = tr("%1x→%2x").arg(factor).arg(effective, 0, 'g', 3);
+        }
         break;
+    }
     case ScaleUiState::Custom:
         label = tr("Custom");
         break;
@@ -3199,6 +3255,19 @@ void MainWindow::setScaleUiState(ScaleUiState state, int factor)
     }
     if (m_scaleButton != nullptr) {
         m_scaleButton->setText(label);
+        if (state == ScaleUiState::Fixed
+            && effectiveFixedScale(factor) > 0.0) {
+            m_scaleButton->setToolTip(
+                tr("This domain is wider than %1 finest cells, which is the "
+                   "largest whole-domain raster AMReXplorer builds, so one "
+                   "raster pixel covers more than one cell and %2x magnifies "
+                   "it less than %2x.")
+                    .arg(maxSliceOutputDimension)
+                    .arg(factor));
+        } else {
+            m_scaleButton->setToolTip(
+                tr("Zoom scale and rubber-band synchronization for panels"));
+        }
     }
     if (m_scaleGroup == nullptr) {
         return;

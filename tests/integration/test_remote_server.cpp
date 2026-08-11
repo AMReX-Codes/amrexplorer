@@ -778,6 +778,14 @@ int main(int argc, char* argv[])
             = std::chrono::milliseconds{500};
         // 8 KiB/s over a response of a few kibibytes: half a second of grace
         // plus well under a second of transfer allowance.
+        //
+        // Retirement lands at stallTimeout + payloadBytes / minBytesPerSecond,
+        // so the margin the `elapsed > stallTimeout` assertion below rests on
+        // is the transfer term alone. It cannot go negative, and elapsed only
+        // grows under load, so this is not a flake; but shrinking the response
+        // or raising the floor shrinks that term, and past some point the
+        // assertion stops distinguishing the budget from the stall in any
+        // meaningful way. Retune the two together, not one at a time.
         trickleOptions.responseWriteMinimumBytesPerSecond = 8ULL * 1024ULL;
         Server trickleServer(trickleOptions);
         RunningServer trickleRunning(trickleServer);

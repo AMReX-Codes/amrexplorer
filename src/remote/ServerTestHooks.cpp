@@ -64,7 +64,12 @@ std::size_t writeChunkLimit(std::size_t requested)
     if (!hook) {
         return requested;
     }
-    return std::min(requested, hook(requested));
+    // Clamped into [1, requested]. Zero is the dangerous answer: writeExact
+    // reads a zero-byte send as the peer having closed the connection, so a
+    // hook returning zero would surface as a spurious disconnect rather than
+    // as an obviously wrong test. requested is never zero -- the write loop
+    // only asks while bytes remain -- so the lower bound cannot exceed it.
+    return std::clamp(hook(requested), std::size_t{1}, requested);
 }
 
 ResponseWriteScope::ResponseWriteScope() noexcept

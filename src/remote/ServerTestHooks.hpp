@@ -19,6 +19,8 @@ void notifyBeforeResponseWrite(std::uint64_t requestId);
 // that renews the no-progress deadline forever, so only the whole-response
 // budget can retire it -- and it produces that condition from a tiny response
 // instead of one large enough to exhaust the kernel's socket buffers.
+// The result is clamped into [1, requested], so a hook cannot accidentally
+// stall the write outright by answering zero.
 using WriteChunkLimit = std::function<std::size_t(std::size_t)>;
 
 void setWriteChunkLimit(WriteChunkLimit hook);

@@ -21,11 +21,13 @@
 
 namespace amrvis::detail {
 
-// A FAB header is one line of text at the head of an otherwise binary file, so
-// it is read from a stream that has no idea where the text ends. Real headers
-// are a few hundred bytes -- "FAB " plus a RealDescriptor, a Box, and a
-// component count -- and this ceiling leaves two orders of magnitude of room.
-inline constexpr std::size_t maximumFabHeaderLineBytes = 16U * 1024U;
+// A header line is text at the head of a file the reader otherwise treats as
+// opaque, so it is read from a stream that has no idea where the text ends.
+// Real ones are a few hundred bytes -- a FAB's "FAB " plus a RealDescriptor, a
+// Box and a component count; a plotfile's version string -- and this ceiling
+// leaves two orders of magnitude of room. Named for headers generally, not for
+// FAB: readBoundedLine is used for both.
+inline constexpr std::size_t maximumHeaderLineBytes = 16U * 1024U;
 
 // std::getline with a ceiling, and otherwise its semantics: false when nothing
 // could be read, the line without its terminator otherwise, and the stream left
@@ -36,7 +38,7 @@ inline constexpr std::size_t maximumFabHeaderLineBytes = 16U * 1024U;
 // than returning a truncated one that might parse.
 template <typename Error>
 [[nodiscard]] bool readBoundedLine(std::istream& input, std::string& line,
-    std::size_t limit = maximumFabHeaderLineBytes)
+    std::size_t limit = maximumHeaderLineBytes)
 {
     line.clear();
     for (;;) {
@@ -58,7 +60,7 @@ template <typename Error>
             return true;
         }
         if (line.size() >= limit) {
-            throw Error("FAB header line exceeds the supported length");
+            throw Error("header line exceeds the supported length");
         }
         line.push_back(static_cast<char>(character));
     }

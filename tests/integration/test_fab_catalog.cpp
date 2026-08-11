@@ -330,10 +330,9 @@ int main()
             require(static_cast<bool>(output),
                 "could not create the endless-header fixture");
             output << "FAB ";
-            const std::string filler(64U * 1024U, 'x');
-            for (int chunk = 0; chunk < 16; ++chunk) {
-                output << filler;
-            }
+            // Just past the ceiling, not a megabyte past it: the property is
+            // "longer than the limit", and this runs under the sanitizers.
+            output << std::string(32U * 1024U, 'x');
         }
         bool threw = false;
         try {

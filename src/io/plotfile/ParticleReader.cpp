@@ -4,6 +4,8 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <iomanip>
+#include <type_traits>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -50,10 +52,20 @@ struct SelectedParticle {
     std::uint64_t id = 0;
 };
 
+// Longest string token a Header may contain -- a version string or a component
+// name. Extracting a string with >> is otherwise unbounded: it reads until
+// whitespace, so a Header holding one enormous whitespace-free run allocates
+// all of it before any count or cap is consulted. width() is how the standard
+// bounds that, and it is reset by the extraction.
+constexpr int maximumHeaderTokenBytes = 4096;
+
 template <typename T>
 T readRequired(std::istream& input, std::string_view description)
 {
     T value{};
+    if constexpr (std::is_same_v<T, std::string>) {
+        input >> std::setw(maximumHeaderTokenBytes);
+    }
     if (!(input >> value)) {
         throw ParticleReadError(
             "malformed particle Header while reading " + std::string(description));
@@ -208,11 +220,15 @@ ParsedHeader parseHeader(
     constexpr std::uint64_t minimumBytesPerGridRecord = 6;
     std::error_code headerSizeError;
     const auto headerBytes = std::filesystem::file_size(path, headerSizeError);
-    const auto describableGrids = headerSizeError
-        ? totalGrids
-        : static_cast<std::uint64_t>(headerBytes) / minimumBytesPerGridRecord;
-    result.grids.reserve(
-        static_cast<std::size_t>(std::min(totalGrids, describableGrids)));
+    if (!headerSizeError) {
+        const auto describableGrids
+            = static_cast<std::uint64_t>(headerBytes) / minimumBytesPerGridRecord;
+        result.grids.reserve(
+            static_cast<std::size_t>(std::min(totalGrids, describableGrids)));
+    }
+    // No fallback reserve when the size is unknown: this is an optimization,
+    // and the safe answer for an optimization that cannot be bounded is to
+    // skip it, not to take the largest allocation the cap still permits.
     std::uint64_t recordedParticles = 0;
     for (int level = 0; level <= result.finestLevel; ++level) {
         for (int grid = 0; grid < gridCounts[static_cast<std::size_t>(level)]; ++grid) {
@@ -487,8 +503,13 @@ std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
             continue;
         }
         const auto headerPath = entry.path() / "Header";
+        // Bounded like every other Header token: this runs before the try
+        // below, and its catch is deliberately narrow -- a malformed species
+        // is skipped, an out-of-memory machine is not something to swallow --
+        // so an unbounded read here would take the whole open down.
         std::ifstream probe(headerPath);
         std::string version;
+        probe >> std::setw(maximumHeaderTokenBytes);
         if (!(probe >> version) || !version.starts_with("Version_")) {
             continue;
         }
@@ -534,6 +555,12 @@ ParticleSample readParticleSample(
     std::map<DataFileKey, std::uint64_t> dataFileSizes;
     std::uint64_t totalDataBytes = 0;
     for (const auto& [key, dataPath] : dataPaths) {
+        // One stat per DATA file, so this window grows with their count; the
+        // read loop below polls per grid and this must not be the one stretch
+        // that ignores a cancelled request.
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         std::error_code sizeError;
         const auto dataFileSize = std::filesystem::file_size(dataPath, sizeError);
         if (sizeError) {

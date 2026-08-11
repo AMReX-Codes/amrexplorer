@@ -72,10 +72,11 @@
     {
       "name": "tsan",
       "inherits": "headless",
-      "displayName": "Headless ThreadSanitizer build",
+      "displayName": "Headless ThreadSanitizer build (includes remote)",
       "binaryDir": "${sourceDir}/build-tsan",
       "cacheVariables": {
-        "AMREXPLORER_ENABLE_TSAN": "ON"
+        "AMREXPLORER_ENABLE_TSAN": "ON",
+        "AMREXPLORER_ENABLE_REMOTE": "ON"
       }
     },
     {

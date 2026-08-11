@@ -339,7 +339,8 @@ Plotfiles that carry particle data can draw it over the slice. Choose **View >
 Particles...** — the item is enabled only while the open dataset has at least
 one particle species.
 
-The dialog lists every species with its particle count and four controls each:
+The dialog lists every species with its particle count and three controls
+each:
 
 - **Show** draws that species, or hides it.
 - **Color** picks the point color. Each species starts with a distinct default.

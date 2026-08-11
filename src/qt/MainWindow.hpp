@@ -218,6 +218,11 @@ public:
     void selectToolbarFixedScaleForTest(int factor);
     // What the Scale button currently reports.
     [[nodiscard]] QString scaleUiLabelForTest() const;
+    // The View > Scale item currently checked, with its mnemonic stripped, or
+    // an empty string when nothing is. The button label and this can differ in
+    // wording -- a clamped label says "32x->16x" -- but they must never
+    // disagree about which factor is selected.
+    [[nodiscard]] QString scaleMenuCheckedLabelForTest() const;
     // The magnification the UI claims for this factor (0 when it is literal),
     // and the finest cell size along the active view's horizontal axis, so a
     // test can check the claim against the window the view actually shows.

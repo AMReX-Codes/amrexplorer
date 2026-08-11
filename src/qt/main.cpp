@@ -2342,7 +2342,7 @@ int main(int argc, char* argv[])
                     application.exit(2);
                     return;
                 }
-                window.selectFixedScaleForTest(factor);
+                window.selectToolbarFixedScaleForTest(factor);
                 // Measure past the layout pass the new scale's scroll bars
                 // demand: they shrink the viewport, and the window below is
                 // read in viewport pixels.
@@ -2361,6 +2361,20 @@ int main(int argc, char* argv[])
                             qCritical("the Scale button reports '%s', which "
                                       "does not state the applied scale",
                                 qUtf8Printable(label));
+                            application.exit(1);
+                            return;
+                        }
+                        // The decorated label must not cost the menu its
+                        // check: matching the radio on that string finds
+                        // nothing, and the toolbar/menu split reopens on
+                        // exactly the domains this reporting exists for.
+                        const auto checked
+                            = window.scaleMenuCheckedLabelForTest();
+                        if (checked
+                            != QStringLiteral("%1x").arg(factor)) {
+                            qCritical("a clamped toolbar pick left View > "
+                                      "Scale showing '%s'",
+                                qUtf8Printable(checked));
                             application.exit(1);
                             return;
                         }

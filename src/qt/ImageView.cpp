@@ -815,7 +815,14 @@ void ImageView::keyPressEvent(QKeyEvent* event)
     // Only while this view holds focus and has something to pan. Anything else
     // -- including an arrow with a modifier, which belongs to whatever else may
     // want it -- falls through to the base class.
-    if (hasImage() && event->modifiers() == Qt::NoModifier) {
+    //
+    // KeypadModifier is masked out rather than treated as a modifier: macOS
+    // stamps it on the arrow keys, which Qt documents ("the arrow keys are
+    // considered part of the keypad"), so testing against NoModifier alone
+    // would leave arrow panning dead there. The QShortcut binding this
+    // replaced normalized that away for us.
+    const auto modifiers = event->modifiers() & ~Qt::KeypadModifier;
+    if (hasImage() && modifiers == Qt::NoModifier) {
         switch (event->key()) {
         case Qt::Key_Left:
             emit panStepRequested(QPointF(1.0, 0.0));

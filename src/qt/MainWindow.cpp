@@ -527,8 +527,11 @@ MainWindow::MainWindow(QWidget* parent)
     for (const auto factor : scaleFactors) {
         auto* action = scaleMenu->addAction(tr("%1x").arg(factor));
         connect(action, &QAction::triggered, this, [this, factor] {
-            setScaleUiState(ScaleUiState::Fixed, factor);
+            // Apply first, report second: the report asks the view whether it
+            // is on a virtual canvas and what region its raster covers, and
+            // neither is settled until applyFixedScale has run.
             applyFixedScale(factor);
+            setScaleUiState(ScaleUiState::Fixed, factor);
         });
     }
     m_syncRubberBandZoomAction =
@@ -754,9 +757,7 @@ MainWindow::MainWindow(QWidget* parent)
             // opening a fresh dataset does, but keep the view state (field,
             // level, range, log, palette, zoom, slice positions) for the
             // next frame.
-            const std::array<PlaneViewState*, 4> states{&m_view2d,
-                &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
-            for (auto* state : states) {
+            for (auto* state : allViewStates()) {
                 state->stopSource.request_stop();
                 ++state->sliceGeneration;
             }
@@ -1006,6 +1007,14 @@ std::array<MainWindow::PlaneViewState*, 4> MainWindow::allViewStates()
 void MainWindow::setAllViewPlaceholders(const QString& text)
 {
     for (auto* state : allViewStates()) {
+        // Never over a panel that has something to show. Both callers are
+        // catch blocks spanning the whole display path, so a throw from the
+        // third panel reaches here with the first two already rendered, and
+        // blanking those would turn a partial failure into a total one --
+        // behind four placeholders, over a live and interactive dataset.
+        if (state->view->hasImage()) {
+            continue;
+        }
         state->view->setPlaceholder(text);
     }
 }
@@ -1405,8 +1414,8 @@ void MainWindow::createMenus()
         action->setActionGroup(m_scaleGroup);
         action->setShortcut(QKeySequence(Qt::Key_1 + static_cast<int>(index)));
         connect(action, &QAction::triggered, this, [this, factor] {
+            applyFixedScale(factor);   // then report; see the toolbar menu
             setScaleUiState(ScaleUiState::Fixed, factor);
-            applyFixedScale(factor);
         });
         scaleMenu->addAction(action);
     }
@@ -2245,6 +2254,20 @@ void MainWindow::selectToolbarFixedScaleForTest(int factor)
 QString MainWindow::scaleUiLabelForTest() const
 {
     return m_scaleButton == nullptr ? QString() : m_scaleButton->text();
+}
+
+QString MainWindow::scaleMenuCheckedLabelForTest() const
+{
+    if (m_scaleGroup == nullptr) {
+        return {};
+    }
+    auto* checked = m_scaleGroup->checkedAction();
+    if (checked == nullptr) {
+        return {};
+    }
+    auto text = checked->text();
+    text.remove(QLatin1Char('&'));
+    return text;
 }
 
 QRectF MainWindow::datasetPhysicalDomainForTest() const
@@ -3208,22 +3231,29 @@ void MainWindow::showAboutDialog()
 
 double MainWindow::effectiveFixedScale(int factor) const
 {
-    // The remote path hosts a whole-domain virtual canvas in finest cells and
-    // fetches only the visible window at finest resolution, so its factor is
-    // always literal. Only the local whole-domain raster can be clamped.
+    // A view on the whole-domain virtual canvas fetches its visible window at
+    // finest resolution, so its factor is always literal. That is the test,
+    // not "is this remote": a remote *spherical* view refuses the canvas (see
+    // applyFixedScale) and scales a clamped raster like any local one, so
+    // asking about the session rather than the view reported no clamp exactly
+    // where one was in force.
     if (!m_openMetadata || m_openMetadata->levels.empty() || factor <= 0
-        || std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)
-            != nullptr) {
+        || m_activeView == nullptr || m_activeView->view == nullptr
+        || m_activeView->view->virtualCanvasActive()) {
         return 0.0;
     }
     const auto& metadata = *m_openMetadata;
     const auto& finest = metadata.levels[static_cast<std::size_t>(
         std::max(0, metadata.finestLevel))];
-    const auto domain = datasetSampleBounds(metadata);
+    // The region the raster actually covers, which is what nativeOutputSize
+    // clamps -- not the whole domain. After a rubber-band zoom the raster
+    // covers the selection, which may well fit under the clamp while the
+    // domain does not, and announcing a clamp then contradicts the guide.
+    const auto domain = m_activeView->visibleRegion.value_or(
+        datasetSampleBounds(metadata));
     auto worst = static_cast<double>(factor);
     bool clamped = false;
-    for (const auto axis : displayAxes(m_activeView == nullptr
-             ? 2 : m_activeView->normal)) {
+    for (const auto axis : displayAxes(m_activeView->normal)) {
         const auto i = static_cast<std::size_t>(axis);
         const auto cellSize = finest.cellSize[i];
         if (!(cellSize > 0.0)) {
@@ -3246,20 +3276,21 @@ double MainWindow::effectiveFixedScale(int factor) const
 void MainWindow::setScaleUiState(ScaleUiState state, int factor)
 {
     QString label;
+    // Computed once: it decides both the label and the tool tip below.
+    double effective = 0.0;
     switch (state) {
     case ScaleUiState::Fit:
         label = tr("Fit");
         break;
-    case ScaleUiState::Fixed: {
+    case ScaleUiState::Fixed:
         label = tr("%1x").arg(factor);
         // Say what the factor really came to when the raster clamp reduced it,
         // so "32x" never silently means two different magnifications.
-        const auto effective = effectiveFixedScale(factor);
+        effective = effectiveFixedScale(factor);
         if (effective > 0.0) {
             label = tr("%1x→%2x").arg(factor).arg(effective, 0, 'g', 3);
         }
         break;
-    }
     case ScaleUiState::Custom:
         label = tr("Custom");
         break;
@@ -3269,15 +3300,15 @@ void MainWindow::setScaleUiState(ScaleUiState state, int factor)
     }
     if (m_scaleButton != nullptr) {
         m_scaleButton->setText(label);
-        if (state == ScaleUiState::Fixed
-            && effectiveFixedScale(factor) > 0.0) {
+        if (state == ScaleUiState::Fixed && effective > 0.0) {
             m_scaleButton->setToolTip(
-                tr("This domain is wider than %1 finest cells, which is the "
-                   "largest whole-domain raster AMReXplorer builds, so one "
-                   "raster pixel covers more than one cell and %2x magnifies "
-                   "it less than %2x.")
+                tr("This view spans more than %1 finest cells, which is the "
+                   "largest raster AMReXplorer builds for it, so one raster "
+                   "pixel covers more than one cell: %2x is applied as %3x. "
+                   "Zoom into a subregion to inspect it at %2x.")
                     .arg(maxSliceOutputDimension)
-                    .arg(factor));
+                    .arg(factor)
+                    .arg(effective, 0, 'g', 3));
         } else {
             m_scaleButton->setToolTip(
                 tr("Zoom scale and rubber-band synchronization for panels"));
@@ -3299,12 +3330,16 @@ void MainWindow::setScaleUiState(ScaleUiState state, int factor)
         }
         return;
     }
+    // Match on the plain factor, never on `label`: a clamped label reads
+    // "32x->16x", which matches no radio item, and the menu would keep the
+    // previous check -- the toolbar/menu split this setter exists to remove.
+    const auto wanted = tr("%1x").arg(factor);
     // setChecked, never trigger: the group's handlers call back into
     // applyFixedScale, and this is reporting the scale, not choosing one.
     for (auto* action : m_scaleGroup->actions()) {
         auto text = action->text();
         text.remove(QLatin1Char('&'));
-        if (text == label) {
+        if (text == wanted) {
             action->setChecked(true);
             return;
         }

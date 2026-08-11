@@ -148,6 +148,26 @@ void arrowKeysRequestPanOnlyWhenFocusedWithAnImage()
     press(::Qt::Key_Down, ::Qt::ShiftModifier);
     require(requested.empty(),
         "a modified arrow key must not be claimed as a pan");
+
+    // macOS stamps KeypadModifier on the arrow keys -- Qt documents them as
+    // part of the keypad -- so a gate testing against NoModifier alone leaves
+    // panning dead there while passing everywhere else. Every case above
+    // builds its own events, so only an explicit case covers it.
+    requested.clear();
+    press(::Qt::Key_Left, ::Qt::KeypadModifier);
+    press(::Qt::Key_Down, ::Qt::KeypadModifier);
+    require(requested.size() == 2,
+        "a keypad-flagged arrow key must still pan (macOS sets this)");
+    require(requested[0] == QPointF(1.0, 0.0)
+            && requested[1] == QPointF(0.0, -1.0),
+        "a keypad-flagged arrow key panned the wrong way");
+
+    // ...but the mask must not swallow a real modifier that happens to arrive
+    // with the keypad flag.
+    requested.clear();
+    press(::Qt::Key_Up, ::Qt::KeypadModifier | ::Qt::ControlModifier);
+    require(requested.empty(),
+        "Ctrl with the keypad flag must not be claimed as a pan");
 }
 
 } // namespace

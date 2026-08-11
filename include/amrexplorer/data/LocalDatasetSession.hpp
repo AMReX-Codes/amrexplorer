@@ -2,9 +2,12 @@
 
 #include <amrexplorer/data/DatasetSession.hpp>
 
+#include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 namespace amrvis {
 
@@ -58,6 +61,12 @@ private:
     std::vector<ParticleSpeciesMetadata> m_particleSpecies;
     mutable std::mutex m_mutex;
     std::shared_ptr<PlotfileDataset> m_dataset;
+    // File-scope ranges for a standalone FAB, by field. These are scanned out
+    // of the payload rather than read from a statistic, and they never change,
+    // so the scan happens once per field. Cached even when the answer is "no
+    // finite values", which costs the same scan to discover. Cancelled scans
+    // record nothing.
+    std::map<std::uint32_t, std::optional<ValueRange>> m_fabRanges;
 };
 
 } // namespace amrvis

@@ -202,6 +202,26 @@ void test2d(const std::filesystem::path& source, const std::filesystem::path& wo
         }
     }
 
+    // Planning follows the region too, not just the walk. The refined blocks
+    // live in the middle of this domain, so a region over the left quarter
+    // cannot need them -- but the planning used to pin only the *non*-line
+    // coordinates, leaving the line axis full-width, and preloaded every block
+    // the whole-domain line crosses. That is what a line plot zoomed into a
+    // fraction of a large domain used to pay.
+    {
+        auto leftEdge = request;
+        leftEdge.region = amrvis::RealBox{{{0.0, 0.0, 0.0}}, {{0.2, 1.0, 0.0}}};
+        const auto edge = lines.execute(leftEdge);
+        require(edge.metrics.candidateBlocks < composite.metrics.candidateBlocks,
+            "a subregion line still planned against the whole line axis");
+        require(!edge.line.positions.empty(),
+            "a subregion line at the domain edge returned nothing");
+        for (const auto position : edge.line.positions) {
+            require(position > 0.0 && position < 0.2,
+                "an edge-region line sample fell outside the region");
+        }
+    }
+
     // Cross-check against a slice whose single pixel row covers the same cells.
     // The slice composites on a uniform 8-pixel grid, so each native line
     // sample must agree with the slice cell that contains its position.

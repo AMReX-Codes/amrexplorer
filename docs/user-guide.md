@@ -132,6 +132,15 @@ number, even though the server's port changes each run:
 (local) $ unset AMREXPLORER_TOKEN
 ```
 
+Once a remote dataset is open it is driven exactly like a local one: the same
+fields, levels, ranges, palettes, slice planes, line plots, sequences, and
+overlays, including [particles](#particles). What differs is where the work
+happens. Reading, slicing, and particle sampling run on the server, which sends
+only what the current view needs; color mapping, contours, vector glyphs, and
+drawing run on your own machine. So changing a palette or a particle color is
+immediate, while moving a slice, panning, or changing the particle subset costs
+a round trip.
+
 ## User interface overview
 
 ![AMReXplorer displaying a three-dimensional plotfile](images/user-guide-overview.png)
@@ -150,7 +159,9 @@ The main controls are:
 8. **Animation** controls a 3-D plane sweep or an open plotfile sequence.
 
 Use **View** to show or hide toolbars and dock panels. Docks can be moved,
-detached, resized, and placed on another side of the main window.
+detached, resized, and placed on another side of the main window. **View** also
+holds the overlays drawn on top of the slice: grid boxes, contours and vectors,
+and particles.
 
 ## Inspecting standalone FABs and MultiFabs
 
@@ -321,6 +332,50 @@ For contours, choose the number of lines and their color. For vectors, select
 the U and V components for 2-D data, and the U, V, and W components for 3-D
 data. AMReXplorer may propose fields based on common velocity names; verify the
 component selections for your dataset.
+
+## Particles
+
+Plotfiles that carry particle data can draw it over the slice. Choose **View >
+Particles...** — the item is enabled only while the open dataset has at least
+one particle species.
+
+The dialog lists every species with its particle count and four controls each:
+
+- **Show** draws that species, or hides it.
+- **Color** picks the point color. Each species starts with a distinct default.
+- **Alpha** sets opacity from 0 to 100 percent, which is how you keep a dense
+  species from hiding the raster underneath it.
+
+Below the species list are three settings that apply to all of them:
+
+- **Visible subset** is the percentage of particles drawn, from 0.01 to 100.
+  Large particle counts are impractical to draw in full, and a subset conveys
+  the distribution just as well.
+- **Sampling seed** chooses *which* particles the subset contains. Change it to
+  look at a different sample of the same size.
+- **Point size** is the drawn diameter in pixels, from 1 to 12.
+
+Sampling is by a hash of each particle's persistent ID/CPU identity, not by
+position or file order. Two consequences are worth knowing. The same particles
+stay selected as you step through the frames of a sequence, so a subset can be
+followed over time rather than resampled at every frame. And lower percentages
+are nested inside higher ones for a given seed, so reducing the subset thins the
+same set of particles rather than replacing it.
+
+For 3-D data, particles are projected onto each of the three orthogonal slice
+panels. The projection is through the whole volume: a panel shows every selected
+particle, not only those near that slice plane.
+
+Particle settings are not saved between sessions. Species selection, colors, and
+the seed reset when a new dataset is opened; the subset percentage and point
+size persist for the session.
+
+**Remote datasets** use the same dialog and behave the same way. The sampling
+runs on the server, which sends only the selected points, and the number of
+points one response may carry is bounded by the same frame budget that bounds
+slices. Changing the subset percentage or the seed therefore costs a request to
+the server; changing a color or alpha does not, since those are applied when the
+points are drawn.
 
 ## 2-D spherical coordinates
 

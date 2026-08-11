@@ -2027,7 +2027,17 @@ int main(int argc, char* argv[])
                     }
                     window.setAnimationDockVisibleForTest(false);
                     window.requestSequenceFrameForTest(0);
-                    window.stepSequence(1);
+                    // Do *not* step yet. Stepping immediately bumps the load
+                    // generation and cancels the redundant frame-0 load before
+                    // it can display, so the observed sequence is [0, 1]
+                    // whether or not the request was suppressed -- which is to
+                    // say the assertion below would pass against the bug it
+                    // exists for. Give the reload time to arrive instead: if
+                    // one was started, it displays frame 0 a second time and
+                    // the branch below catches it.
+                    QTimer::singleShot(500, &window, [&window] {
+                        window.stepSequence(1);
+                    });
                     return;
                 }
                 if (index != 1 || displays->size() != 2) {

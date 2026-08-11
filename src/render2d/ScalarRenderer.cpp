@@ -77,6 +77,27 @@ ImageBuffer renderScalarPlane(
     image.rgba.resize(plane.values.size());
     const Palette& palette = settings.palette != nullptr
         ? *settings.palette : builtinPalette(BuiltinPalette::Rainbow);
+
+    // Palette::argb reassembles its result from three stored bytes on every
+    // call, which at the 4096 output cap is up to 16.7 million times for a
+    // palette of 253 colors. Resolve them once and index instead. The three
+    // cases below are argb's own, kept in the same order: it clips at or below
+    // zero to the first data slot (NaN fails that test too, though NaN never
+    // reaches here), at or above one to the last, and otherwise truncates --
+    // never rounds, never interpolates -- into a slot.
+    std::array<std::uint32_t, Palette::colorSlots> slots{};
+    for (int index = 0; index < Palette::colorSlots; ++index) {
+        slots[static_cast<std::size_t>(index)]
+            = palette.slotArgb(Palette::paletteStart + index);
+    }
+    constexpr auto lastSlot = static_cast<std::size_t>(Palette::colorSlots - 1);
+    const auto scale = static_cast<double>(Palette::colorSlots - 1);
+
+    // The span is loop-invariant, but the compiler may not hoist a division:
+    // it would have to prove the divisor never changes and that reassociating
+    // into a multiply is exact, and the latter is not true in general.
+    const auto invSpan = 1.0 / (rangeMaximum - rangeMinimum);
+
     for (std::size_t pixel = 0; pixel < image.rgba.size(); ++pixel) {
         if (plane.valid[pixel] == 0) {
             image.rgba[pixel] = settings.invalidColor;
@@ -89,8 +110,15 @@ ImageBuffer renderScalarPlane(
             continue;
         }
         const auto mapped = settings.logarithmic ? std::log(value) : value;
-        const auto normalized = (mapped - rangeMinimum) / (rangeMaximum - rangeMinimum);
-        image.rgba[pixel] = palette.argb(normalized);
+        const auto normalized = (mapped - rangeMinimum) * invSpan;
+        if (!(normalized > 0.0)) {
+            image.rgba[pixel] = slots[0];
+        } else if (!(normalized < 1.0)) {
+            image.rgba[pixel] = slots[lastSlot];
+        } else {
+            image.rgba[pixel]
+                = slots[static_cast<std::size_t>(normalized * scale)];
+        }
     }
     return image;
 }

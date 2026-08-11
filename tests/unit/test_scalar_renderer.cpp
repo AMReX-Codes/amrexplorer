@@ -214,5 +214,42 @@ int main()
             "the storage check did not precede the range/log checks");
     }
 
+    // The renderer resolves the palette into a lookup table once instead of
+    // calling Palette::argb per pixel. That is only allowed to be faster, never
+    // different: this walks a plane across the whole range, including both
+    // clipped ends and the slot boundaries in between, and requires every pixel
+    // to equal what argb would have produced.
+    {
+        const auto& palette = amrvis::builtinPalette(
+            amrvis::BuiltinPalette::Rainbow);
+        constexpr int samples = 4096;
+        amrvis::ScalarPlane sweep;
+        sweep.width = samples;
+        sweep.height = 1;
+        sweep.values.resize(static_cast<std::size_t>(samples));
+        sweep.valid.assign(static_cast<std::size_t>(samples), 1);
+        // Deliberately runs outside [0, 1] at both ends so the two clipping
+        // branches are covered, not just the interior.
+        for (int i = 0; i < samples; ++i) {
+            sweep.values[static_cast<std::size_t>(i)] = static_cast<float>(
+                -0.25 + 1.5 * static_cast<double>(i)
+                    / static_cast<double>(samples - 1));
+        }
+        amrvis::ScalarRenderSettings sweepSettings;
+        sweepSettings.minimum = 0.0;
+        sweepSettings.maximum = 1.0;
+        sweepSettings.palette = &palette;
+        const auto sweepImage = amrvis::renderScalarPlane(sweep, sweepSettings);
+        for (int i = 0; i < samples; ++i) {
+            const auto value
+                = static_cast<double>(sweep.values[static_cast<std::size_t>(i)]);
+            const auto normalized = (value - sweepSettings.minimum)
+                / (sweepSettings.maximum - sweepSettings.minimum);
+            require(sweepImage.rgba[static_cast<std::size_t>(i)]
+                    == palette.argb(normalized),
+                "the palette lookup table disagrees with Palette::argb");
+        }
+    }
+
     return 0;
 }

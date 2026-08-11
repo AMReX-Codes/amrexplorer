@@ -70,6 +70,17 @@ T readRequired(std::istream& input, std::string_view description)
         throw ParticleReadError(
             "malformed particle Header while reading " + std::string(description));
     }
+    if constexpr (std::is_same_v<T, std::string>) {
+        // width() stops the extraction but does not fail it: >> sets failbit
+        // only when it extracts nothing, so hitting the limit would leave the
+        // rest of the token in the stream to be read as the next field, and
+        // every field after it would shift. Bounding the allocation must not
+        // buy that -- a token this long is malformed, so say so.
+        if (value.size() >= static_cast<std::size_t>(maximumHeaderTokenBytes)) {
+            throw ParticleReadError("particle Header " + std::string(description)
+                + " exceeds the supported length");
+        }
+    }
     return value;
 }
 
@@ -510,7 +521,10 @@ std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
         std::ifstream probe(headerPath);
         std::string version;
         probe >> std::setw(maximumHeaderTokenBytes);
-        if (!(probe >> version) || !version.starts_with("Version_")) {
+        if (!(probe >> version)
+            || version.size() >= static_cast<std::size_t>(
+                   maximumHeaderTokenBytes)
+            || !version.starts_with("Version_")) {
             continue;
         }
         try {

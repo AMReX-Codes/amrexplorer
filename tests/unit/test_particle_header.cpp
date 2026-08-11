@@ -126,6 +126,21 @@ int main()
             "particle grid total is outside supported bounds");
     }
 
+    // An over-long component name, with no whitespace before the field that
+    // follows it. Bounding the extraction with width() is not enough on its
+    // own: >> stops at the limit but only fails on an empty extraction, so the
+    // tail would be read as the *next* field and every field after it would
+    // shift -- a silent misparse, which is worse than the allocation it
+    // replaced. It has to be rejected outright.
+    {
+        std::string body = "Version_Two_Dot_Zero_double\n2\n1\n";
+        body += std::string(8192, 'A');
+        body += "\n0\n1\n0\n1000\n0\n1\n0 0 0\n";
+        expectRejected(scratch / "long_token", body,
+            "a component name past the token ceiling",
+            "exceeds the supported length");
+    }
+
     // A forged particleCount over an empty DATA file. The Header is internally
     // consistent -- its one grid record accounts for every claimed particle --
     // so nothing in the text contradicts it, and the reserve was previously

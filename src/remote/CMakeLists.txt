@@ -30,6 +30,11 @@ add_library(amrexplorer_remote
     Server.cpp
     "${amrexplorer_wire_generated}"
 )
+if(AMREXPLORER_ENABLE_SERVER_TEST_HOOKS)
+    target_sources(amrexplorer_remote PRIVATE ServerTestHooks.cpp)
+    target_compile_definitions(amrexplorer_remote
+        PRIVATE AMREXPLORER_SERVER_TEST_HOOKS)
+endif()
 add_library(amrexplorer::remote ALIAS amrexplorer_remote)
 
 target_include_directories(amrexplorer_remote

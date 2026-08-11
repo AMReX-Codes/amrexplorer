@@ -20,23 +20,23 @@ cmake --preset debug       # Debug build → build-debug/
 cmake --build --preset debug
 ctest --preset debug
 
-cmake --preset headless    # No Qt, core library + tools + tests → build-headless/
+cmake --preset headless    # Release, no Qt, core + tools + tests → build-headless/
 cmake --build --preset headless
 ctest --preset headless
 
-cmake --preset remote      # Headless remote server + protocol tests → build-remote/
+cmake --preset remote      # Release headless server + protocol tests → build-remote/
 cmake --build --preset remote
 ctest --preset remote
 
-cmake --preset sanitizers  # Headless + ASan + UBSan → build-sanitizers/
+cmake --preset sanitizers  # Debug headless + ASan + UBSan → build-sanitizers/
 cmake --build --preset sanitizers
 ctest --preset sanitizers
 
-cmake --preset tsan        # Headless + remote + ThreadSanitizer → build-tsan/
+cmake --preset tsan        # Debug headless + remote + TSan → build-tsan/
 cmake --build --preset tsan
 ctest --preset tsan
 
-cmake --preset qt-sanitizers  # Qt + ASan + UBSan → build-qt-sanitizers/
+cmake --preset qt-sanitizers  # Qt Debug + ASan + UBSan → build-qt-sanitizers/
 cmake --build --preset qt-sanitizers
 ctest --preset qt-sanitizers
 ```

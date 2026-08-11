@@ -12,6 +12,8 @@ option(AMREXPLORER_ENABLE_VTK "Build the optional VTK volume module" OFF)
 option(AMREXPLORER_ENABLE_REMOTE
     "Build production remote client/server support" ${AMREXPLORER_ENABLE_QT})
 option(AMREXPLORER_BUILD_TESTS "Build unit and integration tests" ON)
+option(AMREXPLORER_ENABLE_SERVER_TEST_HOOKS
+    "Enable internal remote-server synchronization hooks for tests" OFF)
 option(AMREXPLORER_BUILD_MACOS_APP_BUNDLE
     "Build the Qt application as a macOS .app bundle" ${APPLE})
 option(AMREXPLORER_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
@@ -19,6 +21,12 @@ option(AMREXPLORER_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehav
 option(AMREXPLORER_ENABLE_TSAN "Enable ThreadSanitizer (mutually exclusive with AMREXPLORER_ENABLE_SANITIZERS)" OFF)
 option(AMREXPLORER_FORCE_FETCH_FLATBUFFERS
     "Skip installed FlatBuffers discovery and use the pinned fallback" OFF)
+
+if(AMREXPLORER_ENABLE_SERVER_TEST_HOOKS
+    AND NOT AMREXPLORER_BUILD_TESTS)
+    message(FATAL_ERROR
+        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS requires AMREXPLORER_BUILD_TESTS=ON")
+endif()
 
 if(AMREXPLORER_ENABLE_QT AND NOT AMREXPLORER_ENABLE_REMOTE)
     message(FATAL_ERROR

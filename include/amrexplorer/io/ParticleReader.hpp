@@ -25,6 +25,10 @@ struct ParticleSpeciesMetadata {
     int intComponentCount = 0;
     std::uint64_t particleCount = 0;
     ParticleRealPrecision precision = ParticleRealPrecision::Double;
+
+    friend bool operator==(
+        const ParticleSpeciesMetadata&, const ParticleSpeciesMetadata&)
+        = default;
 };
 
 struct ParticlePoint {

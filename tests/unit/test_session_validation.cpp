@@ -1,8 +1,10 @@
 #include <amrexplorer/core/Metadata.hpp>
 #include <amrexplorer/data/SessionValidation.hpp>
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -222,25 +224,41 @@ int main()
         }, "a 3-D page region degenerate on its normal axis was rejected");
     }
 
-    // Slice results: provenance and plane extent against the catalog.
+    // Slice results: tied to the request that was made, and to the catalog.
     for (const int dimension : {2, 3}) {
         const auto metadata = dataset(dimension);
         const auto request = sliceRequest(dimension);
         const ViewDataRequest view = request;
-        auto region = request.visibleRegion;
-        if (dimension == 3) {
-            // The normal axis of a slice region is degenerate by construction.
-            region.upper[2] = region.lower[2];
-        }
+        // A slice too large for one frame is refused rather than reduced, and
+        // the query copies the requested region, so a real answer carries both
+        // verbatim.
+        const auto region = request.visibleRegion;
         requireAccepted([&] {
             validateSessionViewResult(metadata, view, sliceResult(region));
         }, "a valid slice result was rejected");
+
+        auto elsewhere = region;
+        elsewhere.lower[0] += 0.25;
+        elsewhere.upper[0] += 0.25;
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, sliceResult(elsewhere));
+        }, "a slice result over another region was accepted");
 
         auto reversed = region;
         reversed.upper[0] = reversed.lower[0] - 1.0;
         requireRejected([&] {
             validateSessionViewResult(metadata, view, sliceResult(reversed));
         }, "a slice result with a reversed plane region was accepted");
+
+        auto reshaped = sliceResult(region);
+        reshaped.plane.width = 3;
+        reshaped.plane.height = 1;
+        reshaped.plane.values = {1.0F, 2.0F, 3.0F};
+        reshaped.plane.valid = {1, 1, 1};
+        reshaped.plane.sourceLevel = {0, 0, 0};
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, reshaped);
+        }, "a slice raster of another shape was accepted");
 
         auto beyond = sliceResult(region);
         beyond.plane.sourceLevel = {0, 1, 2, 0};
@@ -253,6 +271,22 @@ int main()
         requireRejected([&] {
             validateSessionViewResult(metadata, view, sentinel);
         }, "a slice source level below the no-data sentinel was accepted");
+
+        // Provenance the dataset has but the request excluded: asking for level
+        // 0 and being answered from level 1 is not the requested composition.
+        auto coarse = request;
+        coarse.maximumLevel = 0;
+        const ViewDataRequest coarseView = coarse;
+        auto finer = sliceResult(region);
+        finer.plane.sourceLevel = {0, 1, 0, 0};
+        requireRejected([&] {
+            validateSessionViewResult(metadata, coarseView, finer);
+        }, "a slice source level above the requested maximum was accepted");
+        auto atMaximum = sliceResult(region);
+        atMaximum.plane.sourceLevel = {0, 0, -1, 0};
+        requireAccepted([&] {
+            validateSessionViewResult(metadata, coarseView, atMaximum);
+        }, "a slice at the requested maximum level was rejected");
 
         auto ragged = sliceResult(region);
         ragged.plane.values.pop_back();
@@ -277,6 +311,19 @@ int main()
         requireRejected([&] {
             validateSessionViewResult(metadata, view, grid);
         }, "a grid box with a reversed region was accepted");
+
+        // A grid box may keep its own extent on the normal axis: only the plane
+        // axes are clipped to the visible region.
+        if (dimension == 3) {
+            auto normalExtent = sliceResult(region);
+            auto box = region;
+            box.lower[2] -= 1.0;
+            box.upper[2] += 1.0;
+            normalExtent.gridBoxes.push_back({1, box});
+            requireAccepted([&] {
+                validateSessionViewResult(metadata, view, normalExtent);
+            }, "a grid box with its own normal-axis extent was rejected");
+        }
 
         // A line answer to a slice request is not an answer at all.
         requireRejected([&] {
@@ -307,6 +354,25 @@ int main()
         requireRejected([&] {
             validateSessionViewResult(metadata, view, ragged);
         }, "a line result with a short validity vector was accepted");
+
+        // boundLineToViewport allows at most two samples per output pixel.
+        auto narrow = lineRequest(3, 1);
+        narrow.outputWidth = 1;
+        const ViewDataRequest narrowView = narrow;
+        requireAccepted([&] {
+            validateSessionViewResult(metadata, narrowView, lineResult(1));
+        }, "a line at exactly two samples per pixel was rejected");
+
+        auto dense = lineResult(1);
+        for (int index = 0; index < 8; ++index) {
+            dense.line.positions.push_back(0.1 * index);
+            dense.line.values.push_back(1.0F);
+            dense.line.valid.push_back(1);
+            dense.line.sourceLevel.push_back(0);
+        }
+        requireRejected([&] {
+            validateSessionViewResult(metadata, narrowView, dense);
+        }, "a line denser than its viewport allows was accepted");
     }
 
     // Dataset page results.
@@ -343,6 +409,54 @@ int main()
         requireRejected([&] {
             validateSessionDatasetPageResult(metadata, request, ragged);
         }, "a page with a short coverage vector was accepted");
+
+        auto lopsided = page(4, 4);
+        lopsided.ny = 0;
+        lopsided.values.clear();
+        lopsided.covered.clear();
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, lopsided);
+        }, "a page empty on one axis only was accepted");
+
+        // The page indexes the level it named: 1000..1003 is not inside 0..3.
+        auto outside = page(4, 4);
+        outside.lower[0] = 1000;
+        outside.upper[0] = 1003;
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, outside);
+        }, "a page outside the level domain was accepted");
+
+        // Extreme bounds come straight off the wire; the span arithmetic must
+        // not overflow while rejecting them (UBSan proves this one).
+        auto extreme = page(4, 4);
+        extreme.lower[0] = std::numeric_limits<int>::min();
+        extreme.upper[0] = std::numeric_limits<int>::max();
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, extreme);
+        }, "a page spanning the whole int range was accepted");
+        extreme = page(4, 4);
+        extreme.lower[1] = std::numeric_limits<int>::max();
+        extreme.upper[1] = std::numeric_limits<int>::min();
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, extreme);
+        }, "a page with maximally reversed bounds was accepted");
+    }
+
+    // A 3-D page also names a slice index, which has to be in the level domain.
+    {
+        const auto metadata = dataset(3);
+        const auto request = pageRequest(3);
+        auto valid = page(4, 4);
+        valid.sliceIndex = 2;
+        requireAccepted([&] {
+            validateSessionDatasetPageResult(metadata, request, valid);
+        }, "a page with an in-domain slice index was rejected");
+
+        auto beyond = page(4, 4);
+        beyond.sliceIndex = 99;
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, beyond);
+        }, "a page with a slice index outside the level domain was accepted");
     }
 
     // Particle samples against the catalog they claim to sample.
@@ -374,6 +488,36 @@ int main()
             validateSessionParticleSampleResult(
                 species, "electrons", flattened);
         }, "a sample with an impossible dimension was accepted");
+
+        // A shape that contradicts the catalog entry, in each field that could
+        // be reported back to the user as the species' own.
+        auto reshaped = sample;
+        reshaped.species.dimension = 2;
+        requireRejected([&] {
+            validateSessionParticleSampleResult(
+                species, "electrons", reshaped);
+        }, "a sample of another dimension than the catalog was accepted");
+
+        reshaped = sample;
+        reshaped.species.precision = ParticleRealPrecision::Single;
+        requireRejected([&] {
+            validateSessionParticleSampleResult(
+                species, "electrons", reshaped);
+        }, "a sample of another precision than the catalog was accepted");
+
+        reshaped = sample;
+        reshaped.species.realComponentCount = 7;
+        requireRejected([&] {
+            validateSessionParticleSampleResult(
+                species, "electrons", reshaped);
+        }, "a sample with another component count was accepted");
+
+        reshaped = sample;
+        reshaped.species.particleCount = 1000;
+        requireRejected([&] {
+            validateSessionParticleSampleResult(
+                species, "electrons", reshaped);
+        }, "a sample inflating the species particle count was accepted");
 
         auto overfull = sample;
         overfull.points.push_back({2, Real3{{0.25, 0.25, 0.25}}});

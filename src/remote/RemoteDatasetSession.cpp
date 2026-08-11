@@ -9,14 +9,26 @@
 namespace amrvis::remote {
 namespace {
 
-// A response that cannot describe this dataset means the peer is not speaking
-// the protocol we negotiated, so the connection goes rather than just the one
-// request: leaving it open would let the next response be trusted again.
-template <typename Check>
-void refuseUnlessValid(Connection& connection, Check&& check)
+// One policy over everything a response can fail at: the transport and the
+// decode inside the connection, and the contextual validation after it. A peer
+// that cannot answer in the protocol we negotiated is not one whose next answer
+// should be trusted, so the connection goes rather than just the request -- and
+// that has to include a failure raised while decoding, where there is no result
+// to validate yet and where the server may be holding an opened dataset for a
+// session we are about to abandon.
+//
+// Two exceptions pass through untouched: RemoteError is the server answering
+// properly, with an error, and ReadCancelled is our own stop.
+template <typename Operation>
+decltype(auto) refusingInvalidResponses(
+    Connection& connection, Operation&& operation)
 {
     try {
-        check();
+        return operation();
+    } catch (const RemoteError&) {
+        throw;
+    } catch (const ReadCancelled&) {
+        throw;
     } catch (...) {
         connection.close();
         throw;
@@ -33,8 +45,11 @@ std::shared_ptr<RemoteDatasetSession> RemoteDatasetSession::open(
         throw std::invalid_argument(
             "remote dataset requires a connection");
     }
-    auto opened
-        = connection->openDataset(path, cacheBudgetBytes, cancellation);
+    // The catalog is validated while it is decoded, so an impossible one throws
+    // in here rather than at a later call.
+    auto opened = refusingInvalidResponses(*connection, [&] {
+        return connection->openDataset(path, cacheBudgetBytes, cancellation);
+    });
     return std::shared_ptr<RemoteDatasetSession>(
         new RemoteDatasetSession(
             std::move(connection), path, std::move(opened)));
@@ -98,11 +113,11 @@ ViewDataResult RemoteDatasetSession::requestView(
 {
     requireOpen();
     validateSessionViewRequest(m_metadata, m_id, request);
-    auto result = m_connection->requestView(request, cancellation);
-    refuseUnlessValid(*m_connection, [&] {
+    return refusingInvalidResponses(*m_connection, [&] {
+        auto result = m_connection->requestView(request, cancellation);
         validateSessionViewResult(m_metadata, request, result);
+        return result;
     });
-    return result;
 }
 
 DatasetPage RemoteDatasetSession::requestDatasetPage(
@@ -110,11 +125,11 @@ DatasetPage RemoteDatasetSession::requestDatasetPage(
 {
     requireOpen();
     validateSessionDatasetPageRequest(m_metadata, m_id, request);
-    auto page = m_connection->requestDatasetPage(request, cancellation);
-    refuseUnlessValid(*m_connection, [&] {
+    return refusingInvalidResponses(*m_connection, [&] {
+        auto page = m_connection->requestDatasetPage(request, cancellation);
         validateSessionDatasetPageResult(m_metadata, request, page);
+        return page;
     });
-    return page;
 }
 
 std::optional<ValueRange> RemoteDatasetSession::requestRange(
@@ -122,7 +137,9 @@ std::optional<ValueRange> RemoteDatasetSession::requestRange(
 {
     requireOpen();
     validateSessionRangeRequest(m_metadata, request);
-    return m_connection->requestRange(m_id, request, cancellation);
+    return refusingInvalidResponses(*m_connection, [&] {
+        return m_connection->requestRange(m_id, request, cancellation);
+    });
 }
 
 bool RemoteDatasetSession::rangeAvailable(
@@ -163,13 +180,13 @@ ParticleSample RemoteDatasetSession::requestParticleSample(
     requireOpen();
     validateSessionParticleRequest(
         m_metadata, m_particleSpecies, species, fraction);
-    auto sample = m_connection->requestParticleSample(
-        m_id, species, fraction, seed, cancellation);
-    refuseUnlessValid(*m_connection, [&] {
+    return refusingInvalidResponses(*m_connection, [&] {
+        auto sample = m_connection->requestParticleSample(
+            m_id, species, fraction, seed, cancellation);
         validateSessionParticleSampleResult(
             m_particleSpecies, species, sample);
+        return sample;
     });
-    return sample;
 }
 
 CacheMetrics RemoteDatasetSession::cacheMetrics() const
@@ -181,13 +198,17 @@ CacheMetrics RemoteDatasetSession::cacheMetrics() const
 bool RemoteDatasetSession::setCacheBudget(std::uint64_t bytes)
 {
     requireOpen();
-    return m_connection->setCacheBudget(m_id, bytes).withinBudget();
+    return refusingInvalidResponses(*m_connection, [&] {
+        return m_connection->setCacheBudget(m_id, bytes).withinBudget();
+    });
 }
 
 void RemoteDatasetSession::clearUnpinnedCache()
 {
     requireOpen();
-    static_cast<void>(m_connection->clearCache(m_id));
+    refusingInvalidResponses(*m_connection, [&] {
+        static_cast<void>(m_connection->clearCache(m_id));
+    });
 }
 
 void RemoteDatasetSession::close() noexcept

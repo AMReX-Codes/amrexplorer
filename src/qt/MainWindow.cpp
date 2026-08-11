@@ -986,6 +986,18 @@ void MainWindow::wireView(PlaneViewState& state)
         [this, &state] { updateRemoteFixedScaleDemand(state); });
 }
 
+std::array<MainWindow::PlaneViewState*, 4> MainWindow::allViewStates()
+{
+    return {&m_view2d, &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+}
+
+void MainWindow::setAllViewPlaceholders(const QString& text)
+{
+    for (auto* state : allViewStates()) {
+        state->view->setPlaceholder(text);
+    }
+}
+
 std::vector<MainWindow::PlaneViewState*> MainWindow::currentViews()
 {
     if (m_viewDimension == 3) {
@@ -1963,6 +1975,23 @@ void MainWindow::zoomActiveViewForTest()
     }
     m_activeView->visibleRegion = subregion;
     scheduleSliceRequest(*m_activeView, true);
+}
+
+QString MainWindow::viewPlaceholderForTest()
+{
+    QString shared;
+    for (const auto* state : allViewStates()) {
+        if (state->view->hasImage()) {
+            return {};
+        }
+        const auto& text = state->view->placeholderText();
+        if (shared.isEmpty()) {
+            shared = text;
+        } else if (shared != text) {
+            return {};
+        }
+    }
+    return shared;
 }
 
 bool MainWindow::activeViewRasterMatchesDisplayRangeForTest()
@@ -5026,9 +5055,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     closeSequence();
     resetRangeState();
     // Invalidate every in-flight per-view slice and reset the view states.
-    const std::array<PlaneViewState*, 4> states{
-        &m_view2d, &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
-    for (auto* state : states) {
+    for (auto* state : allViewStates()) {
         state->stopSource.request_stop();
         ++state->sliceGeneration;
         state->view->setPlaceholder(tr("Loading dataset..."));
@@ -5212,6 +5239,14 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                         reportBackgroundError(tr("Cannot open dataset: %1")
                                 .arg(exceptionMessage(error)));
                     }
+                    // The prior dataset was torn down before this attempt even
+                    // began, so leaving "Loading dataset..." up would claim a
+                    // load is still coming. Name what failed instead; the
+                    // controls are already disabled from the teardown, so this
+                    // is the whole of the settled failure state.
+                    setAllViewPlaceholders(
+                        tr("Could not open %1")
+                            .arg(QString::fromStdString(path.string())));
                     emit datasetOpenFinished(false);
                 } else {
                     ++m_staleResults;
@@ -5470,6 +5505,13 @@ void MainWindow::requestInitialSlice(
                 if (generation == m_generation && !cancellation.stop_requested()) {
                     reportBackgroundError(
                         tr("Cannot load slice: %1").arg(exceptionMessage(error)));
+                    // The metadata opened but its first slice did not, so the
+                    // panels are still on the open's placeholder with nothing
+                    // left in flight to replace it. The dataset name is known
+                    // here, so say which one has no displayable slice.
+                    setAllViewPlaceholders(
+                        tr("Could not display %1")
+                            .arg(QString::fromStdString(m_datasetPath.string())));
                     emit initialSliceFinished(false);
                 } else {
                     ++m_staleResults;
@@ -6596,8 +6638,8 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
     if (sorted.size() < 2 || !valid) {
         emit sequenceFrameFailed();
         QMessageBox::warning(this, tr("Cannot open sequence"),
-            tr("Select two or more plotfile Header files, each inside its own "
-               "plotfile directory."));
+            tr("Select two or more plotfile directories, each containing a "
+               "Header."));
         return;
     }
 
@@ -6642,7 +6684,11 @@ void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
             [](const auto& path) { return path.empty(); })) {
         emit sequenceFrameFailed();
         QMessageBox::warning(this, tr("Cannot open remote sequence"),
-            tr("Enter two or more server-visible plotfile paths."));
+            tr("Enter two or more plotfile paths as they appear on %1:%2. "
+               "Remote frames are named by their path on the server, not "
+               "chosen from a local file dialog.")
+                .arg(QString::fromStdString(host))
+                .arg(port));
         return;
     }
 

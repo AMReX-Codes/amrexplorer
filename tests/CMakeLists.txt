@@ -657,6 +657,18 @@ if(TARGET amrexplorer_qt)
             "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
     )
     set_tests_properties(qt_metadata_smoke_3d PROPERTIES TIMEOUT 10)
+    # A failed open destroys the previous dataset before it knows whether the
+    # replacement is openable, so it has to leave a placeholder that says so --
+    # and the window must still open a good dataset afterwards. Metadata-only
+    # on both sides: the bad path fails before any payload is read.
+    add_test(
+        NAME qt_open_failure_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>" --open-failure-smoke-test
+            "${CMAKE_CURRENT_BINARY_DIR}/no_such_plotfile"
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+    )
+    set_tests_properties(qt_open_failure_smoke PROPERTIES TIMEOUT 20)
     # The slice and sequence smoke paths need FAB payloads, so each test
     # materializes a fixture copy first (see qt_smoke_driver.cmake).
     add_test(

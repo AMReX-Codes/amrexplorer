@@ -156,6 +156,10 @@ public:
     // to its plane re-rendered against the current display (color-bar) range —
     // i.e. the raster and color bar agree. See
     // raster-colorbar-mismatch-on-2d-visible-zoom.
+    // Test-only: the placeholder every panel is showing, or an empty string if
+    // any panel holds an image instead. A failed open must leave a settled
+    // placeholder naming what failed, never the "Loading..." one it replaced.
+    [[nodiscard]] QString viewPlaceholderForTest();
     [[nodiscard]] bool activeViewRasterMatchesDisplayRangeForTest();
     [[nodiscard]] bool activeViewUsesViewportBoundedOutputForTest() const;
     [[nodiscard]] bool activeViewUsesNativeOutputForTest() const;
@@ -423,6 +427,12 @@ private:
 
     // Per-view wiring and display updates.
     void wireView(PlaneViewState& state);
+    // Every view state, whatever the current dimension -- the 2-D view and all
+    // three slice panels. currentViews() answers a narrower question: the views
+    // the *displayed* dataset uses. Teardown and failure states have to reach
+    // all four, since the dimension they were showing is already gone.
+    [[nodiscard]] std::array<PlaneViewState*, 4> allViewStates();
+    void setAllViewPlaceholders(const QString& text);
     [[nodiscard]] std::vector<PlaneViewState*> currentViews();
     void setActiveView(PlaneViewState& state);
     // Point the color scale and range spin boxes at the active view's display

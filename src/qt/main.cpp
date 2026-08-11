@@ -1369,6 +1369,42 @@ int main(int argc, char* argv[])
             });
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path, true); });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--open-failure-smoke-test") {
+        // A failed open has already torn the previous dataset down, so it must
+        // leave a placeholder that says so rather than the "Loading dataset..."
+        // one it replaced -- and the window must still be usable afterwards.
+        // Open a bad path, check the settled state, then open a good one.
+        const std::filesystem::path bad(argv[2]);
+        const std::filesystem::path good(argv[3]);
+        auto attemptedGood = std::make_shared<bool>(false);
+        QObject::connect(&window, &amrvis::qt::MainWindow::datasetOpenFinished,
+            &application, [&window, &application, good, attemptedGood](
+                              bool success) {
+                if (*attemptedGood) {
+                    // The recovery open: succeeding here is the whole point.
+                    application.exit(success ? 0 : 1);
+                    return;
+                }
+                if (success) {
+                    qCritical("the bad path opened successfully");
+                    application.exit(1);
+                    return;
+                }
+                const auto placeholder = window.viewPlaceholderForTest();
+                if (placeholder.isEmpty()
+                    || placeholder.contains(QStringLiteral("Loading"))) {
+                    qCritical("a failed open left the panels at '%s'",
+                        qUtf8Printable(placeholder));
+                    application.exit(1);
+                    return;
+                }
+                *attemptedGood = true;
+                QTimer::singleShot(0, &window,
+                    [&window, good] { window.openDataset(good, true); });
+            });
+        QTimer::singleShot(0, &window,
+            [&window, bad] { window.openDataset(bad, true); });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--missing-range-smoke-test") {
         const std::filesystem::path path(argv[2]);

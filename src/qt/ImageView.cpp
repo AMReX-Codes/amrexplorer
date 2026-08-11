@@ -121,6 +121,7 @@ void ImageView::setImage(
     m_lineGuide = nullptr;
     m_lineDragButton = Qt::NoButton;
     m_image = image;
+    m_placeholderText.clear();
     m_logicalSize = logicalSize.isValid() ? logicalSize : image.size();
     m_item = m_scene->addPixmap(QPixmap::fromImage(m_image));
     m_placement = placement;
@@ -506,6 +507,7 @@ void ImageView::setPlaceholder(const QString& text)
     m_image = {};
     m_logicalSize = {};
     m_placement.reset();
+    m_placeholderText = text;
     setBackgroundBrush(palette().window());
     auto* label = m_scene->addText(text);
     label->setDefaultTextColor(palette().windowText().color());

@@ -136,6 +136,13 @@ public:
     // other's.
     void setCellHighlightPath(const std::optional<QPainterPath>& scenePath);
     void setPlaceholder(const QString& text);
+    // The text a placeholder is currently showing, empty once an image
+    // replaces it. Tests use this to tell a settled failure state from the
+    // "Loading dataset..." one that outlived its load.
+    [[nodiscard]] const QString& placeholderText() const noexcept
+    {
+        return m_placeholderText;
+    }
     [[nodiscard]] bool hasImage() const noexcept;
     // Fit, fixed integer scale, and custom zoom/pan are durable display modes,
     // not incidental properties of the current QTransform.
@@ -229,6 +236,7 @@ private:
     QGraphicsScene* m_scene = nullptr;
     QGraphicsPixmapItem* m_item = nullptr;
     QImage m_image;
+    QString m_placeholderText;
     // Raster dimensions at local/native density. Remote Fit rasters may have
     // a different sampled size; fixed scales use this logical size so 1x
     // remains one native output pixel per screen pixel.

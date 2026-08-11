@@ -234,6 +234,10 @@ add_executable(test_plotfile_header unit/test_plotfile_header.cpp)
 target_link_libraries(test_plotfile_header PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME plotfile_header COMMAND test_plotfile_header)
 
+add_executable(test_particle_header unit/test_particle_header.cpp)
+target_link_libraries(test_particle_header PRIVATE amrexplorer::io amrexplorer::warnings)
+add_test(NAME particle_header COMMAND test_particle_header)
+
 add_executable(test_fits_writer unit/test_fits_writer.cpp)
 target_link_libraries(test_fits_writer PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME fits_writer COMMAND test_fits_writer)

@@ -22,6 +22,12 @@ namespace {
 constexpr int maximumComponents = maximumParticleComponents;
 constexpr int maximumLevels = 1'000;
 constexpr int maximumGridsPerLevel = 10'000'000;
+// The per-level cap leaves their sum unbounded: a Header declaring the maximum
+// on each of the maximum levels asks for ten billion GridRecords -- hundreds of
+// gigabytes reserved from a few kilobytes of text, before a single record is
+// read. Real particle plotfiles stay orders of magnitude below one level's cap,
+// so the whole table is held to the same number.
+constexpr std::uint64_t maximumGridsTotal = maximumGridsPerLevel;
 constexpr std::uint64_t particleReadChunkBytes = 1024U * 1024U;
 
 struct GridRecord {
@@ -186,6 +192,10 @@ ParsedHeader parseHeader(
             throw ParticleReadError("particle grid count is outside supported bounds");
         }
         totalGrids += static_cast<std::uint64_t>(count);
+    }
+    if (totalGrids > maximumGridsTotal) {
+        throw ParticleReadError(
+            "particle grid total is outside supported bounds");
     }
     result.grids.reserve(static_cast<std::size_t>(totalGrids));
     std::uint64_t recordedParticles = 0;

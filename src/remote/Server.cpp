@@ -911,6 +911,10 @@ private:
             if (!m_stopping.load()) {
 #ifdef AMREXPLORER_SERVER_TEST_HOOKS
                 testing::notifyBeforeResponseWrite(requestId);
+                // Marks this thread as writing a server response, which is what
+                // scopes write pacing to the server: a test's own client
+                // sockets live in the same process.
+                const testing::ResponseWriteScope pacingScope;
 #endif
                 writeFrameWithBudget(m_socket, bytes,
                     m_maximumFrameBytes.load(), writeBudget(), {},

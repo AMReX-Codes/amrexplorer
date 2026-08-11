@@ -175,9 +175,11 @@ if(TARGET amrexplorer_remote)
         FIXTURES_SETUP remote_server_spherical_materialized)
     add_test(NAME remote_server
         COMMAND test_remote_server "${remote_server_private_fixture_dir}")
-    # The live-socket trickle case samples and encodes a large slice before the
-    # write it measures even begins. RUN_SERIAL keeps it from competing with the
-    # other sanitized tests for shared cores; 90 s leaves room on top of that.
+    # The trickle case now paces the write through the test hook instead of
+    # provoking one with a 50 MiB response, so this costs a couple of seconds
+    # rather than the ten to twelve it used to under the sanitizer presets.
+    # RUN_SERIAL stays: the case still asserts against a stall interval, and
+    # keeping it off shared cores is cheap for a test this short.
     set_tests_properties(remote_server PROPERTIES
         FIXTURES_REQUIRED remote_server_private_materialized
         RUN_SERIAL TRUE

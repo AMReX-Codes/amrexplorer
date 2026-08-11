@@ -3178,6 +3178,13 @@ void MainWindow::requestParticleReload()
     connect(watcher, &QFutureWatcher<std::vector<ParticleSample>>::finished,
         this, [this, watcher, generation, particleGeneration, cancellation] {
             --m_activeRequests;
+            // The one watcher that lacked this: during shutdown the handler
+            // below touches the status bar, the progress widget, and the
+            // overlays, and the other six all return here instead.
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
+            }
             try {
                 auto samples = watcher->future().takeResult();
                 if (generation == m_generation
@@ -3200,6 +3207,10 @@ void MainWindow::requestParticleReload()
                     reportBackgroundError(
                         tr("Particles were not loaded: %1")
                             .arg(exceptionMessage(error)));
+                } else {
+                    // Counted like every other superseded result, which this
+                    // handler alone was not doing.
+                    ++m_staleResults;
                 }
             }
             if (particleGeneration == m_particleGeneration) {

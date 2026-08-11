@@ -7,6 +7,7 @@
 
 #include <QString>
 
+#include <clocale>
 #include <cstdlib>
 #include <iostream>
 
@@ -81,6 +82,27 @@ int main()
     require(formatNumber(1.0, QStringLiteral("%.130f"))
             == QString::number(1.0, 'g', 7),
         "formatNumber did not fall back on a buffer overflow");
+
+    // snprintf honors LC_NUMERIC, and QApplication sets it from the
+    // environment on Unix, so under a comma locale the formatted path would
+    // render "3,14" while both fallback paths above -- which use
+    // QString::number -- always render a point. Every readout has to agree.
+    // Skipped, with a note, where the locale is not installed: the fix is
+    // wanted on the platforms that have it, and a test that silently passes
+    // for the wrong reason is worse than one that says why.
+    if (std::setlocale(LC_NUMERIC, "de_DE.UTF-8") != nullptr
+        || std::setlocale(LC_NUMERIC, "de_DE") != nullptr) {
+        require(formatNumber(3.14159, QStringLiteral("%.2f"))
+                == QStringLiteral("3.14"),
+            "formatNumber emitted a locale decimal separator");
+        require(formatNumber(1234.5, QStringLiteral("%.1f"))
+                == QStringLiteral("1234.5"),
+            "formatNumber emitted a locale decimal separator");
+        std::setlocale(LC_NUMERIC, "C");
+    } else {
+        std::cerr << "note: no German locale installed; the LC_NUMERIC case "
+                     "did not run\n";
+    }
 
     return 0;
 }

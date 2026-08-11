@@ -1,6 +1,8 @@
 #include "NumberFormat.hpp"
 
+#include <clocale>
 #include <cstdio>
+#include <cstring>
 
 namespace amrvis::qt {
 
@@ -108,7 +110,24 @@ QString formatNumber(double value, const QString& format)
     if (written < 0 || static_cast<std::size_t>(written) >= sizeof(buffer)) {
         return QString::number(value, 'g', 7);
     }
-    return QString::fromUtf8(buffer, written);
+    auto text = QString::fromUtf8(buffer, written);
+    // snprintf honors LC_NUMERIC, and QApplication calls setlocale(LC_ALL, "")
+    // on Unix, so under a comma locale this path renders "1,5" while both
+    // fallbacks above use QString::number, which is always C-locale. The
+    // readouts have to agree with each other whichever locale the user runs
+    // in, and the C locale is what the rest of the application writes and
+    // parses, so normalize to it. Substituting the decimal point rather than
+    // reaching for snprintf_l keeps this free of platform conditionals; the
+    // validator admits exactly one conversion and no grouping flag, so the
+    // decimal point is the only locale-dependent character that can appear.
+    if (const auto* conventions = std::localeconv(); conventions != nullptr) {
+        const auto* point = conventions->decimal_point;
+        if (point != nullptr && *point != '\0'
+            && std::strcmp(point, ".") != 0) {
+            text.replace(QString::fromUtf8(point), QStringLiteral("."));
+        }
+    }
+    return text;
 }
 
 } // namespace amrvis::qt

@@ -53,7 +53,21 @@ public:
 
     [[nodiscard]] QRectF boundingRect() const override
     {
-        return m_bounds.adjusted(-m_size, -m_size, m_size, m_size);
+        // The pen is cosmetic, so its width is m_size *device* pixels however
+        // far the view is zoomed out; in item coordinates that is m_size/scale,
+        // which exceeds a bare m_size padding as soon as the scale drops below
+        // one, and edge points then paint outside the declared bounds. Nothing
+        // shows today because the view repaints its whole viewport, but the
+        // contract holds regardless of who is asking.
+        //
+        // A constant multiple rather than the live view scale: boundingRect
+        // must not change without prepareGeometryChange, or the scene's item
+        // index goes stale, and the view scale changes on every zoom. This
+        // covers zoom-out to 1/16, past which the whole raster occupies a
+        // handful of pixels and a point's overspill is not a visible artifact.
+        constexpr qreal smallestCoveredScale = 16.0;
+        const auto padding = m_size * smallestCoveredScale;
+        return m_bounds.adjusted(-padding, -padding, padding, padding);
     }
 
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override

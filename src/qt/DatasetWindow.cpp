@@ -260,8 +260,17 @@ void DatasetWindow::startLoad()
                 return;
             }
             try {
-                m_levels = watcher->result();
+                // Take the old extracts out of the way before m_levels is
+                // replaced, and only destroy them once the models have been
+                // rebuilt off the new ones. Assigning straight into m_levels
+                // destroys the old extracts while the old LevelTableModels
+                // still reference them; nothing dispatches in between today,
+                // so nothing observes it, but the window is one queued call
+                // away from doing so.
+                auto previous = std::move(m_levels);
+                m_levels = watcher->future().takeResult();
                 populateTabs();
+                previous.clear();
                 m_status->setText(tr("Field: %1").arg(m_request.fieldName));
             } catch (const std::exception& error) {
                 // Report a real failure non-modally through the owner, then

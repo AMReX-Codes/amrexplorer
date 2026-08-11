@@ -47,8 +47,9 @@ amrvis::DatasetMetadata dataset(int dimension)
     metadata.dimension = dimension;
     metadata.finestLevel = 1;
     metadata.hasPhysicalGeometry = true;
+    // Cell size 1 over index domain 0..3, so each axis spans 0..4 physically.
     metadata.physicalDomain = amrvis::RealBox{
-        amrvis::Real3{{0.0, 0.0, 0.0}}, amrvis::Real3{{1.0, 1.0, 1.0}}};
+        amrvis::Real3{{0.0, 0.0, 0.0}}, amrvis::Real3{{4.0, 4.0, 4.0}}};
     metadata.fields.push_back({"density", amrvis::Centering::Cell, {}});
     for (int level = 0; level < 2; ++level) {
         amrvis::LevelMetadata entry;
@@ -67,10 +68,11 @@ amrvis::SliceRequest sliceRequest(int dimension)
     request.field = amrvis::FieldId{0};
     request.normalDirection = dimension == 3 ? 2 : 1;
     request.visibleRegion = amrvis::RealBox{
-        amrvis::Real3{{0.0, 0.0, 0.0}}, amrvis::Real3{{1.0, 1.0, 1.0}}};
-    request.physicalPosition = 0.5;
+        amrvis::Real3{{0.0, 0.0, 0.0}}, amrvis::Real3{{4.0, 4.0, 4.0}}};
+    request.physicalPosition = 2.0;
     request.maximumLevel = 1;
     request.outputSize = {2, 2};
+    request.includeGridBoxes = true;
     return request;
 }
 
@@ -115,10 +117,11 @@ amrvis::DatasetPageRequest pageRequest(int dimension)
     request.dataset = amrvis::DatasetId{1};
     request.field = amrvis::FieldId{0};
     request.level = 0;
+    // The whole level: index window 0..3 on each in-plane axis.
     request.region = amrvis::RealBox{
-        amrvis::Real3{{0.0, 0.0, 0.0}}, amrvis::Real3{{1.0, 1.0, 1.0}}};
+        amrvis::Real3{{0.0, 0.0, 0.0}}, amrvis::Real3{{4.0, 4.0, 4.0}}};
     request.normalAxis = dimension == 3 ? 2 : 1;
-    request.slicePosition = 0.5;
+    request.slicePosition = 2.5;
     request.maximumExtent = 8;
     return request;
 }
@@ -134,6 +137,7 @@ amrvis::DatasetPage page(int nx, int ny)
     result.ny = ny;
     result.lower = {0, 0};
     result.upper = {nx - 1, ny - 1};
+    result.sliceIndex = 2;
     const auto samples
         = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny);
     result.values.assign(samples, 0.0F);
@@ -312,6 +316,34 @@ int main()
             validateSessionViewResult(metadata, view, grid);
         }, "a grid box with a reversed region was accepted");
 
+        // The overlay is requested or it is not: a peer cannot install one the
+        // caller switched off, and cannot place a box outside the window.
+        auto without = request;
+        without.includeGridBoxes = false;
+        const ViewDataRequest withoutView = without;
+        requireAccepted([&] {
+            validateSessionViewResult(
+                metadata, withoutView, sliceResult(region));
+        }, "a slice without overlays was rejected");
+        auto unrequested = sliceResult(region);
+        unrequested.gridBoxesIncluded = true;
+        requireRejected([&] {
+            validateSessionViewResult(metadata, withoutView, unrequested);
+        }, "an unrequested overlay flag was accepted");
+        unrequested = sliceResult(region);
+        unrequested.gridBoxes.push_back({1, region});
+        requireRejected([&] {
+            validateSessionViewResult(metadata, withoutView, unrequested);
+        }, "an unrequested grid box was accepted");
+
+        auto outside = sliceResult(region);
+        auto beyondWindow = region;
+        beyondWindow.lower[0] -= 1.0;
+        outside.gridBoxes.push_back({1, beyondWindow});
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, outside);
+        }, "a grid box outside the visible region was accepted");
+
         // A grid box may keep its own extent on the normal axis: only the plane
         // axes are clipped to the visible region.
         if (dimension == 3) {
@@ -373,6 +405,58 @@ int main()
         requireRejected([&] {
             validateSessionViewResult(metadata, narrowView, dense);
         }, "a line denser than its viewport allows was accepted");
+
+        // Whether the horizontal axis is physical or an index belongs to the
+        // dataset: this one has geometry, so index positions contradict it.
+        auto indexed = lineResult(1);
+        indexed.line.positionsAreIndices = true;
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, indexed);
+        }, "index positions were accepted for a physical dataset");
+
+        auto unsorted = lineResult(1);
+        unsorted.line.positions = {0.75, 0.25};
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, unsorted);
+        }, "unordered line positions were accepted");
+
+        auto beyondExtent = lineResult(1);
+        beyondExtent.line.positions = {0.25, 99.0};
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, beyondExtent);
+        }, "a line position outside the sampled level was accepted");
+
+        auto nonFinite = lineResult(1);
+        nonFinite.line.positions = {0.25, std::nan("")};
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, nonFinite);
+        }, "a non-finite line position was accepted");
+    }
+
+    // A dataset without physical geometry reports index positions, bounded by
+    // the level's index domain rather than its physical extent.
+    {
+        auto metadata = dataset(2);
+        metadata.hasPhysicalGeometry = false;
+        const ViewDataRequest view = lineRequest(2, 0);
+        auto indexed = lineResult(0);
+        indexed.line.positionsAreIndices = true;
+        indexed.line.positions = {0.0, 3.0};
+        requireAccepted([&] {
+            validateSessionViewResult(metadata, view, indexed);
+        }, "index positions were rejected for a geometry-free dataset");
+
+        auto physical = lineResult(0);
+        physical.line.positions = {0.25, 0.75};
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, physical);
+        }, "physical positions were accepted for a geometry-free dataset");
+
+        auto beyondDomain = indexed;
+        beyondDomain.line.positions = {0.0, 9.0};
+        requireRejected([&] {
+            validateSessionViewResult(metadata, view, beyondDomain);
+        }, "an index position outside the level domain was accepted");
     }
 
     // Dataset page results.
@@ -382,10 +466,6 @@ int main()
         requireAccepted([&] {
             validateSessionDatasetPageResult(metadata, request, page(4, 4));
         }, "a valid dataset page was rejected");
-        requireAccepted([&] {
-            validateSessionDatasetPageResult(metadata, request, page(0, 0));
-        }, "an empty dataset page was rejected");
-
         auto oversized = page(4, 4);
         oversized.nx = request.maximumExtent + 1;
         requireRejected([&] {
@@ -403,6 +483,51 @@ int main()
         requireRejected([&] {
             validateSessionDatasetPageResult(metadata, request, mismatched);
         }, "a page whose bounds outrun its extent was accepted");
+
+        // The window is determined by the region: a page that starts elsewhere,
+        // or stops short without saying it truncated, is not this answer.
+        auto shifted = page(2, 2);
+        shifted.lower = {2, 2};
+        shifted.upper = {3, 3};
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, shifted);
+        }, "a page starting away from the requested region was accepted");
+
+        auto short_ = page(2, 2);
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, short_);
+        }, "a page short of the region without truncation was accepted");
+
+        auto truncated = page(2, 2);
+        truncated.truncatedX = true;
+        truncated.truncatedY = true;
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, truncated);
+        }, "a truncation claim below the extent limit was accepted");
+
+        auto limited = request;
+        limited.maximumExtent = 2;
+        auto atLimit = page(2, 2);
+        atLimit.truncatedX = true;
+        atLimit.truncatedY = true;
+        requireAccepted([&] {
+            validateSessionDatasetPageResult(metadata, limited, atLimit);
+        }, "a page truncated to the extent limit was rejected");
+
+        // Emptiness is determined too, in both directions.
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, page(0, 0));
+        }, "an empty page was accepted where the region meets the level");
+
+        auto away = request;
+        away.region.lower[0] = 90.0;
+        away.region.upper[0] = 99.0;
+        requireAccepted([&] {
+            validateSessionDatasetPageResult(metadata, away, page(0, 0));
+        }, "an empty page was rejected where the region misses the level");
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, away, page(4, 4));
+        }, "a populated page was accepted where the region misses the level");
 
         auto ragged = page(4, 4);
         ragged.covered.pop_back();
@@ -457,6 +582,12 @@ int main()
         requireRejected([&] {
             validateSessionDatasetPageResult(metadata, request, beyond);
         }, "a page with a slice index outside the level domain was accepted");
+
+        auto elsewhere = page(4, 4);
+        elsewhere.sliceIndex = 0;
+        requireRejected([&] {
+            validateSessionDatasetPageResult(metadata, request, elsewhere);
+        }, "a page slicing at another position than requested was accepted");
     }
 
     // Particle samples against the catalog they claim to sample.

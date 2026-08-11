@@ -1,5 +1,6 @@
 #include <amrexplorer/remote/RemoteDatasetSession.hpp>
 
+#include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/data/SessionValidation.hpp>
 
 #include <stdexcept>
@@ -17,8 +18,12 @@ namespace {
 // to validate yet and where the server may be holding an opened dataset for a
 // session we are about to abandon.
 //
-// Two exceptions pass through untouched: RemoteError is the server answering
-// properly, with an error, and ReadCancelled is our own stop.
+// Three exceptions pass through untouched, because none of them says the peer
+// stopped speaking the protocol: RemoteError is the server answering properly
+// with an error, ReadCancelled is our own stop, and CacheBudgetExceeded is the
+// one server error code that does not arrive as a RemoteError -- Connection
+// translates it into the cache exception the pipeline and the window already
+// recover from by clearing the cache and retrying on this same session.
 template <typename Operation>
 decltype(auto) refusingInvalidResponses(
     Connection& connection, Operation&& operation)
@@ -28,6 +33,8 @@ decltype(auto) refusingInvalidResponses(
     } catch (const RemoteError&) {
         throw;
     } catch (const ReadCancelled&) {
+        throw;
+    } catch (const CacheBudgetExceeded&) {
         throw;
     } catch (...) {
         connection.close();

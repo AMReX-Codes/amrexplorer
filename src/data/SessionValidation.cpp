@@ -1,7 +1,9 @@
 #include <amrexplorer/data/SessionValidation.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -227,6 +229,15 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
         requireSourceLevels(plane.sourceLevel,
             std::min(query.maximumLevel, metadata.finestLevel),
             "slice result");
+        // The overlay is switched by the request: the query copies the flag and
+        // collects nothing when it is off, and the window installs whatever the
+        // flag says arrived.
+        if (!query.includeGridBoxes
+            && (slice->gridBoxesIncluded || !slice->gridBoxes.empty()
+                || slice->gridBoxesTruncated)) {
+            throw std::invalid_argument(
+                "slice result carries grid boxes that were not requested");
+        }
         for (const auto& box : slice->gridBoxes) {
             // A grid box, unlike a sample, always comes from a real level:
             // there is no sentinel for "no level drew this box".
@@ -239,6 +250,21 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
             }
             requirePlaneRegion(box.physicalRegion, metadata.dimension,
                 query.normalDirection, "slice result grid box");
+            // Every box is clipped to the visible region on the plane axes
+            // before it is collected, so one reaching outside it never came
+            // from this request.
+            for (const auto axis : planeAxes(
+                     metadata.dimension, query.normalDirection)) {
+                const auto entry = static_cast<std::size_t>(axis);
+                if (box.physicalRegion.lower[entry]
+                        < query.visibleRegion.lower[entry]
+                    || box.physicalRegion.upper[entry]
+                        > query.visibleRegion.upper[entry]) {
+                    throw std::invalid_argument(
+                        "slice result grid box lies outside the visible "
+                        "region");
+                }
+            }
         }
         return;
     }
@@ -264,6 +290,48 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
     }
     requireSourceLevels(line.sourceLevel,
         std::min(query.maximumLevel, metadata.finestLevel), "line result");
+    // Whether the horizontal axis is physical or an index is a property of the
+    // dataset, not of the answer: the plot labels and scales its axis from this.
+    if (line.positionsAreIndices == metadata.hasPhysicalGeometry) {
+        throw std::invalid_argument(
+            "line result disagrees with the dataset about index positions");
+    }
+    if (metadata.levels.empty()) {
+        return;
+    }
+    // The walk advances along the axis and emits at most one sample per index,
+    // in order, and boundLineToViewport appends each bucket's picks in index
+    // order too, so the positions arrive sorted. Unsorted ones would plot as a
+    // line folded back over itself.
+    if (!std::is_sorted(line.positions.begin(), line.positions.end())) {
+        throw std::invalid_argument("line result positions are not ordered");
+    }
+    // And they lie in the extent the sampling level spans: physical bounds when
+    // the dataset has geometry, index bounds when its positions are indices.
+    // A region narrows this further; the level extent is the outer limit either
+    // way, which is what makes this check independent of the region's own rule.
+    const auto& level = metadata.levels[static_cast<std::size_t>(
+        std::clamp(query.maximumLevel, 0, metadata.finestLevel))];
+    const auto axis = static_cast<std::size_t>(
+        std::clamp(query.axis, 0, metadata.dimension - 1));
+    double lowest = 0.0;
+    double highest = 0.0;
+    if (line.positionsAreIndices) {
+        lowest = static_cast<double>(level.domain.lower[axis]);
+        highest = static_cast<double>(level.domain.upper[axis]);
+    } else {
+        const auto bounds
+            = sampleBounds(level, level.domain, metadata.dimension);
+        lowest = bounds.lower[axis];
+        highest = bounds.upper[axis];
+    }
+    for (const auto position : line.positions) {
+        if (!std::isfinite(position) || position < lowest
+            || position > highest) {
+            throw std::invalid_argument(
+                "line result position lies outside the sampled level");
+        }
+    }
 }
 
 void validateSessionDatasetPageResult(const DatasetMetadata& metadata,
@@ -285,16 +353,64 @@ void validateSessionDatasetPageResult(const DatasetMetadata& metadata,
         throw std::invalid_argument(
             "dataset page is empty on one axis only");
     }
-    if (page.nx > 0 && page.ny > 0) {
-        if (request.level < 0
-            || static_cast<std::size_t>(request.level)
-                >= metadata.levels.size()) {
-            throw std::invalid_argument(
-                "dataset page names a level the dataset does not have");
+    if (request.level < 0
+        || static_cast<std::size_t>(request.level) >= metadata.levels.size()) {
+        throw std::invalid_argument(
+            "dataset page names a level the dataset does not have");
+    }
+    const auto& level
+        = metadata.levels[static_cast<std::size_t>(request.level)];
+    const auto axes = planeAxes(metadata.dimension, request.normalAxis);
+    // What extractDatasetPage would have produced for this request. Mirroring it
+    // is the point: the window, the slice index, and the emptiness of a page are
+    // all determined by the region, the slice position, the level domain, and
+    // the extent limit, so anything else is not an answer to this request. Keep
+    // this in step with extractDatasetPage.
+    //
+    // sampleIndex throws when a coordinate is too far out to be an index. The
+    // server's own builder would have thrown first and answered with an error,
+    // so a response that exists at all implies the derivation succeeds; if it
+    // does not, leave the geometry unchecked rather than blame the peer.
+    struct Window {
+        std::int64_t lower = 0;
+        std::int64_t upper = 0;
+    };
+    std::array<Window, 2> expected{};
+    bool derived = false;
+    bool expectEmpty = false;
+    try {
+        for (std::size_t entry = 0; entry < 2; ++entry) {
+            const auto axis = static_cast<std::size_t>(axes[entry]);
+            const auto domainLower
+                = static_cast<std::int64_t>(level.domain.lower[axis]);
+            const auto domainUpper
+                = static_cast<std::int64_t>(level.domain.upper[axis]);
+            const auto rawLower = static_cast<std::int64_t>(
+                sampleIndex(level, axes[entry], request.region.lower[axis]));
+            const auto rawUpper = static_cast<std::int64_t>(
+                sampleIndex(level, axes[entry],
+                    std::nextafter(request.region.upper[axis],
+                        -std::numeric_limits<double>::infinity())));
+            if (rawUpper < domainLower || rawLower > domainUpper) {
+                expectEmpty = true;
+                break;
+            }
+            expected[entry].lower = std::max(rawLower, domainLower);
+            expected[entry].upper = std::min(rawUpper, domainUpper);
         }
-        const auto& level
-            = metadata.levels[static_cast<std::size_t>(request.level)];
-        const auto axes = planeAxes(metadata.dimension, request.normalAxis);
+        derived = true;
+    } catch (const std::exception&) {
+        derived = false;
+    }
+    if (derived && expectEmpty && (page.nx != 0 || page.ny != 0)) {
+        throw std::invalid_argument(
+            "dataset page is not empty although the request misses the level");
+    }
+    if (derived && !expectEmpty && page.nx == 0 && page.ny == 0) {
+        throw std::invalid_argument(
+            "dataset page is empty although the request meets the level");
+    }
+    if (page.nx > 0 && page.ny > 0) {
         for (std::size_t entry = 0; entry < page.lower.size(); ++entry) {
             // Widen before subtracting: both bounds come straight off the wire,
             // where INT_MIN and INT_MAX are reachable and int arithmetic on them
@@ -303,6 +419,8 @@ void validateSessionDatasetPageResult(const DatasetMetadata& metadata,
             const auto upper = static_cast<std::int64_t>(page.upper[entry]);
             const auto extent = static_cast<std::int64_t>(
                 entry == 0 ? page.nx : page.ny);
+            const auto truncated = entry == 0 ? page.truncatedX
+                                              : page.truncatedY;
             if (lower > upper) {
                 throw std::invalid_argument(
                     "dataset page index bounds are reversed");
@@ -320,14 +438,58 @@ void validateSessionDatasetPageResult(const DatasetMetadata& metadata,
                 throw std::invalid_argument(
                     "dataset page lies outside the level domain");
             }
+            // Truncation only ever moves the upper edge in, so the lower edge is
+            // exactly the requested one and the extent stops at the limit.
+            if (derived && !expectEmpty) {
+                if (lower != expected[entry].lower) {
+                    throw std::invalid_argument(
+                        "dataset page does not start where the request does");
+                }
+                if (upper > expected[entry].upper) {
+                    throw std::invalid_argument(
+                        "dataset page reaches past the requested region");
+                }
+                if (truncated
+                    && extent
+                        != static_cast<std::int64_t>(request.maximumExtent)) {
+                    throw std::invalid_argument(
+                        "dataset page claims truncation without filling the "
+                        "extent limit");
+                }
+                if (!truncated && upper != expected[entry].upper) {
+                    throw std::invalid_argument(
+                        "dataset page is short of the requested region without "
+                        "claiming truncation");
+                }
+            }
         }
         if (metadata.dimension == 3) {
             const auto normal = static_cast<std::size_t>(request.normalAxis);
-            if (normal < 3
-                && (page.sliceIndex < level.domain.lower[normal]
-                    || page.sliceIndex > level.domain.upper[normal])) {
+            if (normal >= 3) {
+                throw std::invalid_argument(
+                    "dataset page normal axis is invalid");
+            }
+            if (page.sliceIndex < level.domain.lower[normal]
+                || page.sliceIndex > level.domain.upper[normal]) {
                 throw std::invalid_argument(
                     "dataset page slice index is outside the level domain");
+            }
+            // The slice index is the requested position clamped to the domain,
+            // so it is determined rather than merely plausible.
+            try {
+                const auto raw = static_cast<std::int64_t>(sampleIndex(
+                    level, request.normalAxis, request.slicePosition));
+                const auto clamped = std::clamp(raw,
+                    static_cast<std::int64_t>(level.domain.lower[normal]),
+                    static_cast<std::int64_t>(level.domain.upper[normal]));
+                if (static_cast<std::int64_t>(page.sliceIndex) != clamped) {
+                    throw std::invalid_argument(
+                        "dataset page slices at a different position than was "
+                        "requested");
+                }
+            } catch (const std::out_of_range&) {
+                // Unreachable through the server, which would have failed the
+                // same conversion first.
             }
         }
     }

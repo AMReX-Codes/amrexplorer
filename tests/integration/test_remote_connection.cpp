@@ -1,5 +1,6 @@
 #include "../../src/remote/Codec.hpp"
 
+#include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/data/ViewData.hpp>
 #include <amrexplorer/remote/Connection.hpp>
 #include <amrexplorer/remote/RemoteDatasetSession.hpp>
@@ -559,6 +560,55 @@ int main(int argc, char* argv[])
         "the connection survived a slice with impossible provenance");
     badSliceConnection->close();
     badSlicePeer.get();
+
+    // The other side of that policy: a cache-budget refusal is the server
+    // answering properly, and the client's recovery clears the cache and retries
+    // on this same session, so the connection has to survive it. It is the one
+    // server error code Connection does not raise as a RemoteError.
+    auto budgetListener = listenOnLoopback(0);
+    auto budgetPeer = std::async(std::launch::async, [&] {
+        auto peer = acceptConnection(budgetListener.socket);
+        static_cast<void>(acceptHello(peer));
+        const auto openFrame = readFrame(peer, defaultMaximumFrameBytes);
+        require(openFrame.has_value(), "client omitted the open request");
+        const auto openRequest = codec::decode(*openFrame);
+        writeFrame(peer,
+            codec::encode(openRequest->request_id,
+                codec::toWire(plausibleCatalog())),
+            defaultMaximumFrameBytes);
+        const auto sliceFrame = readFrame(peer, defaultMaximumFrameBytes);
+        require(sliceFrame.has_value(), "client omitted the slice request");
+        const auto sliceEnvelope = codec::decode(*sliceFrame);
+        writeFrame(peer,
+            codec::encode(sliceEnvelope->request_id,
+                codec::toWire(ErrorData{ErrorCode::CacheBudgetExceeded,
+                    "cache budget exceeded"})),
+            defaultMaximumFrameBytes);
+        static_cast<void>(readFrame(peer, defaultMaximumFrameBytes));
+    });
+    auto budgetConnection = std::make_shared<Connection>(
+        "127.0.0.1", budgetListener.port);
+    auto budgetDataset = RemoteDatasetSession::open(
+        budgetConnection, "/remote/plt", 16ULL * 1024ULL * 1024ULL);
+    amrvis::SliceRequest budgetSlice;
+    budgetSlice.dataset = budgetDataset->id();
+    budgetSlice.field = amrvis::FieldId{0};
+    budgetSlice.normalDirection = 1;
+    budgetSlice.visibleRegion = budgetDataset->metadata().physicalDomain;
+    budgetSlice.physicalPosition = 0.5;
+    budgetSlice.maximumLevel = 0;
+    budgetSlice.outputSize = {2, 2};
+    bool budgetReported = false;
+    try {
+        static_cast<void>(budgetDataset->requestView(budgetSlice));
+    } catch (const amrvis::CacheBudgetExceeded&) {
+        budgetReported = true;
+    }
+    require(budgetReported, "a cache-budget refusal did not reach the caller");
+    require(budgetConnection->connected(),
+        "a cache-budget refusal retired the connection");
+    budgetConnection->close();
+    budgetPeer.get();
     return 0;
 }
 #include <chrono>

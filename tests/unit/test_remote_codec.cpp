@@ -342,6 +342,32 @@ int main()
     requireRejected([&] { static_cast<void>(codec::fromWire(badSpecies)); },
         "a particle species with an impossible dimension was accepted");
 
+    // The local parser refuses component counts outside [0, 100000]; so must the
+    // wire, or a species that cannot exist reaches the client.
+    for (const int realCount : {-1, maximumParticleComponents + 1}) {
+        auto badComponents = codec::toWire(opened);
+        badComponents.particle_species.push_back(
+            std::make_unique<codec::fb::ParticleSpeciesCatalogT>());
+        badComponents.particle_species.back()->name = "electrons";
+        badComponents.particle_species.back()->dimension = 3;
+        badComponents.particle_species.back()->real_component_count
+            = realCount;
+        requireRejected(
+            [&] { static_cast<void>(codec::fromWire(badComponents)); },
+            "an out-of-range real component count was accepted");
+    }
+    for (const int intCount : {-2, maximumParticleComponents + 1}) {
+        auto badComponents = codec::toWire(opened);
+        badComponents.particle_species.push_back(
+            std::make_unique<codec::fb::ParticleSpeciesCatalogT>());
+        badComponents.particle_species.back()->name = "electrons";
+        badComponents.particle_species.back()->dimension = 3;
+        badComponents.particle_species.back()->int_component_count = intCount;
+        requireRejected(
+            [&] { static_cast<void>(codec::fromWire(badComponents)); },
+            "an out-of-range integer component count was accepted");
+    }
+
     ParticleSample sample;
     sample.species = {"electrons", 3, 0, 0, 4, ParticleRealPrecision::Double};
     sample.points.push_back({1, Real3{{0.25, 0.5, 0.75}}});

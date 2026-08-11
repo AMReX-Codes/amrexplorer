@@ -614,6 +614,13 @@ OpenedDataset fromWire(const fb::DatasetOpenedT& value)
             throw std::invalid_argument(
                 "wire particle species dimension is outside [1, 3]");
         }
+        if (species.realComponentCount < 0
+            || species.realComponentCount > maximumParticleComponents
+            || species.intComponentCount < 0
+            || species.intComponentCount > maximumParticleComponents) {
+            throw std::invalid_argument(
+                "wire particle species component count is outside its bounds");
+        }
     }
     return result;
 }

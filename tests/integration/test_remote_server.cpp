@@ -4,6 +4,8 @@
 #include <amrexplorer/remote/Frame.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <exception>
@@ -12,9 +14,21 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <cerrno>
+#include <span>
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#else
+#include <sys/socket.h>
+#endif
 
 namespace {
 
@@ -116,6 +130,32 @@ std::unique_ptr<amrvis::remote::codec::NativeEnvelope> readWithDeadline(
         return {};
     }
     return pending.get();
+}
+
+// One recv, no framing: the trickle-reader test accepts a few kibibytes at a
+// time rather than a whole frame. These sockets are non-blocking, so an empty
+// receive buffer reports EAGAIN, which means "nothing yet" and must not be
+// confused with the close this test is waiting for. Returns the byte count, 0
+// on a closed connection, and -1 for "nothing available right now".
+long readRaw(const amrvis::remote::Socket& socket,
+    std::span<std::uint8_t> destination)
+{
+#ifdef _WIN32
+    const auto count = ::recv(static_cast<SOCKET>(socket.descriptor()),
+        reinterpret_cast<char*>(destination.data()),
+        static_cast<int>(destination.size()), 0);
+    if (count == SOCKET_ERROR) {
+        return ::WSAGetLastError() == WSAEWOULDBLOCK ? -1 : 0;
+    }
+    return count;
+#else
+    const auto count = ::recv(static_cast<int>(socket.descriptor()),
+        destination.data(), destination.size(), 0);
+    if (count < 0) {
+        return errno == EAGAIN || errno == EWOULDBLOCK ? -1 : 0;
+    }
+    return static_cast<long>(count);
+#endif
 }
 
 amrvis::remote::HelloRequestData helloRequest(std::string sessionToken)
@@ -582,6 +622,156 @@ int main(int argc, char* argv[])
     }
     require(boundedRunning.stopWithin(std::chrono::seconds{2}),
         "small-frame server shutdown exceeded its deadline");
+
+    // A peer that keeps accepting a trickle of bytes renews the no-progress
+    // deadline forever, so the stall timeout alone would let it hold a pooled
+    // worker and this session's write mutex indefinitely. The whole-response
+    // budget must retire it within a bound the operator can compute, and a
+    // second connection must keep working while it is still being retired.
+    // The reader below drains 256 KiB every 100 ms. TCP reports a socket
+    // writable again only once about half the send buffer is free, so progress
+    // comes in bursts rather than every tick -- but it keeps coming, roughly
+    // twice a second, which is what makes this a trickle rather than a stall.
+    // Against the three-second stall grace configured here, the no-progress
+    // timeout can therefore never fire, and a server without the whole-response
+    // budget would never retire this session at all: the upper bound below is
+    // the regression assertion. test_remote_frame pins down which limit fires,
+    // deterministically, on a socket whose buffers it controls.
+    {
+        ServerOptions trickleOptions;
+        trickleOptions.workerCount = 2;
+        trickleOptions.maximumDatasets = 2;
+        trickleOptions.maximumConnections = 4;
+        // Long enough that the bursty progress below always lands inside it.
+        trickleOptions.responseWriteStallTimeout = std::chrono::seconds{3};
+        // 32 MiB/s over the ~50 MiB response below: three seconds of grace plus
+        // about 1.6 s of transfer allowance. The floor is high only to keep the
+        // test quick; the small responses this server also serves are
+        // unaffected, since their transfer allowance rounds to nothing next to
+        // the grace.
+        trickleOptions.responseWriteMinimumBytesPerSecond
+            = 32ULL * 1024ULL * 1024ULL;
+        Server trickleServer(trickleOptions);
+        RunningServer trickleRunning(trickleServer);
+
+        auto slow = connectTo("127.0.0.1", trickleServer.port());
+        envelope = exchange(slow, 1,
+            codec::toWire(helloRequest(trickleServer.token())),
+            defaultMaximumFrameBytes);
+        require(codec::inspect(*envelope).payload
+                == PayloadKind::HelloResponse,
+            "trickle server rejected a valid handshake");
+        envelope = exchange(slow, 2,
+            codec::toWire(OpenDatasetData{
+                std::filesystem::path(argv[1]).string(),
+                16ULL * 1024ULL * 1024ULL}),
+            defaultMaximumFrameBytes);
+        require(codec::inspect(*envelope).payload
+                == PayloadKind::DatasetOpened,
+            "trickle server did not open the plotfile");
+        const auto trickleOpened = codec::fromWire(
+            *envelope->payload.AsDatasetOpened());
+
+        // Ask for a response far larger than the kernel socket buffers, then
+        // read it a few kibibytes at a time. Loopback send and receive buffers
+        // autotune into the megabytes, so a response of a few hundred kilobytes
+        // is absorbed whole and the server's write never even blocks; 2048x2048
+        // samples is about 50 MiB and cannot be.
+        SliceRequest large;
+        large.dataset = trickleOpened.id;
+        large.field = FieldId{0};
+        large.normalDirection = 1;
+        large.visibleRegion = trickleOpened.catalog.physicalDomain;
+        large.physicalPosition = 0.5
+            * (large.visibleRegion.lower[1] + large.visibleRegion.upper[1]);
+        large.maximumLevel = trickleOpened.catalog.finestLevel;
+        large.outputSize = {2048, 2048};
+        writeFrame(slow, codec::encode(3, codec::toWire(large)),
+            defaultMaximumFrameBytes);
+
+        std::atomic_bool draining{true};
+        std::atomic<std::uint64_t> drained{0};
+        auto retired = std::async(std::launch::async,
+            [&slow, &draining, &drained] {
+                const auto start = std::chrono::steady_clock::now();
+                // Big enough that the drain reliably restores writability,
+                // small enough (about 2.5 MiB/s) to stay far under the floor.
+                std::vector<std::uint8_t> chunk(256U * 1024U);
+                while (draining.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds{100});
+                    const auto count = readRaw(slow, chunk);
+                    if (count == 0) {
+                        break;  // the server retired the session
+                    }
+                    if (count > 0) {
+                        drained += static_cast<std::uint64_t>(count);
+                    }
+                }
+                return std::chrono::steady_clock::now() - start;
+            });
+
+        // While that response is still being written, a second authenticated
+        // connection opens the dataset and gets a small response.
+        auto neighbour = connectTo("127.0.0.1", trickleServer.port());
+        envelope = exchange(neighbour, 1,
+            codec::toWire(helloRequest(trickleServer.token())),
+            defaultMaximumFrameBytes);
+        require(codec::inspect(*envelope).payload
+                == PayloadKind::HelloResponse,
+            "the trickle reader blocked a second handshake");
+        envelope = exchange(neighbour, 2,
+            codec::toWire(OpenDatasetData{
+                std::filesystem::path(argv[1]).string(),
+                16ULL * 1024ULL * 1024ULL}),
+            defaultMaximumFrameBytes);
+        require(codec::inspect(*envelope).payload
+                == PayloadKind::DatasetOpened,
+            "the trickle reader blocked a second dataset open");
+        const auto neighbourOpened = codec::fromWire(
+            *envelope->payload.AsDatasetOpened());
+        DatasetPageRequest neighbourPage;
+        neighbourPage.dataset = neighbourOpened.id;
+        neighbourPage.field = FieldId{0};
+        neighbourPage.level = 0;
+        neighbourPage.region = neighbourOpened.catalog.physicalDomain;
+        neighbourPage.normalAxis = 1;
+        neighbourPage.maximumExtent = datasetPageMaxExtent;
+        envelope = exchange(neighbour, 3, codec::toWire(neighbourPage),
+            defaultMaximumFrameBytes);
+        require(codec::inspect(*envelope).payload
+                == PayloadKind::DatasetPageResponse,
+            "the trickle reader blocked a second small response");
+
+        // The slow session is retired on its own, without the server being
+        // stopped: the write throws past its budget and the session shuts down.
+        const auto retirementBound = std::chrono::seconds{15};
+        if (retired.wait_for(retirementBound) != std::future_status::ready) {
+            std::cerr << "trickle reader drained " << drained.load()
+                      << " bytes without the session being retired\n";
+            slow.shutdown();
+            retired.wait();
+            require(false, "the trickle-reading session was never retired");
+        }
+        draining.store(false);
+        const auto elapsed = retired.get();
+        require(elapsed < retirementBound,
+            "the trickle-reading session outlived its retirement bound");
+        // The write outlived the stall grace while still moving bytes, so it was
+        // the whole-response budget that retired it.
+        if (elapsed <= trickleOptions.responseWriteStallTimeout) {
+            std::cerr << "trickle session ended after "
+                      << std::chrono::duration_cast<std::chrono::milliseconds>(
+                             elapsed)
+                             .count()
+                      << " ms having drained " << drained.load()
+                      << " bytes\n";
+        }
+        require(elapsed > trickleOptions.responseWriteStallTimeout,
+            "the trickle-reading session ended within the stall grace");
+        require(trickleRunning.stopWithin(std::chrono::seconds{5}),
+            "trickle server shutdown exceeded its deadline");
+    }
+
     std::filesystem::remove_all(
         std::filesystem::path(argv[1]) / "Oversized");
     return 0;

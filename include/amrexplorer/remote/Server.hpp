@@ -20,10 +20,19 @@ struct ServerOptions {
     // small frame cap. Both limits are removed after a valid hello.
     std::chrono::milliseconds handshakeTimeout{5000};
     std::uint32_t maximumHandshakeFrameBytes = 64U * 1024U;
-    // A response may take arbitrarily long while bytes continue moving. A peer
-    // that makes no write progress for this interval is disconnected so it
-    // cannot retain a worker or the session write mutex indefinitely.
+    // A peer that makes no write progress for this interval is disconnected so
+    // it cannot retain a worker or the session write mutex indefinitely. It is
+    // also the fixed grace in the whole-response budget below.
     std::chrono::milliseconds responseWriteStallTimeout{30000};
+    // The stall timeout alone bounds only a period of *zero* progress, which a
+    // peer defeats by accepting a few bytes before each deadline. Every response
+    // therefore also has to fit in
+    //   responseWriteStallTimeout + size / responseWriteMinimumBytesPerSecond,
+    // so a trickle-reader is retired within a bound the operator can compute.
+    // The default floor, 64 KiB/s, is far below any usable SSH tunnel; lower it
+    // for a genuinely slow link (1 allows roughly 18 hours for a 64 MiB
+    // response). Zero is rejected: it would restore the unbounded case.
+    std::uint64_t responseWriteMinimumBytesPerSecond = 64U * 1024U;
     std::string softwareVersion = "unknown";
     // Per-session access token. Clients must present a byte-identical token in
     // their handshake or the connection is refused. Left empty, the server

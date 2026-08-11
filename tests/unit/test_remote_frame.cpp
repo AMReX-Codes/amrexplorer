@@ -238,7 +238,9 @@ int main()
     require(timedOut, "a peer-blocked frame write ignored its deadline");
 
     // A slow peer that keeps draining bytes must be allowed to take longer
-    // than one stall interval to receive the complete frame.
+    // than one stall interval to receive the complete frame. The payload is also
+    // the frame limit for this write, so this is the maximum-size response a
+    // slow-but-above-policy reader has to be able to finish.
     int slowDescriptors[2]{};
     require(::socketpair(AF_UNIX, SOCK_STREAM, 0, slowDescriptors) == 0,
         "could not create the slow-reader socket pair");
@@ -254,6 +256,9 @@ int main()
         "could not reduce the slow-writer send buffer");
     constexpr std::size_t slowPayloadBytes = 512U * 1024U;
     constexpr auto writeStallTimeout = std::chrono::milliseconds{250};
+    // 4 KiB every 5 ms is about 800 KiB/s, comfortably above this floor, so the
+    // whole-write budget must not retire a reader that is merely slow.
+    constexpr FrameWriteBudget slowBudget{writeStallTimeout, 64U * 1024U};
     std::atomic<std::size_t> slowBytesRead{0};
     std::promise<void> slowReaderReady;
     auto slowReaderStarted = slowReaderReady.get_future();
@@ -276,9 +281,9 @@ int main()
     std::string slowWriteError;
     const auto slowWriteStart = std::chrono::steady_clock::now();
     try {
-        writeFrameWithStallTimeout(slowWriter,
+        writeFrameWithBudget(slowWriter,
             std::vector<std::uint8_t>(slowPayloadBytes), slowPayloadBytes,
-            writeStallTimeout);
+            slowBudget);
     } catch (const std::exception& error) {
         slowWriteCompleted = false;
         slowWriteError = error.what();
@@ -297,6 +302,89 @@ int main()
         "the slow reader did not receive the complete frame");
     require(slowWriteElapsed > writeStallTimeout,
         "the slow-reader regression did not exceed one stall interval");
+
+    // The defect the whole-write budget closes: a peer that accepts a few bytes
+    // just before every stall deadline renews it forever, so the stall timeout
+    // alone never retires the write. The reader below empties the writer's whole
+    // 4 KiB send buffer every 150 ms, against a 250 ms stall interval: draining
+    // more than the buffer holds is what makes the socket reliably writable
+    // again, so progress always lands before the stall deadline, and because the
+    // stall interval is longer than the read interval the stall deadline can
+    // never be the limit that bites. Yet ~27 KiB/s is far under the floor, so
+    // only the whole-write budget can retire this peer -- within the bound it
+    // advertises.
+    int trickleDescriptors[2]{};
+    require(::socketpair(AF_UNIX, SOCK_STREAM, 0, trickleDescriptors) == 0,
+        "could not create the trickle-reader socket pair");
+    Socket trickleWriter(trickleDescriptors[0]);
+    Socket tricklePeer(trickleDescriptors[1]);
+    const auto trickleWriterFlags = ::fcntl(trickleDescriptors[0], F_GETFL, 0);
+    require(trickleWriterFlags >= 0
+            && ::fcntl(trickleDescriptors[0], F_SETFL,
+                   trickleWriterFlags | O_NONBLOCK) == 0,
+        "could not make the trickle writer nonblocking");
+    require(::setsockopt(trickleDescriptors[0], SOL_SOCKET, SO_SNDBUF,
+                &sendBufferBytes, sizeof(sendBufferBytes)) == 0,
+        "could not reduce the trickle-writer send buffer");
+    constexpr std::size_t tricklePayloadBytes = 256U * 1024U;
+    // 8 KiB/s floor over a 256 KiB payload: 32 s of transfer allowance would
+    // make the test slow, so scale both down -- the policy is a ratio, and a
+    // 2 MiB/s floor with this payload gives 250 ms grace + 128 ms.
+    constexpr FrameWriteBudget trickleBudget{
+        writeStallTimeout, 2U * 1024U * 1024U};
+    const auto trickleBound = trickleBudget.total(tricklePayloadBytes);
+    std::atomic_bool trickleStop{false};
+    std::thread trickleReader([&] {
+        std::array<std::uint8_t, 16U * 1024U> chunk{};
+        while (!trickleStop.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{150});
+            if (::recv(trickleDescriptors[1], chunk.data(), chunk.size(), 0)
+                <= 0) {
+                break;
+            }
+        }
+    });
+    std::string trickleError;
+    const auto trickleStart = std::chrono::steady_clock::now();
+    try {
+        writeFrameWithBudget(trickleWriter,
+            std::vector<std::uint8_t>(tricklePayloadBytes),
+            tricklePayloadBytes, trickleBudget);
+    } catch (const std::exception& error) {
+        trickleError = error.what();
+    }
+    const auto trickleElapsed = std::chrono::steady_clock::now() - trickleStart;
+    trickleStop.store(true);
+    trickleWriter.shutdown();
+    trickleReader.join();
+    if (trickleError.find("below the minimum throughput")
+        == std::string::npos) {
+        std::cerr << "trickle write ended with: "
+                  << (trickleError.empty() ? "no error" : trickleError) << '\n';
+    }
+    require(trickleError.find("below the minimum throughput")
+            != std::string::npos,
+        "a trickle-reading peer was not retired by the whole-write budget");
+    // Never before the advertised bound, and not far after it: the writer waits
+    // on the earlier of the two deadlines every iteration.
+    require(trickleElapsed >= trickleBound
+            && trickleElapsed < trickleBound + std::chrono::seconds(5),
+        "the trickle-reader write did not end near its advertised bound");
+    // The stall interval alone could not have done this: the reader never went
+    // quiet for that long.
+    require(trickleBound > writeStallTimeout,
+        "the trickle bound is not longer than one stall interval");
+
+    // The floor is a hard requirement of the budget, not a suggestion: zero
+    // would silently restore the unbounded case.
+    bool rejectedZeroFloor = false;
+    try {
+        writeFrameWithBudget(trickleWriter, std::vector<std::uint8_t>(8), 8,
+            FrameWriteBudget{writeStallTimeout, 0});
+    } catch (const std::invalid_argument&) {
+        rejectedZeroFloor = true;
+    }
+    require(rejectedZeroFloor, "a zero throughput floor was accepted");
 #endif
 
     // A TCP-segment boundary may tear the four-byte header without making the

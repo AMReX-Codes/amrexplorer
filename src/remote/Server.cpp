@@ -906,9 +906,8 @@ private:
             }
             std::scoped_lock lock(m_writeMutex);
             if (!m_stopping.load()) {
-                writeFrameWithStallTimeout(m_socket, bytes,
-                    m_maximumFrameBytes.load(),
-                    m_options.responseWriteStallTimeout, {},
+                writeFrameWithBudget(m_socket, bytes,
+                    m_maximumFrameBytes.load(), writeBudget(), {},
                     m_lifecycleStop.get_token());
             }
         } catch (...) {
@@ -927,14 +926,23 @@ private:
             }
             std::scoped_lock lock(m_writeMutex);
             if (!m_stopping.load()) {
-                writeFrameWithStallTimeout(m_socket, bytes,
-                    m_maximumFrameBytes.load(),
-                    m_options.responseWriteStallTimeout, {},
+                writeFrameWithBudget(m_socket, bytes,
+                    m_maximumFrameBytes.load(), writeBudget(), {},
                     m_lifecycleStop.get_token());
             }
         } catch (...) {
             stop();
         }
+    }
+
+    // Both write limits, per response: no-progress and whole-write. A write
+    // that exceeds either throws, and both callers above answer a throw by
+    // retiring the session, which is what releases the worker and the write
+    // mutex a trickle-reader would otherwise hold forever.
+    [[nodiscard]] FrameWriteBudget writeBudget() const noexcept
+    {
+        return {m_options.responseWriteStallTimeout,
+            m_options.responseWriteMinimumBytesPerSecond};
     }
 
     Socket m_socket;
@@ -974,7 +982,8 @@ public:
             || m_options.handshakeTimeout
                 <= std::chrono::milliseconds::zero()
             || m_options.responseWriteStallTimeout
-                <= std::chrono::milliseconds::zero()) {
+                <= std::chrono::milliseconds::zero()
+            || m_options.responseWriteMinimumBytesPerSecond == 0) {
             throw std::invalid_argument(
                 "server resource limits must be greater than zero");
         }

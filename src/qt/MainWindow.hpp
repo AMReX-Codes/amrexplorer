@@ -596,7 +596,11 @@ private:
     // change, or no resolution change).
     [[nodiscard]] std::optional<QRectF> sphericalReframe(
         const PlaneViewState& state, const SliceDisplayResult& display) const;
-    void showSlice(PlaneViewState& state, const SliceDisplayResult& display);
+    // By value, and callers move into it: the planes are the largest thing an
+    // arrival carries -- at the 4096 output cap a ScalarPlane is around 117 MB
+    // and the ImageBuffer around 67 MB -- and a const& forced this function to
+    // deep-copy them again into the shared_ptr snapshots it publishes.
+    void showSlice(PlaneViewState& state, SliceDisplayResult display);
     void updateOverlay(PlaneViewState& state);
     void updateOverlays();
     void updateGridBoxes(PlaneViewState& state);
@@ -661,6 +665,16 @@ private:
     // demand-driven and never clamped. Zero when there is nothing to report.
     // See agent-notes/issues/fixed-scale-clamped-native-raster.md.
     [[nodiscard]] double effectiveFixedScale(int factor) const;
+    // Reads a standalone FAB header off the GUI thread and opens it from the
+    // completion. The read is one small pread, but it is a *blocking* one, and
+    // on the network filesystems these datasets usually live on it freezes the
+    // event loop for as long as the server takes. Every other header read in
+    // this window already runs on a worker (see buildFabSelector); these two
+    // entry points were the exceptions.
+    void openStandaloneFabAsync(std::filesystem::path path,
+        std::optional<std::uint64_t> fileOffset,
+        std::filesystem::path dataRoot, bool preserveFabSelector,
+        std::optional<FrameSliceSpec> initialSpec, QString failureTitle);
     void configureSliceControls();
     // Enable the dataset-dependent field/level/range/menu controls once a
     // dataset (single or sequence frame) is loaded. Shared by

@@ -4736,19 +4736,13 @@ void MainWindow::chooseStandaloneDataset(const QString& caption, bool rawFab)
         tr("AMReX data (*)"));
     if (!filename.isEmpty()) {
         if (rawFab) {
-            try {
-                const auto path = std::filesystem::path(filename.toStdString());
-                auto metadata = StandaloneMetadataReader{}.readFab(path);
-                auto root = path.parent_path();
-                if (root.empty()) {
-                    root = ".";
-                }
-                openDatasetImpl(path, false, std::move(metadata),
-                    std::move(root), false, std::nullopt);
-            } catch (const std::exception& error) {
-                QMessageBox::critical(this, tr("Cannot open FAB"),
-                    exceptionMessage(error));
+            const auto path = std::filesystem::path(filename.toStdString());
+            auto root = path.parent_path();
+            if (root.empty()) {
+                root = ".";
             }
+            openStandaloneFabAsync(path, std::nullopt, std::move(root), false,
+                std::nullopt, tr("Cannot open FAB"));
         } else {
             openDataset(filename.toStdString());
         }
@@ -4887,6 +4881,53 @@ FabSelectorBuild buildFabSelector(
 
 } // namespace
 
+void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
+    std::optional<std::uint64_t> fileOffset, std::filesystem::path dataRoot,
+    bool preserveFabSelector, std::optional<FrameSliceSpec> initialSpec,
+    QString failureTitle)
+{
+    ++m_activeRequests;
+    const auto generation = m_generation;
+    auto* watcher = new QFutureWatcher<PlotfileMetadataResult>(this);
+    connect(watcher, &QFutureWatcher<PlotfileMetadataResult>::finished, this,
+        [this, watcher, generation, path, dataRoot = std::move(dataRoot),
+            preserveFabSelector, initialSpec = std::move(initialSpec),
+            failureTitle = std::move(failureTitle)]() mutable {
+            --m_activeRequests;
+            if (m_closing) {
+                watcher->deleteLater();
+                return;
+            }
+            try {
+                auto metadata = watcher->future().takeResult();
+                // A dataset opened while this read was in flight owns the
+                // window now; publishing over it would be a stale result.
+                if (generation == m_generation) {
+                    openDatasetImpl(path, false, std::move(metadata),
+                        std::move(dataRoot), preserveFabSelector,
+                        std::move(initialSpec));
+                } else {
+                    ++m_staleResults;
+                }
+            } catch (const std::exception& error) {
+                if (generation == m_generation) {
+                    QMessageBox::critical(
+                        this, failureTitle, exceptionMessage(error));
+                } else {
+                    ++m_staleResults;
+                }
+            }
+            updateDiagnostics();
+            watcher->deleteLater();
+        });
+    watcher->setFuture(QtConcurrent::run([path, fileOffset] {
+        return fileOffset
+            ? StandaloneMetadataReader{}.readFab(path, *fileOffset)
+            : StandaloneMetadataReader{}.readFab(path);
+    }));
+    updateDiagnostics();
+}
+
 void MainWindow::viewFab(std::size_t entryIndex)
 {
     const auto& entries = m_fabSelectorDock->entries();
@@ -4905,9 +4946,18 @@ void MainWindow::viewFab(std::size_t entryIndex)
         }
         PlotfileMetadataResult selected;
         if (entry.rawRecord) {
-            selected = StandaloneMetadataReader{}.readFab(
-                entry.filePath, entry.fileOffset);
-        } else {
+            // The record's own header has to be read; do it off the GUI thread
+            // and let the completion open it. The selector state below is set
+            // first either way, so the dock reflects the choice immediately.
+            m_fabMode = true;
+            m_fabSelectorDock->setBackAvailable(m_multifabReturn.has_value());
+            m_fabSelectorDock->selectEntry(entry.ordinal);
+            openStandaloneFabAsync(m_fabSourcePath, entry.fileOffset,
+                m_fabDataRoot, true, std::move(selectedSpec),
+                tr("Cannot view FAB"));
+            return;
+        }
+        {
             if (!m_fabSourceMetadata) {
                 throw std::runtime_error(
                     "the source MultiFab is no longer available");
@@ -5804,7 +5854,7 @@ void MainWindow::requestInitialSlice(
                 return;
             }
             try {
-                auto result = watcher->result();
+                auto result = watcher->future().takeResult();
                 if (generation == m_generation) {
                     m_dataset = result.dataset;
                     m_particleSamples = std::move(result.particles);
@@ -5890,7 +5940,7 @@ void MainWindow::requestInitialSlice(
                                     result.displays[index].request.visibleRegion}
                                 : std::optional<RealBox>{};
                         }
-                        showSlice(*views[index], result.displays[index]);
+                        showSlice(*views[index], std::move(result.displays[index]));
                     }
                     if (isRemote) {
                         // A resize during the initial worker cannot submit a
@@ -6292,7 +6342,10 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                 return;
             }
             try {
-                auto result = watcher->result();
+                // takeResult, not result(): result() returns a reference into
+                // the future and copying out of it duplicates every plane in
+                // the arrival before showSlice has even seen it.
+                auto result = watcher->future().takeResult();
                 if (generation == m_generation
                     && sliceGeneration == state.sliceGeneration) {
                     // Cache the full-domain range whenever we get a non-zoomed
@@ -6328,7 +6381,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                         DisplayCoordinator::realignArrivalToRange(result,
                             *cachedRange, m_palette, m_viewDimension != 3);
                     }
-                    showSlice(state, result);
+                    showSlice(state, std::move(result));
                     syncVisibleRanges();
                     // Cache the full-domain range. In 3-D the store defers to
                     // the (async) shared-range sync's completion so the union
@@ -6702,7 +6755,7 @@ std::optional<QRectF> MainWindow::sphericalReframe(
         visible.width() * sx, visible.height() * sy);
 }
 
-void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& display)
+void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
 {
     if (!display.rasterUnchanged) {
         if (!display.image.valid()) {
@@ -6764,7 +6817,8 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     }
     // Fresh immutable snapshots: replace the pointers, never mutate the
     // pointees a cached-planes refresh worker may still be reading.
-    state.plane = std::make_shared<const ScalarPlane>(display.slice.plane);
+    state.plane
+        = std::make_shared<const ScalarPlane>(std::move(display.slice.plane));
     // Spherical warps the raster into physical (R, Z); overlays and the probe
     // map through displayRegion, which for every other system is just the
     // plane's logical bounds (see PlaneMapping).
@@ -6772,19 +6826,19 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     state.sphericalDisplay = display.sphericalDisplay;
     state.displayRegion = display.displayRegion;
     state.contourPlane
-        = std::make_shared<const ScalarPlane>(display.contourPlane);
-    state.contourFinePlane
-        = std::make_shared<const ScalarPlane>(display.contourFinePlane);
+        = std::make_shared<const ScalarPlane>(std::move(display.contourPlane));
+    state.contourFinePlane = std::make_shared<const ScalarPlane>(
+        std::move(display.contourFinePlane));
     state.contourFineFactor = display.contourFineFactor;
-    state.contourPolylines = display.contourPolylines;
+    state.contourPolylines = std::move(display.contourPolylines);
     const auto fieldName = QString::fromStdString(display.fieldName);
     state.fieldName = fieldName;
     state.displayMinimum = display.minimum;
     state.displayMaximum = display.maximum;
     state.displayLogarithmic = display.logarithmic;
-    state.vectorSegments = display.vectors;
+    state.vectorSegments = std::move(display.vectors);
     if (display.slice.gridBoxesIncluded) {
-        state.gridBoxes = display.slice.gridBoxes;
+        state.gridBoxes = std::move(display.slice.gridBoxes);
     }
     // Cache key for the re-render-from-cache path (see requestSlice).
     state.cachedRequest = display.request;
@@ -7297,7 +7351,7 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
         throw std::runtime_error("frame slice count does not match the view set");
     }
     for (std::size_t index = 0; index < views.size(); ++index) {
-        showSlice(*views[index], result.displays[index]);
+        showSlice(*views[index], std::move(result.displays[index]));
     }
     const auto cache = m_dataset->cacheMetrics();
     m_cacheBudgetBytes = cache.budgetBytes;

@@ -159,7 +159,10 @@ void SequenceController::startLoad(int index, std::uint64_t generation)
                 return;
             }
             try {
-                auto result = watcher->result();
+                // See MainWindow's slice arrival: result() copies every plane
+                // out of the future, and a frame carries the same load a slice
+                // does.
+                auto result = watcher->future().takeResult();
                 if (generation == m_loadGeneration && index == m_index) {
                     finishLoad(std::move(result), defaultPositions);
                 } else {

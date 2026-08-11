@@ -1,9 +1,8 @@
 # Installing AMReXplorer
 
-Two options: build from source, or download a prebuilt AppImage.
-Tested on Ubuntu 24.04 and macOS.
+Build from source. Tested on Ubuntu 24.04 and macOS.
 
-## Option 1: Build from source
+## Build from source
 
 ### Linux (Ubuntu)
 
@@ -86,21 +85,15 @@ Set `-DAMREXPLORER_BUILD_MACOS_APP_BUNDLE=OFF` when configuring to build the pla
 sudo cmake --install build --prefix /usr/local
 ```
 
-## Option 2: Prebuilt AppImage
-
-> **Not yet available.** Prebuilt AppImages will be published on the
-> [GitHub Releases][] page once the first release is tagged.
+## Packaging an AppImage
 
 An AppImage is a self-contained executable that runs on any modern Linux
-distribution without installing packages. To package a source build now, see
-**[Building an AppImage](docs/building.md#building-an-appimage)**. When
-prebuilt images become available:
+distribution without installing packages, which makes it a convenient way to
+move a build to machines you do not administer. You can build one from a source
+build yourself: see
+**[Building an AppImage](docs/building.md#building-an-appimage)**.
 
-1. Download `amrexplorer-*.AppImage` from the [GitHub Releases][] page.
-2. Make it executable: `chmod +x amrexplorer-*.AppImage`
-3. Run it: `./amrexplorer-*.AppImage /path/to/plotfile`
-
-[GitHub Releases]: https://github.com/amrex-codes/amrexplorer/releases
+There is no release pipeline yet, so no prebuilt AppImage is published.
 
 ## Next steps
 

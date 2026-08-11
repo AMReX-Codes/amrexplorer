@@ -7,6 +7,7 @@
 #include <amrexplorer/remote/Frame.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -17,6 +18,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <ranges>
 #include <cerrno>
 #include <span>
 #include <stdexcept>
@@ -190,6 +192,29 @@ void writeOversizedParticleHeader(const std::filesystem::path& root)
         "could not write oversized particle Header");
 }
 
+// A species Header whose ten levels each declare two million grids. Every count
+// is under the per-level cap, so only the whole-table cap rejects it. The point
+// here is *where* it is read: species discovery runs at dataset open, inside the
+// long-lived server, so before that cap this cost the server hundreds of
+// megabytes for a few dozen bytes of text supplied by whoever can write a
+// server-visible directory.
+void writeCraftedGridTable(const std::filesystem::path& root)
+{
+    const auto species = root / "GridBomb";
+    std::filesystem::create_directories(species);
+    std::ofstream header(species / "Header");
+    require(static_cast<bool>(header),
+        "could not create crafted grid-table Header");
+    header << "Version_Two_Dot_Zero_double\n"
+           << "2\n0\n0\n1\n"
+           << "0\n1\n9\n";
+    for (int level = 0; level < 10; ++level) {
+        header << "2000000\n";
+    }
+    require(static_cast<bool>(header),
+        "could not write crafted grid-table Header");
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -202,6 +227,7 @@ int main(int argc, char* argv[])
         return 2;
     }
     writeOversizedParticleHeader(argv[1]);
+    writeCraftedGridTable(argv[1]);
 
     ServerOptions options;
     options.workerCount = 2;
@@ -329,6 +355,33 @@ int main(int argc, char* argv[])
             && codec::fromWire(*envelope->payload.AsErrorResponse()).code
                 == ErrorCode::ResourceLimitExceeded,
         "oversized particle request reached the particle reader");
+
+    // The crafted grid table was already read once, by species discovery during
+    // the open above -- an open that succeeded, which is the property under
+    // test: a crafted species costs the server a rejected species, not its
+    // memory. The species is simply absent from the catalog, and asking for it
+    // by name is an ordinary bounded error rather than anything the server has
+    // to survive.
+    // "Oversized" proves the absence below means something: its Header is
+    // well-formed, only its particle count is beyond one frame, so discovery
+    // does list it. A species missing from this list was rejected by the
+    // parser, not overlooked by the test.
+    require(std::ranges::any_of(opened.particleSpecies,
+                [](const auto& candidate) {
+                    return candidate.name == "Oversized";
+                }),
+        "a well-formed particle species was not discovered");
+    require(std::ranges::none_of(opened.particleSpecies,
+                [](const auto& candidate) {
+                    return candidate.name == "GridBomb";
+                }),
+        "a crafted particle grid table was advertised to the client");
+    envelope = exchange(socket, 13,
+        codec::toWire(opened.id, "GridBomb", 1.0, 0), hello.maximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
+            && codec::fromWire(*envelope->payload.AsErrorResponse()).code
+                == ErrorCode::InvalidRequest,
+        "a crafted particle species was not refused by name");
 
     SliceRequest request;
     request.dataset = opened.id;
@@ -838,5 +891,7 @@ int main(int argc, char* argv[])
 
     std::filesystem::remove_all(
         std::filesystem::path(argv[1]) / "Oversized");
+    std::filesystem::remove_all(
+        std::filesystem::path(argv[1]) / "GridBomb");
     return 0;
 }

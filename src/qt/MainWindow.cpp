@@ -2243,6 +2243,12 @@ QRectF MainWindow::activeViewVisibleDataWindowForTest() const
     // rect directly would report a window in the wrong space (and offset by
     // the fetched window's position in the domain) whenever the canvas
     // scrolls.
+    //
+    // The second clamp is not redundant with the one inside visibleImageRect:
+    // that one clamps to the pixmap, while the normalization below divides by
+    // the plane's dimensions, and a supersampled spherical warp makes the
+    // pixmap larger than the plane. Clamping to the plane rect keeps the
+    // fractions in range there, exactly as this probe did before.
     const auto visible = view->visibleImageRect().intersected(
         QRectF(0.0, 0.0, plane.width, plane.height));
     const auto axes = displayAxes(m_activeView->normal);

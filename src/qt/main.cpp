@@ -39,7 +39,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <memory>

@@ -3,8 +3,6 @@
 #include <amrexplorer/core/Statistics.hpp>
 #include <amrexplorer/data/SessionValidation.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
-#include <amrexplorer/io/PlotfileMetadataReader.hpp>
-#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/query/LineQuery.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
 
@@ -28,20 +26,7 @@ std::string readFileVersion(
     }
     std::ifstream header(path / "Header");
     std::string version;
-    // Bounded, like the FAB header reads: this runs on every dataset open,
-    // including inside the long-lived server, and a Header whose first line
-    // never ends would otherwise be pulled into memory whole. A version string
-    // is a few dozen bytes; anything past the ceiling is not one.
-    //
-    // Empty rather than a throw, unlike the FAB readers: this string is
-    // informational, the caller already treats an unreadable Header as an
-    // empty version, and one unparsable line should not fail the open.
-    try {
-        static_cast<void>(
-            detail::readBoundedLine<MetadataReadError>(header, version));
-    } catch (const MetadataReadError&) {
-        return {};
-    }
+    std::getline(header, version);
     while (!version.empty() && version.back() == '\r') {
         version.pop_back();
     }

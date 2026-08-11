@@ -79,13 +79,10 @@ std::string trim(std::string value)
     return value.substr(first, last - first + 1);
 }
 
-// Bounded, like the FAB header reads: this is the reader that actually walks a
-// plotfile Header, so bounding readFileVersion's single line and leaving this
-// one unbounded would have closed nothing.
 std::string readNonEmptyLine(std::istream& input, std::string_view description)
 {
     std::string line;
-    while (detail::readBoundedLine<MetadataReadError>(input, line)) {
+    while (std::getline(input, line)) {
         line = trim(std::move(line));
         if (!line.empty()) {
             return line;

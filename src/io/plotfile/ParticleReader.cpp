@@ -4,10 +4,9 @@
 #include <array>
 #include <bit>
 #include <cmath>
-#include <iomanip>
-#include <type_traits>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <optional>
@@ -15,6 +14,7 @@
 #include <set>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 
 namespace amrvis {
 namespace {

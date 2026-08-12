@@ -1470,8 +1470,13 @@ int main(int argc, char* argv[])
             &application, [&window, &application, good, attemptedGood](
                               bool success) {
                 if (*attemptedGood) {
-                    // The recovery open: succeeding here is the whole point.
-                    application.exit(success ? 0 : 1);
+                    // The recovery open. Opening is not the end of it -- the
+                    // slice has to arrive and clear the placeholder -- so the
+                    // verdict is left to initialSliceFinished below.
+                    if (!success) {
+                        qCritical("the recovery open failed");
+                        application.exit(1);
+                    }
                     return;
                 }
                 if (success) {
@@ -1488,9 +1493,36 @@ int main(int argc, char* argv[])
                     return;
                 }
                 *attemptedGood = true;
+                // Rendered, not metadata-only: the placeholder is what a
+                // failed open leaves behind, so only a real slice arriving
+                // proves the recovery cleared it. Both legs used to skip the
+                // render, which left that unproven.
                 QTimer::singleShot(0, &window,
-                    [&window, good] { window.openDataset(good, true); });
+                    [&window, good] { window.openDataset(good); });
             });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, attemptedGood](bool success) {
+                if (!*attemptedGood) {
+                    // The failed open's own signal; the placeholder it leaves
+                    // is checked above.
+                    return;
+                }
+                if (!success) {
+                    qCritical("the recovery open did not render");
+                    application.exit(1);
+                    return;
+                }
+                if (!window.viewPlaceholderForTest().isEmpty()) {
+                    qCritical("the recovery open left a placeholder: '%s'",
+                        qUtf8Printable(window.viewPlaceholderForTest()));
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
         QTimer::singleShot(0, &window,
             [&window, bad] { window.openDataset(bad, true); });
     } else if (argc == 3
@@ -2576,6 +2608,54 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, first] { window.openDataset(first); });
     } else if (argc == 3
+        && std::string_view(argv[1]) == "--idle-ui-state-smoke-test") {
+        // Two controls that are reachable before any dataset is, and used to
+        // strand state there.
+        //
+        // The Animation panel: shown from the View menu with nothing open, it
+        // holds no controls at all, and an edge trigger on "does it apply"
+        // never fired on the following open because the answer stayed false --
+        // so an empty dock stayed parked for the session.
+        //
+        // Reset Zoom: reachable by its shortcut with nothing open, where it
+        // iterates no views. Reporting from inside the per-view reset meant it
+        // reported nothing, and the button kept a factor nothing applied.
+        const std::filesystem::path path(argv[2]);
+        window.setAnimationDockVisibleForTest(true);
+        window.selectFixedScaleForTest(4);
+        window.resetZoomAllViewsForTest();
+        if (window.scaleUiLabelForTest() != QStringLiteral("Fit")) {
+            qCritical("Reset Zoom with no dataset left the button at '%s'",
+                qUtf8Printable(window.scaleUiLabelForTest()));
+            return 1;
+        }
+        window.setAnimationDockVisibleForTest(true);
+        if (!window.animationDockVisibleForTest()) {
+            qCritical("the Animation panel would not open with no dataset, so "
+                      "this test proves nothing");
+            return 1;
+        }
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                // A 2-D plotfile: no sweep controls, no sequence, so the panel
+                // has nothing to show and must not stay up.
+                if (window.animationDockVisibleForTest()) {
+                    qCritical("an empty Animation panel survived an open");
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--arrow-key-routing-smoke-test") {
         // The arrow keys pan the focused image view and nothing else. They
         // used to be window-context QShortcuts, which took Up/Down from every
@@ -2628,10 +2708,10 @@ int main(int argc, char* argv[])
                     if (!press(::Qt::Key_Left) || !press(::Qt::Key_Up)) {
                         return;
                     }
-                    if (window.panStepsForTest() != 2) {
+                    if (window.panStepRequestsForTest() != 2) {
                         qCritical("arrow keys on the focused view produced %zu "
-                                  "pan steps, expected 2",
-                            window.panStepsForTest());
+                                  "pan requests, expected 2",
+                            window.panStepRequestsForTest());
                         application.exit(1);
                         return;
                     }
@@ -2648,10 +2728,10 @@ int main(int argc, char* argv[])
                         || !press(::Qt::Key_Left) || !press(::Qt::Key_Right)) {
                         return;
                     }
-                    if (window.panStepsForTest() != 2) {
-                        qCritical("an arrow key in the level selector panned "
-                                  "the image (%zu pan steps)",
-                            window.panStepsForTest());
+                    if (window.panStepRequestsForTest() != 2) {
+                        qCritical("an arrow key in the level selector reached the "
+                                  "image view (%zu pan requests)",
+                            window.panStepRequestsForTest());
                         application.exit(1);
                         return;
                     }
@@ -2678,8 +2758,12 @@ int main(int argc, char* argv[])
                     reopen();
                     return;
                 }
+                // Not necessarily the level selector by now -- teardown
+                // disables it and Qt moves focus to a neighbouring control --
+                // but it must not have landed in the view.
                 if (window.activeViewHasFocusForTest()) {
-                    qCritical("an open stole focus from the level selector");
+                    qCritical("an open pulled focus into the view while a "
+                              "control had it");
                     application.exit(1);
                     return;
                 }

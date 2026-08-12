@@ -210,16 +210,18 @@ public:
 
     // Test-only: apply a panel-local scale, drive the exact data-region pan
     // handlers used by Shift+left drag, and inspect the resulting transform.
-    // Arrow keys reaching a view are pan steps; arrow keys reaching a toolbar
-    // widget must not be. Counting them tests the routing the unit test cannot
-    // see, because it delivers events to the view directly.
-    [[nodiscard]] std::size_t panStepsForTest() const noexcept
+    // Counts arrow-key pan *requests* that reached a view, which is what the
+    // routing regression is about -- not pans that moved something, since a
+    // step at the domain edge legitimately moves nothing. The unit test cannot
+    // see routing at all: it delivers events to the view directly.
+    [[nodiscard]] std::size_t panStepRequestsForTest() const noexcept
     {
-        return m_panSteps;
+        return m_panStepRequests;
     }
     [[nodiscard]] bool activeViewHasFocusForTest() const;
     void focusLevelSelectorForTest();
     void clearFocusForTest();
+    void resetZoomAllViewsForTest() { resetZoomAllViews(); }
     void setActiveViewScaleForTest(int factor);
     void selectFixedScaleForTest(int factor);
     // The same choice made from the *toolbar* button's own menu rather than
@@ -632,10 +634,10 @@ private:
     // Re-state the current scale after the active view or its dataset changed;
     // the clamped label is computed from both.
     void refreshScaleReport();
+    // The radio items' text and every lookup that matches them.
+    [[nodiscard]] QString plainScaleLabel(int factor) const;
     [[nodiscard]] QString fixedScaleLabel(int factor, double effective) const;
     [[nodiscard]] QString defaultScaleToolTip() const;
-    ScaleUiState m_scaleState = ScaleUiState::Fit;
-    int m_scaleFactor = 0;
     // View pixels per finest cell that a chosen fixed scale actually achieves,
     // which is the factor itself unless the whole-domain raster hit
     // maxSliceOutputDimension. Past that clamp one raster pixel is more than one
@@ -760,8 +762,8 @@ private:
     // even though the panel applied before and after.
     bool m_animationDockSequence = false;
     bool m_animationDockThreeD = false;
-    // Arrow-key pan steps actually applied, for the routing regression.
-    std::size_t m_panSteps = 0;
+    // Arrow-key pan requests that reached a view, for the routing regression.
+    std::size_t m_panStepRequests = 0;
     FabSelectorDock* m_fabSelectorDock = nullptr;
     QToolBar* m_sliceToolbar = nullptr;
     QToolBar* m_rangeToolbar = nullptr;

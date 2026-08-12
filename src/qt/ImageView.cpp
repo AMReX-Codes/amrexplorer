@@ -604,6 +604,7 @@ void ImageView::zoomBy(qreal factor)
     }
     scale(factor, factor);
     m_transformMode = TransformMode::Custom;
+    emit zoomChanged();
 }
 
 void ImageView::zoomToRect(const QRectF& imageRect)

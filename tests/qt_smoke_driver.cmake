@@ -21,7 +21,7 @@
 #                 sequence-equal-size-transform-preserve |
 #                 sequence-geometry-refit | sequence-noop | sequence-failure |
 #                 remote-canvas-wheel | scale-state | effective-scale |
-#                 arrow-key-routing | animation-dock-role |
+#                 arrow-key-routing | animation-dock-role | open-failure |
 #                 fixed-scale-centre
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
@@ -118,6 +118,13 @@ elseif(MODE STREQUAL "effective-scale")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --effective-scale-smoke-test
         "${WORK}/plt" 32)
+elseif(MODE STREQUAL "idle-ui-state")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --idle-ui-state-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "open-failure")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --open-failure-smoke-test
+        "${WORK}/no_such_plotfile" "${WORK}/plt")
 elseif(MODE STREQUAL "sequence-scale-report")
     if(NOT DEFINED SECOND_SOURCE)
         message(FATAL_ERROR

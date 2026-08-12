@@ -230,10 +230,10 @@ one cell and the fixed scale magnifies by less than the factor says. When that
 happens the Scale button reports what it actually applied — `32x→16x` on a
 domain 8192 cells across — and its tool tip explains why. Rubber-band zoom is
 unaffected: selecting a subregion re-reads that region at finest resolution.
-Remote datasets are usually unaffected too, because they fetch only the visible
-window at finest resolution instead of building a whole-domain image — the one
-exception is a remote 2-D spherical view, which is drawn from a whole-domain
-raster like a local one and so reports a reduced scale on the same domains.
+Remote datasets are also unaffected, because they fetch only the visible window
+at finest resolution instead of building a whole-domain image. Spherical views
+report nothing either way: their image is warped, so one image pixel does not
+stand for a fixed number of cells and there is no single magnification to state.
 
 The line-plot window can accumulate curves, which is useful when comparing
 variables, levels, or positions. Its horizontal axis uses physical coordinates

@@ -695,16 +695,20 @@ if(TARGET amrexplorer_qt)
     set_tests_properties(qt_metadata_smoke_3d PROPERTIES TIMEOUT 10)
     # A failed open destroys the previous dataset before it knows whether the
     # replacement is openable, so it has to leave a placeholder that says so --
-    # and the window must still open a good dataset afterwards. Metadata-only
-    # on both sides: the bad path fails before any payload is read.
+    # and the window must still open a good dataset afterwards. The recovery
+    # leg renders, which is the only way the placeholder is proven cleared, so
+    # it needs a materialized fixture with payloads rather than the source tree.
     add_test(
         NAME qt_open_failure_smoke
-        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
-            "$<TARGET_FILE:amrexplorer_qt>" --open-failure-smoke-test
-            "${CMAKE_CURRENT_BINARY_DIR}/no_such_plotfile"
-            "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_open_failure"
+            -DMODE=open-failure
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
-    set_tests_properties(qt_open_failure_smoke PROPERTIES TIMEOUT 20)
+    set_tests_properties(qt_open_failure_smoke PROPERTIES TIMEOUT 30)
     # The slice and sequence smoke paths need FAB payloads, so each test
     # materializes a fixture copy first (see qt_smoke_driver.cmake).
     add_test(
@@ -1025,6 +1029,20 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_sequence_scale_report_smoke PROPERTIES TIMEOUT 30)
+    # Controls reachable before any dataset is: an Animation panel opened from
+    # the View menu with nothing loaded must not survive the next open holding
+    # no controls, and Reset Zoom with no views must still report Fit.
+    add_test(
+        NAME qt_idle_ui_state_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_idle_ui_state"
+            -DMODE=idle-ui-state
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_idle_ui_state_smoke PROPERTIES TIMEOUT 30)
     # Hiding the Animation panel while it holds the 3-D sweep controls must not
     # keep it hidden when a sequence arrives and it holds the transport.
     add_test(

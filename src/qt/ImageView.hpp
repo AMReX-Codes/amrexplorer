@@ -213,6 +213,10 @@ signals:
     void linePlotRequested(int imageX, int imageY, Qt::MouseButton button);
     void sliceMoveRequested(int imageX, int imageY, Qt::MouseButton button);
     void fitRequested();
+    // The view zoomed itself, leaving the display mode at Custom. The owner
+    // reports the scale, and a wheel zoom is the one path that changes it
+    // without going through the owner first.
+    void zoomChanged();
     void viewportResized(const QSize& size);
     // An arrow key pressed while this view has focus, as a unit direction in
     // pan terms (+x scrolls the data right, +y scrolls it up). Panning is a

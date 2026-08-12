@@ -987,7 +987,10 @@ void MainWindow::wireView(PlaneViewState& state)
     connect(view, &ImageView::fitRequested, this,
         [this, &state] {
             resetViewZoom(state);
-            setScaleUiState(ScaleUiState::Fit);
+            // Derived, not asserted: this fits *one* panel, so with sync off in
+            // 3-D the others keep whatever they had and the honest report is
+            // Mixed. Hardcoding Fit here claimed all three had been fitted.
+            refreshScaleReport();
         });
     connect(view, &ImageView::viewportResized, this,
         [this, &state](const QSize&) {

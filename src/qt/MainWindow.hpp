@@ -221,6 +221,12 @@ public:
     [[nodiscard]] bool activeViewHasFocusForTest() const;
     void focusLevelSelectorForTest();
     void clearFocusForTest();
+    // Test-only: the fixture really opened as a spherical view. Without this
+    // the spherical exclusion could be "tested" against a Cartesian view.
+    [[nodiscard]] bool displayIsSphericalForTest() const
+    {
+        return displayIsSpherical();
+    }
     void resetZoomAllViewsForTest() { resetZoomAllViews(); }
     void setActiveViewScaleForTest(int factor);
     void selectFixedScaleForTest(int factor);

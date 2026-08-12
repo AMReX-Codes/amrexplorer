@@ -118,6 +118,10 @@ elseif(MODE STREQUAL "effective-scale")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --effective-scale-smoke-test
         "${WORK}/plt" 32)
+elseif(MODE STREQUAL "spherical-scale-report")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --spherical-scale-report-smoke-test
+        "${WORK}/plt")
 elseif(MODE STREQUAL "idle-ui-state")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --idle-ui-state-smoke-test "${WORK}/plt")

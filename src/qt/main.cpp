@@ -2608,6 +2608,53 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, first] { window.openDataset(first); });
     } else if (argc == 3
+        && std::string_view(argv[1])
+            == "--spherical-scale-report-smoke-test") {
+        // A spherical view reports the plain factor, never a reduced one. Its
+        // raster is warped, so one raster pixel does not stand for a fixed
+        // number of finest cells and there is no single magnification to
+        // state; effectiveFixedScale excludes it for the same reason
+        // logicalImageSize does.
+        //
+        // The fixture is 8192 finest cells across -- twice the largest
+        // whole-domain raster -- so a Cartesian view of the same size would
+        // decorate. That is what makes this distinguish the exclusion from a
+        // domain that simply does not clamp.
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                if (!window.displayIsSphericalForTest()) {
+                    qCritical("the fixture did not open as a spherical view, "
+                              "so this test proves nothing");
+                    application.exit(1);
+                    return;
+                }
+                window.selectToolbarFixedScaleForTest(32);
+                const auto label = window.scaleUiLabelForTest();
+                if (label != QStringLiteral("32x")) {
+                    qCritical("a spherical view reported '%s', expected a "
+                              "plain 32x",
+                        qUtf8Printable(label));
+                    application.exit(1);
+                    return;
+                }
+                if (window.effectiveFixedScaleForTest(32) != 0.0) {
+                    qCritical("a spherical view claimed an effective scale");
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--idle-ui-state-smoke-test") {
         // Two controls that are reachable before any dataset is, and used to
         // strand state there.

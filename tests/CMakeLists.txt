@@ -1029,6 +1029,22 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_sequence_scale_report_smoke PROPERTIES TIMEOUT 30)
+    # A spherical view never reports a reduced scale: its raster is warped, so
+    # one pixel does not stand for a fixed number of cells. The fixture is
+    # 8192 finest cells across, so a Cartesian view of it would report one --
+    # which is what makes this distinguish the exclusion from a domain that
+    # simply does not clamp.
+    add_test(
+        NAME qt_spherical_scale_report_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_wide_spherical"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_spherical_scale_report"
+            -DMODE=spherical-scale-report
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_spherical_scale_report_smoke PROPERTIES TIMEOUT 30)
     # Controls reachable before any dataset is: an Animation panel opened from
     # the View menu with nothing loaded must not survive the next open holding
     # no controls, and Reset Zoom with no views must still report Fit.

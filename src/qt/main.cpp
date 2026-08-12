@@ -2400,7 +2400,16 @@ int main(int argc, char* argv[])
                             return;
                         }
                         const auto label = window.scaleUiLabelForTest();
-                        if (!label.contains(QStringLiteral("→"))) {
+                        // →, not the raw character: QStringLiteral converts
+                        // at compile time, and MSVC without a BOM or /utf-8
+                        // (neither the windows preset nor
+                        // amrexplorer_warnings.cmake passes it) reads the source
+                        // as CP1252, so the three UTF-8 bytes would become three
+                        // wrong code points here. The production label survives
+                        // that because tr() takes a narrow literal and decodes
+                        // it with fromUtf8 at run time, so only this comparison
+                        // would break -- on windows-2022 alone.
+                        if (!label.contains(QStringLiteral("\u2192"))) {
                             qCritical("the Scale button reports '%s', which "
                                       "does not state the applied scale",
                                 qUtf8Printable(label));
@@ -2559,7 +2568,7 @@ int main(int argc, char* argv[])
             [&application] { application.exit(3); });
         QTimer::singleShot(0, &window,
             [&window, first] { window.openDataset(first); });
-    } else if (argc == 4
+    } else if (argc == 5
         && std::string_view(argv[1]) == "--animation-dock-role-smoke-test") {
         // The Animation panel hosts two different sets of controls: the 3-D
         // slice sweep and the sequence transport. Hiding it while it holds the
@@ -2572,9 +2581,11 @@ int main(int argc, char* argv[])
         // in a dock nothing would reopen.
         const std::filesystem::path first(argv[2]);
         const std::filesystem::path second(argv[3]);
+        const std::filesystem::path bad(argv[4]);
+        auto phase = std::make_shared<int>(0);
         QObject::connect(&window,
             &amrvis::qt::MainWindow::initialSliceFinished, &application,
-            [&window, &application, first, second](bool success) {
+            [&window, &application, first, second, bad, phase](bool success) {
                 if (!success) {
                     application.exit(2);
                     return;
@@ -2584,10 +2595,39 @@ int main(int argc, char* argv[])
                     application.exit(1);
                     return;
                 }
+                if (*phase == 0) {
+                    // A failed open tears the 3-D dataset down, so the panel
+                    // stops applying and must not stay up empty. The teardown's
+                    // own call runs while the outgoing dataset is still
+                    // installed, so it is not the one that can settle this.
+                    *phase = 1;
+                    QTimer::singleShot(0, &window,
+                        [&window, bad] { window.openDataset(bad, true); });
+                    return;
+                }
                 window.setAnimationDockVisibleForTest(false);
                 QTimer::singleShot(0, &window, [&window, first, second] {
                     window.openSequence({first, second});
                 });
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::datasetOpenFinished,
+            &application, [&window, &application, first, phase](bool success) {
+                if (*phase != 1) {
+                    return;
+                }
+                if (success) {
+                    qCritical("the bad path opened successfully");
+                    application.exit(1);
+                    return;
+                }
+                if (window.animationDockVisibleForTest()) {
+                    qCritical("a failed open left an empty Animation panel up");
+                    application.exit(1);
+                    return;
+                }
+                *phase = 2;
+                QTimer::singleShot(0, &window,
+                    [&window, first] { window.openDataset(first); });
             });
         QObject::connect(&window,
             &amrvis::qt::MainWindow::sequenceFrameDisplayed, &application,

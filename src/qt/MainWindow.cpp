@@ -518,9 +518,9 @@ MainWindow::MainWindow(QWidget* parent)
     // the region is not the whole domain); the adjacent "Scale:" label names
     // the control.
     auto* resetZoomAction = scaleMenu->addAction(tr("Reset Zoom"));
-    // resetViewZoom reports Fit itself, so this path must not report on top of
-    // it: the View menu's Reset Zoom goes straight to resetZoomAllViews, and
-    // the two are meant to be the same action reached two ways.
+    // Straight to resetZoomAllViews, which is where the single Fit report
+    // lives: the View menu's Reset Zoom connects to the same slot, and the two
+    // are meant to be one action reached two ways.
     connect(resetZoomAction, &QAction::triggered, this,
         &MainWindow::resetZoomAllViews);
     constexpr std::array<int, 6> scaleFactors{1, 2, 4, 8, 16, 32};
@@ -978,12 +978,12 @@ void MainWindow::wireView(PlaneViewState& state)
     // Scale button kept reading "32x" over a view that was no longer applying
     // it. This is the last path that moved the view without telling the
     // reporter.
+    // No active-view guard: wheeling a *non-active* 3-D panel demotes only
+    // that panel, which is exactly the disagreement refreshScaleReport reads
+    // every view to find. Guarding on the active view suppressed the Mixed the
+    // signal was added to surface.
     connect(view, &ImageView::zoomChanged, this,
-        [this, &state] {
-            if (m_activeView == &state) {
-                refreshScaleReport();
-            }
-        });
+        [this] { refreshScaleReport(); });
     connect(view, &ImageView::fitRequested, this,
         [this, &state] {
             resetViewZoom(state);
@@ -3343,20 +3343,12 @@ double MainWindow::effectiveFixedScale(int factor) const
     // re-deriving its clamp here: nativeOutputSize is the same
     // finestNativeOutputSize the worker calls, so if the clamp moves or stops
     // being a plain per-axis limit, this report follows instead of drifting.
-    // The axis pair is derived from the same metadata nativeOutputSize used,
-    // not from displayAxes: displayAxes keys on m_dataset and nativeOutputSize
-    // on m_openMetadata, and the two disagree while a dataset is opened but not
-    // yet published, which would pair output[k] with the wrong axis.
+    // slicePlaneAxes is what finestNativeOutputSize itself uses, keyed on the
+    // same metadata -- not displayAxes, which keys on m_dataset and so
+    // disagrees while a dataset is opened but not yet published, pairing
+    // output[k] with the wrong axis.
     const auto output = nativeOutputSize(*m_activeView);
-    std::array<int, 2> axes{0, 1};
-    if (metadata.dimension == 3) {
-        std::size_t next = 0;
-        for (int axis = 0; axis < 3; ++axis) {
-            if (axis != m_activeView->normal) {
-                axes[next++] = axis;
-            }
-        }
-    }
+    const auto axes = slicePlaneAxes(metadata.dimension, m_activeView->normal);
     auto worst = static_cast<double>(factor);
     bool clamped = false;
     for (std::size_t k = 0; k < axes.size(); ++k) {
@@ -4162,7 +4154,9 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
                 == ImageView::TransformMode::FixedScale;
         if (!remoteFixed) {
             state.view->fitToWindow();
-            setScaleUiState(ScaleUiState::Fit);
+            // One panel refitted; the others kept what they had, so the report
+            // is derived rather than asserted (see the fitRequested handler).
+            refreshScaleReport();
         }
         scheduleSliceRequest(state, false);
         return;
@@ -5632,6 +5626,13 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                     setAllViewPlaceholders(
                         tr("Could not open %1")
                             .arg(QString::fromStdString(path.string())));
+                    // The teardown's own call ran while the outgoing dataset
+                    // was still installed, so a 3-D one made the Animation
+                    // panel still "apply" and the guard returned. By now the
+                    // dataset is gone and the panel holds nothing, so this is
+                    // the call that settles it -- without it an empty dock
+                    // stayed up for the rest of the session.
+                    updateAnimationDockVisibility();
                     emit datasetOpenFinished(false);
                 } else {
                     ++m_staleResults;
@@ -6790,6 +6791,12 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     updateParticleOverlay(state);
     // This view's region may have changed; refresh every view's guides.
     updateCrosshairs();
+
+    // setImage demotes Custom to Fit when the coordinator returns Refit -- a
+    // spherical r-theta to R-Z switch does it -- so the raster funnel has to
+    // restate the scale too, not only the sequence path that calls this in a
+    // loop.
+    refreshScaleReport();
 
     m_lastBlocksRead = display.slice.metrics.blocksRead;
     m_lastCacheHits = display.slice.metrics.cacheHits;

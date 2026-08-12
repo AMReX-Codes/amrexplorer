@@ -5449,6 +5449,12 @@ void MainWindow::openDataset(
 
 void MainWindow::resetFabState()
 {
+    // The selector is being torn down entirely, so a rollback recorded against
+    // it describes a dataset that is no longer on screen. Leaving it would both
+    // suppress the recording of a real rollback for the next raw-record click
+    // (the guard there only records when none is pending) and be what a failure
+    // of that click restores -- an ordinal carried over from the previous file.
+    m_fabSelectorRollback.reset();
     m_fabMode = false;
     m_multifabReturn.reset();
     m_fabSourceMetadata.reset();

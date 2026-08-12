@@ -210,6 +210,16 @@ public:
 
     // Test-only: apply a panel-local scale, drive the exact data-region pan
     // handlers used by Shift+left drag, and inspect the resulting transform.
+    // Arrow keys reaching a view are pan steps; arrow keys reaching a toolbar
+    // widget must not be. Counting them tests the routing the unit test cannot
+    // see, because it delivers events to the view directly.
+    [[nodiscard]] std::size_t panStepsForTest() const noexcept
+    {
+        return m_panSteps;
+    }
+    [[nodiscard]] bool activeViewHasFocusForTest() const;
+    void focusLevelSelectorForTest();
+    void clearFocusForTest();
     void setActiveViewScaleForTest(int factor);
     void selectFixedScaleForTest(int factor);
     // The same choice made from the *toolbar* button's own menu rather than
@@ -480,6 +490,10 @@ private:
     void setAllViewPlaceholders(const QString& text);
     [[nodiscard]] std::vector<PlaneViewState*> currentViews();
     void setActiveView(PlaneViewState& state);
+    // Give the active view keyboard focus so the arrow-key pan works on a
+    // freshly opened dataset without a click first -- unless the user is
+    // already typing somewhere, in which case their place is theirs to keep.
+    void focusActiveViewForPanning();
     // Point the color scale and range spin boxes at the active view's display
     // state. Shared by setActiveView and showSlice's active-view branch.
     void syncActiveViewColorControls(const PlaneViewState& state);
@@ -615,6 +629,13 @@ private:
     // agreement.
     enum class ScaleUiState : std::uint8_t { Fit, Fixed, Custom, Mixed };
     void setScaleUiState(ScaleUiState state, int factor = 0);
+    // Re-state the current scale after the active view or its dataset changed;
+    // the clamped label is computed from both.
+    void refreshScaleReport();
+    [[nodiscard]] QString fixedScaleLabel(int factor, double effective) const;
+    [[nodiscard]] QString defaultScaleToolTip() const;
+    ScaleUiState m_scaleState = ScaleUiState::Fit;
+    int m_scaleFactor = 0;
     // View pixels per finest cell that a chosen fixed scale actually achieves,
     // which is the factor itself unless the whole-domain raster hit
     // maxSliceOutputDimension. Past that clamp one raster pixel is more than one
@@ -731,10 +752,16 @@ private:
     QDockWidget* m_diagnosticsDock = nullptr;
     QDockWidget* m_colorBarDock = nullptr;
     QDockWidget* m_animationDock = nullptr;
-    // Whether the Animation panel currently applies at all (a sequence is open
-    // or the data is 3-D), so updateAnimationDockVisibility can act on the
-    // transition rather than reasserting visibility on every sequence frame.
-    bool m_animationDockApplies = false;
+    // *Why* the Animation panel currently applies, so
+    // updateAnimationDockVisibility can act on the transition rather than
+    // reasserting visibility on every sequence frame. Both reasons are kept
+    // separately, not folded into one "applies" flag: the panel hosts two
+    // different sets of controls, so 3-D-only -> sequence is a real transition
+    // even though the panel applied before and after.
+    bool m_animationDockSequence = false;
+    bool m_animationDockThreeD = false;
+    // Arrow-key pan steps actually applied, for the routing regression.
+    std::size_t m_panSteps = 0;
     FabSelectorDock* m_fabSelectorDock = nullptr;
     QToolBar* m_sliceToolbar = nullptr;
     QToolBar* m_rangeToolbar = nullptr;

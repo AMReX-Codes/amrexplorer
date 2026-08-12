@@ -45,6 +45,15 @@ void SequenceController::open(
 {
     m_frames = std::move(frames);
     m_loader = std::move(loader);
+    // A fresh sequence has nothing on screen yet. Without this, opening a
+    // second sequence while frame 0 of the first is displayed would be
+    // suppressed by goToFrame as a request for the frame already shown, and
+    // the new sequence would never load its first frame. Both call sites go
+    // through the host's prepareSequence today, which closes first; open() is
+    // public, so it states its own precondition.
+    m_index = -1;
+    m_displayedIndex = -1;
+    m_inFlight = false;
     goToFrame(0);
 }
 

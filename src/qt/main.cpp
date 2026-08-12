@@ -2461,6 +2461,168 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, first] { window.openDataset(first); });
     } else if (argc == 4
+        && std::string_view(argv[1]) == "--animation-dock-role-smoke-test") {
+        // The Animation panel hosts two different sets of controls: the 3-D
+        // slice sweep and the sequence transport. Hiding it while it holds the
+        // sweep controls is not a standing refusal of the transport.
+        //
+        // Open a 3-D plotfile (the panel applies, and is shown), hide it, then
+        // open a plotfile sequence. Testing one "applies" flag made that a
+        // true -> true change, so neither the close nor the first frame was a
+        // transition and the sequence arrived with its slider and play button
+        // in a dock nothing would reopen.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, first, second](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                if (!window.animationDockVisibleForTest()) {
+                    qCritical("a 3-D dataset left the Animation panel hidden");
+                    application.exit(1);
+                    return;
+                }
+                window.setAnimationDockVisibleForTest(false);
+                QTimer::singleShot(0, &window, [&window, first, second] {
+                    window.openSequence({first, second});
+                });
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed, &application,
+            [&window, &application](int) {
+                if (!window.animationDockVisibleForTest()) {
+                    qCritical("a sequence opened with its transport controls "
+                              "in a hidden Animation panel");
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed, &application,
+            [&application] { application.exit(2); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, first] { window.openDataset(first); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--arrow-key-routing-smoke-test") {
+        // The arrow keys pan the focused image view and nothing else. They
+        // used to be window-context QShortcuts, which took Up/Down from every
+        // toolbar spin box and combo -- Qt line edits claim Left/Right through
+        // ShortcutOverride but not Up/Down, and non-editable combos claim no
+        // arrows at all -- so a keyboard user stepping the level or a slice
+        // position panned the image instead.
+        //
+        // Only a window-level test sees this. The ImageView unit test sends
+        // its events to the view directly, which is the one delivery that
+        // cannot tell a focused view from an unfocused one. Here the events go
+        // to whatever holds focus, the way Qt delivers real key presses, so
+        // the routing is the thing under test.
+        const std::filesystem::path path(argv[2]);
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, phase, path](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                const auto press = [&application](::Qt::Key key) {
+                    auto* const target = QApplication::focusWidget();
+                    if (target == nullptr) {
+                        qCritical("no widget held focus");
+                        application.exit(1);
+                        return false;
+                    }
+                    QKeyEvent event(QEvent::KeyPress, key, ::Qt::NoModifier);
+                    QApplication::sendEvent(target, &event);
+                    return true;
+                };
+                const auto reopen = [&window, path] {
+                    QTimer::singleShot(0, &window,
+                        [&window, path] { window.openDataset(path); });
+                };
+                if (*phase == 0) {
+                    *phase = 1;
+                    // Scrollable, so a pan step has somewhere to go.
+                    window.selectToolbarFixedScaleForTest(8);
+                    // Precondition, not the property: a freshly shown window
+                    // gives the view focus on its own. Phase 1 is where the
+                    // open path's own focus handling is put to the question.
+                    if (!window.activeViewHasFocusForTest()) {
+                        qCritical("the view did not start focused");
+                        application.exit(1);
+                        return;
+                    }
+                    if (!press(::Qt::Key_Left) || !press(::Qt::Key_Up)) {
+                        return;
+                    }
+                    if (window.panStepsForTest() != 2) {
+                        qCritical("arrow keys on the focused view produced %zu "
+                                  "pan steps, expected 2",
+                            window.panStepsForTest());
+                        application.exit(1);
+                        return;
+                    }
+                    // The level combo. Up/Down belong to it -- this is the
+                    // binding that used to be stolen -- and must not reach the
+                    // view at all.
+                    window.focusLevelSelectorForTest();
+                    if (window.activeViewHasFocusForTest()) {
+                        qCritical("the level selector did not take focus");
+                        application.exit(1);
+                        return;
+                    }
+                    if (!press(::Qt::Key_Up) || !press(::Qt::Key_Down)
+                        || !press(::Qt::Key_Left) || !press(::Qt::Key_Right)) {
+                        return;
+                    }
+                    if (window.panStepsForTest() != 2) {
+                        qCritical("an arrow key in the level selector panned "
+                                  "the image (%zu pan steps)",
+                            window.panStepsForTest());
+                        application.exit(1);
+                        return;
+                    }
+                    // Focus is nowhere in particular, the way it is when a file
+                    // dialog closes. The open should claim it for the view, so
+                    // the keys work without a click first.
+                    window.clearFocusForTest();
+                    reopen();
+                    return;
+                }
+                if (*phase == 1) {
+                    *phase = 2;
+                    if (!window.activeViewHasFocusForTest()) {
+                        qCritical("an open left the view unfocused, so the "
+                                  "arrow keys need a click first");
+                        application.exit(1);
+                        return;
+                    }
+                    // ...but an open must not take focus away from a control
+                    // the user is working in. This arrives from a watcher
+                    // completion, which on a slow open lands long after the
+                    // dialog closed and they moved on.
+                    window.focusLevelSelectorForTest();
+                    reopen();
+                    return;
+                }
+                if (window.activeViewHasFocusForTest()) {
+                    qCritical("an open stole focus from the level selector");
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 4
         && std::string_view(argv[1])
             == "--sequence-transform-preserve-smoke-test") {
         const std::filesystem::path first(argv[2]);

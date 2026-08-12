@@ -98,9 +98,17 @@ void fullyVisibleSceneIgnoresPan()
 // be window-wide QShortcuts, which took Up/Down from every spin box and combo
 // in the toolbars -- Qt line edits claim Left/Right through ShortcutOverride
 // but not Up/Down, and non-editable combos claim no arrows at all -- so a
-// keyboard user stepping the Z position panned the image instead. An unfocused
-// or image-less view must stay silent, and a modified arrow belongs to whoever
-// else wants it.
+// keyboard user stepping the Z position panned the image instead. Handling the
+// keys in the view means only the focused widget receives them.
+//
+// What this covers is the handler's own gates: an image-less view stays
+// silent, and a modified arrow belongs to whoever else wants it. It does not
+// cover the routing, and cannot: sendEvent delivers straight to the view, so
+// the setFocus below only makes the widget a plausible recipient rather than
+// proving anything about focus. The routing is Qt's, not ours -- keyPressEvent
+// has no focus test to get wrong -- and the window-level consequence is
+// covered end to end by qt_arrow_key_routing_smoke, which sends its keys to
+// whatever holds focus instead.
 void arrowKeysRequestPanOnlyWhenFocusedWithAnImage()
 {
     amrvis::qt::ImageView view;

@@ -1010,6 +1010,34 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_scale_state_smoke PROPERTIES TIMEOUT 30)
+    # Hiding the Animation panel while it holds the 3-D sweep controls must not
+    # keep it hidden when a sequence arrives and it holds the transport.
+    add_test(
+        NAME qt_animation_dock_role_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_animation_dock_role"
+            -DMODE=animation-dock-role
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_animation_dock_role_smoke PROPERTIES TIMEOUT 30)
+    # The arrow keys must pan the focused view and must not be taken from a
+    # toolbar widget, which is what the window-context QShortcuts used to do.
+    # The ImageView unit test cannot see this: it delivers events to the view
+    # itself, bypassing the focus routing that is the whole point.
+    add_test(
+        NAME qt_arrow_key_routing_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_arrow_key_routing"
+            -DMODE=arrow-key-routing
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_arrow_key_routing_smoke PROPERTIES TIMEOUT 30)
     # Regression for fixed-scale-clamped-native-raster: plotfile_2d_wide is
     # 8192 finest cells across, twice the largest whole-domain raster, so a
     # local 32x really applies 16x. The UI must say so, and the number it says

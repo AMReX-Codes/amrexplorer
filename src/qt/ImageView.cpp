@@ -12,6 +12,7 @@
 #include <QPainter>
 #include <QResizeEvent>
 #include <QScrollBar>
+#include <QKeyEvent>
 #include <QWheelEvent>
 #include <QPen>
 
@@ -121,6 +122,7 @@ void ImageView::setImage(
     m_lineGuide = nullptr;
     m_lineDragButton = Qt::NoButton;
     m_image = image;
+    m_placeholderText.clear();
     m_logicalSize = logicalSize.isValid() ? logicalSize : image.size();
     m_item = m_scene->addPixmap(QPixmap::fromImage(m_image));
     m_placement = placement;
@@ -506,6 +508,7 @@ void ImageView::setPlaceholder(const QString& text)
     m_image = {};
     m_logicalSize = {};
     m_placement.reset();
+    m_placeholderText = text;
     setBackgroundBrush(palette().window());
     auto* label = m_scene->addText(text);
     label->setDefaultTextColor(palette().windowText().color());
@@ -601,6 +604,7 @@ void ImageView::zoomBy(qreal factor)
     }
     scale(factor, factor);
     m_transformMode = TransformMode::Custom;
+    emit zoomChanged();
 }
 
 void ImageView::zoomToRect(const QRectF& imageRect)
@@ -805,6 +809,43 @@ void ImageView::scrollContentsBy(int dx, int dy)
     if (m_placement.has_value()) {
         emit canvasScrolled();
     }
+}
+
+void ImageView::keyPressEvent(QKeyEvent* event)
+{
+    // Only while this view holds focus and has something to pan. Anything else
+    // -- including an arrow with a modifier, which belongs to whatever else may
+    // want it -- falls through to the base class.
+    //
+    // KeypadModifier is masked out rather than treated as a modifier: macOS
+    // stamps it on the arrow keys, which Qt documents ("the arrow keys are
+    // considered part of the keypad"), so testing against NoModifier alone
+    // would leave arrow panning dead there. The QShortcut binding this
+    // replaced normalized that away for us.
+    const auto modifiers = event->modifiers() & ~Qt::KeypadModifier;
+    if (hasImage() && modifiers == Qt::NoModifier) {
+        switch (event->key()) {
+        case Qt::Key_Left:
+            emit panStepRequested(QPointF(1.0, 0.0));
+            event->accept();
+            return;
+        case Qt::Key_Right:
+            emit panStepRequested(QPointF(-1.0, 0.0));
+            event->accept();
+            return;
+        case Qt::Key_Up:
+            emit panStepRequested(QPointF(0.0, 1.0));
+            event->accept();
+            return;
+        case Qt::Key_Down:
+            emit panStepRequested(QPointF(0.0, -1.0));
+            event->accept();
+            return;
+        default:
+            break;
+        }
+    }
+    QGraphicsView::keyPressEvent(event);
 }
 
 void ImageView::wheelEvent(QWheelEvent* event)

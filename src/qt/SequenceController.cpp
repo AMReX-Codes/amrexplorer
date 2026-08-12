@@ -45,6 +45,19 @@ void SequenceController::open(
 {
     m_frames = std::move(frames);
     m_loader = std::move(loader);
+    // A fresh sequence has nothing on screen and nothing prefetched. Without
+    // the index reset, opening a second sequence while frame 0 of the first is
+    // displayed would be suppressed by goToFrame as a request for the frame
+    // already shown, and the new sequence would never load its first frame.
+    // Without discarding the prefetch, a wrapped sequence that had already
+    // prefetched its own frame 0 would have goToFrame publish *that* --
+    // the previous sequence's dataset -- as the new sequence's first frame.
+    // Both call sites go through the host's prepareSequence today, which
+    // closes first; open() is public, so it states its whole precondition.
+    m_index = -1;
+    m_displayedIndex = -1;
+    m_inFlight = false;
+    discardPrefetch();
     goToFrame(0);
 }
 
@@ -56,6 +69,7 @@ void SequenceController::close()
     m_frames.clear();
     m_loader = {};
     m_index = -1;
+    m_displayedIndex = -1;
     m_inFlight = false;
 }
 
@@ -75,7 +89,15 @@ void SequenceController::goToFrame(int index, bool forceRestart)
     const auto count = static_cast<int>(m_frames.size());
     // Both steps and playback wrap around the ends of the sequence.
     index = ((index % count) + count) % count;
-    if (!forceRestart && m_inFlight && index == m_index) {
+    // Asking for the frame already in flight, or already on screen, is a no-op.
+    // An idle press-and-release of the frame slider used to fall through here
+    // and restart the whole switch: cancel the in-flight work, close the
+    // Dataset and Line Plot windows, and re-open and re-render the same frame --
+    // over the network, for a remote sequence. forceRestart is how a caller
+    // that changed what a frame *means* (a new particle selection) asks for the
+    // reload anyway.
+    if (!forceRestart && index == m_index
+        && (m_inFlight || m_displayedIndex == index)) {
         return;
     }
     // The host cancels the previous frame's in-flight work and closes its
@@ -146,6 +168,7 @@ void SequenceController::startLoad(int index, std::uint64_t generation)
             } catch (const std::exception& error) {
                 if (generation == m_loadGeneration && index == m_index) {
                     m_inFlight = false;
+                    m_displayedIndex = -1;
                     emit frameLoadFailed(exceptionMessage(error));
                 } else {
                     emit staleResultDropped();
@@ -170,10 +193,12 @@ void SequenceController::finishLoad(
         m_hooks.displayFrame(result, defaultPositions);
     } catch (const std::exception& error) {
         m_inFlight = false;
+        m_displayedIndex = -1;
         emit frameLoadFailed(exceptionMessage(error));
         return;
     }
     m_inFlight = false;
+    m_displayedIndex = m_index;
     m_lastFrameSwitchMs = m_frameTimer.elapsed();
     emit frameDisplayed(m_index);
     // Bounded low-priority prefetch of the next frame: queued behind the

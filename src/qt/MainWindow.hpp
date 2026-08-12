@@ -117,6 +117,19 @@ public:
     // dialogs, writing frames and MP4s under path's directory. Test-only entry
     // used by the export-quit smoke test to reach the encoder deterministically.
     void startAnimationExportForTest(const QString& path, bool includeColorBar);
+    // Test-only sequence probes: whether the Animation dock is on screen, and
+    // whether sequence playback is still running. A frame refresh must not
+    // reassert the first, and a failed frame must clear the second.
+    [[nodiscard]] bool animationDockVisibleForTest() const;
+    [[nodiscard]] bool sequencePlayingForTest() const noexcept
+    {
+        return m_playbackMode == PlaybackMode::Sequence;
+    }
+    void setAnimationDockVisibleForTest(bool visible);
+    void toggleSequencePlaybackForTest() { toggleSequencePlayback(); }
+    // The slot an idle frame-slider press-and-release lands in, which must not
+    // restart a frame that is already on screen.
+    void requestSequenceFrameForTest(int index) { goToSequenceFrame(index); }
 
     // Test-only: move each 3-D plane to slicePositions (per axis, so the three
     // panels sample different data with different local ranges), switch to
@@ -151,6 +164,11 @@ public:
     // With Visible mode active and the full-domain range cached, this exercises
     // the reuse path that must re-render the raster to match the color bar.
     void zoomActiveViewForTest();
+
+    // Test-only: the placeholder every panel is showing, or an empty string if
+    // any panel holds an image instead. A failed open must leave a settled
+    // placeholder naming what failed, never the "Loading..." one it replaced.
+    [[nodiscard]] QString viewPlaceholderForTest();
 
     // Test-only: true when the active view's displayed raster is byte-identical
     // to its plane re-rendered against the current display (color-bar) range —
@@ -192,8 +210,65 @@ public:
 
     // Test-only: apply a panel-local scale, drive the exact data-region pan
     // handlers used by Shift+left drag, and inspect the resulting transform.
+    // Counts arrow-key pan *requests* that reached a view, which is what the
+    // routing regression is about -- not pans that moved something, since a
+    // step at the domain edge legitimately moves nothing. The unit test cannot
+    // see routing at all: it delivers events to the view directly.
+    [[nodiscard]] std::size_t panStepRequestsForTest() const noexcept
+    {
+        return m_panStepRequests;
+    }
+    [[nodiscard]] bool activeViewHasFocusForTest() const;
+    void focusLevelSelectorForTest();
+    void clearFocusForTest();
+    // Test-only: the fixture really opened as a spherical view. Without this
+    // the spherical exclusion could be "tested" against a Cartesian view.
+    [[nodiscard]] bool displayIsSphericalForTest() const
+    {
+        return displayIsSpherical();
+    }
+    // Test-only: drive the View > 2-D Spherical > Display group the way the
+    // menu does, so a test can reach the unwarped r-theta and theta-r modes.
+    // Only R-Z warps, and the scale report turns on that distinction.
+    void selectSphericalDisplayForTest(int mode);
+    [[nodiscard]] bool displayIsSphericalWarpForTest() const
+    {
+        return displayIsSphericalWarp();
+    }
+    void resetZoomAllViewsForTest() { resetZoomAllViews(); }
     void setActiveViewScaleForTest(int factor);
     void selectFixedScaleForTest(int factor);
+    // The same choice made from the *toolbar* button's own menu rather than
+    // View > Scale. Both must leave the same state; only the View-menu path was
+    // covered before, which is why the toolbar's one-way sync went unnoticed.
+    void selectToolbarFixedScaleForTest(int factor);
+    // What the Scale button currently reports.
+    [[nodiscard]] QString scaleUiLabelForTest() const;
+    // The View > Scale item currently checked, with its mnemonic stripped, or
+    // an empty string when nothing is. The button label and this can differ in
+    // wording -- a clamped label says "32x->16x" -- but they must never
+    // disagree about which factor is selected.
+    [[nodiscard]] QString scaleMenuCheckedLabelForTest() const;
+    // The magnification the UI claims for this factor (0 when it is literal),
+    // and the finest cell size along the active view's horizontal axis, so a
+    // test can check the claim against the window the view actually shows.
+    [[nodiscard]] double effectiveFixedScaleForTest(int factor) const
+    {
+        return effectiveFixedScale(factor);
+    }
+    [[nodiscard]] double activeViewFinestCellSizeForTest() const;
+    // The dataset's physical domain in the active view's two display axes, so
+    // a test can say where "centred" is.
+    [[nodiscard]] QRectF datasetPhysicalDomainForTest() const;
+    // Test-only: send a real wheel event through the active view's viewport,
+    // exercising the same zoomBy path a user's scroll wheel takes. Positive
+    // notches zoom in.
+    void wheelActiveViewForTest(int notches);
+    // Test-only: true when the active view still hosts a whole-domain virtual
+    // canvas. A wheel zoom leaves the canvas in place and only changes the
+    // scale, so every scene-to-physical reader has to cope with a canvas in
+    // Custom mode.
+    [[nodiscard]] bool activeViewVirtualCanvasActiveForTest() const;
     [[nodiscard]] bool fixedScaleStateMatchesForTest(int factor) const;
     void wheelZoomAndPanActiveViewForTest();
     [[nodiscard]] QRectF activeViewVisibleDataWindowForTest() const;
@@ -423,8 +498,18 @@ private:
 
     // Per-view wiring and display updates.
     void wireView(PlaneViewState& state);
+    // Every view state, whatever the current dimension -- the 2-D view and all
+    // three slice panels. currentViews() answers a narrower question: the views
+    // the *displayed* dataset uses. Teardown and failure states have to reach
+    // all four, since the dimension they were showing is already gone.
+    [[nodiscard]] std::array<PlaneViewState*, 4> allViewStates();
+    void setAllViewPlaceholders(const QString& text);
     [[nodiscard]] std::vector<PlaneViewState*> currentViews();
     void setActiveView(PlaneViewState& state);
+    // Give the active view keyboard focus so the arrow-key pan works on a
+    // freshly opened dataset without a click first -- unless the user is
+    // already typing somewhere, in which case their place is theirs to keep.
+    void focusActiveViewForPanning();
     // Point the color scale and range spin boxes at the active view's display
     // state. Shared by setActiveView and showSlice's active-view branch.
     void syncActiveViewColorControls(const PlaneViewState& state);
@@ -483,7 +568,6 @@ private:
     [[nodiscard]] std::array<double, 2> viewCenterInData(
         const PlaneViewState& state) const;
     void applyPanStep(PlaneViewState& state, const QPointF& direction);
-    void setupPanShortcuts();
     [[nodiscard]] std::optional<RealBox> shiftedPanRegion(
         const PlaneViewState& state, const RealBox& baseRegion,
         int planeWidth, int planeHeight, const QPointF& sceneDelta) const;
@@ -553,6 +637,30 @@ private:
         std::filesystem::path dataRoot = {},
         std::optional<FrameSliceSpec> initialSpec = std::nullopt,
         std::shared_ptr<DatasetSession> preparedSession = {});
+    // The scale the toolbar button and the View > Scale radio group report.
+    // They are one state shown twice, so there is one setter: picking "4x" from
+    // the toolbar used to leave the View menu unchecked, and neither reset when
+    // a new dataset opened fitted, so the toolbar could claim "4x" over a
+    // fitted view. fixedScaleStateMatchesForTest asserts exactly this
+    // agreement.
+    enum class ScaleUiState : std::uint8_t { Fit, Fixed, Custom, Mixed };
+    void setScaleUiState(ScaleUiState state, int factor = 0);
+    // Re-state the current scale after the active view or its dataset changed;
+    // the clamped label is computed from both.
+    void refreshScaleReport();
+    // The radio items' text and every lookup that matches them.
+    [[nodiscard]] QString plainScaleLabel(int factor) const;
+    [[nodiscard]] QString fixedScaleLabel(int factor, double effective) const;
+    [[nodiscard]] QString defaultScaleToolTip() const;
+    // View pixels per finest cell that a chosen fixed scale actually achieves,
+    // which is the factor itself unless the whole-domain raster hit
+    // maxSliceOutputDimension. Past that clamp one raster pixel is more than one
+    // finest cell and the view scales the clamped raster by the factor anyway,
+    // so the same menu item means different magnifications on different
+    // domains -- and something different again remotely, where the fetch is
+    // demand-driven and never clamped. Zero when there is nothing to report.
+    // See agent-notes/issues/fixed-scale-clamped-native-raster.md.
+    [[nodiscard]] double effectiveFixedScale(int factor) const;
     void configureSliceControls();
     // Enable the dataset-dependent field/level/range/menu controls once a
     // dataset (single or sequence frame) is loaded. Shared by
@@ -660,6 +768,16 @@ private:
     QDockWidget* m_diagnosticsDock = nullptr;
     QDockWidget* m_colorBarDock = nullptr;
     QDockWidget* m_animationDock = nullptr;
+    // *Why* the Animation panel currently applies, so
+    // updateAnimationDockVisibility can act on the transition rather than
+    // reasserting visibility on every sequence frame. Both reasons are kept
+    // separately, not folded into one "applies" flag: the panel hosts two
+    // different sets of controls, so 3-D-only -> sequence is a real transition
+    // even though the panel applied before and after.
+    bool m_animationDockSequence = false;
+    bool m_animationDockThreeD = false;
+    // Arrow-key pan requests that reached a view, for the routing regression.
+    std::size_t m_panStepRequests = 0;
     FabSelectorDock* m_fabSelectorDock = nullptr;
     QToolBar* m_sliceToolbar = nullptr;
     QToolBar* m_rangeToolbar = nullptr;

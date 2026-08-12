@@ -34,6 +34,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QWheelEvent>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QColorDialog>
@@ -73,7 +74,6 @@
 #include <QRegularExpressionValidator>
 #include <QScrollBar>
 #include <QSettings>
-#include <QShortcut>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -508,8 +508,7 @@ MainWindow::MainWindow(QWidget* parent)
     // View -> Scale menu name).
     sliceToolbar->addWidget(new QLabel(tr("Scale:"), sliceToolbar));
     m_scaleButton = new QPushButton(tr("Fit"), sliceToolbar);
-    m_scaleButton->setToolTip(
-        tr("Zoom scale and rubber-band synchronization for panels"));
+    m_scaleButton->setToolTip(defaultScaleToolTip());
     m_scaleButton->setFocusPolicy(Qt::NoFocus);
     auto* scaleMenu = new QMenu(m_scaleButton);
     // The clicked item stays "Reset Zoom" (the action verb): it restores the
@@ -519,16 +518,24 @@ MainWindow::MainWindow(QWidget* parent)
     // the region is not the whole domain); the adjacent "Scale:" label names
     // the control.
     auto* resetZoomAction = scaleMenu->addAction(tr("Reset Zoom"));
-    connect(resetZoomAction, &QAction::triggered, this, [this] {
-        m_scaleButton->setText(tr("Fit"));
-        resetZoomAllViews();
-    });
+    // Straight to resetZoomAllViews, which is where the single Fit report
+    // lives: the View menu's Reset Zoom connects to the same slot, and the two
+    // are meant to be one action reached two ways.
+    connect(resetZoomAction, &QAction::triggered, this,
+        &MainWindow::resetZoomAllViews);
     constexpr std::array<int, 6> scaleFactors{1, 2, 4, 8, 16, 32};
     for (const auto factor : scaleFactors) {
-        auto* action = scaleMenu->addAction(tr("%1x").arg(factor));
+        auto* action = scaleMenu->addAction(plainScaleLabel(factor));
         connect(action, &QAction::triggered, this, [this, factor] {
-            m_scaleButton->setText(tr("%1x").arg(factor));
+            // Apply first, report second: the report asks the view whether it
+            // is on a virtual canvas and what region its raster covers, and
+            // neither is settled until applyFixedScale has run. Derived, not
+            // asserted -- applyFixedScale only touches currentViews(), and
+            // setFixedScale early-returns on a view with no image, so before a
+            // dataset (or after a failed open) the factor reaches nothing and
+            // claiming it would put a number on the button no view backed.
             applyFixedScale(factor);
+            refreshScaleReport();
         });
     }
     m_syncRubberBandZoomAction =
@@ -754,9 +761,7 @@ MainWindow::MainWindow(QWidget* parent)
             // opening a fresh dataset does, but keep the view state (field,
             // level, range, log, palette, zoom, slice positions) for the
             // next frame.
-            const std::array<PlaneViewState*, 4> states{&m_view2d,
-                &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
-            for (auto* state : states) {
+            for (auto* state : allViewStates()) {
                 state->stopSource.request_stop();
                 ++state->sliceGeneration;
             }
@@ -811,6 +816,15 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_sequenceController, &SequenceController::frameLoadFailed,
         this, [this](const QString& message) {
             statusBar()->showMessage(tr("Frame load failed"));
+            // Stop playing. Playback wraps, so without this it comes back to
+            // the same unreadable frame -- or the same disconnected server --
+            // every cycle, raising a diagnostic each time. The user is left on
+            // the failed frame and can step or play again once they have dealt
+            // with it. A sweep is left alone; only sequence playback can hit a
+            // frame load.
+            if (m_playbackMode == PlaybackMode::Sequence) {
+                setPlaybackMode(PlaybackMode::None);
+            }
             // During animation export the failure is reported by the export
             // handler; avoid a second dialog.
             const bool wasExporting = m_animationExporter->active();
@@ -908,7 +922,6 @@ MainWindow::MainWindow(QWidget* parent)
     for (auto& state : m_planeViews) {
         wireView(state);
     }
-    setupPanShortcuts();
 
     m_probeLabel = new QLabel(statusBar());
     m_particleProgress = new QProgressBar(statusBar());
@@ -965,8 +978,24 @@ void MainWindow::wireView(PlaneViewState& state)
         [this, &state](int x, int y, Qt::MouseButton button) {
             sliceMoveRequested(state, x, y, button);
         });
+    // A wheel zoom demotes the view to Custom on its own; without this the
+    // Scale button kept reading "32x" over a view that was no longer applying
+    // it. This is the last path that moved the view without telling the
+    // reporter.
+    // No active-view guard: wheeling a *non-active* 3-D panel demotes only
+    // that panel, which is exactly the disagreement refreshScaleReport reads
+    // every view to find. Guarding on the active view suppressed the Mixed the
+    // signal was added to surface.
+    connect(view, &ImageView::zoomChanged, this,
+        [this] { refreshScaleReport(); });
     connect(view, &ImageView::fitRequested, this,
-        [this, &state] { resetViewZoom(state); });
+        [this, &state] {
+            resetViewZoom(state);
+            // Derived, not asserted: this fits *one* panel, so with sync off in
+            // 3-D the others keep whatever they had and the honest report is
+            // Mixed. Hardcoding Fit here claimed all three had been fitted.
+            refreshScaleReport();
+        });
     connect(view, &ImageView::viewportResized, this,
         [this, &state](const QSize&) {
             if (!m_dataset || !std::dynamic_pointer_cast<
@@ -984,6 +1013,31 @@ void MainWindow::wireView(PlaneViewState& state)
         });
     connect(view, &ImageView::canvasScrolled, this,
         [this, &state] { updateRemoteFixedScaleDemand(state); });
+    connect(view, &ImageView::panStepRequested, this,
+        [this, &state](const QPointF& direction) {
+            ++m_panStepRequests;
+            applyPanStep(state, direction);
+        });
+}
+
+std::array<MainWindow::PlaneViewState*, 4> MainWindow::allViewStates()
+{
+    return {&m_view2d, &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+}
+
+void MainWindow::setAllViewPlaceholders(const QString& text)
+{
+    for (auto* state : allViewStates()) {
+        // Never over a panel that has something to show. Both callers are
+        // catch blocks spanning the whole display path, so a throw from the
+        // third panel reaches here with the first two already rendered, and
+        // blanking those would turn a partial failure into a total one --
+        // behind four placeholders, over a live and interactive dataset.
+        if (state->view->hasImage()) {
+            continue;
+        }
+        state->view->setPlaceholder(text);
+    }
 }
 
 std::vector<MainWindow::PlaneViewState*> MainWindow::currentViews()
@@ -1009,6 +1063,12 @@ void MainWindow::setActiveView(PlaneViewState& state)
     if (m_viewDimension == 3) {
         state.view->setActiveBorder(true);
     }
+    // The clamped scale report is computed over the active view's axis pair,
+    // so switching 3-D panels can change it: a panel whose axes both fit under
+    // the clamp is not reduced even when the one beside it is. Re-state it
+    // here rather than leaving a number, and a tool tip naming a limit, that
+    // describes the panel the user just left.
+    refreshScaleReport();
     if (state.plane->width <= 0 || state.plane->height <= 0) {
         return;
     }
@@ -1376,15 +1436,13 @@ void MainWindow::createMenus()
     constexpr std::array<int, 6> fixedScales{1, 2, 4, 8, 16, 32};
     for (std::size_t index = 0; index < fixedScales.size(); ++index) {
         const auto factor = fixedScales[index];
-        auto* action = new QAction(tr("%1x").arg(factor), scaleMenu);
+        auto* action = new QAction(plainScaleLabel(factor), scaleMenu);
         action->setCheckable(true);
         action->setActionGroup(m_scaleGroup);
         action->setShortcut(QKeySequence(Qt::Key_1 + static_cast<int>(index)));
         connect(action, &QAction::triggered, this, [this, factor] {
-            if (m_scaleButton != nullptr) {
-                m_scaleButton->setText(tr("%1x").arg(factor));
-            }
-            applyFixedScale(factor);
+            applyFixedScale(factor);   // then report; see the toolbar menu
+            refreshScaleReport();
         });
         scaleMenu->addAction(action);
     }
@@ -1965,6 +2023,35 @@ void MainWindow::zoomActiveViewForTest()
     scheduleSliceRequest(*m_activeView, true);
 }
 
+bool MainWindow::animationDockVisibleForTest() const
+{
+    return m_animationDock != nullptr && m_animationDock->isVisible();
+}
+
+void MainWindow::setAnimationDockVisibleForTest(bool visible)
+{
+    if (m_animationDock != nullptr) {
+        m_animationDock->setVisible(visible);
+    }
+}
+
+QString MainWindow::viewPlaceholderForTest()
+{
+    QString shared;
+    for (const auto* state : allViewStates()) {
+        if (state->view->hasImage()) {
+            return {};
+        }
+        const auto& text = state->view->placeholderText();
+        if (shared.isEmpty()) {
+            shared = text;
+        } else if (shared != text) {
+            return {};
+        }
+    }
+    return shared;
+}
+
 bool MainWindow::activeViewRasterMatchesDisplayRangeForTest()
 {
     if (m_activeView == nullptr) {
@@ -2152,6 +2239,70 @@ std::size_t MainWindow::rubberBandZoomedViewCountForTest()
         }));
 }
 
+void MainWindow::focusActiveViewForPanning()
+{
+    if (m_activeView == nullptr || m_activeView->view == nullptr) {
+        return;
+    }
+    // Both callers run from a watcher's completion, which on a slow open lands
+    // well after the file dialog closed and the user moved on to a toolbar
+    // control. Move focus only when it is on nothing in particular or on
+    // another image view; a control outranks a convenience.
+    //
+    // What this preserves is that focus stays *out of the view*, not that it
+    // stays exactly where the user put it: the teardown disables the field,
+    // level and range widgets, and Qt moves focus off a disabled focus widget
+    // to a tab-chain neighbour before this runs. That neighbour is still a
+    // control, so the guard declines either way -- which is the outcome that
+    // matters, because the alternative is their next arrow key panning the
+    // image.
+    auto* const focused = QApplication::focusWidget();
+    const QWidget* probe = focused;
+    while (probe != nullptr && qobject_cast<const ImageView*>(probe) == nullptr) {
+        probe = probe->parentWidget();
+    }
+    if (focused != nullptr && focused != this && probe == nullptr) {
+        return;
+    }
+    m_activeView->view->setFocus(::Qt::OtherFocusReason);
+}
+
+bool MainWindow::activeViewHasFocusForTest() const
+{
+    return m_activeView != nullptr && m_activeView->view != nullptr
+        && m_activeView->view->hasFocus();
+}
+
+void MainWindow::focusLevelSelectorForTest()
+{
+    if (m_levelSelector != nullptr) {
+        m_levelSelector->setFocus(::Qt::OtherFocusReason);
+    }
+}
+
+void MainWindow::selectSphericalDisplayForTest(int mode)
+{
+    if (m_sphericalDisplayGroup == nullptr) {
+        return;
+    }
+    for (auto* action : m_sphericalDisplayGroup->actions()) {
+        if (action->data().toInt() == mode) {
+            action->trigger();
+            return;
+        }
+    }
+}
+
+void MainWindow::clearFocusForTest()
+{
+    // A freshly shown window gives the image view focus on its own, which
+    // hides whether the open path takes it deliberately. Clearing first is
+    // what makes that observable.
+    if (auto* focused = QApplication::focusWidget()) {
+        focused->clearFocus();
+    }
+}
+
 void MainWindow::setActiveViewScaleForTest(int factor)
 {
     if (m_activeView != nullptr) {
@@ -2164,7 +2315,7 @@ void MainWindow::selectFixedScaleForTest(int factor)
     if (m_scaleGroup == nullptr) {
         return;
     }
-    const auto label = tr("%1x").arg(factor);
+    const auto label = plainScaleLabel(factor);
     for (auto* action : m_scaleGroup->actions()) {
         auto text = action->text();
         text.remove(QLatin1Char('&'));
@@ -2175,13 +2326,98 @@ void MainWindow::selectFixedScaleForTest(int factor)
     }
 }
 
+void MainWindow::selectToolbarFixedScaleForTest(int factor)
+{
+    if (m_scaleButton == nullptr || m_scaleButton->menu() == nullptr) {
+        return;
+    }
+    const auto label = plainScaleLabel(factor);
+    for (auto* action : m_scaleButton->menu()->actions()) {
+        auto text = action->text();
+        text.remove(QLatin1Char('&'));
+        if (text == label) {
+            action->trigger();
+            return;
+        }
+    }
+}
+
+QString MainWindow::scaleUiLabelForTest() const
+{
+    return m_scaleButton == nullptr ? QString() : m_scaleButton->text();
+}
+
+QString MainWindow::scaleMenuCheckedLabelForTest() const
+{
+    if (m_scaleGroup == nullptr) {
+        return {};
+    }
+    auto* checked = m_scaleGroup->checkedAction();
+    if (checked == nullptr) {
+        return {};
+    }
+    auto text = checked->text();
+    text.remove(QLatin1Char('&'));
+    return text;
+}
+
+QRectF MainWindow::datasetPhysicalDomainForTest() const
+{
+    if (!m_openMetadata || m_openMetadata->levels.empty()
+        || m_activeView == nullptr) {
+        return {};
+    }
+    const auto domain = datasetSampleBounds(*m_openMetadata);
+    const auto axes = displayAxes(m_activeView->normal);
+    const auto x = static_cast<std::size_t>(axes[0]);
+    const auto y = static_cast<std::size_t>(axes[1]);
+    return QRectF(QPointF(domain.lower[x], domain.lower[y]),
+        QPointF(domain.upper[x], domain.upper[y]));
+}
+
+double MainWindow::activeViewFinestCellSizeForTest() const
+{
+    if (!m_openMetadata || m_openMetadata->levels.empty()
+        || m_activeView == nullptr) {
+        return 0.0;
+    }
+    const auto& finest = m_openMetadata->levels[static_cast<std::size_t>(
+        std::max(0, m_openMetadata->finestLevel))];
+    return finest.cellSize[static_cast<std::size_t>(
+        displayAxes(m_activeView->normal)[0])];
+}
+
+void MainWindow::wheelActiveViewForTest(int notches)
+{
+    if (m_activeView == nullptr || m_activeView->view->viewport() == nullptr) {
+        return;
+    }
+    auto* viewport = m_activeView->view->viewport();
+    const auto centre = viewport->rect().center();
+    QWheelEvent event(QPointF(centre), viewport->mapToGlobal(QPointF(centre)),
+        QPoint(), QPoint(0, notches * 120), ::Qt::NoButton, ::Qt::NoModifier,
+        ::Qt::NoScrollPhase, false);
+    QApplication::sendEvent(viewport, &event);
+}
+
+bool MainWindow::activeViewVirtualCanvasActiveForTest() const
+{
+    return m_activeView != nullptr
+        && m_activeView->view->virtualCanvasActive();
+}
+
 bool MainWindow::fixedScaleStateMatchesForTest(int factor) const
 {
     if (m_activeView == nullptr || m_scaleGroup == nullptr
         || m_scaleButton == nullptr) {
         return false;
     }
-    const auto expected = tr("%1x").arg(factor);
+    // The radio item always carries the plain factor; the button carries the
+    // clamped label where one applies, so the two are compared against
+    // different strings on purpose.
+    const auto wanted = plainScaleLabel(factor);
+    const auto expectedButton
+        = fixedScaleLabel(factor, effectiveFixedScale(factor));
     auto* checked = m_scaleGroup->checkedAction();
     auto checkedText = checked == nullptr ? QString() : checked->text();
     checkedText.remove(QLatin1Char('&'));
@@ -2189,7 +2425,7 @@ bool MainWindow::fixedScaleStateMatchesForTest(int factor) const
     return view->transformMode() == ImageView::TransformMode::FixedScale
         && view->fixedScaleFactor() == factor
         && std::fabs(view->transform().m11() - factor) <= 1.0e-12
-        && m_scaleButton->text() == expected && checkedText == expected;
+        && m_scaleButton->text() == expectedButton && checkedText == wanted;
 }
 
 void MainWindow::wheelZoomAndPanActiveViewForTest()
@@ -3041,7 +3277,8 @@ void MainWindow::showKeyboardMouseReference()
     add(tr("Left drag"),
         tr("Zoom to the rubber-band subregion; Scale controls panel sync"));
     add(tr("Shift+left drag"), tr("Pan the view"));
-    add(tr("Arrow keys"), tr("Pan the active panel (5% of the view per step)"));
+    add(tr("Arrow keys"),
+        tr("Pan the focused panel (5% of the view per step)"));
     add(tr("Shift+middle click"), tr("Line plot along the horizontal axis"));
     add(tr("Shift+right click"), tr("Line plot along the vertical axis"));
     add(tr("Right drag"), tr("Line plot (drag direction picks orientation)"));
@@ -3088,15 +3325,215 @@ void MainWindow::showAboutDialog()
             .arg(QStringLiteral(AMREXPLORER_VERSION)));
 }
 
+double MainWindow::effectiveFixedScale(int factor) const
+{
+    // A view on the whole-domain virtual canvas fetches its visible window at
+    // finest resolution, so its factor is always literal. That is the test,
+    // not "is this remote": a remote *spherical* view refuses the canvas (see
+    // applyFixedScale) and scales a clamped raster like any local one, so
+    // asking about the session rather than the view reported no clamp exactly
+    // where one was in force.
+    //
+    // The gate is the *warp*, not spherical-ness. Only the R-Z display warps
+    // the raster into a physical wedge; r-theta draws the logical grid as-is
+    // and theta-r transposes it (see SlicePipeline's sphericalDisplay switch),
+    // so in both of those one raster pixel still stands for cells/pixels finest
+    // cells and the clamp still applies. Excluding every spherical view left
+    // the two unwarped modes stating a factor they were not applying -- the
+    // exact over-claim this report exists to prevent. The transpose needs no
+    // special case: the worst axis is a min over both, which a swap does not
+    // change.
+    if (!m_openMetadata || m_openMetadata->levels.empty() || factor <= 0
+        || m_activeView == nullptr || m_activeView->view == nullptr
+        || m_activeView->view->virtualCanvasActive()
+        || displayIsSphericalWarp()) {
+        return 0.0;
+    }
+    const auto& metadata = *m_openMetadata;
+    const auto& finest = metadata.levels[static_cast<std::size_t>(
+        std::max(0, metadata.finestLevel))];
+    // The region the raster actually covers, which is what nativeOutputSize
+    // clamps -- not the whole domain. After a rubber-band zoom the raster
+    // covers the selection, which may well fit under the clamp while the
+    // domain does not, and announcing a clamp then contradicts the guide.
+    const auto domain = m_activeView->visibleRegion.value_or(
+        datasetSampleBounds(metadata));
+    // Ask the pipeline what raster it will actually build rather than
+    // re-deriving its clamp here: nativeOutputSize is the same
+    // finestNativeOutputSize the worker calls, so if the clamp moves or stops
+    // being a plain per-axis limit, this report follows instead of drifting.
+    // slicePlaneAxes is what finestNativeOutputSize itself uses, keyed on the
+    // same metadata -- not displayAxes, which keys on m_dataset and so
+    // disagrees while a dataset is opened but not yet published, pairing
+    // output[k] with the wrong axis.
+    const auto output = nativeOutputSize(*m_activeView);
+    const auto axes = slicePlaneAxes(metadata.dimension, m_activeView->normal);
+    auto worst = static_cast<double>(factor);
+    bool clamped = false;
+    for (std::size_t k = 0; k < axes.size(); ++k) {
+        const auto i = static_cast<std::size_t>(axes[k]);
+        const auto cellSize = finest.cellSize[i];
+        if (!(cellSize > 0.0)) {
+            continue;
+        }
+        const auto cells = std::round(
+            (domain.upper[i] - domain.lower[i]) / cellSize);
+        const auto pixels = static_cast<double>(output[k]);
+        if (!(cells > pixels)) {
+            continue;
+        }
+        clamped = true;
+        // One raster pixel now spans cells/pixels finest cells, and the view
+        // scales raster pixels by the factor.
+        worst = std::min(worst, factor * pixels / cells);
+    }
+    return clamped ? worst : 0.0;
+}
+
+QString MainWindow::plainScaleLabel(int factor) const
+{
+    // The radio items' text, and what every scale lookup matches against. It
+    // had been spelled out at six sites; the one that drifted was the test
+    // helper, which kept this spelling for the *button* after the button
+    // started decorating it.
+    return tr("%1x").arg(factor);
+}
+
+QString MainWindow::fixedScaleLabel(int factor, double effective) const
+{
+    // One definition of the button's fixed-scale text. It used to be spelled
+    // out at each site, and fixedScaleStateMatchesForTest kept the plain
+    // tr("%1x") spelling -- which a clamped label can never equal, so the
+    // helper could only ever fail on exactly the datasets the report exists
+    // for.
+    return effective > 0.0
+        ? tr("%1x→%2x").arg(factor).arg(effective, 0, 'g', 3)
+        : plainScaleLabel(factor);
+}
+
+QString MainWindow::defaultScaleToolTip() const
+{
+    return tr("Zoom scale and rubber-band synchronization for panels");
+}
+
+void MainWindow::refreshScaleReport()
+{
+    // Derive the state from the view rather than replaying the last one set.
+    // Replaying re-asserted a state the view had already left: ImageView
+    // demotes Custom to Fit when the coordinator returns Refit, so rubber-band
+    // a sequence frame, step to a differently shaped one, and the button
+    // claimed "Custom" over a view that had just refitted. Reading the mode
+    // back cannot disagree with it, and it makes the report correct across
+    // every path that changes a transform, including ones that report nothing
+    // themselves.
+    if (m_activeView == nullptr || m_activeView->view == nullptr) {
+        return;
+    }
+    const auto* view = m_activeView->view;
+    const auto mode = view->transformMode();
+    const auto factor = view->fixedScaleFactor();
+    // Panels can disagree -- an unsynchronized rubber-band zoom leaves one in
+    // Custom and the others alone -- and Mixed is what says so. Deriving from
+    // the active view alone would quietly report that one panel's state as if
+    // it held for all three.
+    for (const auto* state : currentViews()) {
+        if (state->view->transformMode() != mode
+            || (mode == ImageView::TransformMode::FixedScale
+                && state->view->fixedScaleFactor() != factor)) {
+            setScaleUiState(ScaleUiState::Mixed);
+            return;
+        }
+    }
+    switch (mode) {
+    case ImageView::TransformMode::Fit:
+        setScaleUiState(ScaleUiState::Fit);
+        return;
+    case ImageView::TransformMode::FixedScale:
+        // The clamped label also depends on the dataset, which is why this
+        // runs on a new frame: a factor picked on one domain can come to
+        // something else on the next.
+        setScaleUiState(ScaleUiState::Fixed, factor);
+        return;
+    case ImageView::TransformMode::Custom:
+        setScaleUiState(ScaleUiState::Custom);
+        return;
+    }
+}
+
+void MainWindow::setScaleUiState(ScaleUiState state, int factor)
+{
+    QString label;
+    // Computed once: it decides both the label and the tool tip below.
+    double effective = 0.0;
+    switch (state) {
+    case ScaleUiState::Fit:
+        label = tr("Fit");
+        break;
+    case ScaleUiState::Fixed:
+        // Say what the factor really came to when the raster clamp reduced it,
+        // so "32x" never silently means two different magnifications.
+        effective = effectiveFixedScale(factor);
+        label = fixedScaleLabel(factor, effective);
+        break;
+    case ScaleUiState::Custom:
+        label = tr("Custom");
+        break;
+    case ScaleUiState::Mixed:
+        label = tr("Mixed");
+        break;
+    }
+    if (m_scaleButton != nullptr) {
+        m_scaleButton->setText(label);
+        if (state == ScaleUiState::Fixed && effective > 0.0) {
+            m_scaleButton->setToolTip(
+                tr("This view spans more than %1 finest cells, which is the "
+                   "largest raster AMReXplorer builds for it, so one raster "
+                   "pixel covers more than one cell: %2x is applied as %3x. "
+                   "Zoom into a subregion to inspect it at %2x.")
+                    .arg(maxSliceOutputDimension)
+                    .arg(factor)
+                    .arg(effective, 0, 'g', 3));
+        } else {
+            m_scaleButton->setToolTip(defaultScaleToolTip());
+        }
+    }
+    if (m_scaleGroup == nullptr) {
+        return;
+    }
+    // Custom and Mixed have no radio item; leave the group with nothing checked.
+    if (state == ScaleUiState::Custom || state == ScaleUiState::Mixed) {
+        if (auto* checked = m_scaleGroup->checkedAction()) {
+            checked->setChecked(false);
+        }
+        return;
+    }
+    if (state == ScaleUiState::Fit) {
+        if (m_resetZoomAction != nullptr) {
+            m_resetZoomAction->setChecked(true);
+        }
+        return;
+    }
+    // Match on the plain factor, never on `label`: a clamped label reads
+    // "32x->16x", which matches no radio item, and the menu would keep the
+    // previous check -- the toolbar/menu split this setter exists to remove.
+    const auto wanted = plainScaleLabel(factor);
+    // setChecked, never trigger: the group's handlers call back into
+    // applyFixedScale, and this is reporting the scale, not choosing one.
+    for (auto* action : m_scaleGroup->actions()) {
+        auto text = action->text();
+        text.remove(QLatin1Char('&'));
+        if (text == wanted) {
+            action->setChecked(true);
+            return;
+        }
+    }
+}
+
 void MainWindow::resetViewZoom(PlaneViewState& state)
 {
     state.visibleRegion.reset();
     state.view->setVirtualCanvas(std::nullopt);
     state.view->fitToWindow();
-    m_resetZoomAction->setChecked(true);
-    if (m_scaleButton != nullptr) {
-        m_scaleButton->setText(tr("Fit"));
-    }
     scheduleSliceRequest(state);
 }
 
@@ -3105,6 +3542,11 @@ void MainWindow::resetZoomAllViews()
     for (auto* state : currentViews()) {
         resetViewZoom(*state);
     }
+    // Reported here, not per view: once per user action, and *unconditionally*.
+    // Leaving it to resetViewZoom meant a Reset Zoom with no dataset open --
+    // reachable by its shortcut -- iterated nothing and reported nothing, so
+    // the button kept a factor no view was applying.
+    setScaleUiState(ScaleUiState::Fit);
 }
 
 QString MainWindow::probeReadout(
@@ -3337,14 +3779,7 @@ void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
             return;
         }
         state.view->zoomToRect(selection);
-        if (m_scaleGroup != nullptr) {
-            if (auto* checked = m_scaleGroup->checkedAction()) {
-                checked->setChecked(false);
-            }
-        }
-        if (m_scaleButton != nullptr) {
-            m_scaleButton->setText(tr("Custom"));
-        }
+        setScaleUiState(ScaleUiState::Custom);
         return;
     }
     const auto clamped = sceneRect.normalized().intersected(
@@ -3369,15 +3804,9 @@ void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
     } else {
         applyRubberBandZoom(state, normalizedRect);
     }
-    if (m_scaleGroup != nullptr) {
-        if (auto* checked = m_scaleGroup->checkedAction()) {
-            checked->setChecked(false);
-        }
-    }
-    if (m_scaleButton != nullptr) {
-        m_scaleButton->setText(
-            views.size() > 1 && !synchronize ? tr("Mixed") : tr("Custom"));
-    }
+    setScaleUiState(views.size() > 1 && !synchronize
+            ? ScaleUiState::Mixed
+            : ScaleUiState::Custom);
 }
 
 void MainWindow::applyRubberBandZoom(
@@ -3523,8 +3952,17 @@ std::array<double, 2> MainWindow::viewCenterInData(
         return {0.5 * (region.lower[xAxis] + region.upper[xAxis]),
             0.5 * (region.lower[yAxis] + region.upper[yAxis])};
     }
+    // The centre of the mapped viewport, not the mapping of the viewport's
+    // centre *point*: QRect::center() is integral and rounds down, so on a
+    // 640-pixel-wide viewport it answers 319 where the geometric centre is 320.
+    // That half-to-one pixel is nothing at native resolution and a lot when one
+    // raster pixel spans many finest cells -- on an 8192-cell domain fitted to
+    // 640 pixels it is about 13 cells, which is what made a remote fixed-scale
+    // switch land off the centre a local one keeps. This is also the reading
+    // preservedDataWindow and updateRemoteFixedScaleDemand already use, so all
+    // three now agree on where the view is looking.
     const auto scene = state.view->mapToScene(
-        state.view->viewport()->rect().center());
+        state.view->viewport()->rect()).boundingRect().center();
     if (state.view->virtualCanvasActive() && m_dataset
         && !m_dataset->metadata().levels.empty()) {
         // Virtual canvas: scene units are finest cells over the whole domain,
@@ -3711,24 +4149,6 @@ void MainWindow::updateRemoteFixedScaleDemand(PlaneViewState& state)
     }
 }
 
-void MainWindow::setupPanShortcuts()
-{
-    const auto bind = [this](Qt::Key key, double x, double y) {
-        auto* shortcut = new QShortcut(QKeySequence(key), this);
-        shortcut->setContext(Qt::WindowShortcut);
-        connect(shortcut, &QShortcut::activated, this, [this, x, y] {
-            if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
-                return;
-            }
-            applyPanStep(*m_activeView, QPointF(x, y));
-        });
-    };
-    bind(Qt::Key_Left, 1.0, 0.0);
-    bind(Qt::Key_Right, -1.0, 0.0);
-    bind(Qt::Key_Up, 0.0, 1.0);
-    bind(Qt::Key_Down, 0.0, -1.0);
-}
-
 void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
 {
     if (!state.view->hasImage() || state.plane->width <= 0 || state.plane->height <= 0) {
@@ -3753,10 +4173,9 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
                 == ImageView::TransformMode::FixedScale;
         if (!remoteFixed) {
             state.view->fitToWindow();
-            m_resetZoomAction->setChecked(true);
-            if (m_scaleButton != nullptr) {
-                m_scaleButton->setText(tr("Fit"));
-            }
+            // One panel refitted; the others kept what they had, so the report
+            // is derived rather than asserted (see the fitRequested handler).
+            refreshScaleReport();
         }
         scheduleSliceRequest(state, false);
         return;
@@ -4760,7 +5179,10 @@ void MainWindow::beginAnimationExport(const QString& path, bool includeColorBar)
     m_exportAnimationAction->setEnabled(false);
     setPlaybackMode(PlaybackMode::None);
 
-    goToSequenceFrame(0);
+    // forceRestart because the export drives itself off sequenceFrameDisplayed,
+    // and an export started while frame 0 is already on screen would otherwise
+    // be suppressed as a no-op and never receive the signal that advances it.
+    goToSequenceFrame(0, true);
 }
 
 std::optional<DatasetRequest> MainWindow::buildDatasetRequest() const
@@ -5025,10 +5447,13 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     setPlaybackMode(PlaybackMode::None);
     closeSequence();
     resetRangeState();
+    // The new dataset arrives fitted -- setPlaceholder below puts every view
+    // back to Fit -- so the scale report has to come back with it. Without
+    // this the toolbar kept claiming the previous dataset's "4x" over a fitted
+    // view of the new one.
+    setScaleUiState(ScaleUiState::Fit);
     // Invalidate every in-flight per-view slice and reset the view states.
-    const std::array<PlaneViewState*, 4> states{
-        &m_view2d, &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
-    for (auto* state : states) {
+    for (auto* state : allViewStates()) {
         state->stopSource.request_stop();
         ++state->sliceGeneration;
         state->view->setPlaceholder(tr("Loading dataset..."));
@@ -5063,6 +5488,15 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     }
     m_activeView = nullptr;
     m_dataset.reset();
+    // The dock's edge trigger is per dataset, not per session: an open is a new
+    // context, so the next update re-asserts it. Without this the flags could
+    // hold (false, true) straight across a 3-D -> 3-D open -- closeSequence
+    // above runs while the outgoing dataset is still installed, so the !applies
+    // branch that clears them never runs -- and a dock hidden under the old
+    // dataset stayed hidden under the new one, while the same hide followed by
+    // a 2-D dataset reopened it. Same user action, opposite result.
+    m_animationDockSequence = false;
+    m_animationDockThreeD = false;
     // Line plot curves are snapshots of this dataset; drop the window.
     auto* linePlotWindow = m_linePlotWindow;
     m_linePlotWindow = nullptr;
@@ -5212,6 +5646,21 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                         reportBackgroundError(tr("Cannot open dataset: %1")
                                 .arg(exceptionMessage(error)));
                     }
+                    // The prior dataset was torn down before this attempt even
+                    // began, so leaving "Loading dataset..." up would claim a
+                    // load is still coming. Name what failed instead; the
+                    // controls are already disabled from the teardown, so this
+                    // is the whole of the settled failure state.
+                    setAllViewPlaceholders(
+                        tr("Could not open %1")
+                            .arg(QString::fromStdString(path.string())));
+                    // The teardown's own call ran while the outgoing dataset
+                    // was still installed, so a 3-D one made the Animation
+                    // panel still "apply" and the guard returned. By now the
+                    // dataset is gone and the panel holds nothing, so this is
+                    // the call that settles it -- without it an empty dock
+                    // stayed up for the rest of the session.
+                    updateAnimationDockVisibility();
                     emit datasetOpenFinished(false);
                 } else {
                     ++m_staleResults;
@@ -5280,6 +5729,11 @@ void MainWindow::requestInitialSlice(
     // The XY view starts out as the active one in 3-D.
     setActiveView(m_viewDimension == 3
         ? m_planeViews[2] : m_view2d);
+    // ...and takes keyboard focus, so the arrow-key pan works on a freshly
+    // opened dataset rather than only after the view has been clicked. The
+    // other setActiveView callers run mid-session, where focus belongs to
+    // whatever the user is doing; this one and the sequence path are opens.
+    focusActiveViewForPanning();
     // Slice positions start at the domain midpoints unless a reversible FAB
     // transition is restoring the previous MultiFab view.
     const auto dataBounds = datasetSampleBounds(metadata);
@@ -5470,6 +5924,13 @@ void MainWindow::requestInitialSlice(
                 if (generation == m_generation && !cancellation.stop_requested()) {
                     reportBackgroundError(
                         tr("Cannot load slice: %1").arg(exceptionMessage(error)));
+                    // The metadata opened but its first slice did not, so the
+                    // panels are still on the open's placeholder with nothing
+                    // left in flight to replace it. The dataset name is known
+                    // here, so say which one has no displayable slice.
+                    setAllViewPlaceholders(
+                        tr("Could not display %1")
+                            .arg(QString::fromStdString(m_datasetPath.string())));
                     emit initialSliceFinished(false);
                 } else {
                     ++m_staleResults;
@@ -6154,6 +6615,23 @@ std::optional<QRectF> MainWindow::preservedDataWindow(
     if (displayIsSpherical()) {
         return std::nullopt;
     }
+    // A virtual canvas needs no re-frame, and would be mismapped by one. Its
+    // scene is the whole domain in finest cells and is anchored to the domain,
+    // not to the raster: applyPlacement re-positions the incoming raster within
+    // that unchanged scene and deliberately leaves the view where it is, so the
+    // visible window is already preserved. The arithmetic below assumes scene
+    // units are raster pixels of the cached plane, which on a canvas they are
+    // not.
+    //
+    // Its call site tests transformMode() == Custom, which used to be taken as
+    // excluding the canvas, since applyFixedScale installs one in FixedScale
+    // mode. That does not hold: ImageView::zoomBy sets Custom and leaves the
+    // placement alone, so one wheel notch over a remote fixed scale reaches
+    // here with cell-space coordinates. The guard belongs on the canvas itself
+    // rather than on a mode that only usually implies its absence.
+    if (state.view->virtualCanvasActive()) {
+        return std::nullopt;
+    }
     const auto& cached = *state.plane;
     const auto axes = displayAxes(state.normal);
     const auto xAxis = static_cast<std::size_t>(axes[0]);
@@ -6341,6 +6819,12 @@ void MainWindow::showSlice(PlaneViewState& state, const SliceDisplayResult& disp
     updateParticleOverlay(state);
     // This view's region may have changed; refresh every view's guides.
     updateCrosshairs();
+
+    // setImage demotes Custom to Fit when the coordinator returns Refit -- a
+    // spherical r-theta to R-Z switch does it -- so the raster funnel has to
+    // restate the scale too, not only the sequence path that calls this in a
+    // loop.
+    refreshScaleReport();
 
     m_lastBlocksRead = display.slice.metrics.blocksRead;
     m_lastCacheHits = display.slice.metrics.cacheHits;
@@ -6596,8 +7080,8 @@ void MainWindow::openSequence(const std::vector<std::filesystem::path>& frames)
     if (sorted.size() < 2 || !valid) {
         emit sequenceFrameFailed();
         QMessageBox::warning(this, tr("Cannot open sequence"),
-            tr("Select two or more plotfile Header files, each inside its own "
-               "plotfile directory."));
+            tr("Select two or more plotfile directories, each containing a "
+               "Header."));
         return;
     }
 
@@ -6642,7 +7126,11 @@ void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
             [](const auto& path) { return path.empty(); })) {
         emit sequenceFrameFailed();
         QMessageBox::warning(this, tr("Cannot open remote sequence"),
-            tr("Enter two or more server-visible plotfile paths."));
+            tr("Enter two or more plotfile paths as they appear on %1:%2. "
+               "Remote frames are named by their path on the server, not "
+               "chosen from a local file dialog.")
+                .arg(QString::fromStdString(host))
+                .arg(port));
         return;
     }
 
@@ -6727,7 +7215,38 @@ void MainWindow::updateAnimationDockVisibility()
     const auto sequenceActive = m_sequenceController->hasSequence();
     const auto threeD = m_dataset != nullptr
         && m_dataset->metadata().dimension == 3;
-    m_animationDock->setVisible(sequenceActive || threeD);
+    const auto applies = sequenceActive || threeD;
+    // Only act on a transition. This runs again for every sequence frame, by
+    // way of configureSequenceControls, and forcing the dock visible there
+    // reopened it after the user hid it mid-playback. Whether the panel applies
+    // at all is ours to decide; whether it is shown while it applies is theirs.
+    //
+    // An empty panel is hidden unconditionally, never on a transition. Both
+    // control groups are hidden when neither reason holds, so an edge trigger
+    // parked dead space for the session in the false -> false direction: open
+    // the panel from the View menu with no dataset (or after a failed open),
+    // then open a 2-D plotfile, and nothing moved the flags, so an empty dock
+    // stayed. Deciding whether the panel applies at all is ours.
+    if (!applies) {
+        m_animationDockSequence = false;
+        m_animationDockThreeD = false;
+        m_animationDock->setVisible(false);
+        return;
+    }
+    // While it does apply, only a change in *why* re-asserts it. Testing one
+    // "applies" flag missed the true -> true direction: open a 3-D plotfile,
+    // hide the dock, then open a plotfile sequence, and neither the close nor
+    // the first frame is a transition, so the transport arrived in a dock
+    // nothing would reopen. Hiding the sweep controls is not a standing refusal
+    // of the transport that replaces them -- but it is one of the sweep
+    // controls themselves, which is why this stays an edge trigger.
+    if (sequenceActive == m_animationDockSequence
+        && threeD == m_animationDockThreeD) {
+        return;
+    }
+    m_animationDockSequence = sequenceActive;
+    m_animationDockThreeD = threeD;
+    m_animationDock->setVisible(true);
 }
 
 void MainWindow::stepSequence(int direction)
@@ -6786,6 +7305,10 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     m_cachePinnedBytes = cache.pinnedBytes;
     m_cacheEvictions = cache.evictions;
     validateVectorMode();
+    // Frames need not share a domain, and the clamped scale report is computed
+    // from one. A scale picked on an earlier frame otherwise kept that frame's
+    // number.
+    refreshScaleReport();
     if (result.cacheFallbackToLevel >= 0) {
         statusBar()->showMessage(cacheFallbackMessage(
             *result.dataset, result.cacheFallbackFromLevel,
@@ -6846,10 +7369,15 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
     updateAnimationDockVisibility();
     configureSlicePositionControls();
 
-    // The active view must belong to the new dimension's view set.
+    // The active view must belong to the new dimension's view set. This fires
+    // on the transition into a sequence, not per frame, so it is also where
+    // the sequence takes focus for the arrow-key pan: opening a sequence
+    // bypasses requestInitialSlice entirely, and without this the keys stayed
+    // dead until the user clicked a panel.
     const auto views = currentViews();
     if (std::find(views.begin(), views.end(), m_activeView) == views.end()) {
         setActiveView(isThreeDimensional ? m_planeViews[2] : m_view2d);
+        focusActiveViewForPanning();
     }
 
     enableDatasetControls(metadata);

@@ -19,7 +19,12 @@
 #                 local-remote-fixed-scale-window |
 #                 sequence-density-preserve |
 #                 sequence-equal-size-transform-preserve |
-#                 sequence-geometry-refit
+#                 sequence-geometry-refit | sequence-noop | sequence-failure |
+#                 remote-canvas-wheel | scale-state | effective-scale |
+#                 arrow-key-routing | animation-dock-role | open-failure |
+#                 idle-ui-state | sequence-scale-report |
+#                 spherical-scale-report |
+#                 fixed-scale-centre
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -53,6 +58,23 @@ elseif(MODE STREQUAL "sequence")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
     run_or_die("${AMREXPLORER_QT}" --sequence-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "sequence-noop")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --sequence-noop-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "sequence-failure")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    # Drop the second frame's payloads only: its metadata still reads, so the
+    # sequence opens and frame 0 displays, and the failure lands on the frame
+    # step that playback makes.
+    file(GLOB brokenPayloads "${WORK}/plt00010/Level_*/*_D_*")
+    foreach(payload ${brokenPayloads})
+        file(REMOVE "${payload}")
+    endforeach()
+    run_or_die("${AMREXPLORER_QT}" --sequence-failure-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "sequence-after-fab")
     # Open a raw FAB first, then a plotfile sequence: the sequence must clear
@@ -89,6 +111,53 @@ elseif(MODE STREQUAL "remote-fixed-scale")
 elseif(MODE STREQUAL "remote-fixed-scale-flicker")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --remote-fixed-scale-flicker-smoke-test
+        "${WORK}/plt")
+elseif(MODE STREQUAL "fixed-scale-centre")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --fixed-scale-centre-smoke-test
+        "${WORK}/plt")
+elseif(MODE STREQUAL "effective-scale")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --effective-scale-smoke-test
+        "${WORK}/plt" 32)
+elseif(MODE STREQUAL "spherical-scale-report")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --spherical-scale-report-smoke-test
+        "${WORK}/plt")
+elseif(MODE STREQUAL "idle-ui-state")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --idle-ui-state-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "open-failure")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --open-failure-smoke-test
+        "${WORK}/no_such_plotfile" "${WORK}/plt")
+elseif(MODE STREQUAL "sequence-scale-report")
+    if(NOT DEFINED SECOND_SOURCE)
+        message(FATAL_ERROR
+            "sequence-scale-report requires -DSECOND_SOURCE=...")
+    endif()
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${MATERIALIZER}" "${SECOND_SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SECOND_SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --sequence-scale-report-smoke-test
+        "${WORK}/plt" "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "animation-dock-role")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --animation-dock-role-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010" "${WORK}/no_such_plotfile")
+elseif(MODE STREQUAL "arrow-key-routing")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --arrow-key-routing-smoke-test
+        "${WORK}/plt")
+elseif(MODE STREQUAL "scale-state")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --scale-state-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "remote-canvas-wheel")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --remote-canvas-wheel-smoke-test
         "${WORK}/plt")
 elseif(MODE STREQUAL "local-remote-fixed-scale-window")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")

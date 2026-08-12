@@ -443,6 +443,42 @@ if(TARGET amrexplorer_qt)
     set_tests_properties(qt_remote_fixed_scale_flicker_smoke PROPERTIES
         TIMEOUT 30)
 
+    # Regression for virtual-canvas-survives-wheel-zoom: a wheel notch over a
+    # remote fixed scale switches the transform mode to Custom while leaving the
+    # whole-domain canvas installed, so every scene-to-physical reader has to
+    # cope with that pairing. The view must stay where the wheel put it rather
+    # than jumping to whatever cell-space coordinates read as raster pixels.
+    add_test(
+        NAME qt_remote_canvas_wheel_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_wide"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_canvas_wheel"
+            -DMODE=remote-canvas-wheel
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_remote_canvas_wheel_smoke PROPERTIES TIMEOUT 30)
+
+    # Regression for fixed-scale-switch-lands-off-center-remotely: selecting a
+    # fixed scale keeps looking at the same place. Local does that implicitly
+    # through the view's transformation anchor while remote re-centres on the
+    # centre viewCenterInData reports, so the two agree only if that centre is
+    # the true one. It was a fraction of a raster pixel off, which is thirteen
+    # finest cells on this domain.
+    add_test(
+        NAME qt_remote_fixed_scale_centre_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_wide"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_fixed_scale_centre"
+            -DMODE=fixed-scale-centre
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_remote_fixed_scale_centre_smoke
+        PROPERTIES TIMEOUT 30)
+
     # Local and remote must agree on what a scrolled fixed scale shows.
     # Scrolling is what separates the two coordinate spaces: local scales a
     # whole-domain raster while remote scales a whole-domain virtual canvas of
@@ -657,6 +693,22 @@ if(TARGET amrexplorer_qt)
             "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
     )
     set_tests_properties(qt_metadata_smoke_3d PROPERTIES TIMEOUT 10)
+    # A failed open destroys the previous dataset before it knows whether the
+    # replacement is openable, so it has to leave a placeholder that says so --
+    # and the window must still open a good dataset afterwards. The recovery
+    # leg renders, which is the only way the placeholder is proven cleared, so
+    # it needs a materialized fixture with payloads rather than the source tree.
+    add_test(
+        NAME qt_open_failure_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_open_failure"
+            -DMODE=open-failure
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_open_failure_smoke PROPERTIES TIMEOUT 30)
     # The slice and sequence smoke paths need FAB payloads, so each test
     # materializes a fixture copy first (see qt_smoke_driver.cmake).
     add_test(
@@ -935,6 +987,135 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_sequence_smoke PROPERTIES TIMEOUT 30)
+    # Regression for sequence-ui-annoyances: an idle frame request must not
+    # reload the frame already on screen, and a frame refresh must not reopen
+    # the Animation dock the user hid.
+    add_test(
+        NAME qt_sequence_noop_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_noop"
+            -DMODE=sequence-noop
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_sequence_noop_smoke PROPERTIES TIMEOUT 30)
+    # Regression for low-priority-ui-polish item 3: the toolbar Scale button and
+    # View > Scale are one state, and it resets when a dataset opens fitted.
+    add_test(
+        NAME qt_scale_state_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_scale_state"
+            -DMODE=scale-state
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_scale_state_smoke PROPERTIES TIMEOUT 30)
+    # A fixed scale survives into a sequence, but what it comes to depends on
+    # the frame's domain: 4x picked on a narrow plotfile really applies 2x on a
+    # sequence 8192 finest cells across, and the button must be restated.
+    add_test(
+        NAME qt_sequence_scale_report_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DSECOND_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_wide"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_scale_report"
+            -DMODE=sequence-scale-report
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_sequence_scale_report_smoke PROPERTIES TIMEOUT 30)
+    # A spherical view never reports a reduced scale: its raster is warped, so
+    # one pixel does not stand for a fixed number of cells. The fixture is
+    # 8192 finest cells across, so a Cartesian view of it would report one --
+    # which is what makes this distinguish the exclusion from a domain that
+    # simply does not clamp.
+    add_test(
+        NAME qt_spherical_scale_report_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_wide_spherical"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_spherical_scale_report"
+            -DMODE=spherical-scale-report
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_spherical_scale_report_smoke PROPERTIES TIMEOUT 30)
+    # Controls reachable before any dataset is: an Animation panel opened from
+    # the View menu with nothing loaded must not survive the next open holding
+    # no controls, and Reset Zoom with no views must still report Fit.
+    add_test(
+        NAME qt_idle_ui_state_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_idle_ui_state"
+            -DMODE=idle-ui-state
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_idle_ui_state_smoke PROPERTIES TIMEOUT 30)
+    # Hiding the Animation panel while it holds the 3-D sweep controls must not
+    # keep it hidden when a sequence arrives and it holds the transport.
+    add_test(
+        NAME qt_animation_dock_role_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_animation_dock_role"
+            -DMODE=animation-dock-role
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_animation_dock_role_smoke PROPERTIES TIMEOUT 30)
+    # The arrow keys must pan the focused view and must not be taken from a
+    # toolbar widget, which is what the window-context QShortcuts used to do.
+    # The ImageView unit test cannot see this: it delivers events to the view
+    # itself, bypassing the focus routing that is the whole point.
+    add_test(
+        NAME qt_arrow_key_routing_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_arrow_key_routing"
+            -DMODE=arrow-key-routing
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_arrow_key_routing_smoke PROPERTIES TIMEOUT 30)
+    # Regression for fixed-scale-clamped-native-raster: plotfile_2d_wide is
+    # 8192 finest cells across, twice the largest whole-domain raster, so a
+    # local 32x really applies 16x. The UI must say so, and the number it says
+    # must be the one the view is using.
+    add_test(
+        NAME qt_effective_scale_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_wide"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_effective_scale"
+            -DMODE=effective-scale
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_effective_scale_smoke PROPERTIES TIMEOUT 30)
+    # ...and playback must stop on a frame it cannot read, rather than wrapping
+    # back onto it every cycle.
+    add_test(
+        NAME qt_sequence_failure_stops_playback_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_failure"
+            -DMODE=sequence-failure
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_sequence_failure_stops_playback_smoke
+        PROPERTIES TIMEOUT 30)
     # Regression for open-sequence-stale-fab-state: opening a plotfile sequence
     # after a raw FAB must clear the FAB view state (dock hidden, no "— FAB"
     # title), since openSequence does not go through openDatasetImpl.

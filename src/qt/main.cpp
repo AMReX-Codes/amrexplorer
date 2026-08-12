@@ -862,6 +862,94 @@ int main(int argc, char* argv[])
             });
     } else if (argc == 3
         && std::string_view(argv[1])
+            == "--remote-canvas-wheel-smoke-test") {
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        // Regression for virtual-canvas-survives-wheel-zoom. A wheel notch over
+        // a remote fixed scale leaves the whole-domain virtual canvas installed
+        // while switching the transform mode to Custom, so the next slice
+        // arrival with a changed density or owner reaches preservedDataWindow --
+        // which reads scene units as raster pixels of the cached plane, and on
+        // a canvas they are finest cells over the whole domain. The window it
+        // computed was then fed to zoomToRect. The view must stay where the
+        // wheel put it: still on the canvas, still showing a window inside the
+        // domain, and still centred where it was zoomed about.
+        auto phase = std::make_shared<int>(0);
+        auto before = std::make_shared<QRectF>();
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, phase, before](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application,
+                    [&window, &application, phase, before] {
+                        if (*phase == 0) {
+                            *phase = 1;
+                            if (!window
+                                    .activeViewVirtualCanvasActiveForTest()) {
+                                qCritical("no virtual canvas at fixed scale");
+                                application.exit(1);
+                                return;
+                            }
+                            *before = window
+                                .activeViewVisibleDataWindowForTest();
+                            window.wheelActiveViewForTest(1);
+                            return;
+                        }
+                        if (*phase != 1) {
+                            return;
+                        }
+                        *phase = 2;
+                        const auto after
+                            = window.activeViewVisibleDataWindowForTest();
+                        // The canvas survives the zoom by design: it is what
+                        // lets the demand fetch keep working, and dropping it
+                        // would strand the scroll bars mid-domain.
+                        if (!window.activeViewVirtualCanvasActiveForTest()) {
+                            qCritical("the wheel zoom dropped the canvas");
+                            application.exit(1);
+                            return;
+                        }
+                        // A window with no extent is what the raster-pixel
+                        // reading of cell-space scene coordinates produced.
+                        if (after.width() <= 0.0 || after.height() <= 0.0) {
+                            qCritical("the wheel zoom left a %gx%g window",
+                                after.width(), after.height());
+                            application.exit(1);
+                            return;
+                        }
+                        if (after.width() >= before->width()) {
+                            qCritical("zooming in did not narrow the window");
+                            application.exit(1);
+                            return;
+                        }
+                        // Zoomed about the viewport centre, so the centre is
+                        // what must not move.
+                        const auto drift = std::abs(
+                            after.center().x() - before->center().x());
+                        if (drift > 0.05 * after.width()) {
+                            qCritical("the wheel zoom moved the centre by %g",
+                                drift);
+                            application.exit(1);
+                            return;
+                        }
+                        application.exit(0);
+                    });
+                window.selectFixedScaleForTest(32);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                window.openRemoteDataset(
+                    "127.0.0.1", server->port(), path, server->token());
+            });
+    } else if (argc == 3 && std::string_view(argv[1])
             == "--remote-fixed-scale-flicker-smoke-test") {
         smokeServer = std::make_shared<amrvis::remote::Server>();
         smokeServerThread.emplace(
@@ -1369,6 +1457,74 @@ int main(int argc, char* argv[])
             });
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path, true); });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--open-failure-smoke-test") {
+        // A failed open has already torn the previous dataset down, so it must
+        // leave a placeholder that says so rather than the "Loading dataset..."
+        // one it replaced -- and the window must still be usable afterwards.
+        // Open a bad path, check the settled state, then open a good one.
+        const std::filesystem::path bad(argv[2]);
+        const std::filesystem::path good(argv[3]);
+        auto attemptedGood = std::make_shared<bool>(false);
+        QObject::connect(&window, &amrvis::qt::MainWindow::datasetOpenFinished,
+            &application, [&window, &application, good, attemptedGood](
+                              bool success) {
+                if (*attemptedGood) {
+                    // The recovery open. Opening is not the end of it -- the
+                    // slice has to arrive and clear the placeholder -- so the
+                    // verdict is left to initialSliceFinished below.
+                    if (!success) {
+                        qCritical("the recovery open failed");
+                        application.exit(1);
+                    }
+                    return;
+                }
+                if (success) {
+                    qCritical("the bad path opened successfully");
+                    application.exit(1);
+                    return;
+                }
+                const auto placeholder = window.viewPlaceholderForTest();
+                if (placeholder.isEmpty()
+                    || placeholder.contains(QStringLiteral("Loading"))) {
+                    qCritical("a failed open left the panels at '%s'",
+                        qUtf8Printable(placeholder));
+                    application.exit(1);
+                    return;
+                }
+                *attemptedGood = true;
+                // Rendered, not metadata-only: the placeholder is what a
+                // failed open leaves behind, so only a real slice arriving
+                // proves the recovery cleared it. Both legs used to skip the
+                // render, which left that unproven.
+                QTimer::singleShot(0, &window,
+                    [&window, good] { window.openDataset(good); });
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, attemptedGood](bool success) {
+                if (!*attemptedGood) {
+                    // The failed open's own signal; the placeholder it leaves
+                    // is checked above.
+                    return;
+                }
+                if (!success) {
+                    qCritical("the recovery open did not render");
+                    application.exit(1);
+                    return;
+                }
+                if (!window.viewPlaceholderForTest().isEmpty()) {
+                    qCritical("the recovery open left a placeholder: '%s'",
+                        qUtf8Printable(window.viewPlaceholderForTest()));
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, bad] { window.openDataset(bad, true); });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--missing-range-smoke-test") {
         const std::filesystem::path path(argv[2]);
@@ -1879,6 +2035,109 @@ int main(int argc, char* argv[])
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 4
+        && std::string_view(argv[1]) == "--sequence-noop-smoke-test") {
+        // Two sequence annoyances at once, because both are observed on the
+        // same frame step. On frame 0: hide the Animation dock, then ask for
+        // frame 0 again the way an idle slider press-and-release does. That
+        // must not reload -- a reload would close the inspection windows,
+        // cancel work, and re-render the frame already on screen -- so the
+        // second displayed frame must be frame 1, not another frame 0. And on
+        // reaching frame 1, the dock must still be hidden: a frame refresh has
+        // no business reasserting the user's dock choice.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        auto displays = std::make_shared<std::vector<int>>();
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed, &application,
+            [&window, &application, displays](int index) {
+                displays->push_back(index);
+                if (displays->size() == 1) {
+                    if (index != 0) {
+                        qCritical("sequence started on frame %d", index);
+                        application.exit(1);
+                        return;
+                    }
+                    window.setAnimationDockVisibleForTest(false);
+                    window.requestSequenceFrameForTest(0);
+                    // Do *not* step yet. Stepping immediately bumps the load
+                    // generation and cancels the redundant frame-0 load before
+                    // it can display, so the observed sequence is [0, 1]
+                    // whether or not the request was suppressed -- which is to
+                    // say the assertion below would pass against the bug it
+                    // exists for. Give the reload time to arrive instead: if
+                    // one was started, it displays frame 0 a second time and
+                    // the branch below catches it.
+                    //
+                    // This margin is a timing assumption, and it fails open: a
+                    // machine loaded enough to keep a redundant frame-0 reload
+                    // of a small local fixture from displaying inside 500 ms
+                    // would let this pass without testing anything. It is not
+                    // the only cover. test_sequence_controller pins the same
+                    // property deterministically by counting
+                    // frameSwitchStarted, which is emitted synchronously
+                    // exactly when a switch proceeds; what is left here is the
+                    // end-to-end check that MainWindow's slider path reaches
+                    // that suppression at all.
+                    QTimer::singleShot(500, &window, [&window] {
+                        window.stepSequence(1);
+                    });
+                    return;
+                }
+                if (index != 1 || displays->size() != 2) {
+                    qCritical("a no-op frame request reloaded the frame");
+                    application.exit(1);
+                    return;
+                }
+                if (window.animationDockVisibleForTest()) {
+                    qCritical("a frame refresh reopened the Animation dock");
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--sequence-failure-smoke-test") {
+        // Playback wraps, so a frame that cannot be read comes back around
+        // forever, raising a diagnostic every cycle. Start playing a sequence
+        // whose second frame is unreadable and require playback to have
+        // stopped by the time the failure is reported.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed, &application,
+            [&window](int index) {
+                if (index == 0 && !window.sequencePlayingForTest()) {
+                    window.toggleSequencePlaybackForTest();
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed, &application,
+            [&window, &application] {
+                // Queued: the failure handler stops playback around this
+                // signal, so read the state once that handler has finished.
+                QTimer::singleShot(0, &window, [&window, &application] {
+                    if (window.sequencePlayingForTest()) {
+                        qCritical("playback kept running past a failed frame");
+                        application.exit(1);
+                        return;
+                    }
+                    application.exit(0);
+                });
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window, [&window, first, second] {
+            window.openSequence({first, second});
+        });
+    } else if (argc == 4
         && std::string_view(argv[1]) == "--sequence-smoke-test") {
         // Opens the two-frame sequence, waits for the first frame to display,
         // steps to frame 1 through the same slot the step button uses, and
@@ -2043,6 +2302,624 @@ int main(int argc, char* argv[])
                 window.enableVisibleRasterForTest();
             }, Qt::SingleShotConnection);
         QTimer::singleShot(15000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 3 && std::string_view(argv[1])
+            == "--fixed-scale-centre-smoke-test") {
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        // Regression for fixed-scale-switch-lands-off-center-remotely.
+        // Selecting a fixed scale is supposed to keep looking at the same
+        // place. Local does that implicitly, through the view's own
+        // transformation anchor; remote has to re-centre explicitly, on the
+        // centre viewCenterInData reports. Those two only agree if that centre
+        // is the true one -- and it was a fraction of a raster pixel off, which
+        // is many finest cells on a domain this wide. Open the same dataset
+        // remotely, switch to 1x without touching the view, and require the
+        // resulting window to be centred on the domain, which is where a
+        // fitted view was looking.
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, phase](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application, phase] {
+                        if (*phase != 0) {
+                            return;
+                        }
+                        *phase = 1;
+                        const auto shown
+                            = window.activeViewVisibleDataWindowForTest();
+                        const auto domain
+                            = window.datasetPhysicalDomainForTest();
+                        if (!(shown.width() > 0.0)) {
+                            qCritical("no visible window after the switch");
+                            application.exit(1);
+                            return;
+                        }
+                        const auto drift = std::abs(
+                            shown.center().x() - domain.center().x());
+                        const auto cellSize
+                            = window.activeViewFinestCellSizeForTest();
+                        // One finest cell of slack: the fetch window is
+                        // quantised to whole cells, and nothing more than that
+                        // is explainable.
+                        if (drift > cellSize) {
+                            qCritical("the switch left the view %g off centre "
+                                      "(%g finest cells)",
+                                drift, cellSize > 0.0 ? drift / cellSize : 0.0);
+                            application.exit(1);
+                            return;
+                        }
+                        application.exit(0);
+                    });
+                window.selectFixedScaleForTest(1);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                window.openRemoteDataset(
+                    "127.0.0.1", server->port(), path, server->token());
+            });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--effective-scale-smoke-test") {
+        // A domain wider than maxSliceOutputDimension finest cells cannot have
+        // a whole-domain raster at finest resolution, so a local fixed scale
+        // magnifies it by less than the factor says. The UI has to state what
+        // it actually applied, and the number it states has to be the one the
+        // view is really using -- checked here against the visible window.
+        const std::filesystem::path path(argv[2]);
+        const int factor = std::stoi(argv[3]);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, factor](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                window.selectToolbarFixedScaleForTest(factor);
+                // Measure past the layout pass the new scale's scroll bars
+                // demand: they shrink the viewport, and the window below is
+                // read in viewport pixels.
+                QTimer::singleShot(200, &window,
+                    [&window, &application, factor] {
+                        const auto claimed
+                            = window.effectiveFixedScaleForTest(factor);
+                        if (!(claimed > 0.0)) {
+                            qCritical("no reduced scale reported on a domain "
+                                      "past the raster clamp");
+                            application.exit(1);
+                            return;
+                        }
+                        const auto label = window.scaleUiLabelForTest();
+                        // →, not the raw character: QStringLiteral converts
+                        // at compile time, and MSVC without a BOM or /utf-8
+                        // (neither the windows preset nor
+                        // amrexplorer_warnings.cmake passes it) reads the source
+                        // as CP1252, so the three UTF-8 bytes would become three
+                        // wrong code points here. The production label survives
+                        // that because tr() takes a narrow literal and decodes
+                        // it with fromUtf8 at run time, so only this comparison
+                        // would break -- on windows-2022 alone.
+                        if (!label.contains(QStringLiteral("\u2192"))) {
+                            qCritical("the Scale button reports '%s', which "
+                                      "does not state the applied scale",
+                                qUtf8Printable(label));
+                            application.exit(1);
+                            return;
+                        }
+                        // The decorated label must not cost the menu its
+                        // check: matching the radio on that string finds
+                        // nothing, and the toolbar/menu split reopens on
+                        // exactly the domains this reporting exists for.
+                        const auto checked
+                            = window.scaleMenuCheckedLabelForTest();
+                        if (checked
+                            != QStringLiteral("%1x").arg(factor)) {
+                            qCritical("a clamped toolbar pick left View > "
+                                      "Scale showing '%s'",
+                                qUtf8Printable(checked));
+                            application.exit(1);
+                            return;
+                        }
+                        // What the view really does: viewport pixels per
+                        // finest cell across the window it shows.
+                        const auto window_ = window
+                            .activeViewVisibleDataWindowForTest();
+                        const auto viewport
+                            = window.activeViewViewportSizeForTest();
+                        const auto cellSize
+                            = window.activeViewFinestCellSizeForTest();
+                        if (!(window_.width() > 0.0) || !(cellSize > 0.0)) {
+                            application.exit(1);
+                            return;
+                        }
+                        const auto cells = window_.width() / cellSize;
+                        const auto actual
+                            = static_cast<double>(viewport[0]) / cells;
+                        if (std::abs(actual - claimed) > 0.05 * claimed) {
+                            qCritical("the UI claims %gx but the view applies "
+                                      "%gx", claimed, actual);
+                            application.exit(1);
+                            return;
+                        }
+                        application.exit(0);
+                    });
+            }, ::Qt::SingleShotConnection);
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 4
+        && std::string_view(argv[1]) == "--scale-state-smoke-test") {
+        // The toolbar Scale button and View > Scale are one state shown twice.
+        // Pick 4x from the *toolbar* menu -- the path that used to leave the
+        // View-menu radio unchecked -- and require the full agreement
+        // fixedScaleStateMatchesForTest asserts. Then open a second dataset,
+        // which arrives fitted, and require the report to have come back to
+        // Fit rather than still claiming 4x.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, phase, second](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                if (*phase == 0) {
+                    *phase = 1;
+                    window.selectToolbarFixedScaleForTest(4);
+                    if (!window.fixedScaleStateMatchesForTest(4)) {
+                        qCritical("a toolbar scale pick left the state split");
+                        application.exit(1);
+                        return;
+                    }
+                    QTimer::singleShot(0, &window, [&window, second] {
+                        window.openDataset(second);
+                    });
+                    return;
+                }
+                if (window.scaleUiLabelForTest() != QStringLiteral("Fit")) {
+                    qCritical("a new dataset kept the old scale report '%s'",
+                        qUtf8Printable(window.scaleUiLabelForTest()));
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, first] { window.openDataset(first); });
+    } else if (argc == 5
+        && std::string_view(argv[1]) == "--sequence-scale-report-smoke-test") {
+        // The clamped scale report is computed from the active view's dataset,
+        // and a sequence can carry a different domain than the dataset the
+        // scale was picked on. A fixed scale is a persistent view mode and
+        // survives the raster replacement, so the factor carries over -- but
+        // what it *comes to* does not.
+        //
+        // Pick 4x on a narrow plotfile (literal, no clamp), then open a
+        // sequence 8192 finest cells across, twice the largest whole-domain
+        // raster. The same 4x now applies 2x, and the button has to say so
+        // rather than keep the number it computed for the dataset before.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path frameOne(argv[3]);
+        const std::filesystem::path frameTwo(argv[4]);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, frameOne, frameTwo](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                window.selectToolbarFixedScaleForTest(4);
+                if (window.scaleUiLabelForTest() != QStringLiteral("4x")) {
+                    qCritical("a narrow domain reported '%s', expected a "
+                              "literal 4x",
+                        qUtf8Printable(window.scaleUiLabelForTest()));
+                    application.exit(1);
+                    return;
+                }
+                QTimer::singleShot(0, &window, [&window, frameOne, frameTwo] {
+                    window.openSequence({frameOne, frameTwo});
+                });
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed, &application,
+            [&window, &application](int) {
+                const auto label = window.scaleUiLabelForTest();
+                if (!label.startsWith(QStringLiteral("4x"))) {
+                    qCritical("a sequence frame dropped the 4x scale: '%s'",
+                        qUtf8Printable(label));
+                    application.exit(1);
+                    return;
+                }
+                if (label == QStringLiteral("4x")) {
+                    qCritical("a wider sequence frame kept the previous "
+                              "dataset's literal 4x, applying 2x");
+                    application.exit(1);
+                    return;
+                }
+                // ...and the number it now states must be the one in force.
+                const auto effective = window.effectiveFixedScaleForTest(4);
+                if (std::fabs(effective - 2.0) > 1.0e-9) {
+                    qCritical("reported an effective scale of %f, expected 2",
+                        effective);
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed, &application,
+            [&application] { application.exit(2); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, first] { window.openDataset(first); });
+    } else if (argc == 5
+        && std::string_view(argv[1]) == "--animation-dock-role-smoke-test") {
+        // The Animation panel hosts two different sets of controls: the 3-D
+        // slice sweep and the sequence transport. Hiding it while it holds the
+        // sweep controls is not a standing refusal of the transport.
+        //
+        // Open a 3-D plotfile (the panel applies, and is shown), hide it, then
+        // open a plotfile sequence. Testing one "applies" flag made that a
+        // true -> true change, so neither the close nor the first frame was a
+        // transition and the sequence arrived with its slider and play button
+        // in a dock nothing would reopen.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        const std::filesystem::path bad(argv[4]);
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, first, second, bad, phase](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                if (!window.animationDockVisibleForTest()) {
+                    qCritical("a 3-D dataset left the Animation panel hidden "
+                              "(phase %d)", *phase);
+                    application.exit(1);
+                    return;
+                }
+                if (*phase == 0) {
+                    // A failed open tears the 3-D dataset down, so the panel
+                    // stops applying and must not stay up empty. The teardown's
+                    // own call runs while the outgoing dataset is still
+                    // installed, so it is not the one that can settle this.
+                    *phase = 1;
+                    QTimer::singleShot(0, &window,
+                        [&window, bad] { window.openDataset(bad, true); });
+                    return;
+                }
+                if (*phase == 2) {
+                    // 3-D -> 3-D with the dock hidden. The teardown's
+                    // closeSequence runs while the outgoing dataset is still
+                    // installed, so the !applies branch that clears the flags
+                    // never runs on this path; without an explicit reset the
+                    // hide carried into the new dataset, while the same hide
+                    // followed by a 2-D one reopened it.
+                    *phase = 3;
+                    window.setAnimationDockVisibleForTest(false);
+                    QTimer::singleShot(0, &window,
+                        [&window, first] { window.openDataset(first); });
+                    return;
+                }
+                window.setAnimationDockVisibleForTest(false);
+                QTimer::singleShot(0, &window, [&window, first, second] {
+                    window.openSequence({first, second});
+                });
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::datasetOpenFinished,
+            &application, [&window, &application, first, phase](bool success) {
+                if (*phase != 1) {
+                    return;
+                }
+                if (success) {
+                    qCritical("the bad path opened successfully");
+                    application.exit(1);
+                    return;
+                }
+                if (window.animationDockVisibleForTest()) {
+                    qCritical("a failed open left an empty Animation panel up");
+                    application.exit(1);
+                    return;
+                }
+                *phase = 2;
+                QTimer::singleShot(0, &window,
+                    [&window, first] { window.openDataset(first); });
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed, &application,
+            [&window, &application](int) {
+                if (!window.animationDockVisibleForTest()) {
+                    qCritical("a sequence opened with its transport controls "
+                              "in a hidden Animation panel");
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed, &application,
+            [&application] { application.exit(2); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, first] { window.openDataset(first); });
+    } else if (argc == 3
+        && std::string_view(argv[1])
+            == "--spherical-scale-report-smoke-test") {
+        // A spherical view reports the plain factor, never a reduced one. Its
+        // raster is warped, so one raster pixel does not stand for a fixed
+        // number of finest cells and there is no single magnification to
+        // state; effectiveFixedScale excludes it for the same reason
+        // logicalImageSize does.
+        //
+        // The fixture is 8192 finest cells across -- twice the largest
+        // whole-domain raster -- so a Cartesian view of the same size would
+        // decorate. That is what makes this distinguish the exclusion from a
+        // domain that simply does not clamp.
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                if (!window.displayIsSphericalForTest()) {
+                    qCritical("the fixture did not open as a spherical view, "
+                              "so this test proves nothing");
+                    application.exit(1);
+                    return;
+                }
+                // Pin the mode: choosing a display writes it through
+                // saveSettings(), so it survives into the next run and this
+                // test would otherwise inherit whatever the last one left.
+                window.selectSphericalDisplayForTest(0);
+                if (!window.displayIsSphericalWarpForTest()) {
+                    qCritical("R-Z did not select, so the warp case is untested");
+                    application.exit(1);
+                    return;
+                }
+                window.selectToolbarFixedScaleForTest(32);
+                const auto label = window.scaleUiLabelForTest();
+                if (label != QStringLiteral("32x")) {
+                    qCritical("an R-Z spherical view reported '%s', expected a "
+                              "plain 32x",
+                        qUtf8Printable(label));
+                    application.exit(1);
+                    return;
+                }
+                if (window.effectiveFixedScaleForTest(32) != 0.0) {
+                    qCritical("an R-Z spherical view claimed a scale");
+                    application.exit(1);
+                    return;
+                }
+                // ...but only R-Z warps. r-theta draws the logical grid as-is
+                // and theta-r transposes it, so both are clamped exactly like a
+                // Cartesian raster and must report the reduction. Excluding
+                // every spherical view left these two silently applying 16x
+                // while the button said 32x.
+                for (const auto mode : {1, 2}) {
+                    window.selectSphericalDisplayForTest(mode);
+                    if (window.displayIsSphericalWarpForTest()) {
+                        qCritical("mode %d still reports as warped", mode);
+                        application.exit(1);
+                        return;
+                    }
+                    const auto effective = window.effectiveFixedScaleForTest(32);
+                    if (std::fabs(effective - 16.0) > 1.0e-9) {
+                        qCritical("unwarped spherical mode %d reported an "
+                                  "effective scale of %f, expected 16",
+                            mode, effective);
+                        application.exit(1);
+                        return;
+                    }
+                }
+                window.selectSphericalDisplayForTest(0);
+                application.exit(0);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--idle-ui-state-smoke-test") {
+        // Two controls that are reachable before any dataset is, and used to
+        // strand state there.
+        //
+        // The Animation panel: shown from the View menu with nothing open, it
+        // holds no controls at all, and an edge trigger on "does it apply"
+        // never fired on the following open because the answer stayed false --
+        // so an empty dock stayed parked for the session.
+        //
+        // Reset Zoom: reachable by its shortcut with nothing open, where it
+        // iterates no views. Reporting from inside the per-view reset meant it
+        // reported nothing, and the button kept a factor nothing applied.
+        const std::filesystem::path path(argv[2]);
+        window.setAnimationDockVisibleForTest(true);
+        window.selectFixedScaleForTest(4);
+        // Checked before the reset, which would mask it: applyFixedScale only
+        // touches currentViews(), and setFixedScale early-returns on a view
+        // with no image, so with nothing open the factor reaches no view and
+        // claiming it puts a number on the button nothing backs.
+        if (window.scaleUiLabelForTest() != QStringLiteral("Fit")) {
+            qCritical("picking 4x from the View menu with no dataset left the "
+                      "button at '%s'",
+                qUtf8Printable(window.scaleUiLabelForTest()));
+            return 1;
+        }
+        // The toolbar menu is a separate call site with the same hazard.
+        window.selectToolbarFixedScaleForTest(8);
+        if (window.scaleUiLabelForTest() != QStringLiteral("Fit")) {
+            qCritical("picking 8x from the toolbar with no dataset left the "
+                      "button at '%s'",
+                qUtf8Printable(window.scaleUiLabelForTest()));
+            return 1;
+        }
+        window.resetZoomAllViewsForTest();
+        if (window.scaleUiLabelForTest() != QStringLiteral("Fit")) {
+            qCritical("Reset Zoom with no dataset left the button at '%s'",
+                qUtf8Printable(window.scaleUiLabelForTest()));
+            return 1;
+        }
+        window.setAnimationDockVisibleForTest(true);
+        if (!window.animationDockVisibleForTest()) {
+            qCritical("the Animation panel would not open with no dataset, so "
+                      "this test proves nothing");
+            return 1;
+        }
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                // A 2-D plotfile: no sweep controls, no sequence, so the panel
+                // has nothing to show and must not stay up.
+                if (window.animationDockVisibleForTest()) {
+                    qCritical("an empty Animation panel survived an open");
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--arrow-key-routing-smoke-test") {
+        // The arrow keys pan the focused image view and nothing else. They
+        // used to be window-context QShortcuts, which took Up/Down from every
+        // toolbar spin box and combo -- Qt line edits claim Left/Right through
+        // ShortcutOverride but not Up/Down, and non-editable combos claim no
+        // arrows at all -- so a keyboard user stepping the level or a slice
+        // position panned the image instead.
+        //
+        // Only a window-level test sees this. The ImageView unit test sends
+        // its events to the view directly, which is the one delivery that
+        // cannot tell a focused view from an unfocused one. Here the events go
+        // to whatever holds focus, the way Qt delivers real key presses, so
+        // the routing is the thing under test.
+        const std::filesystem::path path(argv[2]);
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, phase, path](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                const auto press = [&application](::Qt::Key key) {
+                    auto* const target = QApplication::focusWidget();
+                    if (target == nullptr) {
+                        qCritical("no widget held focus");
+                        application.exit(1);
+                        return false;
+                    }
+                    QKeyEvent event(QEvent::KeyPress, key, ::Qt::NoModifier);
+                    QApplication::sendEvent(target, &event);
+                    return true;
+                };
+                const auto reopen = [&window, path] {
+                    QTimer::singleShot(0, &window,
+                        [&window, path] { window.openDataset(path); });
+                };
+                if (*phase == 0) {
+                    *phase = 1;
+                    // Scrollable, so a pan step has somewhere to go.
+                    window.selectToolbarFixedScaleForTest(8);
+                    // Precondition, not the property: a freshly shown window
+                    // gives the view focus on its own. Phase 1 is where the
+                    // open path's own focus handling is put to the question.
+                    if (!window.activeViewHasFocusForTest()) {
+                        qCritical("the view did not start focused");
+                        application.exit(1);
+                        return;
+                    }
+                    if (!press(::Qt::Key_Left) || !press(::Qt::Key_Up)) {
+                        return;
+                    }
+                    if (window.panStepRequestsForTest() != 2) {
+                        qCritical("arrow keys on the focused view produced %zu "
+                                  "pan requests, expected 2",
+                            window.panStepRequestsForTest());
+                        application.exit(1);
+                        return;
+                    }
+                    // The level combo. Up/Down belong to it -- this is the
+                    // binding that used to be stolen -- and must not reach the
+                    // view at all.
+                    window.focusLevelSelectorForTest();
+                    if (window.activeViewHasFocusForTest()) {
+                        qCritical("the level selector did not take focus");
+                        application.exit(1);
+                        return;
+                    }
+                    if (!press(::Qt::Key_Up) || !press(::Qt::Key_Down)
+                        || !press(::Qt::Key_Left) || !press(::Qt::Key_Right)) {
+                        return;
+                    }
+                    if (window.panStepRequestsForTest() != 2) {
+                        qCritical("an arrow key in the level selector reached the "
+                                  "image view (%zu pan requests)",
+                            window.panStepRequestsForTest());
+                        application.exit(1);
+                        return;
+                    }
+                    // Focus is nowhere in particular, the way it is when a file
+                    // dialog closes. The open should claim it for the view, so
+                    // the keys work without a click first.
+                    window.clearFocusForTest();
+                    reopen();
+                    return;
+                }
+                if (*phase == 1) {
+                    *phase = 2;
+                    if (!window.activeViewHasFocusForTest()) {
+                        qCritical("an open left the view unfocused, so the "
+                                  "arrow keys need a click first");
+                        application.exit(1);
+                        return;
+                    }
+                    // ...but an open must not take focus away from a control
+                    // the user is working in. This arrives from a watcher
+                    // completion, which on a slow open lands long after the
+                    // dialog closed and they moved on.
+                    window.focusLevelSelectorForTest();
+                    reopen();
+                    return;
+                }
+                // Not necessarily the level selector by now -- teardown
+                // disables it and Qt moves focus to a neighbouring control --
+                // but it must not have landed in the view.
+                if (window.activeViewHasFocusForTest()) {
+                    qCritical("an open pulled focus into the view while a "
+                              "control had it");
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QTimer::singleShot(20000, &application,
             [&application] { application.exit(3); });
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path); });

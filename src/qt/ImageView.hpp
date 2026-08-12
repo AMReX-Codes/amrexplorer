@@ -136,6 +136,13 @@ public:
     // other's.
     void setCellHighlightPath(const std::optional<QPainterPath>& scenePath);
     void setPlaceholder(const QString& text);
+    // The text a placeholder is currently showing, empty once an image
+    // replaces it. Tests use this to tell a settled failure state from the
+    // "Loading dataset..." one that outlived its load.
+    [[nodiscard]] const QString& placeholderText() const noexcept
+    {
+        return m_placeholderText;
+    }
     [[nodiscard]] bool hasImage() const noexcept;
     // Fit, fixed integer scale, and custom zoom/pan are durable display modes,
     // not incidental properties of the current QTransform.
@@ -206,7 +213,17 @@ signals:
     void linePlotRequested(int imageX, int imageY, Qt::MouseButton button);
     void sliceMoveRequested(int imageX, int imageY, Qt::MouseButton button);
     void fitRequested();
+    // The view zoomed itself, leaving the display mode at Custom. The owner
+    // reports the scale, and a wheel zoom is the one path that changes it
+    // without going through the owner first.
+    void zoomChanged();
     void viewportResized(const QSize& size);
+    // An arrow key pressed while this view has focus, as a unit direction in
+    // pan terms (+x scrolls the data right, +y scrolls it up). Panning is a
+    // view action, so it belongs to the focused view rather than to the window:
+    // a window-wide shortcut takes Up/Down away from every spin box and combo
+    // in the toolbars, which do not claim those keys through ShortcutOverride.
+    void panStepRequested(const QPointF& direction);
 
 protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
@@ -214,6 +231,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void drawForeground(QPainter* painter, const QRectF& rect) override;
     void scrollContentsBy(int dx, int dy) override;
@@ -229,6 +247,7 @@ private:
     QGraphicsScene* m_scene = nullptr;
     QGraphicsPixmapItem* m_item = nullptr;
     QImage m_image;
+    QString m_placeholderText;
     // Raster dimensions at local/native density. Remote Fit rasters may have
     // a different sampled size; fixed scales use this logical size so 1x
     // remains one native output pixel per screen pixel.

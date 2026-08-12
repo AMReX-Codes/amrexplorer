@@ -127,6 +127,11 @@ private:
     FrameLoader m_loader;
     int m_index = -1;
     bool m_inFlight = false;
+    // The frame actually on screen, which is not the same as m_index: a failed
+    // load leaves m_index on the frame that failed while nothing is displayed.
+    // goToFrame suppresses a repeat of what is already shown, and a frame that
+    // failed is not shown, so asking for it again is a retry rather than a no-op.
+    int m_displayedIndex = -1;
     // Invalidates in-flight loads across frame switches and close(); the
     // watcher also re-checks the index so a stale result never displays.
     std::uint64_t m_loadGeneration = 0;

@@ -1010,6 +1010,21 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_scale_state_smoke PROPERTIES TIMEOUT 30)
+    # A fixed scale survives into a sequence, but what it comes to depends on
+    # the frame's domain: 4x picked on a narrow plotfile really applies 2x on a
+    # sequence 8192 finest cells across, and the button must be restated.
+    add_test(
+        NAME qt_sequence_scale_report_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DSECOND_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_wide"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_sequence_scale_report"
+            -DMODE=sequence-scale-report
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_sequence_scale_report_smoke PROPERTIES TIMEOUT 30)
     # Hiding the Animation panel while it holds the 3-D sweep controls must not
     # keep it hidden when a sequence arrives and it holds the transport.
     add_test(

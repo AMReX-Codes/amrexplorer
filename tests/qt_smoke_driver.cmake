@@ -118,6 +118,16 @@ elseif(MODE STREQUAL "effective-scale")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --effective-scale-smoke-test
         "${WORK}/plt" 32)
+elseif(MODE STREQUAL "sequence-scale-report")
+    if(NOT DEFINED SECOND_SOURCE)
+        message(FATAL_ERROR
+            "sequence-scale-report requires -DSECOND_SOURCE=...")
+    endif()
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${MATERIALIZER}" "${SECOND_SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SECOND_SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --sequence-scale-report-smoke-test
+        "${WORK}/plt" "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "animation-dock-role")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")

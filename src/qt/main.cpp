@@ -2460,6 +2460,73 @@ int main(int argc, char* argv[])
             [&application] { application.exit(3); });
         QTimer::singleShot(0, &window,
             [&window, first] { window.openDataset(first); });
+    } else if (argc == 5
+        && std::string_view(argv[1]) == "--sequence-scale-report-smoke-test") {
+        // The clamped scale report is computed from the active view's dataset,
+        // and a sequence can carry a different domain than the dataset the
+        // scale was picked on. A fixed scale is a persistent view mode and
+        // survives the raster replacement, so the factor carries over -- but
+        // what it *comes to* does not.
+        //
+        // Pick 4x on a narrow plotfile (literal, no clamp), then open a
+        // sequence 8192 finest cells across, twice the largest whole-domain
+        // raster. The same 4x now applies 2x, and the button has to say so
+        // rather than keep the number it computed for the dataset before.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path frameOne(argv[3]);
+        const std::filesystem::path frameTwo(argv[4]);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, frameOne, frameTwo](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                window.selectToolbarFixedScaleForTest(4);
+                if (window.scaleUiLabelForTest() != QStringLiteral("4x")) {
+                    qCritical("a narrow domain reported '%s', expected a "
+                              "literal 4x",
+                        qUtf8Printable(window.scaleUiLabelForTest()));
+                    application.exit(1);
+                    return;
+                }
+                QTimer::singleShot(0, &window, [&window, frameOne, frameTwo] {
+                    window.openSequence({frameOne, frameTwo});
+                });
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed, &application,
+            [&window, &application](int) {
+                const auto label = window.scaleUiLabelForTest();
+                if (!label.startsWith(QStringLiteral("4x"))) {
+                    qCritical("a sequence frame dropped the 4x scale: '%s'",
+                        qUtf8Printable(label));
+                    application.exit(1);
+                    return;
+                }
+                if (label == QStringLiteral("4x")) {
+                    qCritical("a wider sequence frame kept the previous "
+                              "dataset's literal 4x, applying 2x");
+                    application.exit(1);
+                    return;
+                }
+                // ...and the number it now states must be the one in force.
+                const auto effective = window.effectiveFixedScaleForTest(4);
+                if (std::fabs(effective - 2.0) > 1.0e-9) {
+                    qCritical("reported an effective scale of %f, expected 2",
+                        effective);
+                    application.exit(1);
+                    return;
+                }
+                application.exit(0);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameFailed, &application,
+            [&application] { application.exit(2); });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window,
+            [&window, first] { window.openDataset(first); });
     } else if (argc == 4
         && std::string_view(argv[1]) == "--animation-dock-role-smoke-test") {
         // The Animation panel hosts two different sets of controls: the 3-D

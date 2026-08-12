@@ -3179,7 +3179,7 @@ void MainWindow::requestParticleReload()
         this, [this, watcher, generation, particleGeneration, cancellation] {
             --m_activeRequests;
             try {
-                auto samples = watcher->result();
+                auto samples = watcher->future().takeResult();
                 if (generation == m_generation
                     && particleGeneration == m_particleGeneration) {
                     m_particleSamples = std::move(samples);
@@ -4884,25 +4884,37 @@ FabSelectorBuild buildFabSelector(
 void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
     std::optional<std::uint64_t> fileOffset, std::filesystem::path dataRoot,
     bool preserveFabSelector, std::optional<FrameSliceSpec> initialSpec,
-    QString failureTitle)
+    QString failureTitle, std::function<void()> restoreOnFailure)
 {
     ++m_activeRequests;
     const auto generation = m_generation;
+    // Two of these can be in flight at once -- clicking a second raw record
+    // while the first is still reading, which is reachable precisely because
+    // the read no longer freezes the GUI. Without a per-request token both
+    // completions match the generation they captured and the *first* to arrive
+    // opens, while the selector already shows the second: oldest-wins, and the
+    // window disagrees with the dock.
+    const auto fabGeneration = ++m_fabOpenGeneration;
     auto* watcher = new QFutureWatcher<PlotfileMetadataResult>(this);
     connect(watcher, &QFutureWatcher<PlotfileMetadataResult>::finished, this,
-        [this, watcher, generation, path, dataRoot = std::move(dataRoot),
-            preserveFabSelector, initialSpec = std::move(initialSpec),
-            failureTitle = std::move(failureTitle)]() mutable {
+        [this, watcher, generation, fabGeneration, path,
+            dataRoot = std::move(dataRoot), preserveFabSelector,
+            initialSpec = std::move(initialSpec),
+            failureTitle = std::move(failureTitle),
+            restoreOnFailure = std::move(restoreOnFailure)]() mutable {
             --m_activeRequests;
             if (m_closing) {
                 watcher->deleteLater();
                 return;
             }
+            // A dataset opened while this read was in flight owns the window
+            // now, and so does a newer FAB read; publishing over either would
+            // be a stale result.
+            const bool current = generation == m_generation
+                && fabGeneration == m_fabOpenGeneration;
             try {
                 auto metadata = watcher->future().takeResult();
-                // A dataset opened while this read was in flight owns the
-                // window now; publishing over it would be a stale result.
-                if (generation == m_generation) {
+                if (current) {
                     openDatasetImpl(path, false, std::move(metadata),
                         std::move(dataRoot), preserveFabSelector,
                         std::move(initialSpec));
@@ -4910,7 +4922,13 @@ void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
                     ++m_staleResults;
                 }
             } catch (const std::exception& error) {
-                if (generation == m_generation) {
+                if (current) {
+                    // The caller may have moved UI state to this FAB before
+                    // the read returned; the open did not happen, so put it
+                    // back before saying so.
+                    if (restoreOnFailure) {
+                        restoreOnFailure();
+                    }
                     QMessageBox::critical(
                         this, failureTitle, exceptionMessage(error));
                 } else {
@@ -4947,14 +4965,30 @@ void MainWindow::viewFab(std::size_t entryIndex)
         PlotfileMetadataResult selected;
         if (entry.rawRecord) {
             // The record's own header has to be read; do it off the GUI thread
-            // and let the completion open it. The selector state below is set
-            // first either way, so the dock reflects the choice immediately.
+            // and let the completion open it. The selector state is moved to
+            // the pending record immediately so the dock reflects the choice
+            // without waiting for the read -- but only a read that succeeds
+            // actually changes what the window displays, so a failure has to
+            // put the previous state back rather than leave the dock claiming
+            // a FAB that is not on screen.
+            const auto previousFabMode = m_fabMode;
+            const auto previousBack = m_fabSelectorDock->backAvailable();
+            const auto previousOrdinal = m_fabSelectorDock->selectedOrdinal();
             m_fabMode = true;
             m_fabSelectorDock->setBackAvailable(m_multifabReturn.has_value());
             m_fabSelectorDock->selectEntry(entry.ordinal);
             openStandaloneFabAsync(m_fabSourcePath, entry.fileOffset,
                 m_fabDataRoot, true, std::move(selectedSpec),
-                tr("Cannot view FAB"));
+                tr("Cannot view FAB"),
+                [this, previousFabMode, previousBack, previousOrdinal] {
+                    m_fabMode = previousFabMode;
+                    m_fabSelectorDock->setBackAvailable(previousBack);
+                    if (previousOrdinal) {
+                        m_fabSelectorDock->selectEntry(*previousOrdinal);
+                    } else {
+                        m_fabSelectorDock->clearSelection();
+                    }
+                });
             return;
         }
         {
@@ -5917,6 +5951,17 @@ void MainWindow::requestInitialSlice(
                         throw std::runtime_error(
                             "initial slice count does not match the view set");
                     }
+                    // Copied out before the loop below moves each display into
+                    // showSlice, which now takes it by value. The remote
+                    // resize check afterwards needs the size each slice was
+                    // *requested* at, and a moved-from display is not the
+                    // place to read it from -- it happens to survive today
+                    // only because SliceRequest holds nothing but scalars.
+                    std::vector<std::array<int, 2>> requestedSizes;
+                    requestedSizes.reserve(result.displays.size());
+                    for (const auto& display : result.displays) {
+                        requestedSizes.push_back(display.request.outputSize);
+                    }
                     for (std::size_t index = 0; index < views.size(); ++index) {
                         if (views[index]->sliceGeneration
                             != viewGenerations[index]) {
@@ -5948,7 +5993,7 @@ void MainWindow::requestInitialSlice(
                         // that result settles, coalesce each changed viewport
                         // into exactly one request using its newest size.
                         for (std::size_t index = 0; index < views.size(); ++index) {
-                            if (result.displays[index].request.outputSize
+                            if (requestedSizes[index]
                                 != sliceOutputSize(*views[index])) {
                                 scheduleSliceRequest(*views[index]);
                             }
@@ -6381,6 +6426,11 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                         DisplayCoordinator::realignArrivalToRange(result,
                             *cachedRange, m_palette, m_viewDimension != 3);
                     }
+                    // showSlice takes the arrival by value; the fallback levels
+                    // are still needed below, so copy them out first rather
+                    // than reading them back off a moved-from result.
+                    const auto fallbackToLevel = result.cacheFallbackToLevel;
+                    const auto fallbackFromLevel = result.cacheFallbackFromLevel;
                     showSlice(state, std::move(result));
                     syncVisibleRanges();
                     // Cache the full-domain range. In 3-D the store defers to
@@ -6404,17 +6454,15 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     // A cache-pressure fallback lowered the composite level;
                     // reflect it in the level combo (no re-slice) and inform the
                     // user, matching the initial-load handling.
-                    if (result.cacheFallbackToLevel >= 0) {
+                    if (fallbackToLevel >= 0) {
                         if (selectCacheFallbackLevel(
-                                m_levelSelector,
-                                result.cacheFallbackToLevel)) {
+                                m_levelSelector, fallbackToLevel)) {
                             configureSlicePositionControls();
                             updateRangeModeAvailability();
                             syncMenuChecks();
                         }
                         statusBar()->showMessage(cacheFallbackMessage(
-                            *dataset, result.cacheFallbackFromLevel,
-                            result.cacheFallbackToLevel));
+                            *dataset, fallbackFromLevel, fallbackToLevel));
                     }
                 } else {
                     ++m_staleResults;
@@ -6953,7 +7001,7 @@ void MainWindow::syncVisibleRanges()
                 watcher->deleteLater();
                 return;
             }
-            auto outcome = watcher->result();
+            auto outcome = watcher->future().takeResult();
             const auto nowMode = static_cast<RangeMode>(
                 m_rangeMode->currentData().toInt());
             const bool current = generation == m_generation

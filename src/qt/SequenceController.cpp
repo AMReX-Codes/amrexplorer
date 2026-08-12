@@ -239,7 +239,11 @@ void SequenceController::startPrefetch(int frameIndex)
             defaultPositions] {
             emit loadActivityChanged(-1);
             try {
-                auto result = watcher->result();
+                // takeResult for the same reason the frame load above uses it:
+                // a prefetched frame carries the same planes, and result()
+                // would copy every one of them on the GUI thread once per
+                // frame of playback.
+                auto result = watcher->future().takeResult();
                 if (generation == m_prefetchGeneration && !m_frames.empty()) {
                     m_prefetched = PrefetchedFrame{frameIndex, specGeneration,
                         defaultPositions, std::move(result)};

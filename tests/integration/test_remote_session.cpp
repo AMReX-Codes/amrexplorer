@@ -314,25 +314,64 @@ int main(int argc, char* argv[])
             const auto secondValue = second.get();
             require(firstValue.has_value() == secondValue.has_value(),
                 "concurrent range resolves disagreed");
-            require(connection->transactionCount() <= before + 2,
-                "concurrent identical range misses burst transactions");
+            // Exactly one, not "at most two": two is what *uncoalesced* misses
+            // cost, so a <= before + 2 bound would pass with the coalescing
+            // deleted and assert nothing at all. One of the two calls leads and
+            // transacts; the other waits and reads the memo.
+            require(connection->transactionCount() == before + 1,
+                "concurrent identical range misses did not coalesce");
         }
 
         // A cancelled resolve records nothing, so the retry after it succeeds.
+        // The key has to be one nothing above resolved, or the "cancelled"
+        // call is answered from the memo and never exercises the path at all.
         {
             auto retried = fileRange;
-            retried.field = amrvis::FieldId{
-                dataset->metadata().fields.size() > 1 ? 1U : 0U};
+            retried.maximumLevel = 0;
+            retried.composition = amrvis::CompositionPolicy::ExactLevel;
+            retried.scope = amrvis::RangeScope::Level;
             amrvis::StopSource cancelled;
             cancelled.request_stop();
+            bool reportedCancelled = false;
             try {
                 static_cast<void>(
                     dataset->requestRange(retried, cancelled.get_token()));
             } catch (const amrvis::ReadCancelled&) {
-                // expected
+                reportedCancelled = true;
             }
+            require(reportedCancelled,
+                "a pre-cancelled range resolve returned a value");
+            const auto afterCancel = connection->transactionCount();
             const auto recovered = dataset->requestRange(retried);
-            static_cast<void>(recovered);
+            require(connection->transactionCount() > afterCancel,
+                "the cancelled resolve left a memo entry behind");
+            const auto afterRetry = connection->transactionCount();
+            const auto again = dataset->requestRange(retried);
+            require(again.has_value() == recovered.has_value()
+                    && (!again
+                        || (again->minimum == recovered->minimum
+                            && again->maximum == recovered->maximum)),
+                "the recovered range differs from the one it memoized");
+            require(connection->transactionCount() == afterRetry,
+                "the recovered range was not memoized");
+        }
+
+        // Cancellation outranks the memo. Before it existed every resolve
+        // reached the transport, which answers an already-cancelled token with
+        // ReadCancelled; callers branch on that to tell abandoned work from an
+        // answer, so a memo hit must not report success for a cancelled call.
+        {
+            amrvis::StopSource cancelled;
+            cancelled.request_stop();
+            bool reportedCancelled = false;
+            try {
+                static_cast<void>(
+                    dataset->requestRange(fileRange, cancelled.get_token()));
+            } catch (const amrvis::ReadCancelled&) {
+                reportedCancelled = true;
+            }
+            require(reportedCancelled,
+                "a memoized range ignored an already-cancelled token");
         }
 
         const amrvis::RangeRequest invalidRange{

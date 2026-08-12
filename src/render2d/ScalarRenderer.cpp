@@ -95,8 +95,23 @@ ImageBuffer renderScalarPlane(
 
     // The span is loop-invariant, but the compiler may not hoist a division:
     // it would have to prove the divisor never changes and that reassociating
-    // into a multiply is exact, and the latter is not true in general.
-    const auto invSpan = 1.0 / (rangeMaximum - rangeMinimum);
+    // into a multiply is exact, and the latter is not true in general. What it
+    // costs is the top of the range: for about one span in seven (e.g. [0, 49])
+    // a value equal to the maximum normalizes to just under 1.0 and truncates
+    // into the second-to-last slot, while the color bar -- which still goes
+    // through Palette::argb -- shows the last. So the endpoints are decided by
+    // comparing against the range itself, which is exact, and only strictly
+    // interior values are normalized at all. Over the interior the two forms
+    // agree; a sweep of random spans found no pixel where they disagree.
+    //
+    // isnormal is belt-and-braces rather than a fix for a reachable defect: a
+    // span small enough to make the reciprocal infinite, or large enough to
+    // make it subnormal, has no float strictly inside it, so every pixel takes
+    // a clipping branch either way. It costs one test outside the loop and
+    // keeps the substitution from silently depending on that.
+    const auto span = rangeMaximum - rangeMinimum;
+    const auto invSpan = 1.0 / span;
+    const bool scaleByReciprocal = std::isnormal(invSpan);
 
     for (std::size_t pixel = 0; pixel < image.rgba.size(); ++pixel) {
         if (plane.valid[pixel] == 0) {
@@ -110,12 +125,14 @@ ImageBuffer renderScalarPlane(
             continue;
         }
         const auto mapped = settings.logarithmic ? std::log(value) : value;
-        const auto normalized = (mapped - rangeMinimum) * invSpan;
-        if (!(normalized > 0.0)) {
+        if (!(mapped > rangeMinimum)) {
             image.rgba[pixel] = slots[0];
-        } else if (!(normalized < 1.0)) {
+        } else if (!(mapped < rangeMaximum)) {
             image.rgba[pixel] = slots[lastSlot];
         } else {
+            const auto normalized = scaleByReciprocal
+                ? (mapped - rangeMinimum) * invSpan
+                : (mapped - rangeMinimum) / span;
             image.rgba[pixel]
                 = slots[static_cast<std::size_t>(normalized * scale)];
         }

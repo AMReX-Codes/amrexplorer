@@ -153,6 +153,13 @@ std::optional<ValueRange> RemoteDatasetSession::requestRange(
 {
     requireOpen();
     validateSessionRangeRequest(m_metadata, request);
+    // Before the memo, every resolve reached Connection::transact, which
+    // answers an already-cancelled token with ReadCancelled. Callers branch on
+    // that to tell abandoned work from work that produced an answer, so a memo
+    // hit must not quietly turn a cancelled resolve into a successful one.
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
+    }
     const auto key = rangeKey(request);
     {
         std::unique_lock lock(m_rangeMutex);

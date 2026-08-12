@@ -29,6 +29,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -671,10 +672,15 @@ private:
     // event loop for as long as the server takes. Every other header read in
     // this window already runs on a worker (see buildFabSelector); these two
     // entry points were the exceptions.
+    //
+    // `restoreOnFailure`, when set, runs if the read fails while this request
+    // is still the current one: callers that move UI state to the pending FAB
+    // before the read returns use it to put that state back.
     void openStandaloneFabAsync(std::filesystem::path path,
         std::optional<std::uint64_t> fileOffset,
         std::filesystem::path dataRoot, bool preserveFabSelector,
-        std::optional<FrameSliceSpec> initialSpec, QString failureTitle);
+        std::optional<FrameSliceSpec> initialSpec, QString failureTitle,
+        std::function<void()> restoreOnFailure = {});
     void configureSliceControls();
     // Enable the dataset-dependent field/level/range/menu controls once a
     // dataset (single or sequence frame) is loaded. Shared by
@@ -892,6 +898,11 @@ private:
     QStringList m_backgroundErrors;
     bool m_controlsReady = false;
     std::uint64_t m_generation = 0;
+    // Newest-wins among overlapping standalone-FAB header reads. m_generation
+    // alone cannot order them: it is bumped by openDatasetImpl, which only runs
+    // once a read has already completed, so two reads in flight together both
+    // still match the generation they captured.
+    std::uint64_t m_fabOpenGeneration = 0;
     std::uint64_t m_activeRequests = 0;
     bool m_closing = false;
     std::uint64_t m_staleResults = 0;

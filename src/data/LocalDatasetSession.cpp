@@ -161,6 +161,14 @@ std::optional<ValueRange> LocalDatasetSession::requestRange(
         // be scanned out of the payload. The result is immutable for this
         // (dataset, field), and the resolver asks for it on every range
         // resolve, so scan once.
+        //
+        // The check precedes the memo for the same reason it precedes the scan:
+        // the block read this used to always perform answered an already-
+        // cancelled token with ReadCancelled, and a memo hit must not turn
+        // abandoned work into a successful resolve.
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         {
             std::scoped_lock lock(m_mutex);
             if (const auto found = m_fabRanges.find(request.field.value);

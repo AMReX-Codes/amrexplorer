@@ -273,13 +273,21 @@ private:
     // Handle::release behind a deallocator. Callers declare `doomed` before
     // they take the lock, so it outlives the lock and the memory is returned
     // after the mutex is free.
+    //
+    // The map entry is retired before `doomed` grows, because push_back
+    // allocates: a throw between erasing the LRU node and erasing the map entry
+    // would leave a live entry holding a freed lruPosition (which the next
+    // touch() splices) and a null value (which the returned Handle
+    // dereferences). Ordered this way the only cost of a failed push_back is
+    // that this one payload is freed under the mutex instead of after it.
     static void eraseEntry(State& state, typename EntryMap::iterator entry,
         std::vector<std::shared_ptr<const Value>>& doomed)
     {
+        auto value = std::move(entry->second.value);
         state.metrics.residentBytes -= entry->second.bytes;
         state.lru.erase(entry->second.lruPosition);
-        doomed.push_back(std::move(entry->second.value));
         state.entries.erase(entry);
+        doomed.push_back(std::move(value));
     }
 
     // Single tail-to-head sweep of the LRU list, evicting unpinned entries

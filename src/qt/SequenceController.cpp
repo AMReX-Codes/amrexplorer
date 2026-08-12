@@ -45,15 +45,19 @@ void SequenceController::open(
 {
     m_frames = std::move(frames);
     m_loader = std::move(loader);
-    // A fresh sequence has nothing on screen yet. Without this, opening a
-    // second sequence while frame 0 of the first is displayed would be
-    // suppressed by goToFrame as a request for the frame already shown, and
-    // the new sequence would never load its first frame. Both call sites go
-    // through the host's prepareSequence today, which closes first; open() is
-    // public, so it states its own precondition.
+    // A fresh sequence has nothing on screen and nothing prefetched. Without
+    // the index reset, opening a second sequence while frame 0 of the first is
+    // displayed would be suppressed by goToFrame as a request for the frame
+    // already shown, and the new sequence would never load its first frame.
+    // Without discarding the prefetch, a wrapped sequence that had already
+    // prefetched its own frame 0 would have goToFrame publish *that* --
+    // the previous sequence's dataset -- as the new sequence's first frame.
+    // Both call sites go through the host's prepareSequence today, which
+    // closes first; open() is public, so it states its whole precondition.
     m_index = -1;
     m_displayedIndex = -1;
     m_inFlight = false;
+    discardPrefetch();
     goToFrame(0);
 }
 

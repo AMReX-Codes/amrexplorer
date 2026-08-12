@@ -2035,6 +2035,17 @@ int main(int argc, char* argv[])
                     // exists for. Give the reload time to arrive instead: if
                     // one was started, it displays frame 0 a second time and
                     // the branch below catches it.
+                    //
+                    // This margin is a timing assumption, and it fails open: a
+                    // machine loaded enough to keep a redundant frame-0 reload
+                    // of a small local fixture from displaying inside 500 ms
+                    // would let this pass without testing anything. It is not
+                    // the only cover. test_sequence_controller pins the same
+                    // property deterministically by counting
+                    // frameSwitchStarted, which is emitted synchronously
+                    // exactly when a switch proceeds; what is left here is the
+                    // end-to-end check that MainWindow's slider path reaches
+                    // that suppression at all.
                     QTimer::singleShot(500, &window, [&window] {
                         window.stepSequence(1);
                     });

@@ -231,9 +231,11 @@ happens the Scale button reports what it actually applied — `32x→16x` on a
 domain 8192 cells across — and its tool tip explains why. Rubber-band zoom is
 unaffected: selecting a subregion re-reads that region at finest resolution.
 Remote datasets are also unaffected, because they fetch only the visible window
-at finest resolution instead of building a whole-domain image. Spherical views
-report nothing either way: their image is warped, so one image pixel does not
-stand for a fixed number of cells and there is no single magnification to state.
+at finest resolution instead of building a whole-domain image. The R-Z spherical
+display reports nothing either way: its image is warped onto a physical wedge,
+so one image pixel does not stand for a fixed number of cells and there is no
+single magnification to state. The r-θ and θ-r displays draw the logical grid,
+so they are clamped and reported exactly like any other view.
 
 The line-plot window can accumulate curves, which is useful when comparing
 variables, levels, or positions. Its horizontal axis uses physical coordinates

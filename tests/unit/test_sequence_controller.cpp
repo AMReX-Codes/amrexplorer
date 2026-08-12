@@ -115,10 +115,15 @@ void idleRequestForTheDisplayedFrameStartsNoSwitch(
             const amrvis::FrameSliceSpec&, amrvis::StopToken) {
             return amrvis::InitialSliceResult{};
         });
+    // Checked here, synchronously, because frameSwitchStarted is emitted from
+    // inside goToFrame before the load is queued -- and because after the
+    // event loop has run the count is pinned by the requires above, so the
+    // same check there could not fail. The opening load is a switch: m_index
+    // starts at -1, and open() resets the displayed index, so neither the
+    // "already in flight" nor the "already on screen" suppression may swallow
+    // it.
+    require(switchesStarted == 1, "opening a sequence must start one switch");
     require(application.exec() == 0, "the redundant-request case did not run");
-    // The opening load is a switch: m_index starts at -1, so suppressing
-    // "the index is already current" must not swallow it.
-    require(switchesStarted >= 1, "opening a sequence must start a switch");
 }
 
 } // namespace

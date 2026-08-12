@@ -529,9 +529,13 @@ MainWindow::MainWindow(QWidget* parent)
         connect(action, &QAction::triggered, this, [this, factor] {
             // Apply first, report second: the report asks the view whether it
             // is on a virtual canvas and what region its raster covers, and
-            // neither is settled until applyFixedScale has run.
+            // neither is settled until applyFixedScale has run. Derived, not
+            // asserted -- applyFixedScale only touches currentViews(), and
+            // setFixedScale early-returns on a view with no image, so before a
+            // dataset (or after a failed open) the factor reaches nothing and
+            // claiming it would put a number on the button no view backed.
             applyFixedScale(factor);
-            setScaleUiState(ScaleUiState::Fixed, factor);
+            refreshScaleReport();
         });
     }
     m_syncRubberBandZoomAction =
@@ -1438,7 +1442,7 @@ void MainWindow::createMenus()
         action->setShortcut(QKeySequence(Qt::Key_1 + static_cast<int>(index)));
         connect(action, &QAction::triggered, this, [this, factor] {
             applyFixedScale(factor);   // then report; see the toolbar menu
-            setScaleUiState(ScaleUiState::Fixed, factor);
+            refreshScaleReport();
         });
         scaleMenu->addAction(action);
     }
@@ -2273,6 +2277,19 @@ void MainWindow::focusLevelSelectorForTest()
 {
     if (m_levelSelector != nullptr) {
         m_levelSelector->setFocus(::Qt::OtherFocusReason);
+    }
+}
+
+void MainWindow::selectSphericalDisplayForTest(int mode)
+{
+    if (m_sphericalDisplayGroup == nullptr) {
+        return;
+    }
+    for (auto* action : m_sphericalDisplayGroup->actions()) {
+        if (action->data().toInt() == mode) {
+            action->trigger();
+            return;
+        }
     }
 }
 
@@ -3317,17 +3334,19 @@ double MainWindow::effectiveFixedScale(int factor) const
     // asking about the session rather than the view reported no clamp exactly
     // where one was in force.
     //
-    // A spherical view is excluded outright, matching logicalImageSize, which
-    // returns the raster's own size there rather than the clamped native one.
-    // The displayed raster is warped, so one raster pixel does not stand for a
-    // fixed number of finest cells and "the factor really applies N" has no
-    // single answer to report. This supersedes an earlier round's finding that
-    // remote spherical should report a clamp: the gate belongs on the warp, not
-    // on the canvas, and the two only looked alike because a spherical view
-    // also refuses the canvas.
+    // The gate is the *warp*, not spherical-ness. Only the R-Z display warps
+    // the raster into a physical wedge; r-theta draws the logical grid as-is
+    // and theta-r transposes it (see SlicePipeline's sphericalDisplay switch),
+    // so in both of those one raster pixel still stands for cells/pixels finest
+    // cells and the clamp still applies. Excluding every spherical view left
+    // the two unwarped modes stating a factor they were not applying -- the
+    // exact over-claim this report exists to prevent. The transpose needs no
+    // special case: the worst axis is a min over both, which a swap does not
+    // change.
     if (!m_openMetadata || m_openMetadata->levels.empty() || factor <= 0
         || m_activeView == nullptr || m_activeView->view == nullptr
-        || m_activeView->view->virtualCanvasActive() || displayIsSpherical()) {
+        || m_activeView->view->virtualCanvasActive()
+        || displayIsSphericalWarp()) {
         return 0.0;
     }
     const auto& metadata = *m_openMetadata;
@@ -5469,6 +5488,15 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     }
     m_activeView = nullptr;
     m_dataset.reset();
+    // The dock's edge trigger is per dataset, not per session: an open is a new
+    // context, so the next update re-asserts it. Without this the flags could
+    // hold (false, true) straight across a 3-D -> 3-D open -- closeSequence
+    // above runs while the outgoing dataset is still installed, so the !applies
+    // branch that clears them never runs -- and a dock hidden under the old
+    // dataset stayed hidden under the new one, while the same hide followed by
+    // a 2-D dataset reopened it. Same user action, opposite result.
+    m_animationDockSequence = false;
+    m_animationDockThreeD = false;
     // Line plot curves are snapshots of this dataset; drop the window.
     auto* linePlotWindow = m_linePlotWindow;
     m_linePlotWindow = nullptr;

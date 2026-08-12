@@ -227,6 +227,14 @@ public:
     {
         return displayIsSpherical();
     }
+    // Test-only: drive the View > 2-D Spherical > Display group the way the
+    // menu does, so a test can reach the unwarped r-theta and theta-r modes.
+    // Only R-Z warps, and the scale report turns on that distinction.
+    void selectSphericalDisplayForTest(int mode);
+    [[nodiscard]] bool displayIsSphericalWarpForTest() const
+    {
+        return displayIsSphericalWarp();
+    }
     void resetZoomAllViewsForTest() { resetZoomAllViews(); }
     void setActiveViewScaleForTest(int factor);
     void selectFixedScaleForTest(int factor);

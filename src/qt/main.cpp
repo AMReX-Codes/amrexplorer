@@ -2591,7 +2591,8 @@ int main(int argc, char* argv[])
                     return;
                 }
                 if (!window.animationDockVisibleForTest()) {
-                    qCritical("a 3-D dataset left the Animation panel hidden");
+                    qCritical("a 3-D dataset left the Animation panel hidden "
+                              "(phase %d)", *phase);
                     application.exit(1);
                     return;
                 }
@@ -2603,6 +2604,19 @@ int main(int argc, char* argv[])
                     *phase = 1;
                     QTimer::singleShot(0, &window,
                         [&window, bad] { window.openDataset(bad, true); });
+                    return;
+                }
+                if (*phase == 2) {
+                    // 3-D -> 3-D with the dock hidden. The teardown's
+                    // closeSequence runs while the outgoing dataset is still
+                    // installed, so the !applies branch that clears the flags
+                    // never runs on this path; without an explicit reset the
+                    // hide carried into the new dataset, while the same hide
+                    // followed by a 2-D one reopened it.
+                    *phase = 3;
+                    window.setAnimationDockVisibleForTest(false);
+                    QTimer::singleShot(0, &window,
+                        [&window, first] { window.openDataset(first); });
                     return;
                 }
                 window.setAnimationDockVisibleForTest(false);
@@ -2674,20 +2688,51 @@ int main(int argc, char* argv[])
                     application.exit(1);
                     return;
                 }
+                // Pin the mode: choosing a display writes it through
+                // saveSettings(), so it survives into the next run and this
+                // test would otherwise inherit whatever the last one left.
+                window.selectSphericalDisplayForTest(0);
+                if (!window.displayIsSphericalWarpForTest()) {
+                    qCritical("R-Z did not select, so the warp case is untested");
+                    application.exit(1);
+                    return;
+                }
                 window.selectToolbarFixedScaleForTest(32);
                 const auto label = window.scaleUiLabelForTest();
                 if (label != QStringLiteral("32x")) {
-                    qCritical("a spherical view reported '%s', expected a "
+                    qCritical("an R-Z spherical view reported '%s', expected a "
                               "plain 32x",
                         qUtf8Printable(label));
                     application.exit(1);
                     return;
                 }
                 if (window.effectiveFixedScaleForTest(32) != 0.0) {
-                    qCritical("a spherical view claimed an effective scale");
+                    qCritical("an R-Z spherical view claimed a scale");
                     application.exit(1);
                     return;
                 }
+                // ...but only R-Z warps. r-theta draws the logical grid as-is
+                // and theta-r transposes it, so both are clamped exactly like a
+                // Cartesian raster and must report the reduction. Excluding
+                // every spherical view left these two silently applying 16x
+                // while the button said 32x.
+                for (const auto mode : {1, 2}) {
+                    window.selectSphericalDisplayForTest(mode);
+                    if (window.displayIsSphericalWarpForTest()) {
+                        qCritical("mode %d still reports as warped", mode);
+                        application.exit(1);
+                        return;
+                    }
+                    const auto effective = window.effectiveFixedScaleForTest(32);
+                    if (std::fabs(effective - 16.0) > 1.0e-9) {
+                        qCritical("unwarped spherical mode %d reported an "
+                                  "effective scale of %f, expected 16",
+                            mode, effective);
+                        application.exit(1);
+                        return;
+                    }
+                }
+                window.selectSphericalDisplayForTest(0);
                 application.exit(0);
             });
         QTimer::singleShot(20000, &application,
@@ -2710,6 +2755,24 @@ int main(int argc, char* argv[])
         const std::filesystem::path path(argv[2]);
         window.setAnimationDockVisibleForTest(true);
         window.selectFixedScaleForTest(4);
+        // Checked before the reset, which would mask it: applyFixedScale only
+        // touches currentViews(), and setFixedScale early-returns on a view
+        // with no image, so with nothing open the factor reaches no view and
+        // claiming it puts a number on the button nothing backs.
+        if (window.scaleUiLabelForTest() != QStringLiteral("Fit")) {
+            qCritical("picking 4x from the View menu with no dataset left the "
+                      "button at '%s'",
+                qUtf8Printable(window.scaleUiLabelForTest()));
+            return 1;
+        }
+        // The toolbar menu is a separate call site with the same hazard.
+        window.selectToolbarFixedScaleForTest(8);
+        if (window.scaleUiLabelForTest() != QStringLiteral("Fit")) {
+            qCritical("picking 8x from the toolbar with no dataset left the "
+                      "button at '%s'",
+                qUtf8Printable(window.scaleUiLabelForTest()));
+            return 1;
+        }
         window.resetZoomAllViewsForTest();
         if (window.scaleUiLabelForTest() != QStringLiteral("Fit")) {
             qCritical("Reset Zoom with no dataset left the button at '%s'",

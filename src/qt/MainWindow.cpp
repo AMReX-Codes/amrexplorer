@@ -4881,10 +4881,26 @@ FabSelectorBuild buildFabSelector(
 
 } // namespace
 
+void MainWindow::restoreFabSelectorRollback()
+{
+    if (!m_fabSelectorRollback) {
+        return;
+    }
+    const auto rollback = *m_fabSelectorRollback;
+    m_fabSelectorRollback.reset();
+    m_fabMode = rollback.fabMode;
+    m_fabSelectorDock->setBackAvailable(rollback.backAvailable);
+    if (rollback.ordinal) {
+        m_fabSelectorDock->selectEntry(*rollback.ordinal);
+    } else {
+        m_fabSelectorDock->clearSelection();
+    }
+}
+
 void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
     std::optional<std::uint64_t> fileOffset, std::filesystem::path dataRoot,
     bool preserveFabSelector, std::optional<FrameSliceSpec> initialSpec,
-    QString failureTitle, std::function<void()> restoreOnFailure)
+    QString failureTitle)
 {
     ++m_activeRequests;
     const auto generation = m_generation;
@@ -4900,8 +4916,7 @@ void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
         [this, watcher, generation, fabGeneration, path,
             dataRoot = std::move(dataRoot), preserveFabSelector,
             initialSpec = std::move(initialSpec),
-            failureTitle = std::move(failureTitle),
-            restoreOnFailure = std::move(restoreOnFailure)]() mutable {
+            failureTitle = std::move(failureTitle)]() mutable {
             --m_activeRequests;
             if (m_closing) {
                 watcher->deleteLater();
@@ -4915,6 +4930,10 @@ void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
             try {
                 auto metadata = watcher->future().takeResult();
                 if (current) {
+                    // This selection is about to become what the window
+                    // displays, so it is the state a later failure falls back
+                    // to.
+                    m_fabSelectorRollback.reset();
                     openDatasetImpl(path, false, std::move(metadata),
                         std::move(dataRoot), preserveFabSelector,
                         std::move(initialSpec));
@@ -4923,12 +4942,10 @@ void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
                 }
             } catch (const std::exception& error) {
                 if (current) {
-                    // The caller may have moved UI state to this FAB before
-                    // the read returned; the open did not happen, so put it
-                    // back before saying so.
-                    if (restoreOnFailure) {
-                        restoreOnFailure();
-                    }
+                    // The caller may have moved the selector to this FAB
+                    // before the read returned; the open did not happen, so
+                    // put it back before saying so.
+                    restoreFabSelectorRollback();
                     QMessageBox::critical(
                         this, failureTitle, exceptionMessage(error));
                 } else {
@@ -4971,24 +4988,25 @@ void MainWindow::viewFab(std::size_t entryIndex)
             // actually changes what the window displays, so a failure has to
             // put the previous state back rather than leave the dock claiming
             // a FAB that is not on screen.
-            const auto previousFabMode = m_fabMode;
-            const auto previousBack = m_fabSelectorDock->backAvailable();
-            const auto previousOrdinal = m_fabSelectorDock->selectedOrdinal();
+            //
+            // Only the *first* click of an overlapping burst records that
+            // state. What the highlight shows once a read is already in flight
+            // is itself a pending selection that was never displayed: from a
+            // displayed FAB X, clicking A then B and having B fail must return
+            // to X, not to A -- A lost the request token and will never open,
+            // so restoring it would leave the dock claiming A over a window
+            // still showing X.
+            if (!m_fabSelectorRollback) {
+                m_fabSelectorRollback = FabSelectorRollback{m_fabMode,
+                    m_fabSelectorDock->backAvailable(),
+                    m_fabSelectorDock->selectedOrdinal()};
+            }
             m_fabMode = true;
             m_fabSelectorDock->setBackAvailable(m_multifabReturn.has_value());
             m_fabSelectorDock->selectEntry(entry.ordinal);
             openStandaloneFabAsync(m_fabSourcePath, entry.fileOffset,
                 m_fabDataRoot, true, std::move(selectedSpec),
-                tr("Cannot view FAB"),
-                [this, previousFabMode, previousBack, previousOrdinal] {
-                    m_fabMode = previousFabMode;
-                    m_fabSelectorDock->setBackAvailable(previousBack);
-                    if (previousOrdinal) {
-                        m_fabSelectorDock->selectEntry(*previousOrdinal);
-                    } else {
-                        m_fabSelectorDock->clearSelection();
-                    }
-                });
+                tr("Cannot view FAB"));
             return;
         }
         {
@@ -5004,6 +5022,10 @@ void MainWindow::viewFab(std::size_t entryIndex)
             selected = makeSelectedFabMetadata(*m_fabSourceMetadata->metadata,
                 entry.level, entry.blockIndex, m_fabDataRoot);
         }
+        // Committed here and now, with no read that can fail behind it, so
+        // this is the state a later failure should fall back to -- not
+        // whatever an earlier pending raw-record click recorded.
+        m_fabSelectorRollback.reset();
         m_fabMode = true;
         m_fabSelectorDock->setBackAvailable(m_multifabReturn.has_value());
         m_fabSelectorDock->selectEntry(entry.ordinal);
@@ -5022,6 +5044,9 @@ void MainWindow::backToMultiFab()
     }
     auto state = std::move(*m_multifabReturn);
     m_multifabReturn.reset();
+    // Returning to the MultiFab commits a selector state of its own; a
+    // rollback left over from a pending raw-record read must not outlive it.
+    m_fabSelectorRollback.reset();
     m_fabMode = false;
     m_fabSelectorDock->setBackAvailable(false);
     openDatasetImpl(state.path, false, std::move(state.metadata),

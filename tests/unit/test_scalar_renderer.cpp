@@ -252,31 +252,38 @@ int main()
     }
 
     // The sweep above uses [0, 1], whose reciprocal is exact, so it cannot see
-    // the one way hoisting the division changes the picture. For roughly one
-    // span in seven the reciprocal is not exact at the top: [0, 49] is the
-    // smallest integral case, where 49 * (1/49) is 0.99999999999999988898
-    // rather than 1.0, which truncates into the second-to-last slot. The
-    // maximum-valued pixel is the one a user reads off the color bar, so it
-    // has to land on the same color the bar paints for it.
+    // what hoisting the division out of the loop costs. [0, 49] can, at both
+    // ends of the failure: 49 * (1/49) is 0.99999999999999988898 rather than
+    // 1.0, dropping the maximum into the second-to-last slot, and 24.5 * (1/49)
+    // is 0.49999999999999994 rather than exactly 0.5, dropping the midpoint
+    // from slot 126 to 125. Random sampling does not find the second one --
+    // random doubles do not land on exact ties -- so it is pinned by value
+    // here rather than left to the sweep.
     {
         const auto& palette = amrvis::builtinPalette(
             amrvis::BuiltinPalette::Rainbow);
         amrvis::ScalarPlane peak;
-        peak.width = 2;
+        peak.width = 3;
         peak.height = 1;
-        peak.values = {0.0F, 49.0F};
-        peak.valid = {1, 1};
+        peak.values = {0.0F, 24.5F, 49.0F};
+        peak.valid = {1, 1, 1};
         amrvis::ScalarRenderSettings peakSettings;
         peakSettings.minimum = 0.0;
         peakSettings.maximum = 49.0;
         peakSettings.palette = &palette;
         const auto peakImage = amrvis::renderScalarPlane(peak, peakSettings);
-        require(peakImage.rgba[1] == palette.slotArgb(amrvis::Palette::paletteEnd),
-            "a pixel at the range maximum did not get the last data slot");
-        require(peakImage.rgba[1] == palette.argb(1.0),
-            "a pixel at the range maximum disagrees with the color bar");
         require(peakImage.rgba[0] == palette.slotArgb(amrvis::Palette::paletteStart),
             "a pixel at the range minimum did not get the first data slot");
+        require(peakImage.rgba[2] == palette.slotArgb(amrvis::Palette::paletteEnd),
+            "a pixel at the range maximum did not get the last data slot");
+        require(peakImage.rgba[2] == palette.argb(1.0),
+            "a pixel at the range maximum disagrees with the color bar");
+        // The midpoint of the range is the midpoint of the palette.
+        require(peakImage.rgba[1] == palette.argb(0.5),
+            "a pixel at the range midpoint disagrees with the color bar");
+        require(peakImage.rgba[1]
+                == palette.slotArgb(amrvis::Palette::paletteStart + 126),
+            "the range midpoint did not get the midpoint slot");
     }
 
     return 0;

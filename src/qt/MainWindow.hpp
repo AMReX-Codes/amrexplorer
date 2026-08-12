@@ -29,7 +29,6 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -673,14 +672,14 @@ private:
     // this window already runs on a worker (see buildFabSelector); these two
     // entry points were the exceptions.
     //
-    // `restoreOnFailure`, when set, runs if the read fails while this request
-    // is still the current one: callers that move UI state to the pending FAB
-    // before the read returns use it to put that state back.
+    // A caller that moves the selector to the pending record before the read
+    // returns records the state to fall back to in m_fabSelectorRollback; a
+    // read that fails while it is still the current request puts it back.
     void openStandaloneFabAsync(std::filesystem::path path,
         std::optional<std::uint64_t> fileOffset,
         std::filesystem::path dataRoot, bool preserveFabSelector,
-        std::optional<FrameSliceSpec> initialSpec, QString failureTitle,
-        std::function<void()> restoreOnFailure = {});
+        std::optional<FrameSliceSpec> initialSpec, QString failureTitle);
+    void restoreFabSelectorRollback();
     void configureSliceControls();
     // Enable the dataset-dependent field/level/range/menu controls once a
     // dataset (single or sequence frame) is loaded. Shared by
@@ -903,6 +902,17 @@ private:
     // once a read has already completed, so two reads in flight together both
     // still match the generation they captured.
     std::uint64_t m_fabOpenGeneration = 0;
+    // The selector state a failed standalone-FAB open falls back to: the last
+    // one that was actually committed to the window, not merely highlighted.
+    // Set by the first click of an overlapping burst and cleared when an open
+    // succeeds, so an intermediate selection that lost the request token is
+    // never what a later failure restores.
+    struct FabSelectorRollback {
+        bool fabMode = false;
+        bool backAvailable = false;
+        std::optional<std::size_t> ordinal;
+    };
+    std::optional<FabSelectorRollback> m_fabSelectorRollback;
     std::uint64_t m_activeRequests = 0;
     bool m_closing = false;
     std::uint64_t m_staleResults = 0;

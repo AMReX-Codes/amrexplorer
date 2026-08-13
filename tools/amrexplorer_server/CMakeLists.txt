@@ -25,6 +25,13 @@ target_compile_definitions(amrexplorer_server
 if(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
         AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     include(CheckCXXSourceCompiles)
+    # Re-probed on every configure. check_cxx_source_compiles caches its result,
+    # so a tree first configured on a machine without libstdc++.a would keep the
+    # warning and the dynamic fallback for ever -- installing the package and
+    # reconfiguring would change nothing, and the only way out would be to
+    # delete the build directory. A warning that names a package to install has
+    # to be actionable without that.
+    unset(AMREXPLORER_STATIC_CXX_RUNTIME_LINKS CACHE)
     set(CMAKE_REQUIRED_LINK_OPTIONS -static-libstdc++ -static-libgcc)
     check_cxx_source_compiles([=[
         #include <stdexcept>

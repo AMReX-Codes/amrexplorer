@@ -132,8 +132,8 @@ int main()
             "the decimal-point normalization rewrote a literal separator");
         std::setlocale(LC_NUMERIC, "C");
     } else {
-        std::cerr << "note: no German locale installed; the LC_NUMERIC case "
-                     "did not run\n";
+        std::cerr << "note: no comma-decimal locale installed (tried de_DE, "
+                     "en_DK, fr_FR); the LC_NUMERIC case did not run\n";
     }
 
     return 0;

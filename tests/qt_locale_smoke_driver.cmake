@@ -8,8 +8,8 @@
 #
 # Expected -D arguments: MATERIALIZER, AMREXPLORER_QT, SOURCE, WORK.
 #
-# Skips -- visibly, via ctest's SKIP_RETURN_CODE, never silently -- when no
-# comma locale can be obtained. A silent pass is what let this defect hide:
+# Skips -- visibly, via ctest's SKIP_REGULAR_EXPRESSION, never silently -- when
+# no comma locale can be obtained. A silent pass is what let this defect hide:
 # low-priority-robustness item 5 recorded "no German locale installed" and
 # stopped there, when localedef needs no root.
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK)

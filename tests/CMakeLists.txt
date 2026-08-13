@@ -962,6 +962,17 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_fab_overlap_failure PROPERTIES TIMEOUT 60)
+    add_test(
+        NAME qt_fab_direct_open_failure
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_fab_direct_open"
+            -DMODE=fab-direct-open-failure
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_fab_direct_open_failure PROPERTIES TIMEOUT 60)
     # Regression test for fab-round-trip-loses-visible-region: zooming a MultiFab
     # slice, drilling into a FAB, and going back must leave the restored view
     # still zoomed (visibleRegion written back into the view state).

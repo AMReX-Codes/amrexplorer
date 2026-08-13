@@ -4881,6 +4881,16 @@ FabSelectorBuild buildFabSelector(
 
 } // namespace
 
+void MainWindow::openStandaloneFabForTest(const std::filesystem::path& path)
+{
+    auto root = path.parent_path();
+    if (root.empty()) {
+        root = ".";
+    }
+    openStandaloneFabAsync(path, std::nullopt, std::move(root), false,
+        std::nullopt, tr("Cannot open FAB"));
+}
+
 void MainWindow::applyFabSelectorRollback(const FabSelectorRollback& rollback)
 {
     m_fabMode = rollback.fabMode;
@@ -4905,9 +4915,26 @@ void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
     // completions match the generation they captured and the *first* to arrive
     // opens, while the selector already shows the second: oldest-wins, and the
     // window disagrees with the dock.
+    //
+    // Inheritance is decided here rather than at the call sites, because every
+    // request supersedes whatever was live -- including the direct-open entry
+    // point, which brings no rollback of its own. The read it supersedes will
+    // retire without restoring anything, so if this one fails the state to
+    // return to is still the one that was last displayed. Checked before the
+    // token moves, since moving it is what retires the other request.
+    const bool supersedesLive = m_pendingFabOpen
+        && m_pendingFabOpen->generation == generation
+        && m_pendingFabOpen->requestId == m_fabOpenGeneration;
+    if (supersedesLive) {
+        rollback = m_pendingFabOpen->rollback;
+    }
     const auto requestId = ++m_fabOpenGeneration;
     if (rollback) {
         m_pendingFabOpen = PendingFabOpen{generation, requestId, *rollback};
+    } else {
+        // Nothing live and nothing to fall back to: this request owns the slot
+        // and a failure of it has nowhere to return to.
+        m_pendingFabOpen.reset();
     }
     auto* watcher = new QFutureWatcher<PlotfileMetadataResult>(this);
     connect(watcher, &QFutureWatcher<PlotfileMetadataResult>::finished, this,
@@ -4928,17 +4955,21 @@ void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
             // Only the completion that recorded the pending entry may consume
             // it. Anything that revoked it -- a dataset open, a teardown, a
             // newer click -- has already made `current` false.
-            const bool ownsPending = m_pendingFabOpen
+            // Taken out of the member up front, not read back later: this
+            // completion decides the entry's fate either way, and openDatasetImpl
+            // below can throw *after* the success path has given the entry up.
+            // Reading `m_pendingFabOpen->rollback` in the catch would then
+            // dereference a disengaged optional.
+            std::optional<FabSelectorRollback> owned;
+            if (current && m_pendingFabOpen
                 && m_pendingFabOpen->generation == generation
-                && m_pendingFabOpen->requestId == requestId;
+                && m_pendingFabOpen->requestId == requestId) {
+                owned = m_pendingFabOpen->rollback;
+                m_pendingFabOpen.reset();
+            }
             try {
                 auto metadata = watcher->future().takeResult();
                 if (current) {
-                    // This selection is about to become what the window
-                    // displays, so there is nothing left to roll back to.
-                    if (ownsPending) {
-                        m_pendingFabOpen.reset();
-                    }
                     openDatasetImpl(path, false, std::move(metadata),
                         std::move(dataRoot), preserveFabSelector,
                         std::move(initialSpec));
@@ -4950,10 +4981,8 @@ void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
                     // The caller may have moved the selector to this FAB
                     // before the read returned; the open did not happen, so
                     // put it back before saying so.
-                    if (ownsPending) {
-                        const auto pending = m_pendingFabOpen->rollback;
-                        m_pendingFabOpen.reset();
-                        applyFabSelectorRollback(pending);
+                    if (owned) {
+                        applyFabSelectorRollback(*owned);
                     }
                     reportBackgroundError(QStringLiteral("%1: %2")
                             .arg(failureTitle, exceptionMessage(error)));
@@ -4998,20 +5027,14 @@ void MainWindow::viewFab(std::size_t entryIndex)
             // put the previous state back rather than leave the dock claiming
             // a FAB that is not on screen.
             //
-            // A click while a read is already in flight inherits that read's
-            // rollback instead of snapshotting the dock, because what the dock
-            // shows now is the pending selection, which was never displayed:
-            // from a displayed FAB X, clicking A then B and having B fail must
-            // return to X, not to A -- A lost the request token and will never
-            // open. The pending entry is inherited only while it is still live,
-            // so a dataset open or a teardown in between starts fresh.
-            const auto rollback = (m_pendingFabOpen
-                    && m_pendingFabOpen->generation == m_generation
-                    && m_pendingFabOpen->requestId == m_fabOpenGeneration)
-                ? m_pendingFabOpen->rollback
-                : FabSelectorRollback{m_fabMode,
-                    m_fabSelectorDock->backAvailable(),
-                    m_fabSelectorDock->selectedOrdinal()};
+            // Snapshot what is displayed now; openStandaloneFabAsync prefers a
+            // still-live pending rollback over it, because from a displayed FAB
+            // X, clicking A then B and having B fail must return to X, not to
+            // the A the dock is merely showing -- A lost the request token and
+            // will never open.
+            const FabSelectorRollback rollback{m_fabMode,
+                m_fabSelectorDock->backAvailable(),
+                m_fabSelectorDock->selectedOrdinal()};
             m_fabMode = true;
             m_fabSelectorDock->setBackAvailable(m_multifabReturn.has_value());
             m_fabSelectorDock->selectEntry(entry.ordinal);

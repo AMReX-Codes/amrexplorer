@@ -202,6 +202,10 @@ public:
     {
         return static_cast<int>(m_backgroundErrors.size());
     }
+    // Test-only: the direct "open a raw FAB file" entry point, reached in the
+    // app through a file dialog. Supplies no rollback of its own, which is what
+    // makes it the interesting case when it supersedes a selector click.
+    void openStandaloneFabForTest(const std::filesystem::path& path);
     void setGridBoxesVisibleForTest(bool visible);
     [[nodiscard]] std::size_t activeViewGridBoxCountForTest() const;
 

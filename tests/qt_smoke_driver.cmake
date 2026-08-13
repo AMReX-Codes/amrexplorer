@@ -24,7 +24,8 @@
 #                 arrow-key-routing | animation-dock-role | open-failure |
 #                 idle-ui-state | sequence-scale-report |
 #                 spherical-scale-report |
-#                 fixed-scale-centre | fab-overlap-failure
+#                 fixed-scale-centre | fab-overlap-failure |
+#                 fab-direct-open-failure
 foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
     if(NOT DEFINED ${argument})
         message(FATAL_ERROR "qt_smoke_driver.cmake requires -D${argument}=...")
@@ -245,6 +246,10 @@ elseif(MODE STREQUAL "multifab-fab")
 elseif(MODE STREQUAL "fab-overlap-failure")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --fab-overlap-failure-smoke-test
+        "${WORK}/plt/Level_0/Cell_D_00000")
+elseif(MODE STREQUAL "fab-direct-open-failure")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --fab-direct-open-failure-smoke-test
         "${WORK}/plt/Level_0/Cell_D_00000")
 elseif(MODE STREQUAL "fab-zoom")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")

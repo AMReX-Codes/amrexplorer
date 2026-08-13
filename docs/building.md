@@ -9,36 +9,36 @@ data, and the same runtime metadata representation accepts 1-D data.
 
 ```text
 cmake --preset default     # Release build → build/
-cmake --build --preset default
-ctest --preset default
+cmake --build --preset default --parallel 4
+ctest --preset default --parallel 4
 
 cmake --preset clang       # Release with Clang, warnings as errors → build-clang/
-cmake --build --preset clang
-ctest --preset clang
+cmake --build --preset clang --parallel 4
+ctest --preset clang --parallel 4
 
 cmake --preset debug       # Debug build → build-debug/
-cmake --build --preset debug
-ctest --preset debug
+cmake --build --preset debug --parallel 4
+ctest --preset debug --parallel 4
 
 cmake --preset headless    # Release, no Qt, core + tools + tests → build-headless/
-cmake --build --preset headless
-ctest --preset headless
+cmake --build --preset headless --parallel 4
+ctest --preset headless --parallel 4
 
 cmake --preset remote      # Release headless server + protocol tests → build-remote/
-cmake --build --preset remote
-ctest --preset remote
+cmake --build --preset remote --parallel 4
+ctest --preset remote --parallel 4
 
 cmake --preset sanitizers  # Debug headless + ASan + UBSan → build-sanitizers/
-cmake --build --preset sanitizers
-ctest --preset sanitizers
+cmake --build --preset sanitizers --parallel 4
+ctest --preset sanitizers --parallel 4
 
 cmake --preset tsan        # Debug headless + remote + TSan → build-tsan/
-cmake --build --preset tsan
-ctest --preset tsan
+cmake --build --preset tsan --parallel 4
+ctest --preset tsan --parallel 4
 
 cmake --preset qt-sanitizers  # Qt Debug + ASan + UBSan → build-qt-sanitizers/
-cmake --build --preset qt-sanitizers
-ctest --preset qt-sanitizers
+cmake --build --preset qt-sanitizers --parallel 4
+ctest --preset qt-sanitizers --parallel 4
 ```
 
 The sanitizer preset enables AddressSanitizer and UndefinedBehaviorSanitizer.
@@ -110,7 +110,7 @@ AppDir:
 
 ```bash
 cmake --preset default
-cmake --build --preset default
+cmake --build --preset default --parallel 4
 DESTDIR="$(pwd)/appdir" cmake --install build --prefix /usr
 ```
 

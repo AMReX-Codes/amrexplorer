@@ -93,6 +93,13 @@ void filterWaylandPopupWarning(QtMsgType type,
 // spec reserves backslash, double quote, backtick and dollar there, each
 // escaped with a backslash; a path containing any of them previously produced
 // an Exec line that would not parse back to the same path.
+//
+// Guarded on the same condition as its only caller below. ensureDesktopEntry
+// compiles to an early `return` off Linux, so the call is preprocessed away and
+// an unguarded definition here is an unused static function -- which -Werror
+// turns into a build failure on macOS and Windows, where nothing else in this
+// file would have noticed.
+#ifdef Q_OS_LINUX
 [[nodiscard]] QString desktopExecEscaped(const QString& path)
 {
     QString escaped;
@@ -106,6 +113,7 @@ void filterWaylandPopupWarning(QtMsgType type,
     }
     return escaped;
 }
+#endif
 
 void ensureDesktopEntry()
 {

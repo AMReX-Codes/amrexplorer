@@ -17,10 +17,43 @@ target_compile_definitions(amrexplorer_server
 #
 # Off outside Linux, and overridable: a distro packager wants the system
 # runtime, and should configure with -DAMREXPLORER_SERVER_STATIC_CXX_RUNTIME=OFF.
+# Probed rather than assumed: the static libstdc++ is a separate package on
+# several distributions (Fedora's libstdc++-static, for one) and is not pulled
+# in by an otherwise complete C++ toolchain. Enabling this blind would turn a
+# working desktop build into a link failure, since the server is built by the
+# default preset too. Fall back to the shared runtime with a warning instead.
 if(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
         AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_link_options(amrexplorer_server
-        PRIVATE -static-libstdc++ -static-libgcc)
+    include(CheckCXXSourceCompiles)
+    set(CMAKE_REQUIRED_LINK_OPTIONS -static-libstdc++ -static-libgcc)
+    check_cxx_source_compiles([=[
+        #include <stdexcept>
+        #include <string>
+
+        int main()
+        {
+            try {
+                throw std::runtime_error(std::string("probe"));
+            } catch (const std::exception& error) {
+                return error.what() == nullptr ? 1 : 0;
+            }
+        }
+    ]=] AMREXPLORER_STATIC_CXX_RUNTIME_LINKS)
+    unset(CMAKE_REQUIRED_LINK_OPTIONS)
+
+    if(AMREXPLORER_STATIC_CXX_RUNTIME_LINKS)
+        target_link_options(amrexplorer_server
+            PRIVATE -static-libstdc++ -static-libgcc)
+    else()
+        message(WARNING
+            "A static libstdc++/libgcc is not available with this toolchain, so "
+            "amrexplorer-server will link the shared C++ runtime. The binary "
+            "then requires a matching libstdc++.so.6 wherever it runs, which "
+            "matters on HPC systems where it was built under a compiler module. "
+            "Install the static runtime (Fedora and RHEL: libstdc++-static) to "
+            "get a freely copyable server, or set "
+            "-DAMREXPLORER_SERVER_STATIC_CXX_RUNTIME=OFF to silence this.")
+    endif()
 endif()
 
 install(TARGETS amrexplorer_server RUNTIME DESTINATION bin)

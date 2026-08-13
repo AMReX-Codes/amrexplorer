@@ -16,7 +16,8 @@
         "AMREXPLORER_ENABLE_QT": "ON",
         "AMREXPLORER_ENABLE_VTK": "OFF",
         "AMREXPLORER_BUILD_TESTS": "ON",
-        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS": "OFF"
+        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS": "OFF",
+        "AMREXPLORER_USER_INSTALL_PREFIX": "ON"
       }
     },
     {
@@ -78,7 +79,8 @@
       "cacheVariables": {
         "AMREXPLORER_ENABLE_REMOTE": "ON",
         "AMREXPLORER_BUILD_TESTS": "ON",
-        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS": "OFF"
+        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS": "OFF",
+        "AMREXPLORER_USER_INSTALL_PREFIX": "ON"
       }
     },
     {
@@ -105,7 +107,9 @@
       "name": "windows",
       "displayName": "Windows MSVC Release build (mirrors the CI job)",
       "generator": "Visual Studio 17 2022",
-      "architecture": { "value": "x64" },
+      "architecture": {
+        "value": "x64"
+      },
       "binaryDir": "${sourceDir}/build-windows",
       "condition": {
         "type": "equals",

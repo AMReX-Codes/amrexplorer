@@ -31,15 +31,23 @@ option(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
     ${amrexplorer_static_cxx_default})
 unset(amrexplorer_static_cxx_default)
 
+option(AMREXPLORER_USER_INSTALL_PREFIX
+    "Default the install prefix to the platform's per-user location" OFF)
+
 # CMake would default the install prefix to /usr/local, which essentially
 # nobody who builds this can write to: the users are HPC users without root and
 # desktop users who would otherwise reach for sudo. Default to the per-user
 # location each platform actually uses instead.
 #
-# Only when the caller did not choose one. Packagers always pass a prefix (or
-# stage through DESTDIR), so this cannot surprise them; it only replaces the
-# default nobody wanted.
-if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT
+# Opt-in, and set by the presets rather than unconditionally, because changing
+# a cached prefix is not free for packagers: DESTDIR is *prepended* to the
+# prefix rather than replacing it, so a DESTDIR-only staging install with this
+# forced on would produce stage/home/<builder>/.local/bin/... and bake the
+# builder's home directory into the package. Packagers invoke cmake directly
+# rather than through a preset, so they keep CMake's own default and DESTDIR
+# behaves as documented.
+if(AMREXPLORER_USER_INSTALL_PREFIX
+        AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT
         AND NOT WIN32 AND DEFINED ENV{HOME})
     if(APPLE AND AMREXPLORER_BUILD_MACOS_APP_BUNDLE)
         # The GUI installs as a .app bundle at the prefix root (BUNDLE

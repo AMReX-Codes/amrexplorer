@@ -23,6 +23,16 @@ They install and move independently.
 
 ## Dependencies
 
+CMake 3.25 or newer, a C++20 compiler, and Qt 6 for the desktop application.
+The CMake floor is worth checking before anything else — every command below
+uses presets, and `--fresh` needs 3.24 — because enterprise distributions and
+HPC login nodes often ship an older one:
+
+```bash
+cmake --version
+module load cmake     # on an HPC system, if it is too old
+```
+
 ### Linux (Ubuntu)
 
 ```bash
@@ -160,6 +170,10 @@ written a cache naming the old compiler, and while CMake normally clears such a
 cache and retries within the same run, the C++20 error aborts before it can — so
 without `--fresh` the next attempt fails identically, naming the old compiler
 again, and only a third would succeed.
+
+The same applies to any other preset: keep whichever one you were using and add
+`--fresh` and `-DCMAKE_CXX_COMPILER=...` to it. `--preset remote` above is the
+HPC case, not part of the fix.
 
 Configuring with an unsupported compiler fails with a message naming the
 compiler it found and repeating these commands.

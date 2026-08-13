@@ -28,10 +28,17 @@ target_compile_definitions(amrexplorer_server
 # would still get the flags. Guarding where they are applied makes the
 # behaviour right in every tree, including hand-configured ones that no preset
 # covers.
+#
+# The compiler is not checked by identity. A GNU|Clang gate looked like a safety
+# net but was the opposite: the option's default has no compiler clause, so on a
+# Linux login node running oneAPI (IntelLLVM), NVHPC, Cray or XL the cache said
+# ON while the flags were quietly dropped -- exactly the toolchains this exists
+# for, failing silently, with INSTALL.md still promising a copyable binary. The
+# probe below is the real test: a toolchain that cannot link this way fails it
+# and gets the warning.
 if(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
         AND NOT AMREXPLORER_ENABLE_SANITIZERS
-        AND NOT AMREXPLORER_ENABLE_TSAN
-        AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        AND NOT AMREXPLORER_ENABLE_TSAN)
     include(CheckCXXSourceCompiles)
     # Re-probed on every configure. check_cxx_source_compiles caches its result,
     # so a tree first configured on a machine without libstdc++.a would keep the
@@ -69,6 +76,16 @@ if(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
             "get a freely copyable server, or set "
             "-DAMREXPLORER_SERVER_STATIC_CXX_RUNTIME=OFF to silence this.")
     endif()
+elseif(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME)
+    # Asked for, and vetoed above. Say so: the veto leaves the cache reading ON
+    # and AMREXPLORER_STATIC_CXX_RUNTIME_LINKS possibly reading 1 from an earlier
+    # configure, both describing a build that ignores them, and silence there is
+    # how the stale-cache defect went unnoticed in the first place.
+    message(STATUS
+        "amrexplorer-server: linking the shared C++ runtime despite "
+        "AMREXPLORER_SERVER_STATIC_CXX_RUNTIME=ON, because a sanitizer is "
+        "enabled. Their runtimes load libstdc++.so.6 and libgcc_s.so.1 anyway, "
+        "so a static copy inside the executable would only add a second one.")
 endif()
 
 install(TARGETS amrexplorer_server RUNTIME DESTINATION bin)

@@ -54,10 +54,15 @@ option(AMREXPLORER_USER_INSTALL_PREFIX
 # builder's home directory into the package. Packagers invoke cmake directly
 # rather than through a preset, so they keep CMake's own default and DESTDIR
 # behaves as documented.
+# DEFINED is not enough: HOME set but empty would yield a prefix of "/.local".
 if(AMREXPLORER_USER_INSTALL_PREFIX
         AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT
-        AND NOT WIN32 AND DEFINED ENV{HOME})
-    if(APPLE AND AMREXPLORER_BUILD_MACOS_APP_BUNDLE)
+        AND NOT WIN32 AND NOT "$ENV{HOME}" STREQUAL "")
+    # Gated on the GUI actually being built, not just on the bundle option,
+    # which defaults to ${APPLE} independently of it. A server-only build on a
+    # Mac (`cmake --preset remote`) otherwise took the bundle branch and
+    # installed ~/Applications/bin/amrexplorer-server with no .app anywhere.
+    if(APPLE AND AMREXPLORER_ENABLE_QT AND AMREXPLORER_BUILD_MACOS_APP_BUNDLE)
         # The GUI installs as a .app bundle at the prefix root (BUNDLE
         # DESTINATION .), so here the prefix *is* the applications folder.
         # amrexplorer-server lands in a bin/ beside it, which is unusual for
@@ -134,7 +139,9 @@ if(NOT AMREXPLORER_HAS_REQUIRED_CXX20_SUPPORT)
         "\n"
         "On an HPC system this usually means CMake picked up the system "
         "compiler in /usr/bin rather than a module-provided one. Load a newer "
-        "toolchain and point CMake at it, for example:\n"
+        "toolchain and re-run the configure you just ran, adding --fresh and "
+        "the compiler -- keeping your own preset, since the one below is only "
+        "an example:\n"
         "    module load gcc\n"
         "    cmake --preset remote --fresh -DCMAKE_CXX_COMPILER=g++\n"
         "On Cray systems (Perlmutter, Frontier) the compiler wrapper is CC:\n"

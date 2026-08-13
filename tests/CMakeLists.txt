@@ -962,6 +962,22 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_fab_overlap_failure PROPERTIES TIMEOUT 60)
+    # The LC_NUMERIC pin, end to end: under a comma-decimal locale the reader's
+    # strtod stops at the '.' in "0.5" and nothing opens, so an ordinary slice
+    # smoke test is the whole regression. Skips visibly (never silently) when no
+    # comma locale is installed and localedef cannot build one.
+    add_test(
+        NAME qt_comma_locale_open
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_comma_locale"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_locale_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_comma_locale_open PROPERTIES
+        SKIP_REGULAR_EXPRESSION "AMREXPLORER_LOCALE_SKIP"
+        TIMEOUT 120)
     add_test(
         NAME qt_fab_direct_open_failure
         COMMAND "${CMAKE_COMMAND}"

@@ -34,6 +34,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -618,6 +619,27 @@ int main(int argc, char* argv[])
                        "qt.qpa.services.warning=false"));
 
     QApplication application(argc, argv);
+    // Undo, for numeric conversion only, what QApplication just did. Qt calls
+    // setlocale(LC_ALL, "") on Unix, which hands the C locale to the
+    // environment -- and the C locale is what strtod, printf("%f") and atof
+    // consult. The plotfile reader parses per-block statistics with strtod, so
+    // under any comma-decimal locale strtod("0.5") stopped at the '.' and *no
+    // plotfile opened at all*: LC_ALL=en_DK.utf8 failed 49 of 115 tests.
+    //
+    // This is pinned here, once, rather than fixed at the call site, because
+    // the call site is not the class of bug: the next strtod, atof or
+    // printf("%f") anyone adds re-opens the same hole, and only a pin closes
+    // it by construction. Placement is deliberate -- immediately after the
+    // constructor that moves the locale, before any window or worker thread
+    // exists to observe either value.
+    //
+    // Nothing user-visible is lost. QLocale is independent of the C locale, so
+    // QLocale::system() still reports the user's real locale and separators;
+    // only the C conversion functions are pinned. C++ iostreams were never
+    // affected either -- they consult the C++ global locale, which stays "C"
+    // -- which is why the reader's other numeric fields, and AMReX's readers,
+    // never broke. See agent-notes comma-locale-breaks-every-open.
+    std::setlocale(LC_NUMERIC, "C");
     // Advertise the desktop entry name and WM class as "amrexplorer" so Linux
     // docks/taskbars can match the running window to amrexplorer.desktop and
     // resolve its icon from the icon theme (setWindowIcon alone only sets the

@@ -60,9 +60,19 @@ bool isValidNumberFormat(const QString& format)
     return specifiers == 1;
 }
 
-QString conversionSpecifier(const QString& format)
+namespace {
+
+// Byte range [start, end) of the single floating conversion in `bytes`, or a
+// start of -1 if there is none. Both the specifier accessor and the formatter
+// need it, and the formatter needs the *position*, not just the text: it splices
+// the rendered number back between the surrounding literals.
+struct ConversionSpan {
+    qsizetype start = -1;
+    qsizetype end = -1;
+};
+
+ConversionSpan conversionSpan(const QByteArray& bytes)
 {
-    const auto bytes = format.toUtf8();
     const auto size = bytes.size();
     for (qsizetype index = 0; index < size; ++index) {
         if (bytes[index] != '%') {
@@ -89,9 +99,36 @@ QString conversionSpecifier(const QString& format)
         if (index < size && (bytes[index] == 'e' || bytes[index] == 'E'
                 || bytes[index] == 'f' || bytes[index] == 'g'
                 || bytes[index] == 'G')) {
-            return QString::fromLatin1(
-                bytes.constData() + start, index - start + 1);
+            return {start, index + 1};
         }
+    }
+    return {};
+}
+
+// Literal text around the conversion. snprintf is no longer run over it, so the
+// "%%" it would have collapsed to "%" is collapsed here instead.
+QString literalText(const char* data, qsizetype size)
+{
+    QByteArray literal;
+    literal.reserve(size);
+    for (qsizetype index = 0; index < size; ++index) {
+        literal.append(data[index]);
+        if (data[index] == '%' && index + 1 < size && data[index + 1] == '%') {
+            ++index;
+        }
+    }
+    return QString::fromUtf8(literal);
+}
+
+} // namespace
+
+QString conversionSpecifier(const QString& format)
+{
+    const auto bytes = format.toUtf8();
+    const auto span = conversionSpan(bytes);
+    if (span.start >= 0) {
+        return QString::fromLatin1(
+            bytes.constData() + span.start, span.end - span.start);
     }
     return defaultNumberFormat();
 }
@@ -102,32 +139,46 @@ QString formatNumber(double value, const QString& format)
         return QString::number(value, 'g', 7);
     }
     const auto bytes = format.toUtf8();
+    const auto span = conversionSpan(bytes);
+    if (span.start < 0) {
+        return QString::number(value, 'g', 7);
+    }
+    // Only the conversion is rendered through snprintf, and only its output is
+    // normalized below. Formatting the whole format string and substituting
+    // across the result corrupts the user's literal text: under a comma locale
+    // the decimal point *is* a comma, so "rho=%.2f, kg/m3" -- which the
+    // validator accepts -- came back as "rho=3.14. kg/m3", with the literal
+    // separator rewritten too. The old comment reasoned that the decimal point
+    // was the only locale-dependent character that could appear, which is true
+    // of the conversion's output and says nothing about the literals around it.
+    const QByteArray specifier(bytes.constData() + span.start,
+        span.end - span.start);
     char buffer[128];
     // The validator guarantees exactly one floating conversion and no other
     // arguments, so a single double is the whole vararg list.
     const auto written = std::snprintf(buffer, sizeof(buffer),
-        bytes.constData(), value);
+        specifier.constData(), value);
     if (written < 0 || static_cast<std::size_t>(written) >= sizeof(buffer)) {
         return QString::number(value, 'g', 7);
     }
-    auto text = QString::fromUtf8(buffer, written);
+    auto number = QString::fromUtf8(buffer, written);
     // snprintf honors LC_NUMERIC, and QApplication calls setlocale(LC_ALL, "")
     // on Unix, so under a comma locale this path renders "1,5" while both
     // fallbacks above use QString::number, which is always C-locale. The
     // readouts have to agree with each other whichever locale the user runs
-    // in, and the C locale is what the rest of the application writes and
-    // parses, so normalize to it. Substituting the decimal point rather than
-    // reaching for snprintf_l keeps this free of platform conditionals; the
-    // validator admits exactly one conversion and no grouping flag, so the
-    // decimal point is the only locale-dependent character that can appear.
+    // in, so normalize to the C locale. Substituting the decimal point rather
+    // than reaching for snprintf_l keeps this free of platform conditionals,
+    // and with only the conversion's own output in hand the substitution can
+    // no longer reach anything the user typed.
     if (const auto* conventions = std::localeconv(); conventions != nullptr) {
         const auto* point = conventions->decimal_point;
         if (point != nullptr && *point != '\0'
             && std::strcmp(point, ".") != 0) {
-            text.replace(QString::fromUtf8(point), QStringLiteral("."));
+            number.replace(QString::fromUtf8(point), QStringLiteral("."));
         }
     }
-    return text;
+    return literalText(bytes.constData(), span.start) + number
+        + literalText(bytes.constData() + span.end, bytes.size() - span.end);
 }
 
 } // namespace amrvis::qt

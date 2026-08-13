@@ -90,6 +90,15 @@ int main()
     // Skipped, with a note, where the locale is not installed: the fix is
     // wanted on the platforms that have it, and a test that silently passes
     // for the wrong reason is worse than one that says why.
+    // Literal text survives in the C locale too, so this half of the contract
+    // is checked whether or not a comma locale is installed.
+    require(formatNumber(3.14159, QStringLiteral("rho=%.2f, kg/m3"))
+            == QStringLiteral("rho=3.14, kg/m3"),
+        "formatNumber altered the literal text around the conversion");
+    require(formatNumber(2.5, QStringLiteral("%.3f,%%"))
+            == QStringLiteral("2.500,%"),
+        "formatNumber mishandled a literal percent");
+
     if (std::setlocale(LC_NUMERIC, "de_DE.UTF-8") != nullptr
         || std::setlocale(LC_NUMERIC, "de_DE") != nullptr) {
         require(formatNumber(3.14159, QStringLiteral("%.2f"))
@@ -98,6 +107,16 @@ int main()
         require(formatNumber(1234.5, QStringLiteral("%.1f"))
                 == QStringLiteral("1234.5"),
             "formatNumber emitted a locale decimal separator");
+        // The normalization must reach the conversion's output and nothing
+        // else. Under a comma locale the decimal separator *is* the comma the
+        // user typed as a literal, so substituting across the whole formatted
+        // string rewrote their text too: this returned "rho=3.14. kg/m3".
+        require(formatNumber(3.14159, QStringLiteral("rho=%.2f, kg/m3"))
+                == QStringLiteral("rho=3.14, kg/m3"),
+            "the decimal-point normalization rewrote literal text");
+        require(formatNumber(2.5, QStringLiteral("%.3f,%%"))
+                == QStringLiteral("2.500,%"),
+            "the decimal-point normalization rewrote a literal separator");
         std::setlocale(LC_NUMERIC, "C");
     } else {
         std::cerr << "note: no German locale installed; the LC_NUMERIC case "

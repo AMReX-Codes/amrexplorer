@@ -260,15 +260,23 @@ void DatasetWindow::startLoad()
                 return;
             }
             try {
-                // Take the old extracts out of the way before m_levels is
-                // replaced, and only destroy them once the models have been
-                // rebuilt off the new ones. Assigning straight into m_levels
-                // destroys the old extracts while the old LevelTableModels
-                // still reference them; nothing dispatches in between today,
-                // so nothing observes it, but the window is one queued call
-                // away from doing so.
-                auto previous = std::move(m_levels);
-                m_levels = watcher->future().takeResult();
+                // Retrieve first, and only then take the old extracts out of
+                // the way, destroying them once the models have been rebuilt
+                // off the new ones. Assigning straight into m_levels destroys
+                // the old extracts while the old LevelTableModels still hold
+                // `const DatasetLevelExtract&` into them; nothing dispatches in
+                // between today, so nothing observes it, but the window is one
+                // queued call away from doing so.
+                //
+                // The retrieval has to come first because it throws: a worker
+                // failure with the old extracts already moved into a local here
+                // would destroy them during unwinding, before the handler below
+                // runs and without populateTabs having rebuilt anything, so
+                // every existing model would be left dangling until the
+                // window's deferred delete. Leaving m_levels alone until the
+                // result is in hand keeps the failure path exactly as it was.
+                auto next = watcher->future().takeResult();
+                auto previous = std::exchange(m_levels, std::move(next));
                 populateTabs();
                 previous.clear();
                 m_status->setText(tr("Field: %1").arg(m_request.fieldName));

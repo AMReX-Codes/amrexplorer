@@ -102,15 +102,33 @@ void filterWaylandPopupWarning(QtMsgType type,
 #ifdef Q_OS_LINUX
 [[nodiscard]] QString desktopExecEscaped(const QString& path)
 {
+    // Two layers, applied in the order the reader undoes them. The Exec value
+    // is first unescaped as a desktop-entry string, and only then parsed as an
+    // Exec command line, so the backslashes the quoting rule needs must
+    // themselves survive the string rule -- which is why the spec says a
+    // literal backslash inside a quoted argument takes four of them.
     QString escaped;
     escaped.reserve(path.size());
     for (const auto character : path) {
+        // Exec quoting: reserved inside double quotes.
         if (character == QLatin1Char('\\') || character == QLatin1Char('"')
             || character == QLatin1Char('`') || character == QLatin1Char('$')) {
             escaped.append(QLatin1Char('\\'));
+            escaped.append(character);
+            continue;
+        }
+        // Field codes: a literal percent is written as two. Without this a
+        // path containing, say, "%q" is read as an unknown field code and
+        // desktop-file-validate rejects the entry.
+        if (character == QLatin1Char('%')) {
+            escaped.append(QLatin1String("%%"));
+            continue;
         }
         escaped.append(character);
     }
+    // Desktop-entry string escaping, over the result of the above so the
+    // quoting layer's own backslashes are doubled with the path's.
+    escaped.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
     return escaped;
 }
 #endif

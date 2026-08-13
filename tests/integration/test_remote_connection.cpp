@@ -1,4 +1,7 @@
 #include "../../src/remote/Codec.hpp"
+#ifdef AMREXPLORER_SERVER_TEST_HOOKS
+#include "../../src/remote/ServerTestHooks.hpp"
+#endif
 
 #include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/data/ViewData.hpp>
@@ -337,6 +340,65 @@ int main(int argc, char* argv[])
     require(!wrongPayloadConnection.connected(),
         "wrong response payload did not fail the connection");
     wrongPayloadPeer.get();
+
+#ifdef AMREXPLORER_SERVER_TEST_HOOKS
+    // The same guarantee as the case above, made deterministic. That one only
+    // fails when the reader happens to be descheduled between waking the caller
+    // and unwinding; this one stalls the reader at exactly that point, so a
+    // client that retires while unwinding rather than under the lock that
+    // recognized the violation fails it on every run.
+    //
+    // Reachability is not hypothetical: openRemoteSequence shares one
+    // connection between overlapping foreground and prefetch loads and gates
+    // reuse on connected(), so a second loader inside this window would write
+    // to a connection that has already seen an impossible response.
+    {
+        auto retirementListener = listenOnLoopback(0);
+        auto retirementPeer = std::async(std::launch::async, [&] {
+            auto peer = acceptConnection(retirementListener.socket);
+            static_cast<void>(acceptHello(peer));
+            const auto frame = readFrame(peer, defaultMaximumFrameBytes);
+            require(frame.has_value(), "client omitted ping request");
+            const auto requestEnvelope = codec::decode(*frame);
+            const auto requestInfo = codec::inspect(*requestEnvelope);
+            codec::fb::DatasetClosedT wrong;
+            wrong.dataset_id = 1;
+            writeFrame(peer,
+                codec::encode(requestInfo.requestId, std::move(wrong)),
+                defaultMaximumFrameBytes);
+        });
+
+        std::promise<void> insideWindowPromise;
+        auto insideWindow = insideWindowPromise.get_future();
+        std::promise<void> releaseReaderPromise;
+        auto releaseReader = releaseReaderPromise.get_future();
+        testing::setAfterViolationWake([&] {
+            insideWindowPromise.set_value();
+            releaseReader.wait();
+        });
+
+        // Generous, because the reader is deliberately held: a timeout here
+        // would retire the connection through close() and mask the defect.
+        ConnectionOptions heldReader;
+        heldReader.requestTimeout = 30s;
+        Connection retirementConnection(
+            "127.0.0.1", retirementListener.port, heldReader);
+        auto retirementCall = std::async(std::launch::async,
+            [&] { retirementConnection.ping(); });
+
+        require(insideWindow.wait_for(5s) == std::future_status::ready,
+            "reader never reached the protocol-violation window");
+        require(!retirementConnection.connected(),
+            "connection was still reusable inside the retirement window");
+        releaseReaderPromise.set_value();
+        require(throwsWithin(retirementCall, 5s),
+            "held wrong payload left its caller waiting");
+        // Join the reader out of the hook before the captured futures die.
+        retirementConnection.close();
+        testing::clearAfterViolationWake();
+        retirementPeer.get();
+    }
+#endif
 
     auto delayedRangeListener = listenOnLoopback(0);
     auto delayedRangePeer = std::async(std::launch::async, [&] {

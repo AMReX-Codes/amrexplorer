@@ -81,8 +81,9 @@ cmake --install build
 ```
 
 No `sudo` needed: this installs to `~/.local` on Linux and `~/Applications` on
-macOS. On Linux it also adds a desktop entry, so AMReXplorer appears in your
-application menu.
+macOS. On Linux the application lands at `~/.local/bin/amrexplorer`, and a
+desktop entry puts it in your application menu. If `~/.local/bin` did not exist
+before, log out and back in for it to be on your `PATH`.
 
 Choose somewhere else with `--prefix`:
 
@@ -104,8 +105,8 @@ cmake --install build-remote --prefix ${HOME}
 
 That installs one file, `${HOME}/bin/amrexplorer-server`.
 
-Use `--fresh` whenever you change the compiler; without it a build directory
-keeps the one it was first configured with.
+Use `--fresh` whenever you change the compiler; without it the configure fails
+again with the same message and has to be run twice.
 
 If your `${HOME}` is shared between machines, give each its own prefix so one
 build does not overwrite another:

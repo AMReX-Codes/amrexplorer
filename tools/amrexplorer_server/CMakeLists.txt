@@ -98,6 +98,21 @@ if(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
             "get a freely copyable server, or set "
             "-DAMREXPLORER_SERVER_STATIC_CXX_RUNTIME=OFF to silence this.")
     endif()
+# Each condition names its own reason rather than relying on the order of the
+# branches: the toolchain test used to sit after the try-compile one, so a
+# compiler that failed both was told "nothing is wrong with the toolchain".
+elseif(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
+        AND NOT AMREXPLORER_ENABLE_SANITIZERS
+        AND NOT AMREXPLORER_ENABLE_TSAN
+        AND NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    message(STATUS
+        "amrexplorer-server: linking the shared C++ runtime, because this "
+        "build uses ${CMAKE_CXX_COMPILER_ID} and only the GNU and Clang "
+        "families are known to honour -static-libstdc++ rather than accept and "
+        "ignore it. The server will need a matching libstdc++.so.6 wherever it "
+        "runs, which on an HPC system means the compiler module it was built "
+        "under. Build with GNU (module load gcc, or PrgEnv-gnu) for a freely "
+        "copyable server.")
 elseif(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
         AND NOT AMREXPLORER_ENABLE_SANITIZERS
         AND NOT AMREXPLORER_ENABLE_TSAN
@@ -108,17 +123,6 @@ elseif(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
         "the static-runtime link cannot be tested that way. Nothing is wrong "
         "with the toolchain; set -DAMREXPLORER_SERVER_STATIC_CXX_RUNTIME=OFF to "
         "silence this.")
-elseif(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
-        AND NOT AMREXPLORER_ENABLE_SANITIZERS
-        AND NOT AMREXPLORER_ENABLE_TSAN)
-    message(STATUS
-        "amrexplorer-server: linking the shared C++ runtime, because this "
-        "build uses ${CMAKE_CXX_COMPILER_ID} and only the GNU and Clang "
-        "families are known to honour -static-libstdc++ rather than accept and "
-        "ignore it. The server will need a matching libstdc++.so.6 wherever it "
-        "runs, which on an HPC system means the compiler module it was built "
-        "under. Build with GNU (module load gcc, or PrgEnv-gnu) for a freely "
-        "copyable server.")
 elseif(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME)
     # Asked for, and vetoed above. Say so: the veto leaves the cache reading ON
     # and AMREXPLORER_STATIC_CXX_RUNTIME_LINKS possibly reading 1 from an earlier

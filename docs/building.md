@@ -126,6 +126,7 @@ application.
 |---|---|---|
 | Ubuntu 24.04 | GCC | GitHub CI (full Qt) |
 | Ubuntu 24.04 | Clang | GitHub CI (full Qt) |
+| Ubuntu 26.04 | GCC 15 | Developer machines (full Qt) |
 | macOS 15 | AppleClang | GitHub CI (full Qt) |
 | Windows Server 2022 | MSVC 2022 | GitHub CI (full Qt) |
 

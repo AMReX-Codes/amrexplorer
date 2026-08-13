@@ -21,6 +21,46 @@ option(AMREXPLORER_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehav
 option(AMREXPLORER_ENABLE_TSAN "Enable ThreadSanitizer (mutually exclusive with AMREXPLORER_ENABLE_SANITIZERS)" OFF)
 option(AMREXPLORER_FORCE_FETCH_FLATBUFFERS
     "Skip installed FlatBuffers discovery and use the pinned fallback" OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(amrexplorer_static_cxx_default ON)
+else()
+    set(amrexplorer_static_cxx_default OFF)
+endif()
+option(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
+    "Link amrexplorer-server against a static libstdc++/libgcc"
+    ${amrexplorer_static_cxx_default})
+unset(amrexplorer_static_cxx_default)
+
+# CMake would default the install prefix to /usr/local, which essentially
+# nobody who builds this can write to: the users are HPC users without root and
+# desktop users who would otherwise reach for sudo. Default to the per-user
+# location each platform actually uses instead.
+#
+# Only when the caller did not choose one. Packagers always pass a prefix (or
+# stage through DESTDIR), so this cannot surprise them; it only replaces the
+# default nobody wanted.
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT
+        AND NOT WIN32 AND DEFINED ENV{HOME})
+    if(APPLE AND AMREXPLORER_BUILD_MACOS_APP_BUNDLE)
+        # The GUI installs as a .app bundle at the prefix root (BUNDLE
+        # DESTINATION .), so here the prefix *is* the applications folder.
+        # amrexplorer-server lands in a bin/ beside it, which is unusual for
+        # macOS but harmless -- the server is a headless HPC tool and those
+        # machines are not Macs.
+        set(amrexplorer_default_prefix "$ENV{HOME}/Applications")
+    else()
+        # ~/.local is the XDG user prefix, and the choice is load-bearing
+        # rather than cosmetic: ~/.local/share is $XDG_DATA_HOME, which is
+        # where the desktop entry and icons below have to land to be found at
+        # all. Installed under $HOME directly they are inert -- nothing
+        # searches $HOME/share. ~/.local/bin is also on PATH by default on most
+        # distributions.
+        set(amrexplorer_default_prefix "$ENV{HOME}/.local")
+    endif()
+    set(CMAKE_INSTALL_PREFIX "${amrexplorer_default_prefix}" CACHE PATH
+        "Install path prefix, prepended onto install directories" FORCE)
+    unset(amrexplorer_default_prefix)
+endif()
 
 if(AMREXPLORER_ENABLE_SERVER_TEST_HOOKS
     AND NOT AMREXPLORER_BUILD_TESTS)
@@ -59,11 +99,26 @@ check_cxx_source_compiles([=[
 ]=] AMREXPLORER_HAS_REQUIRED_CXX20_SUPPORT)
 
 if(NOT AMREXPLORER_HAS_REQUIRED_CXX20_SUPPORT)
+    # The remedy matters more than the diagnosis here. This fails most often on
+    # HPC login nodes, where the OS is several years old and /usr/bin/c++ is
+    # too, but a perfectly good compiler is one `module load` away -- so say so
+    # rather than leaving the reader to conclude the machine is unsupported.
     message(FATAL_ERROR
         "AMReXplorer requires a compiler and standard library with C++20 support "
         "(including <compare> and defaulted comparisons). "
         "The configured compiler is ${CMAKE_CXX_COMPILER_ID} "
-        "${CMAKE_CXX_COMPILER_VERSION} at ${CMAKE_CXX_COMPILER}.")
+        "${CMAKE_CXX_COMPILER_VERSION} at ${CMAKE_CXX_COMPILER}.\n"
+        "\n"
+        "On an HPC system this usually means CMake picked up the system "
+        "compiler in /usr/bin rather than a module-provided one. Load a newer "
+        "toolchain and point CMake at it in a fresh build directory, for "
+        "example:\n"
+        "    module load gcc\n"
+        "    cmake --preset remote -DCMAKE_CXX_COMPILER=g++\n"
+        "On Cray systems (Perlmutter, Frontier) the compiler wrapper is CC:\n"
+        "    cmake --preset remote -DCMAKE_CXX_COMPILER=CC\n"
+        "CMAKE_CXX_COMPILER is only read when a build directory is first "
+        "configured, so change it in a new directory or delete CMakeCache.txt.")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")

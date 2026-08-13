@@ -29,16 +29,20 @@ target_compile_definitions(amrexplorer_server
 # behaviour right in every tree, including hand-configured ones that no preset
 # covers.
 #
-# The compiler is not checked by identity. A GNU|Clang gate looked like a safety
-# net but was the opposite: the option's default has no compiler clause, so on a
-# Linux login node running oneAPI (IntelLLVM), NVHPC, Cray or XL the cache said
-# ON while the flags were quietly dropped -- exactly the toolchains this exists
-# for, failing silently, with INSTALL.md still promising a copyable binary. The
-# probe below is the real test: a toolchain that cannot link this way fails it
-# and gets the warning.
+# Restricted to the GNU and Clang families, whose handling of these flags is
+# known, and *not* silently. Both halves matter, and each was learned the hard
+# way. A probe alone is not enough: a driver that accepts an unknown switch and
+# ignores it makes the probe succeed while still linking libstdc++ dynamically,
+# so the build would claim a copyable binary and not have one. An allowlist
+# alone is not enough either: when this was a bare condition the flags simply
+# vanished on other toolchains while the cache still read ON and INSTALL.md
+# still promised the static link. So: restrict, and say so when the restriction
+# bites. GNU is what we recommend and test; Clang is included because the clang
+# preset and the CI job build with it.
 if(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
         AND NOT AMREXPLORER_ENABLE_SANITIZERS
-        AND NOT AMREXPLORER_ENABLE_TSAN)
+        AND NOT AMREXPLORER_ENABLE_TSAN
+        AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     include(CheckCXXSourceCompiles)
     # Re-probed on every configure. check_cxx_source_compiles caches its result,
     # so a tree first configured on a machine without libstdc++.a would keep the
@@ -76,6 +80,17 @@ if(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
             "get a freely copyable server, or set "
             "-DAMREXPLORER_SERVER_STATIC_CXX_RUNTIME=OFF to silence this.")
     endif()
+elseif(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
+        AND NOT AMREXPLORER_ENABLE_SANITIZERS
+        AND NOT AMREXPLORER_ENABLE_TSAN)
+    message(STATUS
+        "amrexplorer-server: linking the shared C++ runtime, because this "
+        "build uses ${CMAKE_CXX_COMPILER_ID} and only the GNU and Clang "
+        "families are known to honour -static-libstdc++ rather than accept and "
+        "ignore it. The server will need a matching libstdc++.so.6 wherever it "
+        "runs, which on an HPC system means the compiler module it was built "
+        "under. Build with GNU (module load gcc, or PrgEnv-gnu) for a freely "
+        "copyable server.")
 elseif(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME)
     # Asked for, and vetoed above. Say so: the veto leaves the cache reading ON
     # and AMREXPLORER_STATIC_CXX_RUNTIME_LINKS possibly reading 1 from an earlier

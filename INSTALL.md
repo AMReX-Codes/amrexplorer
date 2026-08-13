@@ -1,37 +1,24 @@
 # Installing AMReXplorer
 
-Build from source. Tested on Ubuntu 24.04 and 26.04, and on macOS; for Windows
-see [below](#windows). There are no prebuilt binaries yet.
+Build from source. Tested on Ubuntu 24.04 and 26.04, and on macOS.
 
-The build produces two independent executables.
+The build produces two programs:
 
-`amrexplorer` is the application. On its own it opens plotfiles stored on the
-machine it runs on, which is the ordinary case and needs nothing further.
+- `amrexplorer` — the application. Opens plotfiles on the machine it runs on.
+- `amrexplorer-server` — optional. Run it where the data lives, typically an HPC
+  login node, and connect to it from `amrexplorer` over an SSH tunnel.
 
-`amrexplorer-server` is optional. Run it on the machine where the data lives —
-typically an HPC login node — and connect to it from `amrexplorer` over an SSH
-tunnel, for datasets too large or too awkward to copy back. If you only ever
-open local files you can ignore it; a desktop build produces it anyway, and it
-costs nothing to leave alone.
+## Requirements
 
-| | needs at run time | typical home |
-| --- | --- | --- |
-| `amrexplorer` | Qt 6 and its dependencies | your desktop or laptop |
-| `amrexplorer-server` | the C and C++ system libraries — on Linux usually the C library alone, see [HPC](#hpc-systems-the-server-only) | an HPC login node |
-
-They install and move independently.
-
-## Dependencies
-
-CMake 3.25 or newer, a C++20 compiler, and Qt 6 for the desktop application.
-The CMake floor is worth checking before anything else — every command below
-uses presets, and `--fresh` needs 3.24 — because enterprise distributions and
-HPC login nodes often ship an older one:
+CMake 3.25 or newer, a C++20 compiler (GCC recommended), and Qt 6 for the
+application. Check CMake first — enterprise distributions and HPC login nodes
+often ship an older one:
 
 ```bash
 cmake --version
-module load cmake     # on an HPC system, if it is too old
 ```
+
+## Dependencies
 
 ### Linux (Ubuntu)
 
@@ -59,12 +46,8 @@ brew install cmake ninja qt
 ### Windows
 
 Windows is covered only in continuous integration: MSVC 2022 with Qt 6.8, using
-the `windows` preset, building and running the test suite on every change.
-
-None of the developers uses Windows or has tested a build on a Windows machine,
-so there is no guidance here on installing Qt, choosing an install location, or
-anything else specific to the platform. The CI job is evidence that the code
-compiles and the tests pass; it is not a supported installation path.
+the `windows` preset. None of the developers uses Windows or has tested a build
+on one, so there is no guidance here for it.
 
 ### Optional
 
@@ -75,11 +58,6 @@ sudo apt install ffmpeg   # Ubuntu
 brew install ffmpeg       # macOS
 ```
 
-FlatBuffers is found automatically: CMake uses an installed package when there
-is one and otherwise fetches the pinned version. Point `CMAKE_PREFIX_PATH` at an
-installed package for offline or package-managed builds, or set
-`-DAMREXPLORER_FORCE_FETCH_FLATBUFFERS=ON` to force the pinned fallback.
-
 ## Build
 
 ```bash
@@ -89,16 +67,12 @@ cmake --preset default
 cmake --build --preset default
 ```
 
-Run it straight from the build tree, without installing:
+Run it from the build tree without installing:
 
 ```bash
-./build/src/qt/amrexplorer /path/to/plotfile                      # Linux
-open build/src/qt/amrexplorer.app                                 # macOS
+./build/src/qt/amrexplorer /path/to/plotfile     # Linux
+open build/src/qt/amrexplorer.app                # macOS
 ```
-
-On macOS the build is an `.app` bundle; to pass a plotfile on the command line
-use `./build/src/qt/amrexplorer.app/Contents/MacOS/amrexplorer`, or configure
-with `-DAMREXPLORER_BUILD_MACOS_APP_BUNDLE=OFF` for a plain executable.
 
 ## Install
 
@@ -106,116 +80,43 @@ with `-DAMREXPLORER_BUILD_MACOS_APP_BUNDLE=OFF` for a plain executable.
 cmake --install build
 ```
 
-No `sudo`, and no prefix to choose: the default is the per-user location for
-your platform — `~/.local` on Linux, and `~/Applications` on macOS when building
-the `.app` bundle, which is the default there. (CMake's own default is
-`/usr/local`, which most people building this cannot write to.) Building on
-macOS with `-DAMREXPLORER_BUILD_MACOS_APP_BUNDLE=OFF` produces a plain
-executable rather than a bundle, and installs to `~/.local` like Linux.
-
-On Linux that installs:
-
-```
-~/.local/bin/amrexplorer
-~/.local/bin/amrexplorer-server
-~/.local/share/applications/amrexplorer.desktop
-~/.local/share/icons/hicolor/{16,32,64,128,256}x*/apps/amrexplorer.png
-```
-
-`~/.local/bin` is on `PATH` by default on most distributions, and the desktop
-entry and icons make AMReXplorer appear in your application menu. The
-application also writes its own desktop entry on first run, so the menu entry
-works even if you skip installing and just copy the executable somewhere.
-
-On macOS it installs `~/Applications/amrexplorer.app`, plus
-`~/Applications/bin/amrexplorer-server`.
+No `sudo` needed: this installs to `~/.local` on Linux and `~/Applications` on
+macOS. On Linux it also adds a desktop entry, so AMReXplorer appears in your
+application menu.
 
 Choose somewhere else with `--prefix`:
 
 ```bash
-cmake --install build --prefix /opt/amrexplorer      # needs write access
+cmake --install build --prefix /opt/amrexplorer
 ```
 
-## HPC systems: the server only
+## HPC systems
 
-On a cluster you want the server and nothing else. Use the `remote` preset,
-which builds no Qt and installs exactly one file:
-
-```bash
-cmake --preset remote
-cmake --build --preset remote
-cmake --install build-remote --prefix ${HOME}
-# -> ${HOME}/bin/amrexplorer-server
-```
-
-Three things are worth knowing.
-
-**The system compiler is usually too old.** HPC login nodes run an OS several
-years old, and `/usr/bin/c++` with it, so a default configure often fails on
-C++20 support. The compiler you want is a module away:
+Build the server only, with a GNU toolchain:
 
 ```bash
 module load gcc
+module load cmake          # if the system cmake is older than 3.25
 cmake --preset remote --fresh -DCMAKE_CXX_COMPILER=g++
+cmake --build --preset remote
+cmake --install build-remote --prefix ${HOME}
 ```
 
-On Cray systems such as Perlmutter and Frontier, use the compiler wrapper:
+That installs one file, `${HOME}/bin/amrexplorer-server`. On Cray systems such
+as Perlmutter and Frontier, use `PrgEnv-gnu` and `-DCMAKE_CXX_COMPILER=CC`.
 
-```bash
-cmake --preset remote --fresh -DCMAKE_CXX_COMPILER=CC
-```
+Use `--fresh` whenever you change the compiler; without it a build directory
+keeps the one it was first configured with.
 
-`--fresh` is not optional after a failed configure. That configure has already
-written a cache naming the old compiler, and while CMake normally clears such a
-cache and retries within the same run, the C++20 error aborts before it can — so
-without `--fresh` the next attempt fails identically, naming the old compiler
-again, and only a third would succeed.
-
-The same applies to any other preset: keep whichever one you were using and add
-`--fresh` and `-DCMAKE_CXX_COMPILER=...` to it. `--preset remote` above is the
-HPC case, not part of the fix.
-
-Configuring with an unsupported compiler fails with a message naming the
-compiler it found and repeating these commands.
-
-**The binary is easy to move.** On Linux the server links the C++ runtime
-statically and depends only on the C library, so you can build it once and copy
-it where you like — including to machines where the compiler module you built
-with is not loaded. It does need a glibc no older than the machine that built
-it, so build on the cluster rather than carrying a binary from your laptop.
-Packagers who want the system runtime should configure with
-`-DAMREXPLORER_SERVER_STATIC_CXX_RUNTIME=OFF`.
-
-**Beware a shared home directory.** Several centres share `${HOME}` across
-machines. Installing to the same `${HOME}/bin` from two clusters overwrites one
-build with the other, and the survivor may not run on both. Give each system its
-own prefix:
+If your `${HOME}` is shared between machines, give each its own prefix so one
+build does not overwrite another:
 
 ```bash
 cmake --install build-remote --prefix ${HOME}/perlmutter
 ```
 
-See the **[User Guide](docs/user-guide.md)** for connecting the desktop
-application to a running server over an SSH tunnel.
-
-## Development tools
-
-`amrexplorer-render-equivalence`, which compares local and remote rendering, is
-built but not installed by default. Install it deliberately with:
-
-```bash
-cmake --install build --component tools
-```
-
-## Packaging an AppImage
-
-An AppImage is a self-contained executable that runs on any modern Linux
-distribution without installing packages, which makes it a convenient way to
-move a build to machines you do not administer. Build one from a source build
-yourself: see
-**[Building an AppImage](docs/building.md#building-an-appimage)**.
-
-There is no release pipeline yet, so no prebuilt AppImage is published.
+See the **[User Guide](docs/user-guide.md)** for connecting the application to a
+running server over an SSH tunnel.
 
 ## Next steps
 
@@ -223,6 +124,9 @@ See the **[AMReXplorer User Guide](docs/user-guide.md)** for opening plotfiles,
 navigating 2-D and 3-D data, selecting AMR levels, animation, export, and
 troubleshooting. The same guide is bundled in the application under **Help >
 User Guide...**.
+
+Developers and packagers: see **[docs/building.md](docs/building.md)** for build
+options, presets, the compiler matrix, and packaging an AppImage.
 
 ## Existing installations
 

@@ -44,7 +44,12 @@ std::vector<VectorSegment> generateVectorGlyphs(
     const auto pixelCount = static_cast<std::size_t>(uComponent.width)
         * static_cast<std::size_t>(uComponent.height);
 
-    double maxSpeed = 0.0;
+    // Only the maximum is wanted, and sqrt is monotonic, so compare squared
+    // speeds and take one root at the end. std::hypot's overflow-safe scaling
+    // buys nothing here: the inputs are floats promoted to double, whose
+    // squares and sum cannot overflow a double. At the output cap this is up
+    // to 16.7 million hypot calls saved per vector slice.
+    double maxSpeedSquared = 0.0;
     for (std::size_t pixel = 0; pixel < pixelCount; ++pixel) {
         if (uComponent.valid[pixel] == 0 || vComponent.valid[pixel] == 0) {
             continue;
@@ -54,8 +59,9 @@ std::vector<VectorSegment> generateVectorGlyphs(
         if (!std::isfinite(u) || !std::isfinite(v)) {
             continue;
         }
-        maxSpeed = std::max(maxSpeed, std::hypot(u, v));
+        maxSpeedSquared = std::max(maxSpeedSquared, u * u + v * v);
     }
+    const double maxSpeed = std::sqrt(maxSpeedSquared);
 
     std::vector<VectorSegment> segments;
     if (!(maxSpeed >= minimumMaxSpeed)) {

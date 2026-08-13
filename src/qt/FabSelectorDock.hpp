@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <vector>
 
 class QLineEdit;
@@ -40,7 +41,14 @@ public:
     void setEntries(std::vector<FabSelectorEntry> entries);
     [[nodiscard]] const std::vector<FabSelectorEntry>& entries() const noexcept;
     void setBackAvailable(bool available);
+    [[nodiscard]] bool backAvailable() const noexcept;
     void selectEntry(std::size_t ordinal);
+    // The ordinal the table currently highlights, or nullopt if nothing is
+    // selected. Together with backAvailable this is the selector state a
+    // caller has to put back when an open it committed to optimistically
+    // turns out to have failed.
+    [[nodiscard]] std::optional<std::size_t> selectedOrdinal() const;
+    void clearSelection();
 
 signals:
     void viewRequested(std::size_t entry);
@@ -60,6 +68,7 @@ private:
     QTableView* m_table = nullptr;
     QPushButton* m_view = nullptr;
     QPushButton* m_back = nullptr;
+    bool m_backAvailable = false;
     int m_dimension = 0;
 };
 

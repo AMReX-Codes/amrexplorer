@@ -3,9 +3,14 @@
 #include <amrexplorer/data/DatasetSession.hpp>
 #include <amrexplorer/remote/Connection.hpp>
 
+#include <condition_variable>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <set>
 #include <string>
+#include <tuple>
 
 namespace amrvis::remote {
 
@@ -52,6 +57,18 @@ private:
         std::string path, OpenedDataset opened);
     void requireOpen() const;
 
+    // A range is immutable for a (dataset, field, level, composition, scope),
+    // and the dataset is fixed for the life of this session, so a successful
+    // answer never has to be asked for twice. The UI defaults to File range
+    // mode and resolves it after every slice, so without this each pan, zoom,
+    // sequence frame, and cosmetic re-render paid an extra serialized round
+    // trip -- and a logarithmic display resolves twice per render.
+    //
+    // RangeRequest has no equality or hash, so the key is a tuple of exactly
+    // the fields the server distinguishes.
+    using RangeKey = std::tuple<std::uint32_t, int, std::uint8_t, std::uint8_t>;
+    [[nodiscard]] static RangeKey rangeKey(const RangeRequest& request) noexcept;
+
     std::shared_ptr<Connection> m_connection;
     std::string m_path;
     DatasetId m_id;
@@ -63,6 +80,22 @@ private:
     std::vector<std::uint8_t> m_levelRangeAvailable;
     mutable std::mutex m_mutex;
     bool m_open = true;
+
+    // Successful answers only. An empty optional is one of them -- the wire
+    // carries "has range" as a boolean, so "this field has no range" is an
+    // answer rather than an absence. Errors, cancellations, and disconnects are
+    // never recorded, so none of them can poison a later retry.
+    //
+    // m_rangeInFlight plus the condition variable coalesce concurrent identical
+    // misses into one transaction: the first caller for a key does the work and
+    // the rest wait for it. A waiter whose leader failed takes the work over
+    // itself rather than inheriting the failure. Neither mutex is ever held
+    // across network I/O.
+    mutable std::mutex m_rangeMutex;
+    mutable std::condition_variable m_rangeReady;
+    std::map<RangeKey, std::optional<ValueRange>> m_ranges;
+    std::set<RangeKey> m_rangeInFlight;
+
 };
 
 } // namespace amrvis::remote

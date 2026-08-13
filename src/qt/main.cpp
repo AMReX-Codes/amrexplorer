@@ -1950,6 +1950,160 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path); });
     } else if (argc == 3
+        && std::string_view(argv[1]) == "--fab-overlap-failure-smoke-test") {
+        // Regression for the FAB selector rollback under overlapping opens.
+        // Commit record 0 (call it X), then click record 1 twice in one slot so
+        // both reads are in flight together, and make both fail. The second
+        // click must inherit X as its rollback rather than snapshotting the
+        // dock -- which by then shows record 1, a selection that was never
+        // displayed. Without that, the failure restores record 1 and the dock
+        // claims a FAB the window is not showing.
+        //
+        // The overlap is structural, not timed: the two viewFab calls run in
+        // one event-loop slot, so neither completion can have been delivered,
+        // and the pool gate additionally holds both reads until the file is
+        // gone so both are guaranteed to fail.
+        const std::filesystem::path path(argv[2]);
+        auto phase = std::make_shared<int>(0);
+        auto baselineErrors = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, phase, path,
+                baselineErrors](bool success) {
+                auto* selector =
+                    window.findChild<amrvis::qt::FabSelectorDock*>();
+                if (!success || selector == nullptr
+                    || selector->entries().size() < 2) {
+                    application.exit(1);
+                    return;
+                }
+                if (*phase == 0) {
+                    // Commit X = record 0 through the normal async path.
+                    *phase = 1;
+                    window.viewFabForTest(0);
+                    return;
+                }
+                if (*phase != 1) {
+                    return;
+                }
+                *phase = 2;
+                if (selector->selectedOrdinal() != std::optional<std::size_t>{0}) {
+                    application.exit(1);   // X did not commit
+                    return;
+                }
+                *baselineErrors = window.backgroundErrorCountForTest();
+                auto* pool = QThreadPool::globalInstance();
+                pool->setMaxThreadCount(1);
+                auto gate = std::make_shared<std::atomic<bool>>(false);
+                pool->start(QRunnable::create([gate] {
+                    while (!gate->load()) {
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(2));
+                    }
+                }));
+                // Both queued behind the gate, in one slot: A is superseded by
+                // B before either can complete.
+                window.viewFabForTest(1);
+                window.viewFabForTest(1);
+                std::error_code removeError;
+                std::filesystem::remove(path, removeError);
+                gate->store(true);
+                // Wait for the failure to be reported, then assert. A watchdog
+                // below fails the run rather than letting it hang.
+                auto* poll = new QTimer(&window);
+                poll->setInterval(5);
+                QObject::connect(poll, &QTimer::timeout, &window,
+                    [&window, &application, selector, poll, baselineErrors] {
+                        if (window.backgroundErrorCountForTest()
+                            <= *baselineErrors) {
+                            return;
+                        }
+                        poll->stop();
+                        // The rollback must be X, not the record that was
+                        // merely highlighted when the second click landed.
+                        application.exit(selector->selectedOrdinal()
+                                == std::optional<std::size_t>{0}
+                            ? 0 : 1);
+                    });
+                poll->start();
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--fab-direct-open-failure-smoke-test") {
+        // Regression for a superseding request that brings no rollback of its
+        // own. Commit record 0 (X), click record 1 so the dock moves to it with
+        // a read in flight, then take the direct "open a raw FAB file" path --
+        // which the app reaches through a file dialog and which passes no
+        // rollback -- for a file that does not exist. The direct open retires
+        // the click, so the click restores nothing; if the direct open does not
+        // inherit the click's rollback, its own failure restores nothing either
+        // and the dock is left on record 1 while X is still displayed.
+        const std::filesystem::path path(argv[2]);
+        auto phase = std::make_shared<int>(0);
+        auto baselineErrors = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, phase, path,
+                baselineErrors](bool success) {
+                auto* selector =
+                    window.findChild<amrvis::qt::FabSelectorDock*>();
+                if (!success || selector == nullptr
+                    || selector->entries().size() < 2) {
+                    application.exit(1);
+                    return;
+                }
+                if (*phase == 0) {
+                    *phase = 1;
+                    window.viewFabForTest(0);
+                    return;
+                }
+                if (*phase != 1) {
+                    return;
+                }
+                *phase = 2;
+                if (selector->selectedOrdinal()
+                    != std::optional<std::size_t>{0}) {
+                    application.exit(1);
+                    return;
+                }
+                *baselineErrors = window.backgroundErrorCountForTest();
+                auto* pool = QThreadPool::globalInstance();
+                pool->setMaxThreadCount(1);
+                auto gate = std::make_shared<std::atomic<bool>>(false);
+                pool->start(QRunnable::create([gate] {
+                    while (!gate->load()) {
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(2));
+                    }
+                }));
+                // Both queued behind the gate and issued in one slot, so the
+                // click is genuinely unresolved when the direct open supersedes
+                // it. The direct open's target does not exist, so it fails.
+                window.viewFabForTest(1);
+                window.openStandaloneFabForTest(
+                    path.parent_path() / "no_such_fab_file");
+                gate->store(true);
+                auto* poll = new QTimer(&window);
+                poll->setInterval(5);
+                QObject::connect(poll, &QTimer::timeout, &window,
+                    [&window, &application, selector, poll, baselineErrors] {
+                        if (window.backgroundErrorCountForTest()
+                            <= *baselineErrors) {
+                            return;
+                        }
+                        poll->stop();
+                        application.exit(selector->selectedOrdinal()
+                                == std::optional<std::size_t>{0}
+                            ? 0 : 1);
+                    });
+                poll->start();
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--fab-zoom-smoke-test") {
         // Regression for fab-round-trip-loses-visible-region: zoom the MultiFab
         // slice, drill into a FAB, go back, and confirm the restored MultiFab

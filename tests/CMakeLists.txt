@@ -948,6 +948,31 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_multifab_fab_mode PROPERTIES TIMEOUT 30)
+    # Two regressions for the standalone-FAB selector rollback. Both gate the
+    # shared pool to one occupied thread so the overlap is structural rather
+    # than timed: the reads cannot start until the test releases them.
+    add_test(
+        NAME qt_fab_overlap_failure
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_fab_overlap_failure"
+            -DMODE=fab-overlap-failure
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_fab_overlap_failure PROPERTIES TIMEOUT 60)
+    add_test(
+        NAME qt_fab_direct_open_failure
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_fab_direct_open"
+            -DMODE=fab-direct-open-failure
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_fab_direct_open_failure PROPERTIES TIMEOUT 60)
     # Regression test for fab-round-trip-loses-visible-region: zooming a MultiFab
     # slice, drilling into a FAB, and going back must leave the restored view
     # still zoomed (visibleRegion written back into the view state).

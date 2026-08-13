@@ -104,6 +104,25 @@ LineQueryResult LineQuery::execute(
             lineBox.lower[i] = index;
             lineBox.upper[i] = index;
         }
+        // ...and only the stretch of the line axis the caller asked about. The
+        // walk below already honours request.region physically, but without
+        // this the planning stayed full-width: a line plot zoomed into a small
+        // fraction of the domain still read every block the full-domain line
+        // crosses. Clamped in index space, at this level's resolution, so the
+        // block intersection test is comparing like with like.
+        if (request.region.has_value()) {
+            const auto first = physicalToIndex(
+                physicalStart, metadata, level, request.axis);
+            const auto last = physicalToIndex(
+                physicalEnd, metadata, level, request.axis);
+            lineBox.lower[lineAxis] = std::max(
+                lineBox.lower[lineAxis], std::min(first, last));
+            lineBox.upper[lineAxis] = std::min(
+                lineBox.upper[lineAxis], std::max(first, last));
+            if (lineBox.lower[lineAxis] > lineBox.upper[lineAxis]) {
+                continue;  // the region misses this level entirely
+            }
+        }
         auto& loaded = loadedByLevel[static_cast<std::size_t>(levelIndex)];
         for (std::size_t grid = 0; grid < level.blocks.size(); ++grid) {
             const auto& block = level.blocks[grid];

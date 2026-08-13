@@ -116,6 +116,7 @@ public:
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
         }
+        m_transactions.fetch_add(1, std::memory_order_relaxed);
         const auto requestId = nextRequestId();
         auto pending = std::make_shared<Pending>();
         pending->expected = expected;
@@ -325,6 +326,11 @@ public:
         std::scoped_lock lock(m_cacheMutex);
         const auto found = m_cache.find(dataset.value);
         return found == m_cache.end() ? CacheMetrics{} : found->second;
+    }
+
+    [[nodiscard]] std::uint64_t transactionCount() const noexcept
+    {
+        return m_transactions.load(std::memory_order_relaxed);
     }
 
     void ping(StopToken cancellation)
@@ -575,6 +581,10 @@ private:
     std::chrono::milliseconds m_requestTimeout;
     StopSource m_lifecycleStop;
     std::atomic<std::uint64_t> m_nextRequestId{1};
+    // Every started transaction, including the ones that go on to fail. Kept
+    // separately from m_nextRequestId, which is an identifier rather than a
+    // count and is not otherwise observable.
+    std::atomic<std::uint64_t> m_transactions{0};
     std::atomic<std::uint64_t> m_nextPingNonce{1};
     std::mutex m_closeMutex;
     mutable std::mutex m_stateMutex;
@@ -684,6 +694,11 @@ CacheMetrics Connection::setCacheBudget(
 CacheMetrics Connection::latestCache(DatasetId dataset) const
 {
     return m_impl->latestCache(dataset);
+}
+
+std::uint64_t Connection::transactionCount() const noexcept
+{
+    return m_impl->transactionCount();
 }
 
 void Connection::ping(StopToken cancellation)

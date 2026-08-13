@@ -277,21 +277,35 @@ std::vector<ContourPolyline> chainSegments(
                 polyline.points.push_back({segment.x0, segment.y0});
             }
         }
+        // Grow the front into its own vector and splice it on at the end.
+        // Prepending in place shifts the whole chain per point, and because the
+        // unstable sort above scrambles seed positions roughly half of each
+        // chain is built this way -- O(k^2) for a k-segment iso-line, which at
+        // 4096 width is easily tens of thousands of segments, per level, per
+        // re-render.
+        decltype(polyline.points) front;
         for (;;) {
-            const auto& front = polyline.points.front();
-            const auto next = takeAt(pointKey(front[0], front[1]));
+            const auto& tip
+                = front.empty() ? polyline.points.front() : front.back();
+            const auto next = takeAt(pointKey(tip[0], tip[1]));
             if (!next.has_value()) {
                 break;
             }
             used[next->segment] = true;
             const auto& segment = segments[next->segment];
             if (next->end == 0) {
-                polyline.points.insert(polyline.points.begin(),
-                    {segment.x1, segment.y1});
+                front.push_back({segment.x1, segment.y1});
             } else {
-                polyline.points.insert(polyline.points.begin(),
-                    {segment.x0, segment.y0});
+                front.push_back({segment.x0, segment.y0});
             }
+        }
+        if (!front.empty()) {
+            // One insert, not one per point: the range overload knows the
+            // count up front, so the tail shifts once and the vector grows at
+            // most once -- the same O(k) this hunk exists to get, without a
+            // third buffer to copy both halves into.
+            polyline.points.insert(
+                polyline.points.begin(), front.rbegin(), front.rend());
         }
         // A chain that returns to its start is a closed loop; drop the
         // duplicated closing point so the ring lists each vertex once.

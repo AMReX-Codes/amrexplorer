@@ -260,6 +260,120 @@ int main(int argc, char* argv[])
                         && range->maximum == localRange->maximum)),
             "local and remote range values differ");
 
+        // A range is immutable for its key, so asking again must not cost a
+        // round trip. The counter is the assertion: timing would prove nothing
+        // over loopback, and the point of the memo is the transaction, not the
+        // latency. The UI resolves a range after every slice in the default
+        // File mode, which is why this repetition is the common case rather
+        // than a contrived one.
+        const amrvis::RangeRequest fileRange{
+            .field = amrvis::FieldId{0},
+            .maximumLevel = dataset->metadata().finestLevel,
+            .composition = amrvis::CompositionPolicy::FinestAvailable,
+            .scope = amrvis::RangeScope::File};
+        {
+            const auto before = connection->transactionCount();
+            for (int repeat = 0; repeat < 5; ++repeat) {
+                const auto repeated = dataset->requestRange(fileRange);
+                require(repeated.has_value() == range.has_value()
+                        && (!repeated
+                            || (repeated->minimum == range->minimum
+                                && repeated->maximum == range->maximum)),
+                    "a memoized range differs from the one it answers for");
+            }
+            require(connection->transactionCount() == before,
+                "repeated identical range resolves still transacted");
+        }
+
+        // Distinct keys stay distinct: Level scope is a different question from
+        // File scope even for the same field and level.
+        {
+            auto levelScope = fileRange;
+            levelScope.scope = amrvis::RangeScope::Level;
+            const auto before = connection->transactionCount();
+            static_cast<void>(dataset->requestRange(levelScope));
+            require(connection->transactionCount() > before,
+                "a distinct range key was answered from another key's memo");
+            const auto after = connection->transactionCount();
+            static_cast<void>(dataset->requestRange(levelScope));
+            require(connection->transactionCount() == after,
+                "the distinct range key was not memoized in its turn");
+        }
+
+        // Concurrent identical misses coalesce rather than each transacting.
+        {
+            auto uncached = fileRange;
+            uncached.composition = amrvis::CompositionPolicy::ExactLevel;
+            uncached.maximumLevel = 0;
+            const auto before = connection->transactionCount();
+            auto first = std::async(std::launch::async,
+                [&] { return dataset->requestRange(uncached); });
+            auto second = std::async(std::launch::async,
+                [&] { return dataset->requestRange(uncached); });
+            const auto firstValue = first.get();
+            const auto secondValue = second.get();
+            require(firstValue.has_value() == secondValue.has_value(),
+                "concurrent range resolves disagreed");
+            // Exactly one, not "at most two": two is what *uncoalesced* misses
+            // cost, so a <= before + 2 bound would pass with the coalescing
+            // deleted and assert nothing at all. One of the two calls leads and
+            // transacts; the other waits and reads the memo.
+            require(connection->transactionCount() == before + 1,
+                "concurrent identical range misses did not coalesce");
+        }
+
+        // A cancelled resolve records nothing, so the retry after it succeeds.
+        // The key has to be one nothing above resolved, or the "cancelled"
+        // call is answered from the memo and never exercises the path at all.
+        {
+            auto retried = fileRange;
+            retried.maximumLevel = 0;
+            retried.composition = amrvis::CompositionPolicy::ExactLevel;
+            retried.scope = amrvis::RangeScope::Level;
+            amrvis::StopSource cancelled;
+            cancelled.request_stop();
+            bool reportedCancelled = false;
+            try {
+                static_cast<void>(
+                    dataset->requestRange(retried, cancelled.get_token()));
+            } catch (const amrvis::ReadCancelled&) {
+                reportedCancelled = true;
+            }
+            require(reportedCancelled,
+                "a pre-cancelled range resolve returned a value");
+            const auto afterCancel = connection->transactionCount();
+            const auto recovered = dataset->requestRange(retried);
+            require(connection->transactionCount() > afterCancel,
+                "the cancelled resolve left a memo entry behind");
+            const auto afterRetry = connection->transactionCount();
+            const auto again = dataset->requestRange(retried);
+            require(again.has_value() == recovered.has_value()
+                    && (!again
+                        || (again->minimum == recovered->minimum
+                            && again->maximum == recovered->maximum)),
+                "the recovered range differs from the one it memoized");
+            require(connection->transactionCount() == afterRetry,
+                "the recovered range was not memoized");
+        }
+
+        // Cancellation outranks the memo. Before it existed every resolve
+        // reached the transport, which answers an already-cancelled token with
+        // ReadCancelled; callers branch on that to tell abandoned work from an
+        // answer, so a memo hit must not report success for a cancelled call.
+        {
+            amrvis::StopSource cancelled;
+            cancelled.request_stop();
+            bool reportedCancelled = false;
+            try {
+                static_cast<void>(
+                    dataset->requestRange(fileRange, cancelled.get_token()));
+            } catch (const amrvis::ReadCancelled&) {
+                reportedCancelled = true;
+            }
+            require(reportedCancelled,
+                "a memoized range ignored an already-cancelled token");
+        }
+
         const amrvis::RangeRequest invalidRange{
             .field = amrvis::FieldId{999},
             .maximumLevel = 0,

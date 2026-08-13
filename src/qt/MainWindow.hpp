@@ -195,6 +195,20 @@ public:
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
     [[nodiscard]] bool fabStateClearedForTest() const;
+    // Test-only: how many failures have been reported non-modally. The FAB
+    // rollback smoke tests assert on this so a passing run proves the failure
+    // branch actually ran rather than the read having quietly succeeded.
+    // Saturates: reportBackgroundError keeps only the newest 50, so a test that
+    // waits for this to exceed a baseline of 50 would wait forever. Both
+    // current callers start from an empty list.
+    [[nodiscard]] int backgroundErrorCountForTest() const
+    {
+        return static_cast<int>(m_backgroundErrors.size());
+    }
+    // Test-only: the direct "open a raw FAB file" entry point, reached in the
+    // app through a file dialog. Supplies no rollback of its own, which is what
+    // makes it the interesting case when it supersedes a selector click.
+    void openStandaloneFabForTest(const std::filesystem::path& path);
     void setGridBoxesVisibleForTest(bool visible);
     [[nodiscard]] std::size_t activeViewGridBoxCountForTest() const;
 
@@ -596,7 +610,11 @@ private:
     // change, or no resolution change).
     [[nodiscard]] std::optional<QRectF> sphericalReframe(
         const PlaneViewState& state, const SliceDisplayResult& display) const;
-    void showSlice(PlaneViewState& state, const SliceDisplayResult& display);
+    // By value, and callers move into it: the planes are the largest thing an
+    // arrival carries -- at the 4096 output cap a ScalarPlane is around 117 MB
+    // and the ImageBuffer around 67 MB -- and a const& forced this function to
+    // deep-copy them again into the shared_ptr snapshots it publishes.
+    void showSlice(PlaneViewState& state, SliceDisplayResult display);
     void updateOverlay(PlaneViewState& state);
     void updateOverlays();
     void updateGridBoxes(PlaneViewState& state);
@@ -661,6 +679,47 @@ private:
     // demand-driven and never clamped. Zero when there is nothing to report.
     // See agent-notes/issues/fixed-scale-clamped-native-raster.md.
     [[nodiscard]] double effectiveFixedScale(int factor) const;
+    // Reads a standalone FAB header off the GUI thread and opens it from the
+    // completion. The read is one small pread, but it is a *blocking* one, and
+    // on the network filesystems these datasets usually live on it freezes the
+    // event loop for as long as the server takes. Every other header read in
+    // this window already runs on a worker (see buildFabSelector); these two
+    // entry points were the exceptions.
+    //
+    // The selector state a failed standalone-FAB open falls back to: the last
+    // one actually committed to the window, not merely highlighted.
+    struct FabSelectorRollback {
+        bool fabMode = false;
+        bool backAvailable = false;
+        std::optional<std::size_t> ordinal;
+    };
+    // A launched standalone-FAB header read that has not resolved yet, carrying
+    // the state to restore if it fails. The pair (generation, requestId) is what
+    // makes this safe without any site reaching in to clear it: only the
+    // completion holding both may consume the entry, so opening a dataset
+    // (which bumps m_generation) or tearing the selector down (which bumps
+    // m_fabOpenGeneration) revokes it as a side effect of what it already does.
+    // A second click while a read is in flight inherits the pending rollback
+    // rather than snapshotting the dock, because what the dock shows then is
+    // that pending selection, which was never displayed.
+    struct PendingFabOpen {
+        std::uint64_t generation = 0;
+        std::uint64_t requestId = 0;
+        FabSelectorRollback rollback;
+    };
+
+    // A caller that moves the selector to the pending record before the read
+    // returns passes the state to fall back to; a read that fails while it is
+    // still the current request puts it back. Failures are reported through
+    // reportBackgroundError: this one arrives from a worker, like every other
+    // background load failure, and a modal dialog here would open a nested
+    // event loop on the arrival path.
+    void openStandaloneFabAsync(std::filesystem::path path,
+        std::optional<std::uint64_t> fileOffset,
+        std::filesystem::path dataRoot, bool preserveFabSelector,
+        std::optional<FrameSliceSpec> initialSpec, QString failureTitle,
+        std::optional<FabSelectorRollback> rollback = std::nullopt);
+    void applyFabSelectorRollback(const FabSelectorRollback& rollback);
     void configureSliceControls();
     // Enable the dataset-dependent field/level/range/menu controls once a
     // dataset (single or sequence frame) is loaded. Shared by
@@ -878,6 +937,12 @@ private:
     QStringList m_backgroundErrors;
     bool m_controlsReady = false;
     std::uint64_t m_generation = 0;
+    // Newest-wins among overlapping standalone-FAB header reads. m_generation
+    // alone cannot order them: it is bumped by openDatasetImpl, which only runs
+    // once a read has already completed, so two reads in flight together both
+    // still match the generation they captured.
+    std::uint64_t m_fabOpenGeneration = 0;
+    std::optional<PendingFabOpen> m_pendingFabOpen;
     std::uint64_t m_activeRequests = 0;
     bool m_closing = false;
     std::uint64_t m_staleResults = 0;

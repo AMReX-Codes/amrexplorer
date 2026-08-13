@@ -214,5 +214,77 @@ int main()
             "the storage check did not precede the range/log checks");
     }
 
+    // The renderer resolves the palette into a lookup table once instead of
+    // calling Palette::argb per pixel. That is only allowed to be faster, never
+    // different: this walks a plane across the whole range, including both
+    // clipped ends and the slot boundaries in between, and requires every pixel
+    // to equal what argb would have produced.
+    {
+        const auto& palette = amrvis::builtinPalette(
+            amrvis::BuiltinPalette::Rainbow);
+        constexpr int samples = 4096;
+        amrvis::ScalarPlane sweep;
+        sweep.width = samples;
+        sweep.height = 1;
+        sweep.values.resize(static_cast<std::size_t>(samples));
+        sweep.valid.assign(static_cast<std::size_t>(samples), 1);
+        // Deliberately runs outside [0, 1] at both ends so the two clipping
+        // branches are covered, not just the interior.
+        for (int i = 0; i < samples; ++i) {
+            sweep.values[static_cast<std::size_t>(i)] = static_cast<float>(
+                -0.25 + 1.5 * static_cast<double>(i)
+                    / static_cast<double>(samples - 1));
+        }
+        amrvis::ScalarRenderSettings sweepSettings;
+        sweepSettings.minimum = 0.0;
+        sweepSettings.maximum = 1.0;
+        sweepSettings.palette = &palette;
+        const auto sweepImage = amrvis::renderScalarPlane(sweep, sweepSettings);
+        for (int i = 0; i < samples; ++i) {
+            const auto value
+                = static_cast<double>(sweep.values[static_cast<std::size_t>(i)]);
+            const auto normalized = (value - sweepSettings.minimum)
+                / (sweepSettings.maximum - sweepSettings.minimum);
+            require(sweepImage.rgba[static_cast<std::size_t>(i)]
+                    == palette.argb(normalized),
+                "the palette lookup table disagrees with Palette::argb");
+        }
+    }
+
+    // The sweep above uses [0, 1], whose reciprocal is exact, so it cannot see
+    // what hoisting the division out of the loop costs. [0, 49] can, at both
+    // ends of the failure: 49 * (1/49) is 0.99999999999999988898 rather than
+    // 1.0, dropping the maximum into the second-to-last slot, and 24.5 * (1/49)
+    // is 0.49999999999999994 rather than exactly 0.5, dropping the midpoint
+    // from slot 126 to 125. Random sampling does not find the second one --
+    // random doubles do not land on exact ties -- so it is pinned by value
+    // here rather than left to the sweep.
+    {
+        const auto& palette = amrvis::builtinPalette(
+            amrvis::BuiltinPalette::Rainbow);
+        amrvis::ScalarPlane peak;
+        peak.width = 3;
+        peak.height = 1;
+        peak.values = {0.0F, 24.5F, 49.0F};
+        peak.valid = {1, 1, 1};
+        amrvis::ScalarRenderSettings peakSettings;
+        peakSettings.minimum = 0.0;
+        peakSettings.maximum = 49.0;
+        peakSettings.palette = &palette;
+        const auto peakImage = amrvis::renderScalarPlane(peak, peakSettings);
+        require(peakImage.rgba[0] == palette.slotArgb(amrvis::Palette::paletteStart),
+            "a pixel at the range minimum did not get the first data slot");
+        require(peakImage.rgba[2] == palette.slotArgb(amrvis::Palette::paletteEnd),
+            "a pixel at the range maximum did not get the last data slot");
+        require(peakImage.rgba[2] == palette.argb(1.0),
+            "a pixel at the range maximum disagrees with the color bar");
+        // The midpoint of the range is the midpoint of the palette.
+        require(peakImage.rgba[1] == palette.argb(0.5),
+            "a pixel at the range midpoint disagrees with the color bar");
+        require(peakImage.rgba[1]
+                == palette.slotArgb(amrvis::Palette::paletteStart + 126),
+            "the range midpoint did not get the midpoint slot");
+    }
+
     return 0;
 }

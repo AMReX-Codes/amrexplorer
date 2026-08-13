@@ -157,24 +157,55 @@ std::optional<ValueRange> LocalDatasetSession::requestRange(
     const auto dataset = requireDataset();
     validateSessionRangeRequest(m_metadata, request);
     if (m_metadata.isFab && request.scope == RangeScope::File) {
-        BlockRequest block;
-        block.dataset = m_id;
-        block.field = request.field;
-        const auto access = dataset->requestBlock(block, cancellation);
+        // A standalone FAB has no metadata statistic, so the File range has to
+        // be scanned out of the payload. The result is immutable for this
+        // (dataset, field), and the resolver asks for it on every range
+        // resolve, so scan once.
+        //
+        // The check precedes the memo for the same reason it precedes the scan:
+        // the block read this used to always perform answered an already-
+        // cancelled token with ReadCancelled, and a memo hit must not turn
+        // abandoned work into a successful resolve.
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
+        {
+            std::scoped_lock lock(m_mutex);
+            if (const auto found = m_fabRanges.find(request.field.value);
+                found != m_fabRanges.end()) {
+                return found->second;
+            }
+        }
+        const auto access = [&] {
+            BlockRequest block;
+            block.dataset = m_id;
+            block.field = request.field;
+            return dataset->requestBlock(block, cancellation);
+        }();
         auto minimum = std::numeric_limits<double>::infinity();
         auto maximum = -std::numeric_limits<double>::infinity();
-        for (std::size_t index = 0; index < access.handle->values.size();
-             ++index) {
-            const auto value = access.handle->values[index];
+        const auto& values = access.handle->values;
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            // The read itself polls cancellation; this pass did not, so a
+            // cancelled request still walked every value of a large FAB before
+            // returning. One check per chunk keeps that responsive without
+            // putting a branch on every value.
+            if ((index & 0xFFFFU) == 0 && cancellation.stop_requested()) {
+                throw ReadCancelled();
+            }
+            const auto value = values[index];
             if (std::isfinite(value)) {
                 minimum = std::min(minimum, value);
                 maximum = std::max(maximum, value);
             }
         }
-        if (std::isfinite(minimum) && std::isfinite(maximum)) {
-            return ValueRange{minimum, maximum};
-        }
-        return std::nullopt;
+        const auto result = std::isfinite(minimum) && std::isfinite(maximum)
+            ? std::optional<ValueRange>{ValueRange{minimum, maximum}}
+            : std::nullopt;
+        // Only a completed scan is recorded; a cancelled one threw above.
+        std::scoped_lock lock(m_mutex);
+        m_fabRanges.insert_or_assign(request.field.value, result);
+        return result;
     }
     return compositeMetadataRange(m_metadata, request);
 }

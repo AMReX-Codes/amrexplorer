@@ -374,8 +374,36 @@ const std::vector<FabSelectorEntry>& FabSelectorDock::entries() const noexcept
 
 void FabSelectorDock::setBackAvailable(bool available)
 {
+    // Recorded rather than read back off the button: a widget inside a hidden
+    // dock reports isVisible() == false however it was configured, and the
+    // restore path below needs the configured value.
+    m_backAvailable = available;
     m_back->setVisible(available);
     m_back->setEnabled(available);
+}
+
+bool FabSelectorDock::backAvailable() const noexcept
+{
+    return m_backAvailable;
+}
+
+std::optional<std::size_t> FabSelectorDock::selectedOrdinal() const
+{
+    const auto index = m_table->currentIndex();
+    if (!index.isValid()) {
+        return std::nullopt;
+    }
+    const auto ordinal = index.data(Qt::UserRole);
+    if (!ordinal.isValid()) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(ordinal.toULongLong());
+}
+
+void FabSelectorDock::clearSelection()
+{
+    m_table->clearSelection();
+    m_table->setCurrentIndex({});
 }
 
 void FabSelectorDock::selectEntry(std::size_t ordinal)

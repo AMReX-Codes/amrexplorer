@@ -27,6 +27,7 @@ add_executable(amrexplorer_qt
     MainWindowTestAccess.cpp
     NumberFormat.cpp
     NumberFormat.hpp
+    QtErrorText.hpp
     RemoteConnectArguments.hpp
     RemoteEndpoint.hpp
     ScientificDoubleSpinBox.cpp

@@ -5,6 +5,7 @@
 // functions are inline so every unit that needs one gets the same definition.
 
 #include "MainWindow.hpp"
+#include "QtErrorText.hpp"
 #include "AnimationExporter.hpp"
 #include "SequenceController.hpp"
 #include "AnimationPanel.hpp"
@@ -69,6 +70,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -85,6 +87,7 @@
 #include <QStackedWidget>
 #include <QStandardItemModel>
 #include <QStatusBar>
+#include <QString>
 #include <QStringList>
 #include <QStyleOptionComboBox>
 #include <QStyledItemDelegate>
@@ -102,6 +105,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -127,27 +131,6 @@ inline constexpr std::array<BuiltinPalette, 7> builtinPalettes{
     BuiltinPalette::Rainbow, BuiltinPalette::Turbo, BuiltinPalette::Viridis,
     BuiltinPalette::Plasma, BuiltinPalette::Parula, BuiltinPalette::Coolwarm,
     BuiltinPalette::Blackbody};
-// Menu labels and QSettings keys; kept in sync with builtinPaletteName().
-inline constexpr std::array<const char*, 7> builtinPaletteNames{
-    "rainbow", "turbo", "viridis", "plasma", "parula", "coolwarm", "blackbody"};
-
-inline constexpr std::array<Qt::GlobalColor, 7> particleDefaultColors{
-    Qt::white, Qt::yellow, Qt::cyan, Qt::magenta,
-    Qt::green, Qt::red, Qt::lightGray};
-
-inline QColor defaultParticleColor(std::size_t speciesIndex)
-{
-    return QColor(
-        particleDefaultColors[speciesIndex % particleDefaultColors.size()]);
-}
-
-inline void updateColorButton(QPushButton& button, const QColor& color)
-{
-    QPixmap swatch(18, 18);
-    swatch.fill(color);
-    button.setIcon(QIcon(swatch));
-    button.setText(color.name(QColor::HexRgb).toUpper());
-}
 
 inline QImage verticallyFlippedCopy(const QImage& image)
 {
@@ -172,101 +155,6 @@ inline QImage displayImageFor(const ImageBuffer& image)
     return verticallyFlippedCopy(wrapped);
 }
 
-// Marks the active row in the palette dropdown with a bullet. The bullet lives
-// in a reserved left column that every row's sizeHint accounts for, so names
-// align and the indented text is never clipped. Installed only on the combo's
-// popup view, so the closed combo still shows the clean palette name.
-class CurrentRowBulletDelegate : public QStyledItemDelegate {
-public:
-    explicit CurrentRowBulletDelegate(QComboBox* combo, QObject* parent)
-        : QStyledItemDelegate(parent), m_combo(combo) {}
-
-    void paint(QPainter* painter, const QStyleOptionViewItem& option,
-        const QModelIndex& index) const override
-    {
-        if (isSeparator(index)) {
-            // The default combo delegate draws separators as a thin rule; this
-            // custom delegate replaces it, so render the rule ourselves rather
-            // than leaving a tall blank row. Paint the same item-view panel the
-            // other rows use so the background matches, then draw the line.
-            QStyleOptionViewItem sepOpt = option;
-            initStyleOption(&sepOpt, index);
-            auto* const sepStyle =
-                sepOpt.widget != nullptr ? sepOpt.widget->style() : nullptr;
-            if (sepStyle != nullptr) {
-                sepStyle->drawPrimitive(
-                    QStyle::PE_PanelItemViewItem, &sepOpt, painter, sepOpt.widget);
-            }
-            painter->save();
-            painter->setPen(option.palette.color(QPalette::Mid));
-            const int y = option.rect.center().y();
-            painter->drawLine(option.rect.left() + kSeparatorMargin, y,
-                option.rect.right() - kSeparatorMargin, y);
-            painter->restore();
-            return;
-        }
-        QStyleOptionViewItem opt = option;
-        initStyleOption(&opt, index);
-        auto* const style = opt.widget != nullptr ? opt.widget->style() : nullptr;
-
-        // Full-width selection background, then the name indented past the
-        // marker column so all rows line up at the same x.
-        if (style != nullptr) {
-            style->drawPrimitive(
-                QStyle::PE_PanelItemViewItem, &opt, painter, opt.widget);
-        }
-        opt.rect.adjust(kMarkerColumn, 0, 0, 0);
-        if (style != nullptr) {
-            style->drawControl(
-                QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
-        }
-
-        if (m_combo != nullptr && index.row() == m_combo->currentIndex()) {
-            const QPalette::ColorRole role =
-                (opt.state & QStyle::State_Selected) != 0
-                    ? QPalette::HighlightedText
-                    : QPalette::WindowText;
-            painter->save();
-            painter->setRenderHint(QPainter::Antialiasing, true);
-            painter->setPen(Qt::NoPen);
-            painter->setBrush(opt.palette.brush(role));
-            const QPointF center(option.rect.left() + kMarkerColumn / 2.0,
-                option.rect.center().y());
-            painter->drawEllipse(center, 2.5, 2.5);
-            painter->restore();
-        }
-    }
-
-    QSize sizeHint(const QStyleOptionViewItem& option,
-        const QModelIndex& index) const override
-    {
-        if (isSeparator(index)) {
-            // A short row for the rule; the default sizeHint would give it a
-            // full text-row height and read as a large gap.
-            return QSize(0, kSeparatorHeight);
-        }
-        QSize size = QStyledItemDelegate::sizeHint(option, index);
-        // Reserve the marker column horizontally and add vertical padding so
-        // the names have breathing room; keeps the closed combo unaffected.
-        size.setWidth(size.width() + kMarkerColumn);
-        size.setHeight(size.height() + kRowVerticalPadding);
-        return size;
-    }
-
-private:
-    static bool isSeparator(const QModelIndex& index)
-    {
-        return index.data(Qt::AccessibleDescriptionRole).toString()
-            == QLatin1String("separator");
-    }
-
-    static constexpr int kMarkerColumn = 16;
-    static constexpr int kRowVerticalPadding = 6;
-    static constexpr int kSeparatorHeight = 9;
-    static constexpr int kSeparatorMargin = 4;
-    QPointer<QComboBox> m_combo;
-};
-
 inline QSettings makeSettings()
 {
     return QSettings(QStringLiteral("amrex-codes"), QStringLiteral("amrexplorer"));
@@ -290,53 +178,6 @@ inline bool isAmrexPlotfile(const std::filesystem::path& directory)
     }
     return false;
 }
-
-// Qt Concurrent masks worker exceptions behind QUnhandledException, so the
-// underlying library error text must be unwrapped before it is shown.
-inline QString exceptionMessage(const std::exception& error)
-{
-    const auto* unhandled = dynamic_cast<const QUnhandledException*>(&error);
-    if (unhandled != nullptr && unhandled->exception()) {
-        try {
-            std::rethrow_exception(unhandled->exception());
-        } catch (const std::exception& inner) {
-            return QString::fromUtf8(inner.what());
-        } catch (...) {
-            return QStringLiteral("unknown non-std exception");
-        }
-    }
-    return QString::fromUtf8(error.what());
-}
-
-// Recovers a remote error code from a worker exception, unwrapping the
-// QUnhandledException that Qt Concurrent wraps around a thrown std exception.
-// Returns nullopt for local failures and any non-remote error.
-inline std::optional<remote::ErrorCode> remoteErrorCode(const std::exception& error)
-{
-    const auto* unhandled = dynamic_cast<const QUnhandledException*>(&error);
-    if (unhandled != nullptr && unhandled->exception()) {
-        try {
-            std::rethrow_exception(unhandled->exception());
-        } catch (const remote::RemoteError& remoteError) {
-            return remoteError.code();
-        } catch (...) {
-            return std::nullopt;
-        }
-    }
-    if (const auto* remoteError
-            = dynamic_cast<const remote::RemoteError*>(&error)) {
-        return remoteError->code();
-    }
-    return std::nullopt;
-}
-
-// Result of the cheap connect-time handshake used to validate an endpoint and
-// token before any dataset is opened.
-struct RemoteVerifyOutcome {
-    bool ok = false;
-    bool unauthorized = false;
-    QString message;
-};
 
 // QString face of the pipeline's formatter, for the GUI-side messages; hides
 // amrvis::cacheBudgetDescription for unqualified calls in this namespace.
@@ -396,7 +237,6 @@ inline void populateLevelCombo(QComboBox* combo, int finestLevel)
     }
 }
 
-
 // Scene-space annular-sector outline for a logical (r, theta) box: two
 // straight radial edges (constant theta) and two subdivided arcs (constant r).
 // Used for the spherical grid-box outlines and the picked-cell highlight.
@@ -421,108 +261,6 @@ inline QPainterPath sphericalSectorPath(const PlaneMapping& mapping,
     }
     path.closeSubpath();
     return path;
-}
-
-// Everything the FAB selector dock needs for a source, computed off the GUI
-// thread (see buildFabSelector) so its header scans / per-block preads never
-// block the event loop. `matched` distinguishes a recognized FAB or
-// single-level-VisMF source (whose m_fabMode/source state should be applied)
-// from anything else (leave that state untouched, just hide the dock).
-struct FabSelectorBuild {
-    bool matched = false;
-    bool fabMode = false;
-    bool hasSourceMetadata = false;
-    std::vector<FabSelectorEntry> entries;
-    std::filesystem::path root;
-};
-
-// The result of a dataset open worker: the metadata plus, when the caller did
-// not ask to preserve the existing selector, the FAB selector contents built
-// alongside it (so the GUI-thread completion only blits, never reads files).
-struct OpenedDataset {
-    PlotfileMetadataResult metadata;
-    std::optional<FabSelectorBuild> fabSelector;
-    std::shared_ptr<DatasetSession> session;
-};
-
-// Reads FAB/MultiFab record headers and builds the selector entries. Runs on a
-// worker thread; QCoreApplication::translate is thread-safe, and it touches no
-// widgets or member state.
-inline FabSelectorBuild buildFabSelector(
-    const PlotfileMetadataResult& result, const std::filesystem::path& path)
-{
-    const auto precisionLabel = [](FabRealPrecision precision) {
-        return precision == FabRealPrecision::Single
-            ? QCoreApplication::translate("MainWindow", "IEEE-32")
-            : QCoreApplication::translate("MainWindow", "IEEE-64");
-    };
-
-    FabSelectorBuild build;
-    build.root = path.parent_path();
-    if (build.root.empty()) {
-        build.root = ".";
-    }
-
-    if (result.fileVersion == "FAB") {
-        const auto records = scanFabFile(path);
-        build.entries.reserve(records.size());
-        for (const auto& record : records) {
-            build.entries.push_back({
-                .ordinal = record.ordinal,
-                .level = 0,
-                .blockIndex = record.ordinal,
-                .filePath = path,
-                .fileOffset = record.headerOffset,
-                .validBox = record.storedBox,
-                .storedBox = record.storedBox,
-                .dimension = record.dimension,
-                .components = record.components,
-                .precision = precisionLabel(record.precision),
-                .rawRecord = true
-            });
-        }
-        build.matched = true;
-        build.fabMode = true;
-        build.hasSourceMetadata = false;
-    } else if (result.fileVersion.starts_with("VisMF-")
-        && result.metadata->levels.size() == 1) {
-        const auto& metadata = *result.metadata;
-        const auto& level = metadata.levels.front();
-        build.entries.reserve(level.blocks.size());
-        for (std::size_t index = 0; index < level.blocks.size(); ++index) {
-            const auto& block = level.blocks[index];
-            // Overflow-guarded shared grow (this copy previously used
-            // plain int).
-            auto storedBox = amrvis::detail::grownBox<MetadataReadError>(
-                block.box, level.ghostWidth, metadata.dimension);
-            auto precision = FabRealPrecision::Double;
-            if (level.visMfHeaderVersion == 1) {
-                const auto record = inspectFabRecord(
-                    build.root / block.filePath, block.fileOffset);
-                storedBox = record.storedBox;
-                precision = record.precision;
-            } else {
-                precision = fabPrecisionFromDescriptor(level.realDescriptor);
-            }
-            build.entries.push_back({
-                .ordinal = index,
-                .level = level.level,
-                .blockIndex = index,
-                .filePath = build.root / block.filePath,
-                .fileOffset = block.fileOffset,
-                .validBox = block.box,
-                .storedBox = storedBox,
-                .dimension = metadata.dimension,
-                .components = level.storedComponents,
-                .precision = precisionLabel(precision),
-                .rawRecord = false
-            });
-        }
-        build.matched = true;
-        build.fabMode = false;
-        build.hasSourceMetadata = true;
-    }
-    return build;
 }
 
 } // namespace amrvis::qt

@@ -1,6 +1,7 @@
 #include "SequenceController.hpp"
 
 #include "CacheConfig.hpp"
+#include "QtErrorText.hpp"
 
 #include <QException>
 #include <QFutureWatcher>
@@ -16,21 +17,6 @@ namespace {
 // Sequence frames get synthetic dataset ids well above interactive ones so a
 // stale cross-dataset cache entry can never alias a frame's blocks.
 constexpr std::uint64_t sequenceDatasetIdBase = 0x4000000000000000ULL;
-
-QString exceptionMessage(const std::exception& error)
-{
-    const auto* unhandled = dynamic_cast<const QUnhandledException*>(&error);
-    if (unhandled != nullptr && unhandled->exception()) {
-        try {
-            std::rethrow_exception(unhandled->exception());
-        } catch (const std::exception& inner) {
-            return QString::fromUtf8(inner.what());
-        } catch (...) {
-            return QStringLiteral("unknown non-std exception");
-        }
-    }
-    return QString::fromUtf8(error.what());
-}
 
 } // namespace
 

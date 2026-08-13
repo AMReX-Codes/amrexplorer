@@ -2,6 +2,28 @@
 
 namespace amrvis::qt {
 
+namespace {
+
+constexpr std::array<Qt::GlobalColor, 7> particleDefaultColors{
+    Qt::white, Qt::yellow, Qt::cyan, Qt::magenta,
+    Qt::green, Qt::red, Qt::lightGray};
+
+QColor defaultParticleColor(std::size_t speciesIndex)
+{
+    return QColor(
+        particleDefaultColors[speciesIndex % particleDefaultColors.size()]);
+}
+
+void updateColorButton(QPushButton& button, const QColor& color)
+{
+    QPixmap swatch(18, 18);
+    swatch.fill(color);
+    button.setIcon(QIcon(swatch));
+    button.setText(color.name(QColor::HexRgb).toUpper());
+}
+
+} // namespace
+
 void MainWindow::focusActiveViewForPanning()
 {
     if (m_activeView == nullptr || m_activeView->view == nullptr) {

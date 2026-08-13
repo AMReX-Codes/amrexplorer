@@ -29,7 +29,6 @@ void MainWindow::configureContourSyncForTest(
 }
 
 std::vector<MainWindow::ContourViewProbe>
-
 MainWindow::contourViewProbesForTest()
 {
     std::vector<ContourViewProbe> probes;

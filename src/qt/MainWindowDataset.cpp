@@ -2,6 +2,146 @@
 
 namespace amrvis::qt {
 
+namespace {
+
+// Menu labels and QSettings keys; kept in sync with builtinPaletteName().
+constexpr std::array<const char*, 7> builtinPaletteNames{
+    "rainbow", "turbo", "viridis", "plasma", "parula", "coolwarm", "blackbody"};
+
+// Recovers a remote error code from a worker exception, unwrapping the
+// QUnhandledException that Qt Concurrent wraps around a thrown std exception.
+// Returns nullopt for local failures and any non-remote error.
+std::optional<remote::ErrorCode> remoteErrorCode(const std::exception& error)
+{
+    const auto* unhandled = dynamic_cast<const QUnhandledException*>(&error);
+    if (unhandled != nullptr && unhandled->exception()) {
+        try {
+            std::rethrow_exception(unhandled->exception());
+        } catch (const remote::RemoteError& remoteError) {
+            return remoteError.code();
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+    if (const auto* remoteError
+            = dynamic_cast<const remote::RemoteError*>(&error)) {
+        return remoteError->code();
+    }
+    return std::nullopt;
+}
+
+// Result of the cheap connect-time handshake used to validate an endpoint and
+// token before any dataset is opened.
+struct RemoteVerifyOutcome {
+    bool ok = false;
+    bool unauthorized = false;
+    QString message;
+};
+
+// Everything the FAB selector dock needs for a source, computed off the GUI
+// thread (see buildFabSelector) so its header scans / per-block preads never
+// block the event loop. `matched` distinguishes a recognized FAB or
+// single-level-VisMF source (whose m_fabMode/source state should be applied)
+// from anything else (leave that state untouched, just hide the dock).
+struct FabSelectorBuild {
+    bool matched = false;
+    bool fabMode = false;
+    bool hasSourceMetadata = false;
+    std::vector<FabSelectorEntry> entries;
+    std::filesystem::path root;
+};
+
+// The result of a dataset open worker: the metadata plus, when the caller did
+// not ask to preserve the existing selector, the FAB selector contents built
+// alongside it (so the GUI-thread completion only blits, never reads files).
+struct OpenedDataset {
+    PlotfileMetadataResult metadata;
+    std::optional<FabSelectorBuild> fabSelector;
+    std::shared_ptr<DatasetSession> session;
+};
+
+// Reads FAB/MultiFab record headers and builds the selector entries. Runs on a
+// worker thread; QCoreApplication::translate is thread-safe, and it touches no
+// widgets or member state.
+FabSelectorBuild buildFabSelector(
+    const PlotfileMetadataResult& result, const std::filesystem::path& path)
+{
+    const auto precisionLabel = [](FabRealPrecision precision) {
+        return precision == FabRealPrecision::Single
+            ? QCoreApplication::translate("MainWindow", "IEEE-32")
+            : QCoreApplication::translate("MainWindow", "IEEE-64");
+    };
+
+    FabSelectorBuild build;
+    build.root = path.parent_path();
+    if (build.root.empty()) {
+        build.root = ".";
+    }
+
+    if (result.fileVersion == "FAB") {
+        const auto records = scanFabFile(path);
+        build.entries.reserve(records.size());
+        for (const auto& record : records) {
+            build.entries.push_back({
+                .ordinal = record.ordinal,
+                .level = 0,
+                .blockIndex = record.ordinal,
+                .filePath = path,
+                .fileOffset = record.headerOffset,
+                .validBox = record.storedBox,
+                .storedBox = record.storedBox,
+                .dimension = record.dimension,
+                .components = record.components,
+                .precision = precisionLabel(record.precision),
+                .rawRecord = true
+            });
+        }
+        build.matched = true;
+        build.fabMode = true;
+        build.hasSourceMetadata = false;
+    } else if (result.fileVersion.starts_with("VisMF-")
+        && result.metadata->levels.size() == 1) {
+        const auto& metadata = *result.metadata;
+        const auto& level = metadata.levels.front();
+        build.entries.reserve(level.blocks.size());
+        for (std::size_t index = 0; index < level.blocks.size(); ++index) {
+            const auto& block = level.blocks[index];
+            // Overflow-guarded shared grow (this copy previously used
+            // plain int).
+            auto storedBox = amrvis::detail::grownBox<MetadataReadError>(
+                block.box, level.ghostWidth, metadata.dimension);
+            auto precision = FabRealPrecision::Double;
+            if (level.visMfHeaderVersion == 1) {
+                const auto record = inspectFabRecord(
+                    build.root / block.filePath, block.fileOffset);
+                storedBox = record.storedBox;
+                precision = record.precision;
+            } else {
+                precision = fabPrecisionFromDescriptor(level.realDescriptor);
+            }
+            build.entries.push_back({
+                .ordinal = index,
+                .level = level.level,
+                .blockIndex = index,
+                .filePath = build.root / block.filePath,
+                .fileOffset = block.fileOffset,
+                .validBox = block.box,
+                .storedBox = storedBox,
+                .dimension = metadata.dimension,
+                .components = level.storedComponents,
+                .precision = precisionLabel(precision),
+                .rawRecord = false
+            });
+        }
+        build.matched = true;
+        build.fabMode = false;
+        build.hasSourceMetadata = true;
+    }
+    return build;
+}
+
+} // namespace
+
 void MainWindow::cancelInFlight()
 {
     // Stop the timers that resubmit work and request stop on every async task

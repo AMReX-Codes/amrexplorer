@@ -171,15 +171,30 @@ public:
         }
         evictFor(*m_state, bytes, doomed);
 
+        // Publish first, account second. Both allocating steps -- the LRU node
+        // and the map node -- happen before either byte counter moves, so a
+        // bad_alloc from the map cannot leave pinnedBytes inflated for a pin
+        // that no Handle exists to release. That inflation was permanent:
+        // Handle::release is the only thing that decrements it, and the budget
+        // checks above would eventually reject every insert. Everything after
+        // the emplace is nothrow.
         m_state->lru.push_front(key);
-        Entry entry{std::move(value), bytes, 1, m_state->lru.begin()};
-        m_state->metrics.residentBytes += bytes;
-        m_state->metrics.pinnedBytes += bytes;
-        const auto [inserted, success] = m_state->entries.emplace(key, std::move(entry));
-        if (!success) {
+        std::pair<typename EntryMap::iterator, bool> insertion;
+        try {
+            Entry entry{std::move(value), bytes, 1, m_state->lru.begin()};
+            insertion = m_state->entries.emplace(key, std::move(entry));
+        } catch (...) {
+            m_state->lru.pop_front();
+            throw;
+        }
+        if (!insertion.second) {
+            m_state->lru.pop_front();
             throw std::logic_error("cache insertion failed unexpectedly");
         }
-        return Handle(m_state, std::move(key), inserted->second.value, bytes);
+        m_state->metrics.residentBytes += bytes;
+        m_state->metrics.pinnedBytes += bytes;
+        return Handle(
+            m_state, std::move(key), insertion.first->second.value, bytes);
     }
 
     [[nodiscard]] bool erase(const Key& key)

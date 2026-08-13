@@ -181,5 +181,46 @@ int main()
             "mixed pan did not snap the nodal y axis");
     }
 
+    // A RealBox is valid only if it is ordered *and* finite. C++ streams parse
+    // "inf", so a corrupt header can present an ordered infinite box; accepting
+    // it means every extent derived from it is infinite, and their differences
+    // NaN.
+    {
+        constexpr auto infinity = std::numeric_limits<double>::infinity();
+        const amrvis::RealBox finite{{{0.0, 0.0, 0.0}}, {{1.0, 1.0, 1.0}}};
+        require(finite.valid(3), "a finite ordered box was rejected");
+
+        amrvis::RealBox upperInfinite = finite;
+        upperInfinite.upper[0] = infinity;
+        require(!upperInfinite.valid(3),
+            "a box with an infinite upper edge was accepted");
+
+        amrvis::RealBox lowerInfinite = finite;
+        lowerInfinite.lower[1] = -infinity;
+        require(!lowerInfinite.valid(3),
+            "a box with an infinite lower edge was accepted");
+
+        // Only the active directions are checked, as before.
+        amrvis::RealBox infiniteInZ = finite;
+        infiniteInZ.upper[2] = infinity;
+        require(infiniteInZ.valid(2),
+            "an inactive direction was checked for finiteness");
+    }
+
+    // snapToNearestCellGrid preserves the span, but never past the domain: with
+    // more cells than the domain holds, the clamp on the first cell collapses
+    // and the upper edge used to land outside.
+    {
+        const amrvis::RealBox unitDomain{{{0.0, 0.0, 0.0}}, {{4.0, 4.0, 0.0}}};
+        const amrvis::Real3 unitCells{{1.0, 1.0, 1.0}};
+        const std::array<int, 2> snapAxes{0, 1};
+        const amrvis::RealBox tooWide{{{-3.0, 0.0, 0.0}}, {{9.0, 4.0, 0.0}}};
+        const auto snapped = amrvis::snapToNearestCellGrid(
+            tooWide, unitDomain, unitCells, snapAxes);
+        require(snapped.lower[0] >= unitDomain.lower[0]
+                && snapped.upper[0] <= unitDomain.upper[0],
+            "a wider-than-domain region snapped outside the domain");
+    }
+
     return 0;
 }

@@ -166,8 +166,13 @@ std::vector<MetadataIssue> validateMetadata(const DatasetMetadata& metadata)
                     "must contain only cell (0) or node (1) index types");
                 break;
             }
-            if (!(level.cellSize[i] > 0.0)) {
-                add(path + ".cellSize", "must be positive in every active direction");
+            // Positive *and* finite: +inf is positive, parses out of a corrupt
+            // header, and turns every extent computed from it into inf or NaN.
+            // The indexOrigin check below already demanded finiteness.
+            if (!(level.cellSize[i] > 0.0)
+                || !std::isfinite(level.cellSize[i])) {
+                add(path + ".cellSize",
+                    "must be positive and finite in every active direction");
                 break;
             }
             if (!std::isfinite(level.indexOrigin[i])) {

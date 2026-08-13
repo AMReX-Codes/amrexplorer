@@ -17,6 +17,8 @@ public:
 
     // Fixed panel width (including labels); kept constant so exports of the
     // same view always have the same size even when tick labels vary.
+    // Minimum on-screen width; the widget grows past it when the tick
+    // labels need more (see applyPreferredWidth).
     static constexpr int panelWidth = 150;
 
     void setPalette(const amrvis::Palette* palette);
@@ -38,6 +40,10 @@ protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
+    // Resize to whichever is larger, panelWidth or what the current labels
+    // need, after anything that can change their width.
+    void applyPreferredWidth();
+
     const amrvis::Palette* m_palette = nullptr;
     QString m_fieldName;
     QString m_numberFormat;

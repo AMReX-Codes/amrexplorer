@@ -184,6 +184,17 @@ int main()
             std::pair{5.0, 5.0}, true, plane);
         require(log.first < 5.0 && log.second > 5.0 && log.first > 0.0,
             "degenerate logarithmic range was not ratio-padded");
+        // Zero has no magnitude for the padding to be relative to. Falling back
+        // to the smallest-normal backstop there gives a range of +/-2.2e-308,
+        // which is what the color bar and the seeded User-range spin boxes then
+        // show for a uniform plane of zeros -- an ordinary case. The padding
+        // has to stay the absolute constant.
+        const auto zero = amrvis::resolveRange(noDataset, FieldId{0}, 0,
+            CompositionPolicy::FinestAvailable, RangeMode::User,
+            std::pair{0.0, 0.0}, false, plane);
+        require(nearlyEqual(zero.first, -1.0e-6)
+                && nearlyEqual(zero.second, 1.0e-6),
+            "a degenerate range at zero was not padded by the constant");
     }
     {
         bool threw = false;

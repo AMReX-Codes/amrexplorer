@@ -50,17 +50,7 @@ std::optional<std::pair<double, double>> DisplayCoordinator::sharedVisibleRange(
     if (!std::isfinite(minimum) || !std::isfinite(maximum)) {
         return std::nullopt;
     }
-    if (minimum == maximum) {
-        if (logarithmic && minimum > 0.0) {
-            minimum /= 1.0 + 1.0e-6;
-            maximum *= 1.0 + 1.0e-6;
-        } else {
-            const auto pad = std::max(std::abs(minimum), 1.0) * 1.0e-6;
-            minimum -= pad;
-            maximum += pad;
-        }
-    }
-    return std::pair{minimum, maximum};
+    return paddedIfDegenerate(minimum, maximum, logarithmic);
 }
 
 ImageTransformPolicy DisplayCoordinator::rasterTransformPolicy(

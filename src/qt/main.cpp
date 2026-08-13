@@ -89,6 +89,50 @@ void filterWaylandPopupWarning(QtMsgType type,
 // (~/.local/share); delete ~/.local/share/applications/amrexplorer.desktop and the
 // amrexplorer.png files under ~/.local/share/icons/hicolor to undo. The standalone
 // resources/install-desktop-entry.sh does the same thing by hand.
+// Escapes a path for the inside of a quoted Desktop Entry Exec argument. The
+// spec reserves backslash, double quote, backtick and dollar there, each
+// escaped with a backslash; a path containing any of them previously produced
+// an Exec line that would not parse back to the same path.
+//
+// Guarded on the same condition as its only caller below. ensureDesktopEntry
+// compiles to an early `return` off Linux, so the call is preprocessed away and
+// an unguarded definition here is an unused static function -- which -Werror
+// turns into a build failure on macOS and Windows, where nothing else in this
+// file would have noticed.
+#ifdef Q_OS_LINUX
+[[nodiscard]] QString desktopExecEscaped(const QString& path)
+{
+    // Two layers, applied in the order the reader undoes them. The Exec value
+    // is first unescaped as a desktop-entry string, and only then parsed as an
+    // Exec command line, so the backslashes the quoting rule needs must
+    // themselves survive the string rule -- which is why the spec says a
+    // literal backslash inside a quoted argument takes four of them.
+    QString escaped;
+    escaped.reserve(path.size());
+    for (const auto character : path) {
+        // Exec quoting: reserved inside double quotes.
+        if (character == QLatin1Char('\\') || character == QLatin1Char('"')
+            || character == QLatin1Char('`') || character == QLatin1Char('$')) {
+            escaped.append(QLatin1Char('\\'));
+            escaped.append(character);
+            continue;
+        }
+        // Field codes: a literal percent is written as two. Without this a
+        // path containing, say, "%q" is read as an unknown field code and
+        // desktop-file-validate rejects the entry.
+        if (character == QLatin1Char('%')) {
+            escaped.append(QLatin1String("%%"));
+            continue;
+        }
+        escaped.append(character);
+    }
+    // Desktop-entry string escaping, over the result of the above so the
+    // quoting layer's own backslashes are doubled with the path's.
+    escaped.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
+    return escaped;
+}
+#endif
+
 void ensureDesktopEntry()
 {
 #ifndef Q_OS_LINUX
@@ -158,7 +202,7 @@ void ensureDesktopEntry()
             << "Name=AMReXplorer\n"
             << "GenericName=AMR Visualization\n"
             << "Comment=Demand-driven AMR visualization\n"
-            << "Exec=\"" << execPath << "\" %F\n"
+            << "Exec=\"" << desktopExecEscaped(execPath) << "\" %F\n"
             << "Icon=amrexplorer\n"
             << "StartupWMClass=amrexplorer\n"
             << "Terminal=false\n"
@@ -178,15 +222,25 @@ void ensureDesktopEntry()
             }
         }
     }
-    // Best-effort cache refresh. Detached processes inherit the terminal, so
-    // route them through a shell that discards output (otherwise they print
-    // "Cache file created successfully." on every install). Failures harmless.
-    const auto runSilent = [](const QString& command) {
-        QProcess::startDetached("sh",
-            QStringList{"-c", command + " >/dev/null 2>&1"});
+    // Best-effort cache refresh; failures are harmless. Arguments go through
+    // QProcess as a list rather than being pasted into a shell command: a
+    // single quote anywhere in $HOME used to break the quoting and run
+    // something else entirely. Output is discarded by redirecting the detached
+    // process's channels, not by a shell, since these otherwise print "Cache
+    // file created successfully." on every install.
+    const auto runSilent = [](const QString& program,
+                               const QStringList& arguments) {
+        QProcess process;
+        process.setProgram(program);
+        process.setArguments(arguments);
+        process.setStandardOutputFile(QProcess::nullDevice());
+        process.setStandardErrorFile(QProcess::nullDevice());
+        process.startDetached();
     };
-    runSilent("gtk-update-icon-cache -f '" + hicolorDir + "'");
-    runSilent("update-desktop-database '" + dataDir + "/applications'");
+    runSilent(QStringLiteral("gtk-update-icon-cache"),
+        QStringList{QStringLiteral("-f"), hicolorDir});
+    runSilent(QStringLiteral("update-desktop-database"),
+        QStringList{dataDir + QStringLiteral("/applications")});
 #endif
 }
 
@@ -3314,6 +3368,20 @@ int main(int argc, char* argv[])
                 window.openSequence(paths);
             }
         });
+    } else if (argc >= 2) {
+        // Anything starting with "--" that reached here matched no option, or
+        // matched one with the wrong number of arguments. Both used to fall
+        // through to an empty window with no diagnostic, which reads as the
+        // option having been accepted and done nothing.
+        std::fprintf(stderr,
+            "amrexplorer: unrecognized option '%s'\n\n"
+            "usage: amrexplorer [PLOTFILE...]\n"
+            "       amrexplorer --connect HOST:PORT [--token-stdin] "
+            "REMOTE_PLOTFILE...\n\n"
+            "Open one plotfile directory, or several to play them as a\n"
+            "sequence. See docs/user-guide.md for the remote options.\n",
+            argv[1]);
+        return 2;
     }
     const auto result = application.exec();
     if (smokeServer) {

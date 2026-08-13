@@ -21,7 +21,15 @@ option(AMREXPLORER_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehav
 option(AMREXPLORER_ENABLE_TSAN "Enable ThreadSanitizer (mutually exclusive with AMREXPLORER_ENABLE_SANITIZERS)" OFF)
 option(AMREXPLORER_FORCE_FETCH_FLATBUFFERS
     "Skip installed FlatBuffers discovery and use the pinned fallback" OFF)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+# Off under the sanitizers, where it is both pointless and a hazard: their
+# runtimes pull in libgcc_s.so.1 and libstdc++.so.6 anyway, so -static-libgcc
+# buys nothing and the process ends up carrying a statically linked libstdc++
+# inside the executable alongside the shared one behind libasan -- two unwinders
+# and two copies of the runtime's state. The portability this option exists for
+# only concerns release and remote builds.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
+        AND NOT AMREXPLORER_ENABLE_SANITIZERS
+        AND NOT AMREXPLORER_ENABLE_TSAN)
     set(amrexplorer_static_cxx_default ON)
 else()
     set(amrexplorer_static_cxx_default OFF)
@@ -58,11 +66,18 @@ if(AMREXPLORER_USER_INSTALL_PREFIX
         set(amrexplorer_default_prefix "$ENV{HOME}/Applications")
     else()
         # ~/.local is the XDG user prefix, and the choice is load-bearing
-        # rather than cosmetic: ~/.local/share is $XDG_DATA_HOME, which is
-        # where the desktop entry and icons below have to land to be found at
-        # all. Installed under $HOME directly they are inert -- nothing
+        # rather than cosmetic: ~/.local/share is the *default* $XDG_DATA_HOME,
+        # which is where the desktop entry and icons below have to land to be
+        # found at all. Installed under $HOME directly they are inert -- nothing
         # searches $HOME/share. ~/.local/bin is also on PATH by default on most
         # distributions.
+        #
+        # A user who has moved XDG_DATA_HOME elsewhere gets the installed entry
+        # in a directory their desktop does not search. The application's own
+        # ensureDesktopEntry (src/qt/main.cpp) writes through
+        # QStandardPaths::GenericDataLocation and so honours the variable, which
+        # means the menu entry still appears -- the two disagree only about
+        # which copy is the live one, and the runtime one wins.
         set(amrexplorer_default_prefix "$ENV{HOME}/.local")
     endif()
     set(CMAKE_INSTALL_PREFIX "${amrexplorer_default_prefix}" CACHE PATH
@@ -119,14 +134,16 @@ if(NOT AMREXPLORER_HAS_REQUIRED_CXX20_SUPPORT)
         "\n"
         "On an HPC system this usually means CMake picked up the system "
         "compiler in /usr/bin rather than a module-provided one. Load a newer "
-        "toolchain and point CMake at it in a fresh build directory, for "
-        "example:\n"
+        "toolchain and point CMake at it, for example:\n"
         "    module load gcc\n"
-        "    cmake --preset remote -DCMAKE_CXX_COMPILER=g++\n"
+        "    cmake --preset remote --fresh -DCMAKE_CXX_COMPILER=g++\n"
         "On Cray systems (Perlmutter, Frontier) the compiler wrapper is CC:\n"
-        "    cmake --preset remote -DCMAKE_CXX_COMPILER=CC\n"
-        "CMAKE_CXX_COMPILER is only read when a build directory is first "
-        "configured, so change it in a new directory or delete CMakeCache.txt.")
+        "    cmake --preset remote --fresh -DCMAKE_CXX_COMPILER=CC\n"
+        "--fresh matters: this configure has already written a cache naming the "
+        "old compiler, and CMake normally clears such a cache and retries "
+        "within the same run -- but the error above aborts before it can, so "
+        "without --fresh the next attempt fails identically and only a third "
+        "would succeed.")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")

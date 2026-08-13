@@ -17,7 +17,7 @@ costs nothing to leave alone.
 | | needs at run time | typical home |
 | --- | --- | --- |
 | `amrexplorer` | Qt 6 and its dependencies | your desktop or laptop |
-| `amrexplorer-server` | the C system library, nothing else | an HPC login node |
+| `amrexplorer-server` | the C and C++ system libraries — on Linux usually the C library alone, see [HPC](#hpc-systems-the-server-only) | an HPC login node |
 
 They install and move independently.
 
@@ -97,8 +97,11 @@ cmake --install build
 ```
 
 No `sudo`, and no prefix to choose: the default is the per-user location for
-your platform — `~/.local` on Linux, `~/Applications` on macOS. (CMake's own
-default is `/usr/local`, which most people building this cannot write to.)
+your platform — `~/.local` on Linux, and `~/Applications` on macOS when building
+the `.app` bundle, which is the default there. (CMake's own default is
+`/usr/local`, which most people building this cannot write to.) Building on
+macOS with `-DAMREXPLORER_BUILD_MACOS_APP_BUNDLE=OFF` produces a plain
+executable rather than a bundle, and installs to `~/.local` like Linux.
 
 On Linux that installs:
 
@@ -139,20 +142,24 @@ Three things are worth knowing.
 
 **The system compiler is usually too old.** HPC login nodes run an OS several
 years old, and `/usr/bin/c++` with it, so a default configure often fails on
-C++20 support. The compiler you want is a module away. Point CMake at it in a
-*fresh* build directory — `CMAKE_CXX_COMPILER` is only read when a directory is
-first configured:
+C++20 support. The compiler you want is a module away:
 
 ```bash
 module load gcc
-cmake --preset remote -DCMAKE_CXX_COMPILER=g++
+cmake --preset remote --fresh -DCMAKE_CXX_COMPILER=g++
 ```
 
 On Cray systems such as Perlmutter and Frontier, use the compiler wrapper:
 
 ```bash
-cmake --preset remote -DCMAKE_CXX_COMPILER=CC
+cmake --preset remote --fresh -DCMAKE_CXX_COMPILER=CC
 ```
+
+`--fresh` is not optional after a failed configure. That configure has already
+written a cache naming the old compiler, and while CMake normally clears such a
+cache and retries within the same run, the C++20 error aborts before it can — so
+without `--fresh` the next attempt fails identically, naming the old compiler
+again, and only a third would succeed.
 
 Configuring with an unsupported compiler fails with a message naming the
 compiler it found and repeating these commands.

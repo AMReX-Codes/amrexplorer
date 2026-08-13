@@ -79,8 +79,7 @@
       "cacheVariables": {
         "AMREXPLORER_ENABLE_REMOTE": "ON",
         "AMREXPLORER_BUILD_TESTS": "ON",
-        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS": "OFF",
-        "AMREXPLORER_USER_INSTALL_PREFIX": "ON"
+        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS": "OFF"
       }
     },
     {

@@ -1,55 +1,64 @@
 # Installing AMReXplorer
 
-Build from source. Tested on Ubuntu 24.04 and macOS.
+Build from source. Tested on Ubuntu 24.04 and 26.04, and on macOS.
 
-## Build from source
+The build produces two programs:
+
+- `amrexplorer` — the application. Opens plotfiles on the machine it runs on.
+- `amrexplorer-server` — optional. Run it where the data lives, typically an HPC
+  login node, and connect to it from `amrexplorer` over an SSH tunnel.
+
+## Requirements
+
+CMake 3.25 or newer, a C++20 compiler (GCC or Clang recommended), and Qt 6.4 or
+newer for the application. Check CMake first — enterprise distributions and HPC
+login nodes often ship an older one:
+
+```bash
+cmake --version
+```
+
+## Dependencies
 
 ### Linux (Ubuntu)
-
-Install the dependencies:
 
 ```bash
 sudo apt install g++ cmake ninja-build qt6-base-dev
 ```
 
-### Linux (all distros)
+### Linux (any distribution)
 
-Install the dependencies with [Spack](https://github.com/spack/spack):
+With [Spack](https://github.com/spack/spack):
+
 ```bash
 spack install qt-base
 spack load qt-base
-cmake --preset default
-cmake --build --preset default
-./build/src/qt/amrexplorer /path/to/plotfile
 ```
-
-Remote support and the headless `amrexplorer-server` executable are included
-in normal desktop builds. CMake uses an installed FlatBuffers CMake package
-when one is available, otherwise it fetches the project's pinned FlatBuffers
-version. Package-managed and offline builds can point `CMAKE_PREFIX_PATH` at an
-installed FlatBuffers package. Set `-DAMREXPLORER_FORCE_FETCH_FLATBUFFERS=ON`
-to test or explicitly select the pinned fallback.
 
 ### macOS
 
-Install the dependencies with [Homebrew][]:
+With [Homebrew](https://brew.sh):
 
 ```bash
 brew install cmake ninja qt
 ```
 
-[Homebrew]: https://brew.sh
+### Windows
 
-**Optional:** `ffmpeg` is needed to encode animation exports (MP4).
+Windows is covered only in continuous integration: MSVC 2022 with Qt 6.8, using
+the `windows` preset. None of the developers uses Windows or has tested a build
+on one, so there is no guidance here for it.
+
+### Optional
+
+`ffmpeg` is needed only to encode animation exports (MP4):
 
 ```bash
-# Ubuntu
-sudo apt install ffmpeg
-# macOS
-brew install ffmpeg
+sudo apt install ffmpeg   # Ubuntu
+brew install ffmpeg       # macOS
 ```
 
-Build (both platforms):
+## Build
 
 ```bash
 git clone https://github.com/amrex-codes/amrexplorer.git
@@ -58,42 +67,56 @@ cmake --preset default
 cmake --build --preset default
 ```
 
-On Linux, the executable is `build/src/qt/amrexplorer`. Run it with a plotfile:
+Run it from the build tree without installing:
 
 ```bash
-./build/src/qt/amrexplorer /path/to/plotfile
+./build/src/qt/amrexplorer /path/to/plotfile     # Linux
+open build/src/qt/amrexplorer.app                # macOS
 ```
 
-On macOS, the default build is `build/src/qt/amrexplorer.app`. It can be opened
-from Finder, launched with `open build/src/qt/amrexplorer.app`, or run with a
-plotfile from the command line:
+## Install
 
 ```bash
-./build/src/qt/amrexplorer.app/Contents/MacOS/amrexplorer /path/to/plotfile
+cmake --install build
 ```
 
-Install it for the current user with:
+No `sudo` needed: this installs to `~/.local` on Linux and `~/Applications` on
+macOS. On Linux the application lands at `~/.local/bin/amrexplorer`, and a
+desktop entry puts it in your application menu. If `~/.local/bin` did not exist
+before, log out and back in for it to be on your `PATH`.
+
+Choose somewhere else with `--prefix`:
 
 ```bash
-cmake --install build --prefix "$HOME/Applications"
+cmake --install build --prefix /opt/amrexplorer
 ```
 
-Set `-DAMREXPLORER_BUILD_MACOS_APP_BUNDLE=OFF` when configuring to build the plain
-`amrexplorer` executable on macOS instead. On Linux, install system-wide with:
+## HPC systems
+
+Build the server only, with a GNU toolchain:
 
 ```bash
-sudo cmake --install build --prefix /usr/local
+module load gcc            # or gcc-native on a Cray system
+module load cmake          # if the system cmake is older than 3.25
+cmake --preset remote --fresh -DCMAKE_CXX_COMPILER=g++
+cmake --build --preset remote
+cmake --install build-remote --prefix ${HOME}
 ```
 
-## Packaging an AppImage
+That installs one file, `${HOME}/bin/amrexplorer-server`.
 
-An AppImage is a self-contained executable that runs on any modern Linux
-distribution without installing packages, which makes it a convenient way to
-move a build to machines you do not administer. You can build one from a source
-build yourself: see
-**[Building an AppImage](docs/building.md#building-an-appimage)**.
+Use `--fresh` whenever you change the compiler; without it the configure fails
+again with the same message and has to be run twice.
 
-There is no release pipeline yet, so no prebuilt AppImage is published.
+If your `${HOME}` is shared between machines, give each its own prefix so one
+build does not overwrite another:
+
+```bash
+cmake --install build-remote --prefix ${HOME}/perlmutter
+```
+
+See the **[User Guide](docs/user-guide.md)** for connecting the application to a
+running server over an SSH tunnel.
 
 ## Next steps
 
@@ -101,6 +124,9 @@ See the **[AMReXplorer User Guide](docs/user-guide.md)** for opening plotfiles,
 navigating 2-D and 3-D data, selecting AMR levels, animation, export, and
 troubleshooting. The same guide is bundled in the application under **Help >
 User Guide...**.
+
+Developers and packagers: see **[docs/building.md](docs/building.md)** for build
+options, presets, the compiler matrix, and packaging an AppImage.
 
 ## Existing installations
 

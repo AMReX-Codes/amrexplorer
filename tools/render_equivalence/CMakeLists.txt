@@ -11,4 +11,12 @@ target_link_libraries(amrexplorer_render_equivalence
 )
 target_compile_features(amrexplorer_render_equivalence PRIVATE cxx_std_20)
 
-install(TARGETS amrexplorer_render_equivalence RUNTIME DESTINATION bin)
+# Not installed by default: this is a local/remote render comparison tool for
+# development, documented nowhere a user would look, and it was landing in
+# everyone's bin/ beside the two executables they asked for. Still installable
+# deliberately, for comparison work on a machine without a build tree:
+#     cmake --install build --component tools
+install(TARGETS amrexplorer_render_equivalence
+    RUNTIME DESTINATION bin
+    COMPONENT tools
+    EXCLUDE_FROM_ALL)

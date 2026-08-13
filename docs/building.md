@@ -77,6 +77,32 @@ cmake --install build --prefix "$HOME/Applications"
 Configure with `-DAMREXPLORER_BUILD_MACOS_APP_BUNDLE=OFF` to retain the plain
 `build/src/qt/amrexplorer` executable layout.
 
+## Install options
+
+The `default` preset sets `AMREXPLORER_USER_INSTALL_PREFIX=ON`, and `clang`,
+`headless` and `remote` inherit it; the `debug`, `sanitizers`, `tsan`,
+`qt-sanitizers` and `windows` presets do not, and keep CMake's default. Where it
+is on, `CMAKE_INSTALL_PREFIX` defaults to `~/.local` (or `~/Applications` for a
+macOS bundle).
+Configuring without a preset leaves CMake's own default, so packaging with
+`DESTDIR` alone is unaffected; pass `-DCMAKE_INSTALL_PREFIX` explicitly as usual.
+
+`amrexplorer-render-equivalence`, which compares local and remote rendering, is
+built but not installed by default:
+
+```bash
+cmake --install build --component tools
+```
+
+On Linux the server links the C++ runtime statically so it can be copied between
+machines without the compiler module it was built under. This applies to GNU and
+Clang builds, and falls back to the shared runtime — reporting why at configure
+time — under the sanitizers, where `libstdc++.a` is missing (Fedora and RHEL
+package it as `libstdc++-static`), and when `CMAKE_TRY_COMPILE_TARGET_TYPE` is
+not `EXECUTABLE`, which cross-compiling toolchain files set so that the link
+cannot be tested. Packagers who want the system runtime should configure with
+`-DAMREXPLORER_SERVER_STATIC_CXX_RUNTIME=OFF`.
+
 ## Building an AppImage
 
 From the repository root on Linux, build AMReXplorer and install it into an
@@ -126,6 +152,7 @@ application.
 |---|---|---|
 | Ubuntu 24.04 | GCC | GitHub CI (full Qt) |
 | Ubuntu 24.04 | Clang | GitHub CI (full Qt) |
+| Ubuntu 26.04 | GCC 15 | Developer machines (full Qt) |
 | macOS 15 | AppleClang | GitHub CI (full Qt) |
 | Windows Server 2022 | MSVC 2022 | GitHub CI (full Qt) |
 

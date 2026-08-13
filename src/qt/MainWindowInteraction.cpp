@@ -1727,7 +1727,7 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
                     reportBackgroundError(tr(
                         "The line plot cannot fit in the %1 cache. Choose a "
                         "lower level or increase AMREXPLORER_CACHE_SIZE_MB.")
-                        .arg(cacheBudgetDescription(
+                        .arg(cacheBudgetText(
                             dataset->cacheMetrics().budgetBytes)));
                 } else {
                     ++m_staleResults;

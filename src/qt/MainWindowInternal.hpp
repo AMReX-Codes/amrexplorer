@@ -28,13 +28,16 @@
 #include <amrexplorer/io/FitsWriter.hpp>
 #include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
+#include <amrexplorer/data/DatasetSession.hpp>
 #include <amrexplorer/core/CoordinateSystem.hpp>
 #include <amrexplorer/core/Statistics.hpp>
 #include <amrexplorer/pipeline/ParticleProjection.hpp>
+#include <amrexplorer/pipeline/SlicePipeline.hpp>
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
 #include <amrexplorer/remote/Connection.hpp>
 #include <amrexplorer/remote/RemoteDatasetSession.hpp>
 #include <amrexplorer/render2d/Contours.hpp>
+#include <amrexplorer/render2d/ImageBuffer.hpp>
 #include <amrexplorer/render2d/Palette.hpp>
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
 
@@ -115,6 +118,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <system_error>
 #include <string>
 #include <utility>
 #include <vector>
@@ -179,9 +183,10 @@ inline bool isAmrexPlotfile(const std::filesystem::path& directory)
     return false;
 }
 
-// QString face of the pipeline's formatter, for the GUI-side messages; hides
-// amrvis::cacheBudgetDescription for unqualified calls in this namespace.
-inline QString cacheBudgetDescription(std::uint64_t bytes)
+// QString face of the pipeline's formatter, for the GUI-side messages. Named
+// apart from amrvis::cacheBudgetDescription so an unqualified call in this
+// namespace cannot silently pick the wrong return type.
+inline QString cacheBudgetText(std::uint64_t bytes)
 {
     return QString::fromStdString(amrvis::cacheBudgetDescription(bytes));
 }
@@ -189,7 +194,7 @@ inline QString cacheBudgetDescription(std::uint64_t bytes)
 inline QString cacheFallbackMessage(
     const DatasetSession& dataset, int fromLevel, int toLevel)
 {
-    const auto budget = cacheBudgetDescription(
+    const auto budget = cacheBudgetText(
         dataset.cacheMetrics().budgetBytes);
     return QObject::tr(
         "The finest slice exceeded the %1 cache budget. Showing levels 0 "
@@ -214,27 +219,6 @@ inline bool selectCacheFallbackLevel(QComboBox* selector, int toLevel)
     const QSignalBlocker blocker(selector);
     selector->setCurrentIndex(index);
     return true;
-}
-
-inline void populateLevelCombo(QComboBox* combo, int finestLevel)
-{
-    combo->clear();
-    combo->addItem(QObject::tr("Finest available"), -1);
-    // "Level N only" is redundant when there is only one level; the whole
-    // block is skipped for finestLevel == 0 so the combo shows just the
-    // "Finest available" entry.
-    if (finestLevel <= 0) {
-        return;
-    }
-    // "Update to Level N" (composite 0..N) in reverse order, from
-    // finestLevel-1 down to 1; only when there are at least three levels.
-    for (int level = finestLevel - 1; level >= 1; --level) {
-        combo->addItem(QObject::tr("Levs 0-%1").arg(level),
-            kUpdateToLevelOffset + level);
-    }
-    for (int level = 0; level <= finestLevel; ++level) {
-        combo->addItem(QObject::tr("Level %1 only").arg(level), level);
-    }
 }
 
 // Scene-space annular-sector outline for a logical (r, theta) box: two

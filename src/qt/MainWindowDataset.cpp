@@ -5,8 +5,14 @@ namespace amrvis::qt {
 namespace {
 
 // Menu labels and QSettings keys; kept in sync with builtinPaletteName().
-constexpr std::array<const char*, 7> builtinPaletteNames{
-    "rainbow", "turbo", "viridis", "plasma", "parula", "coolwarm", "blackbody"};
+// The QSettings key for a builtin palette. builtinPaletteName() is the single
+// source of these strings, and indexing builtinPalettes keeps the key and the
+// palette from drifting apart.
+QLatin1String builtinPaletteKey(std::size_t index)
+{
+    const auto name = builtinPaletteName(builtinPalettes[index]);
+    return QLatin1String(name.data(), static_cast<qsizetype>(name.size()));
+}
 
 // Recovers a remote error code from a worker exception, unwrapping the
 // QUnhandledException that Qt Concurrent wraps around a thrown std exception.
@@ -203,8 +209,8 @@ void MainWindow::restoreSettings()
         const auto name = settings.value(QStringLiteral("palette/builtin"),
             QStringLiteral("rainbow")).toString();
         m_builtinIndex = 0;
-        for (std::size_t index = 0; index < builtinPaletteNames.size(); ++index) {
-            if (name == QLatin1String(builtinPaletteNames[index])) {
+        for (std::size_t index = 0; index < builtinPalettes.size(); ++index) {
+            if (name == builtinPaletteKey(index)) {
                 m_builtinIndex = static_cast<int>(index);
                 break;
             }
@@ -307,7 +313,7 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("palette/fromFile"), m_paletteFromFile);
     settings.setValue(QStringLiteral("palette/filePath"), m_paletteFilePath);
     settings.setValue(QStringLiteral("palette/builtin"),
-        QLatin1String(builtinPaletteNames[static_cast<std::size_t>(m_builtinIndex)]));
+        builtinPaletteKey(static_cast<std::size_t>(m_builtinIndex)));
     settings.setValue(QStringLiteral("palette/reversed"), m_reversePalette);
     settings.setValue(QStringLiteral("numberFormat"), m_numberFormat);
     settings.setValue(QStringLiteral("animation/speed"),

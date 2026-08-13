@@ -3,7 +3,6 @@
 #include "CacheConfig.hpp"
 #include "QtErrorText.hpp"
 
-#include <QException>
 #include <QFutureWatcher>
 #include <QTimer>
 #include <QtConcurrent>

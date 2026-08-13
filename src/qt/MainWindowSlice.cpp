@@ -2,6 +2,31 @@
 
 namespace amrvis::qt {
 
+namespace {
+
+void populateLevelCombo(QComboBox* combo, int finestLevel)
+{
+    combo->clear();
+    combo->addItem(QObject::tr("Finest available"), -1);
+    // "Level N only" is redundant when there is only one level; the whole
+    // block is skipped for finestLevel == 0 so the combo shows just the
+    // "Finest available" entry.
+    if (finestLevel <= 0) {
+        return;
+    }
+    // "Update to Level N" (composite 0..N) in reverse order, from
+    // finestLevel-1 down to 1; only when there are at least three levels.
+    for (int level = finestLevel - 1; level >= 1; --level) {
+        combo->addItem(QObject::tr("Levs 0-%1").arg(level),
+            kUpdateToLevelOffset + level);
+    }
+    for (int level = 0; level <= finestLevel; ++level) {
+        combo->addItem(QObject::tr("Level %1 only").arg(level), level);
+    }
+}
+
+} // namespace
+
 void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
 {
     m_controlsReady = true;

@@ -10,7 +10,6 @@
 #include <QAbstractTableModel>
 #include <QCloseEvent>
 #include <QColor>
-#include <QException>
 #include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QLabel>

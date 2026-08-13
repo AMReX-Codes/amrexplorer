@@ -20,6 +20,11 @@ add_executable(amrexplorer_qt
     LinePlotWindow.hpp
     MainWindow.cpp
     MainWindow.hpp
+    MainWindowDataset.cpp
+    MainWindowInteraction.cpp
+    MainWindowInternal.hpp
+    MainWindowSlice.cpp
+    MainWindowTestAccess.cpp
     NumberFormat.cpp
     NumberFormat.hpp
     RemoteConnectArguments.hpp

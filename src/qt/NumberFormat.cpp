@@ -162,14 +162,15 @@ QString formatNumber(double value, const QString& format)
         return QString::number(value, 'g', 7);
     }
     auto number = QString::fromUtf8(buffer, written);
-    // snprintf honors LC_NUMERIC, and QApplication calls setlocale(LC_ALL, "")
-    // on Unix, so under a comma locale this path renders "1,5" while both
-    // fallbacks above use QString::number, which is always C-locale. The
-    // readouts have to agree with each other whichever locale the user runs
-    // in, so normalize to the C locale. Substituting the decimal point rather
-    // than reaching for snprintf_l keeps this free of platform conditionals,
-    // and with only the conversion's own output in hand the substitution can
-    // no longer reach anything the user typed.
+    // Belt-and-braces since main() pins LC_NUMERIC to "C" after constructing
+    // QApplication: with that pin in place snprintf already renders "1.5", and
+    // this substitution finds nothing to do. It is kept because this is a
+    // library function -- nothing stops it being called from a process that
+    // has not pinned the locale, and the readouts have to agree with the
+    // QString::number fallbacks above, which are always C-locale, whichever
+    // locale is in force. Substituting the decimal point rather than reaching
+    // for snprintf_l keeps it free of platform conditionals, and with only the
+    // conversion's own output in hand it cannot reach anything the user typed.
     if (const auto* conventions = std::localeconv(); conventions != nullptr) {
         const auto* point = conventions->decimal_point;
         if (point != nullptr && *point != '\0'

@@ -34,6 +34,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -618,6 +619,46 @@ int main(int argc, char* argv[])
                        "qt.qpa.services.warning=false"));
 
     QApplication application(argc, argv);
+    // Undo, for numeric conversion only, what QApplication just did. Qt calls
+    // setlocale(LC_ALL, "") on Unix, which hands the C locale to the
+    // environment -- and the C locale is what strtod, printf("%f") and atof
+    // consult. The plotfile reader parses per-block statistics with strtod, so
+    // under any comma-decimal locale strtod("0.5") stopped at the '.' and *no
+    // plotfile opened at all*: LC_ALL=en_DK.utf8 failed 49 of 115 tests.
+    //
+    // This is pinned here, once, rather than fixed at the call site, because
+    // the call site is not the class of bug: the next strtod, atof or
+    // printf("%f") anyone adds re-opens the same hole, and only a pin closes
+    // it by construction.
+    //
+    // The placement is forced rather than merely chosen. Qt moves the locale
+    // inside the constructor above (QCoreApplicationPrivate::initLocale), and
+    // that runs once behind a static guard, so pinning earlier is simply
+    // overwritten; pinning later only widens the window in which the wrong
+    // locale is live. Immediately after is the earliest point that holds.
+    //
+    // It is not, however, "before any thread exists". No *application* window
+    // or worker does, but the constructor has already started Qt's own --
+    // QDBusConnection always, and with a platform theme or a non-offscreen
+    // platform also the xcb/wayland event threads and glib's pango/gdbus/pool
+    // threads (measured: 2 threads offscreen, 10 under wayland with the gtk3
+    // theme). glibc marks setlocale MT-Unsafe, so this call is not provably
+    // race-free against threads the application does not control. It is the
+    // best available placement, not a safe one in the formal sense.
+    //
+    // The gtk3 platform theme is the one plausible defeater and it is not one:
+    // gtk_init does call setlocale(LC_ALL, "") of its own, but theme creation
+    // is eager inside the constructor above, so it happens before this line,
+    // and GTK's call is one-shot -- opening a native dialog later cannot undo
+    // the pin.
+    //
+    // Nothing user-visible is lost. QLocale is independent of the C locale, so
+    // QLocale::system() still reports the user's real locale and separators;
+    // only the C conversion functions are pinned. C++ iostreams were never
+    // affected either -- they consult the C++ global locale, which stays "C"
+    // -- which is why the reader's other numeric fields, and AMReX's readers,
+    // never broke. See agent-notes comma-locale-breaks-every-open.
+    std::setlocale(LC_NUMERIC, "C");
     // Advertise the desktop entry name and WM class as "amrexplorer" so Linux
     // docks/taskbars can match the running window to amrexplorer.desktop and
     // resolve its icon from the icon theme (setWindowIcon alone only sets the

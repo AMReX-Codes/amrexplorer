@@ -10,9 +10,9 @@ The build produces two programs:
 
 ## Requirements
 
-CMake 3.25 or newer, a C++20 compiler (GCC recommended), and Qt 6.4 or newer
-for the application. Check CMake first — enterprise distributions and HPC login nodes
-often ship an older one:
+CMake 3.25 or newer, a C++20 compiler (GCC or Clang recommended), and Qt 6.4 or
+newer for the application. Check CMake first — enterprise distributions and HPC
+login nodes often ship an older one:
 
 ```bash
 cmake --version
@@ -95,16 +95,14 @@ cmake --install build --prefix /opt/amrexplorer
 Build the server only, with a GNU toolchain:
 
 ```bash
-module load gcc
+module load gcc            # or gcc-native on a Cray system
 module load cmake          # if the system cmake is older than 3.25
 cmake --preset remote --fresh -DCMAKE_CXX_COMPILER=g++
 cmake --build --preset remote
 cmake --install build-remote --prefix ${HOME}
 ```
 
-That installs one file, `${HOME}/bin/amrexplorer-server`. On Cray systems such
-as Perlmutter and Frontier the GNU module may be named `gcc` or `gcc-native`,
-and either `g++` or the `CC` wrapper works.
+That installs one file, `${HOME}/bin/amrexplorer-server`.
 
 Use `--fresh` whenever you change the compiler; without it a build directory
 keeps the one it was first configured with.

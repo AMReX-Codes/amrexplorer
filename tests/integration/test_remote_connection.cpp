@@ -245,6 +245,11 @@ int main(int argc, char* argv[])
         "non-negotiated response minor version was accepted");
     require(!wrongMinorVersionConnection.connected(),
         "non-negotiated response minor version did not fail the connection");
+    // Join this reader before moving on: the assertion above only proves the
+    // caller was woken, so the reader can still be short of unwinding, at the
+    // point where the hook-enabled case below would let it consume the
+    // process-global violation hook installed for that case's connection.
+    wrongMinorVersionConnection.close();
     wrongMinorVersionPeer.get();
 
     StopSource preCancelled;
@@ -339,6 +344,8 @@ int main(int argc, char* argv[])
         "wrong response payload left its caller waiting");
     require(!wrongPayloadConnection.connected(),
         "wrong response payload did not fail the connection");
+    // Join this reader too, for the reason above.
+    wrongPayloadConnection.close();
     wrongPayloadPeer.get();
 
 #ifdef AMREXPLORER_SERVER_TEST_HOOKS

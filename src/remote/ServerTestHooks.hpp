@@ -6,7 +6,10 @@
 
 namespace amrvis::remote::testing {
 
-// Internal synchronization seam, compiled only into test-enabled builds.
+// Internal synchronization seams for the remote client and server, compiled
+// only into test-enabled builds. The option that controls them is still named
+// AMREXPLORER_ENABLE_SERVER_TEST_HOOKS for the benefit of existing CI
+// invocations; it covers both sides of the protocol.
 using BeforeResponseWrite = std::function<void(std::uint64_t)>;
 
 void setBeforeResponseWrite(BeforeResponseWrite hook);
@@ -31,6 +34,24 @@ void clearWriteChunkLimit();
 // drives its own client sockets from its own threads in this same process, and
 // pacing those would throttle the test rather than the server.
 [[nodiscard]] std::size_t writeChunkLimit(std::size_t requested);
+
+// Client-side seam, consulted by Connection's receive loop immediately after a
+// protocol violation has woken the caller waiting on that request, and before
+// the reader thread unwinds. That is the one instant at which the two halves
+// of retirement can be observed apart: an implementation that marks the
+// connection disconnected while unwinding, rather than under the lock that
+// recognized the violation, still reports connected() == true here. A hook that
+// blocks holds the instant open for as long as the test needs, which is what
+// turns a load-dependent race into a deterministic assertion.
+//
+// Invoked on the reader thread with no connection lock held, so a hook may call
+// back into the connection. It must return before the connection is destroyed:
+// the destructor joins the reader.
+using AfterViolationWake = std::function<void()>;
+
+void setAfterViolationWake(AfterViolationWake hook);
+void clearAfterViolationWake();
+void notifyAfterViolationWake();
 
 class ResponseWriteScope {
 public:

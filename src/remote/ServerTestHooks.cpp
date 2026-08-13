@@ -10,6 +10,7 @@ namespace {
 std::mutex hookMutex;
 BeforeResponseWrite beforeResponseWrite;
 WriteChunkLimit writeChunkLimitHook;
+AfterViolationWake afterViolationWake;
 thread_local bool inResponseWrite = false;
 
 } // namespace
@@ -34,6 +35,32 @@ void notifyBeforeResponseWrite(std::uint64_t requestId)
     }
     if (hook) {
         hook(requestId);
+    }
+}
+
+void setAfterViolationWake(AfterViolationWake hook)
+{
+    std::scoped_lock lock(hookMutex);
+    afterViolationWake = std::move(hook);
+}
+
+void clearAfterViolationWake()
+{
+    setAfterViolationWake({});
+}
+
+void notifyAfterViolationWake()
+{
+    AfterViolationWake hook;
+    {
+        std::scoped_lock lock(hookMutex);
+        hook = afterViolationWake;
+    }
+    // Copied out and invoked unlocked, like the hooks around it: this one is
+    // meant to block, and holding the installer's mutex while it did would
+    // deadlock whoever tries to clear it.
+    if (hook) {
+        hook();
     }
 }
 

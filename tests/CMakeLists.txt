@@ -197,6 +197,10 @@ if(TARGET amrexplorer_remote)
             amrexplorer::warnings
             Threads::Threads
     )
+    if(AMREXPLORER_ENABLE_SERVER_TEST_HOOKS)
+        target_compile_definitions(test_remote_connection
+            PRIVATE AMREXPLORER_SERVER_TEST_HOOKS)
+    endif()
     add_test(NAME remote_connection
         COMMAND test_remote_connection "${remote_server_fixture_dir}")
     set_tests_properties(remote_connection PROPERTIES

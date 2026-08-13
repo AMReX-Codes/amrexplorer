@@ -1,6 +1,9 @@
 #include <amrexplorer/remote/Connection.hpp>
 
 #include "Codec.hpp"
+#ifdef AMREXPLORER_SERVER_TEST_HOOKS
+#include "ServerTestHooks.hpp"
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -431,8 +434,7 @@ private:
                         "remote server changed protocol major version");
                 }
                 std::shared_ptr<Pending> pending;
-                bool minorVersionMismatch = false;
-                bool payloadMismatch = false;
+                const char* protocolViolation = nullptr;
                 {
                     std::scoped_lock lock(m_stateMutex);
                     const auto found = m_pending.find(info.requestId);
@@ -441,30 +443,50 @@ private:
                             "remote response has an unknown request ID");
                     }
                     pending = found->second;
-                    minorVersionMismatch
-                        = pending->expected != PayloadKind::HelloResponse
+                    if (pending->expected != PayloadKind::HelloResponse
                         && info.protocolMinorVersion
-                            != m_selectedMinorVersion;
-                    payloadMismatch = info.payload != pending->expected
-                        && info.payload != PayloadKind::ErrorResponse;
+                            != m_selectedMinorVersion) {
+                        protocolViolation
+                            = "remote server changed protocol minor version";
+                    } else if (info.payload != pending->expected
+                        && info.payload != PayloadKind::ErrorResponse) {
+                        protocolViolation
+                            = "remote response has an unexpected payload type";
+                    }
                     m_pending.erase(found);
                     if (pending->countsAgainstBudget) {
                         --m_outstandingRequests;
                     }
+                    if (protocolViolation != nullptr) {
+                        // Retire under the same lock that recognizes the
+                        // violation, so detection and retirement are atomic.
+                        // Setting m_connected below -- even immediately before
+                        // waking the caller -- would leave a window in which an
+                        // independent thread sharing this connection observes
+                        // connected() == true and reuses one that has already
+                        // seen a semantically impossible response.
+                        m_connected = false;
+                        // The catch handler fills the reason only when it is
+                        // empty, so this early write wins and has to carry the
+                        // real one.
+                        if (m_disconnectReason.empty()) {
+                            m_disconnectReason = protocolViolation;
+                        }
+                    }
                 }
-                if (minorVersionMismatch) {
-                    pending->promise.set_exception(std::make_exception_ptr(
-                        std::runtime_error(
-                            "remote server changed protocol minor version")));
-                    throw std::runtime_error(
-                        "remote server changed protocol minor version");
-                }
-                if (payloadMismatch) {
-                    pending->promise.set_exception(std::make_exception_ptr(
-                        std::runtime_error(
-                            "remote response has an unexpected payload type")));
-                    throw std::runtime_error(
-                        "remote response has an unexpected payload type");
+                if (protocolViolation != nullptr) {
+                    pending->promise.set_exception(
+                        std::make_exception_ptr(
+                            std::runtime_error(protocolViolation)));
+#ifdef AMREXPLORER_SERVER_TEST_HOOKS
+                    // The caller is awake and this thread has not unwound: the
+                    // window the retirement above closes. A test stalls here to
+                    // observe it.
+                    testing::notifyAfterViolationWake();
+#endif
+                    // Still throw: the handler below also fails the other
+                    // outstanding requests and stops the lifecycle.
+                    throw std::runtime_error(protocolViolation);
                 }
                 pending->promise.set_value(std::move(envelope));
             }

@@ -39,10 +39,23 @@ target_compile_definitions(amrexplorer_server
 # still promised the static link. So: restrict, and say so when the restriction
 # bites. GNU is what we recommend and test; Clang is included because the clang
 # preset and the CI job build with it.
+#
+# The probe needs try_compile to build an executable. Toolchain files set
+# CMAKE_TRY_COMPILE_TARGET_TYPE to STATIC_LIBRARY when cross-compiling, and CMake
+# then hands the link options to `ar`, which rejects them -- the probe fails on a
+# machine where the flags work perfectly well, and the warning tells the user to
+# install a package they already have.
+set(amrexplorer_static_runtime_probeable TRUE)
+if(DEFINED CMAKE_TRY_COMPILE_TARGET_TYPE
+        AND NOT CMAKE_TRY_COMPILE_TARGET_TYPE STREQUAL "EXECUTABLE")
+    set(amrexplorer_static_runtime_probeable FALSE)
+endif()
+
 if(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
         AND NOT AMREXPLORER_ENABLE_SANITIZERS
         AND NOT AMREXPLORER_ENABLE_TSAN
-        AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"
+        AND amrexplorer_static_runtime_probeable)
     include(CheckCXXSourceCompiles)
     # Re-probed on every configure. check_cxx_source_compiles caches its result,
     # so a tree first configured on a machine without libstdc++.a would keep the
@@ -51,7 +64,11 @@ if(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
     # delete the build directory. A warning that names a package to install has
     # to be actionable without that.
     unset(AMREXPLORER_STATIC_CXX_RUNTIME_LINKS CACHE)
-    set(CMAKE_REQUIRED_LINK_OPTIONS -static-libstdc++ -static-libgcc)
+    # Appended and restored, not overwritten: a toolchain file may have put its
+    # own link options here, and dropping them would make the probe test
+    # something other than this build.
+    set(amrexplorer_saved_link_options "${CMAKE_REQUIRED_LINK_OPTIONS}")
+    list(APPEND CMAKE_REQUIRED_LINK_OPTIONS -static-libstdc++ -static-libgcc)
     check_cxx_source_compiles([=[
         #include <stdexcept>
         #include <string>
@@ -65,7 +82,8 @@ if(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
             }
         }
     ]=] AMREXPLORER_STATIC_CXX_RUNTIME_LINKS)
-    unset(CMAKE_REQUIRED_LINK_OPTIONS)
+    set(CMAKE_REQUIRED_LINK_OPTIONS "${amrexplorer_saved_link_options}")
+    unset(amrexplorer_saved_link_options)
 
     if(AMREXPLORER_STATIC_CXX_RUNTIME_LINKS)
         target_link_options(amrexplorer_server
@@ -80,6 +98,16 @@ if(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
             "get a freely copyable server, or set "
             "-DAMREXPLORER_SERVER_STATIC_CXX_RUNTIME=OFF to silence this.")
     endif()
+elseif(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
+        AND NOT AMREXPLORER_ENABLE_SANITIZERS
+        AND NOT AMREXPLORER_ENABLE_TSAN
+        AND NOT amrexplorer_static_runtime_probeable)
+    message(STATUS
+        "amrexplorer-server: linking the shared C++ runtime, because "
+        "CMAKE_TRY_COMPILE_TARGET_TYPE is ${CMAKE_TRY_COMPILE_TARGET_TYPE} and "
+        "the static-runtime link cannot be tested that way. Nothing is wrong "
+        "with the toolchain; set -DAMREXPLORER_SERVER_STATIC_CXX_RUNTIME=OFF to "
+        "silence this.")
 elseif(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
         AND NOT AMREXPLORER_ENABLE_SANITIZERS
         AND NOT AMREXPLORER_ENABLE_TSAN)
@@ -99,8 +127,10 @@ elseif(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME)
     message(STATUS
         "amrexplorer-server: linking the shared C++ runtime despite "
         "AMREXPLORER_SERVER_STATIC_CXX_RUNTIME=ON, because a sanitizer is "
-        "enabled. Their runtimes load libstdc++.so.6 and libgcc_s.so.1 anyway, "
-        "so a static copy inside the executable would only add a second one.")
+        "enabled. Every sanitizer runtime pulls in libgcc_s.so.1, so "
+        "-static-libgcc achieves nothing, and libubsan pulls libstdc++.so.6 as "
+        "well -- a statically linked copy inside the executable would then be "
+        "the second one in the process.")
 endif()
 
 install(TARGETS amrexplorer_server RUNTIME DESTINATION bin)

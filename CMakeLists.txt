@@ -21,12 +21,11 @@ option(AMREXPLORER_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehav
 option(AMREXPLORER_ENABLE_TSAN "Enable ThreadSanitizer (mutually exclusive with AMREXPLORER_ENABLE_SANITIZERS)" OFF)
 option(AMREXPLORER_FORCE_FETCH_FLATBUFFERS
     "Skip installed FlatBuffers discovery and use the pinned fallback" OFF)
-# Off under the sanitizers, where it is both pointless and a hazard: their
-# runtimes pull in libgcc_s.so.1 and libstdc++.so.6 anyway, so -static-libgcc
-# buys nothing and the process ends up carrying a statically linked libstdc++
-# inside the executable alongside the shared one behind libasan -- two unwinders
-# and two copies of the runtime's state. The portability this option exists for
-# only concerns release and remote builds.
+# Off under the sanitizers, where it is both pointless and a hazard: every
+# sanitizer runtime pulls in libgcc_s.so.1, so -static-libgcc buys nothing, and
+# libubsan pulls libstdc++.so.6 too -- the process would then carry a statically
+# linked copy inside the executable alongside that one. The portability this
+# option exists for only concerns release and remote builds.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
         AND NOT AMREXPLORER_ENABLE_SANITIZERS
         AND NOT AMREXPLORER_ENABLE_TSAN)

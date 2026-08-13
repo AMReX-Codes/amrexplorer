@@ -123,15 +123,15 @@
 
 namespace amrvis::qt {
 
-constexpr std::array<BuiltinPalette, 7> builtinPalettes{
+inline constexpr std::array<BuiltinPalette, 7> builtinPalettes{
     BuiltinPalette::Rainbow, BuiltinPalette::Turbo, BuiltinPalette::Viridis,
     BuiltinPalette::Plasma, BuiltinPalette::Parula, BuiltinPalette::Coolwarm,
     BuiltinPalette::Blackbody};
 // Menu labels and QSettings keys; kept in sync with builtinPaletteName().
-constexpr std::array<const char*, 7> builtinPaletteNames{
+inline constexpr std::array<const char*, 7> builtinPaletteNames{
     "rainbow", "turbo", "viridis", "plasma", "parula", "coolwarm", "blackbody"};
 
-constexpr std::array<Qt::GlobalColor, 7> particleDefaultColors{
+inline constexpr std::array<Qt::GlobalColor, 7> particleDefaultColors{
     Qt::white, Qt::yellow, Qt::cyan, Qt::magenta,
     Qt::green, Qt::red, Qt::lightGray};
 

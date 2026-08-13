@@ -195,6 +195,13 @@ public:
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
     [[nodiscard]] bool fabStateClearedForTest() const;
+    // Test-only: how many failures have been reported non-modally. The FAB
+    // rollback smoke tests assert on this so a passing run proves the failure
+    // branch actually ran rather than the read having quietly succeeded.
+    [[nodiscard]] int backgroundErrorCountForTest() const
+    {
+        return static_cast<int>(m_backgroundErrors.size());
+    }
     void setGridBoxesVisibleForTest(bool visible);
     [[nodiscard]] std::size_t activeViewGridBoxCountForTest() const;
 
@@ -672,14 +679,40 @@ private:
     // this window already runs on a worker (see buildFabSelector); these two
     // entry points were the exceptions.
     //
+    // The selector state a failed standalone-FAB open falls back to: the last
+    // one actually committed to the window, not merely highlighted.
+    struct FabSelectorRollback {
+        bool fabMode = false;
+        bool backAvailable = false;
+        std::optional<std::size_t> ordinal;
+    };
+    // A launched standalone-FAB header read that has not resolved yet, carrying
+    // the state to restore if it fails. The pair (generation, requestId) is what
+    // makes this safe without any site reaching in to clear it: only the
+    // completion holding both may consume the entry, so opening a dataset
+    // (which bumps m_generation) or tearing the selector down (which bumps
+    // m_fabOpenGeneration) revokes it as a side effect of what it already does.
+    // A second click while a read is in flight inherits the pending rollback
+    // rather than snapshotting the dock, because what the dock shows then is
+    // that pending selection, which was never displayed.
+    struct PendingFabOpen {
+        std::uint64_t generation = 0;
+        std::uint64_t requestId = 0;
+        FabSelectorRollback rollback;
+    };
+
     // A caller that moves the selector to the pending record before the read
-    // returns records the state to fall back to in m_fabSelectorRollback; a
-    // read that fails while it is still the current request puts it back.
+    // returns passes the state to fall back to; a read that fails while it is
+    // still the current request puts it back. Failures are reported through
+    // reportBackgroundError: this one arrives from a worker, like every other
+    // background load failure, and a modal dialog here would open a nested
+    // event loop on the arrival path.
     void openStandaloneFabAsync(std::filesystem::path path,
         std::optional<std::uint64_t> fileOffset,
         std::filesystem::path dataRoot, bool preserveFabSelector,
-        std::optional<FrameSliceSpec> initialSpec, QString failureTitle);
-    void restoreFabSelectorRollback();
+        std::optional<FrameSliceSpec> initialSpec, QString failureTitle,
+        std::optional<FabSelectorRollback> rollback = std::nullopt);
+    void applyFabSelectorRollback(const FabSelectorRollback& rollback);
     void configureSliceControls();
     // Enable the dataset-dependent field/level/range/menu controls once a
     // dataset (single or sequence frame) is loaded. Shared by
@@ -902,17 +935,7 @@ private:
     // once a read has already completed, so two reads in flight together both
     // still match the generation they captured.
     std::uint64_t m_fabOpenGeneration = 0;
-    // The selector state a failed standalone-FAB open falls back to: the last
-    // one that was actually committed to the window, not merely highlighted.
-    // Set by the first click of an overlapping burst and cleared when an open
-    // succeeds, so an intermediate selection that lost the request token is
-    // never what a later failure restores.
-    struct FabSelectorRollback {
-        bool fabMode = false;
-        bool backAvailable = false;
-        std::optional<std::size_t> ordinal;
-    };
-    std::optional<FabSelectorRollback> m_fabSelectorRollback;
+    std::optional<PendingFabOpen> m_pendingFabOpen;
     std::uint64_t m_activeRequests = 0;
     bool m_closing = false;
     std::uint64_t m_staleResults = 0;

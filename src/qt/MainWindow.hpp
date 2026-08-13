@@ -198,6 +198,9 @@ public:
     // Test-only: how many failures have been reported non-modally. The FAB
     // rollback smoke tests assert on this so a passing run proves the failure
     // branch actually ran rather than the read having quietly succeeded.
+    // Saturates: reportBackgroundError keeps only the newest 50, so a test that
+    // waits for this to exceed a baseline of 50 would wait forever. Both
+    // current callers start from an empty list.
     [[nodiscard]] int backgroundErrorCountForTest() const
     {
         return static_cast<int>(m_backgroundErrors.size());

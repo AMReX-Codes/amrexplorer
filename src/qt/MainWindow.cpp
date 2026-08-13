@@ -4984,8 +4984,8 @@ void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
                     if (owned) {
                         applyFabSelectorRollback(*owned);
                     }
-                    reportBackgroundError(QStringLiteral("%1: %2")
-                            .arg(failureTitle, exceptionMessage(error)));
+                    reportBackgroundError(
+                        tr("%1: %2").arg(failureTitle, exceptionMessage(error)));
                 } else {
                     ++m_staleResults;
                 }
@@ -5476,12 +5476,19 @@ void MainWindow::openDataset(
 
 void MainWindow::resetFabState()
 {
-    // Tearing the selector down revokes any read still in flight against it.
-    // Moving the request token is what does that: no completion can still be
-    // current, so none can publish over the new dataset or restore an ordinal
-    // belonging to the old one. This is the only teardown site that needs to
-    // say so -- prepareSequence reaches it too, and that path bypasses
-    // openDatasetImpl entirely, so its generation bump is not available here.
+    // Belt-and-braces, not the guarantee. Tearing the selector down has to
+    // revoke any read still in flight against it, but the dataset generation
+    // already does that at both call sites: openDatasetImpl bumps it further
+    // down the same straight-line body, and prepareSequence's callers reach
+    // MainWindow's frameSwitchStarted handler -- a direct connection, so the
+    // same event-loop slot -- which bumps it too. No completion can be
+    // delivered in between, so `generation == m_generation` is already false
+    // for every earlier read and this token bump has never been what retires
+    // one. It is kept because it is cheap and because relying on a bump that
+    // happens a frame up the stack, in a signal handler, is not a property
+    // this function can see. Do not read it as load-bearing: it is not
+    // covered by a test, and it cannot be, because the state it would guard
+    // is unreachable.
     ++m_fabOpenGeneration;
     m_pendingFabOpen.reset();
     m_fabMode = false;

@@ -629,9 +629,28 @@ int main(int argc, char* argv[])
     // This is pinned here, once, rather than fixed at the call site, because
     // the call site is not the class of bug: the next strtod, atof or
     // printf("%f") anyone adds re-opens the same hole, and only a pin closes
-    // it by construction. Placement is deliberate -- immediately after the
-    // constructor that moves the locale, before any window or worker thread
-    // exists to observe either value.
+    // it by construction.
+    //
+    // The placement is forced rather than merely chosen. Qt moves the locale
+    // inside the constructor above (QCoreApplicationPrivate::initLocale), and
+    // that runs once behind a static guard, so pinning earlier is simply
+    // overwritten; pinning later only widens the window in which the wrong
+    // locale is live. Immediately after is the earliest point that holds.
+    //
+    // It is not, however, "before any thread exists". No *application* window
+    // or worker does, but the constructor has already started Qt's own --
+    // QDBusConnection always, and with a platform theme or a non-offscreen
+    // platform also the xcb/wayland event threads and glib's pango/gdbus/pool
+    // threads (measured: 2 threads offscreen, 10 under wayland with the gtk3
+    // theme). glibc marks setlocale MT-Unsafe, so this call is not provably
+    // race-free against threads the application does not control. It is the
+    // best available placement, not a safe one in the formal sense.
+    //
+    // The gtk3 platform theme is the one plausible defeater and it is not one:
+    // gtk_init does call setlocale(LC_ALL, "") of its own, but theme creation
+    // is eager inside the constructor above, so it happens before this line,
+    // and GTK's call is one-shot -- opening a native dialog later cannot undo
+    // the pin.
     //
     // Nothing user-visible is lost. QLocale is independent of the C locale, so
     // QLocale::system() still reports the user's real locale and separators;

@@ -99,8 +99,21 @@ int main()
             == QStringLiteral("2.500,%"),
         "formatNumber mishandled a literal percent");
 
-    if (std::setlocale(LC_NUMERIC, "de_DE.UTF-8") != nullptr
-        || std::setlocale(LC_NUMERIC, "de_DE") != nullptr) {
+    // Several candidates, not just de_DE: the runners here and on CI have no
+    // German locale but do have en_DK, so trying only de_DE meant this branch
+    // printed its note and passed green everywhere it mattered. A silent skip
+    // is how the far larger sibling bug -- strtod failing on "0.5", so no
+    // plotfile opened at all under a comma locale -- stayed hidden.
+    const char* commaLocales[] = {"de_DE.UTF-8", "de_DE", "en_DK.UTF-8",
+        "en_DK.utf8", "fr_FR.UTF-8", "fr_FR.utf8"};
+    bool commaLocaleSet = false;
+    for (const auto* candidate : commaLocales) {
+        if (std::setlocale(LC_NUMERIC, candidate) != nullptr) {
+            commaLocaleSet = true;
+            break;
+        }
+    }
+    if (commaLocaleSet) {
         require(formatNumber(3.14159, QStringLiteral("%.2f"))
                 == QStringLiteral("3.14"),
             "formatNumber emitted a locale decimal separator");

@@ -41,7 +41,12 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes cmake desktop-file-utils ninja-build qt6-base-dev ${{ matrix.package }}
+          sudo apt-get install --yes cmake desktop-file-utils locales ninja-build qt6-base-dev ${{ matrix.package }}
+          # qt_comma_locale_open needs a comma-decimal locale. The runner image
+          # ships no language packs, so generate one: without it the test falls
+          # back to building a locale with localedef, and if that ever stops
+          # working it would skip and CI would stay green over the regression.
+          sudo locale-gen de_DE.UTF-8
 
       - name: Configure
         run: cmake --preset default -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
@@ -185,7 +190,10 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes cmake g++ ninja-build qt6-base-dev
+          sudo apt-get install --yes cmake g++ locales ninja-build qt6-base-dev
+          # See the linux job: qt_comma_locale_open needs a comma locale, and a
+          # skip here would be a silent green over the LC_NUMERIC regression.
+          sudo locale-gen de_DE.UTF-8
 
       - name: Configure
         run: cmake --preset qt-sanitizers -DAMREXPLORER_WARNINGS_AS_ERRORS=ON

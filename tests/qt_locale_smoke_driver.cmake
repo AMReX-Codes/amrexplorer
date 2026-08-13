@@ -70,7 +70,15 @@ endif()
 # LC_ALL so the whole environment, not just LC_NUMERIC, is the comma locale --
 # which is what a user in that locale actually has.
 set(ENV{LC_ALL} "${commaLocale}")
+# TIMEOUT because the regression this guards does not exit: a metadata-open
+# failure never reaches the slice stage, so initialSliceFinished -- which is
+# what the smoke test quits on -- is never emitted and the app hangs. Without a
+# timeout here ctest kills the test at its own 120 s limit and reports a bare
+# Timeout, with the child's streams still captured into the variables below, so
+# neither the app's error nor this driver's message ever reaches the log. Thirty
+# seconds is ~100x the passing runtime.
 execute_process(COMMAND "${AMREXPLORER_QT}" --slice-smoke-test "${WORK}/plt"
+    TIMEOUT 30
     RESULT_VARIABLE smokeResult
     OUTPUT_VARIABLE smokeOutput ERROR_VARIABLE smokeError)
 if(NOT smokeResult STREQUAL "0")

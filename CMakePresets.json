@@ -68,7 +68,8 @@
       "displayName": "Headless Debug with ASan and UBSan",
       "binaryDir": "${sourceDir}/build-sanitizers",
       "cacheVariables": {
-        "AMREXPLORER_ENABLE_SANITIZERS": "ON"
+        "AMREXPLORER_ENABLE_SANITIZERS": "ON",
+        "AMREXPLORER_SERVER_STATIC_CXX_RUNTIME": "OFF"
       }
     },
     {
@@ -90,7 +91,8 @@
       "cacheVariables": {
         "AMREXPLORER_ENABLE_TSAN": "ON",
         "AMREXPLORER_ENABLE_REMOTE": "ON",
-        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS": "OFF"
+        "AMREXPLORER_ENABLE_SERVER_TEST_HOOKS": "OFF",
+        "AMREXPLORER_SERVER_STATIC_CXX_RUNTIME": "OFF"
       }
     },
     {
@@ -99,7 +101,8 @@
       "displayName": "Qt Debug with ASan and UBSan (offscreen smoke tests)",
       "binaryDir": "${sourceDir}/build-qt-sanitizers",
       "cacheVariables": {
-        "AMREXPLORER_ENABLE_SANITIZERS": "ON"
+        "AMREXPLORER_ENABLE_SANITIZERS": "ON",
+        "AMREXPLORER_SERVER_STATIC_CXX_RUNTIME": "OFF"
       }
     },
     {

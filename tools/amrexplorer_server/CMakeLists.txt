@@ -22,7 +22,15 @@ target_compile_definitions(amrexplorer_server
 # in by an otherwise complete C++ toolchain. Enabling this blind would turn a
 # working desktop build into a link failure, since the server is built by the
 # default preset too. Fall back to the shared runtime with a warning instead.
+# The sanitizer conditions are repeated here rather than left to the option's
+# default, because a default only applies to a build tree's first configure: a
+# directory configured before that default changed keeps ON in its cache and
+# would still get the flags. Guarding where they are applied makes the
+# behaviour right in every tree, including hand-configured ones that no preset
+# covers.
 if(AMREXPLORER_SERVER_STATIC_CXX_RUNTIME
+        AND NOT AMREXPLORER_ENABLE_SANITIZERS
+        AND NOT AMREXPLORER_ENABLE_TSAN
         AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     include(CheckCXXSourceCompiles)
     # Re-probed on every configure. check_cxx_source_compiles caches its result,

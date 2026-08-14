@@ -84,6 +84,39 @@ void operator delete[](void* memory, std::size_t) noexcept
     std::free(memory);
 }
 
+// The budget must sit above what a crafted parse legitimately needs -- a
+// handful of small vectors and a stream buffer, well under 100 KB -- and below
+// what the unbounded reserve would take, which differs per case: ten million
+// IntBox is ~360 MB, while a hundred thousand FieldMetadata is only ~7 MB. A
+// single generous budget would leave the component case passing either way, so
+// each caller states its own.
+constexpr std::size_t defaultAllowedBytes = 8U * 1024U * 1024U;
+
+template <typename Parse>
+void requireBoundedAllocation(Parse parse, const char* what,
+    std::size_t allowedBytes = defaultAllowedBytes)
+{
+    const auto before = g_allocatedBytes.load(std::memory_order_relaxed);
+    bool threw = false;
+    try {
+        parse();
+    } catch (const amrvis::MetadataReadError&) {
+        threw = true;
+    } catch (const std::exception& other) {
+        std::cerr << "FAILED: " << what << " threw the wrong exception: "
+                  << other.what() << '\n';
+        ++g_failures;
+    }
+    const auto used
+        = g_allocatedBytes.load(std::memory_order_relaxed) - before;
+    require(threw, what);
+    if (used >= allowedBytes) {
+        std::cerr << "FAILED: " << what << " allocated " << used
+                  << " bytes; the reserve is not bounded by the file's size\n";
+        ++g_failures;
+    }
+}
+
 int main()
 {
     const auto scratch = std::filesystem::temp_directory_path()
@@ -101,32 +134,43 @@ int main()
                   ")\n";
     }
 
-    // Everything before this point -- iostreams, the filesystem calls, the
-    // static initializers -- is excluded by taking the baseline here.
-    const auto before = g_allocatedBytes.load(std::memory_order_relaxed);
-    bool threw = false;
-    try {
-        (void)amrvis::detail::readVisMfIndex(path, 2);
-    } catch (const amrvis::MetadataReadError&) {
-        threw = true;
-    } catch (const std::exception& other) {
-        std::cerr << "FAILED: the crafted Header threw the wrong exception: "
-                  << other.what() << '\n';
-        ++g_failures;
-    }
-    const auto used = g_allocatedBytes.load(std::memory_order_relaxed) - before;
+    requireBoundedAllocation([&path] { (void)amrvis::detail::readVisMfIndex(path, 2); },
+        "a VisMF BoxArray shorter than its declared count");
 
-    require(threw, "a BoxArray shorter than its declared count was not rejected");
-    // Two orders of magnitude of headroom over what the parse actually needs
-    // (a handful of small vectors and the stream buffer), and two below what
-    // the unbounded reserve would take.
-    constexpr std::size_t allowedBytes = 8U * 1024U * 1024U;
-    if (used >= allowedBytes) {
-        std::cerr << "FAILED: parsing a 42-byte Header that claims ten million "
-                     "boxes allocated " << used << " bytes; the reserve is not "
-                     "bounded by the file's size\n";
-        ++g_failures;
+    // The same claim in the top-level plotfile Header, which is the first file
+    // any open reads and the one the server reads on every session. Its
+    // per-level grid count carries the same ten-million cap, so a Header that
+    // declares it and then supplies no grid bounds asks for the same ~360 MB
+    // before failing on the first one it cannot read.
+    const auto plotfile = scratch / "claims_ten_million_grids";
+    std::filesystem::create_directories(plotfile);
+    {
+        std::ofstream stream(plotfile / "Header", std::ios::binary);
+        stream << "HyperCLaw-V1.1\n"      // file version
+                  "1\ndensity\n"          // one component
+                  "2\n0.0\n0\n"           // dimension, time, finest level
+                  "0.0\n0.0\n1.0\n1.0\n"  // physical bounds
+                  "((0,0) (7,7) (0,0))\n" // level 0 domain
+                  "0\n"                   // level step
+                  "0.125 0.125\n"         // cell sizes
+                  "0\n0\n"                // coordinate system, boundary width
+                  "0 10000000 0.0 0\n";   // level record claiming ten million
     }
+    requireBoundedAllocation(
+        [&plotfile] { (void)amrvis::PlotfileMetadataReader{}.read(plotfile); },
+        "a plotfile Header level record shorter than its declared grid count");
+
+    // A component count is the same shape of claim, one line per name.
+    const auto components = scratch / "claims_many_components";
+    std::filesystem::create_directories(components);
+    {
+        std::ofstream stream(components / "Header", std::ios::binary);
+        stream << "HyperCLaw-V1.1\n100000\ndensity\n";
+    }
+    requireBoundedAllocation(
+        [&components] { (void)amrvis::PlotfileMetadataReader{}.read(components); },
+        "a plotfile Header shorter than its declared component count",
+        1024U * 1024U);
 
     std::error_code removeError;
     std::filesystem::remove_all(scratch, removeError);

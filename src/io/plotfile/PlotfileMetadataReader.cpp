@@ -46,6 +46,25 @@ T readRequired(std::istream& input, std::string_view description)
     }
 }
 
+// How many entries to reserve for a count the file declares. A declared count
+// is a claim; the file's own size is the evidence against it, because a header
+// cannot describe more entries than its bytes allow. Reserving from the claim
+// alone let a header of a few dozen bytes take hundreds of megabytes before a
+// single entry was parsed -- the trade the particle grid table already refuses
+// to make.
+//
+// Every caller is reserving, never sizing, so under-reserving a legitimate file
+// costs one reallocation and nothing else. That asymmetry is why the per-record
+// floors callers pass sit *below* the true minimum rather than being tuned to
+// it: too low only forgoes some of the optimization, while too high would drop
+// a real file's reserve on the floor.
+[[nodiscard]] std::size_t evidenceBoundedCount(std::uint64_t declared,
+    std::uintmax_t fileBytes, std::uint64_t minimumBytesPerRecord)
+{
+    return static_cast<std::size_t>(std::min(
+        declared, static_cast<std::uint64_t>(fileBytes) / minimumBytesPerRecord));
+}
+
 // Reads one VisMF min/max statistic, which -- unlike the geometry fields --
 // may be non-finite. AMReX's FArrayBox::min/max propagate +/-inf (and can
 // leave a NaN) from an overflowed run, and its plotfile headers carry those
@@ -261,26 +280,14 @@ detail::VisMfIndex detail::readVisMfIndex(
     }
     const auto boxCount = static_cast<std::size_t>(boxArrayHeader.front());
     // The cap above rejects the absurd; the file's own size bounds what is
-    // merely large. A declared count is a claim, and the Header cannot describe
-    // more entries than its bytes allow: the shortest legal BoxArray entry is
-    // "((0)(0)(0))", eleven bytes at one dimension and more at two or three,
-    // and the shortest legal location record is "FabOnDisk: a 0", fourteen.
-    // Reserving from the declared count alone let a Header of a few dozen bytes
-    // claim ten million boxes plus ten million names and offsets -- roughly
-    // 750 MB -- before a single entry was parsed, which is the same trade the
-    // particle grid table already refuses to make. Both reserves are
-    // optimizations, so under-reserving a legitimate file costs one
-    // reallocation and nothing else; that is why the floors here sit below the
-    // true minimums rather than being tuned to them.
+    // merely large. The shortest legal BoxArray entry is "((0)(0)(0))", eleven
+    // bytes at one dimension and more at two or three, and the shortest legal
+    // location record is "FabOnDisk: a 0", fourteen.
     constexpr std::uint64_t minimumBytesPerBoxEntry = 8;
     constexpr std::uint64_t minimumBytesPerLocationRecord = 12;
-    const auto evidenceBoundedCount = [headerSize](std::uint64_t declared,
-                                          std::uint64_t bytesPerRecord) {
-        return static_cast<std::size_t>(std::min(
-            declared, static_cast<std::uint64_t>(headerSize) / bytesPerRecord));
-    };
     index.boxes.reserve(evidenceBoundedCount(
-        static_cast<std::uint64_t>(boxCount), minimumBytesPerBoxEntry));
+        static_cast<std::uint64_t>(boxCount), headerSize,
+        minimumBytesPerBoxEntry));
     for (std::size_t box = 0; box < boxCount; ++box) {
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
@@ -296,7 +303,8 @@ detail::VisMfIndex detail::readVisMfIndex(
         throw MetadataReadError("VisMF location count does not match BoxArray size");
     }
     const auto reservableLocations = evidenceBoundedCount(
-        static_cast<std::uint64_t>(boxCount), minimumBytesPerLocationRecord);
+        static_cast<std::uint64_t>(boxCount), headerSize,
+        minimumBytesPerLocationRecord);
     index.fileNames.reserve(reservableLocations);
     index.fileOffsets.reserve(reservableLocations);
     for (std::size_t block = 0; block < boxCount; ++block) {
@@ -421,7 +429,12 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
     }
 
     input.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-    metadata->fields.reserve(static_cast<std::size_t>(componentCount));
+    // Each component is one name on its own line, so two bytes is the shortest
+    // one a Header can carry.
+    constexpr std::uint64_t minimumBytesPerComponentName = 2;
+    metadata->fields.reserve(evidenceBoundedCount(
+        static_cast<std::uint64_t>(componentCount), headerSize,
+        minimumBytesPerComponentName));
     for (int component = 0; component < componentCount; ++component) {
         auto name = readNonEmptyLine(input, "component name");
         metadata->fields.push_back({name, Centering::Cell, {std::move(name)}});
@@ -493,7 +506,15 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
 
         auto& level = metadata->levels[levelIndex];
         level.step = headerStep;
-        level.boxes.reserve(static_cast<std::size_t>(gridCount));
+        // The same claim-versus-evidence trade as the VisMF BoxArray, and the
+        // more reachable one: this is the top-level Header, the first file any
+        // open reads. A grid record is a physical bound per axis, so the
+        // shortest one a Header can carry is "0 0\n" -- four bytes at one
+        // dimension, more above it.
+        constexpr std::uint64_t minimumBytesPerGridRecord = 4;
+        level.boxes.reserve(evidenceBoundedCount(
+            static_cast<std::uint64_t>(gridCount), headerSize,
+            minimumBytesPerGridRecord));
         for (int grid = 0; grid < gridCount; ++grid) {
             if (cancellation.stop_requested()) {
                 throw ReadCancelled();

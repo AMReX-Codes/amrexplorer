@@ -2,6 +2,7 @@
 
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 #include "NumberFormat.hpp"
+#include "QtErrorText.hpp"
 
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
@@ -9,7 +10,6 @@
 #include <QAbstractTableModel>
 #include <QCloseEvent>
 #include <QColor>
-#include <QException>
 #include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -53,23 +53,6 @@ int datasetPageMaximumExtent(const DatasetSession& dataset)
         : static_cast<int>(std::floor(
             std::sqrt(static_cast<double>(maximumCells))));
     return std::clamp(extent, 1, datasetPageMaxExtent);
-}
-
-// Qt Concurrent masks worker exceptions behind QUnhandledException, so the
-// underlying library error text must be unwrapped before it is shown.
-QString exceptionMessage(const std::exception& error)
-{
-    const auto* unhandled = dynamic_cast<const QUnhandledException*>(&error);
-    if (unhandled != nullptr && unhandled->exception()) {
-        try {
-            std::rethrow_exception(unhandled->exception());
-        } catch (const std::exception& inner) {
-            return QString::fromUtf8(inner.what());
-        } catch (...) {
-            return QStringLiteral("unknown non-std exception");
-        }
-    }
-    return QString::fromUtf8(error.what());
 }
 
 // Presents one level's already-dense DatasetLevelExtract to a QTableView.

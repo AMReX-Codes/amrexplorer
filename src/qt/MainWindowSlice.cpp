@@ -1180,15 +1180,19 @@ void MainWindow::prepareSequence(std::size_t frameCount)
     resetFabState();
     m_particleStopSource.request_stop();
     m_particleSamples.clear();
-    // A sequence is a different dataset, so its particle settings start from
-    // defaults exactly as a plain open's do. Clearing only the species left the
-    // subset, seed, point size, and colors behind: a 0.05% subset chosen for a
-    // dense plotfile silently decimated the sequence opened after it.
+    // A sequence is a different dataset, so it starts from defaults exactly as
+    // a plain open does.
     resetParticleSettings();
     m_particleLoading = false;
     m_particleProgress->setVisible(false);
     ++m_particleGeneration;
     m_remoteSequenceConnectionGeneration = 0;
+    // Frame 0 is not installed yet, so m_dataset still describes the outgoing
+    // one. Take the overlay dialogs' menu items down with the dialogs above,
+    // the way a plain open's teardown does; configureSequenceControls and
+    // configureParticleControls bring them back when a frame arrives.
+    m_contoursAction->setEnabled(false);
+    m_particlesAction->setEnabled(false);
 
     m_animationPanel->setSequenceFrameCount(static_cast<int>(frameCount));
     m_animationPanel->setSequenceVisible(true);

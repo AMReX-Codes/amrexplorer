@@ -426,6 +426,21 @@ if(TARGET amrexplorer_qt)
     add_test(NAME remote_connect_arguments
         COMMAND test_remote_connect_arguments)
 
+    # The Palette menu and the palette selector are built in different
+    # translation units and must agree. Needs no fixture: both lists exist as
+    # soon as the window is constructed -- but it does need an isolated
+    # XDG_CONFIG_HOME, like qt_smoke_driver.cmake gives the fixture-based
+    # cases. Without it the run inherits the developer's real QSettings, and a
+    # persisted "Reverse Colormap" makes the selector read "Rainbow_r" against
+    # the menu's "Rainbow".
+    add_test(
+        NAME qt_palette_labels_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/config_palette_labels"
+            "$<TARGET_FILE:amrexplorer_qt>" --palette-labels-smoke-test
+    )
+    set_tests_properties(qt_palette_labels_smoke PROPERTIES TIMEOUT 30)
+
     add_test(
         NAME qt_remote_slice_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen

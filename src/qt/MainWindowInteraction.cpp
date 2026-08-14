@@ -431,9 +431,14 @@ void MainWindow::showParticlesDialog()
         [this, dialog, buttons, speciesControls, fraction, seed, pointSize](
             QAbstractButton* button) {
             const auto role = buttons->buttonRole(button);
+            if (role == QDialogButtonBox::RejectRole) {
+                dialog->reject();
+                return;
+            }
+            // Only Ok and Apply act; anything added later (a Reset, a Help)
+            // must not be treated as a Cancel and dismiss the dialog.
             if (role != QDialogButtonBox::AcceptRole
                 && role != QDialogButtonBox::ApplyRole) {
-                dialog->reject();
                 return;
             }
             bool valid = false;

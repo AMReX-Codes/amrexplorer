@@ -1727,15 +1727,32 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window, [&window, path] {
             window.openDataset(path);
         });
-    } else if (argc == 3
+    } else if (argc == 4
         && std::string_view(argv[1]) == "--particle-dialog-smoke-test") {
         // The particles dialog is modeless with an Apply button: settings are
         // meant to be tried against the image, so the dialog must not block the
         // main window, must survive Apply, and must not stack up copies of
-        // itself when the menu item is chosen again.
-        const std::filesystem::path path(argv[2]);
+        // itself when the menu item is chosen again. It also belongs to the
+        // dataset whose species it lists, so opening a sequence -- which never
+        // runs openDatasetImpl -- must take it down.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        // The dialog closes with WA_DeleteOnClose, so a just-closed one can
+        // still be a child of the window; the live dialog is the visible one.
+        const auto liveDialog = [&window]() -> QDialog* {
+            for (auto* candidate :
+                window.findChildren<QDialog*>(QStringLiteral("particlesDialog"))) {
+                if (candidate->isVisible()) {
+                    return candidate;
+                }
+            }
+            return nullptr;
+        };
+        auto* poll = new QTimer(&window);
+        poll->setInterval(10);
+        auto attempts = std::make_shared<int>(0);
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-            &application, [&window, &application](bool success) {
+            &application, [&window, &application, poll](bool success) {
                 if (!success) {
                     application.exit(1);
                     return;
@@ -1757,7 +1774,7 @@ int main(int argc, char* argv[])
                     application.exit(1);
                     return;
                 }
-                const QPointer<QDialog> dialog = dialogs.front();
+                auto* dialog = dialogs.front();
                 if (!dialog->isVisible() || dialog->isModal()
                     || QApplication::activeModalWidget() != nullptr) {
                     qCritical("the particles dialog blocks the main window");
@@ -1774,18 +1791,62 @@ int main(int argc, char* argv[])
                 }
                 buttons->button(QDialogButtonBox::Apply)->click();
                 // Apply draws the checked species and leaves the dialog up.
-                if (dialog.isNull() || !dialog->isVisible()
-                    || !window.particleLoadingForTest()) {
+                if (!dialog->isVisible() || !window.particleLoadingForTest()) {
                     qCritical("Apply did not draw, or closed the dialog");
                     application.exit(1);
                     return;
                 }
+                poll->start();
+            }, Qt::SingleShotConnection);
+        // Let the Apply read finish rather than tearing the window down around
+        // a live worker, then check the rest of the dialog's lifecycle.
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, &application, poll, attempts, liveDialog, first, second] {
+                if (++*attempts > 500) {
+                    qCritical("the particle read started by Apply never settled");
+                    application.exit(1);
+                    return;
+                }
+                if (window.particleLoadingForTest()) {
+                    return;
+                }
+                poll->stop();
+                auto* dialog = liveDialog();
+                if (dialog == nullptr) {
+                    qCritical("the dialog did not survive the particle read");
+                    application.exit(1);
+                    return;
+                }
+                auto* buttons = dialog->findChild<QDialogButtonBox*>(
+                    QStringLiteral("particlesDialogButtons"));
                 buttons->button(QDialogButtonBox::Ok)->click();
-                application.exit(
-                    !dialog.isNull() && dialog->isVisible() ? 1 : 0);
+                if (liveDialog() != nullptr) {
+                    qCritical("Ok did not close the dialog");
+                    application.exit(1);
+                    return;
+                }
+                auto* action = window.findChild<QAction*>(
+                    QStringLiteral("particlesAction"));
+                action->trigger();
+                if (liveDialog() == nullptr) {
+                    qCritical("the dialog did not reopen");
+                    application.exit(1);
+                    return;
+                }
+                // The species it lists belong to the outgoing dataset.
+                window.openSequence({first, second});
+                if (liveDialog() != nullptr) {
+                    qCritical("opening a sequence left the dialog on screen");
+                    application.exit(1);
+                    return;
+                }
+                window.close();
+                application.exit(0);
             });
-        QTimer::singleShot(0, &window, [&window, path] {
-            window.openDataset(path);
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window, [&window, first] {
+            window.openDataset(first);
         });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--raster-zoom-smoke-test") {

@@ -1196,6 +1196,15 @@ void MainWindow::prepareSequence(std::size_t frameCount)
     if (linePlotWindow != nullptr) {
         linePlotWindow->close();
     }
+    // The particles dialog lists the outgoing dataset's species, and the state
+    // it edits was just reset above. openDatasetImpl closes it for a plain
+    // open; this path never runs that, so a sequence open would otherwise leave
+    // it on screen writing the old species names back on Apply.
+    auto* particlesDialog = m_particlesDialog;
+    m_particlesDialog = nullptr;
+    if (particlesDialog != nullptr) {
+        particlesDialog->close();
+    }
 }
 
 void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,

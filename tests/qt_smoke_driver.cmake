@@ -211,8 +211,10 @@ elseif(MODE STREQUAL "particle-visible-range")
     run_or_die("${AMREXPLORER_QT}" --particle-visible-range-smoke-test
         "${WORK}/plt")
 elseif(MODE STREQUAL "particle-dialog")
-    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
-    run_or_die("${AMREXPLORER_QT}" --particle-dialog-smoke-test "${WORK}/plt")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --particle-dialog-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "raster-zoom")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --raster-zoom-smoke-test "${WORK}/plt")

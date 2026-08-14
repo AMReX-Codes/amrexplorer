@@ -1576,7 +1576,21 @@ int main(int argc, char* argv[])
         // the selector read "Rainbow". Needs no dataset -- both lists are built
         // during construction.
         const auto menu = window.paletteMenuLabelsForTest();
-        const auto selector = window.paletteSelectorLabelsForTest();
+        auto selector = window.paletteSelectorLabelsForTest();
+        // The reversal suffix is a selector-only presentation rule: with
+        // "Reverse Colormap" on, syncPaletteSelector appends "_r" while the
+        // menu actions keep their original text. That divergence is real and
+        // outside what this case is about, so it is normalized away rather
+        // than asserted on -- the property here is that the two agree on the
+        // *name*. Isolated settings make reversal off anyway; this keeps the
+        // case honest on the platforms where XDG_CONFIG_HOME does not isolate
+        // QSettings, and stops it claiming an invariant the product does not
+        // hold. Unifying the suffix into the shared helper is follow-up work.
+        for (auto& label : selector) {
+            if (label.endsWith(QStringLiteral("_r"))) {
+                label.chop(2);
+            }
+        }
         if (menu.isEmpty() || menu != selector) {
             qCritical("palette menu labels %s do not match the selector's %s",
                 qPrintable(menu.join(QStringLiteral(","))),

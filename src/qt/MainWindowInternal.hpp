@@ -162,8 +162,10 @@ inline QString builtinPaletteKey(std::size_t index)
 }
 
 // The palette's name for the menu and the selector, and the one definition of
-// how it is presented: capitalized, where the settings key above stays
-// lowercase. Kept apart from that key precisely so this rule can live here
+// its capitalization -- where the settings key above stays lowercase. Not the
+// only presentation rule: syncPaletteSelector still appends the "_r" reversal
+// suffix to the selector alone, so with reversal on the two surfaces differ by
+// that suffix. Folding it in here is the remaining half of the job. Kept apart from that key precisely so this rule can live here
 // without rewriting anyone's stored settings. It used to be a pass-through
 // with the capitalization spelled out at two of its three call sites, so the
 // Palette menu showed "rainbow" while the selector showed "Rainbow".

@@ -90,8 +90,9 @@ enum class BuiltinPalette {
 // (the Moreland diverging map shared by ParaView/VisIt), and blackbody (a
 // black-body radiation thermal ramp).
 [[nodiscard]] const Palette& builtinPalette(BuiltinPalette palette);
-// The palette's menu label / settings key, without a file extension, e.g.
-// "rainbow".
+// The palette's settings key, without a file extension, e.g. "rainbow". Also
+// the basis for its UI label, which the Qt layer capitalizes -- so this string
+// is what goes on disk and must not change with presentation.
 [[nodiscard]] std::string_view builtinPaletteName(BuiltinPalette palette) noexcept;
 
 } // namespace amrvis

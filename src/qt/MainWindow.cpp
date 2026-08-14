@@ -1268,6 +1268,7 @@ void MainWindow::createMenus()
         this, [this] { showContoursDialog(); });
 
     m_particlesAction = new QAction(tr("Par&ticles..."), this);
+    m_particlesAction->setObjectName(QStringLiteral("particlesAction"));
     m_particlesAction->setEnabled(false);
     connect(m_particlesAction, &QAction::triggered,
         this, [this] { showParticlesDialog(); });

@@ -6,6 +6,8 @@
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -16,6 +18,7 @@
 #include <QLoggingCategory>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QProcess>
 #include <QPushButton>
 #include <QStandardPaths>
@@ -1720,6 +1723,66 @@ int main(int argc, char* argv[])
                             ? 0 : 1);
                     }, Qt::SingleShotConnection);
                 window.enableVisibleRasterForTest();
+            });
+        QTimer::singleShot(0, &window, [&window, path] {
+            window.openDataset(path);
+        });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--particle-dialog-smoke-test") {
+        // The particles dialog is modeless with an Apply button: settings are
+        // meant to be tried against the image, so the dialog must not block the
+        // main window, must survive Apply, and must not stack up copies of
+        // itself when the menu item is chosen again.
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                auto* action = window.findChild<QAction*>(
+                    QStringLiteral("particlesAction"));
+                if (action == nullptr || !action->isEnabled()) {
+                    qCritical("the particles menu item is missing or disabled");
+                    application.exit(1);
+                    return;
+                }
+                action->trigger();
+                action->trigger();
+                const auto dialogs = window.findChildren<QDialog*>(
+                    QStringLiteral("particlesDialog"));
+                if (dialogs.size() != 1) {
+                    qCritical("expected one particles dialog, found %lld",
+                        static_cast<long long>(dialogs.size()));
+                    application.exit(1);
+                    return;
+                }
+                const QPointer<QDialog> dialog = dialogs.front();
+                if (!dialog->isVisible() || dialog->isModal()
+                    || QApplication::activeModalWidget() != nullptr) {
+                    qCritical("the particles dialog blocks the main window");
+                    application.exit(1);
+                    return;
+                }
+                auto* buttons = dialog->findChild<QDialogButtonBox*>(
+                    QStringLiteral("particlesDialogButtons"));
+                if (buttons == nullptr
+                    || buttons->button(QDialogButtonBox::Apply) == nullptr) {
+                    qCritical("the particles dialog has no Apply button");
+                    application.exit(1);
+                    return;
+                }
+                buttons->button(QDialogButtonBox::Apply)->click();
+                // Apply draws the checked species and leaves the dialog up.
+                if (dialog.isNull() || !dialog->isVisible()
+                    || !window.particleLoadingForTest()) {
+                    qCritical("Apply did not draw, or closed the dialog");
+                    application.exit(1);
+                    return;
+                }
+                buttons->button(QDialogButtonBox::Ok)->click();
+                application.exit(
+                    !dialog.isNull() && dialog->isVisible() ? 1 : 0);
             });
         QTimer::singleShot(0, &window, [&window, path] {
             window.openDataset(path);

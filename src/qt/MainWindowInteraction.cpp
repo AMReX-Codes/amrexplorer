@@ -303,17 +303,28 @@ void MainWindow::updateOverlays()
 
 void MainWindow::showParticlesDialog()
 {
+    if (m_particlesDialog != nullptr) {
+        m_particlesDialog->raise();
+        m_particlesDialog->activateWindow();
+        return;
+    }
     if (!m_dataset || m_dataset->particleSpecies().empty()) {
         return;
     }
-    QDialog dialog(this);
-    dialog.setWindowTitle(tr("Particles"));
-    auto* layout = new QVBoxLayout(&dialog);
+    // Modeless, like the contours dialog: settings are worth trying against the
+    // image, and a modal dialog made every attempt a reopen -- and dimmed the
+    // main window while it was up on Linux.
+    auto* dialog = new QDialog(this);
+    dialog->setObjectName(QStringLiteral("particlesDialog"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(tr("Particles"));
+    dialog->setWindowFlags(Qt::Window);
+    auto* layout = new QVBoxLayout(dialog);
     layout->addWidget(new QLabel(
         tr("Select particle species to draw. Sampling hashes the persistent "
            "particle ID/CPU identity, so the same particles remain selected "
            "across plotfile frames."),
-        &dialog));
+        dialog));
 
     struct SpeciesControls {
         std::string name;
@@ -322,17 +333,19 @@ void MainWindow::showParticlesDialog()
         QSpinBox* alpha = nullptr;
         QColor color;
     };
-    std::vector<SpeciesControls> speciesControls;
-    speciesControls.reserve(m_dataset->particleSpecies().size());
+    // The dialog outlives this call now, so the per-species state has to as
+    // well; the button handlers keep it alive by shared ownership.
+    auto speciesControls = std::make_shared<std::vector<SpeciesControls>>();
+    speciesControls->reserve(m_dataset->particleSpecies().size());
     auto* speciesGrid = new QGridLayout;
-    speciesGrid->addWidget(new QLabel(tr("Show"), &dialog), 0, 0);
-    speciesGrid->addWidget(new QLabel(tr("Species"), &dialog), 0, 1);
-    speciesGrid->addWidget(new QLabel(tr("Color"), &dialog), 0, 2);
-    speciesGrid->addWidget(new QLabel(tr("Alpha"), &dialog), 0, 3);
+    speciesGrid->addWidget(new QLabel(tr("Show"), dialog), 0, 0);
+    speciesGrid->addWidget(new QLabel(tr("Species"), dialog), 0, 1);
+    speciesGrid->addWidget(new QLabel(tr("Color"), dialog), 0, 2);
+    speciesGrid->addWidget(new QLabel(tr("Alpha"), dialog), 0, 3);
     for (std::size_t speciesIndex = 0;
          speciesIndex < m_dataset->particleSpecies().size(); ++speciesIndex) {
         const auto& species = m_dataset->particleSpecies()[speciesIndex];
-        auto* check = new QCheckBox(&dialog);
+        auto* check = new QCheckBox(dialog);
         check->setChecked(!m_particleSelectionInitialized
             || std::find(m_selectedParticleSpecies.begin(),
                 m_selectedParticleSpecies.end(), species.name)
@@ -341,13 +354,13 @@ void MainWindow::showParticlesDialog()
             tr("%1 (%2 particles)")
                 .arg(QString::fromStdString(species.name))
                 .arg(species.particleCount),
-            &dialog);
+            dialog);
         auto color = m_particleColors.contains(species.name)
             ? m_particleColors.at(species.name)
             : defaultParticleColor(speciesIndex);
-        auto* colorButton = new QPushButton(&dialog);
+        auto* colorButton = new QPushButton(dialog);
         updateColorButton(*colorButton, color);
-        auto* alpha = new QSpinBox(&dialog);
+        auto* alpha = new QSpinBox(dialog);
         alpha->setRange(0, 100);
         alpha->setSuffix(tr("%"));
         alpha->setValue(qRound(color.alphaF() * 100.0));
@@ -356,29 +369,28 @@ void MainWindow::showParticlesDialog()
         speciesGrid->addWidget(name, row, 1);
         speciesGrid->addWidget(colorButton, row, 2);
         speciesGrid->addWidget(alpha, row, 3);
-        speciesControls.push_back(
+        speciesControls->push_back(
             {species.name, check, colorButton, alpha, color});
     }
-    for (auto& controls : speciesControls) {
-        auto* controlsPtr = &controls;
-        connect(controls.colorButton, &QPushButton::clicked, &dialog,
-            [&dialog, controlsPtr] {
-                auto chosen = QColorDialog::getColor(controlsPtr->color, &dialog,
+    for (std::size_t index = 0; index < speciesControls->size(); ++index) {
+        connect((*speciesControls)[index].colorButton, &QPushButton::clicked,
+            dialog, [dialog, speciesControls, index] {
+                auto& controls = (*speciesControls)[index];
+                auto chosen = QColorDialog::getColor(controls.color, dialog,
                     QObject::tr("Particle color"));
                 if (!chosen.isValid()) {
                     return;
                 }
-                chosen.setAlpha(controlsPtr->color.alpha());
-                controlsPtr->color = chosen;
-                updateColorButton(
-                    *controlsPtr->colorButton, controlsPtr->color);
+                chosen.setAlpha(controls.color.alpha());
+                controls.color = chosen;
+                updateColorButton(*controls.colorButton, controls.color);
             });
     }
     layout->addLayout(speciesGrid);
 
     auto* fractionRow = new QHBoxLayout;
-    fractionRow->addWidget(new QLabel(tr("Visible subset:"), &dialog));
-    auto* fraction = new QDoubleSpinBox(&dialog);
+    fractionRow->addWidget(new QLabel(tr("Visible subset:"), dialog));
+    auto* fraction = new QDoubleSpinBox(dialog);
     fraction->setRange(0.01, 100.0);
     fraction->setDecimals(2);
     fraction->setSuffix(tr("%"));
@@ -388,8 +400,8 @@ void MainWindow::showParticlesDialog()
     layout->addLayout(fractionRow);
 
     auto* seedRow = new QHBoxLayout;
-    seedRow->addWidget(new QLabel(tr("Sampling seed:"), &dialog));
-    auto* seed = new QLineEdit(QString::number(m_particleSeed), &dialog);
+    seedRow->addWidget(new QLabel(tr("Sampling seed:"), dialog));
+    auto* seed = new QLineEdit(QString::number(m_particleSeed), dialog);
     seed->setValidator(new QRegularExpressionValidator(
         QRegularExpression(QStringLiteral("[0-9]{1,20}")), seed));
     seed->setToolTip(tr(
@@ -399,8 +411,8 @@ void MainWindow::showParticlesDialog()
     layout->addLayout(seedRow);
 
     auto* sizeRow = new QHBoxLayout;
-    sizeRow->addWidget(new QLabel(tr("Point size:"), &dialog));
-    auto* pointSize = new QSpinBox(&dialog);
+    sizeRow->addWidget(new QLabel(tr("Point size:"), dialog));
+    auto* pointSize = new QSpinBox(dialog);
     pointSize->setRange(1, 12);
     pointSize->setValue(m_particlePointSize);
     sizeRow->addWidget(pointSize);
@@ -410,40 +422,50 @@ void MainWindow::showParticlesDialog()
     if (m_dataset->metadata().dimension == 3) {
         layout->addWidget(new QLabel(
             tr("In 3-D, points are projected onto each orthogonal view."),
-            &dialog));
+            dialog));
     }
-    auto* buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&dialog, seed] {
-        bool valid = false;
-        static_cast<void>(seed->text().toULongLong(&valid));
-        if (valid) {
-            dialog.accept();
-        } else {
-            QMessageBox::warning(&dialog, QObject::tr("Invalid seed"),
-                QObject::tr(
-                    "The sampling seed must be an integer from 0 through "
-                    "18446744073709551615."));
-        }
-    });
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok
+        | QDialogButtonBox::Apply | QDialogButtonBox::Cancel, dialog);
+    buttons->setObjectName(QStringLiteral("particlesDialogButtons"));
+    connect(buttons, &QDialogButtonBox::clicked, dialog,
+        [this, dialog, buttons, speciesControls, fraction, seed, pointSize](
+            QAbstractButton* button) {
+            const auto role = buttons->buttonRole(button);
+            if (role != QDialogButtonBox::AcceptRole
+                && role != QDialogButtonBox::ApplyRole) {
+                dialog->reject();
+                return;
+            }
+            bool valid = false;
+            const auto seedValue = seed->text().toULongLong(&valid);
+            if (!valid) {
+                QMessageBox::warning(dialog, QObject::tr("Invalid seed"),
+                    QObject::tr(
+                        "The sampling seed must be an integer from 0 through "
+                        "18446744073709551615."));
+                return;
+            }
+            std::vector<std::string> selectedSpecies;
+            for (auto& controls : *speciesControls) {
+                if (controls.enabled->isChecked()) {
+                    selectedSpecies.push_back(controls.name);
+                }
+                controls.color.setAlphaF(
+                    static_cast<float>(controls.alpha->value()) / 100.0F);
+                m_particleColors[controls.name] = controls.color;
+            }
+            applyParticleSelection(std::move(selectedSpecies),
+                fraction->value() / 100.0, pointSize->value(), seedValue);
+            if (role == QDialogButtonBox::AcceptRole) {
+                dialog->accept();
+            }
+        });
     layout->addWidget(buttons);
-    if (dialog.exec() != QDialog::Accepted) {
-        return;
-    }
-
-    std::vector<std::string> selectedSpecies;
-    for (auto& controls : speciesControls) {
-        if (controls.enabled->isChecked()) {
-            selectedSpecies.push_back(controls.name);
-        }
-        controls.color.setAlphaF(
-            static_cast<float>(controls.alpha->value()) / 100.0F);
-        m_particleColors[controls.name] = controls.color;
-    }
-    const auto seedValue = seed->text().toULongLong();
-    applyParticleSelection(std::move(selectedSpecies),
-        fraction->value() / 100.0, pointSize->value(), seedValue);
+    connect(dialog, &QDialog::finished, this, [this] {
+        m_particlesDialog = nullptr;
+    });
+    m_particlesDialog = dialog;
+    dialog->show();
 }
 
 void MainWindow::configureParticleControls(bool preserveSelection)
@@ -1846,6 +1868,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
     if (m_contoursDialog != nullptr) {
         auto* dialog = m_contoursDialog;
         m_contoursDialog = nullptr;
+        dialog->close();
+    }
+    if (m_particlesDialog != nullptr) {
+        auto* dialog = m_particlesDialog;
+        m_particlesDialog = nullptr;
         dialog->close();
     }
     if (m_numberFormatDialog != nullptr) {

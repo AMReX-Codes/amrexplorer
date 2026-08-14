@@ -1162,6 +1162,13 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         m_contoursDialog = nullptr;
         dialog->close();
     }
+    // The particles dialog lists this dataset's species; the next one has its
+    // own. (A sequence frame switch keeps it open -- the species are the same.)
+    if (m_particlesDialog != nullptr) {
+        auto* dialog = m_particlesDialog;
+        m_particlesDialog = nullptr;
+        dialog->close();
+    }
     // The Number Format dialog is deliberately *not* closed here. Unlike the
     // contours dialog above, its setting is dataset-independent and persisted,
     // so closing it on every open only discarded whatever the user had typed

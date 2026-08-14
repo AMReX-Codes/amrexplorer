@@ -11,7 +11,7 @@
 #                 multifab-fab | quit | quit-on-failure | window-close-pool |
 #                 export-quit |
 #                 contour-sync | raster-zoom | rubber-zoom-sync |
-#                 particle-visible-range |
+#                 particle-visible-range | particle-dialog |
 #                 rubber-zoom-local | rubber-overzoom | pan-zoom |
 #                 range-cache | fab-zoom | cache-budget |
 #                 fixed-scale-1 | fixed-scale-4 | sequence-transform-preserve |
@@ -210,6 +210,9 @@ elseif(MODE STREQUAL "particle-visible-range")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --particle-visible-range-smoke-test
         "${WORK}/plt")
+elseif(MODE STREQUAL "particle-dialog")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --particle-dialog-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "raster-zoom")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --raster-zoom-smoke-test "${WORK}/plt")

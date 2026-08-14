@@ -18,7 +18,6 @@
 #include <QLoggingCategory>
 #include <QMouseEvent>
 #include <QPainter>
-#include <QPointer>
 #include <QProcess>
 #include <QPushButton>
 #include <QStandardPaths>
@@ -1808,6 +1807,9 @@ int main(int argc, char* argv[])
             [&window, &application, poll, attempts, liveDialog, liveNamedDialog,
                 first, second] {
                 if (++*attempts > 500) {
+                    // exit() only flags the loop, so stop the timer too rather
+                    // than report the same stall on every tick until it unwinds.
+                    poll->stop();
                     qCritical("the particle read started by Apply never settled");
                     application.exit(1);
                     return;
@@ -1824,6 +1826,12 @@ int main(int argc, char* argv[])
                 }
                 auto* buttons = dialog->findChild<QDialogButtonBox*>(
                     QStringLiteral("particlesDialogButtons"));
+                if (buttons == nullptr
+                    || buttons->button(QDialogButtonBox::Ok) == nullptr) {
+                    qCritical("the particles dialog has no Ok button");
+                    application.exit(1);
+                    return;
+                }
                 buttons->button(QDialogButtonBox::Ok)->click();
                 if (liveDialog() != nullptr) {
                     qCritical("Ok did not close the dialog");
@@ -1832,6 +1840,11 @@ int main(int argc, char* argv[])
                 }
                 auto* action = window.findChild<QAction*>(
                     QStringLiteral("particlesAction"));
+                if (action == nullptr || !action->isEnabled()) {
+                    qCritical("the particles menu item did not come back");
+                    application.exit(1);
+                    return;
+                }
                 action->trigger();
                 if (liveDialog() == nullptr) {
                     qCritical("the dialog did not reopen");

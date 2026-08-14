@@ -355,15 +355,21 @@ void MainWindow::showParticlesDialog()
                 .arg(QString::fromStdString(species.name))
                 .arg(species.particleCount),
             dialog);
-        auto color = m_particleColors.contains(species.name)
+        const auto stored = m_particleColors.contains(species.name)
             ? m_particleColors.at(species.name)
             : defaultParticleColor(speciesIndex);
+        // The spin box owns opacity and the swatch shows the hue alone. Held
+        // together, an Apply that folded the alpha into the swatch would leave
+        // it disagreeing with the spin box beside it until the next color pick,
+        // which would then bake that alpha into the newly picked color.
+        auto color = stored;
+        color.setAlpha(255);
         auto* colorButton = new QPushButton(dialog);
         updateColorButton(*colorButton, color);
         auto* alpha = new QSpinBox(dialog);
         alpha->setRange(0, 100);
         alpha->setSuffix(tr("%"));
-        alpha->setValue(qRound(color.alphaF() * 100.0));
+        alpha->setValue(qRound(stored.alphaF() * 100.0));
         const auto row = static_cast<int>(speciesIndex + 1);
         speciesGrid->addWidget(check, row, 0, Qt::AlignHCenter);
         speciesGrid->addWidget(name, row, 1);
@@ -381,7 +387,6 @@ void MainWindow::showParticlesDialog()
                 if (!chosen.isValid()) {
                     return;
                 }
-                chosen.setAlpha(controls.color.alpha());
                 controls.color = chosen;
                 updateColorButton(*controls.colorButton, controls.color);
             });
@@ -451,13 +456,14 @@ void MainWindow::showParticlesDialog()
                 return;
             }
             std::vector<std::string> selectedSpecies;
-            for (auto& controls : *speciesControls) {
+            for (const auto& controls : *speciesControls) {
                 if (controls.enabled->isChecked()) {
                     selectedSpecies.push_back(controls.name);
                 }
-                controls.color.setAlphaF(
+                auto applied = controls.color;
+                applied.setAlphaF(
                     static_cast<float>(controls.alpha->value()) / 100.0F);
-                m_particleColors[controls.name] = controls.color;
+                m_particleColors[controls.name] = applied;
             }
             applyParticleSelection(std::move(selectedSpecies),
                 fraction->value() / 100.0, pointSize->value(), seedValue);

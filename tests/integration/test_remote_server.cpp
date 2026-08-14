@@ -432,6 +432,11 @@ int main(int argc, char* argv[])
             "a crafted plotfile Header was opened as a dataset");
         const auto rejection
             = codec::fromWire(*envelope->payload.AsErrorResponse());
+        // The code first, like every other refusal case here: without it this
+        // passes on any error that happens to carry the phrase, including a
+        // cancellation or an authorization failure.
+        require(rejection.code == ErrorCode::DatasetOpenFailure,
+            "a crafted plotfile Header was not refused as an open failure");
         require(rejection.message.find("exceeds the supported length")
                 != std::string::npos,
             "a crafted plotfile Header was rejected for the wrong reason");

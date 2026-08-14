@@ -28,8 +28,18 @@ constexpr int maximumGridsPerLevel = 10'000'000;
 
 // Every Header field goes through here. String fields -- the file version, the
 // FabOnDisk prefix and filename, the level data path -- are bounded and
-// length-checked by the shared helper; the numeric ones need no ceiling because
-// >> stops at the first character that cannot extend the value.
+// length-checked by the shared helper.
+//
+// The numeric ones are not, and they do not divide the way one would guess.
+// Integer extraction is genuinely bounded: libstdc++ stops accumulating once
+// the digits cannot extend the value, and a multi-megabyte digit run allocates
+// nothing (measured). `double` is not: the whole run is a syntactically valid
+// float prefix, so num_get buffers all of it -- 67 MB for a 20 MB run of
+// digits, a 3.2x amplification, before the value overflows and the extraction
+// fails. `time`, the physical bounds, the cell sizes and the grid bounds all
+// read through that path. Bounding it means routing through readBoundedToken
+// and strtod, the shape readStatisticValue already uses; it is tracked with
+// the rest of the remaining allocation work rather than done here.
 template <typename T>
 T readRequired(std::istream& input, std::string_view description)
 {

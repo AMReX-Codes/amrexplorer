@@ -214,7 +214,7 @@ ParsedHeader parseHeader(const std::filesystem::path& path,
     // describe more than its bytes allow. Without this a Header of a few
     // dozen bytes could still reserve the cap's worth, a quarter of a
     // gigabyte, which is the same trade the point reserve below refuses to
-    // make. A failure to stat falls back to the count, which the cap bounds.
+    // make.
     constexpr std::uint64_t minimumBytesPerGridRecord = 6;
     std::error_code headerSizeError;
     const auto headerBytes = std::filesystem::file_size(path, headerSizeError);
@@ -514,6 +514,14 @@ std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
         // narrow deliberately, since an out-of-memory machine is not something
         // to swallow.
         std::ifstream probe(headerPath);
+        // Checked before the read, not caught after it: the plotfile root's
+        // subdirectories include every Level_N, none of which has a Header, so
+        // routing that outcome through a throw would cost one exception per
+        // level on every dataset open for a result that is entirely expected.
+        // The catch stays for the genuinely malformed case below.
+        if (!probe) {
+            continue;
+        }
         std::string version;
         try {
             version = detail::readBoundedToken<ParticleReadError>(

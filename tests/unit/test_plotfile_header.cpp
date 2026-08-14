@@ -246,8 +246,10 @@ int main()
         "exceeds the supported length");
     // The unterminated variant, which is the shape the line bound exists for:
     // a line that never ends makes plain getline accumulate the whole rest of
-    // the file before the parse can look at it. Ends at EOF rather than at a
-    // newline, so it also covers the bound's end-of-input path.
+    // the file before the parse can look at it. This trips the ceiling at
+    // 16 KiB and never reaches end of input, so it does *not* cover the
+    // bound's end-of-input path -- see the unterminated-descriptor case in
+    // test_vismf_index for that.
     expectHeaderRejected(scratch / "no_newline",
         "HyperCLaw-V1.1\n1\n" + std::string(30000, 'z'),
         "an unterminated over-long line was not rejected",

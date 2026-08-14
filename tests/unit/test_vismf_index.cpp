@@ -500,6 +500,35 @@ void testRejectsOverlongLine(const std::filesystem::path& path)
         "header line exceeds the supported length");
 }
 
+void testAcceptsUnterminatedDescriptor(const std::filesystem::path& path)
+{
+    // A file whose final line has no trailing newline. The RealDescriptor is
+    // the last field a v2 _H carries and is read as a line, so this is the one
+    // shape that exercises the bounded reader's end-of-input-with-content
+    // branch -- the one that returns the partial line instead of discarding
+    // it, and clears the failbit that would otherwise make it look like a
+    // failed read. Nothing else in the suite reaches it: every other case
+    // either ends on a newline or trips the length ceiling first. A reader
+    // that got this wrong would reject every Header written without a final
+    // newline.
+    writeHeader(path,
+        "2\n1\n2\n0\n"
+        "(2 0\n"
+        "((0,0) (1,3) (0,0))\n"
+        "((2,0) (3,3) (0,0))\n"
+        ")\n"
+        "2\n"
+        "FabOnDisk: Cell_D_00000 0\n"
+        "FabOnDisk: Cell_D_00000 4096\n"
+        "\n"
+        "((8, (64 11 52 0 1 12 0 1023)),(8, (8 7 6 5 4 3 2 1)))");
+    const auto index = readHeader(path, 2, "2-unterminated");
+    require(index.realDescriptor == kRealDescriptor,
+        "a RealDescriptor without a trailing newline was not read whole");
+    require(index.boxes.size() == 2,
+        "unterminated-descriptor box count mismatch");
+}
+
 void testRejectsOverlongMultiFabLine(const std::filesystem::path& path)
 {
     // readMultiFab infers the dimension by scanning the header for the first
@@ -568,6 +597,7 @@ int main()
     testRejectsOverlongFabName(scratch / "long_name_H");
     testAcceptsMaximumLengthFabName(scratch / "limit_name_H");
     testRejectsOverlongLine(scratch / "long_line_H");
+    testAcceptsUnterminatedDescriptor(scratch / "unterminated_H");
     testRejectsOverlongMultiFabLine(scratch / "long_multifab_line_H");
     testRejectsOverlongStatistic(scratch / "long_statistic_H");
 

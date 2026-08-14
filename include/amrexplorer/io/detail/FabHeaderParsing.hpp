@@ -46,25 +46,39 @@ inline constexpr std::size_t maximumHeaderTokenBytes = 4U * 1024U;
 // remaining file into the string before the parse can reject it. An overlong
 // line is malformed by definition, so it throws the caller's error type rather
 // than returning a truncated one that might parse.
+//
+// Reads through the stream buffer rather than istream::get(), which builds a
+// sentry per character. Measured over a 2.4 MB, 100,000-line Header: 10.1 ms
+// through get(), 5.0 ms this way, against std::getline's 1.34 ms. Real Headers
+// carry a handful of components, so the absolute cost is small either way --
+// but the ceiling is the only reason to leave getline behind, and paying 7x
+// for it was not part of that bargain. The remaining gap buys the bound.
+//
+// The stream-state handling is what makes this a drop-in, and it is written
+// out rather than inherited because sbumpc sets no state of its own:
+//   - nothing read at end of input: eofbit *and* failbit, as getline sets when
+//     it extracts nothing, so a caller's `while (readBoundedLine(...))` ends;
+//   - characters read, then end of input: eofbit only, so the final line of a
+//     file with no trailing newline is returned rather than discarded;
+//   - a stream that is not good() on entry: failbit, matching the sentry
+//     get() would have constructed and failed.
 template <typename Error>
 [[nodiscard]] bool readBoundedLine(std::istream& input, std::string& line,
     std::size_t limit = maximumHeaderLineBytes)
 {
     line.clear();
+    if (!input.good()) {
+        input.setstate(std::ios::failbit);
+        return false;
+    }
+    auto* buffer = input.rdbuf();
     for (;;) {
-        const auto character = input.get();
+        const auto character = buffer->sbumpc();
         if (character == std::char_traits<char>::eof()) {
-            // istream::get() sets failbit *and* eofbit when it runs out;
-            // std::getline sets failbit only if it extracted nothing. Drop the
-            // failbit when characters were read, so this really is a drop-in.
-            // Both current callers happen not to notice -- they only call
-            // tellg(), whose sentry sets failbit for an eof stream regardless
-            // -- but a caller that checks the stream would see the difference.
-            if (line.empty()) {
-                return false;
-            }
-            input.clear(input.rdstate() & ~std::ios::failbit);
-            return true;
+            input.setstate(line.empty()
+                    ? (std::ios::eofbit | std::ios::failbit)
+                    : std::ios::eofbit);
+            return !line.empty();
         }
         if (character == '\n') {
             return true;
@@ -95,8 +109,15 @@ template <typename Error>
     std::string_view subject, std::string_view description,
     std::size_t limit = maximumHeaderTokenBytes)
 {
+    // width() is an int, and a limit past INT_MAX would narrow to zero or
+    // negative -- which operator>> reads as "no width", making the extraction
+    // unbounded and the check below dead. That is the exact behaviour this
+    // helper exists to prevent, so clamp instead of narrowing, and compare
+    // against what was actually applied.
+    const auto effectiveLimit = std::min<std::size_t>(limit,
+        static_cast<std::size_t>(std::numeric_limits<int>::max()));
     std::string value;
-    input >> std::setw(static_cast<int>(limit)) >> value;
+    input >> std::setw(static_cast<int>(effectiveLimit)) >> value;
     if (!input) {
         throw Error("malformed " + std::string(subject) + " while reading "
             + std::string(description));
@@ -104,7 +125,7 @@ template <typename Error>
     // good() is false when the extraction stopped at end of file, which is one
     // of the two ways a complete token ends -- and peeking a stream that is not
     // good() would set failbit on a stream the caller may still be reading.
-    if (value.size() >= limit && input.good()) {
+    if (value.size() >= effectiveLimit && input.good()) {
         const auto next = input.peek();
         if (next != std::char_traits<char>::eof()
             && std::isspace(static_cast<unsigned char>(next)) == 0) {

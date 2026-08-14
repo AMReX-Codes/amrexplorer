@@ -16,6 +16,7 @@
 // boxCount real boxes have been read out of the file, so by then the file is
 // genuinely as large as the count claims; its bound is defensive rather than
 // load-bearing.
+#include <amrexplorer/core/Geometry.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/io/detail/VisMfIndex.hpp>
 
@@ -48,6 +49,17 @@ void require(bool condition, const char* message)
 // allocator that did not produce it. The aligned overloads are deliberately
 // left to the library -- they pair with the library's aligned delete, and
 // nothing on this path uses them.
+//
+// "Nothing on this path uses them" is the assumption the measurement rests on,
+// so it is asserted rather than trusted: an over-aligned element type would
+// route std::vector's allocation to operator new(size_t, align_val_t), the
+// counter would stop seeing the reserve, and every case here would pass with
+// the bounds reverted -- failing open, silently.
+static_assert(alignof(amrvis::IntBox) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__,
+    "IntBox is over-aligned, so vector routes around the counted operator new "
+    "and these allocation bounds are no longer measured");
+static_assert(alignof(double) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__,
+    "double is over-aligned, so the statistics matrix is no longer measured");
 void* operator new(std::size_t bytes)
 {
     g_allocatedBytes.fetch_add(bytes, std::memory_order_relaxed);

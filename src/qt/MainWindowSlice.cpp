@@ -1196,14 +1196,21 @@ void MainWindow::prepareSequence(std::size_t frameCount)
     if (linePlotWindow != nullptr) {
         linePlotWindow->close();
     }
-    // The particles dialog lists the outgoing dataset's species, and the state
-    // it edits was just reset above. openDatasetImpl closes it for a plain
+    // Both overlay dialogs describe the outgoing dataset -- the particles one
+    // lists its species, whose selection state was just reset above, and the
+    // contours one lists its fields. openDatasetImpl closes them for a plain
     // open; this path never runs that, so a sequence open would otherwise leave
-    // it on screen writing the old species names back on Apply.
+    // them on screen writing the old dataset's names back on Apply. Frame steps
+    // do not come through here, so both survive stepping, as intended.
     auto* particlesDialog = m_particlesDialog;
     m_particlesDialog = nullptr;
     if (particlesDialog != nullptr) {
         particlesDialog->close();
+    }
+    auto* contoursDialog = m_contoursDialog;
+    m_contoursDialog = nullptr;
+    if (contoursDialog != nullptr) {
+        contoursDialog->close();
     }
 }
 

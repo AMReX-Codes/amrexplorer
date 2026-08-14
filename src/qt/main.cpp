@@ -1734,19 +1734,23 @@ int main(int argc, char* argv[])
         // main window, must survive Apply, and must not stack up copies of
         // itself when the menu item is chosen again. It also belongs to the
         // dataset whose species it lists, so opening a sequence -- which never
-        // runs openDatasetImpl -- must take it down.
+        // runs openDatasetImpl -- must take it down, as it must the contours
+        // dialog beside it.
         const std::filesystem::path first(argv[2]);
         const std::filesystem::path second(argv[3]);
-        // The dialog closes with WA_DeleteOnClose, so a just-closed one can
-        // still be a child of the window; the live dialog is the visible one.
-        const auto liveDialog = [&window]() -> QDialog* {
-            for (auto* candidate :
-                window.findChildren<QDialog*>(QStringLiteral("particlesDialog"))) {
+        // Both close with WA_DeleteOnClose, so a just-closed one can still be a
+        // child of the window; the live dialog is the visible one.
+        const auto liveNamedDialog
+            = [&window](const QString& name) -> QDialog* {
+            for (auto* candidate : window.findChildren<QDialog*>(name)) {
                 if (candidate->isVisible()) {
                     return candidate;
                 }
             }
             return nullptr;
+        };
+        const auto liveDialog = [liveNamedDialog]() {
+            return liveNamedDialog(QStringLiteral("particlesDialog"));
         };
         auto* poll = new QTimer(&window);
         poll->setInterval(10);
@@ -1801,7 +1805,8 @@ int main(int argc, char* argv[])
         // Let the Apply read finish rather than tearing the window down around
         // a live worker, then check the rest of the dialog's lifecycle.
         QObject::connect(poll, &QTimer::timeout, &application,
-            [&window, &application, poll, attempts, liveDialog, first, second] {
+            [&window, &application, poll, attempts, liveDialog, liveNamedDialog,
+                first, second] {
                 if (++*attempts > 500) {
                     qCritical("the particle read started by Apply never settled");
                     application.exit(1);
@@ -1833,10 +1838,32 @@ int main(int argc, char* argv[])
                     application.exit(1);
                     return;
                 }
-                // The species it lists belong to the outgoing dataset.
+                // The contours dialog is the other one bound to this dataset.
+                auto* contoursAction = window.findChild<QAction*>(
+                    QStringLiteral("contoursAction"));
+                if (contoursAction == nullptr || !contoursAction->isEnabled()) {
+                    qCritical("the contours menu item is missing or disabled");
+                    application.exit(1);
+                    return;
+                }
+                contoursAction->trigger();
+                const auto contoursName = QStringLiteral("setContoursDialog");
+                if (liveNamedDialog(contoursName) == nullptr) {
+                    qCritical("the contours dialog did not open");
+                    application.exit(1);
+                    return;
+                }
+                // The species and fields they list belong to the outgoing
+                // dataset, which a sequence open replaces.
                 window.openSequence({first, second});
                 if (liveDialog() != nullptr) {
                     qCritical("opening a sequence left the dialog on screen");
+                    application.exit(1);
+                    return;
+                }
+                if (liveNamedDialog(contoursName) != nullptr) {
+                    qCritical(
+                        "opening a sequence left the contours dialog on screen");
                     application.exit(1);
                     return;
                 }

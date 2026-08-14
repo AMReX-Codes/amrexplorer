@@ -1263,6 +1263,7 @@ void MainWindow::createMenus()
         [this](bool visible) { m_isoWidget->setSlicePlanesVisible(visible); });
 
     m_contoursAction = new QAction(tr("&Contours..."), this);
+    m_contoursAction->setObjectName(QStringLiteral("contoursAction"));
     m_contoursAction->setEnabled(false);
     connect(m_contoursAction, &QAction::triggered,
         this, [this] { showContoursDialog(); });

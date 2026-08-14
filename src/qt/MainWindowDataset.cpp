@@ -4,16 +4,6 @@ namespace amrvis::qt {
 
 namespace {
 
-// Menu labels and QSettings keys; kept in sync with builtinPaletteName().
-// The QSettings key for a builtin palette. builtinPaletteName() is the single
-// source of these strings, and indexing builtinPalettes keeps the key and the
-// palette from drifting apart.
-QLatin1String builtinPaletteKey(std::size_t index)
-{
-    const auto name = builtinPaletteName(builtinPalettes[index]);
-    return QLatin1String(name.data(), static_cast<qsizetype>(name.size()));
-}
-
 // Recovers a remote error code from a worker exception, unwrapping the
 // QUnhandledException that Qt Concurrent wraps around a thrown std exception.
 // Returns nullopt for local failures and any non-remote error.
@@ -210,7 +200,7 @@ void MainWindow::restoreSettings()
             QStringLiteral("rainbow")).toString();
         m_builtinIndex = 0;
         for (std::size_t index = 0; index < builtinPalettes.size(); ++index) {
-            if (name == builtinPaletteKey(index)) {
+            if (name == builtinPaletteLabel(index)) {
                 m_builtinIndex = static_cast<int>(index);
                 break;
             }
@@ -313,7 +303,7 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("palette/fromFile"), m_paletteFromFile);
     settings.setValue(QStringLiteral("palette/filePath"), m_paletteFilePath);
     settings.setValue(QStringLiteral("palette/builtin"),
-        builtinPaletteKey(static_cast<std::size_t>(m_builtinIndex)));
+        builtinPaletteLabel(static_cast<std::size_t>(m_builtinIndex)));
     settings.setValue(QStringLiteral("palette/reversed"), m_reversePalette);
     settings.setValue(QStringLiteral("numberFormat"), m_numberFormat);
     settings.setValue(QStringLiteral("animation/speed"),
@@ -1067,7 +1057,7 @@ void MainWindow::verifyRemoteEndpoint(
                 remote::Connection connection(host, port,
                     remote::ConnectionOptions{
                         .clientName = "AMReXplorer Qt",
-                        .softwareVersion = AMREXPLORER_VERSION,
+                        .softwareVersion = kVersion,
                         .sessionToken = token},
                     cancellation);
                 connection.ping(cancellation);
@@ -1343,7 +1333,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
             auto connection = std::make_shared<remote::Connection>(
                 host, port, remote::ConnectionOptions{
                     .clientName = "AMReXplorer Qt",
-                    .softwareVersion = AMREXPLORER_VERSION,
+                    .softwareVersion = kVersion,
                     .sessionToken = token},
                 cancellation);
             opened.session = remote::RemoteDatasetSession::open(

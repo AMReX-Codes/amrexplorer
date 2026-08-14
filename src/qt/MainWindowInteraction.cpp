@@ -687,7 +687,7 @@ void MainWindow::showAboutDialog()
            "<p>Demand-driven AMR visualization.</p>"
            "<p>Version %1</p>"
            "<p>A C++20 / Qt 6 application for inspecting AMReX plotfiles.</p>")
-            .arg(QStringLiteral(AMREXPLORER_VERSION)));
+            .arg(QString::fromLatin1(kVersion)));
 }
 
 double MainWindow::effectiveFixedScale(int factor) const

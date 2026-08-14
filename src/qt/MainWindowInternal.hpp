@@ -1,8 +1,9 @@
 #pragma once
 
-// Shared internals of the MainWindow translation units. These were the two
-// anonymous namespaces of the original single-file MainWindow.cpp; the free
-// functions are inline so every unit that needs one gets the same definition.
+// The parts of the original MainWindow.cpp anonymous namespaces that more than
+// one of the five translation units needs; everything used by a single unit
+// stayed in that unit's own anonymous namespace. The free functions are inline
+// so every unit that needs one gets the same definition.
 
 #include "MainWindow.hpp"
 #include "QtErrorText.hpp"
@@ -123,32 +124,35 @@
 #include <utility>
 #include <vector>
 
+namespace amrvis::qt {
+
 // Fed from the project version through a CMake compile definition; the
 // fallback covers builds that do not set it (e.g. some IDE integrations).
-#ifndef AMREXPLORER_VERSION
-#define AMREXPLORER_VERSION "0.1.0-dev"
+inline constexpr const char* kVersion =
+#ifdef AMREXPLORER_VERSION
+    AMREXPLORER_VERSION
+#else
+    "0.1.0-dev"
 #endif
-
-namespace amrvis::qt {
+    ;
 
 inline constexpr std::array<BuiltinPalette, 7> builtinPalettes{
     BuiltinPalette::Rainbow, BuiltinPalette::Turbo, BuiltinPalette::Viridis,
     BuiltinPalette::Plasma, BuiltinPalette::Parula, BuiltinPalette::Coolwarm,
     BuiltinPalette::Blackbody};
 
-inline QImage verticallyFlippedCopy(const QImage& image)
+// The Qt face of builtinPaletteName(). Menu labels and the QSettings key both
+// come from here, so the string and the palette it names cannot drift apart.
+inline QString builtinPaletteLabel(std::size_t index)
 {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
-    return image.flipped(Qt::Vertical).copy();
-#else
-    return image.mirrored(false, true).copy();
-#endif
+    const auto name = builtinPaletteName(builtinPalettes[index]);
+    return QString::fromLatin1(name.data(), static_cast<qsizetype>(name.size()));
 }
 
 // The single conversion from a rendered ImageBuffer to the QImage the views
 // display: ARGB32 over the buffer's rgba, mirrored vertically because plane
-// row 0 is the bottom row. Returns a detached copy (verticallyFlippedCopy
-// copies), so it outlives the buffer. Every setImage caller goes through here
+// row 0 is the bottom row. Returns a detached copy, so it outlives the buffer.
+// Every setImage caller goes through here
 // so the transform has one definition (see showSlice, syncVisibleRanges, and
 // activeViewRasterMatchesDisplayRangeForTest).
 inline QImage displayImageFor(const ImageBuffer& image)
@@ -156,7 +160,11 @@ inline QImage displayImageFor(const ImageBuffer& image)
     const QImage wrapped(
         reinterpret_cast<const uchar*>(image.rgba.data()),
         image.width, image.height, image.strideBytes, QImage::Format_ARGB32);
-    return verticallyFlippedCopy(wrapped);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
+    return wrapped.flipped(Qt::Vertical).copy();
+#else
+    return wrapped.mirrored(false, true).copy();
+#endif
 }
 
 inline QSettings makeSettings()

@@ -1249,7 +1249,7 @@ void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
             auto candidate = std::make_shared<remote::Connection>(host, port,
                 remote::ConnectionOptions{
                     .clientName = "AMReXplorer Qt sequence",
-                    .softwareVersion = AMREXPLORER_VERSION,
+                    .softwareVersion = kVersion,
                     .sessionToken = token},
                 cancellation);
             {

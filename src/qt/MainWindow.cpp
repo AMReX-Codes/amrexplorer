@@ -298,9 +298,7 @@ MainWindow::MainWindow(QWidget* parent)
     const QFontMetrics paletteFm(m_paletteSelector->font());
     int widestBuiltin = 0;
     for (std::size_t index = 0; index < builtinPalettes.size(); ++index) {
-        const auto raw = builtinPaletteName(builtinPalettes[index]);
-        auto label = QString::fromLatin1(raw.data(),
-            static_cast<qsizetype>(raw.size()));
+        auto label = builtinPaletteLabel(index);
         if (!label.isEmpty()) {
             label[0] = label[0].toUpper();
         }
@@ -1078,9 +1076,7 @@ void MainWindow::createMenus()
     m_paletteGroup = new QActionGroup(this);
     auto* paletteMenu = new QMenu(tr("&Palette"), this);
     for (std::size_t index = 0; index < builtinPalettes.size(); ++index) {
-        const auto fileName = builtinPaletteName(builtinPalettes[index]);
-        auto* action = new QAction(QString::fromLatin1(fileName.data(),
-            static_cast<qsizetype>(fileName.size())), paletteMenu);
+        auto* action = new QAction(builtinPaletteLabel(index), paletteMenu);
         action->setCheckable(true);
         action->setActionGroup(m_paletteGroup);
         connect(action, &QAction::triggered, this,
@@ -1462,10 +1458,7 @@ void MainWindow::syncPaletteSelector()
     }
 
     const auto builtinLabel = [](int index) {
-        const auto raw =
-            builtinPaletteName(builtinPalettes[static_cast<std::size_t>(index)]);
-        auto label = QString::fromLatin1(
-            raw.data(), static_cast<qsizetype>(raw.size()));
+        auto label = builtinPaletteLabel(static_cast<std::size_t>(index));
         if (!label.isEmpty()) {
             label[0] = label[0].toUpper();
         }

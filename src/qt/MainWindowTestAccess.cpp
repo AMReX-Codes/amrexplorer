@@ -95,6 +95,36 @@ void MainWindow::setAnimationDockVisibleForTest(bool visible)
     }
 }
 
+QStringList MainWindow::paletteMenuLabelsForTest() const
+{
+    QStringList labels;
+    if (m_paletteGroup == nullptr) {
+        return labels;
+    }
+    for (const auto* action : m_paletteGroup->actions()) {
+        labels.append(action->text());
+    }
+    return labels;
+}
+
+QStringList MainWindow::paletteSelectorLabelsForTest() const
+{
+    QStringList labels;
+    if (m_paletteSelector == nullptr) {
+        return labels;
+    }
+    for (int item = 0; item < m_paletteSelector->count(); ++item) {
+        const auto entryData = m_paletteSelector->itemData(item);
+        // Skip the separator, the custom-palette entry (-2) and the reverse
+        // toggle (-3): only the builtins have a non-negative index, and only
+        // they are built from the shared label helper.
+        if (entryData.isValid() && entryData.toInt() >= 0) {
+            labels.append(m_paletteSelector->itemText(item));
+        }
+    }
+    return labels;
+}
+
 QString MainWindow::viewPlaceholderForTest()
 {
     QString shared;

@@ -426,6 +426,16 @@ if(TARGET amrexplorer_qt)
     add_test(NAME remote_connect_arguments
         COMMAND test_remote_connect_arguments)
 
+    # The Palette menu and the palette selector are built in different
+    # translation units and must agree. Needs no fixture: both lists exist as
+    # soon as the window is constructed.
+    add_test(
+        NAME qt_palette_labels_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>" --palette-labels-smoke-test
+    )
+    set_tests_properties(qt_palette_labels_smoke PROPERTIES TIMEOUT 30)
+
     add_test(
         NAME qt_remote_slice_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen

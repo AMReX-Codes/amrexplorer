@@ -247,6 +247,12 @@ void ensureDesktopEntry()
 #endif
 }
 
+// Everything from here to the end of the namespace serves the smoke-test
+// branches in main() and nothing else, so it is gated with them: without this
+// a release build compiles a few hundred lines it cannot reach, and -Werror
+// reports every one of them as unused.
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+
 bool rangeSelectorMatches(
     const amrvis::qt::MainWindow& window, bool metadataRangesAvailable)
 {
@@ -601,6 +607,8 @@ std::optional<ViewportDifference> viewportDifference(
     return difference;
 }
 
+#endif // AMREXPLORER_QT_TEST_ACCESS
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -683,6 +691,15 @@ int main(int argc, char* argv[])
     std::shared_ptr<amrvis::remote::Server> smokeServer;
     std::optional<std::thread> smokeServerThread;
     std::optional<std::thread> smokePeerThread;
+    // The option chain below carries two kinds of branch. The production
+    // options -- --connect, and the bare plotfile paths at the end -- always
+    // compile. The ~55 "--...-smoke-test" branches drive the offscreen test
+    // harness through MainWindow's ForTest accessors, so they compile only
+    // where those accessors do, and the release binary carries neither. The
+    // chain is split into two guarded runs because --connect sits between
+    // them; the trailing `else` of the first run attaches to it, so removing
+    // the run leaves --connect as the leading `if`.
+#ifdef AMREXPLORER_QT_TEST_ACCESS
     if ((argc == 8 || argc == 10)
         && std::string_view(argv[1])
             == "--fixed-scale-local-remote-repro") {
@@ -1521,7 +1538,9 @@ int main(int argc, char* argv[])
                     "127.0.0.1", server->port(), {path, path},
                     server->token());
             });
-    } else if (argc >= 2
+    } else
+#endif
+    if (argc >= 2
         && std::string_view(argv[1]) == "--connect") {
         std::vector<std::string_view> arguments;
         arguments.reserve(static_cast<std::size_t>(argc - 2));
@@ -1546,7 +1565,9 @@ int main(int argc, char* argv[])
                         request.endpoint.token);
                 }
             });
-    } else if (argc == 3 && std::string_view(argv[1]) == "--smoke-test") {
+    }
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+    else if (argc == 3 && std::string_view(argv[1]) == "--smoke-test") {
         const std::filesystem::path path(argv[2]);
         QObject::connect(&window, &amrvis::qt::MainWindow::datasetOpenFinished,
             &application, [&application](bool success) {
@@ -3655,7 +3676,9 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window, [&window, first, second] {
             window.openSequence({first, second});
         });
-    } else if (argc >= 2 && !std::string_view(argv[1]).starts_with("--")) {
+    }
+#endif
+    else if (argc >= 2 && !std::string_view(argv[1]).starts_with("--")) {
         // One or more plotfile paths: a single path opens a dataset, two or
         // more open a plotfile sequence (matching the GUI's Open Plotfile
         // Sequence, which also takes plotfile directories).

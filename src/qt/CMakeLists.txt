@@ -32,6 +32,9 @@ add_executable(amrexplorer_qt
     RemoteEndpoint.hpp
     ScientificDoubleSpinBox.cpp
     ScientificDoubleSpinBox.hpp
+    SshConnectArguments.hpp
+    SshRemoteSession.cpp
+    SshRemoteSession.hpp
     SequenceController.cpp
     SequenceController.hpp
     SetContoursDialog.cpp
@@ -74,6 +77,7 @@ target_link_libraries(amrexplorer_qt
         Qt6::Concurrent
         Qt6::Core
         Qt6::Gui
+        Qt6::Network
         Qt6::Widgets
 )
 target_link_libraries(amrexplorer_qt PRIVATE amrexplorer::remote)

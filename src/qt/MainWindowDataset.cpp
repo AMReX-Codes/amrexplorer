@@ -1069,6 +1069,64 @@ void MainWindow::verifyRemoteEndpoint(
         }));
 }
 
+void MainWindow::startSshRemoteSession(std::string destination,
+    std::string serverExecutable, std::vector<std::string> remotePaths)
+{
+    if (destination.empty() || destination.front() == '-'
+        || destination.find_first_of(" \t\r\n") != std::string::npos) {
+        reportBackgroundError(tr("Invalid SSH destination."));
+        return;
+    }
+    m_remoteVerifyStopSource.request_stop();
+    m_sshRemoteSession = std::make_unique<SshRemoteSession>(this);
+    statusBar()->showMessage(tr("Starting remote session on %1...")
+            .arg(QString::fromStdString(destination)));
+    updateDiagnostics();
+    m_sshRemoteSession->start(destination, std::move(serverExecutable),
+        [this, destination,
+            paths = std::move(remotePaths)](SshRemoteSession::Endpoint endpoint) {
+            if (m_closing) {
+                return;
+            }
+            m_remoteHost = std::move(endpoint.host);
+            m_remotePort = endpoint.port;
+            m_remoteToken = std::move(endpoint.token);
+            saveRemoteSettings();
+            statusBar()->showMessage(tr("SSH session to %1 is ready")
+                    .arg(QString::fromStdString(destination)));
+            updateDiagnostics();
+            if (paths.empty()) {
+                verifyRemoteEndpoint(
+                    m_remoteHost, m_remotePort, m_remoteToken);
+            } else if (paths.size() == 1) {
+                openRemoteDataset(m_remoteHost, m_remotePort, paths.front(),
+                    m_remoteToken);
+            } else {
+                openRemoteSequence(
+                    m_remoteHost, m_remotePort, paths, m_remoteToken);
+            }
+        },
+        [this, destination](const QString& message) {
+            if (m_closing) {
+                return;
+            }
+            statusBar()->showMessage(tr("Could not start SSH session"));
+            reportBackgroundError(tr("Could not start the remote session on "
+                                     "%1: %2")
+                    .arg(QString::fromStdString(destination), message));
+            updateDiagnostics();
+        },
+        [this, destination](const QString& message) {
+            if (m_closing) {
+                return;
+            }
+            statusBar()->showMessage(tr("SSH remote session ended"));
+            reportBackgroundError(tr("The remote session on %1 ended: %2")
+                    .arg(QString::fromStdString(destination), message));
+            updateDiagnostics();
+        });
+}
+
 void MainWindow::openRemoteDataset(std::string host, std::uint16_t port,
     std::string remotePath, std::string token)
 {

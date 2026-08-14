@@ -1,4 +1,5 @@
 #include "MainWindowInternal.hpp"
+#include "SshRemoteSession.hpp"
 
 #include <QKeySequence>
 #include <QStyle>
@@ -667,6 +668,8 @@ MainWindow::MainWindow(QWidget* parent)
     });
 }
 
+MainWindow::~MainWindow() = default;
+
 void MainWindow::wireView(PlaneViewState& state)
 {
     auto* view = state.view;
@@ -1009,6 +1012,9 @@ void MainWindow::createMenus()
                 tr("A session token is required to connect."));
             return false;
         }
+        // A manually supplied endpoint supersedes any processes owned by an
+        // automatically-created SSH session.
+        m_sshRemoteSession.reset();
         m_remoteHost = endpoint->host;
         m_remotePort = endpoint->port;
         m_remoteToken = std::move(token);
@@ -1028,6 +1034,39 @@ void MainWindow::createMenus()
                     m_remoteHost, m_remotePort, m_remoteToken);
             }
         });
+
+    auto* startSshSessionAction = new QAction(
+        tr("Start Remote Session via &SSH..."), this);
+    connect(startSshSessionAction, &QAction::triggered, this, [this] {
+        auto settings = makeSettings();
+        bool destinationAccepted = false;
+        const auto destination = QInputDialog::getText(this,
+            tr("Start Remote Session via SSH"),
+            tr("SSH destination (hostname, alias, or user@host):"),
+            QLineEdit::Normal,
+            settings.value(QStringLiteral("remote/sshDestination"))
+                .toString(),
+            &destinationAccepted).trimmed();
+        if (!destinationAccepted || destination.isEmpty()) {
+            return;
+        }
+        bool executableAccepted = false;
+        const auto executable = QInputDialog::getText(this,
+            tr("Start Remote Session via SSH"),
+            tr("Remote amrexplorer-server executable:"), QLineEdit::Normal,
+            settings.value(QStringLiteral("remote/serverExecutable"),
+                QStringLiteral("amrexplorer-server")).toString(),
+            &executableAccepted).trimmed();
+        if (!executableAccepted || executable.isEmpty()) {
+            return;
+        }
+        settings.setValue(
+            QStringLiteral("remote/sshDestination"), destination);
+        settings.setValue(
+            QStringLiteral("remote/serverExecutable"), executable);
+        startSshRemoteSession(destination.toStdString(),
+            executable.toStdString(), {});
+    });
 
     auto* openRemoteAction = new QAction(
         tr("Open Remote &Plotfile..."), this);
@@ -1126,6 +1165,7 @@ void MainWindow::createMenus()
     fileMenu->addAction(openAction);
     fileMenu->addAction(openSequenceAction);
     fileMenu->addSeparator();
+    fileMenu->addAction(startSshSessionAction);
     fileMenu->addAction(connectRemoteAction);
     fileMenu->addAction(openRemoteAction);
     fileMenu->addAction(openRemoteSequenceAction);

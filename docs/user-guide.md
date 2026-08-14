@@ -41,11 +41,42 @@ true physical space — see [2-D spherical coordinates](#2-d-spherical-coordinat
 
 ## Remote datasets
 
-AMReXplorer can display plotfiles that live on another machine, such as an HPC
-login node. You run a small server on that machine, connect it to your desktop
-through an SSH tunnel, and then open the data. The commands below are labelled
-`(remote) $` for the machine that holds the plotfiles and `(local) $` for your
-own desktop.
+AMReXplorer can display plotfiles that live on another Linux machine, such as
+an HPC login node. The client can launch the server, create the SSH tunnel, and
+pass the generated bearer token automatically. Give it any destination that
+works with `ssh`, including a hostname or alias from `~/.ssh/config`:
+
+```text
+(local) $ amrexplorer --ssh user@remote /remote/path/plt00010
+```
+
+If `amrexplorer-server` is not on the non-interactive remote `PATH`, give its
+path explicitly. Quote a home-relative path so `~` is expanded on the remote
+machine rather than by the local shell:
+
+```text
+(local) $ amrexplorer --ssh remote --server "~/bin/amrexplorer-server" \
+    /remote/path/plt00010
+```
+
+The GUI equivalent is **File > Start Remote Session via SSH...**. Enter the
+SSH destination and, optionally, a different server executable. Once the
+session is ready, use **Open Remote Plotfile...** or **Open Remote Plotfile
+Sequence...**.
+
+The client keeps the SSH process alive for the session and stops it when the
+window closes. The server remains bound to remote loopback, the tunnel is
+bound to local loopback, and the token is passed in memory rather than in a
+process argument or shell history.
+
+If the SSH destination requires password or keyboard-interactive MFA,
+AMReXplorer opens a secure response dialog for each OpenSSH prompt. The server
+command and tunnel share one SSH connection, so the session requires only one
+authentication flow and does not rely on SSH multiplexing.
+
+The manual workflow remains available for troubleshooting or externally
+managed tunnels. The commands below are labelled `(remote) $` for the machine
+that holds the plotfiles and `(local) $` for your own desktop.
 
 **Step 1 — On the remote machine, start the server.** It prints a port number
 and an access token that you will use in the next two steps:
@@ -86,7 +117,7 @@ plotfile path as it appears on the remote machine:
 
 To open several plotfiles as a sequence, list more than one path.
 
-The same thing is available from the menus: **File > Connect to Remote
+The manual workflow is available from the menus: **File > Connect to Remote
 Server...** (enter `127.0.0.1:PORT`, then the token when prompted), followed by
 **Open Remote Plotfile...** or **Open Remote Plotfile Sequence...** and the
 remote path.

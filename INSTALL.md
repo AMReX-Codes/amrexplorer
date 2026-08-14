@@ -115,8 +115,8 @@ build does not overwrite another:
 cmake --install build-remote --prefix ${HOME}/perlmutter
 ```
 
-See the **[User Guide](docs/user-guide.md)** for connecting the application to a
-running server over an SSH tunnel.
+See the **[User Guide](docs/user-guide.md)** for having the application launch
+this server and manage its SSH tunnel, or for the manual tunnel workflow.
 
 ## Next steps
 

@@ -75,6 +75,7 @@ class IsoWidget;
 class LinePlotWindow;
 class ScientificDoubleSpinBox;
 class SequenceController;
+class SshRemoteSession;
 struct PlaneMapping;
 class UserGuideDialog;
 
@@ -91,6 +92,7 @@ class MainWindow final : public QMainWindow {
 
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
 
     void openDataset(const std::filesystem::path& path, bool metadataOnly = false);
     void openRemoteDataset(std::string host, std::uint16_t port,
@@ -102,6 +104,11 @@ public:
     // opening a dataset.
     void verifyRemoteEndpoint(
         std::string host, std::uint16_t port, std::string token);
+    // Launches amrexplorer-server through the named OpenSSH destination,
+    // creates a loopback tunnel, and opens the supplied server-visible paths.
+    // An empty path list only establishes and verifies the session.
+    void startSshRemoteSession(std::string destination,
+        std::string serverExecutable, std::vector<std::string> remotePaths);
     // Persists only the remote port, to prefill the Connect dialog after a
     // client restart against a still-running server. The token is never
     // written to disk.
@@ -924,6 +931,7 @@ private:
     std::string m_remoteHost;
     std::uint16_t m_remotePort = 0;
     std::string m_remoteToken;
+    std::unique_ptr<SshRemoteSession> m_sshRemoteSession;
     bool m_remoteSequence = false;
     std::uint64_t m_remoteSequenceConnectionGeneration = 0;
     struct MultiFabReturnState {

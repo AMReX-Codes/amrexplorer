@@ -410,6 +410,16 @@ if(TARGET amrexplorer_qt)
     add_test(NAME remote_connect_arguments
         COMMAND test_remote_connect_arguments)
 
+    add_executable(test_ssh_remote_session
+        unit/test_ssh_remote_session.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/SshRemoteSession.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/SshRemoteSession.hpp")
+    target_include_directories(test_ssh_remote_session
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_ssh_remote_session
+        PRIVATE amrexplorer::warnings Qt6::Core Qt6::Network)
+    add_test(NAME ssh_remote_session COMMAND test_ssh_remote_session)
+
     add_test(
         NAME qt_remote_slice_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen

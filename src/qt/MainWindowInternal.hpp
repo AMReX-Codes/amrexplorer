@@ -21,6 +21,7 @@
 #include "PlaneMapping.hpp"
 #include "RemoteEndpoint.hpp"
 #include "ScientificDoubleSpinBox.hpp"
+#include "SshRemoteSession.hpp"
 #include "SetContoursDialog.hpp"
 #include "Theme.hpp"
 #include "UserGuideDialog.hpp"

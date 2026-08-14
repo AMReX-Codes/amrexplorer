@@ -2,6 +2,7 @@
 #include "FabSelectorDock.hpp"
 #include "RemoteConnectArguments.hpp"
 #include "RemoteEndpoint.hpp"
+#include "SshConnectArguments.hpp"
 
 #include <QAction>
 #include <QApplication>
@@ -14,6 +15,7 @@
 #include <QGuiApplication>
 #include <QIcon>
 #include <QInputDialog>
+#include <QLabel>
 #include <QLineEdit>
 #include <QLoggingCategory>
 #include <QMouseEvent>
@@ -53,6 +55,39 @@
 namespace {
 
 QtMessageHandler g_previousMessageHandler = nullptr;
+
+int runSshAskpass(const QString& prompt)
+{
+    if (prompt.isEmpty()) {
+        return 1;
+    }
+    const auto destination = qEnvironmentVariable("AMREXPLORER_SSH_DESTINATION");
+    QInputDialog dialog;
+    dialog.setWindowTitle(destination.isEmpty()
+            ? QStringLiteral("SSH authentication")
+            : QStringLiteral("SSH authentication — %1").arg(destination));
+    dialog.setLabelText(prompt);
+    dialog.setInputMode(QInputDialog::TextInput);
+    dialog.setTextEchoMode(QLineEdit::Password);
+    dialog.setOkButtonText(QStringLiteral("Respond"));
+    dialog.setCancelButtonText(QStringLiteral("Cancel"));
+    dialog.setWindowFlag(Qt::WindowStaysOnTopHint);
+    if (auto* label = dialog.findChild<QLabel*>()) {
+        label->setTextFormat(Qt::PlainText);
+    }
+    if (dialog.exec() != QDialog::Accepted) {
+        return 1;
+    }
+    const auto response = dialog.textValue().toUtf8();
+    if (std::fwrite(response.constData(), 1,
+            static_cast<std::size_t>(response.size()), stdout)
+            != static_cast<std::size_t>(response.size())
+        || std::fputc('\n', stdout) == EOF) {
+        return 1;
+    }
+    std::fflush(stdout);
+    return 0;
+}
 
 // Qt 6 on Wayland logs a benign xdg-shell warning whenever a new grabbing popup
 // -- a menu, submenu, combo-box dropdown, or tooltip -- opens while another
@@ -620,6 +655,21 @@ int main(int argc, char* argv[])
         QStringLiteral("qt.qpa.wayland.textinput=false\n"
                        "qt.qpa.services.warning=false"));
 
+    if (qEnvironmentVariableIsSet("AMREXPLORER_SSH_ASKPASS_MODE")) {
+        if (argc < 2) {
+            return 1;
+        }
+        QStringList promptParts;
+        promptParts.reserve(argc - 1);
+        for (int index = 1; index < argc; ++index) {
+            promptParts.push_back(QString::fromLocal8Bit(argv[index]));
+        }
+        // Do not let QApplication interpret a server-controlled prompt as a
+        // Qt command-line option. It needs only argv[0] in askpass mode.
+        int askpassArgc = 1;
+        QApplication askpassApplication(askpassArgc, argv);
+        return runSshAskpass(promptParts.join(QLatin1Char(' ')));
+    }
     QApplication application(argc, argv);
     // Undo, for numeric conversion only, what QApplication just did. Qt calls
     // setlocale(LC_ALL, "") on Unix, which hands the C locale to the
@@ -1520,6 +1570,22 @@ int main(int argc, char* argv[])
                 window.openRemoteSequence(
                     "127.0.0.1", server->port(), {path, path},
                     server->token());
+            });
+    } else if (argc >= 2 && std::string_view(argv[1]) == "--ssh") {
+        std::vector<std::string_view> arguments;
+        arguments.reserve(static_cast<std::size_t>(argc - 2));
+        for (int index = 2; index < argc; ++index) {
+            arguments.emplace_back(argv[index]);
+        }
+        auto parsed = amrvis::qt::parseSshConnectArguments(arguments);
+        if (!parsed.request) {
+            qCritical("%s", parsed.error.c_str());
+            return 2;
+        }
+        QTimer::singleShot(0, &window,
+            [&window, request = std::move(*parsed.request)] {
+                window.startSshRemoteSession(request.destination,
+                    request.serverExecutable, request.paths);
             });
     } else if (argc >= 2
         && std::string_view(argv[1]) == "--connect") {
@@ -3679,6 +3745,8 @@ int main(int argc, char* argv[])
         std::fprintf(stderr,
             "amrexplorer: unrecognized option '%s'\n\n"
             "usage: amrexplorer [PLOTFILE...]\n"
+            "       amrexplorer --ssh SSH_DESTINATION [--server PATH] "
+            "REMOTE_PLOTFILE...\n"
             "       amrexplorer --connect HOST:PORT [--token-stdin] "
             "REMOTE_PLOTFILE...\n\n"
             "Open one plotfile directory, or several to play them as a\n"

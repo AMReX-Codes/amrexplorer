@@ -1,4 +1,5 @@
 #include <amrexplorer/io/ParticleReader.hpp>
+#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 
 #include <algorithm>
 #include <array>
@@ -6,7 +7,6 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
-#include <iomanip>
 #include <limits>
 #include <map>
 #include <optional>
@@ -52,36 +52,21 @@ struct SelectedParticle {
     std::uint64_t id = 0;
 };
 
-// Longest string token a Header may contain -- a version string or a component
-// name. Extracting a string with >> is otherwise unbounded: it reads until
-// whitespace, so a Header holding one enormous whitespace-free run allocates
-// all of it before any count or cap is consulted. width() is how the standard
-// bounds that, and it is reset by the extraction.
-constexpr int maximumHeaderTokenBytes = 4096;
-
+// String tokens -- the version string, a component name -- are bounded and
+// length-checked by the shared helper, which owns the width()-plus-reject shape
+// this function used to carry by hand.
 template <typename T>
 T readRequired(std::istream& input, std::string_view description)
 {
-    T value{};
     if constexpr (std::is_same_v<T, std::string>) {
-        input >> std::setw(maximumHeaderTokenBytes);
+        return detail::readBoundedToken<ParticleReadError>(
+            input, "particle Header", description);
+    } else {
+        static_assert(std::is_integral_v<T>,
+            "particle Header fields are strings or integers");
+        return detail::readBoundedInteger<ParticleReadError, T>(
+            input, "particle Header", description);
     }
-    if (!(input >> value)) {
-        throw ParticleReadError(
-            "malformed particle Header while reading " + std::string(description));
-    }
-    if constexpr (std::is_same_v<T, std::string>) {
-        // width() stops the extraction but does not fail it: >> sets failbit
-        // only when it extracts nothing, so hitting the limit would leave the
-        // rest of the token in the stream to be read as the next field, and
-        // every field after it would shift. Bounding the allocation must not
-        // buy that -- a token this long is malformed, so say so.
-        if (value.size() >= static_cast<std::size_t>(maximumHeaderTokenBytes)) {
-            throw ParticleReadError("particle Header " + std::string(description)
-                + " exceeds the supported length");
-        }
-    }
-    return value;
 }
 
 std::uint64_t checkedProduct(
@@ -140,8 +125,8 @@ void skipChunk(std::istream& input, std::size_t recordCount,
     }
 }
 
-ParsedHeader parseHeader(
-    const std::filesystem::path& path, const std::string& species)
+ParsedHeader parseHeader(const std::filesystem::path& path,
+    const std::string& species, StopToken cancellation)
 {
     std::ifstream input(path);
     if (!input) {
@@ -180,7 +165,13 @@ ParsedHeader parseHeader(
         || result.metadata.realComponentCount > maximumComponents) {
         throw ParticleReadError("particle real component count is outside supported bounds");
     }
+    // Both component-name loops run up to maximumComponents times, and
+    // discoverParticleSpecies calls this once per subdirectory at every open,
+    // so a cancelled open must not wait them out.
     for (int i = 0; i < result.metadata.realComponentCount; ++i) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         (void)readRequired<std::string>(input, "real component name");
     }
     result.metadata.intComponentCount
@@ -191,6 +182,9 @@ ParsedHeader parseHeader(
             "particle integer component count is outside supported bounds");
     }
     for (int i = 0; i < result.metadata.intComponentCount; ++i) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         (void)readRequired<std::string>(input, "integer component name");
     }
     const auto checkpointFlag = readRequired<int>(input, "checkpoint flag");
@@ -220,29 +214,31 @@ ParsedHeader parseHeader(
         throw ParticleReadError(
             "particle grid total is outside supported bounds");
     }
-    // The cap above rejects the absurd; this bounds what is merely large. A
-    // declared count is a claim, and the file's own size is the evidence
-    // against it: every grid record still to come needs at least "0 0 0\n" --
-    // three numbers, two separators, a newline -- so the Header cannot
-    // describe more than its bytes allow. Without this a Header of a few
-    // dozen bytes could still reserve the cap's worth, a quarter of a
-    // gigabyte, which is the same trade the point reserve below refuses to
-    // make. A failure to stat falls back to the count, which the cap bounds.
+    // The cap above rejects the absurd; the shared rule bounds what is merely
+    // large. Every grid record still to come needs at least "0 0 0\n" -- three
+    // numbers, two separators, a newline -- so that is this table's per-record
+    // floor. Reserving straight from the declared count let a Header of a few
+    // dozen bytes take a quarter of a gigabyte.
+    //
+    // This used to be written out here with its own fallback rule, which had
+    // already drifted from the plotfile reader's copy. It now calls the one
+    // definition, which also brings the absolute reserve cap: a sparse header
+    // can forge any apparent size, so the file's size alone is not a bound.
     constexpr std::uint64_t minimumBytesPerGridRecord = 6;
     std::error_code headerSizeError;
     const auto headerBytes = std::filesystem::file_size(path, headerSizeError);
-    if (!headerSizeError) {
-        const auto describableGrids
-            = static_cast<std::uint64_t>(headerBytes) / minimumBytesPerGridRecord;
-        result.grids.reserve(
-            static_cast<std::size_t>(std::min(totalGrids, describableGrids)));
-    }
-    // No fallback reserve when the size is unknown: this is an optimization,
-    // and the safe answer for an optimization that cannot be bounded is to
-    // skip it, not to take the largest allocation the cap still permits.
+    result.grids.reserve(detail::evidenceBoundedCount(
+        totalGrids, headerBytes, minimumBytesPerGridRecord, headerSizeError));
     std::uint64_t recordedParticles = 0;
     for (int level = 0; level <= result.finestLevel; ++level) {
         for (int grid = 0; grid < gridCounts[static_cast<std::size_t>(level)]; ++grid) {
+            // Up to ten million records per level: the one stretch of a Header
+            // parse long enough that a user who cancels must not wait it out.
+            // Polled per record, like the DATA-file stat loop in
+            // readParticleSample.
+            if (cancellation.stop_requested()) {
+                throw ReadCancelled();
+            }
             GridRecord record;
             record.level = level;
             record.fileNumber = readRequired<int>(input, "particle data file number");
@@ -514,22 +510,33 @@ std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
             continue;
         }
         const auto headerPath = entry.path() / "Header";
-        // Bounded like every other Header token: this runs before the try
-        // below, and its catch is deliberately narrow -- a malformed species
-        // is skipped, an out-of-memory machine is not something to swallow --
-        // so an unbounded read here would take the whole open down.
+        // Bounded like every other Header token, through the same helper the
+        // real parse uses. An unreadable, empty or over-long probe is just a
+        // directory that is not a species, so it is skipped -- the catch stays
+        // narrow deliberately, since an out-of-memory machine is not something
+        // to swallow.
         std::ifstream probe(headerPath);
+        // Checked before the read, not caught after it: the plotfile root's
+        // subdirectories include every Level_N, none of which has a Header, so
+        // routing that outcome through a throw would cost one exception per
+        // level on every dataset open for a result that is entirely expected.
+        // The catch stays for the genuinely malformed case below.
+        if (!probe) {
+            continue;
+        }
         std::string version;
-        probe >> std::setw(maximumHeaderTokenBytes);
-        if (!(probe >> version)
-            || version.size() >= static_cast<std::size_t>(
-                   maximumHeaderTokenBytes)
-            || !version.starts_with("Version_")) {
+        try {
+            version = detail::readBoundedToken<ParticleReadError>(
+                probe, "particle Header", "version");
+        } catch (const ParticleReadError&) {
+            continue;
+        }
+        if (!version.starts_with("Version_")) {
             continue;
         }
         try {
-            result.push_back(parseHeader(
-                headerPath, entry.path().filename().string()).metadata);
+            result.push_back(parseHeader(headerPath,
+                entry.path().filename().string(), cancellation).metadata);
         } catch (const ParticleReadError&) {
             continue;
         }
@@ -553,7 +560,8 @@ ParticleSample readParticleSample(
         throw ReadCancelled();
     }
     const auto speciesPath = plotfile / species;
-    const auto header = parseHeader(speciesPath / "Header", species);
+    const auto header
+        = parseHeader(speciesPath / "Header", species, cancellation);
     if (!header.checkpoint) {
         throw ParticleReadError(
             "non-checkpoint particle data is unsupported because it has no "

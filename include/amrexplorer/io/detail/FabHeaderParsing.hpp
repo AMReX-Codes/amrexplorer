@@ -11,12 +11,17 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
 #include <istream>
 #include <limits>
 #include <sstream>
 #include <string>
+#include <system_error>
+#include <string_view>
 #include <vector>
 
 namespace amrvis::detail {
@@ -25,11 +30,68 @@ namespace amrvis::detail {
 // opaque, so it is read from a stream that has no idea where the text ends.
 // Real ones are a few hundred bytes -- a FAB's "FAB " plus a RealDescriptor, a
 // Box and a component count; a plotfile's version string -- and this ceiling
-// leaves two orders of magnitude of room. Named for headers generally though
-// both callers are currently FAB-path: the plotfile text readers are the
-// follow-up in text-header-readers-unbounded, and renaming this twice to say
-// so would be churn.
+// leaves two orders of magnitude of room. Named for headers generally, and now
+// genuinely shared: the FAB path and the plotfile text readers both bound their
+// lines here.
 inline constexpr std::size_t maximumHeaderLineBytes = 16U * 1024U;
+
+// The same idea for a whitespace-delimited token: a version string, a component
+// name, a FAB filename. Extraction with >> is otherwise unbounded -- it reads to
+// the next whitespace -- so one enormous whitespace-free run is allocated whole
+// before any count or cap can reject it.
+inline constexpr std::size_t maximumHeaderTokenBytes = 4U * 1024U;
+
+// The most *records* a header parse may reserve before it has parsed any. A
+// count, not a byte quantity: what it costs depends on the element, and the
+// callers span 36-byte IntBox through std::string, so 65,536 records is about
+// 2.4 MB of boxes or ~4 MB of field metadata. Named for what it bounds so the
+// next caller with a fatter element knows what it is choosing.
+//
+// It exists because the file's own size is *not* trustworthy evidence on its
+// own: std::filesystem::file_size reports the apparent size, so `truncate -s
+// 80M` on a short crafted header yields 80 MB of "evidence" while occupying
+// one filesystem block, and a bound derived from it alone is forgeable at
+// almost no cost. The size still tightens the bound for ordinary files; this
+// cap is what makes it hold for hostile ones.
+inline constexpr std::size_t maximumSpeculativeRecords = 64U * 1024U;
+
+// How many entries to reserve for a count a header declares. A declared count
+// is a claim; the file's size is evidence against it, since a header cannot
+// describe more records than its bytes allow. Both are advisory, and the cap
+// above is the backstop: every caller is *reserving*, never sizing, so
+// under-reserving costs one reallocation while over-reserving is the whole
+// attack. That asymmetry is also why the per-record floors callers pass sit
+// below the true minimum rather than being tuned to it.
+//
+// A zero floor reserves nothing rather than dividing by it. The floor is often
+// derived from a parsed count -- a component count may legitimately be zero --
+// and a caller should not have to know that passing one through would be a
+// division by zero rather than a bound.
+[[nodiscard]] inline std::size_t evidenceBoundedCount(std::uint64_t declared,
+    std::uintmax_t fileBytes, std::uint64_t minimumBytesPerRecord)
+{
+    if (minimumBytesPerRecord == 0) {
+        return 0;
+    }
+    const auto describable
+        = static_cast<std::uint64_t>(fileBytes) / minimumBytesPerRecord;
+    return static_cast<std::size_t>(std::min({declared, describable,
+        static_cast<std::uint64_t>(maximumSpeculativeRecords)}));
+}
+
+// The same rule when the file's size could not be determined. Callers disagreed
+// about what a failed stat means -- one skipped the reserve, another failed the
+// open -- so the rule states it once: no evidence, no speculative reserve. The
+// parse then decides whether the file is readable, which is its job, not this
+// helper's.
+[[nodiscard]] inline std::size_t evidenceBoundedCount(std::uint64_t declared,
+    std::uintmax_t fileBytes, std::uint64_t minimumBytesPerRecord,
+    const std::error_code& sizeError)
+{
+    return sizeError
+        ? 0
+        : evidenceBoundedCount(declared, fileBytes, minimumBytesPerRecord);
+}
 
 // std::getline with a ceiling, and otherwise its semantics: false when nothing
 // could be read, the line without its terminator otherwise, and the stream left
@@ -38,25 +100,52 @@ inline constexpr std::size_t maximumHeaderLineBytes = 16U * 1024U;
 // remaining file into the string before the parse can reject it. An overlong
 // line is malformed by definition, so it throws the caller's error type rather
 // than returning a truncated one that might parse.
+//
+// Reads through the stream buffer rather than istream::get(), which builds a
+// sentry per character. Measured over a 2.4 MB, 100,000-line Header: 10.1 ms
+// through get(), 5.0 ms this way, against std::getline's 1.34 ms. Real Headers
+// carry a handful of components, so the absolute cost is small either way --
+// but the ceiling is the only reason to leave getline behind, and paying 7x
+// for it was not part of that bargain. The remaining gap buys the bound.
+//
+// The stream-state handling is what makes this a drop-in, and it is written
+// out rather than inherited because sbumpc sets no state of its own:
+//   - nothing read at end of input: eofbit *and* failbit, as getline sets when
+//     it extracts nothing, so a caller's `while (readBoundedLine(...))` ends;
+//   - characters read, then end of input: eofbit only, so the final line of a
+//     file with no trailing newline is returned rather than discarded;
+//   - a stream that is not good() on entry: failbit, matching the sentry
+//     get() would have constructed and failed.
 template <typename Error>
 [[nodiscard]] bool readBoundedLine(std::istream& input, std::string& line,
     std::size_t limit = maximumHeaderLineBytes)
 {
     line.clear();
+    if (!input.good()) {
+        input.setstate(std::ios::failbit);
+        return false;
+    }
+    auto* buffer = input.rdbuf();
+    // An unformatted input function turns a streambuf exception into badbit
+    // and rethrows only when the caller asked for it; sbumpc does neither, so
+    // that translation is done here rather than quietly dropped. (A null rdbuf
+    // needs no guard: both constructing a stream with one and swapping one in
+    // set badbit, so good() is already false above -- verified, not assumed.)
+    const auto next = [buffer, &input] {
+        try {
+            return buffer->sbumpc();
+        } catch (...) {
+            input.setstate(std::ios::badbit);
+            throw;
+        }
+    };
     for (;;) {
-        const auto character = input.get();
+        const auto character = next();
         if (character == std::char_traits<char>::eof()) {
-            // istream::get() sets failbit *and* eofbit when it runs out;
-            // std::getline sets failbit only if it extracted nothing. Drop the
-            // failbit when characters were read, so this really is a drop-in.
-            // Both current callers happen not to notice -- they only call
-            // tellg(), whose sentry sets failbit for an eof stream regardless
-            // -- but a caller that checks the stream would see the difference.
-            if (line.empty()) {
-                return false;
-            }
-            input.clear(input.rdstate() & ~std::ios::failbit);
-            return true;
+            input.setstate(line.empty()
+                    ? (std::ios::eofbit | std::ios::failbit)
+                    : std::ios::eofbit);
+            return !line.empty();
         }
         if (character == '\n') {
             return true;
@@ -66,6 +155,117 @@ template <typename Error>
         }
         line.push_back(static_cast<char>(character));
     }
+}
+
+// operator>>(std::string) with a ceiling, and with the truncation hazard the
+// ceiling introduces handled here once rather than at each call site.
+//
+// width() is how the standard bounds the extraction, but it does not fail it:
+// >> sets failbit only when it extracts *nothing*, so an over-long token would
+// leave its tail in the stream to be read as the next field, and every field
+// after it would shift. That converts an out-of-memory failure into a silent
+// misparse, which is worse. A token this long is malformed, so say so.
+//
+// Reaching the limit is not by itself proof of truncation, and the difference
+// is what the stream position tells: what follows a complete token is
+// whitespace or end of file, and anything else is the rest of a token that did
+// not fit. Without that check a well-formed token of exactly the limit is
+// refused along with the truncated ones.
+template <typename Error>
+[[nodiscard]] std::string readBoundedToken(std::istream& input,
+    std::string_view subject, std::string_view description,
+    std::size_t limit = maximumHeaderTokenBytes)
+{
+    // width() is an int, and operator>> reads any non-positive width as "no
+    // width" -- unbounded extraction, with the length check below then dead.
+    // Both ends therefore need clamping, not just the top: a limit past
+    // INT_MAX narrows to zero or negative, and a limit of zero is already
+    // there. Either way the helper would silently become the thing it exists
+    // to prevent, so the applied width is what the check compares against.
+    const auto effectiveLimit = std::clamp<std::size_t>(limit, 1,
+        static_cast<std::size_t>(std::numeric_limits<int>::max()));
+    std::string value;
+    input >> std::setw(static_cast<int>(effectiveLimit)) >> value;
+    if (!input) {
+        throw Error("malformed " + std::string(subject) + " while reading "
+            + std::string(description));
+    }
+    // good() is false when the extraction stopped at end of file, which is one
+    // of the two ways a complete token ends -- and peeking a stream that is not
+    // good() would set failbit on a stream the caller may still be reading.
+    if (value.size() >= effectiveLimit && input.good()) {
+        const auto next = input.peek();
+        if (next != std::char_traits<char>::eof()
+            && std::isspace(static_cast<unsigned char>(next)) == 0) {
+            throw Error(std::string(subject) + " " + std::string(description)
+                + " exceeds the supported length");
+        }
+    }
+    return value;
+}
+
+// The longest run a numeric field may occupy. A 64-bit value needs 20 digits
+// and a sign; this leaves room for padding without leaving room for a run
+// whose only purpose is to be long.
+inline constexpr std::size_t maximumHeaderNumberBytes = 128;
+
+// An integer field, bounded, and stopping exactly where operator>> stopped.
+//
+// That last part is why this cannot reuse readBoundedToken: header integers sit
+// inside punctuation -- "((0,0) (7,7) (0,0))" -- and must end at the comma or
+// the paren, where a whitespace-delimited token would swallow "0,0)" whole and
+// then fail to convert it. So the digits are accumulated directly, and the
+// first character that cannot extend the value ends the field, as before.
+//
+// The bound is not a libstdc++ detail. That implementation happens to
+// accumulate an integer rather than a buffer, so an enormous digit run costs it
+// nothing -- but libc++ resizes and doubles a std::string per digit, so on
+// macOS the same run allocates it whole. A ceiling here holds on both.
+//
+// Two deliberate differences from the extraction it replaces, both narrowing:
+// a sign is rejected for unsigned fields, where operator>> would wrap "-1" into
+// a huge count of exactly the kind these bounds exist to refuse; and an
+// out-of-range value throws rather than silently saturating.
+template <typename Error, typename Integer>
+[[nodiscard]] Integer readBoundedInteger(std::istream& input,
+    std::string_view subject, std::string_view description,
+    std::size_t limit = maximumHeaderNumberBytes)
+{
+    input >> std::ws;
+    std::string token;
+    for (;;) {
+        const auto next = input.peek();
+        if (next == std::char_traits<char>::eof()) {
+            break;
+        }
+        const auto character = static_cast<char>(next);
+        const bool isDigit = character >= '0' && character <= '9';
+        const bool isSign = (character == '-' || character == '+')
+            && token.empty();
+        if (!isDigit && !isSign) {
+            break;
+        }
+        if (token.size() >= limit) {
+            throw Error(std::string(subject) + " " + std::string(description)
+                + " exceeds the supported length");
+        }
+        token.push_back(character);
+        (void)input.get();
+    }
+    // from_chars rejects a leading '+', which operator>> accepts; skip it so
+    // the only grammar changes are the two narrowing ones described above.
+    const auto* begin = token.data();
+    const auto* end = token.data() + token.size();
+    if (!token.empty() && token.front() == '+') {
+        ++begin;
+    }
+    Integer value{};
+    const auto [stopped, error] = std::from_chars(begin, end, value);
+    if (begin == end || error != std::errc{} || stopped != end) {
+        throw Error("malformed " + std::string(subject) + " while reading "
+            + std::string(description));
+    }
+    return value;
 }
 
 // Every integer in the text, in order; any non-numeric characters act as

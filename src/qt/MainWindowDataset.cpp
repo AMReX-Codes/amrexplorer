@@ -9,15 +9,12 @@ namespace {
 // Returns nullopt for local failures and any non-remote error.
 std::optional<remote::ErrorCode> remoteErrorCode(const std::exception& error)
 {
-    const auto* unhandled = dynamic_cast<const QUnhandledException*>(&error);
-    if (unhandled != nullptr && unhandled->exception()) {
-        try {
-            std::rethrow_exception(unhandled->exception());
-        } catch (const remote::RemoteError& remoteError) {
-            return remoteError.code();
-        } catch (...) {
-            return std::nullopt;
-        }
+    try {
+        rethrowUnwrapped(error);
+    } catch (const remote::RemoteError& remoteError) {
+        return remoteError.code();
+    } catch (...) {
+        return std::nullopt;
     }
     if (const auto* remoteError
             = dynamic_cast<const remote::RemoteError*>(&error)) {

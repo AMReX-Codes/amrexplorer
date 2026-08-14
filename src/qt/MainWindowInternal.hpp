@@ -128,13 +128,10 @@ namespace amrvis::qt {
 
 // Fed from the project version through a CMake compile definition; the
 // fallback covers builds that do not set it (e.g. some IDE integrations).
-inline constexpr const char* kVersion =
-#ifdef AMREXPLORER_VERSION
-    AMREXPLORER_VERSION
-#else
-    "0.1.0-dev"
-#endif
-    ;
+// Defined once in MainWindow.cpp rather than inline here: AMREXPLORER_VERSION
+// is PRIVATE to amrexplorer_qt, so an inline variable would acquire a second,
+// conflicting definition in any other target that included this header.
+extern const char* const kVersion;
 
 inline constexpr std::array<BuiltinPalette, 7> builtinPalettes{
     BuiltinPalette::Rainbow, BuiltinPalette::Turbo, BuiltinPalette::Viridis,
@@ -145,6 +142,9 @@ inline constexpr std::array<BuiltinPalette, 7> builtinPalettes{
 // come from here, so the string and the palette it names cannot drift apart.
 inline QString builtinPaletteLabel(std::size_t index)
 {
+    if (index >= builtinPalettes.size()) {
+        return {};
+    }
     const auto name = builtinPaletteName(builtinPalettes[index]);
     return QString::fromLatin1(name.data(), static_cast<qsizetype>(name.size()));
 }
@@ -152,8 +152,8 @@ inline QString builtinPaletteLabel(std::size_t index)
 // The single conversion from a rendered ImageBuffer to the QImage the views
 // display: ARGB32 over the buffer's rgba, mirrored vertically because plane
 // row 0 is the bottom row. Returns a detached copy, so it outlives the buffer.
-// Every setImage caller goes through here
-// so the transform has one definition (see showSlice, syncVisibleRanges, and
+// Every setImage caller goes through here so the transform has one definition
+// (see showSlice, syncVisibleRanges, and
 // activeViewRasterMatchesDisplayRangeForTest).
 inline QImage displayImageFor(const ImageBuffer& image)
 {

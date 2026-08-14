@@ -2,6 +2,14 @@
 
 namespace amrvis::qt {
 
+const char* const kVersion =
+#ifdef AMREXPLORER_VERSION
+    AMREXPLORER_VERSION
+#else
+    "0.1.0-dev"
+#endif
+    ;
+
 namespace {
 
 // Marks the active row in the palette dropdown with a bullet. The bullet lives
@@ -1366,7 +1374,9 @@ void MainWindow::rebuildLevelMenu()
         m_levelMenu->addAction(action);
     }
     // "Level N only" is redundant for a single-level dataset (mirrors
-    // populateLevelCombo, which also drops these for finestLevel == 0).
+    // populateLevelCombo in MainWindowSlice.cpp, which also drops these for
+    // finestLevel == 0; the menu and the combo must offer the same entries or
+    // the level shortcuts find no matching combo item).
     if (metadata.finestLevel > 0) {
         for (int level = 0; level <= metadata.finestLevel; ++level) {
             auto* action = new QAction(tr("Level %1 only").arg(level), m_levelMenu);

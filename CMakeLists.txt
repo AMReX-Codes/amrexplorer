@@ -204,6 +204,21 @@ if(AMREXPLORER_ENABLE_REMOTE)
             GIT_SHALLOW TRUE
         )
         FetchContent_MakeAvailable(flatbuffers)
+        # GCC reports a bogus -Wstringop-overflow inside the std::vector insert
+        # that flatbuffers::AddFlatBuffer performs; the destination is a vector
+        # GCC cannot see the capacity of after inlining. Upstream knows about
+        # it (google/flatbuffers#7366) but only demotes it from an error under
+        # FLATBUFFERS_STRICT_MODE, so it still shows up in our build on the GCC
+        # versions that emit it. Nothing we compile is at fault, so silence it
+        # on the dependency rather than let it bury our own warnings.
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            foreach(_fb_target flatbuffers flatc)
+                if(TARGET ${_fb_target})
+                    target_compile_options(${_fb_target}
+                        PRIVATE -Wno-stringop-overflow)
+                endif()
+            endforeach()
+        endif()
         set(AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET
             FlatBuffers::FlatBuffers)
         set(AMREXPLORER_FLATC_TARGET flatc)

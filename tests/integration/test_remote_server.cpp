@@ -224,6 +224,29 @@ void writeCraftedGridTable(const std::filesystem::path& root)
         "could not write crafted grid-table Header");
 }
 
+// A plotfile Header whose component-name line never ends. The reader walks a
+// Header as text, so without a ceiling this line is accumulated whole before
+// any parse can look at it -- and in the long-lived server that allocation is
+// charged to a session rather than to a process that can simply die. Two
+// hundred kilobytes is enough to tell the two behaviours apart by the error
+// text: bounded, the reader names the length; unbounded, it swallows the line
+// and fails later on the field after it.
+//
+// Deliberately does not begin with "Version_", so particle species discovery
+// skips this directory and the crafted Header is read only when it is opened
+// as a dataset in its own right.
+void writeCraftedPlotfileHeader(const std::filesystem::path& root)
+{
+    const auto crafted = root / "CraftedHeader";
+    std::filesystem::create_directories(crafted);
+    std::ofstream header(crafted / "Header");
+    require(static_cast<bool>(header),
+        "could not create crafted plotfile Header");
+    header << "HyperCLaw-V1.1\n1\n" << std::string(200000, 'x') << '\n';
+    require(static_cast<bool>(header),
+        "could not write crafted plotfile Header");
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -237,6 +260,7 @@ int main(int argc, char* argv[])
     }
     writeOversizedParticleHeader(argv[1]);
     writeCraftedGridTable(argv[1]);
+    writeCraftedPlotfileHeader(argv[1]);
 
     ServerOptions options;
     options.workerCount = 2;
@@ -391,6 +415,35 @@ int main(int argc, char* argv[])
             && codec::fromWire(*envelope->payload.AsErrorResponse()).code
                 == ErrorCode::InvalidRequest,
         "a crafted particle species was not refused by name");
+
+    // A crafted plotfile Header opened as a dataset of its own. The property is
+    // the one the bounds exist for: the server refuses it on the Header's
+    // length rather than accumulating the line, and the session it was sent on
+    // keeps working afterwards. The message check is what makes this
+    // discriminating -- an unbounded reader would swallow the 200 KB line and
+    // fail on the next field instead.
+    {
+        envelope = exchange(socket, 14,
+            codec::toWire(OpenDatasetData{
+                (std::filesystem::path(argv[1]) / "CraftedHeader").string(),
+                16ULL * 1024ULL * 1024ULL}),
+            hello.maximumFrameBytes);
+        require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse,
+            "a crafted plotfile Header was opened as a dataset");
+        const auto rejection
+            = codec::fromWire(*envelope->payload.AsErrorResponse());
+        require(rejection.message.find("exceeds the supported length")
+                != std::string::npos,
+            "a crafted plotfile Header was rejected for the wrong reason");
+
+        // ...and the server keeps serving: the dataset opened before the
+        // crafted one is still usable on the same connection.
+        envelope = exchange(socket, 15, codec::toWire(smallPage),
+            hello.maximumFrameBytes);
+        require(codec::inspect(*envelope).payload
+                == PayloadKind::DatasetPageResponse,
+            "the server stopped serving after refusing a crafted Header");
+    }
 
     SliceRequest request;
     request.dataset = opened.id;
@@ -927,5 +980,7 @@ int main(int argc, char* argv[])
         std::filesystem::path(argv[1]) / "Oversized");
     std::filesystem::remove_all(
         std::filesystem::path(argv[1]) / "GridBomb");
+    std::filesystem::remove_all(
+        std::filesystem::path(argv[1]) / "CraftedHeader");
     return 0;
 }

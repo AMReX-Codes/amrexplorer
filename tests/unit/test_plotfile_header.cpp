@@ -203,6 +203,34 @@ int main()
         "out-of-order grid records were not rejected",
         "out of order");
 
+    // Crafted input, bounded rather than allocated: the reader walks this file
+    // as text, so without a ceiling one enormous line or token is accumulated
+    // whole before any parse can reject it. Kilobyte-scale input then forces an
+    // allocation limited only by the file's length -- and in the long-lived
+    // server that cost lands on every session, not one process. Each case must
+    // fault with a MetadataReadError, never a std::bad_alloc.
+    expectHeaderRejected(scratch / "long_version",
+        std::string(5000, 'V') + "\n1\ndensity\n2\n0.0\n0\n",
+        "an over-long version token was not rejected",
+        "exceeds the supported length");
+    expectHeaderRejected(scratch / "long_component_name",
+        "HyperCLaw-V1.1\n1\n" + std::string(20000, 'c') + "\n",
+        "an over-long component-name line was not rejected",
+        "header line exceeds the supported length");
+    expectHeaderRejected(scratch / "long_data_path",
+        headerThroughBoundaryWidth()
+            + "0 1 0.0 0\n0.0 1.0 0.0 1.0\n" + std::string(5000, 'p') + "\n",
+        "an over-long level data path was not rejected",
+        "exceeds the supported length");
+    // The unterminated variant, which is the shape the line bound exists for:
+    // a line that never ends makes plain getline accumulate the whole rest of
+    // the file before the parse can look at it. Ends at EOF rather than at a
+    // newline, so it also covers the bound's end-of-input path.
+    expectHeaderRejected(scratch / "no_newline",
+        "HyperCLaw-V1.1\n1\n" + std::string(30000, 'z'),
+        "an unterminated over-long line was not rejected",
+        "header line exceeds the supported length");
+
     std::error_code removeError;
     std::filesystem::remove_all(scratch, removeError);
 

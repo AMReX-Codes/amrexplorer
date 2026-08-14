@@ -240,6 +240,14 @@ add_executable(test_plotfile_header unit/test_plotfile_header.cpp)
 target_link_libraries(test_plotfile_header PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME plotfile_header COMMAND test_plotfile_header)
 
+# Replaces global operator new to measure what a crafted Header reserves, so it
+# must stay its own executable: the counting would otherwise apply to every
+# other case sharing the binary.
+add_executable(test_header_allocation_bounds unit/test_header_allocation_bounds.cpp)
+target_link_libraries(test_header_allocation_bounds
+    PRIVATE amrexplorer::io amrexplorer::warnings)
+add_test(NAME header_allocation_bounds COMMAND test_header_allocation_bounds)
+
 add_executable(test_particle_header unit/test_particle_header.cpp)
 target_link_libraries(test_particle_header PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME particle_header COMMAND test_particle_header)

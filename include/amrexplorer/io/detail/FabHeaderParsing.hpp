@@ -11,12 +11,15 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
 #include <istream>
 #include <limits>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace amrvis::detail {
@@ -25,11 +28,16 @@ namespace amrvis::detail {
 // opaque, so it is read from a stream that has no idea where the text ends.
 // Real ones are a few hundred bytes -- a FAB's "FAB " plus a RealDescriptor, a
 // Box and a component count; a plotfile's version string -- and this ceiling
-// leaves two orders of magnitude of room. Named for headers generally though
-// both callers are currently FAB-path: the plotfile text readers are the
-// follow-up in text-header-readers-unbounded, and renaming this twice to say
-// so would be churn.
+// leaves two orders of magnitude of room. Named for headers generally, and now
+// genuinely shared: the FAB path and the plotfile text readers both bound their
+// lines here.
 inline constexpr std::size_t maximumHeaderLineBytes = 16U * 1024U;
+
+// The same idea for a whitespace-delimited token: a version string, a component
+// name, a FAB filename. Extraction with >> is otherwise unbounded -- it reads to
+// the next whitespace -- so one enormous whitespace-free run is allocated whole
+// before any count or cap can reject it.
+inline constexpr std::size_t maximumHeaderTokenBytes = 4U * 1024U;
 
 // std::getline with a ceiling, and otherwise its semantics: false when nothing
 // could be read, the line without its terminator otherwise, and the stream left
@@ -66,6 +74,45 @@ template <typename Error>
         }
         line.push_back(static_cast<char>(character));
     }
+}
+
+// operator>>(std::string) with a ceiling, and with the truncation hazard the
+// ceiling introduces handled here once rather than at each call site.
+//
+// width() is how the standard bounds the extraction, but it does not fail it:
+// >> sets failbit only when it extracts *nothing*, so an over-long token would
+// leave its tail in the stream to be read as the next field, and every field
+// after it would shift. That converts an out-of-memory failure into a silent
+// misparse, which is worse. A token this long is malformed, so say so.
+//
+// Reaching the limit is not by itself proof of truncation, and the difference
+// is what the stream position tells: what follows a complete token is
+// whitespace or end of file, and anything else is the rest of a token that did
+// not fit. Without that check a well-formed token of exactly the limit is
+// refused along with the truncated ones.
+template <typename Error>
+[[nodiscard]] std::string readBoundedToken(std::istream& input,
+    std::string_view subject, std::string_view description,
+    std::size_t limit = maximumHeaderTokenBytes)
+{
+    std::string value;
+    input >> std::setw(static_cast<int>(limit)) >> value;
+    if (!input) {
+        throw Error("malformed " + std::string(subject) + " while reading "
+            + std::string(description));
+    }
+    // good() is false when the extraction stopped at end of file, which is one
+    // of the two ways a complete token ends -- and peeking a stream that is not
+    // good() would set failbit on a stream the caller may still be reading.
+    if (value.size() >= limit && input.good()) {
+        const auto next = input.peek();
+        if (next != std::char_traits<char>::eof()
+            && std::isspace(static_cast<unsigned char>(next)) == 0) {
+            throw Error(std::string(subject) + " " + std::string(description)
+                + " exceeds the supported length");
+        }
+    }
+    return value;
 }
 
 // Every integer in the text, in order; any non-numeric characters act as

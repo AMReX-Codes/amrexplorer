@@ -1,4 +1,5 @@
 #include <amrexplorer/io/ParticleReader.hpp>
+#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 
 #include <algorithm>
 #include <array>
@@ -6,7 +7,6 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
-#include <iomanip>
 #include <limits>
 #include <map>
 #include <optional>
@@ -52,36 +52,23 @@ struct SelectedParticle {
     std::uint64_t id = 0;
 };
 
-// Longest string token a Header may contain -- a version string or a component
-// name. Extracting a string with >> is otherwise unbounded: it reads until
-// whitespace, so a Header holding one enormous whitespace-free run allocates
-// all of it before any count or cap is consulted. width() is how the standard
-// bounds that, and it is reset by the extraction.
-constexpr int maximumHeaderTokenBytes = 4096;
-
+// String tokens -- the version string, a component name -- are bounded and
+// length-checked by the shared helper, which owns the width()-plus-reject shape
+// this function used to carry by hand.
 template <typename T>
 T readRequired(std::istream& input, std::string_view description)
 {
-    T value{};
     if constexpr (std::is_same_v<T, std::string>) {
-        input >> std::setw(maximumHeaderTokenBytes);
-    }
-    if (!(input >> value)) {
-        throw ParticleReadError(
-            "malformed particle Header while reading " + std::string(description));
-    }
-    if constexpr (std::is_same_v<T, std::string>) {
-        // width() stops the extraction but does not fail it: >> sets failbit
-        // only when it extracts nothing, so hitting the limit would leave the
-        // rest of the token in the stream to be read as the next field, and
-        // every field after it would shift. Bounding the allocation must not
-        // buy that -- a token this long is malformed, so say so.
-        if (value.size() >= static_cast<std::size_t>(maximumHeaderTokenBytes)) {
-            throw ParticleReadError("particle Header " + std::string(description)
-                + " exceeds the supported length");
+        return detail::readBoundedToken<ParticleReadError>(
+            input, "particle Header", description);
+    } else {
+        T value{};
+        if (!(input >> value)) {
+            throw ParticleReadError("malformed particle Header while reading "
+                + std::string(description));
         }
+        return value;
     }
-    return value;
 }
 
 std::uint64_t checkedProduct(
@@ -140,8 +127,8 @@ void skipChunk(std::istream& input, std::size_t recordCount,
     }
 }
 
-ParsedHeader parseHeader(
-    const std::filesystem::path& path, const std::string& species)
+ParsedHeader parseHeader(const std::filesystem::path& path,
+    const std::string& species, StopToken cancellation)
 {
     std::ifstream input(path);
     if (!input) {
@@ -243,6 +230,13 @@ ParsedHeader parseHeader(
     std::uint64_t recordedParticles = 0;
     for (int level = 0; level <= result.finestLevel; ++level) {
         for (int grid = 0; grid < gridCounts[static_cast<std::size_t>(level)]; ++grid) {
+            // Up to ten million records per level: the one stretch of a Header
+            // parse long enough that a user who cancels must not wait it out.
+            // Polled per record, like the DATA-file stat loop in
+            // readParticleSample.
+            if (cancellation.stop_requested()) {
+                throw ReadCancelled();
+            }
             GridRecord record;
             record.level = level;
             record.fileNumber = readRequired<int>(input, "particle data file number");
@@ -514,22 +508,25 @@ std::vector<ParticleSpeciesMetadata> discoverParticleSpecies(
             continue;
         }
         const auto headerPath = entry.path() / "Header";
-        // Bounded like every other Header token: this runs before the try
-        // below, and its catch is deliberately narrow -- a malformed species
-        // is skipped, an out-of-memory machine is not something to swallow --
-        // so an unbounded read here would take the whole open down.
+        // Bounded like every other Header token, through the same helper the
+        // real parse uses. An unreadable, empty or over-long probe is just a
+        // directory that is not a species, so it is skipped -- the catch stays
+        // narrow deliberately, since an out-of-memory machine is not something
+        // to swallow.
         std::ifstream probe(headerPath);
         std::string version;
-        probe >> std::setw(maximumHeaderTokenBytes);
-        if (!(probe >> version)
-            || version.size() >= static_cast<std::size_t>(
-                   maximumHeaderTokenBytes)
-            || !version.starts_with("Version_")) {
+        try {
+            version = detail::readBoundedToken<ParticleReadError>(
+                probe, "particle Header", "version");
+        } catch (const ParticleReadError&) {
+            continue;
+        }
+        if (!version.starts_with("Version_")) {
             continue;
         }
         try {
-            result.push_back(parseHeader(
-                headerPath, entry.path().filename().string()).metadata);
+            result.push_back(parseHeader(headerPath,
+                entry.path().filename().string(), cancellation).metadata);
         } catch (const ParticleReadError&) {
             continue;
         }
@@ -553,7 +550,8 @@ ParticleSample readParticleSample(
         throw ReadCancelled();
     }
     const auto speciesPath = plotfile / species;
-    const auto header = parseHeader(speciesPath / "Header", species);
+    const auto header
+        = parseHeader(speciesPath / "Header", species, cancellation);
     if (!header.checkpoint) {
         throw ParticleReadError(
             "non-checkpoint particle data is unsupported because it has no "

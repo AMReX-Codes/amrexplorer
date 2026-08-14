@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -25,15 +26,24 @@ constexpr int maximumComponents = 100'000;
 constexpr int maximumLevels = 1'000;
 constexpr int maximumGridsPerLevel = 10'000'000;
 
+// Every Header field goes through here. String fields -- the file version, the
+// FabOnDisk prefix and filename, the level data path -- are bounded and
+// length-checked by the shared helper; the numeric ones need no ceiling because
+// >> stops at the first character that cannot extend the value.
 template <typename T>
 T readRequired(std::istream& input, std::string_view description)
 {
-    T value{};
-    if (!(input >> value)) {
-        throw MetadataReadError("malformed plotfile Header while reading "
-            + std::string(description));
+    if constexpr (std::is_same_v<T, std::string>) {
+        return detail::readBoundedToken<MetadataReadError>(
+            input, "plotfile Header", description);
+    } else {
+        T value{};
+        if (!(input >> value)) {
+            throw MetadataReadError("malformed plotfile Header while reading "
+                + std::string(description));
+        }
+        return value;
     }
-    return value;
 }
 
 // Reads one VisMF min/max statistic, which -- unlike the geometry fields --
@@ -57,6 +67,15 @@ double readStatisticValue(std::istream& input, std::string_view description)
              && next != ','
              && std::isspace(static_cast<unsigned char>(next)) == 0;
          next = input.peek()) {
+        // The loop is delimited by the file's own content, so a run without a
+        // comma or whitespace would otherwise accumulate without limit. Unlike
+        // a name or a path, a numeric token has no legitimate length anywhere
+        // near this ceiling, so hitting it needs no complete-versus-truncated
+        // distinction -- it is malformed either way.
+        if (token.size() >= detail::maximumHeaderTokenBytes) {
+            throw MetadataReadError("plotfile Header "
+                + std::string(description) + " exceeds the supported length");
+        }
         token.push_back(static_cast<char>(input.get()));
     }
     const char* begin = token.c_str();
@@ -79,10 +98,13 @@ std::string trim(std::string value)
     return value.substr(first, last - first + 1);
 }
 
+// The function that walks a plotfile Header, so its ceiling matters most: a
+// Header that never supplies a newline would otherwise accumulate the whole
+// remaining file into one line before the parse could reject it.
 std::string readNonEmptyLine(std::istream& input, std::string_view description)
 {
     std::string line;
-    while (std::getline(input, line)) {
+    while (detail::readBoundedLine<MetadataReadError>(input, line)) {
         line = trim(std::move(line));
         if (!line.empty()) {
             return line;
@@ -238,7 +260,27 @@ detail::VisMfIndex detail::readVisMfIndex(
         throw MetadataReadError("VisMF BoxArray size is outside supported bounds");
     }
     const auto boxCount = static_cast<std::size_t>(boxArrayHeader.front());
-    index.boxes.reserve(boxCount);
+    // The cap above rejects the absurd; the file's own size bounds what is
+    // merely large. A declared count is a claim, and the Header cannot describe
+    // more entries than its bytes allow: the shortest legal BoxArray entry is
+    // "((0)(0)(0))", eleven bytes at one dimension and more at two or three,
+    // and the shortest legal location record is "FabOnDisk: a 0", fourteen.
+    // Reserving from the declared count alone let a Header of a few dozen bytes
+    // claim ten million boxes plus ten million names and offsets -- roughly
+    // 750 MB -- before a single entry was parsed, which is the same trade the
+    // particle grid table already refuses to make. Both reserves are
+    // optimizations, so under-reserving a legitimate file costs one
+    // reallocation and nothing else; that is why the floors here sit below the
+    // true minimums rather than being tuned to them.
+    constexpr std::uint64_t minimumBytesPerBoxEntry = 8;
+    constexpr std::uint64_t minimumBytesPerLocationRecord = 12;
+    const auto evidenceBoundedCount = [headerSize](std::uint64_t declared,
+                                          std::uint64_t bytesPerRecord) {
+        return static_cast<std::size_t>(std::min(
+            declared, static_cast<std::uint64_t>(headerSize) / bytesPerRecord));
+    };
+    index.boxes.reserve(evidenceBoundedCount(
+        static_cast<std::uint64_t>(boxCount), minimumBytesPerBoxEntry));
     for (std::size_t box = 0; box < boxCount; ++box) {
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
@@ -253,8 +295,10 @@ detail::VisMfIndex detail::readVisMfIndex(
     if (locationCount != boxCount) {
         throw MetadataReadError("VisMF location count does not match BoxArray size");
     }
-    index.fileNames.reserve(boxCount);
-    index.fileOffsets.reserve(boxCount);
+    const auto reservableLocations = evidenceBoundedCount(
+        static_cast<std::uint64_t>(boxCount), minimumBytesPerLocationRecord);
+    index.fileNames.reserve(reservableLocations);
+    index.fileOffsets.reserve(reservableLocations);
     for (std::size_t block = 0; block < boxCount; ++block) {
         if (cancellation.stop_requested()) {
             throw ReadCancelled();

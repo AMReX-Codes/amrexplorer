@@ -330,6 +330,12 @@ public:
         std::vector<std::string> species, double fraction,
         std::uint64_t seed = 0);
     [[nodiscard]] std::uint64_t particleSeedForTest() const noexcept;
+    [[nodiscard]] double particleFractionForTest() const noexcept;
+    void setParticlePointSizeForTest(int pointSize);
+    [[nodiscard]] int particlePointSizeForTest() const noexcept;
+    // Invalid when the species has no stored color, which is what a reset
+    // leaves behind until the next dataset re-seeds the defaults.
+    [[nodiscard]] QColor particleColorForTest(const std::string& species) const;
     void setParticleColorForTest(
         const std::string& species, const QColor& color);
     [[nodiscard]] bool particleOverlaysUseColorForTest(
@@ -485,6 +491,12 @@ private:
     void showContoursDialog();
     void showParticlesDialog();
     void configureParticleControls(bool preserveSelection);
+    // Drops every particle setting back to its default: the shared reset for
+    // the two paths that install a different dataset, a plain open and a
+    // sequence open. The teardown in openDatasetImpl clears the runtime state
+    // (samples, progress, generation) separately and deliberately leaves the
+    // settings alone, because a restore reinstalls only what its spec carries.
+    void resetParticleSettings();
     void requestParticleReload();
     void updateParticleOverlay(PlaneViewState& state);
     void updateParticleOverlays();

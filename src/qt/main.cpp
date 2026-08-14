@@ -1888,6 +1888,104 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window, [&window, first] {
             window.openDataset(first);
         });
+    } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--particle-settings-reset-smoke-test") {
+        // Particle settings belong to the dataset they were chosen for. Both
+        // paths that install a different one owe the same reset: a plain open,
+        // and a sequence open, which reaches it through prepareSequence rather
+        // than openDatasetImpl. Every setting resets, not just the species --
+        // a subset chosen for a dense plotfile decimates the next one silently.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        const QColor chosenColor(12, 34, 56);
+        // The startup point size is the default this compares against, so the
+        // test does not have to name the constant.
+        const auto defaultPointSize
+            = std::make_shared<int>(window.particlePointSizeForTest());
+        const auto choose = [&window, chosenColor] {
+            window.setParticleSelectionForTest({"Tracer"}, 0.0005, 37);
+            window.setParticlePointSizeForTest(9);
+            window.setParticleColorForTest("Tracer", chosenColor);
+            return window.particleSeedForTest() == 37
+                && window.particleFractionForTest() == 0.0005
+                && window.particlePointSizeForTest() == 9
+                && window.particleColorForTest("Tracer") == chosenColor;
+        };
+        const auto wasReset = [&window, chosenColor, defaultPointSize](
+                                  const char* what) {
+            if (window.particleSeedForTest() == 0
+                && window.particleFractionForTest() == 1.0
+                && window.particlePointSizeForTest() == *defaultPointSize
+                && window.particleColorForTest("Tracer") != chosenColor) {
+                return true;
+            }
+            qCritical("%s inherited particle settings: seed %llu, subset %g, "
+                      "point size %d, colour %s",
+                what,
+                static_cast<unsigned long long>(window.particleSeedForTest()),
+                window.particleFractionForTest(),
+                window.particlePointSizeForTest(),
+                qUtf8Printable(
+                    window.particleColorForTest("Tracer").name(QColor::HexArgb)));
+            return false;
+        };
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application,
+            [&window, &application, first, second, phase, choose, wasReset](
+                bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                if (*phase == 0) {
+                    if (!choose()) {
+                        qCritical("the particle settings did not take");
+                        application.exit(1);
+                        return;
+                    }
+                    // A plain open of a different plotfile resets them.
+                    *phase = 1;
+                    window.openDataset(second);
+                    return;
+                }
+                if (!wasReset("a plain open")) {
+                    application.exit(1);
+                    return;
+                }
+                if (!choose()) {
+                    qCritical("the particle settings did not take");
+                    application.exit(1);
+                    return;
+                }
+                // prepareSequence resets synchronously; frame 0 then arrives
+                // through a different path, which must not put them back.
+                window.openSequence({first, second});
+                if (!wasReset("opening a sequence")) {
+                    application.exit(1);
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::sequenceFrameDisplayed, &application,
+            [&window, &application, wasReset](int index) {
+                if (index != 0) {
+                    return;
+                }
+                if (!wasReset("the first sequence frame")) {
+                    application.exit(1);
+                    return;
+                }
+                window.close();
+                application.exit(0);
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window, [&window, first] {
+            window.openDataset(first);
+        });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--raster-zoom-smoke-test") {
         // 2-D Visible-range raster/color-bar consistency: after a full-domain

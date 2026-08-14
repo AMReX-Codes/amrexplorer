@@ -682,6 +682,28 @@ std::uint64_t MainWindow::particleSeedForTest() const noexcept
     return m_particleSeed;
 }
 
+double MainWindow::particleFractionForTest() const noexcept
+{
+    return m_particleFraction;
+}
+
+void MainWindow::setParticlePointSizeForTest(int pointSize)
+{
+    applyParticleSelection(m_selectedParticleSpecies, m_particleFraction,
+        pointSize, m_particleSeed);
+}
+
+int MainWindow::particlePointSizeForTest() const noexcept
+{
+    return m_particlePointSize;
+}
+
+QColor MainWindow::particleColorForTest(const std::string& species) const
+{
+    const auto color = m_particleColors.find(species);
+    return color != m_particleColors.end() ? color->second : QColor();
+}
+
 void MainWindow::setParticleColorForTest(
     const std::string& species, const QColor& color)
 {

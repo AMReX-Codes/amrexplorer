@@ -139,10 +139,11 @@ inline constexpr std::array<BuiltinPalette, 7> builtinPalettes{
     BuiltinPalette::Plasma, BuiltinPalette::Parula, BuiltinPalette::Coolwarm,
     BuiltinPalette::Blackbody};
 
-// The QSettings value for a builtin palette, taken from builtinPaletteName()
-// so the string and the palette it names cannot drift apart. Deliberately
-// separate from the display label below: this string is on disk in every
-// user's settings, so a presentation change must not be able to reach it.
+// The QSettings value for a builtin palette. This string is on disk in every
+// user's settings, and it comes from amrvis::builtinPaletteName(), which
+// render2d documents as the menu label *and* the settings key -- so renaming a
+// palette there is a settings-format change, not a presentation tweak.
+// test_palette pins the seven strings so that cannot happen silently.
 inline QString builtinPaletteKey(std::size_t index)
 {
     if (index >= builtinPalettes.size()) {

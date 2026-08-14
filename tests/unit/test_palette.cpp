@@ -1,6 +1,7 @@
 #include <amrexplorer/render2d/Palette.hpp>
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -10,6 +11,8 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -198,5 +201,26 @@ int main(int argc, char** argv)
             && restored.slotArgb(index) == rainbow.slotArgb(index);
     }
     require(involution, "reversing twice did not restore the palette");
+
+    // These seven strings are not just menu labels: the Qt layer writes the
+    // active one into QSettings under "palette/builtin" and matches it back on
+    // startup, so changing one silently resets that user's palette to rainbow
+    // on upgrade. Renaming a palette is therefore a settings-format change and
+    // needs a migration, not just an edit here.
+    const std::array<std::pair<amrvis::BuiltinPalette, std::string_view>, 7>
+        persistedNames{{
+            {amrvis::BuiltinPalette::Rainbow, "rainbow"},
+            {amrvis::BuiltinPalette::Turbo, "turbo"},
+            {amrvis::BuiltinPalette::Viridis, "viridis"},
+            {amrvis::BuiltinPalette::Plasma, "plasma"},
+            {amrvis::BuiltinPalette::Parula, "parula"},
+            {amrvis::BuiltinPalette::Coolwarm, "coolwarm"},
+            {amrvis::BuiltinPalette::Blackbody, "blackbody"},
+        }};
+    for (const auto& [palette, expected] : persistedNames) {
+        require(amrvis::builtinPaletteName(palette) == expected,
+            "a builtin palette name changed; stored palette/builtin settings "
+            "will no longer match");
+    }
     return 0;
 }

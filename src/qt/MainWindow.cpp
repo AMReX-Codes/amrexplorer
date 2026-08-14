@@ -1,7 +1,7 @@
+#include "MainWindowInternal.hpp"
+
 #include <QKeySequence>
 #include <QStyle>
-
-#include "MainWindowInternal.hpp"
 
 namespace amrvis::qt {
 

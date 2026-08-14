@@ -204,6 +204,16 @@ inline QSettings makeSettings()
 // An AMReX plotfile directory holds a Header file plus one Level_N
 // subdirectory per refinement level (Level_0, Level_1, ...). Detecting by
 // structure rather than by a "plt" name prefix avoids false matches.
+//
+// Every filesystem call here reports through an error_code, including the
+// iterator's advance. A range-for cannot: it steps with operator++(), which has
+// no error_code overload, so a readdir that fails *after* a successful open --
+// an unmounted directory, an NFS mount dropping mid-scan -- threw
+// filesystem_error out of a function whose signature promises a bool. Both
+// callers run on the GUI thread inside a Qt event handler, where an escaping
+// exception terminates the process instead of raising a dialog, and one of them
+// is restoreSettings, which runs at startup. A directory that cannot be walked
+// is simply not a plotfile.
 inline bool isAmrexPlotfile(const std::filesystem::path& directory)
 {
     std::error_code ec;
@@ -211,10 +221,21 @@ inline bool isAmrexPlotfile(const std::filesystem::path& directory)
         || !std::filesystem::is_regular_file(directory / "Header", ec)) {
         return false;
     }
-    for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
-        if (entry.is_directory(ec)
-            && entry.path().filename().string().starts_with("Level_")) {
+    std::filesystem::directory_iterator entry(directory, ec);
+    if (ec) {
+        return false;
+    }
+    const std::filesystem::directory_iterator end;
+    while (entry != end) {
+        if (entry->is_directory(ec)
+            && entry->path().filename().string().starts_with("Level_")) {
             return true;
+        }
+        // Checked before the iterator is used again: after a failed advance its
+        // value is not something to dereference or compare against end.
+        entry.increment(ec);
+        if (ec) {
+            return false;
         }
     }
     return false;

@@ -220,13 +220,8 @@ ParsedHeader parseHeader(const std::filesystem::path& path,
     constexpr std::uint64_t minimumBytesPerGridRecord = 6;
     std::error_code headerSizeError;
     const auto headerBytes = std::filesystem::file_size(path, headerSizeError);
-    // No reserve at all when the size is unknown: this is an optimization, and
-    // the safe answer for an optimization that cannot be bounded is to skip it
-    // rather than take the largest allocation the cap still permits.
-    if (!headerSizeError) {
-        result.grids.reserve(detail::evidenceBoundedCount(
-            totalGrids, headerBytes, minimumBytesPerGridRecord));
-    }
+    result.grids.reserve(detail::evidenceBoundedCount(
+        totalGrids, headerBytes, minimumBytesPerGridRecord, headerSizeError));
     std::uint64_t recordedParticles = 0;
     for (int level = 0; level <= result.finestLevel; ++level) {
         for (int grid = 0; grid < gridCounts[static_cast<std::size_t>(level)]; ++grid) {

@@ -244,22 +244,17 @@ add_test(NAME plotfile_header COMMAND test_plotfile_header)
 # must stay its own executable: the counting would otherwise apply to every
 # other case sharing the binary.
 #
-# That replacement routes every allocation through plain malloc/free, which
-# takes the whole binary out from under AddressSanitizer's allocator -- no
-# redzones, no use-after-free detection. The parse paths it exercises are
-# covered under ASan by vismf_index and plotfile_header, so nothing is lost by
-# excluding it there, whereas leaving it in would advertise sanitizer coverage
-# this target cannot provide.
+# It runs under the sanitizers like everything else. Replacing operator new was
+# briefly thought to take the binary out from under ASan; it does not. ASan
+# interposes malloc/free at the libc level, so an operator new built on malloc
+# still allocates from ASan's allocator with its redzones intact -- verified by
+# compiling this shape under -fsanitize=address and watching it report a
+# heap-buffer-overflow. Only new/delete-mismatch detection is lost, and this
+# file pairs them by construction.
 add_executable(test_header_allocation_bounds unit/test_header_allocation_bounds.cpp)
 target_link_libraries(test_header_allocation_bounds
     PRIVATE amrexplorer::data amrexplorer::io amrexplorer::warnings)
-if(AMREXPLORER_ENABLE_SANITIZERS)
-    message(STATUS
-        "header_allocation_bounds is excluded under sanitizers: it replaces "
-        "global operator new, which disables ASan's heap instrumentation")
-else()
-    add_test(NAME header_allocation_bounds COMMAND test_header_allocation_bounds)
-endif()
+add_test(NAME header_allocation_bounds COMMAND test_header_allocation_bounds)
 
 add_executable(test_particle_header unit/test_particle_header.cpp)
 target_link_libraries(test_particle_header PRIVATE amrexplorer::io amrexplorer::warnings)

@@ -225,6 +225,44 @@ int main()
         "out-of-order grid records were not rejected",
         "out of order");
 
+    // Bounding the numeric fields must not widen what they accept. strtod
+    // takes "nan", "inf" and an overflowing exponent where operator>> refuses
+    // all three, and `time` is not among the fields validateMetadata checks
+    // for finiteness -- so without an explicit rejection a Header declaring
+    // time = nan would open and carry a NaN into the metadata, the wire
+    // catalog and the UI. Non-finite values stay legal only in VisMF block
+    // statistics, where AMReX genuinely writes them.
+    for (const auto* value : {"nan", "inf", "-inf", "1e999"}) {
+        const auto dir = scratch / (std::string("nonfinite_time_") + value);
+        expectHeaderRejected(dir,
+            "HyperCLaw-V1.1\n1\ndensity\n2\n" + std::string(value) + "\n0\n",
+            "a non-finite time field was not rejected",
+            "time");
+    }
+    // The other direction: a denormal is finite and must still parse, which is
+    // why the check is isfinite rather than errno -- strtod reports ERANGE for
+    // underflow, where the extraction this replaced accepted the value.
+    {
+        const auto dir = scratch / "denormal_time";
+        writeValidPlotfile(dir);
+        writeFile(dir / "Header",
+            "HyperCLaw-V1.1\n1\ndensity\n2\n4.9e-324\n1\n"
+            "0.0\n0.0\n1.0\n1.0\n2\n"
+            "((0,0) (7,7) (0,0))\n((0,0) (15,15) (0,0))\n0\n0\n"
+            "0.125 0.125\n0.0625 0.0625\n0\n0\n"
+            "0 1 0.0 0\n0.0 1.0 0.0 1.0\nLevel_0/Cell\n"
+            "1 1 0.0 0\n0.0 1.0 0.0 1.0\nLevel_1/Cell\n");
+        try {
+            const auto result = amrvis::PlotfileMetadataReader{}.read(dir);
+            require(result.metadata->levels.size() == 2,
+                "a denormal time field parsed to the wrong shape");
+        } catch (const std::exception& error) {
+            std::cerr << "FAILED: a denormal time field was rejected: "
+                      << error.what() << '\n';
+            ++g_failures;
+        }
+    }
+
     // Crafted input, bounded rather than allocated: the reader walks this file
     // as text, so without a ceiling one enormous line or token is accumulated
     // whole before any parse can reject it. Kilobyte-scale input then forces an

@@ -19,6 +19,7 @@
 #include <limits>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <string_view>
 #include <vector>
 
@@ -39,10 +40,11 @@ inline constexpr std::size_t maximumHeaderLineBytes = 16U * 1024U;
 // before any count or cap can reject it.
 inline constexpr std::size_t maximumHeaderTokenBytes = 4U * 1024U;
 
-// The largest speculative reserve any header parse may take. Beyond this the
-// container simply grows as records are parsed, which costs amortized copying
-// and nothing else -- so this is the point where an optimization stops being
-// worth a crafted-input risk.
+// The most *records* a header parse may reserve before it has parsed any. A
+// count, not a byte quantity: what it costs depends on the element, and the
+// callers span 36-byte IntBox through std::string, so 65,536 records is about
+// 2.4 MB of boxes or ~4 MB of field metadata. Named for what it bounds so the
+// next caller with a fatter element knows what it is choosing.
 //
 // It exists because the file's own size is *not* trustworthy evidence on its
 // own: std::filesystem::file_size reports the apparent size, so `truncate -s
@@ -50,7 +52,7 @@ inline constexpr std::size_t maximumHeaderTokenBytes = 4U * 1024U;
 // one filesystem block, and a bound derived from it alone is forgeable at
 // almost no cost. The size still tightens the bound for ordinary files; this
 // cap is what makes it hold for hostile ones.
-inline constexpr std::size_t maximumSpeculativeReserve = 64U * 1024U;
+inline constexpr std::size_t maximumSpeculativeRecords = 64U * 1024U;
 
 // How many entries to reserve for a count a header declares. A declared count
 // is a claim; the file's size is evidence against it, since a header cannot
@@ -59,13 +61,35 @@ inline constexpr std::size_t maximumSpeculativeReserve = 64U * 1024U;
 // under-reserving costs one reallocation while over-reserving is the whole
 // attack. That asymmetry is also why the per-record floors callers pass sit
 // below the true minimum rather than being tuned to it.
+//
+// A zero floor reserves nothing rather than dividing by it. The floor is often
+// derived from a parsed count -- a component count may legitimately be zero --
+// and a caller should not have to know that passing one through would be a
+// division by zero rather than a bound.
 [[nodiscard]] inline std::size_t evidenceBoundedCount(std::uint64_t declared,
     std::uintmax_t fileBytes, std::uint64_t minimumBytesPerRecord)
 {
+    if (minimumBytesPerRecord == 0) {
+        return 0;
+    }
     const auto describable
         = static_cast<std::uint64_t>(fileBytes) / minimumBytesPerRecord;
     return static_cast<std::size_t>(std::min({declared, describable,
-        static_cast<std::uint64_t>(maximumSpeculativeReserve)}));
+        static_cast<std::uint64_t>(maximumSpeculativeRecords)}));
+}
+
+// The same rule when the file's size could not be determined. Callers disagreed
+// about what a failed stat means -- one skipped the reserve, another failed the
+// open -- so the rule states it once: no evidence, no speculative reserve. The
+// parse then decides whether the file is readable, which is its job, not this
+// helper's.
+[[nodiscard]] inline std::size_t evidenceBoundedCount(std::uint64_t declared,
+    std::uintmax_t fileBytes, std::uint64_t minimumBytesPerRecord,
+    const std::error_code& sizeError)
+{
+    return sizeError
+        ? 0
+        : evidenceBoundedCount(declared, fileBytes, minimumBytesPerRecord);
 }
 
 // std::getline with a ceiling, and otherwise its semantics: false when nothing

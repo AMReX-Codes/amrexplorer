@@ -52,7 +52,17 @@ T readRequired(std::istream& input, std::string_view description)
         const char* begin = token.c_str();
         char* end = nullptr;
         const double value = std::strtod(begin, &end);
-        if (token.empty() || end != begin + token.size()) {
+        // strtod and operator>> do not accept the same grammar, and bounding
+        // the read must not quietly widen it. strtod takes "nan", "inf",
+        // "infinity" and an overflowing exponent, all of which num_get
+        // refuses; rejecting non-finite results restores that exactly.
+        //
+        // Deliberately *not* errno == ERANGE: strtod raises it for underflow
+        // too, where operator>> accepts the result -- including a legitimate
+        // denormal like 4.9e-324. Measured on all of nan, inf, -inf, infinity,
+        // 1e999, 1e-999, 4.9e-324 and 0.5, this predicate agrees with the
+        // extraction it replaced on every one.
+        if (end != begin + token.size() || !std::isfinite(value)) {
             throw MetadataReadError("malformed plotfile Header while reading "
                 + std::string(description));
         }
@@ -231,15 +241,21 @@ std::vector<std::vector<double>> readRealMatrix(
     constexpr std::uint64_t minimumBytesPerValue = 2;  // "0,"
     std::vector<std::vector<double>> matrix;
     matrix.reserve(detail::evidenceBoundedCount(
-        rows, fileBytes, minimumBytesPerValue * std::max<std::uint64_t>(1, columns)));
+        rows, fileBytes, minimumBytesPerValue * columns));
     for (std::uint64_t row = 0; row < rows; ++row) {
+        // Polled per row as well as per value: a header may declare zero
+        // components, and then the inner loop never runs while this one still
+        // iterates once per box -- up to ten million times, with the poll
+        // below never reached.
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         std::vector<double> values;
         values.reserve(detail::evidenceBoundedCount(
             columns, fileBytes, minimumBytesPerValue));
         for (std::uint64_t column = 0; column < columns; ++column) {
             // The longest loop in the parse: rows x columns iterations, run
-            // twice for a v1/v3 header. Nothing else here polls often enough
-            // to make a cancelled open responsive.
+            // twice for a v1/v3 header.
             if (cancellation.stop_requested()) {
                 throw ReadCancelled();
             }
@@ -353,9 +369,11 @@ detail::VisMfIndex detail::readVisMfIndex(
             static_cast<std::uint64_t>(index.components), headerSize,
             cancellation);
         index.hasPerBlockStatistics = true;
-        if (index.minimum.size() != boxCount || index.maximum.size() != boxCount) {
-            throw MetadataReadError("VisMF statistics do not match BoxArray size");
-        }
+        // The shape check that used to live here is gone rather than kept as
+        // reassurance: readRealMatrix now returns only after appending exactly
+        // `rows` rows, having already refused any rows != boxCount, so it
+        // could not fail. A check that cannot fail reads like a live invariant
+        // and is worse than none.
     } else if (index.version == 4) {
         index.minimum.push_back({});
         index.maximum.push_back({});

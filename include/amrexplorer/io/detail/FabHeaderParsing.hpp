@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
@@ -199,6 +200,70 @@ template <typename Error>
             throw Error(std::string(subject) + " " + std::string(description)
                 + " exceeds the supported length");
         }
+    }
+    return value;
+}
+
+// The longest run a numeric field may occupy. A 64-bit value needs 20 digits
+// and a sign; this leaves room for padding without leaving room for a run
+// whose only purpose is to be long.
+inline constexpr std::size_t maximumHeaderNumberBytes = 128;
+
+// An integer field, bounded, and stopping exactly where operator>> stopped.
+//
+// That last part is why this cannot reuse readBoundedToken: header integers sit
+// inside punctuation -- "((0,0) (7,7) (0,0))" -- and must end at the comma or
+// the paren, where a whitespace-delimited token would swallow "0,0)" whole and
+// then fail to convert it. So the digits are accumulated directly, and the
+// first character that cannot extend the value ends the field, as before.
+//
+// The bound is not a libstdc++ detail. That implementation happens to
+// accumulate an integer rather than a buffer, so an enormous digit run costs it
+// nothing -- but libc++ resizes and doubles a std::string per digit, so on
+// macOS the same run allocates it whole. A ceiling here holds on both.
+//
+// Two deliberate differences from the extraction it replaces, both narrowing:
+// a sign is rejected for unsigned fields, where operator>> would wrap "-1" into
+// a huge count of exactly the kind these bounds exist to refuse; and an
+// out-of-range value throws rather than silently saturating.
+template <typename Error, typename Integer>
+[[nodiscard]] Integer readBoundedInteger(std::istream& input,
+    std::string_view subject, std::string_view description,
+    std::size_t limit = maximumHeaderNumberBytes)
+{
+    input >> std::ws;
+    std::string token;
+    for (;;) {
+        const auto next = input.peek();
+        if (next == std::char_traits<char>::eof()) {
+            break;
+        }
+        const auto character = static_cast<char>(next);
+        const bool isDigit = character >= '0' && character <= '9';
+        const bool isSign = (character == '-' || character == '+')
+            && token.empty();
+        if (!isDigit && !isSign) {
+            break;
+        }
+        if (token.size() >= limit) {
+            throw Error(std::string(subject) + " " + std::string(description)
+                + " exceeds the supported length");
+        }
+        token.push_back(character);
+        (void)input.get();
+    }
+    // from_chars rejects a leading '+', which operator>> accepts; skip it so
+    // the only grammar changes are the two narrowing ones described above.
+    const auto* begin = token.data();
+    const auto* end = token.data() + token.size();
+    if (!token.empty() && token.front() == '+') {
+        ++begin;
+    }
+    Integer value{};
+    const auto [stopped, error] = std::from_chars(begin, end, value);
+    if (begin == end || error != std::errc{} || stopped != end) {
+        throw Error("malformed " + std::string(subject) + " while reading "
+            + std::string(description));
     }
     return value;
 }

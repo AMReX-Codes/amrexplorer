@@ -62,12 +62,10 @@ T readRequired(std::istream& input, std::string_view description)
         return detail::readBoundedToken<ParticleReadError>(
             input, "particle Header", description);
     } else {
-        T value{};
-        if (!(input >> value)) {
-            throw ParticleReadError("malformed particle Header while reading "
-                + std::string(description));
-        }
-        return value;
+        static_assert(std::is_integral_v<T>,
+            "particle Header fields are strings or integers");
+        return detail::readBoundedInteger<ParticleReadError, T>(
+            input, "particle Header", description);
     }
 }
 
@@ -167,7 +165,13 @@ ParsedHeader parseHeader(const std::filesystem::path& path,
         || result.metadata.realComponentCount > maximumComponents) {
         throw ParticleReadError("particle real component count is outside supported bounds");
     }
+    // Both component-name loops run up to maximumComponents times, and
+    // discoverParticleSpecies calls this once per subdirectory at every open,
+    // so a cancelled open must not wait them out.
     for (int i = 0; i < result.metadata.realComponentCount; ++i) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         (void)readRequired<std::string>(input, "real component name");
     }
     result.metadata.intComponentCount
@@ -178,6 +182,9 @@ ParsedHeader parseHeader(const std::filesystem::path& path,
             "particle integer component count is outside supported bounds");
     }
     for (int i = 0; i < result.metadata.intComponentCount; ++i) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         (void)readRequired<std::string>(input, "integer component name");
     }
     const auto checkpointFlag = readRequired<int>(input, "checkpoint flag");

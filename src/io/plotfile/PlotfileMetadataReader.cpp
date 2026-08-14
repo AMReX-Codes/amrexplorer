@@ -30,16 +30,20 @@ constexpr int maximumGridsPerLevel = 10'000'000;
 // FabOnDisk prefix and filename, the level data path -- are bounded and
 // length-checked by the shared helper.
 //
-// The numeric ones do not divide the way one would guess. Integer extraction
-// is genuinely bounded -- libstdc++ stops accumulating once the digits cannot
-// extend the value, and a multi-megabyte run allocates nothing (measured) --
-// so it goes straight to operator>>. `double` is not: every digit of a long
-// run is a syntactically valid continuation, so num_get buffers all of it, 67
-// MB for a 20 MB run, before the value overflows and the extraction fails.
-// `time`, the physical bounds, the cell sizes and every grid bound read that
-// way, so double goes through a bounded token and strtod instead -- the shape
-// readStatisticValue uses, minus its tolerance for inf/nan, which the geometry
-// fields have no reason to accept.
+// The numeric ones are bounded too, each by the helper that keeps its own
+// delimiters. `double` reads a whitespace-delimited token and converts with
+// strtod, because every digit of a long run is a valid continuation and
+// num_get buffers all of it -- 67 MB for a 20 MB run, measured. Integers stop
+// at the first character that cannot extend the value, because header integers
+// sit inside "((0,0) (7,7))" and a whitespace-delimited read would swallow the
+// punctuation.
+//
+// Integers were briefly left unbounded on the grounds that libstdc++
+// accumulates a value rather than a buffer, which measured as allocating
+// nothing. That reasoning does not travel: libc++ buffers and doubles a string
+// per digit, so the same run allocates in full on macOS, which this project
+// supports and builds in CI. The bound belongs in the reader, not in an
+// assumption about one standard library.
 template <typename T>
 T readRequired(std::istream& input, std::string_view description)
 {
@@ -68,12 +72,10 @@ T readRequired(std::istream& input, std::string_view description)
         }
         return value;
     } else {
-        T value{};
-        if (!(input >> value)) {
-            throw MetadataReadError("malformed plotfile Header while reading "
-                + std::string(description));
-        }
-        return value;
+        static_assert(std::is_integral_v<T>,
+            "readRequired handles strings, doubles and integers");
+        return detail::readBoundedInteger<MetadataReadError, T>(
+            input, "plotfile Header", description);
     }
 }
 
@@ -132,10 +134,19 @@ std::string trim(std::string value)
 // The function that walks a plotfile Header, so its ceiling matters most: a
 // Header that never supplies a newline would otherwise accumulate the whole
 // remaining file into one line before the parse could reject it.
-std::string readNonEmptyLine(std::istream& input, std::string_view description)
+std::string readNonEmptyLine(std::istream& input, std::string_view description,
+    StopToken cancellation = {})
 {
     std::string line;
     while (detail::readBoundedLine<MetadataReadError>(input, line)) {
+        // Each line is individually bounded, but how many blank ones precede
+        // the field is the file's decision: a Header of nothing but newlines
+        // spins here once per byte. Every other loop a declared count drives
+        // polls; this one is driven by content and needs it for the same
+        // reason.
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         line = trim(std::move(line));
         if (!line.empty()) {
             return line;
@@ -299,7 +310,7 @@ detail::VisMfIndex detail::readVisMfIndex(
     }
     input.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 
-    const auto ghostValues = parseIntegers(readNonEmptyLine(input, "VisMF ghost width"));
+    const auto ghostValues = parseIntegers(readNonEmptyLine(input, "VisMF ghost width", cancellation));
     if (ghostValues.size() == 1) {
         index.ghostWidth = {{ghostValues[0], ghostValues[0], ghostValues[0]}};
     } else if (ghostValues.size() >= static_cast<std::size_t>(dimension)) {
@@ -312,7 +323,7 @@ detail::VisMfIndex detail::readVisMfIndex(
     }
 
     const auto boxArrayHeader = parseIntegers(
-        readNonEmptyLine(input, "VisMF BoxArray header"));
+        readNonEmptyLine(input, "VisMF BoxArray header", cancellation));
     if (boxArrayHeader.empty() || boxArrayHeader.front() < 0
         || boxArrayHeader.front() > maximumGridsPerLevel) {
         throw MetadataReadError("VisMF BoxArray size is outside supported bounds");
@@ -333,7 +344,7 @@ detail::VisMfIndex detail::readVisMfIndex(
         }
         index.boxes.push_back(readAmrexBox(input, dimension, "VisMF BoxArray entry"));
     }
-    if (readNonEmptyLine(input, "VisMF BoxArray terminator") != ")") {
+    if (readNonEmptyLine(input, "VisMF BoxArray terminator", cancellation) != ")") {
         throw MetadataReadError("malformed VisMF BoxArray terminator");
     }
 
@@ -408,7 +419,7 @@ detail::VisMfIndex detail::readVisMfIndex(
         // the FabOnDisk list and after each per-block min/max matrix).
         // readNonEmptyLine skips blank lines, mirroring how AMReX reads the
         // descriptor with operator>>. Version 4 emits no separator.
-        index.realDescriptor = readNonEmptyLine(input, "VisMF RealDescriptor");
+        index.realDescriptor = readNonEmptyLine(input, "VisMF RealDescriptor", cancellation);
     }
     return index;
 }
@@ -492,7 +503,7 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
         }
-        auto name = readNonEmptyLine(input, "component name");
+        auto name = readNonEmptyLine(input, "component name", cancellation);
         metadata->fields.push_back({name, Centering::Cell, {std::move(name)}});
     }
 

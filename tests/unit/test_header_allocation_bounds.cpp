@@ -32,7 +32,8 @@
 
 namespace {
 
-std::atomic<std::size_t> g_allocatedBytes{0};
+std::atomic<std::size_t> g_liveBytes{0};
+std::atomic<std::size_t> g_peakBytes{0};
 
 int g_failures = 0;
 
@@ -56,20 +57,52 @@ void require(bool condition, const char* message)
 // route std::vector's allocation to operator new(size_t, align_val_t), the
 // counter would stop seeing the reserve, and every case here would pass with
 // the bounds reverted -- failing open, silently.
+// One per element type any case here measures, since an assert that covers
+// only some of them leaves the rest free to fail open.
 static_assert(alignof(amrvis::IntBox) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__,
     "IntBox is over-aligned, so vector routes around the counted operator new "
     "and these allocation bounds are no longer measured");
 static_assert(alignof(double) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__,
     "double is over-aligned, so the statistics matrix is no longer measured");
+static_assert(alignof(amrvis::FieldMetadata) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__,
+    "FieldMetadata is over-aligned, so the component-count case is no longer "
+    "measured");
+static_assert(alignof(std::string) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__,
+    "std::string is over-aligned, so the FabOnDisk name reserve is no longer "
+    "measured");
+// Live bytes and their high-water mark, not a running total. The property
+// under test is how much a crafted parse *holds*, and this PR deliberately
+// replaces up-front sizing with growth by reallocation past the reserve cap --
+// so a cumulative counter would charge every doubling's new buffer while the
+// old one is freed moments later, and eventually fail a bound that is working.
+// The size is stashed ahead of the block so the unsized deletes can return it.
+struct AllocationHeader {
+    std::size_t bytes;
+};
+constexpr std::size_t headerBytes = sizeof(AllocationHeader) < alignof(std::max_align_t)
+    ? alignof(std::max_align_t)
+    : sizeof(AllocationHeader);
+
+void recordPeak(std::size_t live)
+{
+    auto previous = g_peakBytes.load(std::memory_order_relaxed);
+    while (live > previous
+        && !g_peakBytes.compare_exchange_weak(previous, live,
+               std::memory_order_relaxed)) {
+    }
+}
+
 void* operator new(std::size_t bytes)
 {
-    g_allocatedBytes.fetch_add(bytes, std::memory_order_relaxed);
-    // malloc(0) may return null, which would look like exhaustion here.
-    void* const memory = std::malloc(bytes == 0 ? 1 : bytes);
-    if (memory == nullptr) {
+    void* const block = std::malloc(bytes + headerBytes);
+    if (block == nullptr) {
         throw std::bad_alloc();
     }
-    return memory;
+    static_cast<AllocationHeader*>(block)->bytes = bytes;
+    const auto live
+        = g_liveBytes.fetch_add(bytes, std::memory_order_relaxed) + bytes;
+    recordPeak(live);
+    return static_cast<char*>(block) + headerBytes;
 }
 
 void* operator new[](std::size_t bytes)
@@ -79,22 +112,28 @@ void* operator new[](std::size_t bytes)
 
 void operator delete(void* memory) noexcept
 {
-    std::free(memory);
+    if (memory == nullptr) {
+        return;
+    }
+    auto* const block = static_cast<char*>(memory) - headerBytes;
+    g_liveBytes.fetch_sub(reinterpret_cast<AllocationHeader*>(block)->bytes,
+        std::memory_order_relaxed);
+    std::free(block);
 }
 
 void operator delete[](void* memory) noexcept
 {
-    std::free(memory);
+    operator delete(memory);
 }
 
 void operator delete(void* memory, std::size_t) noexcept
 {
-    std::free(memory);
+    operator delete(memory);
 }
 
 void operator delete[](void* memory, std::size_t) noexcept
 {
-    std::free(memory);
+    operator delete(memory);
 }
 
 // The budget must sit above what a crafted parse legitimately needs -- a
@@ -109,7 +148,10 @@ template <typename Parse>
 void requireBoundedAllocation(Parse parse, const char* what,
     std::size_t allowedBytes = defaultAllowedBytes)
 {
-    const auto before = g_allocatedBytes.load(std::memory_order_relaxed);
+    // The peak is measured against what was already live when the case began,
+    // so the number reported is what this parse added at its worst moment.
+    const auto before = g_liveBytes.load(std::memory_order_relaxed);
+    g_peakBytes.store(before, std::memory_order_relaxed);
     bool threw = false;
     try {
         parse();
@@ -121,8 +163,7 @@ void requireBoundedAllocation(Parse parse, const char* what,
         ++g_failures;
         return;  // one failure per case; require(threw) below would add another
     }
-    const auto used
-        = g_allocatedBytes.load(std::memory_order_relaxed) - before;
+    const auto used = g_peakBytes.load(std::memory_order_relaxed) - before;
     require(threw, what);
     // The positive control. Every one of these parses allocates *something*;
     // a zero means the replaced operator new stopped being the allocator this

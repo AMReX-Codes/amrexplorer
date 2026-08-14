@@ -225,6 +225,22 @@ int main()
         "out-of-order grid records were not rejected",
         "out of order");
 
+    // Integer fields are bounded too, and stop where they always did. The
+    // ceiling matters on libc++, which buffers a digit run rather than
+    // accumulating a value, so an enormous one allocates in full there.
+    expectHeaderRejected(scratch / "long_component_count",
+        "HyperCLaw-V1.1\n" + std::string(5000, '9') + "\ndensity\n",
+        "an over-long component count was not rejected",
+        "exceeds the supported length");
+    // ...and the delimiters are unchanged: a Box packs its integers against
+    // commas and parens, which a whitespace-delimited read would swallow. The
+    // baseline plotfile above already proves the positive case; this pins the
+    // negative one, where the value is followed by punctuation it must not eat.
+    expectHeaderRejected(scratch / "negative_component_count",
+        "HyperCLaw-V1.1\n-3\ndensity\n",
+        "a negative component count was not rejected",
+        "component count");
+
     // Bounding the numeric fields must not widen what they accept. strtod
     // takes "nan", "inf" and an overflowing exponent where operator>> refuses
     // all three, and `time` is not among the fields validateMetadata checks

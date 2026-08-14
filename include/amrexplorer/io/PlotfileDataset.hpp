@@ -32,6 +32,9 @@ public:
 
     [[nodiscard]] const DatasetMetadata& metadata() const noexcept;
     [[nodiscard]] const MetadataReadMetrics& metadataReadMetrics() const noexcept;
+    // The Header's version line, as the bounded metadata read already parsed
+    // it. Exposed so no caller has to open and re-read the Header for it.
+    [[nodiscard]] const std::string& fileVersion() const noexcept;
     [[nodiscard]] DatasetId id() const noexcept;
     [[nodiscard]] const std::vector<ParticleSpeciesMetadata>& particleSpecies()
         const noexcept;

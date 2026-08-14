@@ -207,26 +207,26 @@ ParsedHeader parseHeader(const std::filesystem::path& path,
         throw ParticleReadError(
             "particle grid total is outside supported bounds");
     }
-    // The cap above rejects the absurd; this bounds what is merely large. A
-    // declared count is a claim, and the file's own size is the evidence
-    // against it: every grid record still to come needs at least "0 0 0\n" --
-    // three numbers, two separators, a newline -- so the Header cannot
-    // describe more than its bytes allow. Without this a Header of a few
-    // dozen bytes could still reserve the cap's worth, a quarter of a
-    // gigabyte, which is the same trade the point reserve below refuses to
-    // make.
+    // The cap above rejects the absurd; the shared rule bounds what is merely
+    // large. Every grid record still to come needs at least "0 0 0\n" -- three
+    // numbers, two separators, a newline -- so that is this table's per-record
+    // floor. Reserving straight from the declared count let a Header of a few
+    // dozen bytes take a quarter of a gigabyte.
+    //
+    // This used to be written out here with its own fallback rule, which had
+    // already drifted from the plotfile reader's copy. It now calls the one
+    // definition, which also brings the absolute reserve cap: a sparse header
+    // can forge any apparent size, so the file's size alone is not a bound.
     constexpr std::uint64_t minimumBytesPerGridRecord = 6;
     std::error_code headerSizeError;
     const auto headerBytes = std::filesystem::file_size(path, headerSizeError);
+    // No reserve at all when the size is unknown: this is an optimization, and
+    // the safe answer for an optimization that cannot be bounded is to skip it
+    // rather than take the largest allocation the cap still permits.
     if (!headerSizeError) {
-        const auto describableGrids
-            = static_cast<std::uint64_t>(headerBytes) / minimumBytesPerGridRecord;
-        result.grids.reserve(
-            static_cast<std::size_t>(std::min(totalGrids, describableGrids)));
+        result.grids.reserve(detail::evidenceBoundedCount(
+            totalGrids, headerBytes, minimumBytesPerGridRecord));
     }
-    // No fallback reserve when the size is unknown: this is an optimization,
-    // and the safe answer for an optimization that cannot be bounded is to
-    // skip it, not to take the largest allocation the cap still permits.
     std::uint64_t recordedParticles = 0;
     for (int level = 0; level <= result.finestLevel; ++level) {
         for (int grid = 0; grid < gridCounts[static_cast<std::size_t>(level)]; ++grid) {

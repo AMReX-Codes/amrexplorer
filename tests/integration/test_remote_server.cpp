@@ -432,6 +432,12 @@ int main(int argc, char* argv[])
             "a crafted plotfile Header was opened as a dataset");
         const auto rejection
             = codec::fromWire(*envelope->payload.AsErrorResponse());
+        // What this case can and cannot show: it pins that the server refuses
+        // a crafted Header and keeps serving, on a typed code rather than on
+        // prose. It cannot show that the refusal was *cheap* -- the message is
+        // the same whether or not the file was accumulated first -- so the
+        // allocation itself is measured in header_allocation_bounds instead.
+        //
         // The code first, like every other refusal case here: without it this
         // passes on any error that happens to carry the phrase, including a
         // cancellation or an authorization failure.

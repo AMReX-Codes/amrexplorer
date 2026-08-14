@@ -30,22 +30,33 @@ constexpr int maximumGridsPerLevel = 10'000'000;
 // FabOnDisk prefix and filename, the level data path -- are bounded and
 // length-checked by the shared helper.
 //
-// The numeric ones are not, and they do not divide the way one would guess.
-// Integer extraction is genuinely bounded: libstdc++ stops accumulating once
-// the digits cannot extend the value, and a multi-megabyte digit run allocates
-// nothing (measured). `double` is not: the whole run is a syntactically valid
-// float prefix, so num_get buffers all of it -- 67 MB for a 20 MB run of
-// digits, a 3.2x amplification, before the value overflows and the extraction
-// fails. `time`, the physical bounds, the cell sizes and the grid bounds all
-// read through that path. Bounding it means routing through readBoundedToken
-// and strtod, the shape readStatisticValue already uses; it is tracked with
-// the rest of the remaining allocation work rather than done here.
+// The numeric ones do not divide the way one would guess. Integer extraction
+// is genuinely bounded -- libstdc++ stops accumulating once the digits cannot
+// extend the value, and a multi-megabyte run allocates nothing (measured) --
+// so it goes straight to operator>>. `double` is not: every digit of a long
+// run is a syntactically valid continuation, so num_get buffers all of it, 67
+// MB for a 20 MB run, before the value overflows and the extraction fails.
+// `time`, the physical bounds, the cell sizes and every grid bound read that
+// way, so double goes through a bounded token and strtod instead -- the shape
+// readStatisticValue uses, minus its tolerance for inf/nan, which the geometry
+// fields have no reason to accept.
 template <typename T>
 T readRequired(std::istream& input, std::string_view description)
 {
     if constexpr (std::is_same_v<T, std::string>) {
         return detail::readBoundedToken<MetadataReadError>(
             input, "plotfile Header", description);
+    } else if constexpr (std::is_same_v<T, double>) {
+        const auto token = detail::readBoundedToken<MetadataReadError>(
+            input, "plotfile Header", description);
+        const char* begin = token.c_str();
+        char* end = nullptr;
+        const double value = std::strtod(begin, &end);
+        if (token.empty() || end != begin + token.size()) {
+            throw MetadataReadError("malformed plotfile Header while reading "
+                + std::string(description));
+        }
+        return value;
     } else {
         T value{};
         if (!(input >> value)) {
@@ -54,25 +65,6 @@ T readRequired(std::istream& input, std::string_view description)
         }
         return value;
     }
-}
-
-// How many entries to reserve for a count the file declares. A declared count
-// is a claim; the file's own size is the evidence against it, because a header
-// cannot describe more entries than its bytes allow. Reserving from the claim
-// alone let a header of a few dozen bytes take hundreds of megabytes before a
-// single entry was parsed -- the trade the particle grid table already refuses
-// to make.
-//
-// Every caller is reserving, never sizing, so under-reserving a legitimate file
-// costs one reallocation and nothing else. That asymmetry is why the per-record
-// floors callers pass sit *below* the true minimum rather than being tuned to
-// it: too low only forgoes some of the optimization, while too high would drop
-// a real file's reserve on the floor.
-[[nodiscard]] std::size_t evidenceBoundedCount(std::uint64_t declared,
-    std::uintmax_t fileBytes, std::uint64_t minimumBytesPerRecord)
-{
-    return static_cast<std::size_t>(std::min(
-        declared, static_cast<std::uint64_t>(fileBytes) / minimumBytesPerRecord));
 }
 
 // Reads one VisMF min/max statistic, which -- unlike the geometry fields --
@@ -213,7 +205,8 @@ void requireContainedPath(const std::string& value, std::string_view what)
 // full before the count was cross-checked).
 std::vector<std::vector<double>> readRealMatrix(
     std::istream& input, std::string_view description,
-    std::uint64_t expectedRows, std::uint64_t expectedColumns)
+    std::uint64_t expectedRows, std::uint64_t expectedColumns,
+    std::uintmax_t fileBytes, StopToken cancellation)
 {
     const auto rows = readRequired<std::uint64_t>(input, description);
     char comma = '\0';
@@ -226,16 +219,36 @@ std::vector<std::vector<double>> readRealMatrix(
             "BoxArray size and component count");
     }
 
-    std::vector<std::vector<double>> matrix(
-        static_cast<std::size_t>(rows),
-        std::vector<double>(static_cast<std::size_t>(columns)));
-    for (auto& row : matrix) {
-        for (auto& value : row) {
-            value = readStatisticValue(input, description);
+    // Grown as values parse rather than sized up front. The shape check above
+    // constrains each factor against something real -- rows against the boxes
+    // already parsed, columns against the declared component count -- but not
+    // their *product*, and the product is the allocation. A 35 KB header
+    // declaring 1000 boxes and 100,000 components asked for 800 MB before a
+    // single statistic was read, and scaling the box list to a ~350 KB header
+    // reached ~8 GB. Growing instead means the memory tracks the values the
+    // file actually contains: a header that runs out faults on the first
+    // missing one.
+    constexpr std::uint64_t minimumBytesPerValue = 2;  // "0,"
+    std::vector<std::vector<double>> matrix;
+    matrix.reserve(detail::evidenceBoundedCount(
+        rows, fileBytes, minimumBytesPerValue * std::max<std::uint64_t>(1, columns)));
+    for (std::uint64_t row = 0; row < rows; ++row) {
+        std::vector<double> values;
+        values.reserve(detail::evidenceBoundedCount(
+            columns, fileBytes, minimumBytesPerValue));
+        for (std::uint64_t column = 0; column < columns; ++column) {
+            // The longest loop in the parse: rows x columns iterations, run
+            // twice for a v1/v3 header. Nothing else here polls often enough
+            // to make a cancelled open responsive.
+            if (cancellation.stop_requested()) {
+                throw ReadCancelled();
+            }
+            values.push_back(readStatisticValue(input, description));
             if (!(input >> comma) || comma != ',') {
                 throw MetadataReadError("malformed comma-separated VisMF matrix");
             }
         }
+        matrix.push_back(std::move(values));
     }
     return matrix;
 }
@@ -295,7 +308,7 @@ detail::VisMfIndex detail::readVisMfIndex(
     // location record is "FabOnDisk: a 0", fourteen.
     constexpr std::uint64_t minimumBytesPerBoxEntry = 8;
     constexpr std::uint64_t minimumBytesPerLocationRecord = 12;
-    index.boxes.reserve(evidenceBoundedCount(
+    index.boxes.reserve(detail::evidenceBoundedCount(
         static_cast<std::uint64_t>(boxCount), headerSize,
         minimumBytesPerBoxEntry));
     for (std::size_t box = 0; box < boxCount; ++box) {
@@ -312,7 +325,7 @@ detail::VisMfIndex detail::readVisMfIndex(
     if (locationCount != boxCount) {
         throw MetadataReadError("VisMF location count does not match BoxArray size");
     }
-    const auto reservableLocations = evidenceBoundedCount(
+    const auto reservableLocations = detail::evidenceBoundedCount(
         static_cast<std::uint64_t>(boxCount), headerSize,
         minimumBytesPerLocationRecord);
     index.fileNames.reserve(reservableLocations);
@@ -333,10 +346,12 @@ detail::VisMfIndex detail::readVisMfIndex(
     if (index.version == 1 || index.version == 3) {
         index.minimum = readRealMatrix(input, "per-block minima",
             static_cast<std::uint64_t>(boxCount),
-            static_cast<std::uint64_t>(index.components));
+            static_cast<std::uint64_t>(index.components), headerSize,
+            cancellation);
         index.maximum = readRealMatrix(input, "per-block maxima",
             static_cast<std::uint64_t>(boxCount),
-            static_cast<std::uint64_t>(index.components));
+            static_cast<std::uint64_t>(index.components), headerSize,
+            cancellation);
         index.hasPerBlockStatistics = true;
         if (index.minimum.size() != boxCount || index.maximum.size() != boxCount) {
             throw MetadataReadError("VisMF statistics do not match BoxArray size");
@@ -345,7 +360,12 @@ detail::VisMfIndex detail::readVisMfIndex(
         index.minimum.push_back({});
         index.maximum.push_back({});
         char comma = '\0';
+        // Up to maximumComponents iterations each, so both poll: a declared
+        // count drives the loop and only the values themselves end it.
         for (int component = 0; component < index.components; ++component) {
+            if (cancellation.stop_requested()) {
+                throw ReadCancelled();
+            }
             index.minimum.front().push_back(
                 readStatisticValue(input, "FabArray minimum"));
             if (!(input >> comma) || comma != ',') {
@@ -353,6 +373,9 @@ detail::VisMfIndex detail::readVisMfIndex(
             }
         }
         for (int component = 0; component < index.components; ++component) {
+            if (cancellation.stop_requested()) {
+                throw ReadCancelled();
+            }
             index.maximum.front().push_back(
                 readStatisticValue(input, "FabArray maximum"));
             if (!(input >> comma) || comma != ',') {
@@ -442,10 +465,15 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
     // Each component is one name on its own line, so two bytes is the shortest
     // one a Header can carry.
     constexpr std::uint64_t minimumBytesPerComponentName = 2;
-    metadata->fields.reserve(evidenceBoundedCount(
+    metadata->fields.reserve(detail::evidenceBoundedCount(
         static_cast<std::uint64_t>(componentCount), headerSize,
         minimumBytesPerComponentName));
     for (int component = 0; component < componentCount; ++component) {
+        // Driven by a declared count up to maximumComponents, so it polls for
+        // the same reason the statistics loops do.
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
         auto name = readNonEmptyLine(input, "component name");
         metadata->fields.push_back({name, Centering::Cell, {std::move(name)}});
     }
@@ -522,7 +550,7 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
         // shortest one a Header can carry is "0 0\n" -- four bytes at one
         // dimension, more above it.
         constexpr std::uint64_t minimumBytesPerGridRecord = 4;
-        level.boxes.reserve(evidenceBoundedCount(
+        level.boxes.reserve(detail::evidenceBoundedCount(
             static_cast<std::uint64_t>(gridCount), headerSize,
             minimumBytesPerGridRecord));
         for (int grid = 0; grid < gridCount; ++grid) {

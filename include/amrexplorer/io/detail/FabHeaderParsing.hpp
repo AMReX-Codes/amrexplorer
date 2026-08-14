@@ -39,6 +39,35 @@ inline constexpr std::size_t maximumHeaderLineBytes = 16U * 1024U;
 // before any count or cap can reject it.
 inline constexpr std::size_t maximumHeaderTokenBytes = 4U * 1024U;
 
+// The largest speculative reserve any header parse may take. Beyond this the
+// container simply grows as records are parsed, which costs amortized copying
+// and nothing else -- so this is the point where an optimization stops being
+// worth a crafted-input risk.
+//
+// It exists because the file's own size is *not* trustworthy evidence on its
+// own: std::filesystem::file_size reports the apparent size, so `truncate -s
+// 80M` on a short crafted header yields 80 MB of "evidence" while occupying
+// one filesystem block, and a bound derived from it alone is forgeable at
+// almost no cost. The size still tightens the bound for ordinary files; this
+// cap is what makes it hold for hostile ones.
+inline constexpr std::size_t maximumSpeculativeReserve = 64U * 1024U;
+
+// How many entries to reserve for a count a header declares. A declared count
+// is a claim; the file's size is evidence against it, since a header cannot
+// describe more records than its bytes allow. Both are advisory, and the cap
+// above is the backstop: every caller is *reserving*, never sizing, so
+// under-reserving costs one reallocation while over-reserving is the whole
+// attack. That asymmetry is also why the per-record floors callers pass sit
+// below the true minimum rather than being tuned to it.
+[[nodiscard]] inline std::size_t evidenceBoundedCount(std::uint64_t declared,
+    std::uintmax_t fileBytes, std::uint64_t minimumBytesPerRecord)
+{
+    const auto describable
+        = static_cast<std::uint64_t>(fileBytes) / minimumBytesPerRecord;
+    return static_cast<std::size_t>(std::min({declared, describable,
+        static_cast<std::uint64_t>(maximumSpeculativeReserve)}));
+}
+
 // std::getline with a ceiling, and otherwise its semantics: false when nothing
 // could be read, the line without its terminator otherwise, and the stream left
 // positioned just past the newline. The ceiling is the point: a file that opens
@@ -72,8 +101,21 @@ template <typename Error>
         return false;
     }
     auto* buffer = input.rdbuf();
+    // An unformatted input function turns a streambuf exception into badbit
+    // and rethrows only when the caller asked for it; sbumpc does neither, so
+    // that translation is done here rather than quietly dropped. (A null rdbuf
+    // needs no guard: both constructing a stream with one and swapping one in
+    // set badbit, so good() is already false above -- verified, not assumed.)
+    const auto next = [buffer, &input] {
+        try {
+            return buffer->sbumpc();
+        } catch (...) {
+            input.setstate(std::ios::badbit);
+            throw;
+        }
+    };
     for (;;) {
-        const auto character = buffer->sbumpc();
+        const auto character = next();
         if (character == std::char_traits<char>::eof()) {
             input.setstate(line.empty()
                     ? (std::ios::eofbit | std::ios::failbit)
@@ -109,12 +151,13 @@ template <typename Error>
     std::string_view subject, std::string_view description,
     std::size_t limit = maximumHeaderTokenBytes)
 {
-    // width() is an int, and a limit past INT_MAX would narrow to zero or
-    // negative -- which operator>> reads as "no width", making the extraction
-    // unbounded and the check below dead. That is the exact behaviour this
-    // helper exists to prevent, so clamp instead of narrowing, and compare
-    // against what was actually applied.
-    const auto effectiveLimit = std::min<std::size_t>(limit,
+    // width() is an int, and operator>> reads any non-positive width as "no
+    // width" -- unbounded extraction, with the length check below then dead.
+    // Both ends therefore need clamping, not just the top: a limit past
+    // INT_MAX narrows to zero or negative, and a limit of zero is already
+    // there. Either way the helper would silently become the thing it exists
+    // to prevent, so the applied width is what the check compares against.
+    const auto effectiveLimit = std::clamp<std::size_t>(limit, 1,
         static_cast<std::size_t>(std::numeric_limits<int>::max()));
     std::string value;
     input >> std::setw(static_cast<int>(effectiveLimit)) >> value;

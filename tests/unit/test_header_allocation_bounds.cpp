@@ -17,6 +17,7 @@
 // genuinely as large as the count claims; its bound is defensive rather than
 // load-bearing.
 #include <amrexplorer/core/Geometry.hpp>
+#include <amrexplorer/data/LocalDatasetSession.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/io/detail/VisMfIndex.hpp>
 
@@ -118,10 +119,23 @@ void requireBoundedAllocation(Parse parse, const char* what,
         std::cerr << "FAILED: " << what << " threw the wrong exception: "
                   << other.what() << '\n';
         ++g_failures;
+        return;  // one failure per case; require(threw) below would add another
     }
     const auto used
         = g_allocatedBytes.load(std::memory_order_relaxed) - before;
     require(threw, what);
+    // The positive control. Every one of these parses allocates *something*;
+    // a zero means the replaced operator new stopped being the allocator this
+    // binary uses -- a shared build, an LTO or allocator change -- at which
+    // point every case below passes with the bounds reverted, which is the
+    // silent-green failure this file exists to avoid.
+    if (used == 0) {
+        std::cerr << "FAILED: " << what
+                  << " allocated nothing, so the counted operator new is not "
+                     "in effect and these bounds are not being measured\n";
+        ++g_failures;
+        return;
+    }
     if (used >= allowedBytes) {
         std::cerr << "FAILED: " << what << " allocated " << used
                   << " bytes; the reserve is not bounded by the file's size\n";
@@ -183,6 +197,84 @@ int main()
         [&components] { (void)amrvis::PlotfileMetadataReader{}.read(components); },
         "a plotfile Header shorter than its declared component count",
         1024U * 1024U);
+
+    // Forged evidence. std::filesystem::file_size reports the *apparent* size,
+    // so extending a short crafted header makes it claim megabytes it does not
+    // occupy -- one filesystem block, on any filesystem with sparse support.
+    // The file-size bound alone is therefore defeatable at almost no cost,
+    // which is what the absolute reserve cap is for. 4 MB of apparent size
+    // would otherwise vouch for ~500,000 boxes, or ~18 MB of IntBox.
+    const auto sparse = scratch / "sparse_claims_ten_million_H";
+    {
+        std::ofstream stream(sparse, std::ios::binary);
+        stream << "1\n1\n2\n0\n"
+                  "(10000000 0\n"
+                  "((0,0) (1,3) (0,0))\n"
+                  ")\n";
+    }
+    std::error_code resizeError;
+    std::filesystem::resize_file(sparse, 4u * 1024u * 1024u, resizeError);
+    require(!resizeError, "could not extend the sparse header fixture");
+    requireBoundedAllocation(
+        [&sparse] { (void)amrvis::detail::readVisMfIndex(sparse, 2); },
+        "a sparse header forging four megabytes of apparent size");
+
+    // The statistics matrix: both factors pass their own checks, and it is
+    // their product that allocates. Ten real boxes and a declared 100,000
+    // components claim a million doubles from a header with none of them.
+    const auto matrix = scratch / "claims_wide_matrix_H";
+    {
+        std::ofstream stream(matrix, std::ios::binary);
+        stream << "1\n1\n100000\n0\n"
+                  "(10 0\n";
+        for (int box = 0; box < 10; ++box) {
+            stream << "((" << box << ",0) (" << box << ",3) (0,0))\n";
+        }
+        stream << ")\n10\n";
+        for (int box = 0; box < 10; ++box) {
+            stream << "FabOnDisk: Cell_D_00000 " << box * 4096 << '\n';
+        }
+        stream << "\n10,100000\n";  // shape matches; no values follow
+    }
+    requireBoundedAllocation(
+        [&matrix] { (void)amrvis::detail::readVisMfIndex(matrix, 2); },
+        "a statistics matrix whose declared shape has no values behind it");
+
+    // The first line of the Header, which is where the session used to re-read
+    // the file version with an unbounded getline *before* the bounded parser
+    // saw anything. The remote server's open path ran that read, so the
+    // crafted-Header case in test_remote_server could not see it: the refusal
+    // message was identical whether or not the file had been slurped first.
+    // Measuring is what distinguishes them, so it is measured here.
+    const auto firstLine = scratch / "long_first_line";
+    std::filesystem::create_directories(firstLine);
+    {
+        std::ofstream stream(firstLine / "Header", std::ios::binary);
+        stream << std::string(4u * 1024u * 1024u, 'V') << "\n1\ndensity\n";
+    }
+    // Through LocalDatasetSession, not the reader: the reader bounds the
+    // version token either way, and it was the session that opened the Header a
+    // second time to re-read that line. Calling the reader here would measure
+    // the wrong path and pass whether or not the second read exists.
+    requireBoundedAllocation(
+        [&firstLine] {
+            (void)amrvis::LocalDatasetSession(firstLine, amrvis::DatasetId{1},
+                16ULL * 1024ULL * 1024ULL);
+        },
+        "a Header whose first line is a four-megabyte run");
+
+    // The top-level Header's numeric fields: `double` extraction buffers the
+    // whole digit run, so a long one amplifies by ~3.2x before it even fails.
+    const auto digits = scratch / "long_double_run";
+    std::filesystem::create_directories(digits);
+    {
+        std::ofstream stream(digits / "Header", std::ios::binary);
+        stream << "HyperCLaw-V1.1\n1\ndensity\n2\n" << std::string(4u * 1024u * 1024u, '9')
+               << '\n';
+    }
+    requireBoundedAllocation(
+        [&digits] { (void)amrvis::PlotfileMetadataReader{}.read(digits); },
+        "a Header whose time field is a four-megabyte digit run");
 
     std::error_code removeError;
     std::filesystem::remove_all(scratch, removeError);

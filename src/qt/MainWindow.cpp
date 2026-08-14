@@ -1263,11 +1263,13 @@ void MainWindow::createMenus()
         [this](bool visible) { m_isoWidget->setSlicePlanesVisible(visible); });
 
     m_contoursAction = new QAction(tr("&Contours..."), this);
+    m_contoursAction->setObjectName(QStringLiteral("contoursAction"));
     m_contoursAction->setEnabled(false);
     connect(m_contoursAction, &QAction::triggered,
         this, [this] { showContoursDialog(); });
 
     m_particlesAction = new QAction(tr("Par&ticles..."), this);
+    m_particlesAction->setObjectName(QStringLiteral("particlesAction"));
     m_particlesAction->setEnabled(false);
     connect(m_particlesAction, &QAction::triggered,
         this, [this] { showParticlesDialog(); });

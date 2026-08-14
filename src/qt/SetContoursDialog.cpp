@@ -77,6 +77,7 @@ SetContoursDialog::SetContoursDialog(const std::vector<std::string>& fieldNames,
     bool is3D, QWidget* parent)
     : QDialog(parent)
 {
+    setObjectName(QStringLiteral("setContoursDialog"));
     setWindowTitle(tr("Set Contours"));
     setWindowFlags(Qt::Window);
 

@@ -779,6 +779,7 @@ private:
     DatasetWindow* m_datasetWindow = nullptr;
     SetContoursDialog* m_contoursDialog = nullptr;
     QDialog* m_numberFormatDialog = nullptr;
+    QDialog* m_particlesDialog = nullptr;
     UserGuideDialog* m_userGuideDialog = nullptr;
     QComboBox* m_fieldSelector = nullptr;
     QComboBox* m_levelSelector = nullptr;

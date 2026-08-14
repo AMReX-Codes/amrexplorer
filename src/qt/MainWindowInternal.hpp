@@ -210,10 +210,10 @@ inline QSettings makeSettings()
 // no error_code overload, so a readdir that fails *after* a successful open --
 // an unmounted directory, an NFS mount dropping mid-scan -- threw
 // filesystem_error out of a function whose signature promises a bool. Both
-// callers run on the GUI thread inside a Qt event handler, where an escaping
-// exception terminates the process instead of raising a dialog, and one of them
-// is restoreSettings, which runs at startup. A directory that cannot be walked
-// is simply not a plotfile.
+// callers -- chooseDataset and openSequence -- run on the GUI thread inside a
+// Qt event handler, where an escaping exception terminates the process instead
+// of raising a dialog: the user picks a directory and the application dies. A
+// directory that cannot be walked is simply not a plotfile.
 inline bool isAmrexPlotfile(const std::filesystem::path& directory)
 {
     std::error_code ec;

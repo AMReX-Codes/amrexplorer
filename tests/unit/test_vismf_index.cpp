@@ -433,6 +433,7 @@ void testAcceptsTrailingContent(const std::filesystem::path& path)
         "\n"
         "((8, (64 11 52 0 1 12 0 1023)),(8, (8 7 6 5 4 3 2 1)))\n"
         "a future section this reader does not consume\n"
+        + std::string(30000, 'z') + "\n"
         "999\n");
     const auto index = readHeader(path, 2, "2+trailing");
     require(index.version == 2, "trailing-content version mismatch");

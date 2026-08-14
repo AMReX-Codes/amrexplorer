@@ -175,6 +175,28 @@ int main()
         }
     }
 
+    // Forward compatibility meets the new ceilings: an AMReX Header may carry
+    // content past what this reader consumes, and that content is not the
+    // reader's to validate. A trailing section holding a line far longer than
+    // maximumHeaderLineBytes must therefore still parse -- the bounds apply to
+    // fields the parser actually reads, not to the whole file.
+    {
+        const auto dir = scratch / "valid_extra_long";
+        writeValidPlotfile(dir);
+        writeFile(dir / "Header",
+            validHeaderBody() + std::string(30000, 'z') + "\n");
+        try {
+            const auto result = amrvis::PlotfileMetadataReader{}.read(dir);
+            require(result.metadata->levels.size() == 2,
+                "a Header with an over-long trailing line parsed to the wrong shape");
+        } catch (const std::exception& error) {
+            std::cerr << "FAILED: an over-long line in trailing content the "
+                         "reader never consumes was rejected: "
+                      << error.what() << '\n';
+            ++g_failures;
+        }
+    }
+
     // Truncation: the Header ends before a required field. Each case names the
     // first field the reader cannot read.
     expectHeaderRejected(scratch / "trunc_version",

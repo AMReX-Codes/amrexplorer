@@ -317,9 +317,9 @@ For 3-D data, particles are projected onto each of the three orthogonal slice
 panels. The projection is through the whole volume: a panel shows every selected
 particle, not only those near that slice plane.
 
-Particle settings are not saved between sessions. Species selection, colors, and
-the seed reset when a new dataset is opened; the subset percentage and point
-size persist for the session.
+Particle settings are not saved between sessions. Species selection, colors,
+subset percentage, seed, and point size all reset when a new dataset or sequence
+is opened; they carry across the frames of an open sequence.
 
 ## 2-D spherical coordinates
 

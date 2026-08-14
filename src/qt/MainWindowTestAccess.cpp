@@ -682,6 +682,11 @@ std::uint64_t MainWindow::particleSeedForTest() const noexcept
     return m_particleSeed;
 }
 
+double MainWindow::particleFractionForTest() const noexcept
+{
+    return m_particleFraction;
+}
+
 void MainWindow::setParticleColorForTest(
     const std::string& species, const QColor& color)
 {

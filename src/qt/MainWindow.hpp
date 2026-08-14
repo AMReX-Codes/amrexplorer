@@ -330,6 +330,7 @@ public:
         std::vector<std::string> species, double fraction,
         std::uint64_t seed = 0);
     [[nodiscard]] std::uint64_t particleSeedForTest() const noexcept;
+    [[nodiscard]] double particleFractionForTest() const noexcept;
     void setParticleColorForTest(
         const std::string& species, const QColor& color);
     [[nodiscard]] bool particleOverlaysUseColorForTest(
@@ -485,6 +486,9 @@ private:
     void showContoursDialog();
     void showParticlesDialog();
     void configureParticleControls(bool preserveSelection);
+    // Drops every particle setting back to its default. Belongs to whichever
+    // path installs a different dataset, so the two that do cannot drift.
+    void resetParticleSettings();
     void requestParticleReload();
     void updateParticleOverlay(PlaneViewState& state);
     void updateParticleOverlays();

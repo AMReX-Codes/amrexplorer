@@ -805,6 +805,20 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_particle_dialog_smoke_3d PROPERTIES TIMEOUT 30)
+    # Opening a sequence is a dataset change, so it resets particle settings
+    # rather than carrying the previous dataset's subset and seed into it.
+    add_test(
+        NAME qt_particle_sequence_reset_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_particle_sequence_reset"
+            -DMODE=particle-sequence-reset
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(
+        qt_particle_sequence_reset_smoke_3d PROPERTIES TIMEOUT 30)
     # A rubber-band selection in one 3-D panel synchronizes the selected
     # normalized subregion to all three panels by default.
     add_test(

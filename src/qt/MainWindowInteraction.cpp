@@ -479,6 +479,20 @@ void MainWindow::showParticlesDialog()
     dialog->show();
 }
 
+void MainWindow::resetParticleSettings()
+{
+    m_selectedParticleSpecies.clear();
+    m_particleColors.clear();
+    m_particleSeed = 0;
+    m_particleSelectionInitialized = false;
+    // The subset and point size reset with everything else. They used to
+    // survive, so a 0.05% subset chosen to make one dense dataset legible
+    // silently decimated the next one -- with no indication that it was a
+    // carried-over setting rather than the data.
+    m_particleFraction = 1.0;
+    m_particlePointSize = defaultParticlePointSize;
+}
+
 void MainWindow::configureParticleControls(bool preserveSelection)
 {
     if (!m_dataset) {
@@ -487,16 +501,7 @@ void MainWindow::configureParticleControls(bool preserveSelection)
     }
     const auto& species = m_dataset->particleSpecies();
     if (!preserveSelection) {
-        m_selectedParticleSpecies.clear();
-        m_particleColors.clear();
-        m_particleSeed = 0;
-        m_particleSelectionInitialized = false;
-        // The subset and point size reset with everything else. They used to
-        // survive, so a 0.05% subset chosen to make one dense dataset legible
-        // silently decimated the next one -- with no indication that it was a
-        // carried-over setting rather than the data.
-        m_particleFraction = 1.0;
-        m_particlePointSize = defaultParticlePointSize;
+        resetParticleSettings();
     }
     for (std::size_t speciesIndex = 0; speciesIndex < species.size();
          ++speciesIndex) {

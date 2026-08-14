@@ -1180,8 +1180,11 @@ void MainWindow::prepareSequence(std::size_t frameCount)
     resetFabState();
     m_particleStopSource.request_stop();
     m_particleSamples.clear();
-    m_selectedParticleSpecies.clear();
-    m_particleSelectionInitialized = false;
+    // A sequence is a different dataset, so its particle settings start from
+    // defaults exactly as a plain open's do. Clearing only the species left the
+    // subset, seed, point size, and colors behind: a 0.05% subset chosen for a
+    // dense plotfile silently decimated the sequence opened after it.
+    resetParticleSettings();
     m_particleLoading = false;
     m_particleProgress->setVisible(false);
     ++m_particleGeneration;
@@ -1197,7 +1200,7 @@ void MainWindow::prepareSequence(std::size_t frameCount)
         linePlotWindow->close();
     }
     // Both overlay dialogs describe the outgoing dataset -- the particles one
-    // lists its species, whose selection state was just reset above, and the
+    // lists its species, whose settings were just reset above, and the
     // contours one lists its fields. openDatasetImpl closes them for a plain
     // open; this path never runs that, so a sequence open would otherwise leave
     // them on screen writing the old dataset's names back on Apply. Frame steps

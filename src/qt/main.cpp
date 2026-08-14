@@ -1888,6 +1888,48 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window, [&window, first] {
             window.openDataset(first);
         });
+    } else if (argc == 4
+        && std::string_view(argv[1])
+            == "--particle-sequence-reset-smoke-test") {
+        // Particle settings belong to the dataset they were chosen for. Opening
+        // a sequence installs a different one through prepareSequence, which
+        // bypasses openDatasetImpl, so it owes the same reset a plain open does.
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, first, second](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                window.setParticleSelectionForTest({"Tracer"}, 0.0005, 37);
+                if (window.particleSeedForTest() != 37
+                    || window.particleFractionForTest() != 0.0005) {
+                    qCritical("the particle settings did not take");
+                    application.exit(1);
+                    return;
+                }
+                window.openSequence({first, second});
+                if (window.particleSeedForTest() != 0
+                    || window.particleFractionForTest() != 1.0) {
+                    qCritical("the sequence inherited particle settings: "
+                        "seed %llu, subset %g",
+                        static_cast<unsigned long long>(
+                            window.particleSeedForTest()),
+                        window.particleFractionForTest());
+                    application.exit(1);
+                    return;
+                }
+                window.close();
+                application.exit(0);
+            }, Qt::SingleShotConnection);
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
+            &application, [&application] { application.exit(1); });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(3); });
+        QTimer::singleShot(0, &window, [&window, first] {
+            window.openDataset(first);
+        });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--raster-zoom-smoke-test") {
         // 2-D Visible-range raster/color-bar consistency: after a full-domain

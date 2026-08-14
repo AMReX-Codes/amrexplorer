@@ -1,3 +1,5 @@
+#include <QIcon>
+
 #include "MainWindowInternal.hpp"
 
 namespace amrvis::qt {

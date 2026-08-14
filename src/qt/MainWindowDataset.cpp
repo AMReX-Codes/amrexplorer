@@ -197,7 +197,7 @@ void MainWindow::restoreSettings()
             QStringLiteral("rainbow")).toString();
         m_builtinIndex = 0;
         for (std::size_t index = 0; index < builtinPalettes.size(); ++index) {
-            if (name == builtinPaletteLabel(index)) {
+            if (name == builtinPaletteKey(index)) {
                 m_builtinIndex = static_cast<int>(index);
                 break;
             }
@@ -300,7 +300,7 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("palette/fromFile"), m_paletteFromFile);
     settings.setValue(QStringLiteral("palette/filePath"), m_paletteFilePath);
     settings.setValue(QStringLiteral("palette/builtin"),
-        builtinPaletteLabel(static_cast<std::size_t>(m_builtinIndex)));
+        builtinPaletteKey(static_cast<std::size_t>(m_builtinIndex)));
     settings.setValue(QStringLiteral("palette/reversed"), m_reversePalette);
     settings.setValue(QStringLiteral("numberFormat"), m_numberFormat);
     settings.setValue(QStringLiteral("animation/speed"),

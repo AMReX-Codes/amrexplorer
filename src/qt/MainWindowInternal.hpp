@@ -55,8 +55,8 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDockWidget>
+#include <QObject>
 #include <QDoubleSpinBox>
-#include <QException>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontMetrics>
@@ -109,6 +109,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -138,15 +139,25 @@ inline constexpr std::array<BuiltinPalette, 7> builtinPalettes{
     BuiltinPalette::Plasma, BuiltinPalette::Parula, BuiltinPalette::Coolwarm,
     BuiltinPalette::Blackbody};
 
-// The Qt face of builtinPaletteName(). Menu labels and the QSettings key both
-// come from here, so the string and the palette it names cannot drift apart.
-inline QString builtinPaletteLabel(std::size_t index)
+// The QSettings value for a builtin palette, taken from builtinPaletteName()
+// so the string and the palette it names cannot drift apart. Deliberately
+// separate from the display label below: this string is on disk in every
+// user's settings, so a presentation change must not be able to reach it.
+inline QString builtinPaletteKey(std::size_t index)
 {
     if (index >= builtinPalettes.size()) {
         return {};
     }
     const auto name = builtinPaletteName(builtinPalettes[index]);
     return QString::fromLatin1(name.data(), static_cast<qsizetype>(name.size()));
+}
+
+// The palette's name for the menu and the selector. Identical to the settings
+// key today, and kept apart so it can take presentation rules -- two call
+// sites already capitalize it -- without rewriting anyone's stored settings.
+inline QString builtinPaletteLabel(std::size_t index)
+{
+    return builtinPaletteKey(index);
 }
 
 // The single conversion from a rendered ImageBuffer to the QImage the views

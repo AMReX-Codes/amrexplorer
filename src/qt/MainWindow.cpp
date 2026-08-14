@@ -1,8 +1,11 @@
+#include <QKeySequence>
+#include <QStyle>
+
 #include "MainWindowInternal.hpp"
 
 namespace amrvis::qt {
 
-const char* const kVersion =
+extern const char* const kVersion =
 #ifdef AMREXPLORER_VERSION
     AMREXPLORER_VERSION
 #else

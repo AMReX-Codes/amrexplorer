@@ -17,6 +17,7 @@ void require(bool condition, const char* message) {
 int main() {
     using amrvis::qt::parseSshServerReadyLine;
     using amrvis::qt::sshAskpassEnvironment;
+    using amrvis::qt::sshLocalForwardBindFailed;
     using amrvis::qt::sshRemoteProcessArguments;
     using amrvis::qt::sshRemoteServerCommand;
 
@@ -65,6 +66,17 @@ int main() {
                 environment.value(QStringLiteral("AMREXPLORER_SSH_ASKPASS_MODE")) ==
                     QStringLiteral("1"),
             "SSH process environment does not force the in-app askpass helper");
+
+    require(sshLocalForwardBindFailed(
+                QStringLiteral("bind [127.0.0.1]:41419: Address already in use\n"
+                               "channel_setup_fwd_listener_tcpip: cannot listen to port: 41419\n"
+                               "Could not request local forwarding.\n")),
+            "a failed local forward bind was not detected");
+    require(
+        !sshLocalForwardBindFailed(QStringLiteral("user@host: Permission denied (publickey).\n")),
+        "an authentication failure was misattributed to the local forward");
+    require(!sshLocalForwardBindFailed(QString()),
+            "empty ssh output was misattributed to the local forward");
 
     return 0;
 }

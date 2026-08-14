@@ -42,6 +42,12 @@ sshRemoteServerCommand(std::string_view executable, std::uint16_t port);
 // normal main window and returns one keyboard-interactive response on stdout.
 [[nodiscard]] QProcessEnvironment sshAskpassEnvironment(const QString& applicationExecutable);
 
+// True when ssh's collected stderr shows the local forwarding listener could
+// not bind, i.e. the reserved ephemeral port was lost to a concurrent process
+// before ssh claimed it. Only this failure is retried on a fresh port; any
+// other ssh exit is reported to the user unchanged.
+[[nodiscard]] bool sshLocalForwardBindFailed(const QString& errors);
+
 // Owns the single SSH process that runs the loopback-only server and carries a
 // loopback-only local forward to it. The bearer token is retained only in
 // memory and never put in the process's arguments.
@@ -71,6 +77,7 @@ class SshRemoteSession final : public QObject {
     void readServerOutput();
     void drainProcessErrors(QProcess* process, QString& buffer, QString& pending, bool redactTokens,
                             bool flush = false);
+    void startSshProcess();
     void probeTunnel();
     void fail(const QString& message);
     void processEnded(const QString& description);
@@ -79,6 +86,7 @@ class SshRemoteSession final : public QObject {
     QTcpSocket* m_probe = nullptr;
     QTimer* m_startupTimer = nullptr;
     std::string m_destination;
+    std::string m_serverExecutable;
     std::string m_serverOutput;
     QString m_serverErrors;
     QString m_serverErrorPending;
@@ -86,6 +94,7 @@ class SshRemoteSession final : public QObject {
     std::string m_token;
     bool m_ready = false;
     bool m_stopping = false;
+    int m_forwardRetries = 0;
     ReadyHandler m_readyHandler;
     ErrorHandler m_errorHandler;
     LostHandler m_lostHandler;

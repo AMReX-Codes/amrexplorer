@@ -461,10 +461,11 @@ RemoteDirectoryListing fromWire(const fb::DirectoryListingT& value)
     listing.parentPath = value.parent_path;
     listing.entries.reserve(value.entries.size());
     for (const auto& entry : value.entries) {
+        // A backslash is a legal filename character on the Linux servers this
+        // client browses; only genuinely impossible names are rejected.
         if (entry == nullptr || entry->name.empty()
             || entry->name == "." || entry->name == ".."
-            || entry->name.find('/') != std::string::npos
-            || entry->name.find('\\') != std::string::npos) {
+            || entry->name.find('/') != std::string::npos) {
             throw std::invalid_argument(
                 "directory listing contains an invalid entry");
         }

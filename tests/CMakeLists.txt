@@ -407,10 +407,14 @@ if(TARGET amrexplorer_qt)
         "${PROJECT_SOURCE_DIR}/src/qt/RemoteFileDialog.hpp"
     )
     target_include_directories(test_remote_file_dialog
-        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/src/qt"
+            "${PROJECT_SOURCE_DIR}/src/remote"
+            "${PROJECT_BINARY_DIR}/src/remote/generated")
     target_link_libraries(test_remote_file_dialog
         PRIVATE
             amrexplorer::remote
+            ${AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET}
             amrexplorer::warnings
             Qt6::Concurrent
             Qt6::Widgets

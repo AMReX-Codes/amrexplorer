@@ -13,6 +13,11 @@
 #include <utility>
 
 namespace amrvis::qt {
+namespace {
+
+constexpr int maximumForwardRetries = 2;
+
+} // namespace
 
 std::optional<SshServerReadyLine> parseSshServerReadyLine(std::string_view line) {
     if (!line.empty() && line.back() == '\r') {
@@ -98,6 +103,12 @@ QProcessEnvironment sshAskpassEnvironment(const QString& applicationExecutable) 
     return environment;
 }
 
+bool sshLocalForwardBindFailed(const QString& errors) {
+    return errors.contains(QStringLiteral("Address already in use"))
+        || errors.contains(QStringLiteral("cannot listen to port"))
+        || errors.contains(QStringLiteral("Could not request local forwarding"));
+}
+
 SshRemoteSession::SshRemoteSession(QObject* parent)
     : QObject(parent), m_server(new QProcess(this)), m_probe(new QTcpSocket(this)),
       m_startupTimer(new QTimer(this)) {
@@ -124,6 +135,17 @@ SshRemoteSession::SshRemoteSession(QObject* parent)
     connect(m_server, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
             [this](int, QProcess::ExitStatus) {
                 drainProcessErrors(m_server, m_serverErrors, m_serverErrorPending, true, true);
+                if (!m_stopping && !m_ready
+                    && m_forwardRetries < maximumForwardRetries
+                    && sshLocalForwardBindFailed(m_serverErrors)) {
+                    ++m_forwardRetries;
+                    // Another process bound the reserved port in the window
+                    // between the ephemeral reservation and ssh's -L listener;
+                    // retry on a freshly reserved port.
+                    m_serverErrors.clear();
+                    startSshProcess();
+                    return;
+                }
                 processEnded(tr("The SSH server process exited.%1")
                                  .arg(m_serverErrors.isEmpty()
                                           ? QString()
@@ -158,6 +180,7 @@ SshRemoteSession::~SshRemoteSession() {
 void SshRemoteSession::start(std::string destination, std::string serverExecutable,
                              ReadyHandler ready, ErrorHandler error, LostHandler lost) {
     m_destination = std::move(destination);
+    m_serverExecutable = std::move(serverExecutable);
     m_readyHandler = std::move(ready);
     m_errorHandler = std::move(error);
     m_lostHandler = std::move(lost);
@@ -168,8 +191,15 @@ void SshRemoteSession::start(std::string destination, std::string serverExecutab
     m_serverErrorPending.clear();
     m_token.clear();
     m_localPort = 0;
+    m_forwardRetries = 0;
     m_startupTimer->start(60000);
+    startSshProcess();
+}
 
+void SshRemoteSession::startSshProcess() {
+    // The reservation is released before ssh starts, leaving a small window in
+    // which another process can take the port; sshLocalForwardBindFailed and
+    // the retry in the finished handler make that race self-healing.
     QTcpServer reservation;
     if (!reservation.listen(QHostAddress::LocalHost, 0)) {
         fail(tr("Could not allocate a local port for the SSH tunnel: %1")
@@ -180,7 +210,7 @@ void SshRemoteSession::start(std::string destination, std::string serverExecutab
     reservation.close();
 
     const auto sshArguments =
-        sshRemoteProcessArguments(m_destination, serverExecutable, m_localPort);
+        sshRemoteProcessArguments(m_destination, m_serverExecutable, m_localPort);
     if (!sshArguments) {
         fail(tr("The SSH destination or remote server executable path is invalid."));
         return;

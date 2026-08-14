@@ -14,6 +14,7 @@
 class QDialogButtonBox;
 class QLabel;
 class QLineEdit;
+class QPlainTextEdit;
 class QPushButton;
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -40,11 +41,14 @@ class RemoteFileDialog final : public QDialog {
     struct BrowseResult {
         amrvis::remote::RemoteDirectoryListing listing;
         std::shared_ptr<amrvis::remote::Connection> connection;
+        bool browsingSupported = true;
         QString error;
     };
 
     void loadDirectory(const QString& path);
     void finishLoad();
+    void enterManualMode();
+    void recordSelectionOrder();
     void updateOpenButton();
     void activateItem(QTreeWidgetItem* item);
 
@@ -56,12 +60,19 @@ class RemoteFileDialog final : public QDialog {
     QString m_currentDirectory;
     QString m_parentDirectory;
     QLineEdit* m_pathEdit = nullptr;
+    // Sequence-mode fallback for servers that cannot browse: one plotfile
+    // path per line, typed by the user.
+    QPlainTextEdit* m_manualPaths = nullptr;
     QPushButton* m_upButton = nullptr;
     QPushButton* m_goButton = nullptr;
     QTreeWidget* m_entries = nullptr;
     QLabel* m_status = nullptr;
     QDialogButtonBox* m_buttons = nullptr;
     QFutureWatcher<BrowseResult>* m_watcher = nullptr;
+    // Selected items in the order the user selected them, so sequence
+    // playback order follows selection order rather than display order.
+    std::vector<QTreeWidgetItem*> m_selectionOrder;
+    bool m_manualEntry = false;
     StopSource m_browseStop;
 };
 

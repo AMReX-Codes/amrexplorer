@@ -604,8 +604,9 @@ Add:
 
 The connection dialog collects host and port. Protocol 1.1 adds authenticated,
 bounded directory listing so the remote-open dialogs can browse server-visible
-directories. The sequence dialog accepts multiple plotfile directories in
-their displayed order.
+directories. The sequence dialog accepts multiple plotfile directories in the
+order the user selects them. Against a protocol 1.0 server the browse view is
+unavailable and the dialogs fall back to typed plotfile paths.
 
 Switching back to a local open remains supported without restarting the
 application. Changing remote endpoints closes the old remote datasets after

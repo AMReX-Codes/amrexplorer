@@ -124,6 +124,17 @@ int main()
                 == listing.entries.front().path,
         "directory listing did not round-trip");
 
+    // A backslash is a legal filename character on the Linux servers this
+    // client browses; the decode must not reject the whole listing for it.
+    RemoteDirectoryListing backslashListing{
+        "/scratch/run", "/scratch",
+        {{"run\\final", "/scratch/run/run\\final", true}}};
+    const auto decodedBackslashListing =
+        codec::fromWire(codec::toWire(backslashListing));
+    require(decodedBackslashListing.entries.size() == 1
+            && decodedBackslashListing.entries.front().name == "run\\final",
+        "directory listing with a backslash entry name did not round-trip");
+
     const std::array errorCodes{
         ErrorCode::UnsupportedProtocol,
         ErrorCode::InvalidRequest,

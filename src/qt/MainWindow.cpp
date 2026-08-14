@@ -1075,14 +1075,19 @@ void MainWindow::createMenus()
             if (m_remotePort == 0 && !configureRemoteEndpoint()) {
                 return;
             }
-            bool accepted = false;
-            const auto path = QInputDialog::getText(this,
-                tr("Open Remote Plotfile"),
-                tr("Server-visible plotfile path:"), QLineEdit::Normal,
-                QString(), &accepted);
-            if (accepted && !path.trimmed().isEmpty()) {
-                openRemoteDataset(m_remoteHost, m_remotePort,
-                    path.toStdString(), m_remoteToken);
+            auto settings = makeSettings();
+            RemoteFileDialog dialog(m_remoteHost, m_remotePort, m_remoteToken,
+                settings.value(QStringLiteral("remote/lastOpenDirectory"))
+                    .toString(),
+                RemoteFileDialog::SelectionMode::SinglePlotfile, this);
+            if (dialog.exec() == QDialog::Accepted) {
+                const auto paths = dialog.selectedPaths();
+                if (paths.size() == 1) {
+                    settings.setValue(QStringLiteral("remote/lastOpenDirectory"),
+                        dialog.currentDirectory());
+                    openRemoteDataset(m_remoteHost, m_remotePort,
+                        paths.front(), m_remoteToken);
+                }
             }
         });
 
@@ -1093,24 +1098,20 @@ void MainWindow::createMenus()
             if (m_remotePort == 0 && !configureRemoteEndpoint()) {
                 return;
             }
-            bool accepted = false;
-            const auto text = QInputDialog::getMultiLineText(this,
-                tr("Open Remote Plotfile Sequence"),
-                tr("Server-visible paths, one per line, in playback order:"),
-                QString(), &accepted);
-            if (!accepted) {
-                return;
-            }
-            std::vector<std::string> paths;
-            for (const auto& line : text.split(
-                     QLatin1Char('\n'), Qt::SkipEmptyParts)) {
-                const auto path = line.trimmed();
-                if (!path.isEmpty()) {
-                    paths.push_back(path.toStdString());
+            auto settings = makeSettings();
+            RemoteFileDialog dialog(m_remoteHost, m_remotePort, m_remoteToken,
+                settings.value(QStringLiteral("remote/lastOpenDirectory"))
+                    .toString(),
+                RemoteFileDialog::SelectionMode::PlotfileSequence, this);
+            if (dialog.exec() == QDialog::Accepted) {
+                const auto paths = dialog.selectedPaths();
+                if (!paths.empty()) {
+                    settings.setValue(QStringLiteral("remote/lastOpenDirectory"),
+                        dialog.currentDirectory());
+                    openRemoteSequence(
+                        m_remoteHost, m_remotePort, paths, m_remoteToken);
                 }
             }
-            openRemoteSequence(
-                m_remoteHost, m_remotePort, paths, m_remoteToken);
         });
 
     auto* openFabAction = new QAction(tr("Open &FAB..."), this);

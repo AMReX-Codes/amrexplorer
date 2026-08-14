@@ -119,8 +119,9 @@ To open several plotfiles as a sequence, list more than one path.
 
 The manual workflow is available from the menus: **File > Connect to Remote
 Server...** (enter `127.0.0.1:PORT`, then the token when prompted), followed by
-**Open Remote Plotfile...** or **Open Remote Plotfile Sequence...** and the
-remote path.
+**Open Remote Plotfile...** or **Open Remote Plotfile Sequence...**. Browse the
+server's directories and select one plotfile, or select several plotfiles for a
+sequence.
 
 Once open, a remote dataset is driven exactly like a local one.
 

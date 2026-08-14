@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <deque>
 #include <exception>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -23,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -193,6 +195,22 @@ ErrorData classifyError(const std::exception& error)
         return {ErrorCode::InvalidRequest, error.what()};
     }
     return {ErrorCode::OperationFailure, error.what()};
+}
+
+bool isPlotfileDirectory(const std::filesystem::path& directory)
+{
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(directory / "Header", error)) {
+        return false;
+    }
+    for (std::filesystem::directory_iterator entries(directory, error), end;
+         !error && entries != end; entries.increment(error)) {
+        if (entries->is_directory(error)
+            && entries->path().filename().string().starts_with("Level_")) {
+            return true;
+        }
+    }
+    return false;
 }
 
 class Session : public std::enable_shared_from_this<Session> {
@@ -445,6 +463,9 @@ private:
             case PayloadKind::SetCacheBudgetRequest:
                 setCacheBudget(*envelope);
                 break;
+            case PayloadKind::ListDirectoryRequest:
+                listDirectory(*envelope, cancellation);
+                break;
             default:
                 throw std::invalid_argument(
                     "payload is not a supported client request");
@@ -569,6 +590,66 @@ private:
             }
             throw RemoteError(ErrorCode::DatasetOpenFailure, error.what());
         }
+    }
+
+    void listDirectory(
+        const codec::NativeEnvelope& envelope, StopToken cancellation)
+    {
+        const auto* request = envelope.payload.AsListDirectoryRequest();
+        if (request == nullptr || request->path.find('\0') != std::string::npos) {
+            throw std::invalid_argument("directory path is invalid");
+        }
+        if (m_selectedMinorVersion < 1) {
+            throw RemoteError(ErrorCode::UnsupportedProtocol,
+                "filesystem browsing requires protocol 1.1");
+        }
+
+        std::error_code error;
+        auto path = request->path.empty()
+            ? std::filesystem::current_path(error)
+            : std::filesystem::absolute(request->path, error);
+        if (error) {
+            throw std::runtime_error(
+                "could not resolve directory: " + error.message());
+        }
+        path = path.lexically_normal();
+        if (!std::filesystem::is_directory(path, error) || error) {
+            throw std::invalid_argument("path is not a readable directory");
+        }
+
+        RemoteDirectoryListing listing;
+        listing.path = path.string();
+        listing.parentPath = path.parent_path().string();
+        if (listing.parentPath.empty()) {
+            listing.parentPath = listing.path;
+        }
+        constexpr std::size_t maximumDirectoryEntries = 4096;
+        for (std::filesystem::directory_iterator entries(path, error), end;
+             !error && entries != end; entries.increment(error)) {
+            if (cancellation.stop_requested()) {
+                throw ReadCancelled();
+            }
+            std::error_code entryError;
+            if (!entries->is_directory(entryError) || entryError) {
+                continue;
+            }
+            if (listing.entries.size() >= maximumDirectoryEntries) {
+                throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                    "directory contains too many subdirectories to browse");
+            }
+            listing.entries.push_back({entries->path().filename().string(),
+                entries->path().string(),
+                isPlotfileDirectory(entries->path())});
+        }
+        if (error) {
+            throw std::runtime_error(
+                "could not read directory: " + error.message());
+        }
+        std::sort(listing.entries.begin(), listing.entries.end(),
+            [](const auto& left, const auto& right) {
+                return left.name < right.name;
+            });
+        send(envelope.request_id, codec::toWire(listing));
     }
 
     void closeDataset(const codec::NativeEnvelope& envelope)

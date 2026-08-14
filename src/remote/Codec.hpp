@@ -60,6 +60,12 @@ Bytes encode(std::uint64_t requestId, Payload payload,
 [[nodiscard]] fb::OpenDatasetRequestT toWire(const OpenDatasetData& value);
 [[nodiscard]] OpenDatasetData fromWire(
     const fb::OpenDatasetRequestT& value);
+[[nodiscard]] fb::ListDirectoryRequestT toWireDirectoryRequest(
+    const std::string& path);
+[[nodiscard]] fb::DirectoryListingT toWire(
+    const RemoteDirectoryListing& value);
+[[nodiscard]] RemoteDirectoryListing fromWire(
+    const fb::DirectoryListingT& value);
 [[nodiscard]] fb::DatasetOpenedT toWire(const OpenedDataset& value);
 [[nodiscard]] OpenedDataset fromWire(const fb::DatasetOpenedT& value);
 

@@ -30,6 +30,8 @@ add_executable(amrexplorer_qt
     QtErrorText.hpp
     RemoteConnectArguments.hpp
     RemoteEndpoint.hpp
+    RemoteFileDialog.cpp
+    RemoteFileDialog.hpp
     ScientificDoubleSpinBox.cpp
     ScientificDoubleSpinBox.hpp
     SshConnectArguments.hpp

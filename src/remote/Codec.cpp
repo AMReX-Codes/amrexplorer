@@ -41,6 +41,8 @@ AMREXPLORER_ASSERT_PAYLOAD_VALUE(CancelAcknowledged, CancelAcknowledged);
 AMREXPLORER_ASSERT_PAYLOAD_VALUE(PingRequest, PingRequest);
 AMREXPLORER_ASSERT_PAYLOAD_VALUE(PongResponse, PongResponse);
 AMREXPLORER_ASSERT_PAYLOAD_VALUE(ErrorResponse, ErrorResponse);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(ListDirectoryRequest, ListDirectoryRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(DirectoryListing, DirectoryListing);
 
 #undef AMREXPLORER_ASSERT_PAYLOAD_VALUE
 
@@ -186,7 +188,7 @@ ErrorCode fromWireError(fb::ErrorCode value)
 PayloadKind payloadKind(fb::Payload value)
 {
     const auto raw = static_cast<std::uint8_t>(value);
-    if (raw > static_cast<std::uint8_t>(PayloadKind::ErrorResponse)) {
+    if (raw > static_cast<std::uint8_t>(PayloadKind::DirectoryListing)) {
         throw std::invalid_argument("unknown wire payload kind");
     }
     return static_cast<PayloadKind>(raw);
@@ -427,6 +429,53 @@ fb::OpenDatasetRequestT toWire(const OpenDatasetData& value)
 OpenDatasetData fromWire(const fb::OpenDatasetRequestT& value)
 {
     return {value.path, value.cache_budget_bytes};
+}
+
+fb::ListDirectoryRequestT toWireDirectoryRequest(const std::string& path)
+{
+    fb::ListDirectoryRequestT wire;
+    wire.path = path;
+    return wire;
+}
+
+fb::DirectoryListingT toWire(const RemoteDirectoryListing& value)
+{
+    fb::DirectoryListingT wire;
+    wire.path = value.path;
+    wire.parent_path = value.parentPath;
+    wire.entries.reserve(value.entries.size());
+    for (const auto& entry : value.entries) {
+        auto converted = std::make_unique<fb::DirectoryEntryT>();
+        converted->name = entry.name;
+        converted->path = entry.path;
+        converted->is_plotfile = entry.isPlotfile;
+        wire.entries.push_back(std::move(converted));
+    }
+    return wire;
+}
+
+RemoteDirectoryListing fromWire(const fb::DirectoryListingT& value)
+{
+    RemoteDirectoryListing listing;
+    listing.path = value.path;
+    listing.parentPath = value.parent_path;
+    listing.entries.reserve(value.entries.size());
+    for (const auto& entry : value.entries) {
+        if (entry == nullptr || entry->name.empty()
+            || entry->name == "." || entry->name == ".."
+            || entry->name.find('/') != std::string::npos
+            || entry->name.find('\\') != std::string::npos) {
+            throw std::invalid_argument(
+                "directory listing contains an invalid entry");
+        }
+        if (entry->path.empty()) {
+            throw std::invalid_argument(
+                "directory listing contains an empty path");
+        }
+        listing.entries.push_back(
+            {entry->name, entry->path, entry->is_plotfile});
+    }
+    return listing;
 }
 
 fb::DatasetOpenedT toWire(const OpenedDataset& value)

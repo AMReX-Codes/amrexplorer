@@ -99,6 +99,8 @@ int main()
         PayloadKind::PingRequest,
         PayloadKind::PongResponse,
         PayloadKind::ErrorResponse,
+        PayloadKind::ListDirectoryRequest,
+        PayloadKind::DirectoryListing,
     };
     for (const auto kind : payloadKinds) {
         codec::NativeEnvelope native;
@@ -107,6 +109,20 @@ int main()
         require(codec::inspect(native).payload == kind,
             "payload enum value did not round-trip");
     }
+
+    RemoteDirectoryListing listing{
+        "/scratch/run", "/scratch",
+        {{"plt00010", "/scratch/run/plt00010", true},
+            {"inputs", "/scratch/run/inputs", false}}};
+    const auto listingWire = codec::toWire(listing);
+    const auto decodedListing = codec::fromWire(listingWire);
+    require(decodedListing.path == listing.path
+            && decodedListing.parentPath == listing.parentPath
+            && decodedListing.entries.size() == 2
+            && decodedListing.entries.front().isPlotfile
+            && decodedListing.entries.front().path
+                == listing.entries.front().path,
+        "directory listing did not round-trip");
 
     const std::array errorCodes{
         ErrorCode::UnsupportedProtocol,

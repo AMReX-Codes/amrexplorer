@@ -602,10 +602,10 @@ Add:
 - **File > Open Remote Plotfile Sequence...**
 - a connection-status entry in diagnostics.
 
-The connection dialog will collect host and port. The remote-open dialog will
-accept server-visible paths; protocol 1.0 will not browse the server
-filesystem. The sequence dialog will accept multiple paths and preserve their
-entered order.
+The connection dialog collects host and port. Protocol 1.1 adds authenticated,
+bounded directory listing so the remote-open dialogs can browse server-visible
+directories. The sequence dialog accepts multiple plotfile directories in
+their displayed order.
 
 Switching back to a local open remains supported without restarting the
 application. Changing remote endpoints closes the old remote datasets after

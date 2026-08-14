@@ -213,6 +213,23 @@ public:
         return opened;
     }
 
+    RemoteDirectoryListing listDirectory(
+        const std::string& path, StopToken cancellation)
+    {
+        if (m_selectedMinorVersion < 1) {
+            throw std::runtime_error(
+                "remote server does not support filesystem browsing");
+        }
+        const auto response = transact(codec::toWireDirectoryRequest(path),
+            PayloadKind::DirectoryListing, cancellation);
+        const auto* payload = response->payload.AsDirectoryListing();
+        if (payload == nullptr) {
+            throw std::runtime_error(
+                "server omitted directory-listing payload");
+        }
+        return codec::fromWire(*payload);
+    }
+
     void closeDataset(DatasetId dataset, StopToken cancellation)
     {
         codec::fb::CloseDatasetRequestT request;
@@ -649,6 +666,12 @@ OpenedDataset Connection::openDataset(const std::string& path,
     std::uint64_t cacheBudgetBytes, StopToken cancellation)
 {
     return m_impl->openDataset(path, cacheBudgetBytes, cancellation);
+}
+
+RemoteDirectoryListing Connection::listDirectory(
+    const std::string& path, StopToken cancellation)
+{
+    return m_impl->listDirectory(path, cancellation);
 }
 
 void Connection::closeDataset(DatasetId dataset, StopToken cancellation)

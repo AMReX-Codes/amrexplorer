@@ -44,6 +44,8 @@ public:
 
     [[nodiscard]] OpenedDataset openDataset(const std::string& path,
         std::uint64_t cacheBudgetBytes, StopToken cancellation = {});
+    [[nodiscard]] RemoteDirectoryListing listDirectory(
+        const std::string& path, StopToken cancellation = {});
     void closeDataset(DatasetId dataset, StopToken cancellation = {});
     void closeDatasetBestEffort(DatasetId dataset) noexcept;
     [[nodiscard]] ViewDataResult requestView(

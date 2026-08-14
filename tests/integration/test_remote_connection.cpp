@@ -9,6 +9,7 @@
 #include <amrexplorer/remote/RemoteDatasetSession.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <exception>
 #include <memory>
@@ -162,6 +163,19 @@ int main(int argc, char* argv[])
         "connection did not complete the protocol handshake");
     connection.ping();
 
+    const auto plotfilePath = std::filesystem::absolute(argv[1]);
+    const auto listing
+        = connection.listDirectory(plotfilePath.parent_path().string());
+    const auto listedPlotfile = std::find_if(listing.entries.begin(),
+        listing.entries.end(), [&](const auto& entry) {
+            return entry.name == plotfilePath.filename().string();
+        });
+    require(listing.path == plotfilePath.parent_path().lexically_normal().string()
+            && listedPlotfile != listing.entries.end()
+            && listedPlotfile->path == plotfilePath.string()
+            && listedPlotfile->isPlotfile,
+        "remote directory browsing did not identify the plotfile");
+
     const auto opened = connection.openDataset(
         std::filesystem::path(argv[1]).string(),
         16ULL * 1024ULL * 1024ULL);
@@ -218,6 +232,15 @@ int main(int argc, char* argv[])
     Connection negotiatedMinorVersionConnection(
         "127.0.0.1", negotiatedMinorVersionListener.port);
     negotiatedMinorVersionConnection.ping();
+    bool legacyBrowseRejected = false;
+    try {
+        static_cast<void>(negotiatedMinorVersionConnection.listDirectory(""));
+    } catch (const std::exception& error) {
+        legacyBrowseRejected = std::string(error.what()).find(
+            "does not support filesystem browsing") != std::string::npos;
+    }
+    require(legacyBrowseRejected,
+        "filesystem browsing was attempted against a protocol 1.0 server");
     negotiatedMinorVersionConnection.close();
     negotiatedMinorVersionPeer.get();
 

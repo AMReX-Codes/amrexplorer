@@ -401,6 +401,31 @@ if(TARGET amrexplorer_qt)
         PRIVATE amrexplorer::remote amrexplorer::warnings)
     add_test(NAME remote_endpoint COMMAND test_remote_endpoint)
 
+    add_executable(test_remote_file_dialog
+        unit/test_remote_file_dialog.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/RemoteFileDialog.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/RemoteFileDialog.hpp"
+    )
+    target_include_directories(test_remote_file_dialog
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_remote_file_dialog
+        PRIVATE
+            amrexplorer::remote
+            amrexplorer::warnings
+            Qt6::Concurrent
+            Qt6::Widgets
+            Threads::Threads
+    )
+    add_test(
+        NAME remote_file_dialog
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_remote_file_dialog>"
+            "${remote_server_fixture_dir}"
+    )
+    set_tests_properties(remote_file_dialog PROPERTIES
+        FIXTURES_REQUIRED remote_server_materialized
+        TIMEOUT 15)
+
     add_executable(test_remote_connect_arguments
         unit/test_remote_connect_arguments.cpp)
     target_include_directories(test_remote_connect_arguments

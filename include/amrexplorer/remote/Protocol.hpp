@@ -17,7 +17,7 @@
 namespace amrvis::remote {
 
 inline constexpr std::uint16_t protocolMajor = 1;
-inline constexpr std::uint16_t protocolMinorVersion = 0;
+inline constexpr std::uint16_t protocolMinorVersion = 1;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,
@@ -44,7 +44,9 @@ enum class PayloadKind : std::uint8_t {
     CancelAcknowledged = 21,
     PingRequest = 22,
     PongResponse = 23,
-    ErrorResponse = 24
+    ErrorResponse = 24,
+    ListDirectoryRequest = 25,
+    DirectoryListing = 26
 };
 
 enum class ErrorCode : std::uint16_t {
@@ -92,6 +94,18 @@ struct HelloResponseData {
 struct OpenDatasetData {
     std::string path;
     std::uint64_t cacheBudgetBytes = 0;
+};
+
+struct RemoteDirectoryEntry {
+    std::string name;
+    std::string path;
+    bool isPlotfile = false;
+};
+
+struct RemoteDirectoryListing {
+    std::string path;
+    std::string parentPath;
+    std::vector<RemoteDirectoryEntry> entries;
 };
 
 struct OpenedDataset {

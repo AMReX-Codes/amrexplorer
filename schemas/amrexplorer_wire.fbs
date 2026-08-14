@@ -314,6 +314,22 @@ table ErrorResponse {
   message:string (id: 1);
 }
 
+table ListDirectoryRequest {
+  path:string (id: 0);
+}
+
+table DirectoryEntry {
+  name:string (id: 0);
+  is_plotfile:bool (id: 1);
+  path:string (id: 2);
+}
+
+table DirectoryListing {
+  path:string (id: 0);
+  entries:[DirectoryEntry] (id: 1);
+  parent_path:string (id: 2);
+}
+
 union Payload {
   HelloRequest = 1,
   HelloResponse = 2,
@@ -338,7 +354,9 @@ union Payload {
   CancelAcknowledged = 21,
   PingRequest = 22,
   PongResponse = 23,
-  ErrorResponse = 24
+  ErrorResponse = 24,
+  ListDirectoryRequest = 25,
+  DirectoryListing = 26
 }
 
 table Envelope {

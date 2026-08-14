@@ -49,6 +49,7 @@ works with `ssh`, including a hostname or alias from `~/.ssh/config`:
 ```text
 (local) $ amrexplorer --ssh user@remote-hostname /remote/path/plt00010
 ```
+where `remote-hostname` is replaced with the actual remote hostname or alias.
 
 If `amrexplorer-server` is not on the non-interactive remote `PATH`, give its
 path explicitly. Quote a home-relative path so `~` is expanded on the remote

@@ -47,7 +47,7 @@ pass the generated bearer token automatically. Give it any destination that
 works with `ssh`, including a hostname or alias from `~/.ssh/config`:
 
 ```text
-(local) $ amrexplorer --ssh user@remote /remote/path/plt00010
+(local) $ amrexplorer --ssh user@remote-hostname /remote/path/plt00010
 ```
 
 If `amrexplorer-server` is not on the non-interactive remote `PATH`, give its
@@ -55,7 +55,7 @@ path explicitly. Quote a home-relative path so `~` is expanded on the remote
 machine rather than by the local shell:
 
 ```text
-(local) $ amrexplorer --ssh remote --server "~/bin/amrexplorer-server" \
+(local) $ amrexplorer --ssh remote-hostname --server "~/bin/amrexplorer-server" \
     /remote/path/plt00010
 ```
 

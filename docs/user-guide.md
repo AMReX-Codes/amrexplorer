@@ -35,14 +35,9 @@ You can also start without a path and use the File menu:
 - **Open New Window** creates an independent viewer for side-by-side
   comparison.
 
-AMReXplorer displays 2-D and 3-D data whose FAB payloads use IEEE 32-bit or IEEE
-64-bit floating-point storage.
-
-Plotfiles written for the cylindrical RZ coordinate system, and 3-D spherical
-plotfiles, open normally but are displayed on their logical grid: an RZ dataset
-appears as its r-z plane with no axisymmetric weighting or revolution. **2-D
-spherical (r, θ)** plotfiles are handled specially and can be shown in true
-physical space — see [2-D spherical coordinates](#2-d-spherical-coordinates).
+Cylindrical RZ and 3-D spherical plotfiles open normally but are displayed on
+their logical grid. **2-D spherical (r, θ)** plotfiles can also be shown in
+true physical space — see [2-D spherical coordinates](#2-d-spherical-coordinates).
 
 ## Remote datasets
 
@@ -62,29 +57,6 @@ LISTENING 127.0.0.1 41419 TOKEN 58f50743dff4f653b58c3a1fe5858904
 
 The port and token are new every time you start the server, so use the values
 from your own output (here, port `41419`), not the ones printed above.
-
-Two limits bound how long the server will spend writing one response, and a
-client that exceeds either is disconnected. The first is a pause: by default, no
-write progress at all for 30 seconds. The second is the whole response, because a
-client that accepts a few bytes before each pause deadline would otherwise renew
-it forever and keep a worker busy indefinitely. A response must finish within
-
-```text
-write-stall-timeout-seconds + response size / write-min-kib-per-second
-```
-
-whose default floor of 64 KiB/s is far below any usable SSH tunnel — a 64 MiB
-response is allowed about 17 minutes. On a link that pauses for longer than 30
-seconds, or that is genuinely slower than the floor, raise the pause interval and
-lower the floor:
-
-```text
-(remote) $ amrexplorer-server --write-stall-timeout-seconds 120 \
-    --write-min-kib-per-second 8
-```
-
-The floor cannot be zero, since that would remove the whole-response bound; the
-smallest value, `1`, allows roughly 18 hours for a 64 MiB response.
 
 **Step 2 — On your local machine, open an SSH tunnel** using the port from
 step 1. Leave this running while you work:
@@ -119,27 +91,22 @@ Server...** (enter `127.0.0.1:PORT`, then the token when prompted), followed by
 **Open Remote Plotfile...** or **Open Remote Plotfile Sequence...** and the
 remote path.
 
+Once open, a remote dataset is driven exactly like a local one.
+
 **Tip — use a fixed local port.** In the tunnel command the first number is a
-port on your own machine and can be any value you pick; only the second has to
-match the server. Choose a fixed local port and step 3 always uses the same
-number, even though the server's port changes each run:
+port on your own machine and can be any value you pick. Choose a fixed one and
+step 3 always uses the same number, even though the server's port changes each
+run.
+
+**Slow links.** The server disconnects a client that stalls: by default it
+allows 30 seconds with no write progress, and expects a response to average at
+least 64 KiB/s. If a slow or intermittent link keeps dropping the connection,
+relax both limits:
 
 ```text
-(local) $ ssh -N -L 9000:127.0.0.1:41419 user@remote
-(local) $ read -rs AMREXPLORER_TOKEN && printf '\n'
-(local) $ amrexplorer --connect 127.0.0.1:9000 --token-stdin \
-    /remote/path/plt00010 <<<"$AMREXPLORER_TOKEN"
-(local) $ unset AMREXPLORER_TOKEN
+(remote) $ amrexplorer-server --write-stall-timeout-seconds 120 \
+    --write-min-kib-per-second 8
 ```
-
-Once a remote dataset is open it is driven exactly like a local one: the same
-fields, levels, ranges, palettes, slice planes, line plots, sequences, and
-overlays, including [particles](#particles). What differs is where the work
-happens. Reading, slicing, and particle sampling run on the server, which sends
-only what the current view needs; color mapping, contours, vector glyphs, and
-drawing run on your own machine. So changing a palette or a particle color is
-immediate, while moving a slice, panning, or changing the particle subset costs
-a round trip.
 
 ## User interface overview
 
@@ -173,18 +140,16 @@ index type, and floating-point precision.
 Opening a standalone MultiFab also opens the selector, with one row for every
 FAB across all of its data files. The MultiFab view excludes ghost points, as
 usual. Selecting **View FAB** switches the same window to that FAB and displays
-its complete stored box, including points that were ghosts in the MultiFab.
-All points in this view are treated equally. Use **Back to MultiFab** to
-restore the previous MultiFab field, level, slice positions, and view regions.
+its complete stored box, including points that were ghosts in the MultiFab. Use
+**Back to MultiFab** to restore the previous MultiFab field, level, slice
+positions, and view regions.
 
-FAB mode uses the range of the complete selected FAB for **File** range, so
-the colors do not change when a 3-D slice is moved or the view is zoomed or
-panned.
+FAB mode uses the range of the complete selected FAB for **File** range, so the
+colors do not change when a 3-D slice is moved or the view is zoomed or panned.
 
 Cell-centered and nodal index types are honored independently in each
-direction. Coordinates, slice positions, probing, panning, and selection
-snapping therefore follow the sample locations recorded by the FAB or
-MultiFab.
+direction, so coordinates, slice positions, probing, and panning follow the
+sample locations recorded by the FAB or MultiFab.
 
 ## A basic 2-D workflow
 
@@ -221,21 +186,12 @@ The active panel is the one most recently clicked or manipulated.
 | Right drag | Plot a line; the drag direction chooses the orientation |
 | Right click in a 3-D slice | Move the other two slice planes to the clicked point |
 
-**Fixed scales and very wide domains.** The **Scale** control offers fixed
-zooms from 1x to 32x, where the factor is screen pixels per finest-level cell.
-For a local dataset this is applied to a single whole-domain image, and that
-image is limited to 4096 cells along each axis. A domain wider than that cannot
-be shown at finest resolution all at once, so one image pixel covers more than
-one cell and the fixed scale magnifies by less than the factor says. When that
-happens the Scale button reports what it actually applied — `32x→16x` on a
-domain 8192 cells across — and its tool tip explains why. Rubber-band zoom is
-unaffected: selecting a subregion re-reads that region at finest resolution.
-Remote datasets are also unaffected, because they fetch only the visible window
-at finest resolution instead of building a whole-domain image. The R-Z spherical
-display reports nothing either way: its image is warped onto a physical wedge,
-so one image pixel does not stand for a fixed number of cells and there is no
-single magnification to state. The r-θ and θ-r displays draw the logical grid,
-so they are clamped and reported exactly like any other view.
+The **Scale** control offers fixed zooms from 1x to 32x, where the factor is
+screen pixels per finest-level cell. A very wide local domain cannot be shown
+at finest resolution all at once, so the requested factor may not be reachable;
+the Scale button then reports what it applied, such as `32x→16x`. Rubber-band
+zoom is unaffected: selecting a subregion re-reads that region at finest
+resolution.
 
 The line-plot window can accumulate curves, which is useful when comparing
 variables, levels, or positions. Its horizontal axis uses physical coordinates
@@ -280,9 +236,8 @@ The level controls offer:
 - **Levs 0-N** composites levels 0 through N.
 - **Level N** displays only exact level N data.
 
-Composite views use fine data where it exists and coarser data elsewhere.
-Exact-level views are useful for checking an individual level's coverage and
-values.
+A composite uses fine data where it exists and coarser data elsewhere; an
+exact-level view is useful for checking one level's coverage and values.
 
 Useful shortcuts are:
 
@@ -291,9 +246,6 @@ Useful shortcuts are:
 | Ctrl+0 | Finest available composite |
 | Ctrl+1 through Ctrl+9 | Composite levels 0 through N |
 | Alt+0 through Alt+9 | Exact level N |
-
-If the finest composite cannot fit in the data cache, AMReXplorer reports the
-condition and retries with a lower maximum level.
 
 ## Ranges, logarithms, and palettes
 
@@ -348,24 +300,18 @@ each:
 
 - **Show** draws that species, or hides it.
 - **Color** picks the point color. Each species starts with a distinct default.
-- **Alpha** sets opacity from 0 to 100 percent, which is how you keep a dense
-  species from hiding the raster underneath it.
+- **Alpha** sets opacity from 0 to 100 percent.
 
 Below the species list are three settings that apply to all of them:
 
 - **Visible subset** is the percentage of particles drawn, from 0.01 to 100.
-  Large particle counts are impractical to draw in full, and a subset conveys
-  the distribution just as well.
 - **Sampling seed** chooses *which* particles the subset contains. Change it to
   look at a different sample of the same size.
 - **Point size** is the drawn diameter in pixels, from 1 to 12.
 
-Sampling is by a hash of each particle's persistent ID/CPU identity, not by
-position or file order. Two consequences are worth knowing. The same particles
-stay selected as you step through the frames of a sequence, so a subset can be
-followed over time rather than resampled at every frame. And lower percentages
-are nested inside higher ones for a given seed, so reducing the subset thins the
-same set of particles rather than replacing it.
+The same particles stay selected as you step through the frames of a sequence,
+and for a given seed a lower percentage thins the same set of particles rather
+than replacing it.
 
 For 3-D data, particles are projected onto each of the three orthogonal slice
 panels. The projection is through the whole volume: a panel shows every selected
@@ -374,13 +320,6 @@ particle, not only those near that slice plane.
 Particle settings are not saved between sessions. Species selection, colors, and
 the seed reset when a new dataset is opened; the subset percentage and point
 size persist for the session.
-
-**Remote datasets** use the same dialog and behave the same way. The sampling
-runs on the server, which sends only the selected points, and the number of
-points one response may carry is bounded by the same frame budget that bounds
-slices. Changing the subset percentage or the seed therefore costs a request to
-the server; changing a color or alpha does not, since those are applied when the
-points are drawn.
 
 ## 2-D spherical coordinates
 
@@ -391,23 +330,20 @@ the vertical axis. AMReXplorer can present it three ways, chosen under **View >
 
 - **R-Z (physical)** — the default. The (r, θ) data is warped into the physical
   wedge it represents, with R = r·sin θ horizontal and Z = r·cos θ vertical, so
-  cell boundaries appear as circular arcs and radial lines. Grid boxes, the
-  picked-cell highlight, contours, and the coordinate readout all follow the
-  warp; the readout reports both physical (R, Z) and native (r, θ).
-- **r-θ** — the logical grid drawn directly, r horizontal and θ vertical (the
-  layout used before spherical support was added).
+  cell boundaries appear as circular arcs and radial lines. Overlays and the
+  coordinate readout follow the warp; the readout reports both physical (R, Z)
+  and native (r, θ).
+- **r-θ** — the logical grid drawn directly, r horizontal and θ vertical.
 - **θ-r** — the same logical grid transposed, θ horizontal and r vertical.
 
-Because the R-Z view resamples the logical grid into physical space, its curved
-cell boundaries can look jagged at the native resolution. **View > 2-D Spherical
-> Supersampling** sets how finely the grid is resampled (1x–16x); higher factors
-trace the curves more smoothly at the cost of a larger image.
+**View > 2-D Spherical > Supersampling** sets how finely the logical grid is
+resampled for the R-Z view (1x–16x); higher factors trace the curved cell
+boundaries more smoothly at the cost of a larger image.
 
 Vector glyphs are available in all three layouts. In the R-Z view each arrow is
 anchored at its physical position and the (v_r, v_θ) components are rotated
-into physical directions; in the r-θ and θ-r layouts the components are drawn
-on the logical grid. Line plots and particle overlays are available in the r-θ
-and θ-r layouts but not in the R-Z view.
+into physical directions. Line plots and particle overlays are available in the
+r-θ and θ-r layouts but not in the R-Z view.
 
 ## Plotfile sequences and animation
 
@@ -421,12 +357,9 @@ provides:
 - a playback speed control.
 
 Frame changes preserve the active field, level, range, log, palette, and
-visible-region settings when those settings are valid for the next plotfile.
-Fit mode refits each frame, while a fixed integer scale is reapplied to the new
-frame. A custom view created with wheel zoom or panning preserves the same
-visible physical region across frames with compatible geometry. AMReXplorer
-refits when the domain, coordinate system, panel orientation, or raster mapping
-changes and the previous physical view is no longer compatible.
+visible region when those settings remain valid for the next plotfile.
+AMReXplorer refits the view when the new frame's geometry is no longer
+compatible with the previous one.
 
 ## Exporting images and animations
 
@@ -506,5 +439,3 @@ minimum and verify that the field contains positive values.
 
 **Controls or panels are missing.** Use the **View** menu to restore hidden
 toolbars and dock panels.
-
-For a compact reminder of the controls, choose **Help > Keyboard & Mouse...**.

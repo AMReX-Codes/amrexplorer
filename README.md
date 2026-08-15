@@ -34,6 +34,8 @@ FAB and MultiFab data.
   export, shortcuts, and troubleshooting
 - **[Developer Build Guide](docs/building.md)** — CMake presets, supported
   compilers, and validation
+- **[Architecture](docs/ARCHITECTURE.md)** — layering, the dataset-session
+  abstraction, threading, and trust boundaries (for contributors)
 
 The User Guide is also bundled in the application under **Help > User
 Guide...** for offline use.

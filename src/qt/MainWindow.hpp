@@ -143,14 +143,15 @@ public:
 
     // Test-only: drive an overlapping visible-range sync deterministically.
     // The gate blocks the sync worker so the test can queue a second sync
-    // (setting the rerun flag) before the first completes; the skip counter
-    // records outcomes dropped as superseded. See the overlapping-sync smoke
-    // test and syncVisibleRanges.
+    // (setting the rerun flag) before the first completes; a superseded
+    // outcome is dropped and counted in m_staleResults, which the test reads
+    // through staleResultCountForTest(). See the overlapping-sync smoke test
+    // and syncVisibleRanges.
     void requestVisibleSyncForTest();
     void armVisibleSyncGateForTest();
     void releaseVisibleSyncGateForTest();
     [[nodiscard]] bool visibleSyncWorkerWaitingForTest() const;
-    [[nodiscard]] int visibleSyncStaleSkipsForTest() const noexcept;
+    [[nodiscard]] std::uint64_t staleResultCountForTest() const noexcept;
 
     // Test-only: for each current view (ordered by normal axis; 2-D has one),
     // the display range and the distinct contour levels present in its overlay
@@ -862,10 +863,6 @@ private:
     // completion, where the union is actually known.
     bool m_visibleSyncInFlight = false;
     bool m_visibleSyncRerun = false;
-    // How many visible-range sync outcomes were dropped because a refresh
-    // landed while the sync ran (its rerun was queued). Observed by the
-    // overlapping-sync regression test.
-    int m_visibleSyncStaleSkips = 0;
     std::optional<amrvis::DisplayCoordinator::RangeKey> m_pendingRangeStore;
     QTreeWidget* m_metadataTree = nullptr;
     QPlainTextEdit* m_diagnostics = nullptr;

@@ -1793,19 +1793,30 @@ int main(int argc, char* argv[])
         poll->setInterval(5);
         auto phase = std::make_shared<int>(0);
         auto attempts = std::make_shared<int>(0);
+        // Stale-result count captured the instant before the gated overlap is
+        // set up, so the assertion measures *only* the drop this overlap
+        // causes -- not any earlier stale result (e.g. from the setup batch's
+        // own sync). Exactly one drop is required.
+        auto baseline = std::make_shared<std::uint64_t>(0);
+        const auto finish = [&application, poll](int code) {
+            poll->stop();  // no stray timeout fires after we ask to exit
+            application.exit(code);
+        };
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-            &application, [&window, &application, poll, phase](bool success) {
+            &application,
+            [&window, &application, finish, poll, phase, baseline](bool success) {
                 if (!success) {
-                    application.exit(1);
+                    finish(1);
                     return;
                 }
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application, [&window, poll, phase] {
+                    &application, [&window, poll, phase, baseline] {
                         if (*phase != 0) {
                             return;
                         }
                         *phase = 1;
+                        *baseline = window.staleResultCountForTest();
                         // Start a sync with the worker gated so it cannot finish
                         // before we queue the superseding one.
                         window.armVisibleSyncGateForTest();
@@ -1816,9 +1827,9 @@ int main(int argc, char* argv[])
                 window.configureContourSyncForTest(3, false, {0.5, 0.5, 0.5});
             });
         QObject::connect(poll, &QTimer::timeout, &application,
-            [&window, &application, poll, phase, attempts] {
+            [&window, finish, phase, attempts, baseline] {
                 if (++*attempts > 2000) {
-                    application.exit(3);
+                    finish(3);
                     return;
                 }
                 if (*phase == 1) {
@@ -1834,17 +1845,22 @@ int main(int argc, char* argv[])
                 }
                 if (*phase == 2) {
                     // The released gated worker's completion runs on this (GUI)
-                    // thread; once it lands it must have dropped its outcome as
-                    // superseded rather than applied it over the newer state.
-                    if (window.visibleSyncStaleSkipsForTest() >= 1) {
-                        poll->stop();
-                        application.exit(0);
+                    // thread; once it lands it must have dropped exactly one
+                    // outcome as superseded rather than applied it over the
+                    // newer state. More than one drop means something other
+                    // than the gated overlap moved the counter -- fail loudly
+                    // rather than let a coincidental increment pass the test.
+                    const auto stale = window.staleResultCountForTest();
+                    if (stale > *baseline + 1) {
+                        finish(5);
+                    } else if (stale == *baseline + 1) {
+                        finish(0);
                     }
                     // else keep polling; the attempts guard above fails on hang.
                 }
             });
         QTimer::singleShot(15000, &application,
-            [&application] { application.exit(4); });
+            [finish] { finish(4); });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1])

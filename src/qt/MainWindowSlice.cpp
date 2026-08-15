@@ -947,12 +947,22 @@ void MainWindow::syncVisibleRanges()
     if (rangeMode != RangeMode::Visible) {
         return;
     }
-    if (m_visibleSyncInFlight) {
-        // Coalesce: rerun with fresh state once the in-flight worker lands
-        // instead of stacking a worker per arrival.
+    // Dispatch exactly one sync per settled interactive batch. While panel
+    // arrivals are still outstanding (m_activeRequests != 0) or a sync is
+    // already running, defer: the arrival that settles the batch -- or the
+    // in-flight sync's completion -- dispatches then, against the fully
+    // updated panels. Without this a three-panel tweak computes (and then
+    // discards) a full three-panel sync on each of the first two arrivals
+    // before the third settles. Deferral also means the only outcome that can
+    // reach completion while a newer request is pending is a genuinely
+    // superseded inter-batch sync, which the completion handler drops.
+    if (m_activeRequests != 0 || m_visibleSyncInFlight) {
         m_visibleSyncRerun = true;
         return;
     }
+    // This dispatch consumes any deferred request; a request that lands while
+    // the worker below runs re-arms the flag and reruns from its completion.
+    m_visibleSyncRerun = false;
 
     // The coordinator resolves the shared range (the cached full-domain
     // range when current, so the color bar stays stable during zoom and pan;
@@ -997,7 +1007,7 @@ void MainWindow::syncVisibleRanges()
     const auto generation = m_generation;
     auto* watcher = new QFutureWatcher<SyncOutcome>(this);
     connect(watcher, &QFutureWatcher<SyncOutcome>::finished, this,
-        [this, watcher, generation, snapshots, views] {
+        [this, watcher, generation, views] {
             m_visibleSyncInFlight = false;
             --m_activeRequests;
             if (m_closing) {
@@ -1010,25 +1020,23 @@ void MainWindow::syncVisibleRanges()
             const bool current = generation == m_generation
                 && m_viewDimension == 3 && m_dataset
                 && nowMode == RangeMode::Visible;
-            // A cosmetic refresh (palette/log/contour count) that landed while
-            // this sync ran sets the rerun flag. Its cached-plane reuse keeps
-            // the plane pointer identical, so the per-panel identity guard below
-            // can no longer tell this outcome is stale -- it was rendered with
-            // the *previous* settings. Skip applying a superseded outcome
-            // entirely (as the pending-range store already does) and let the
-            // queued rerun recompute against the current settings, rather than
-            // flash the old rendering over the newer one.
+            // Dispatch gating means a sync only runs against fully-settled
+            // panels, so the outcome is current *unless* a newer request
+            // (a fresh arrival or a cosmetic palette/log/contour refresh)
+            // landed mid-flight and set the rerun flag. Because cached-plane
+            // reuse keeps the plane pointer identical across a cosmetic
+            // refresh, pointer identity can no longer tell such an outcome is
+            // stale -- so gate on the rerun flag instead: apply when nothing
+            // superseded us, otherwise drop this outcome and let the queued
+            // rerun recompute against the current settings rather than flash
+            // the old rendering over the newer one.
             if (current && outcome.sync && !m_visibleSyncRerun) {
                 const auto [globalMin, globalMax] = outcome.sync->range;
                 bool activeApplied = false;
                 for (std::size_t index = 0; index < views.size(); ++index) {
                     auto* state = views[index];
                     auto& update = outcome.sync->panels[index];
-                    // Apply only while the snapshot this update was computed
-                    // from is still the displayed plane (pointer identity);
-                    // a superseded panel's own arrival re-syncs.
-                    if (!update.applies
-                        || state->plane != snapshots[index].plane) {
+                    if (!update.applies) {
                         continue;
                     }
                     state->displayMinimum = globalMin;
@@ -1102,10 +1110,12 @@ void MainWindow::syncVisibleRanges()
                     m_pendingRangeStore.reset();
                 }
             } else if (current && outcome.sync && m_visibleSyncRerun) {
-                // Superseded by a refresh that landed mid-sync: leave the newer
+                // Superseded by a request that landed mid-sync: leave the newer
                 // image in place and let the queued rerun apply the current
-                // settings. Counted for the overlapping-sync regression test.
-                ++m_visibleSyncStaleSkips;
+                // settings. Counted as a dropped stale result (same bucket the
+                // diagnostics panel surfaces); the overlapping-sync regression
+                // test reads this counter.
+                ++m_staleResults;
             } else if (generation != m_generation) {
                 m_pendingRangeStore.reset();
                 m_visibleSyncRerun = false;

@@ -119,13 +119,17 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <chrono>
 #include <stdexcept>
 #include <system_error>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
+
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+// Used only by the visible_sync_test gate below (test-access builds only).
+#include <chrono>
+#include <thread>
+#endif
 
 namespace amrvis::qt {
 
@@ -324,7 +328,10 @@ inline void waitAtGate()
         return;
     }
     workerWaiting.store(true);
-    while (!released.load()) {
+    // Bounded wait: if the test dies before releasing the gate, the worker
+    // must still return so QThreadPool's destructor can join it. Parking here
+    // forever would surface as a ctest TIMEOUT that masks the real exit code.
+    for (int waited = 0; waited < 10000 && !released.load(); ++waited) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }

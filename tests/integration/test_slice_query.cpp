@@ -6,6 +6,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -483,9 +484,115 @@ int main()
             "ghost MultiFab slice sampled the wrong cell (ghost offset mismatch)");
     }
 
+    // Multi-tile block index + out-of-bounds query point. A 2x2 arrangement of
+    // 1x1 blocks forces the slice compositor's per-level block grid to a real
+    // 2x2 tile layout (every other fixture here has so few blocks the grid
+    // collapses to a single tile, exercising only the linear-scan-equivalent
+    // path). The base index is far negative so a query point far to the
+    // positive side sits >2^31 cells above the grid's lower bound: the pre-fix
+    // narrowing cast in the tile lookup wrapped negative there and indexed the
+    // bucket array out of range (UB/segfault under ASan) where the plain linear
+    // scan safely reported "no block". The grid must reject it in 64-bit before
+    // tiling.
+    const auto gridRoot = std::filesystem::temp_directory_path()
+        / ("amrexplorer-slice-grid-" + std::to_string(unique));
+    std::filesystem::create_directories(gridRoot / "Level_0");
+    constexpr long long base = -2000000000LL;  // near INT_MIN, so lo is negative
+    const auto idx = [](long long v) { return std::to_string(v); };
+    // Header: 2-D, one level, unit cells, domain = cells [base, base+1]^2.
+    std::string header =
+        "HyperCLaw-V1.1\n1\nphi\n2\n0.0\n0\n"
+        + idx(base) + " " + idx(base) + "\n"
+        + idx(base + 2) + " " + idx(base + 2) + "\n"
+        + "\n"
+        + "((" + idx(base) + "," + idx(base) + ") ("
+        + idx(base + 1) + "," + idx(base + 1) + ") (0,0))\n"
+        + "0\n1.0 1.0\n0\n0\n"
+        + "0 4 0.0\n0\n";
+    std::string boxes;
+    std::string fabList;
+    std::string minRows;
+    std::string maxRows;
+    int fabNumber = 0;
+    for (int gj = 0; gj < 2; ++gj) {
+        for (int gi = 0; gi < 2; ++gi) {
+            const auto ci = base + gi;
+            const auto cj = base + gj;
+            header += idx(ci) + " " + idx(ci + 1) + "\n"
+                + idx(cj) + " " + idx(cj + 1) + "\n";
+            const auto box = "((" + idx(ci) + "," + idx(cj) + ") ("
+                + idx(ci) + "," + idx(cj) + ") (0,0))";
+            boxes += box + "\n";
+            char name[32];
+            std::snprintf(name, sizeof(name), "Cell_D_%05d", fabNumber++);
+            fabList += std::string("FabOnDisk: ") + name + " 0\n";
+            const double value = static_cast<double>(gi + gj);
+            minRows += std::to_string(value) + ",\n";
+            maxRows += std::to_string(value) + ",\n";
+            const std::array<double, 1> payload{value};
+            writeFab(gridRoot / "Level_0" / name, box, payload);
+        }
+    }
+    header += "Level_0/Cell\n";
+    writeText(gridRoot / "Header", header);
+    writeText(gridRoot / "Level_0" / "Cell_H",
+        "1\n1\n1\n0\n(4 0\n" + boxes + ")\n4\n" + fabList + "\n"
+        + "4,1\n" + minRows + "\n4,1\n" + maxRows + "\n");
+
+    amrvis::PlotfileDataset gridDataset(
+        gridRoot, amrvis::DatasetId{42}, 1024 * 1024);
+    amrvis::SliceQuery gridQuery(gridDataset);
+
+    // Correctness over the real 2x2 tile grid: every cell resolves to its own
+    // block, phi(i, j) = (i - base) + (j - base).
+    amrvis::SliceRequest inRegion;
+    inRegion.dataset.value = 42;
+    inRegion.field.value = 0;
+    inRegion.normalDirection = 1;
+    inRegion.visibleRegion = {
+        {{static_cast<double>(base), static_cast<double>(base), 0.0}},
+        {{static_cast<double>(base + 2), static_cast<double>(base + 2), 0.0}}};
+    inRegion.maximumLevel = 0;
+    inRegion.outputSize = {2, 2};
+    const auto grid = gridQuery.execute(inRegion);
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            const auto offset = static_cast<std::size_t>(x + 2 * y);
+            require(grid.plane.valid[offset] == 1,
+                "block-grid slice left a hole over a covered cell");
+            require(grid.plane.values[offset]
+                    == static_cast<float>(x + y),
+                "block-grid slice routed a pixel to the wrong block");
+        }
+    }
+
+    // Regression for the tile-index overflow: a region reaching far to the
+    // positive side puts most sample points >2^31 cells above the grid's
+    // negative lower bound. The query must complete (no OOB) and mark those
+    // far points as uncovered rather than crash or read a bogus block.
+    amrvis::SliceRequest farOut;
+    farOut.dataset.value = 42;
+    farOut.field.value = 0;
+    farOut.normalDirection = 1;
+    farOut.visibleRegion = {
+        {{static_cast<double>(base), static_cast<double>(base), 0.0}},
+        {{2.0e9, 2.0e9, 0.0}}};
+    farOut.maximumLevel = 0;
+    farOut.outputSize = {8, 8};
+    const auto reached = gridQuery.execute(farOut);
+    bool sawUncoveredFarPoint = false;
+    for (int offset = 0; offset < 64; ++offset) {
+        if (reached.plane.valid[static_cast<std::size_t>(offset)] == 0) {
+            sawUncoveredFarPoint = true;
+        }
+    }
+    require(sawUncoveredFarPoint,
+        "far-out query point was not reported as uncovered");
+
     std::filesystem::remove_all(root);
     std::filesystem::remove_all(linearRoot);
     std::filesystem::remove_all(linear3dRoot);
     std::filesystem::remove_all(ghostRoot);
+    std::filesystem::remove_all(gridRoot);
     return 0;
 }

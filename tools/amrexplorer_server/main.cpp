@@ -12,7 +12,7 @@
 #include <thread>
 
 #ifndef AMREXPLORER_VERSION
-#define AMREXPLORER_VERSION "0.1.0-dev"
+#define AMREXPLORER_VERSION "0.2.0-dev"
 #endif
 
 namespace {

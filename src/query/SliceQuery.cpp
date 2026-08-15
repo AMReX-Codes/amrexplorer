@@ -54,40 +54,59 @@ public:
         }
         const auto a0 = static_cast<std::size_t>(m_axis0);
         const auto a1 = static_cast<std::size_t>(m_axis1);
-        auto hi0 = std::numeric_limits<std::int64_t>::min();
-        auto hi1 = std::numeric_limits<std::int64_t>::min();
         m_lo0 = std::numeric_limits<std::int64_t>::max();
         m_lo1 = std::numeric_limits<std::int64_t>::max();
+        m_hi0 = std::numeric_limits<std::int64_t>::min();
+        m_hi1 = std::numeric_limits<std::int64_t>::min();
         for (const auto& block : blocks) {
             m_lo0 = std::min(m_lo0,
                 static_cast<std::int64_t>(block.validBox.lower[a0]));
             m_lo1 = std::min(m_lo1,
                 static_cast<std::int64_t>(block.validBox.lower[a1]));
-            hi0 = std::max(hi0,
+            m_hi0 = std::max(m_hi0,
                 static_cast<std::int64_t>(block.validBox.upper[a0]));
-            hi1 = std::max(hi1,
+            m_hi1 = std::max(m_hi1,
                 static_cast<std::int64_t>(block.validBox.upper[a1]));
         }
-        const auto span0 = hi0 - m_lo0 + 1;
-        const auto span1 = hi1 - m_lo1 + 1;
-        // Aim for ~one block per tile (sqrt(blocks) tiles per axis), capped so
-        // the bucket array stays bounded no matter how many blocks intersect.
+        const auto span0 = m_hi0 - m_lo0 + 1;
+        const auto span1 = m_hi1 - m_lo1 + 1;
+        // ~sqrt(blocks) tiles per axis, capped so the bucket array is bounded.
+        // llround(sqrt(n)) >= 1 for n >= 1 (the empty case returned above), so
+        // only the upper cap is needed.
         constexpr std::int64_t maxTilesPerAxis = 256;
-        const auto target = std::clamp<std::int64_t>(
-            static_cast<std::int64_t>(std::llround(
-                std::sqrt(static_cast<double>(blocks.size())))),
-            1, maxTilesPerAxis);
+        const auto target = std::min<std::int64_t>(maxTilesPerAxis,
+            std::llround(std::sqrt(static_cast<double>(blocks.size()))));
         m_tile0 = std::max<std::int64_t>(1, (span0 + target - 1) / target);
         m_tile1 = std::max<std::int64_t>(1, (span1 + target - 1) / target);
         m_n0 = static_cast<int>((span0 + m_tile0 - 1) / m_tile0);
         m_n1 = static_cast<int>((span1 + m_tile1 - 1) / m_tile1);
-        m_buckets.assign(
-            static_cast<std::size_t>(m_n0) * static_cast<std::size_t>(m_n1), {});
+        const auto tileCount
+            = static_cast<std::size_t>(m_n0) * static_cast<std::size_t>(m_n1);
+        // Non-overlapping blocks (the level invariant) put ~one block in each
+        // tile, so the fill is O(blocks + tiles). validateMetadata does not
+        // forbid overlap, though, and a degenerate catalog of many large
+        // overlapping boxes would push billions of (block, tile) entries -- an
+        // unbounded, GB-scale allocation off a small header. Cap the total and
+        // fall back to a plain linear scan (bounded memory, identical result)
+        // rather than build an enormous index.
+        const auto maxEntries = 8 * (blocks.size() + tileCount);
+        m_buckets.assign(tileCount, {});
+        std::size_t entries = 0;
         for (std::size_t index = 0; index < blocks.size(); ++index) {
             const auto& box = blocks[index].validBox;
-            for (int t1 = tile1(box.lower[a1]); t1 <= tile1(box.upper[a1]); ++t1) {
-                for (int t0 = tile0(box.lower[a0]);
-                     t0 <= tile0(box.upper[a0]); ++t0) {
+            // Box coordinates are within [m_lo, m_hi], so these tile indices
+            // never overflow the narrowing cast in tile0()/tile1(); the loop
+            // bounds are hoisted out of the inner condition.
+            const auto t0Last = tile0(box.upper[a0]);
+            const auto t1Last = tile1(box.upper[a1]);
+            for (int t1 = tile1(box.lower[a1]); t1 <= t1Last; ++t1) {
+                for (int t0 = tile0(box.lower[a0]); t0 <= t0Last; ++t0) {
+                    if (++entries > maxEntries) {
+                        m_buckets.clear();
+                        m_buckets.shrink_to_fit();
+                        m_linearScan = true;
+                        return;
+                    }
                     m_buckets[bucket(t0, t1)].push_back(static_cast<int>(index));
                 }
             }
@@ -95,25 +114,31 @@ public:
     }
 
     // Index into `blocks` of the block containing `point`, or -1 if none does.
+    // `blocks` must be the same vector the grid was built from.
     [[nodiscard]] int find(const std::vector<LoadedBlock>& blocks,
         const Int3& point, int dimension) const
     {
-        if (m_buckets.empty()) {
+        if (m_linearScan) {
+            for (std::size_t index = 0; index < blocks.size(); ++index) {
+                if (contains(blocks[index].validBox, point, dimension)) {
+                    return static_cast<int>(index);
+                }
+            }
             return -1;
         }
         const auto p0 = static_cast<std::int64_t>(
             point[static_cast<std::size_t>(m_axis0)]);
         const auto p1 = static_cast<std::int64_t>(
             point[static_cast<std::size_t>(m_axis1)]);
-        if (p0 < m_lo0 || p1 < m_lo1) {
+        // Reject out-of-bounds points in int64 *before* tiling. A point far
+        // above the bounding box would otherwise overflow the narrowing cast
+        // in tile0()/tile1() to a negative int and slip past a bare upper-tile
+        // check, indexing m_buckets wildly out of range. The empty-level case
+        // (inverted default bounds, m_hi < m_lo) is rejected here too.
+        if (p0 < m_lo0 || p0 > m_hi0 || p1 < m_lo1 || p1 > m_hi1) {
             return -1;
         }
-        const auto t0 = tile0(p0);
-        const auto t1 = tile1(p1);
-        if (t0 >= m_n0 || t1 >= m_n1) {
-            return -1;
-        }
-        for (const auto index : m_buckets[bucket(t0, t1)]) {
+        for (const auto index : m_buckets[bucket(tile0(p0), tile1(p1))]) {
             if (contains(blocks[static_cast<std::size_t>(index)].validBox,
                     point, dimension)) {
                 return index;
@@ -123,6 +148,8 @@ public:
     }
 
 private:
+    // Precondition: coordinate is within [m_lo, m_hi] on its axis, so the
+    // quotient is in [0, m_n - 1] and the narrowing cast cannot overflow.
     [[nodiscard]] int tile0(std::int64_t coordinate) const noexcept
     {
         return static_cast<int>((coordinate - m_lo0) / m_tile0);
@@ -139,12 +166,16 @@ private:
 
     int m_axis0 = 0;
     int m_axis1 = 1;
+    // Inverted default range so an empty grid rejects every point in find().
     std::int64_t m_lo0 = 0;
     std::int64_t m_lo1 = 0;
+    std::int64_t m_hi0 = -1;
+    std::int64_t m_hi1 = -1;
     std::int64_t m_tile0 = 1;
     std::int64_t m_tile1 = 1;
     int m_n0 = 0;
     int m_n1 = 0;
+    bool m_linearScan = false;
     std::vector<std::vector<int>> m_buckets;
 };
 

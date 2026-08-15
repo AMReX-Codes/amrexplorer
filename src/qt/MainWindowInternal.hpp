@@ -125,6 +125,12 @@
 #include <utility>
 #include <vector>
 
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+// Used only by the visible_sync_test gate below (test-access builds only).
+#include <chrono>
+#include <thread>
+#endif
+
 namespace amrvis::qt {
 
 // Fed from the project version through a CMake compile definition; the
@@ -304,5 +310,43 @@ inline QPainterPath sphericalSectorPath(const PlaneMapping& mapping,
     path.closeSubpath();
     return path;
 }
+
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+// A gate the visible-range sync worker waits on when armed, so the staleness
+// regression test can hold a sync mid-flight, invalidate a panel, then release
+// workers one at a time -- first the now-stale sync (to observe it dropped),
+// then the self-healing rerun -- and check the transient in between. Grants are
+// counted, not a single boolean, precisely so the sync and its rerun can be
+// released independently. Compiled only into the test-access build.
+namespace visible_sync_test {
+
+inline std::atomic<bool> gateArmed{false};
+inline std::atomic<int> releaseGrants{0};  // # of "proceed" grants issued
+inline std::atomic<int> passed{0};         // # of workers that have proceeded
+inline std::atomic<int> waiting{0};        // # of workers currently parked
+
+inline void waitAtGate()
+{
+    if (!gateArmed.load()) {
+        return;
+    }
+    waiting.fetch_add(1);
+    // Park until a grant is free (passed < grants) -- or the gate is disarmed,
+    // or the bounded wait elapses. The bound matters: if the test dies without
+    // releasing, the worker must still return so QThreadPool's destructor can
+    // join it, rather than hanging into a ctest TIMEOUT that masks the exit code.
+    for (int waited = 0; waited < 10000; ++waited) {
+        if (!gateArmed.load()
+            || passed.load() < releaseGrants.load()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    passed.fetch_add(1);
+    waiting.fetch_sub(1);
+}
+
+} // namespace visible_sync_test
+#endif
 
 } // namespace amrvis::qt

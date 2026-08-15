@@ -2,6 +2,57 @@
 
 namespace amrvis::qt {
 
+void MainWindow::requestVisibleSyncForTest()
+{
+    syncVisibleRanges();
+}
+
+void MainWindow::armVisibleSyncGateForTest()
+{
+    visible_sync_test::releaseGrants.store(0);
+    visible_sync_test::passed.store(0);
+    visible_sync_test::waiting.store(0);
+    visible_sync_test::gateArmed.store(true);
+}
+
+void MainWindow::releaseVisibleSyncGateForTest()
+{
+    // Grant exactly one parked worker leave to proceed.
+    visible_sync_test::releaseGrants.fetch_add(1);
+}
+
+void MainWindow::disarmVisibleSyncGateForTest()
+{
+    // Free everything (used on test exit so no worker stays parked).
+    visible_sync_test::gateArmed.store(false);
+}
+
+bool MainWindow::visibleSyncWorkerWaitingForTest() const
+{
+    return visible_sync_test::waiting.load() > 0;
+}
+
+void MainWindow::setViewDisplayRangesForTest(double minimum, double maximum)
+{
+    // Stamp a sentinel range onto every 3-D panel so a subsequent sync's
+    // real union is observably different: whichever panels the sync applies to
+    // leave the sentinel, whichever it drops keep it.
+    for (auto* state : {&m_planeViews[0], &m_planeViews[1], &m_planeViews[2]}) {
+        state->displayMinimum = minimum;
+        state->displayMaximum = maximum;
+    }
+}
+
+std::uint64_t MainWindow::activeViewRenderGenerationForTest() const
+{
+    return m_activeView == nullptr ? 0 : m_activeView->renderGeneration;
+}
+
+std::uint64_t MainWindow::visibleSyncStaleSkipsForTest() const noexcept
+{
+    return m_visibleSyncStaleSkips;
+}
+
 void MainWindow::configureContourSyncForTest(
     int count, bool logarithmic, std::array<double, 3> slicePositions)
 {
@@ -214,16 +265,7 @@ bool MainWindow::allViewsUseViewportBoundedOutputForTest() const
 
 int MainWindow::slicesInFlightForTest() const
 {
-    if (m_viewDimension == 2) {
-        return m_view2d.pendingRequests;
-    }
-    const std::array<const PlaneViewState*, 3> threeDimensional{
-        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
-    int total = 0;
-    for (const auto* state : threeDimensional) {
-        total += state->pendingRequests;
-    }
-    return total;
+    return slicesInFlight();
 }
 
 bool MainWindow::allViewsFixedScaleRasterCoversViewportForTest() const

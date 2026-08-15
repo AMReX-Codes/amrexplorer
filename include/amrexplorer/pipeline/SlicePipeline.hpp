@@ -38,6 +38,22 @@ struct SliceDisplayResult {
     SliceRequest request;
     SliceQueryResult slice;
     ImageBuffer image;
+    // Re-render-from-cache fast path: the view's existing display plane is
+    // immutable and unchanged, so refreshCachedSlice hands it back by
+    // shared_ptr instead of deep-copying it into slice.plane (which is up to
+    // ~110 MB). When set, displayPlane() and showSlice read through it and
+    // adopt it directly; empty on the executeSlice path, which produces a
+    // fresh slice.plane. Note this makes a cache-path arrival *reuse* the same
+    // pointer the view already holds — pointer identity is no longer a proxy
+    // for "changed", so identity-keyed staleness guards must gate on something
+    // else (see PlaneViewState::plane in MainWindow.hpp).
+    //
+    // NOT covered by this fast path: the contour-mode companion planes
+    // (contourPlane / contourFinePlane below) are still deep-copied by value,
+    // ~14 MB each per view (~42 MB per interactive tweak in 3-D). They retire
+    // with the wider "stop round-tripping planes through SliceDisplayResult"
+    // cleanup, which also removes this dual reusedPlane/slice.plane slot.
+    std::shared_ptr<const ScalarPlane> reusedPlane;
     // Coordinate system of the dataset (AMReX Header code). 2 (spherical) warps
     // `image` into physical (R, Z); all others leave it in logical space.
     int coordinateSystem = 0;
@@ -78,6 +94,17 @@ struct SliceDisplayResult {
     // InitialSliceResult (see cache-budget-exceeded-hard-fails-after-load).
     int cacheFallbackFromLevel = -1;
     int cacheFallbackToLevel = -1;
+
+    // The display plane, whether freshly produced (slice.plane) or reused from
+    // the cache (reusedPlane). Every reader of the display plane goes through
+    // this so the two producers stay interchangeable. The ternary is not a null
+    // fallback: reusedPlane is either unset (executeSlice path -> slice.plane)
+    // or a valid plane (refreshCachedSlice rejects a null argument), so this
+    // never substitutes an empty plane for a missing one.
+    [[nodiscard]] const ScalarPlane& displayPlane() const noexcept
+    {
+        return reusedPlane ? *reusedPlane : slice.plane;
+    }
 };
 
 struct InitialSliceResult {
@@ -253,7 +280,8 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
 // depend on palette/log/range.
 [[nodiscard]] SliceDisplayResult refreshCachedSlice(
     const std::shared_ptr<DatasetSession>& dataset,
-    const SliceRequest& request, ScalarPlane displayPlane,
+    const SliceRequest& request,
+    std::shared_ptr<const ScalarPlane> displayPlanePtr,
     ScalarPlane contourPlane, ScalarPlane contourFinePlane,
     int contourFineFactor, std::vector<VectorSegment> vectors,
     RangeMode rangeMode,

@@ -87,7 +87,7 @@ void DisplayCoordinator::realignArrivalToRange(SliceDisplayResult& result,
         return;
     }
     if (!result.rasterUnchanged) {
-        result.image = renderScalarPlane(result.slice.plane,
+        result.image = renderScalarPlane(result.displayPlane(),
             ScalarRenderSettings{
                 .minimum = result.minimum,
                 .maximum = result.maximum,

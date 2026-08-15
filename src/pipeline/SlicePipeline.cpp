@@ -449,24 +449,19 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     result.slice.metrics.cacheHits += contour.metrics.cacheHits;
     result.slice.metrics.payloadBytesRead += contour.metrics.payloadBytesRead;
 
-    // No supersampling (#8 removed it): the linear plane is already smooth, so
-    // store it as the fine plane too (factor 1) for refreshCachedSlice to
-    // reuse. The copy and the factor retire together when the "stop
-    // round-tripping planes through SliceDisplayResult" cleanup lands.
-    result.contourFinePlane = result.contourPlane;
-    result.contourFineFactor = 1;
+    // No supersampling (#56 removed it): the linear plane is already at contour
+    // resolution, so contours are extracted from contourPlane directly.
     const auto values = contourValues(
         minimum, maximum, contourCount, logarithmic);
     result.contourPolylines = contourPolylinesForDisplay(
-        result.contourFinePlane, 1, values, displayWidth, displayHeight);
+        result.contourPlane, values, displayWidth, displayHeight);
 }
 
 SliceDisplayResult refreshCachedSlice(
     const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request,
     std::shared_ptr<const ScalarPlane> displayPlanePtr,
-    ScalarPlane contourPlane, ScalarPlane contourFinePlane, int contourFineFactor,
-    std::vector<VectorSegment> vectors,
+    ScalarPlane contourPlane, std::vector<VectorSegment> vectors,
     RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
@@ -511,12 +506,10 @@ SliceDisplayResult refreshCachedSlice(
     }
     if (isContourMode(displayMode)) {
         result.contourPlane = std::move(contourPlane);
-        result.contourFinePlane = std::move(contourFinePlane);
-        result.contourFineFactor = contourFineFactor;
         const auto values = contourValues(
             range.minimum, range.maximum, contourCount, range.logarithmic);
         result.contourPolylines = contourPolylinesForDisplay(
-            result.contourFinePlane, contourFineFactor, values,
+            result.contourPlane, values,
             request.outputSize[0], request.outputSize[1]);
     }
     if (displayMode == DisplayMode::VelocityVectors) {
@@ -527,11 +520,11 @@ SliceDisplayResult refreshCachedSlice(
 }
 
 std::vector<ContourPolyline> recomputeContourPolylines(
-    const ScalarPlane& finePlane, int fineFactor, double minimum,
+    const ScalarPlane& plane, double minimum,
     double maximum, bool logarithmic, int contourCount,
     int displayWidth, int displayHeight)
 {
-    if (finePlane.width <= 0 || finePlane.height <= 0 || contourCount < 1
+    if (plane.width <= 0 || plane.height <= 0 || contourCount < 1
         || !(minimum < maximum) || (logarithmic && !(minimum > 0.0))) {
         return {};
     }
@@ -539,7 +532,7 @@ std::vector<ContourPolyline> recomputeContourPolylines(
         const auto values = contourValues(
             minimum, maximum, contourCount, logarithmic);
         return contourPolylinesForDisplay(
-            finePlane, fineFactor, values, displayWidth, displayHeight);
+            plane, values, displayWidth, displayHeight);
     } catch (const std::exception&) {
         return {};
     }
@@ -551,7 +544,7 @@ void recomputeContourPolylines(SliceDisplayResult& result)
         return;
     }
     result.contourPolylines = recomputeContourPolylines(
-        result.contourFinePlane, result.contourFineFactor, result.minimum,
+        result.contourPlane, result.minimum,
         result.maximum, result.logarithmic, result.contourCount,
         result.request.outputSize[0], result.request.outputSize[1]);
 }

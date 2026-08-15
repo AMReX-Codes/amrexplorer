@@ -430,9 +430,6 @@ private:
         // and contour-count changes refresh without a new SliceQuery.
         std::shared_ptr<const ScalarPlane> contourPlane
             = std::make_shared<const ScalarPlane>();
-        std::shared_ptr<const ScalarPlane> contourFinePlane
-            = std::make_shared<const ScalarPlane>();
-        int contourFineFactor = 1;
         std::vector<ContourPolyline> contourPolylines;
         QString fieldName;
         std::optional<RealBox> visibleRegion;

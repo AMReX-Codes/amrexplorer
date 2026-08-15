@@ -153,7 +153,7 @@ int main()
         result.maximum = 3.0;
         result.mode = amrvis::DisplayMode::RasterContours;
         result.contourCount = 2;
-        result.contourFinePlane = makePlane({1.0F, 3.0F});
+        result.contourPlane = makePlane({1.0F, 3.0F});
         result.request.outputSize = {2, 1};
         const amrvis::Palette palette;
 
@@ -201,9 +201,9 @@ int main()
         const auto fine = makePlane({2.0F, 6.0F});
         const amrvis::ScalarPlane empty;
         const std::array<DisplayCoordinator::PanelSyncInput, 3> inputs{{
-            {&a, &fine, 1, {2, 1}},
-            {&b, nullptr, 1, {2, 1}},
-            {&empty, nullptr, 1, {0, 0}},
+            {&a, &fine, {2, 1}},
+            {&b, nullptr, {2, 1}},
+            {&empty, nullptr, {0, 0}},
         }};
 
         // No cached range: the union across panels drives every update.
@@ -234,7 +234,7 @@ int main()
         // Neither cache nor finite samples: nothing to synchronize to.
         coordinator.invalidateRangeCache();
         const std::array<DisplayCoordinator::PanelSyncInput, 1> emptyOnly{{
-            {&empty, nullptr, 1, {0, 0}}}};
+            {&empty, nullptr, {0, 0}}}};
         require(!coordinator.syncPanelsToSharedRange(
                 key, emptyOnly, false, false, 3, palette).has_value(),
             "an empty panel set produced a sync");
@@ -251,8 +251,8 @@ int main()
         const auto crossing = makePlane({-4.0F, 1.0F});  // crosses zero
         const auto fine = makePlane({2.0F, 6.0F});
         const std::array<DisplayCoordinator::PanelSyncInput, 2> mixed{{
-            {&positive, &fine, 1, {2, 1}},
-            {&crossing, nullptr, 1, {2, 1}},
+            {&positive, &fine, {2, 1}},
+            {&crossing, nullptr, {2, 1}},
         }};
         const auto sync = DisplayCoordinator::renderPanelsToSharedRange(
             std::nullopt, mixed, true, true, 3, palette);
@@ -269,8 +269,8 @@ int main()
         // An all-positive union keeps the requested log mapping.
         const auto other = makePlane({3.0F, 5.0F});
         const std::array<DisplayCoordinator::PanelSyncInput, 2> allPositive{{
-            {&positive, nullptr, 1, {2, 1}},
-            {&other, nullptr, 1, {2, 1}},
+            {&positive, nullptr, {2, 1}},
+            {&other, nullptr, {2, 1}},
         }};
         const auto positiveSync = DisplayCoordinator::renderPanelsToSharedRange(
             std::nullopt, allPositive, true, false, 3, palette);

@@ -287,7 +287,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
         && state.cachedVectorVField == vectorVField
         && state.cachedVectorUField == vectorUField
         && displayMode == state.cachedMode
-        && (!isContourMode(displayMode) || state.contourFinePlane->width > 0)
+        && (!isContourMode(displayMode) || state.contourPlane->width > 0)
         && (displayMode != DisplayMode::VelocityVectors
             || (!state.vectorSegments.empty()
                 && contourCount == state.cachedContourCount
@@ -325,21 +325,18 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
         // showSlice, so the former ~110 MB copy per range/log/palette tweak is
         // gone. A newer arrival can safely replace the view's pointers
         // meanwhile; this worker keeps reading its own snapshots. (The
-        // contour-resolution planes are still deref'd into by-value copies at
-        // the call below -- ~14 MB each; see SliceDisplayResult::reusedPlane for
-        // why they are not yet reused.)
+        // contour-resolution plane is still deref'd into a by-value copy at
+        // the call below -- ~14 MB; see SliceDisplayResult::reusedPlane for
+        // why it is not yet reused.)
         future = QtConcurrent::run([dataset, request,
             displayPlane = state.plane,
             contourPlane = state.contourPlane,
-            contourFinePlane = state.contourFinePlane,
-            contourFineFactor = state.contourFineFactor,
             vectors = state.vectorSegments,
             rangeMode, userRange, logarithmic, palette, displayMode,
             vectorUField, vectorVField, contourCount, rasterDirty,
             cancellation]() mutable {
             return refreshCachedSlice(dataset, request, std::move(displayPlane),
-                *contourPlane, *contourFinePlane,
-                contourFineFactor, std::move(vectors), rangeMode, userRange,
+                *contourPlane, std::move(vectors), rangeMode, userRange,
                 logarithmic, palette, displayMode, vectorUField, vectorVField,
                 contourCount, rasterDirty, cancellation);
         });
@@ -905,9 +902,6 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
     state.displayRegion = display.displayRegion;
     state.contourPlane
         = std::make_shared<const ScalarPlane>(std::move(display.contourPlane));
-    state.contourFinePlane = std::make_shared<const ScalarPlane>(
-        std::move(display.contourFinePlane));
-    state.contourFineFactor = display.contourFineFactor;
     state.contourPolylines = std::move(display.contourPolylines);
     const auto fieldName = QString::fromStdString(display.fieldName);
     state.fieldName = fieldName;
@@ -1020,8 +1014,7 @@ void MainWindow::syncVisibleRanges()
 
     struct PanelSnapshot {
         std::shared_ptr<const ScalarPlane> plane;
-        std::shared_ptr<const ScalarPlane> contourFinePlane;
-        int contourFineFactor = 1;
+        std::shared_ptr<const ScalarPlane> contourPlane;
         std::array<int, 2> outputSize{0, 0};
     };
     std::array<PlaneViewState*, 3> views{
@@ -1033,8 +1026,8 @@ void MainWindow::syncVisibleRanges()
     std::array<std::uint64_t, 3> snapshotGenerations{};
     for (std::size_t index = 0; index < views.size(); ++index) {
         const auto* state = views[index];
-        snapshots[index] = {state->plane, state->contourFinePlane,
-            state->contourFineFactor, state->cachedRequest.outputSize};
+        snapshots[index] = {state->plane, state->contourPlane,
+            state->cachedRequest.outputSize};
         snapshotGenerations[index] = state->renderGeneration;
     }
 
@@ -1228,8 +1221,7 @@ void MainWindow::syncVisibleRanges()
             for (std::size_t index = 0; index < snapshots.size(); ++index) {
                 const auto& snapshot = snapshots[index];
                 inputs[index] = {snapshot.plane.get(),
-                    snapshot.contourFinePlane.get(), snapshot.contourFineFactor,
-                    snapshot.outputSize};
+                    snapshot.contourPlane.get(), snapshot.outputSize};
             }
             SyncOutcome outcome;
             outcome.sync = DisplayCoordinator::renderPanelsToSharedRange(

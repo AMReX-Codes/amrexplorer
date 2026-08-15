@@ -1116,9 +1116,14 @@ int main(int argc, char* argv[])
         // model as the fixed-scale-parity poll above.
         auto* poll = new QTimer(&window);
         poll->setInterval(100);
-        auto ticks = std::make_shared<int>(0);
         auto settles = std::make_shared<int>(0);
         auto settlesLastTick = std::make_shared<int>(-1);
+        // Settle count when the current step's action was issued. The flicker
+        // guard bounds settles-per-step (fetch *rounds*), not elapsed ticks: a
+        // legitimate convergence is a few rounds however slow the runner, while
+        // the flicker re-issues without bound. Counting ticks instead would
+        // misread a starved-but-finite fetch chain as a loop.
+        auto settlesAtStep = std::make_shared<int>(0);
         QObject::connect(&window,
             &amrvis::qt::MainWindow::interactiveSlicesSettled,
             &application, [settles] { ++*settles; });
@@ -1133,8 +1138,8 @@ int main(int argc, char* argv[])
                 window.selectFixedScaleForTest(32);
             });
         QObject::connect(poll, &QTimer::timeout, &application,
-            [&window, &application, poll, phase, ticks, settles,
-                settlesLastTick] {
+            [&window, &application, poll, phase, settles, settlesLastTick,
+                settlesAtStep] {
                 // Quiescence also requires no request queued behind the slice
                 // debounce: a pan/zoom schedules its refetch there, so between
                 // the input and the debounce firing nothing is on a worker yet
@@ -1144,11 +1149,11 @@ int main(int argc, char* argv[])
                     && *settles == *settlesLastTick;
                 *settlesLastTick = *settles;
                 if (!quiet) {
-                    // Non-quiescence for a whole budget in a row is the flicker
-                    // regression: the demand loop re-issuing itself endlessly.
-                    // Any legitimate quiescence resets the budget, so only a
-                    // loop that never settles reaches this.
-                    if (++*ticks >= 100) {
+                    // Too many fetch rounds for one step is the flicker
+                    // regression (the demand loop re-issuing itself endlessly);
+                    // a legitimate step converges in a handful. A pure hang with
+                    // no settles is left to the watchdog, not misreported here.
+                    if (*settles - *settlesAtStep > 20) {
                         poll->stop();
                         std::cerr << "the fixed-scale demand loop never "
                                      "quiesced (flicker regression)\n";
@@ -1156,7 +1161,6 @@ int main(int argc, char* argv[])
                     }
                     return;
                 }
-                *ticks = 0;
                 if (*phase == 0) {
                     // Fixed scale converged: the raster backs the whole viewport
                     // and the demand loop stays quiet, rather than re-issuing
@@ -1172,6 +1176,7 @@ int main(int argc, char* argv[])
                     // Five cells' worth of pixels at 32x through the real
                     // Shift+left mouse event path; the newly visible cells are
                     // fetched, then the loop is quiet again.
+                    *settlesAtStep = *settles;
                     window.shiftDragActiveViewForTest(-160, 0);
                     return;
                 }
@@ -1187,6 +1192,7 @@ int main(int argc, char* argv[])
                         application.exit(1);
                         return;
                     }
+                    *settlesAtStep = *settles;
                     window.rubberBandZoomActiveViewForTest();
                     return;
                 }
@@ -1201,9 +1207,13 @@ int main(int argc, char* argv[])
                 }
             });
         // Backstop for a hang outside the poll (e.g. the initial load never
-        // finishing); the poll's own bounded-tick guard catches a flicker first.
+        // finishing); the poll's own settle-count guard catches a flicker first.
+        // Stop the poll so a tick in the same pass can't overwrite exit(4).
         QTimer::singleShot(20000, &application,
-            [&application] { application.exit(4); });
+            [&application, poll] {
+                poll->stop();
+                application.exit(4);
+            });
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
                 window.resize(420, 301);

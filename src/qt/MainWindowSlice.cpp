@@ -468,9 +468,13 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             // its own in-flight state before any such throw).
             try {
                 syncVisibleRanges();
-            } catch (const std::exception&) {
-                // The shared-range sync could not be scheduled; the panels keep
-                // their per-view ranges until the next arrival retries.
+            } catch (const std::exception& error) {
+                // The shared-range sync could not be scheduled; surface it (as
+                // the arrival path above does) rather than fail silently. The
+                // panels keep their per-view ranges until the next arrival
+                // retries.
+                reportBackgroundError(tr("Cannot synchronize views: %1")
+                    .arg(exceptionMessage(error)));
             }
             updateDiagnostics();
             watcher->deleteLater();
@@ -893,13 +897,6 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
     // the 3-D shared-range sync; it must never lag the plane it stamps, or a
     // sync that rendered the previous plane could be mistaken for current.
     ++state.renderGeneration;
-    // Arm the rerun here too, so every plane-rewriting path is self-consistent:
-    // an in-flight sync will drop this now-superseded panel (all-or-nothing),
-    // and this guarantees a fresh sync follows even for paths that rewrite the
-    // plane without calling syncVisibleRanges() (applySequenceFrame, the
-    // initial-load apply). The dispatch below clears it, so a settled batch
-    // still runs exactly one sync.
-    m_visibleSyncRerun = true;
     // Spherical warps the raster into physical (R, Z); overlays and the probe
     // map through displayRegion, which for every other system is just the
     // plane's logical bounds (see PlaneMapping).
@@ -1197,10 +1194,13 @@ void MainWindow::syncVisibleRanges()
             if (m_visibleSyncRerun) {
                 m_visibleSyncRerun = false;
                 // Re-dispatch inside a slot: guard as at the arrival site so a
-                // bad_alloc allocating the next worker cannot escape.
+                // bad_alloc allocating the next worker cannot escape, and
+                // surface it rather than fail silently.
                 try {
                     syncVisibleRanges();
-                } catch (const std::exception&) {
+                } catch (const std::exception& error) {
+                    reportBackgroundError(tr("Cannot synchronize views: %1")
+                        .arg(exceptionMessage(error)));
                 }
             }
             if (m_activeRequests == 0) {
@@ -1245,10 +1245,12 @@ void MainWindow::syncVisibleRanges()
             }
             return outcome;
         }));
-    } catch (const std::exception&) {
+    } catch (const std::exception& error) {
         m_visibleSyncInFlight = false;
         --m_activeRequests;
         watcher->deleteLater();
+        reportBackgroundError(tr("Cannot synchronize views: %1")
+            .arg(exceptionMessage(error)));
     }
 }
 

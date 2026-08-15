@@ -1793,12 +1793,18 @@ int main(int argc, char* argv[])
         poll->setInterval(5);
         auto phase = std::make_shared<int>(0);
         auto attempts = std::make_shared<int>(0);
-        // Stale-result count captured the instant before the gated overlap is
-        // set up, so the assertion measures *only* the drop this overlap
-        // causes -- not any earlier stale result (e.g. from the setup batch's
-        // own sync). Exactly one drop is required.
-        auto baseline = std::make_shared<std::uint64_t>(0);
-        const auto finish = [&application, poll](int code) {
+        // Dedicated skip count captured the instant before the gated overlap
+        // is set up, so the assertion measures only the drop this overlap
+        // causes: without single-flight gating the setup batch's own arrivals
+        // also overlap and drop once, and that lands in the baseline. This
+        // counter's sole writer is the rerun-drop, so an exact delta is safe
+        // (unlike m_staleResults, which five subsystems write).
+        auto baseline = std::make_shared<int>(0);
+        const auto finish = [&application, poll, &window](int code) {
+            // Release the gate first: a worker still parked on it (e.g. on an
+            // early-exit path) must be freed so QThreadPool can join it,
+            // rather than relying on waitAtGate's fallback timeout.
+            window.releaseVisibleSyncGateForTest();
             poll->stop();  // no stray timeout fires after we ask to exit
             application.exit(code);
         };
@@ -1816,7 +1822,7 @@ int main(int argc, char* argv[])
                             return;
                         }
                         *phase = 1;
-                        *baseline = window.staleResultCountForTest();
+                        *baseline = window.visibleSyncStaleSkipsForTest();
                         // Start a sync with the worker gated so it cannot finish
                         // before we queue the superseding one.
                         window.armVisibleSyncGateForTest();
@@ -1847,13 +1853,12 @@ int main(int argc, char* argv[])
                     // The released gated worker's completion runs on this (GUI)
                     // thread; once it lands it must have dropped exactly one
                     // outcome as superseded rather than applied it over the
-                    // newer state. More than one drop means something other
-                    // than the gated overlap moved the counter -- fail loudly
-                    // rather than let a coincidental increment pass the test.
-                    const auto stale = window.staleResultCountForTest();
-                    if (stale > *baseline + 1) {
+                    // newer state. More than one drop means an unexpected
+                    // second overlap -- fail loudly rather than pass on it.
+                    const auto skips = window.visibleSyncStaleSkipsForTest();
+                    if (skips > *baseline + 1) {
                         finish(5);
-                    } else if (stale == *baseline + 1) {
+                    } else if (skips == *baseline + 1) {
                         finish(0);
                     }
                     // else keep polling; the attempts guard above fails on hang.

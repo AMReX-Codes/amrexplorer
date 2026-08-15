@@ -337,7 +337,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             rangeMode, userRange, logarithmic, palette, displayMode,
             vectorUField, vectorVField, contourCount, rasterDirty,
             cancellation]() mutable {
-            return refreshCachedSlice(dataset, request, displayPlane,
+            return refreshCachedSlice(dataset, request, std::move(displayPlane),
                 *contourPlane, *contourFinePlane,
                 contourFineFactor, std::move(vectors), rangeMode, userRange,
                 logarithmic, palette, displayMode, vectorUField, vectorVField,
@@ -947,22 +947,16 @@ void MainWindow::syncVisibleRanges()
     if (rangeMode != RangeMode::Visible) {
         return;
     }
-    // Dispatch exactly one sync per settled interactive batch. While panel
-    // arrivals are still outstanding (m_activeRequests != 0) or a sync is
-    // already running, defer: the arrival that settles the batch -- or the
-    // in-flight sync's completion -- dispatches then, against the fully
-    // updated panels. Without this a three-panel tweak computes (and then
-    // discards) a full three-panel sync on each of the first two arrivals
-    // before the third settles. Deferral also means the only outcome that can
-    // reach completion while a newer request is pending is a genuinely
-    // superseded inter-batch sync, which the completion handler drops.
-    if (m_activeRequests != 0 || m_visibleSyncInFlight) {
+    if (m_visibleSyncInFlight) {
+        // Coalesce: rerun with fresh state once the in-flight worker lands
+        // instead of stacking a worker per arrival. A single-flight sync per
+        // batch (deferring dispatch until the panel slices settle) would avoid
+        // the one superseded sync this leaves per multi-panel tweak, but must
+        // key on panel slice work (PlaneViewState::pendingRequests), not the
+        // global m_activeRequests -- deferred to its own change.
         m_visibleSyncRerun = true;
         return;
     }
-    // This dispatch consumes any deferred request; a request that lands while
-    // the worker below runs re-arms the flag and reruns from its completion.
-    m_visibleSyncRerun = false;
 
     // The coordinator resolves the shared range (the cached full-domain
     // range when current, so the color bar stays stable during zoom and pan;
@@ -1112,10 +1106,15 @@ void MainWindow::syncVisibleRanges()
             } else if (current && outcome.sync && m_visibleSyncRerun) {
                 // Superseded by a request that landed mid-sync: leave the newer
                 // image in place and let the queued rerun apply the current
-                // settings. Counted as a dropped stale result (same bucket the
-                // diagnostics panel surfaces); the overlapping-sync regression
-                // test reads this counter.
+                // settings. Counted as a dropped stale result for the
+                // diagnostics panel.
                 ++m_staleResults;
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+                // A dedicated, test-only tally with this drop as its sole
+                // writer: the regression test asserts an exact count, which a
+                // multi-writer counter like m_staleResults cannot support.
+                ++m_visibleSyncStaleSkips;
+#endif
             } else if (generation != m_generation) {
                 m_pendingRangeStore.reset();
                 m_visibleSyncRerun = false;

@@ -25,9 +25,9 @@ bool MainWindow::visibleSyncWorkerWaitingForTest() const
     return visible_sync_test::workerWaiting.load();
 }
 
-std::uint64_t MainWindow::staleResultCountForTest() const noexcept
+int MainWindow::visibleSyncStaleSkipsForTest() const noexcept
 {
-    return m_staleResults;
+    return m_visibleSyncStaleSkips;
 }
 
 void MainWindow::configureContourSyncForTest(

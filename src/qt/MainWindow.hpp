@@ -144,14 +144,14 @@ public:
     // Test-only: drive an overlapping visible-range sync deterministically.
     // The gate blocks the sync worker so the test can queue a second sync
     // (setting the rerun flag) before the first completes; a superseded
-    // outcome is dropped and counted in m_staleResults, which the test reads
-    // through staleResultCountForTest(). See the overlapping-sync smoke test
-    // and syncVisibleRanges.
+    // outcome is dropped and tallied in the test-only m_visibleSyncStaleSkips,
+    // which the test reads through visibleSyncStaleSkipsForTest(). See the
+    // overlapping-sync smoke test and syncVisibleRanges.
     void requestVisibleSyncForTest();
     void armVisibleSyncGateForTest();
     void releaseVisibleSyncGateForTest();
     [[nodiscard]] bool visibleSyncWorkerWaitingForTest() const;
-    [[nodiscard]] std::uint64_t staleResultCountForTest() const noexcept;
+    [[nodiscard]] int visibleSyncStaleSkipsForTest() const noexcept;
 
     // Test-only: for each current view (ordered by normal axis; 2-D has one),
     // the display range and the distinct contour levels present in its overlay
@@ -864,6 +864,13 @@ private:
     bool m_visibleSyncInFlight = false;
     bool m_visibleSyncRerun = false;
     std::optional<amrvis::DisplayCoordinator::RangeKey> m_pendingRangeStore;
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+    // Test-only: superseded visible-range sync outcomes dropped by the
+    // rerun guard. Sole writer is that drop, so the overlapping-sync test can
+    // assert an exact count. m_staleResults carries the same event for the
+    // user-facing diagnostics panel.
+    int m_visibleSyncStaleSkips = 0;
+#endif
     QTreeWidget* m_metadataTree = nullptr;
     QPlainTextEdit* m_diagnostics = nullptr;
     QDockWidget* m_metadataDock = nullptr;

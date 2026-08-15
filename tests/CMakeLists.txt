@@ -126,6 +126,23 @@ if(TARGET amrexplorer_remote)
     )
     add_test(NAME remote_codec COMMAND test_remote_codec)
 
+    # Fuzz/property harness for the remote wire decoder (malicious-peer trust
+    # boundary). Deterministic + bounded so it runs as a normal ctest; run under
+    # the sanitizers preset for UB/OOB. See the file header for libFuzzer use.
+    add_executable(fuzz_wire_codec fuzz/fuzz_wire_codec.cpp)
+    target_include_directories(fuzz_wire_codec PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/fuzz"
+        "${PROJECT_SOURCE_DIR}/src/remote"
+        "${PROJECT_BINARY_DIR}/src/remote/generated")
+    target_link_libraries(fuzz_wire_codec
+        PRIVATE
+            amrexplorer::remote
+            ${AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET}
+            amrexplorer::warnings
+    )
+    add_test(NAME fuzz_wire_codec COMMAND fuzz_wire_codec)
+    set_tests_properties(fuzz_wire_codec PROPERTIES TIMEOUT 120)
+
     add_executable(test_remote_server
         integration/test_remote_server.cpp)
     target_include_directories(test_remote_server PRIVATE
@@ -1359,3 +1376,15 @@ set_tests_properties(slice_query_benchmark PROPERTIES TIMEOUT 120)
 add_test(NAME slice_query_benchmark_resampled
     COMMAND bench_slice_query 16 8 200 1)
 set_tests_properties(slice_query_benchmark_resampled PROPERTIES TIMEOUT 120)
+
+# Fuzz/property harness for the crafted-plotfile header parsers. No remote
+# dependency, so it builds and runs (including under the sanitizers preset)
+# regardless of remote support. Deterministic + bounded; see the file header
+# for libFuzzer use.
+add_executable(fuzz_header_parsing fuzz/fuzz_header_parsing.cpp)
+target_include_directories(fuzz_header_parsing PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/fuzz")
+target_link_libraries(
+    fuzz_header_parsing PRIVATE amrexplorer::core amrexplorer::warnings)
+add_test(NAME fuzz_header_parsing COMMAND fuzz_header_parsing)
+set_tests_properties(fuzz_header_parsing PROPERTIES TIMEOUT 120)

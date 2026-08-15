@@ -25,14 +25,34 @@ bool MainWindow::visibleSyncWorkerWaitingForTest() const
     return visible_sync_test::workerWaiting.load();
 }
 
-void MainWindow::bumpViewRenderGenerationForTest()
+void MainWindow::setViewDisplayRangesForTest(double minimum, double maximum)
 {
-    // Simulate one 3-D panel being re-sliced mid-sync: bump its render
-    // generation so an in-flight sync's snapshot no longer matches. Bumping the
-    // stamp alone (not the plane) is enough to exercise the completion guard,
-    // and deliberately does not arm m_visibleSyncRerun -- the exact path the
-    // per-panel guard exists to cover.
-    ++m_planeViews[0].renderGeneration;
+    // Stamp a sentinel range onto every 3-D panel so a subsequent sync's
+    // real union is observably different: whichever panels the sync applies to
+    // leave the sentinel, whichever it drops keep it.
+    for (auto* state : {&m_planeViews[0], &m_planeViews[1], &m_planeViews[2]}) {
+        state->displayMinimum = minimum;
+        state->displayMaximum = maximum;
+    }
+}
+
+void MainWindow::setRangeModeVisibleForTest(bool visible)
+{
+    // Silently switch between Visible and File (no re-slice), so a re-slice
+    // driven while File is active takes the syncVisibleRanges early-return path
+    // and does not arm the rerun flag -- the mid-sync-invalidation path the
+    // per-panel identity/rerun signals both miss.
+    const QSignalBlocker blocker(m_rangeMode);
+    const auto index = m_rangeMode->findData(static_cast<int>(
+        visible ? RangeMode::Visible : RangeMode::File));
+    if (index >= 0) {
+        m_rangeMode->setCurrentIndex(index);
+    }
+}
+
+std::uint64_t MainWindow::activeViewRenderGenerationForTest() const
+{
+    return m_activeView == nullptr ? 0 : m_activeView->renderGeneration;
 }
 
 std::uint64_t MainWindow::visibleSyncStaleSkipsForTest() const noexcept
@@ -252,16 +272,7 @@ bool MainWindow::allViewsUseViewportBoundedOutputForTest() const
 
 int MainWindow::slicesInFlightForTest() const
 {
-    if (m_viewDimension == 2) {
-        return m_view2d.pendingRequests;
-    }
-    const std::array<const PlaneViewState*, 3> threeDimensional{
-        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
-    int total = 0;
-    for (const auto* state : threeDimensional) {
-        total += state->pendingRequests;
-    }
-    return total;
+    return slicesInFlight();
 }
 
 bool MainWindow::allViewsFixedScaleRasterCoversViewportForTest() const

@@ -142,16 +142,19 @@ public:
         int count, bool logarithmic, std::array<double, 3> slicePositions);
 
     // Test-only: drive the visible-range sync staleness guard deterministically.
-    // The gate holds the sync worker mid-flight; the test then bumps a panel's
-    // render generation (bumpViewRenderGenerationForTest, simulating that panel
-    // being re-sliced) and releases the worker. Its completion must drop that
-    // panel's stale outcome, tallied in the test-only m_visibleSyncStaleSkips
-    // and read through visibleSyncStaleSkipsForTest(). See the overlapping-sync
-    // smoke test and syncVisibleRanges.
+    // Set sentinel display ranges, gate a sync mid-flight, re-slice one panel
+    // for real (zoomActiveViewForTest) under a silently-switched File mode so it
+    // rewrites that panel's plane without arming rerun, switch back to Visible,
+    // and release. The completion must drop the whole (now-stale) outcome --
+    // tallied in the test-only m_visibleSyncStaleSkips, read through
+    // visibleSyncStaleSkipsForTest() -- leaving the two untouched panels on the
+    // sentinel range. See the staleness smoke test and syncVisibleRanges.
     void requestVisibleSyncForTest();
     void armVisibleSyncGateForTest();
     void releaseVisibleSyncGateForTest();
-    void bumpViewRenderGenerationForTest();
+    void setViewDisplayRangesForTest(double minimum, double maximum);
+    void setRangeModeVisibleForTest(bool visible);
+    [[nodiscard]] std::uint64_t activeViewRenderGenerationForTest() const;
     [[nodiscard]] bool visibleSyncWorkerWaitingForTest() const;
     [[nodiscard]] std::uint64_t visibleSyncStaleSkipsForTest() const noexcept;
 
@@ -696,6 +699,10 @@ private:
     // displayed one (pointer identity). Coalesced single-flight: a call while
     // a sync worker is in flight marks a rerun instead of stacking workers.
     void syncVisibleRanges();
+    // Panel slices currently on a worker (summed PlaneViewState::pendingRequests);
+    // the visible-range sync defers dispatch until this is zero. Panel work only
+    // -- excludes particle/line-plot/prefetch requests tracked by m_activeRequests.
+    [[nodiscard]] int slicesInFlight() const;
 
     // Slice requests: the debounce timer coalesces into per-view requests.
     // rasterDirty false means the trigger (contour mode/count) cannot change

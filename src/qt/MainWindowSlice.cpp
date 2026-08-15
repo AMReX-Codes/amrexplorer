@@ -413,7 +413,6 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     const auto fallbackToLevel = result.cacheFallbackToLevel;
                     const auto fallbackFromLevel = result.cacheFallbackFromLevel;
                     showSlice(state, std::move(result));
-                    syncVisibleRanges();
                     // Cache the full-domain range. In 3-D the store defers to
                     // the (async) shared-range sync's completion so the union
                     // across all panels is captured; 2-D has no later sync
@@ -458,6 +457,13 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     ++m_staleResults;
                 }
             }
+            // Dispatch the 3-D shared-range sync after the try/catch, not inside
+            // the success path: under single-flight only the settling arrival
+            // dispatches, so a throwing arrival must not leave the batch without
+            // its sync. syncVisibleRanges no-ops outside 3-D Visible and defers
+            // while slices are still in flight, so calling it on every arrival
+            // (stale or thrown included) is safe.
+            syncVisibleRanges();
             updateDiagnostics();
             watcher->deleteLater();
             // The interactive re-slice batch has drained once no view has work
@@ -867,8 +873,12 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
     // pointees a cached-planes refresh worker may still be reading. The cache
     // fast path already holds the plane by shared_ptr, so adopt it directly;
     // the executeSlice path produces a fresh plane to wrap.
+    // Copy (not move) the reused pointer: moving it would leave `display` in a
+    // state where displayPlane() returns an empty plane, violating its "never
+    // empty" contract for anything that reads `display` afterward. The copy is
+    // a single shared_ptr refcount bump.
     state.plane = display.reusedPlane
-        ? std::move(display.reusedPlane)
+        ? display.reusedPlane
         : std::make_shared<const ScalarPlane>(std::move(display.slice.plane));
     // Spherical warps the raster into physical (R, Z); overlays and the probe
     // map through displayRegion, which for every other system is just the
@@ -941,6 +951,20 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
     statusBar()->clearMessage();
 }
 
+int MainWindow::slicesInFlight() const
+{
+    if (m_viewDimension == 2) {
+        return m_view2d.pendingRequests;
+    }
+    const std::array<const PlaneViewState*, 3> threeDimensional{
+        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+    int total = 0;
+    for (const auto* state : threeDimensional) {
+        total += state->pendingRequests;
+    }
+    return total;
+}
+
 void MainWindow::syncVisibleRanges()
 {
     if (m_viewDimension != 3 || !m_dataset) {
@@ -951,13 +975,17 @@ void MainWindow::syncVisibleRanges()
     if (rangeMode != RangeMode::Visible) {
         return;
     }
-    if (m_visibleSyncInFlight) {
-        // Coalesce: rerun with fresh state once the in-flight worker lands
-        // instead of stacking a worker per arrival. A single-flight sync per
-        // batch (deferring dispatch until the panel slices settle) would avoid
-        // the one superseded sync this leaves per multi-panel tweak, but must
-        // key on panel slice work (PlaneViewState::pendingRequests), not the
-        // global m_activeRequests -- deferred to its own change.
+    // Single-flight: dispatch one sync only once the panel slice batch has
+    // settled (no view has a slice on a worker) and no sync is already running.
+    // While slices are still arriving -- or a sync is in flight -- defer; the
+    // settling arrival, or the running sync's completion, dispatches then,
+    // against fully-current panels. Running against a settled batch is what lets
+    // the completion apply all-or-nothing (a coherent shared range/log/color bar
+    // across all three panels) instead of a stale subset. Gate on panel slice
+    // work only (slicesInFlight), never the global m_activeRequests -- particle
+    // loads, line plots, and sequence prefetch bump that, and would wedge the
+    // sync shut for the whole operation.
+    if (slicesInFlight() != 0 || m_visibleSyncInFlight) {
         m_visibleSyncRerun = true;
         return;
     }
@@ -982,16 +1010,19 @@ void MainWindow::syncVisibleRanges()
         std::shared_ptr<const ScalarPlane> contourFinePlane;
         int contourFineFactor = 1;
         std::array<int, 2> outputSize{0, 0};
-        std::uint64_t renderGeneration = 0;
     };
     std::array<PlaneViewState*, 3> views{
         &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
     std::array<PanelSnapshot, 3> snapshots;
+    // Render-generation stamps captured at dispatch, kept separate from the
+    // plane snapshots so the completion (which only compares these integers)
+    // need not capture the heavy plane shared_ptrs the worker uses.
+    std::array<std::uint64_t, 3> snapshotGenerations{};
     for (std::size_t index = 0; index < views.size(); ++index) {
         const auto* state = views[index];
         snapshots[index] = {state->plane, state->contourFinePlane,
-            state->contourFineFactor, state->cachedRequest.outputSize,
-            state->renderGeneration};
+            state->contourFineFactor, state->cachedRequest.outputSize};
+        snapshotGenerations[index] = state->renderGeneration;
     }
 
     struct SyncOutcome {
@@ -1010,7 +1041,7 @@ void MainWindow::syncVisibleRanges()
     const auto generation = m_generation;
     auto* watcher = new QFutureWatcher<SyncOutcome>(this);
     connect(watcher, &QFutureWatcher<SyncOutcome>::finished, this,
-        [this, watcher, generation, snapshots, views] {
+        [this, watcher, generation, snapshotGenerations, views] {
             m_visibleSyncInFlight = false;
             --m_activeRequests;
             if (m_closing) {
@@ -1023,33 +1054,34 @@ void MainWindow::syncVisibleRanges()
             const bool current = generation == m_generation
                 && m_viewDimension == 3 && m_dataset
                 && nowMode == RangeMode::Visible;
-            // Apply per panel, keyed on the render-generation stamp captured at
-            // dispatch. A panel re-sliced while this sync ran (stamp bumped)
-            // gets its outcome dropped -- the sync rendered from the previous
-            // plane, and cached-plane reuse means pointer identity can't tell
-            // (the pointer is reused), while the global rerun flag is both too
-            // coarse (drops every panel) and not always armed (syncVisibleRanges
-            // early-returns on a mode/dimension flip without setting it). The
-            // unchanged panels still apply, so the color bar and the deferred
-            // range store are not forgone; a dropped panel's own arrival reruns.
-            if (current && outcome.sync) {
+            // All-or-nothing, keyed on the render-generation stamp captured per
+            // panel at dispatch. The shared range and log flag are joint across
+            // all three panels, so they must not land on a subset. If any panel
+            // was re-sliced while this sync ran (stamp bumped), the sync rendered
+            // it from the previous plane -- and cached-plane reuse means pointer
+            // identity can't tell (the pointer is reused), while the rerun flag
+            // is not always armed (syncVisibleRanges early-returns on a
+            // mode/dimension flip without setting it). Drop the whole outcome and
+            // let the rerun, or the superseding batch's settle, produce a fresh
+            // coherent one. Single-flight makes the common case all-current, so
+            // this drops only on a genuine mid-sync re-slice, not every tweak.
+            bool allCurrent = outcome.sync.has_value();
+            if (outcome.sync) {
+                for (std::size_t index = 0; index < views.size(); ++index) {
+                    if (views[index]->renderGeneration
+                        != snapshotGenerations[index]) {
+                        allCurrent = false;
+                        break;
+                    }
+                }
+            }
+            if (current && outcome.sync && allCurrent) {
                 const auto [globalMin, globalMax] = outcome.sync->range;
                 bool activeApplied = false;
                 for (std::size_t index = 0; index < views.size(); ++index) {
                     auto* state = views[index];
                     auto& update = outcome.sync->panels[index];
                     if (!update.applies) {
-                        continue;
-                    }
-                    if (state->renderGeneration
-                        != snapshots[index].renderGeneration) {
-#ifdef AMREXPLORER_QT_TEST_ACCESS
-                        // Sole writer of this test-only tally: the
-                        // overlapping-sync regression test asserts its exact
-                        // delta. m_staleResults is deliberately not touched --
-                        // per-panel drops are normal churn, not a user signal.
-                        ++m_visibleSyncStaleSkips;
-#endif
                         continue;
                     }
                     state->displayMinimum = globalMin;
@@ -1097,9 +1129,10 @@ void MainWindow::syncVisibleRanges()
                     m_rangeMaximum->setValue(globalMax);
                 }
                 // The deferred full-domain range store (see the slice-arrival
-                // completion): the union is only known here. A rerun-pending
-                // outcome was already skipped above, so this store runs only for
-                // an outcome that is actually being applied.
+                // completion): the union is only known here. This block runs
+                // only for an all-current outcome (every panel's stamp matched),
+                // so the stored union is over the current planes -- a stale
+                // outcome is dropped in the else branch and never stored.
                 if (m_pendingRangeStore) {
                     // Only store if the pending key still describes the current
                     // (dataset, field, level, composition): a full-domain
@@ -1122,6 +1155,16 @@ void MainWindow::syncVisibleRanges()
                     }
                     m_pendingRangeStore.reset();
                 }
+            } else if (current && outcome.sync) {
+                // Dropped as stale (a panel was re-sliced mid-sync): the union
+                // is over at least one now-superseded plane, so it is neither
+                // applied nor stored -- the pending key stays for the rerun,
+                // which recomputes the union over the current planes.
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+                // Sole writer of this test-only tally; the staleness smoke test
+                // asserts its exact delta. m_staleResults is not touched.
+                ++m_visibleSyncStaleSkips;
+#endif
             } else if (generation != m_generation) {
                 m_pendingRangeStore.reset();
                 m_visibleSyncRerun = false;

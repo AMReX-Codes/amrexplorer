@@ -145,10 +145,10 @@ DisplayCoordinator::renderPanelsToSharedRange(
         }
         update.applies = true;
         // Contours before the raster, mirroring the original inline order.
-        if (contourMode && panel.contourFinePlane != nullptr
-            && panel.contourFinePlane->width > 0) {
+        if (contourMode && panel.contourPlane != nullptr
+            && panel.contourPlane->width > 0) {
             update.contourPolylines = recomputeContourPolylines(
-                *panel.contourFinePlane, panel.contourFineFactor,
+                *panel.contourPlane,
                 sync.range.first, sync.range.second, sync.logarithmic,
                 contourCount, panel.outputSize[0], panel.outputSize[1]);
             update.contoursRecomputed = true;

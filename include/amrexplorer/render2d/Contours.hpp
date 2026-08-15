@@ -64,15 +64,12 @@ struct ContourPolyline {
 
 // Marching squares + chaining + one Chaikin corner-cutting pass on a contour
 // plane, with the output mapped from contour-plane pixel space into
-// display-plane pixel space. fineFactor is the refinement factor the plane
-// was produced with (1 when the plane is already at contour resolution, which
-// is what the slice pipeline produces): fine coordinate f corresponds to
-// original sample coordinate f / fineFactor, and original sample center j
-// maps to display pixel ((j + 0.5) * display / original) - 0.5 (cell-center
-// to cell-center; display-plane sample i sits at scene coordinate i).
-// Throws std::invalid_argument when fineFactor < 1.
+// display-plane pixel space. The plane is at contour resolution (one sample per
+// contour cell), so sample center j maps to display pixel
+// ((j + 0.5) * display / plane) - 0.5 (cell-center to cell-center; display-plane
+// sample i sits at scene coordinate i).
 [[nodiscard]] std::vector<ContourPolyline> contourPolylinesForDisplay(
-    const ScalarPlane& finePlane, int fineFactor,
+    const ScalarPlane& plane,
     const std::vector<double>& values, int displayWidth, int displayHeight);
 
 } // namespace amrvis

@@ -389,33 +389,24 @@ std::vector<ContourPolyline> generateContourPolylines(
 }
 
 std::vector<ContourPolyline> contourPolylinesForDisplay(
-    const ScalarPlane& finePlane, int fineFactor,
+    const ScalarPlane& plane,
     const std::vector<double>& values, int displayWidth, int displayHeight)
 {
-    if (fineFactor < 1) {
-        throw std::invalid_argument("fine factor must be at least 1");
-    }
     // The contour plane is already at contour resolution; one Chaikin pass
     // softens the cell-scale corners.
-    auto polylines = generateContourPolylines(finePlane, values, 1);
-    if (finePlane.width < 1 || finePlane.height < 1) {
+    auto polylines = generateContourPolylines(plane, values, 1);
+    if (plane.width < 1 || plane.height < 1) {
         return polylines;
     }
-    // Recover the original (pre-refinement) dimensions the fine plane was
-    // produced from, then map fine coordinates into display pixel space: fine
-    // coordinate f is original sample coordinate f / fineFactor, and original
-    // sample center j maps to display pixel
-    // ((j + 0.5) * display / original) - 0.5, cell-center to cell-center.
-    const auto originalWidth = (finePlane.width - 1) / fineFactor + 1;
-    const auto originalHeight = (finePlane.height - 1) / fineFactor + 1;
+    // Map contour-plane coordinates into display pixel space: sample center j
+    // maps to display pixel ((j + 0.5) * display / plane) - 0.5, cell-center to
+    // cell-center.
     const auto scaleX = static_cast<double>(displayWidth)
-        / (static_cast<double>(fineFactor) * static_cast<double>(originalWidth));
+        / static_cast<double>(plane.width);
     const auto scaleY = static_cast<double>(displayHeight)
-        / (static_cast<double>(fineFactor) * static_cast<double>(originalHeight));
-    const auto offsetX = 0.5 * (static_cast<double>(displayWidth)
-        / static_cast<double>(originalWidth) - 1.0);
-    const auto offsetY = 0.5 * (static_cast<double>(displayHeight)
-        / static_cast<double>(originalHeight) - 1.0);
+        / static_cast<double>(plane.height);
+    const auto offsetX = 0.5 * (scaleX - 1.0);
+    const auto offsetY = 0.5 * (scaleY - 1.0);
     for (auto& polyline : polylines) {
         for (auto& point : polyline.points) {
             point[0] = static_cast<float>(

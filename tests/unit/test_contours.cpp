@@ -371,10 +371,10 @@ int main()
                 = 0.5F * static_cast<float>(i + j);
         }
     }
-    // The slice pipeline always supplies a contour plane already at contour
-    // resolution (fineFactor 1), so exercise that mapping directly.
+    // The slice pipeline supplies a contour plane already at contour
+    // resolution, so exercise that mapping directly.
     const auto displayLines = amrvis::contourPolylinesForDisplay(
-        data, 1, {2.3}, 640, 640);
+        data, {2.3}, 640, 640);
     require(displayLines.size() == 1, "display contour split into pieces");
     require(!displayLines.front().closed, "display contour should stay open");
     for (const auto& point : displayLines.front().points) {

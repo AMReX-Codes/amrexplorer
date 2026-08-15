@@ -48,11 +48,11 @@ struct SliceDisplayResult {
     // for "changed", so identity-keyed staleness guards must gate on something
     // else (see PlaneViewState::plane in MainWindow.hpp).
     //
-    // NOT covered by this fast path: the contour-mode companion planes
-    // (contourPlane / contourFinePlane below) are still deep-copied by value,
-    // ~14 MB each per view (~42 MB per interactive tweak in 3-D). They retire
-    // with the wider "stop round-tripping planes through SliceDisplayResult"
-    // cleanup, which also removes this dual reusedPlane/slice.plane slot.
+    // NOT covered by this fast path: the contour-mode companion plane
+    // (contourPlane below) is still deep-copied by value, ~14 MB per view. It
+    // retires with the wider "stop round-tripping planes through
+    // SliceDisplayResult" cleanup, which also removes this dual
+    // reusedPlane/slice.plane slot.
     std::shared_ptr<const ScalarPlane> reusedPlane;
     // Coordinate system of the dataset (AMReX Header code). 2 (spherical) warps
     // `image` into physical (R, Z); all others leave it in logical space.
@@ -66,17 +66,11 @@ struct SliceDisplayResult {
     // Overlays and the probe map through this.
     RealBox displayRegion;
     std::vector<VectorSegment> vectors;
-    // Contour modes only: the piecewise plane at data resolution the
-    // contours were extracted from (the display plane itself when the data
-    // is finer than the display), the plane the contours were traced on, and
-    // the polylines extracted from it, already mapped to display-plane pixel
-    // space (empty otherwise).
+    // Contour modes only: the plane the contours were traced on (at contour
+    // resolution, which since #8 removed supersampling is the plane the
+    // contours are extracted from directly), and the polylines extracted from
+    // it, already mapped to display-plane pixel space (empty otherwise).
     ScalarPlane contourPlane;
-    ScalarPlane contourFinePlane;
-    // Always 1: #8 removed contour supersampling, so contourFinePlane above is
-    // just a copy of contourPlane. Both retire together when the "stop
-    // round-tripping planes through SliceDisplayResult" cleanup lands.
-    int contourFineFactor = 1;
     std::vector<ContourPolyline> contourPolylines;
     std::string fieldName;
     double minimum = 0.0;
@@ -282,8 +276,7 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request,
     std::shared_ptr<const ScalarPlane> displayPlanePtr,
-    ScalarPlane contourPlane, ScalarPlane contourFinePlane,
-    int contourFineFactor, std::vector<VectorSegment> vectors,
+    ScalarPlane contourPlane, std::vector<VectorSegment> vectors,
     RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
@@ -298,7 +291,7 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
 // clears the overlay rather than throwing. See the
 // contours-stale-after-visible-range-sync issue.
 [[nodiscard]] std::vector<ContourPolyline> recomputeContourPolylines(
-    const ScalarPlane& finePlane, int fineFactor, double minimum,
+    const ScalarPlane& plane, double minimum,
     double maximum, bool logarithmic, int contourCount,
     int displayWidth, int displayHeight);
 

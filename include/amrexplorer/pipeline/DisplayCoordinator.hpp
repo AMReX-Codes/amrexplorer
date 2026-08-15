@@ -95,9 +95,8 @@ public:
 
     // One panel's inputs to / outputs of the shared-range sync below.
     struct PanelSyncInput {
-        const ScalarPlane* plane = nullptr;            // display plane
-        const ScalarPlane* contourFinePlane = nullptr; // contour modes only
-        int contourFineFactor = 1;
+        const ScalarPlane* plane = nullptr;        // display plane
+        const ScalarPlane* contourPlane = nullptr; // contour modes only
         std::array<int, 2> outputSize{0, 0};  // display size for contours
     };
     struct PanelSyncUpdate {

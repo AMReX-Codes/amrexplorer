@@ -1113,8 +1113,6 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         // PlaneViewState).
         state->plane = std::make_shared<const ScalarPlane>();
         state->contourPlane = std::make_shared<const ScalarPlane>();
-        state->contourFinePlane = std::make_shared<const ScalarPlane>();
-        state->contourFineFactor = 1;
         // Plane rewrite: drop any in-flight sync's outcome for this view
         // (see PlaneViewState::renderGeneration).
         ++state->renderGeneration;

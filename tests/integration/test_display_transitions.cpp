@@ -686,8 +686,7 @@ int main()
             static_cast<void>(amrvis::refreshCachedSlice(recording,
                 d0.request,
                 std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane),
-                d0.contourPlane,
-                d0.contourFinePlane, d0.contourFineFactor, {},
+                d0.contourPlane, {},
                 amrvis::RangeMode::File, std::nullopt, true, palette,
                 amrvis::DisplayMode::RasterContours, 0, 0, 4, true,
                 stoppedRange.get_token()));
@@ -707,9 +706,8 @@ int main()
         const auto reusedInput
             = std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane);
         const auto log = amrvis::refreshCachedSlice(baseLoad.dataset,
-            d0.request, reusedInput,
-            d0.contourPlane, d0.contourFinePlane,
-            d0.contourFineFactor, {}, amrvis::RangeMode::File, std::nullopt,
+            d0.request, reusedInput, d0.contourPlane, {},
+            amrvis::RangeMode::File, std::nullopt,
             true, palette, amrvis::DisplayMode::RasterContours, 0, 0, 4, true);
         require(log.logarithmic, "cached-plane log toggle fell back");
         require(log.reusedPlane.get() == reusedInput.get()
@@ -724,8 +722,8 @@ int main()
         bool nullPlaneRejected = false;
         try {
             static_cast<void>(amrvis::refreshCachedSlice(baseLoad.dataset,
-                d0.request, nullptr, d0.contourPlane, d0.contourFinePlane,
-                d0.contourFineFactor, {}, amrvis::RangeMode::File, std::nullopt,
+                d0.request, nullptr, d0.contourPlane, {},
+                amrvis::RangeMode::File, std::nullopt,
                 false, palette, amrvis::DisplayMode::Raster, 0, 0, 0, true));
         } catch (const std::invalid_argument&) {
             nullPlaneRejected = true;
@@ -737,8 +735,7 @@ int main()
         const auto recount = amrvis::refreshCachedSlice(baseLoad.dataset,
             d0.request,
             std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane),
-            d0.contourPlane, d0.contourFinePlane,
-            d0.contourFineFactor, {}, amrvis::RangeMode::File, std::nullopt,
+            d0.contourPlane, {}, amrvis::RangeMode::File, std::nullopt,
             false, palette, amrvis::DisplayMode::RasterContours, 0, 0, 2,
             false);
         require(recount.rasterUnchanged && recount.image.width == 0,
@@ -751,8 +748,7 @@ int main()
         const auto user = amrvis::refreshCachedSlice(baseLoad.dataset,
             d0.request,
             std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane),
-            d0.contourPlane, d0.contourFinePlane,
-            d0.contourFineFactor, {}, amrvis::RangeMode::User,
+            d0.contourPlane, {}, amrvis::RangeMode::User,
             std::pair{2.0, 3.0}, false, palette,
             amrvis::DisplayMode::RasterContours, 0, 0, 4, true);
         require(nearlyEqual(user.minimum, 2.0)

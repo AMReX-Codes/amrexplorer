@@ -64,10 +64,10 @@ struct ContourPolyline {
 
 // Marching squares + chaining + one Chaikin corner-cutting pass on a contour
 // plane, with the output mapped from contour-plane pixel space into
-// display-plane pixel space. The plane is at contour resolution (one sample per
-// contour cell), so sample center j maps to display pixel
-// ((j + 0.5) * display / plane) - 0.5 (cell-center to cell-center; display-plane
-// sample i sits at scene coordinate i).
+// display-plane pixel space. The plane is at contour resolution (its samples
+// are the marching-squares grid; #56 removed supersampling), so sample center j
+// maps to display pixel ((j + 0.5) * display / plane) - 0.5 (cell-center to
+// cell-center; display-plane sample i sits at scene coordinate i).
 [[nodiscard]] std::vector<ContourPolyline> contourPolylinesForDisplay(
     const ScalarPlane& plane,
     const std::vector<double>& values, int displayWidth, int displayHeight);

@@ -355,44 +355,47 @@ int main()
             && hasSegment(saddleMean, 0.5, 1.0, 1.0, 0.5),
         "saddle at the mean did not follow the center rule");
 
-    // (m) contourPolylinesForDisplay on the 4x4 data plane v = (i + j) / 2:
-    // the 2.3 iso-line (i + j = 4.6 in sample coordinates) stays straight,
-    // and the known edge crossings at sample coordinates (3, 1.6) and
-    // (1.6, 3) land at display pixels (559.5, 335.5) and (335.5, 559.5)
-    // under the cell-center mapping d = ((c + 0.5) * 160) - 0.5.
+    // (m) contourPolylinesForDisplay on a NON-square 4x8 plane against a
+    // non-square 640x320 display, so scaleX (160) != scaleY (40): swapping the
+    // two axes' scales would move every contour point off the raster, which a
+    // square plane/display cannot catch. The field v = i is constant in j, so
+    // the 1.5 iso-line is the vertical line i = 1.5 spanning all j; under the
+    // cell-center mapping d = ((c + 0.5) * scale) - 0.5 that is display x = 319.5
+    // with y running from 19.5 (j = 0) to 299.5 (j = 7).
     amrvis::ScalarPlane data;
     data.width = 4;
-    data.height = 4;
-    data.values.resize(16);
-    data.valid.assign(16, 1);
-    for (int j = 0; j < 4; ++j) {
+    data.height = 8;
+    data.values.resize(32);
+    data.valid.assign(32, 1);
+    for (int j = 0; j < 8; ++j) {
         for (int i = 0; i < 4; ++i) {
             data.values[static_cast<std::size_t>(i + 4 * j)]
-                = 0.5F * static_cast<float>(i + j);
+                = static_cast<float>(i);
         }
     }
     // The slice pipeline supplies a contour plane already at contour
     // resolution, so exercise that mapping directly.
     const auto displayLines = amrvis::contourPolylinesForDisplay(
-        data, {2.3}, 640, 640);
+        data, {1.5}, 640, 320);
     require(displayLines.size() == 1, "display contour split into pieces");
     require(!displayLines.front().closed, "display contour should stay open");
     for (const auto& point : displayLines.front().points) {
-        const auto ci = (static_cast<double>(point[0]) + 0.5) / 160.0 - 0.5;
-        const auto cj = (static_cast<double>(point[1]) + 0.5) / 160.0 - 0.5;
-        require(std::fabs(ci + cj - 4.6) / std::sqrt(2.0) < 0.05,
-            "display contour deviates from the analytic iso-line");
+        require(std::fabs(static_cast<double>(point[0]) - 319.5) < 0.5,
+            "display contour x off the vertical iso-line (scaleX misapplied)");
+        require(static_cast<double>(point[1]) >= 19.0
+                && static_cast<double>(point[1]) <= 300.0,
+            "display contour y outside the mapped span (scaleY misapplied)");
     }
-    // Chaikin keeps an open polyline's endpoints fixed, so the two ends are
-    // the mapped edge crossings, in either chaining direction.
+    // Chaikin keeps an open polyline's endpoints fixed, so the two ends are the
+    // mapped edge crossings at j = 0 and j = 7, in either chaining direction.
     const auto& firstPoint = displayLines.front().points.front();
     const auto& lastPoint = displayLines.front().points.back();
     const auto nearPoint = [](const std::array<float, 2>& point, double x, double y) {
         return std::fabs(static_cast<double>(point[0]) - x) <= 1.0
             && std::fabs(static_cast<double>(point[1]) - y) <= 1.0;
     };
-    require((nearPoint(firstPoint, 559.5, 335.5) && nearPoint(lastPoint, 335.5, 559.5))
-            || (nearPoint(firstPoint, 335.5, 559.5) && nearPoint(lastPoint, 559.5, 335.5)),
+    require((nearPoint(firstPoint, 319.5, 19.5) && nearPoint(lastPoint, 319.5, 299.5))
+            || (nearPoint(firstPoint, 319.5, 299.5) && nearPoint(lastPoint, 319.5, 19.5)),
         "display contour endpoints miss the expected display pixels");
 
     // (n) One-pixel-thick planes have no complete 2x2 marching-squares cell

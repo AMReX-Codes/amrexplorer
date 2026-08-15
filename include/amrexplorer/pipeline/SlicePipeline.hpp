@@ -67,7 +67,7 @@ struct SliceDisplayResult {
     RealBox displayRegion;
     std::vector<VectorSegment> vectors;
     // Contour modes only: the plane the contours were traced on (at contour
-    // resolution, which since #8 removed supersampling is the plane the
+    // resolution, which since #56 removed supersampling is the plane the
     // contours are extracted from directly), and the polylines extracted from
     // it, already mapped to display-plane pixel space (empty otherwise).
     ScalarPlane contourPlane;
@@ -258,7 +258,7 @@ void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
     StopToken cancellation);
 
 // Extracts contour polylines for the request at data resolution and maps
-// them to display-plane pixel space; caches the fine plane on the result so
+// them to display-plane pixel space; caches the contour plane on the result so
 // range and contour-count changes can re-extract without a new SliceQuery.
 void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request, int contourCount, double minimum,
@@ -283,10 +283,10 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     std::uint32_t vectorUField, std::uint32_t vectorVField,
     int contourCount, bool rasterDirty, StopToken cancellation = {});
 
-// Re-extract contour polylines from an already-populated fine plane after the
-// display range is replaced downstream of appendContours/refreshCachedSlice —
-// full-domain-range reuse, the 3-D shared Visible range, or syncVisibleRanges.
-// Cheap: the fine plane is cached, so no SliceQuery runs. Returns empty when
+// Re-extract contour polylines from an already-populated contour plane after
+// the display range is replaced downstream of appendContours/refreshCachedSlice
+// — full-domain-range reuse, the 3-D shared Visible range, or syncVisibleRanges.
+// Cheap: the contour plane is cached, so no SliceQuery runs. Returns empty when
 // the range is unusable (non-positive log range, zero extent), so a bad range
 // clears the overlay rather than throwing. See the
 // contours-stale-after-visible-range-sync issue.

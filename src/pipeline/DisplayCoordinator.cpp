@@ -146,7 +146,8 @@ DisplayCoordinator::renderPanelsToSharedRange(
         update.applies = true;
         // Contours before the raster, mirroring the original inline order.
         if (contourMode && panel.contourPlane != nullptr
-            && panel.contourPlane->width > 0) {
+            && panel.contourPlane->width > 0
+            && panel.contourPlane->height > 0) {
             update.contourPolylines = recomputeContourPolylines(
                 *panel.contourPlane,
                 sync.range.first, sync.range.second, sync.logarithmic,

@@ -449,7 +449,7 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     result.slice.metrics.cacheHits += contour.metrics.cacheHits;
     result.slice.metrics.payloadBytesRead += contour.metrics.payloadBytesRead;
 
-    // No supersampling (#8 removed it): the linear plane is already at contour
+    // No supersampling (#56 removed it): the linear plane is already at contour
     // resolution, so contours are extracted from contourPlane directly.
     const auto values = contourValues(
         minimum, maximum, contourCount, logarithmic);

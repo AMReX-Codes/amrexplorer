@@ -313,6 +313,48 @@ void MainWindow::rubberBandZoomRectangularActiveViewForTest()
         QRectF(0.275 * width, 0.35 * height, 0.45 * width, 0.2 * height));
 }
 
+void MainWindow::rubberBandZoomTallActiveViewForTest()
+{
+    if (m_activeView == nullptr || m_activeView->plane->width <= 0
+        || m_activeView->plane->height <= 0) {
+        return;
+    }
+    // The transpose of the rectangular selection above. A wide and a tall
+    // selection err on opposite sides when the arrival is framed through a
+    // padded window, so a framing regression needs both signs covered.
+    const auto width = static_cast<double>(m_activeView->plane->width);
+    const auto height = static_cast<double>(m_activeView->plane->height);
+    rubberBandZoom(*m_activeView,
+        QRectF(0.35 * width, 0.275 * height, 0.2 * width, 0.45 * height));
+}
+
+bool MainWindow::activeViewRasterSnugForTest() const
+{
+    if (m_activeView == nullptr || m_activeView->view == nullptr
+        || !m_activeView->view->hasImage()
+        || m_activeView->view->viewport() == nullptr) {
+        return false;
+    }
+    const auto* view = m_activeView->view;
+    const auto shown = view->mapFromScene(
+        view->imageSceneRect()).boundingRect();
+    const auto viewport = view->viewport()->rect();
+    // A raster fitted to the pane touches both borders on its limiting axis
+    // and never spills past the pane. fitInView keeps a hardcoded 2-pixel
+    // margin per side, hence the tolerances: one pixel of overflow for
+    // round-off, six pixels of slack (the 2x2 margin plus rounding) before
+    // the limiting axis counts as falling short of the pane. Six is
+    // deliberate: framing the arrival through a window that was itself
+    // produced by a fitInView applies the margin twice, which reads as
+    // eight-plus pixels of slack and must fail here.
+    if (!viewport.adjusted(-1, -1, 1, 1).contains(shown)) {
+        return false;
+    }
+    const auto slackX = viewport.width() - shown.width();
+    const auto slackY = viewport.height() - shown.height();
+    return std::min(slackX, slackY) <= 6;
+}
+
 bool MainWindow::allViewsRubberBandZoomedForTest()
 {
     const auto views = currentViews();

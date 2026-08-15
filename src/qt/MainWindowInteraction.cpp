@@ -1261,12 +1261,17 @@ void MainWindow::applyRubberBandZoom(
     state.view->setVirtualCanvas(std::nullopt);
     // Zoom to the requested region mapped back to scene pixels, so the view
     // transform matches the region the requested slice will actually cover.
+    // Confined: the selection becomes a standalone raster with no
+    // domain-spanning scroll bars, so the feedback zoom must not raise them
+    // either — transient scroll bars shrink the viewport, and the remote
+    // request would be sized to the stolen pixels and re-fetched (and
+    // re-framed, visibly) once they vanish.
     const QRectF requestedScene(
         QPointF((visible.lower[xAxis] - region.lower[xAxis]) / xExtent * width,
             (region.upper[yAxis] - visible.upper[yAxis]) / yExtent * height),
         QPointF((visible.upper[xAxis] - region.lower[xAxis]) / xExtent * width,
             (region.upper[yAxis] - visible.lower[yAxis]) / yExtent * height));
-    state.view->zoomToRect(requestedScene.normalized());
+    state.view->zoomToRect(requestedScene.normalized(), true);
     scheduleSliceRequest(state);
 }
 

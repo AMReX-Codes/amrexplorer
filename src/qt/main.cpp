@@ -607,6 +607,34 @@ std::optional<ViewportDifference> viewportDifference(
     return difference;
 }
 
+// The sequence preserve smokes assert that the *data window* survives the
+// step: rubberBandZoomActiveViewForTest selects the domain's centered half,
+// and after the density change the view must still show exactly that window.
+// They used to assert the transform differed from a fresh fit instead, but
+// that proxy only held while the rubber-band feedback disturbed the viewport
+// (transient scroll bars): once the arrival is framed cleanly, preserving a
+// window that the raster covers exactly *is* numerically a fit, while a
+// broken preserve (refit to the whole frame) still moves the window and
+// fails here.
+bool centeredHalfWindowPreserved(const amrvis::qt::MainWindow& window)
+{
+    const auto domain = window.datasetPhysicalDomainForTest();
+    const auto shown = window.activeViewVisibleDataWindowForTest();
+    if (domain.isEmpty() || shown.isEmpty()) {
+        return false;
+    }
+    const QRectF expected(
+        domain.left() + 0.25 * domain.width(),
+        domain.top() + 0.25 * domain.height(),
+        0.5 * domain.width(), 0.5 * domain.height());
+    const auto tolerance
+        = 0.02 * std::max(domain.width(), domain.height());
+    return std::abs(shown.left() - expected.left()) <= tolerance
+        && std::abs(shown.top() - expected.top()) <= tolerance
+        && std::abs(shown.right() - expected.right()) <= tolerance
+        && std::abs(shown.bottom() - expected.bottom()) <= tolerance;
+}
+
 #endif // AMREXPLORER_QT_TEST_ACCESS
 
 } // namespace
@@ -1450,14 +1478,39 @@ int main(int argc, char* argv[])
                     application.exit(2);
                     return;
                 }
+                // Three settles: the wide selection, the reset back to the
+                // whole domain, the tall selection. The wide and tall
+                // selections err on opposite sides of the pane when the
+                // arrival's framing regresses, so both must end snug — and
+                // already at the first settle: the transient-scroll-bar
+                // double fetch showed a mis-framed raster there before its
+                // correction arrived.
+                auto step = std::make_shared<int>(0);
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application, [&window, &application] {
-                        application.exit(window.activeViewIsZoomedForTest()
-                                && window.activeViewHasPhysicalAspectForTest(
+                    &application, [&window, &application, step] {
+                        switch ((*step)++) {
+                        case 0:
+                            if (!window.activeViewIsZoomedForTest()
+                                || !window.activeViewHasPhysicalAspectForTest(
                                     9.0 / 4.0)
-                            ? 0 : 1);
-                    }, Qt::SingleShotConnection);
+                                || !window.activeViewRasterSnugForTest()) {
+                                application.exit(1);
+                                return;
+                            }
+                            window.resetZoomAllViewsForTest();
+                            return;
+                        case 1:
+                            window.rubberBandZoomTallActiveViewForTest();
+                            return;
+                        default:
+                            application.exit(window.activeViewIsZoomedForTest()
+                                    && window.activeViewHasPhysicalAspectForTest(
+                                        4.0 / 9.0)
+                                    && window.activeViewRasterSnugForTest()
+                                ? 0 : 1);
+                        }
+                    });
                 window.rubberBandZoomRectangularActiveViewForTest();
             });
         QTimer::singleShot(15000, &application,
@@ -3567,7 +3620,7 @@ int main(int argc, char* argv[])
                     application.exit(
                         *zoomSettled
                             && window.activeViewIsZoomedForTest()
-                            && !window.activeViewIsFitToWindowForTest()
+                            && centeredHalfWindowPreserved(window)
                         ? 0 : 1);
                 }
             });
@@ -3595,7 +3648,7 @@ int main(int argc, char* argv[])
                 } else if (index == 1) {
                     application.exit(
                         window.activeViewIsZoomedForTest()
-                            && !window.activeViewIsFitToWindowForTest()
+                            && centeredHalfWindowPreserved(window)
                         ? 0 : 1);
                 }
             });

@@ -621,13 +621,17 @@ void ImageView::zoomBy(qreal factor)
     emit zoomChanged();
 }
 
-void ImageView::zoomToRect(const QRectF& imageRect)
+void ImageView::zoomToRect(const QRectF& imageRect, bool confineScene)
 {
     if (!hasImage() || imageRect.isEmpty()) {
         return;
     }
     m_transformMode = TransformMode::Custom;
-    fitInView(m_item->mapRectToScene(imageRect), Qt::KeepAspectRatio);
+    const auto sceneTarget = m_item->mapRectToScene(imageRect);
+    if (confineScene) {
+        m_scene->setSceneRect(sceneTarget);
+    }
+    fitInView(sceneTarget, Qt::KeepAspectRatio);
 }
 
 void ImageView::panViewport(const QPoint& delta)

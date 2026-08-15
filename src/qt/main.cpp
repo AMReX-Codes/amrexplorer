@@ -1781,6 +1781,73 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1])
+            == "--overlapping-visible-sync-smoke-test") {
+        // Regression for cached-plane reuse defeating the sync staleness guard:
+        // a refresh that lands mid-sync keeps the plane pointer identical, so
+        // the sync completion can no longer tell its outcome is stale by pointer
+        // identity alone. Drive it deterministically -- gate the sync worker,
+        // queue a second sync so the rerun flag is set, release, and require the
+        // first outcome to be dropped as superseded rather than applied.
+        const std::filesystem::path path(argv[2]);
+        auto* poll = new QTimer(&window);
+        poll->setInterval(5);
+        auto phase = std::make_shared<int>(0);
+        auto attempts = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, poll, phase](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, poll, phase] {
+                        if (*phase != 0) {
+                            return;
+                        }
+                        *phase = 1;
+                        // Start a sync with the worker gated so it cannot finish
+                        // before we queue the superseding one.
+                        window.armVisibleSyncGateForTest();
+                        window.requestVisibleSyncForTest();
+                        poll->start();
+                    });
+                // Into 3-D Visible + contours; its re-slice settles into a sync.
+                window.configureContourSyncForTest(3, false, {0.5, 0.5, 0.5});
+            });
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, &application, poll, phase, attempts] {
+                if (++*attempts > 2000) {
+                    application.exit(3);
+                    return;
+                }
+                if (*phase == 1) {
+                    if (!window.visibleSyncWorkerWaitingForTest()) {
+                        return;  // wait for the gated worker to reach the gate
+                    }
+                    *phase = 2;
+                    // Queue a second sync while the first is in flight: this
+                    // sets the rerun flag the completion must honor.
+                    window.requestVisibleSyncForTest();
+                    window.releaseVisibleSyncGateForTest();
+                    return;
+                }
+                if (*phase == 2) {
+                    // The released gated worker's completion runs on this (GUI)
+                    // thread; once it lands it must have dropped its outcome as
+                    // superseded rather than applied it over the newer state.
+                    if (window.visibleSyncStaleSkipsForTest() >= 1) {
+                        poll->stop();
+                        application.exit(0);
+                    }
+                    // else keep polling; the attempts guard above fails on hang.
+                }
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1])
             == "--particle-visible-range-smoke-test") {
         // A shared Visible-range reconciliation replaces all three rasters.
         // Particle point batches must be restored after those setImage calls.

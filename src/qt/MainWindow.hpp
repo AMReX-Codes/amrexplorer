@@ -141,6 +141,17 @@ public:
     void configureContourSyncForTest(
         int count, bool logarithmic, std::array<double, 3> slicePositions);
 
+    // Test-only: drive an overlapping visible-range sync deterministically.
+    // The gate blocks the sync worker so the test can queue a second sync
+    // (setting the rerun flag) before the first completes; the skip counter
+    // records outcomes dropped as superseded. See the overlapping-sync smoke
+    // test and syncVisibleRanges.
+    void requestVisibleSyncForTest();
+    void armVisibleSyncGateForTest();
+    void releaseVisibleSyncGateForTest();
+    [[nodiscard]] bool visibleSyncWorkerWaitingForTest() const;
+    [[nodiscard]] int visibleSyncStaleSkipsForTest() const noexcept;
+
     // Test-only: for each current view (ordered by normal axis; 2-D has one),
     // the display range and the distinct contour levels present in its overlay
     // polylines. The contour-sync smoke test checks these levels are re-derived
@@ -389,12 +400,17 @@ private:
         int normal = 1;
         QString label;      // "2-D" / "YZ" / "XZ" / "XY"
         // The displayed plane and its contour-mode companions are immutable
-        // shared snapshots, never null (empty planes when nothing is shown):
-        // arrivals REPLACE the pointer and never mutate the pointee. The
-        // cached-planes refresh worker (requestSlice's fromCache path)
-        // captures these shared_ptrs — a refcount bump instead of the former
-        // ~110 MB deep copy on the GUI thread — and can keep reading its
-        // snapshots safely while a newer arrival swaps the view's pointers.
+        // shared snapshots, never null (empty planes when nothing is shown),
+        // never mutated in place. An executeSlice arrival installs a *fresh*
+        // pointer; a cache-path refresh (palette/log/range) re-installs the
+        // *same* pointer it was built from — the refcount bump that replaces
+        // the former ~110 MB deep copy. So pointer identity is NOT a proxy for
+        // "same rendering settings": a staleness guard keyed on identity alone
+        // fails open across a cosmetic refresh (this exact bug bit
+        // syncVisibleRanges — gate on the rerun flag or a render generation
+        // instead). The cached-planes refresh worker captures these shared_ptrs
+        // and keeps reading its snapshots safely while a newer arrival swaps the
+        // view's pointers.
         std::shared_ptr<const ScalarPlane> plane
             = std::make_shared<const ScalarPlane>();
         // Contour-mode companions of plane: the data-resolution plane the
@@ -846,6 +862,10 @@ private:
     // completion, where the union is actually known.
     bool m_visibleSyncInFlight = false;
     bool m_visibleSyncRerun = false;
+    // How many visible-range sync outcomes were dropped because a refresh
+    // landed while the sync ran (its rerun was queued). Observed by the
+    // overlapping-sync regression test.
+    int m_visibleSyncStaleSkips = 0;
     std::optional<amrvis::DisplayCoordinator::RangeKey> m_pendingRangeStore;
     QTreeWidget* m_metadataTree = nullptr;
     QPlainTextEdit* m_diagnostics = nullptr;

@@ -207,6 +207,10 @@ elseif(MODE STREQUAL "non-finite")
 elseif(MODE STREQUAL "contour-sync")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --contour-sync-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "overlapping-visible-sync")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --overlapping-visible-sync-smoke-test
+        "${WORK}/plt")
 elseif(MODE STREQUAL "particle-visible-range")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --particle-visible-range-smoke-test

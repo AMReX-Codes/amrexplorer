@@ -2,6 +2,34 @@
 
 namespace amrvis::qt {
 
+void MainWindow::requestVisibleSyncForTest()
+{
+    syncVisibleRanges();
+}
+
+void MainWindow::armVisibleSyncGateForTest()
+{
+    visible_sync_test::released.store(false);
+    visible_sync_test::workerWaiting.store(false);
+    visible_sync_test::gateArmed.store(true);
+}
+
+void MainWindow::releaseVisibleSyncGateForTest()
+{
+    visible_sync_test::gateArmed.store(false);
+    visible_sync_test::released.store(true);
+}
+
+bool MainWindow::visibleSyncWorkerWaitingForTest() const
+{
+    return visible_sync_test::workerWaiting.load();
+}
+
+int MainWindow::visibleSyncStaleSkipsForTest() const noexcept
+{
+    return m_visibleSyncStaleSkips;
+}
+
 void MainWindow::configureContourSyncForTest(
     int count, bool logarithmic, std::array<double, 3> slicePositions)
 {

@@ -325,8 +325,9 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
         // showSlice, so the former ~110 MB copy per range/log/palette tweak is
         // gone. A newer arrival can safely replace the view's pointers
         // meanwhile; this worker keeps reading its own snapshots. (The
-        // contour-resolution planes still copy by value on the worker; small,
-        // and retires with the wider round-tripping cleanup.)
+        // contour-resolution planes are still deref'd into by-value copies at
+        // the call below -- ~14 MB each; see SliceDisplayResult::reusedPlane for
+        // why they are not yet reused.)
         future = QtConcurrent::run([dataset, request,
             displayPlane = state.plane,
             contourPlane = state.contourPlane,
@@ -1009,7 +1010,15 @@ void MainWindow::syncVisibleRanges()
             const bool current = generation == m_generation
                 && m_viewDimension == 3 && m_dataset
                 && nowMode == RangeMode::Visible;
-            if (current && outcome.sync) {
+            // A cosmetic refresh (palette/log/contour count) that landed while
+            // this sync ran sets the rerun flag. Its cached-plane reuse keeps
+            // the plane pointer identical, so the per-panel identity guard below
+            // can no longer tell this outcome is stale -- it was rendered with
+            // the *previous* settings. Skip applying a superseded outcome
+            // entirely (as the pending-range store already does) and let the
+            // queued rerun recompute against the current settings, rather than
+            // flash the old rendering over the newer one.
+            if (current && outcome.sync && !m_visibleSyncRerun) {
                 const auto [globalMin, globalMax] = outcome.sync->range;
                 bool activeApplied = false;
                 for (std::size_t index = 0; index < views.size(); ++index) {
@@ -1067,10 +1076,10 @@ void MainWindow::syncVisibleRanges()
                     m_rangeMaximum->setValue(globalMax);
                 }
                 // The deferred full-domain range store (see the slice-arrival
-                // completion): the union is only known here. When a rerun is
-                // queued the union is about to be recomputed with newer
-                // planes — leave the store for the rerun's completion.
-                if (m_pendingRangeStore && !m_visibleSyncRerun) {
+                // completion): the union is only known here. A rerun-pending
+                // outcome was already skipped above, so this store runs only for
+                // an outcome that is actually being applied.
+                if (m_pendingRangeStore) {
                     // Only store if the pending key still describes the current
                     // (dataset, field, level, composition): a full-domain
                     // arrival's key can outlive its own sync (e.g. its
@@ -1092,6 +1101,11 @@ void MainWindow::syncVisibleRanges()
                     }
                     m_pendingRangeStore.reset();
                 }
+            } else if (current && outcome.sync && m_visibleSyncRerun) {
+                // Superseded by a refresh that landed mid-sync: leave the newer
+                // image in place and let the queued rerun apply the current
+                // settings. Counted for the overlapping-sync regression test.
+                ++m_visibleSyncStaleSkips;
             } else if (generation != m_generation) {
                 m_pendingRangeStore.reset();
                 m_visibleSyncRerun = false;
@@ -1110,6 +1124,10 @@ void MainWindow::syncVisibleRanges()
         logarithmic = m_logarithmic->isChecked(),
         contourMode = isContourMode(m_displayMode),
         contourCount = m_contourCount, palette = m_palette] {
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+        // Held only when the overlapping-sync test has armed the gate.
+        visible_sync_test::waitAtGate();
+#endif
         std::array<DisplayCoordinator::PanelSyncInput, 3> inputs;
         for (std::size_t index = 0; index < snapshots.size(); ++index) {
             const auto& snapshot = snapshots[index];

@@ -119,9 +119,11 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <chrono>
 #include <stdexcept>
 #include <system_error>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -304,5 +306,30 @@ inline QPainterPath sphericalSectorPath(const PlaneMapping& mapping,
     path.closeSubpath();
     return path;
 }
+
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+// A gate the visible-range sync worker waits on when armed, so the overlapping-
+// sync regression test can hold a sync mid-flight, queue a second one (setting
+// the rerun flag), then release the first and observe it being dropped as
+// superseded. Compiled only into the test-access build.
+namespace visible_sync_test {
+
+inline std::atomic<bool> gateArmed{false};
+inline std::atomic<bool> released{false};
+inline std::atomic<bool> workerWaiting{false};
+
+inline void waitAtGate()
+{
+    if (!gateArmed.load()) {
+        return;
+    }
+    workerWaiting.store(true);
+    while (!released.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+} // namespace visible_sync_test
+#endif
 
 } // namespace amrvis::qt

@@ -268,6 +268,11 @@ int MainWindow::slicesInFlightForTest() const
     return slicesInFlight();
 }
 
+bool MainWindow::sliceRequestPendingForTest() const
+{
+    return m_sliceDebounce != nullptr && m_sliceDebounce->isActive();
+}
+
 bool MainWindow::allViewsFixedScaleRasterCoversViewportForTest() const
 {
     const auto check = [](const PlaneViewState& state) {

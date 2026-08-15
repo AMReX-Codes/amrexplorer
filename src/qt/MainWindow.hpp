@@ -214,6 +214,9 @@ public:
     // window it implies) needs before it measures. Pair it with a settle to
     // absorb a request that only queues its successor.
     [[nodiscard]] int slicesInFlightForTest() const;
+    // True while a slice request is queued behind the debounce but not yet on a
+    // worker; a settle-driven wait must treat this as "not converged".
+    [[nodiscard]] bool sliceRequestPendingForTest() const;
     // Test-only: send a real Shift+left drag through the active view's
     // viewport, exercising the same event path as interactive panning.
     void shiftDragActiveViewForTest(int dx, int dy);

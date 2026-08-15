@@ -1100,96 +1100,108 @@ int main(int argc, char* argv[])
         // the demand-driven fixed scale must settle with the viewport fully
         // backed by fetched raster, stay quiet with no input (the demand used
         // to re-issue itself endlessly through the as-needed scrollbars,
-        // flickering through one remote render per flip), refetch exactly
-        // once when the virtual scroll bars pan to unfetched cells, and drop
-        // the domain-spanning scroll bars on a rubber-band zoom, whose
-        // selection is re-rendered fitted to the pane exactly as for local
-        // data.
+        // flickering through one remote render per flip), refetch when the
+        // virtual scroll bars pan to unfetched cells, and drop the
+        // domain-spanning scroll bars on a rubber-band zoom, whose selection is
+        // re-rendered fitted to the pane exactly as for local data. The step
+        // gating below waits for quiescence, so it does not count the refetches.
         auto phase = std::make_shared<int>(0);
-        auto sawSettle = std::make_shared<bool>(false);
-        // Each step of the sequence is judged only once the demand loop has
-        // gone quiet for this interval (several remote render round-trips), not
-        // on a fixed delay from the first settle. A slow runner's convergence
-        // jitter -- an extra late settle after a legitimate fetch -- then just
-        // re-arms the wait instead of failing the check, while the flicker this
-        // guards against never goes quiet at all and is caught by the watchdog.
-        auto* quiet = new QTimer(&application);
-        quiet->setSingleShot(true);
-        quiet->setInterval(2000);
+        // Judge each step once the demand loop has quiesced -- nothing on a
+        // worker and no settle since the last tick -- rather than after a fixed
+        // delay. A slow runner's extra convergence settle just costs a tick;
+        // a step that needs no refetch is quiet on the next tick instead of
+        // hanging; and the flicker regression (the demand endlessly re-issuing
+        // itself) never quiesces, so it trips the bounded-tick guard with its
+        // own exit code rather than being conflated with the watchdog. Same
+        // model as the fixed-scale-parity poll above.
+        auto* poll = new QTimer(&window);
+        poll->setInterval(100);
+        auto ticks = std::make_shared<int>(0);
+        auto settles = std::make_shared<int>(0);
+        auto settlesLastTick = std::make_shared<int>(-1);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [settles] { ++*settles; });
         QObject::connect(&window,
             &amrvis::qt::MainWindow::initialSliceFinished,
-            &application,
-            [&window, &application, phase, sawSettle, quiet](bool success) {
+            &application, [&window, &application, poll](bool success) {
                 if (!success) {
                     application.exit(2);
                     return;
                 }
-                // Every settle marks activity and (re)arms quiescence; the phase
-                // machine below advances only after the loop settles and stays
-                // quiet.
-                QObject::connect(&window,
-                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application, [sawSettle, quiet] {
-                        *sawSettle = true;
-                        quiet->start();
-                    });
-                QObject::connect(quiet, &QTimer::timeout, &application,
-                    [&window, &application, phase, sawSettle] {
-                        // A timeout before this step produced any settle (the gap
-                        // between issuing an input and its fetch arriving) is not
-                        // quiescence -- keep waiting.
-                        if (!*sawSettle) {
-                            return;
-                        }
-                        *sawSettle = false;
-                        if (*phase == 0) {
-                            // Fixed scale converged: the raster backs the whole
-                            // viewport and the demand loop stays quiet, rather
-                            // than re-issuing itself endlessly through the
-                            // as-needed scroll bars.
-                            *phase = 1;
-                            if (!window.fixedScaleStateMatchesForTest(32)
-                                || !window
-                        .allViewsFixedScaleRasterCoversViewportForTest()) {
-                                application.exit(1);
-                                return;
-                            }
-                            // Five cells' worth of pixels at 32x through the real
-                            // Shift+left mouse event path: the newly visible
-                            // cells are fetched, then the loop is quiet again.
-                            window.shiftDragActiveViewForTest(-160, 0);
-                            return;
-                        }
-                        if (*phase == 1) {
-                            // The scrolled fixed scale keeps the fetched raster
-                            // under the whole viewport, with the domain-spanning
-                            // scroll bars present.
-                            *phase = 2;
-                            if (!window.fixedScaleStateMatchesForTest(32)
-                                || !window
-                        .allViewsFixedScaleRasterCoversViewportForTest()
-                                || !window
-                                    .activeViewScrollBarsVisibleForTest()) {
-                                application.exit(1);
-                                return;
-                            }
-                            window.rubberBandZoomActiveViewForTest();
-                            return;
-                        }
-                        if (*phase == 2) {
-                            // The re-rendered selection stands alone, fitted to
-                            // the pane without scroll bars, as for local data.
-                            application.exit(
-                                window.activeViewIsZoomedForTest()
-                                    && !window
-                                        .activeViewScrollBarsVisibleForTest()
-                                    ? 0 : 1);
-                        }
-                    });
+                poll->start();
                 window.selectFixedScaleForTest(32);
             });
-        // Longer than three quiescence windows plus convergence, so only a demand
-        // loop that never settles (the flicker regression) reaches it.
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, &application, poll, phase, ticks, settles,
+                settlesLastTick] {
+                // Quiescence also requires no request queued behind the slice
+                // debounce: a pan/zoom schedules its refetch there, so between
+                // the input and the debounce firing nothing is on a worker yet
+                // and a bare in-flight check would read that gap as converged.
+                const auto quiet = !window.sliceRequestPendingForTest()
+                    && window.slicesInFlightForTest() == 0
+                    && *settles == *settlesLastTick;
+                *settlesLastTick = *settles;
+                if (!quiet) {
+                    // Non-quiescence for a whole budget in a row is the flicker
+                    // regression: the demand loop re-issuing itself endlessly.
+                    // Any legitimate quiescence resets the budget, so only a
+                    // loop that never settles reaches this.
+                    if (++*ticks >= 100) {
+                        poll->stop();
+                        std::cerr << "the fixed-scale demand loop never "
+                                     "quiesced (flicker regression)\n";
+                        application.exit(5);
+                    }
+                    return;
+                }
+                *ticks = 0;
+                if (*phase == 0) {
+                    // Fixed scale converged: the raster backs the whole viewport
+                    // and the demand loop stays quiet, rather than re-issuing
+                    // itself through the as-needed scroll bars.
+                    *phase = 1;
+                    if (!window.fixedScaleStateMatchesForTest(32)
+                        || !window
+                            .allViewsFixedScaleRasterCoversViewportForTest()) {
+                        poll->stop();
+                        application.exit(1);
+                        return;
+                    }
+                    // Five cells' worth of pixels at 32x through the real
+                    // Shift+left mouse event path; the newly visible cells are
+                    // fetched, then the loop is quiet again.
+                    window.shiftDragActiveViewForTest(-160, 0);
+                    return;
+                }
+                if (*phase == 1) {
+                    // The scrolled fixed scale keeps the fetched raster under the
+                    // whole viewport, with the domain-spanning scroll bars.
+                    *phase = 2;
+                    if (!window.fixedScaleStateMatchesForTest(32)
+                        || !window
+                            .allViewsFixedScaleRasterCoversViewportForTest()
+                        || !window.activeViewScrollBarsVisibleForTest()) {
+                        poll->stop();
+                        application.exit(1);
+                        return;
+                    }
+                    window.rubberBandZoomActiveViewForTest();
+                    return;
+                }
+                if (*phase == 2) {
+                    // The re-rendered selection stands alone, fitted to the pane
+                    // without scroll bars, as for local data.
+                    poll->stop();
+                    application.exit(
+                        window.activeViewIsZoomedForTest()
+                            && !window.activeViewScrollBarsVisibleForTest()
+                            ? 0 : 1);
+                }
+            });
+        // Backstop for a hang outside the poll (e.g. the initial load never
+        // finishing); the poll's own bounded-tick guard catches a flicker first.
         QTimer::singleShot(20000, &application,
             [&application] { application.exit(4); });
         QTimer::singleShot(0, &window,

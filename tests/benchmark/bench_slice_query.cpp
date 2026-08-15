@@ -1,10 +1,15 @@
-// Slice-path benchmark: times the composited per-pixel block lookup that
-// SliceQuery runs for every output pixel (five times per pixel for linear
-// sampling). It exists to put numbers on the block-index work (the O(pixels x
-// blocks) linear scan the uniform grid replaced) and to guard that path from
-// rotting -- it is registered as a ctest with a generous timeout and a
-// correctness check, NOT a wall-clock threshold (those flake in CI). Read the
-// printed timings by hand; scale the workload up via argv for real numbers:
+// Slice-path benchmark: times a whole SliceQuery::execute over a tiled level,
+// to put numbers on the block-index work (the O(pixels x blocks) linear scan
+// the uniform grid replaced) and to guard that path from rotting. It is
+// registered as a ctest with a generous timeout and a correctness check, NOT a
+// wall-clock threshold (those flake in CI). Read the printed timings by hand;
+// scale the workload up via argv for real numbers:
+//
+// The reported Mpx/s is whole-execute throughput, not isolated per-pixel cost:
+// each execute also does O(blocks) planning (a BlockGrid rebuild and a
+// requestBlock cache lookup per candidate block). Vary outputDim to move pixel
+// count at fixed block count; expect Mpx/s to fall as block count rises even
+// though the per-pixel lookup is O(1) -- that is the planning, not a regression.
 //
 //   bench_slice_query [blocksPerAxis] [cellsPerBlock] [outputDim] [iterations]
 //
@@ -16,6 +21,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -24,6 +30,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -31,9 +38,17 @@ namespace {
 constexpr std::string_view realDescriptor =
     "((8, (64 11 52 0 1 12 0 1023)),(8, (8 7 6 5 4 3 2 1)))";
 
-void die(const char* message)
+// Set once the fixture directory exists, so die() (which exits, skipping
+// destructors) still removes it instead of leaking the tree on any failure.
+std::filesystem::path g_fixtureRoot;
+
+[[noreturn]] void die(const char* message)
 {
     std::fprintf(stderr, "bench_slice_query: %s\n", message);
+    if (!g_fixtureRoot.empty()) {
+        std::error_code ignore;
+        std::filesystem::remove_all(g_fixtureRoot, ignore);
+    }
     std::exit(1);
 }
 
@@ -64,28 +79,47 @@ double medianMillis(std::vector<double>& samples)
     return samples[samples.size() / 2];
 }
 
+// Strictly-positive, bounded integer argument. std::atoi returns 0 on garbage
+// (silently truncating to the "positive" guard); parse explicitly and bound so
+// the derived fixture sizes below cannot overflow int.
+int positiveArg(const char* text)
+{
+    char* end = nullptr;
+    const long value = std::strtol(text, &end, 10);
+    if (end == text || *end != '\0' || value < 1 || value > 65536) {
+        die("arguments must be positive integers <= 65536");
+    }
+    return static_cast<int>(value);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
     // A single level tiled into blocksPerAxis^2 blocks of cellsPerBlock^2 cells,
     // unit cell size, field phi(i, j) = i + j.
-    const int blocksPerAxis = argc > 1 ? std::atoi(argv[1]) : 16;
-    const int cellsPerBlock = argc > 2 ? std::atoi(argv[2]) : 8;
-    const int domain = blocksPerAxis * cellsPerBlock;
-    const int outputDim = argc > 3 ? std::atoi(argv[3]) : domain;
-    const int iterations = argc > 4 ? std::atoi(argv[4]) : 5;
-    if (blocksPerAxis < 1 || cellsPerBlock < 1 || outputDim < 1
-        || iterations < 1) {
-        die("arguments must be positive");
+    const int blocksPerAxis = argc > 1 ? positiveArg(argv[1]) : 16;
+    const int cellsPerBlock = argc > 2 ? positiveArg(argv[2]) : 8;
+    // Guard the derived sizes (long long) before narrowing to int, so a large
+    // pair can't overflow the multiply.
+    const long long domainLL
+        = static_cast<long long>(blocksPerAxis) * cellsPerBlock;
+    const long long blockCountLL
+        = static_cast<long long>(blocksPerAxis) * blocksPerAxis;
+    if (domainLL > 65536 || blockCountLL > 1000000) {
+        die("fixture too large: reduce blocksPerAxis / cellsPerBlock");
     }
-    const int blockCount = blocksPerAxis * blocksPerAxis;
+    const int domain = static_cast<int>(domainLL);
+    const int outputDim = argc > 3 ? positiveArg(argv[3]) : domain;
+    const int iterations = argc > 4 ? positiveArg(argv[4]) : 5;
+    const int blockCount = static_cast<int>(blockCountLL);
 
     const auto unique
         = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto root = std::filesystem::temp_directory_path()
         / ("amrexplorer-bench-slice-" + std::to_string(unique));
     std::filesystem::create_directories(root / "Level_0");
+    g_fixtureRoot = root;
 
     const auto idx = [](int v) { return std::to_string(v); };
     std::string header =
@@ -155,31 +189,50 @@ int main(int argc, char** argv)
         request.sampling = sampling;
         // Warm the block cache so we time the composite lookup, not the FAB I/O.
         const auto warm = query.execute(request);
+        // Output pixel (x, y) samples physical position ((x+0.5)*scale,
+        // (y+0.5)*scale), not cell (x, y) -- they coincide only at
+        // outputDim == domain. Derive the expected value from that position so
+        // the check holds at every outputDim, and require *complete* coverage:
+        // this is the full domain, so a block-lookup regression that dropped
+        // blocks (fewer valid pixels) must fail here, not read as "faster".
+        const double scale = static_cast<double>(domain)
+            / static_cast<double>(outputDim);
         std::size_t covered = 0;
-        bool correct = true;
         for (int y = 0; y < outputDim; ++y) {
+            const double py = (static_cast<double>(y) + 0.5) * scale;
             for (int x = 0; x < outputDim; ++x) {
+                const double px = (static_cast<double>(x) + 0.5) * scale;
                 const auto off = static_cast<std::size_t>(x + outputDim * y);
                 if (warm.plane.valid[off] == 0) {
                     continue;
                 }
                 ++covered;
-                // Cell (i, j) = (x, y) at 1:1 output; phi = i + j. Piecewise is
-                // exact; linear reproduces the linear field at interior pixels.
+                const auto value = static_cast<double>(warm.plane.values[off]);
                 if (sampling == amrvis::SamplingPolicy::Nearest
                     || sampling == amrvis::SamplingPolicy::PiecewiseConstant) {
-                    const auto expected = static_cast<float>(x + y);
-                    if (warm.plane.values[off] != expected) {
-                        correct = false;
+                    // Piecewise returns the containing cell's phi = i + j.
+                    const int i = std::clamp(
+                        static_cast<int>(px), 0, domain - 1);
+                    const int j = std::clamp(
+                        static_cast<int>(py), 0, domain - 1);
+                    if (value != static_cast<double>(i + j)) {
+                        die("benchmark piecewise slice value is wrong");
+                    }
+                } else if (px >= 0.5 && px <= domain - 0.5
+                    && py >= 0.5 && py <= domain - 0.5) {
+                    // Linear over the linear field phi = i + j is exact away
+                    // from the clamped border: phi(px, py) = px + py - 1 (cell
+                    // centers sit at half-integers). Border pixels clamp, so
+                    // only require them to be covered.
+                    if (std::fabs(value - (px + py - 1.0)) > 1e-2) {
+                        die("benchmark linear slice value is wrong");
                     }
                 }
             }
         }
-        if (!correct) {
-            die("benchmark slice produced an incorrect value");
-        }
-        if (covered == 0) {
-            die("benchmark slice covered no pixels");
+        if (covered != static_cast<std::size_t>(outputDim)
+                * static_cast<std::size_t>(outputDim)) {
+            die("benchmark slice left output pixels uncovered");
         }
         std::vector<double> samples;
         samples.reserve(static_cast<std::size_t>(iterations));

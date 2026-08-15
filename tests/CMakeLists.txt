@@ -1351,4 +1351,6 @@ add_executable(bench_slice_query benchmark/bench_slice_query.cpp)
 target_link_libraries(
     bench_slice_query PRIVATE amrexplorer::query amrexplorer::warnings)
 add_test(NAME slice_query_benchmark COMMAND bench_slice_query)
-set_tests_properties(slice_query_benchmark PROPERTIES TIMEOUT 120)
+# RUN_SERIAL so the printed timings aren't measured under ctest --parallel core
+# contention (same reason the remote_frame timing test sets it).
+set_tests_properties(slice_query_benchmark PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)

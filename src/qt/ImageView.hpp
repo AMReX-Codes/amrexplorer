@@ -175,7 +175,14 @@ public:
     void zoomBy(qreal factor);
     // The rect is in image (raster-pixel) coordinates — identical to scene
     // coordinates in the classic scene, offset-corrected on a virtual canvas.
-    void zoomToRect(const QRectF& imageRect);
+    // confineScene additionally shrinks the scene rect to the target, which
+    // keeps the scroll ranges empty: for a zoom whose surroundings are about
+    // to be discarded (a rubber-band selection awaiting its re-slice), the
+    // domain-spanning scroll bars must not appear even transiently — on a
+    // remote session they steal viewport pixels, so the requested raster is
+    // undersized and a second fetch fires when they vanish. The next setImage
+    // restores the scene rect (see applyPlacement).
+    void zoomToRect(const QRectF& imageRect, bool confineScene = false);
     // Scrolls the viewport for Shift+left-drag and the arrow keys. The delta
     // is how far the content moves, matching the sense MainWindow's
     // shiftedPanRegion uses, and is a no-op when the scene already fits the

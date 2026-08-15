@@ -224,6 +224,11 @@ public:
     // the same handler used by ImageView::rubberBandSelected.
     void rubberBandZoomActiveViewForTest();
     void rubberBandZoomRectangularActiveViewForTest();
+    void rubberBandZoomTallActiveViewForTest();
+    // Whether the active view's raster is fitted flush to the pane: within
+    // the viewport (no overflow) and touching both borders on the limiting
+    // axis, up to fitInView's built-in margin.
+    [[nodiscard]] bool activeViewRasterSnugForTest() const;
 
     // Test-only: true when every current panel has a strict visible subregion.
     // Used to lock down synchronized 3-D rubber-band zoom.

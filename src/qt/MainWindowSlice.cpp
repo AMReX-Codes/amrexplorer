@@ -746,7 +746,26 @@ std::optional<QRectF> MainWindow::preservedDataWindow(
     if (window.isEmpty()) {
         return std::nullopt;
     }
-    return window;
+    // Clamped to the raster that actually arrived. The window is the *viewport*
+    // mapped through the old plane, and after a rubber-band zoom the viewport
+    // shows more than the selection: the feedback zoom fits the selection with
+    // KeepAspectRatio, which pads the slack axis. Framing that padded window
+    // over a raster that stops at the selection leaves the raster short of the
+    // pane -- the gap that only the next pan corrected, by refitting.
+    //
+    // There is nothing outside the raster to show anyway, so clamping is the
+    // whole fix, and it is a no-op for the case this function exists for: a
+    // density change mid-view preserves a window that lies *inside* the new
+    // raster. Local rubber-band zooms never reach here at all, since their
+    // density is unchanged -- which is why they never showed the gap.
+    const QRectF rasterBounds(0.0, 0.0,
+        static_cast<double>(incoming.width),
+        static_cast<double>(incoming.height));
+    const auto clamped = window.intersected(rasterBounds);
+    if (clamped.isEmpty()) {
+        return std::nullopt;
+    }
+    return clamped;
 }
 
 std::optional<QRectF> MainWindow::sphericalReframe(

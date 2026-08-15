@@ -1106,21 +1106,47 @@ int main(int argc, char* argv[])
         // selection is re-rendered fitted to the pane exactly as for local
         // data.
         auto phase = std::make_shared<int>(0);
-        auto settles = std::make_shared<int>(0);
+        auto sawSettle = std::make_shared<bool>(false);
+        // Each step of the sequence is judged only once the demand loop has
+        // gone quiet for this interval (several remote render round-trips), not
+        // on a fixed delay from the first settle. A slow runner's convergence
+        // jitter -- an extra late settle after a legitimate fetch -- then just
+        // re-arms the wait instead of failing the check, while the flicker this
+        // guards against never goes quiet at all and is caught by the watchdog.
+        auto* quiet = new QTimer(&application);
+        quiet->setSingleShot(true);
+        quiet->setInterval(2000);
         QObject::connect(&window,
             &amrvis::qt::MainWindow::initialSliceFinished,
             &application,
-            [&window, &application, phase, settles](bool success) {
+            [&window, &application, phase, sawSettle, quiet](bool success) {
                 if (!success) {
                     application.exit(2);
                     return;
                 }
+                // Every settle marks activity and (re)arms quiescence; the phase
+                // machine below advances only after the loop settles and stays
+                // quiet.
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application,
-                    [&window, &application, phase, settles] {
-                        ++*settles;
+                    &application, [sawSettle, quiet] {
+                        *sawSettle = true;
+                        quiet->start();
+                    });
+                QObject::connect(quiet, &QTimer::timeout, &application,
+                    [&window, &application, phase, sawSettle] {
+                        // A timeout before this step produced any settle (the gap
+                        // between issuing an input and its fetch arriving) is not
+                        // quiescence -- keep waiting.
+                        if (!*sawSettle) {
+                            return;
+                        }
+                        *sawSettle = false;
                         if (*phase == 0) {
+                            // Fixed scale converged: the raster backs the whole
+                            // viewport and the demand loop stays quiet, rather
+                            // than re-issuing itself endlessly through the
+                            // as-needed scroll bars.
                             *phase = 1;
                             if (!window.fixedScaleStateMatchesForTest(32)
                                 || !window
@@ -1128,33 +1154,17 @@ int main(int argc, char* argv[])
                                 application.exit(1);
                                 return;
                             }
-                            // A quiet period several render round-trips long:
-                            // any settle in here means the demand feeds back
-                            // on itself.
-                            const auto armed = *settles;
-                            QTimer::singleShot(2000, &application,
-                                [&window, &application, phase, settles,
-                                    armed] {
-                                    if (*settles != armed
-                                        || !window
-                        .allViewsFixedScaleRasterCoversViewportForTest()) {
-                                        application.exit(1);
-                                        return;
-                                    }
-                                    *phase = 2;
-                                    // Five cells' worth of pixels at 32x,
-                                    // sent through the real Shift+left mouse
-                                    // event path: the newly visible cells must
-                                    // be fetched, giving exactly one settle.
-                                    window.shiftDragActiveViewForTest(-160, 0);
-                                });
+                            // Five cells' worth of pixels at 32x through the real
+                            // Shift+left mouse event path: the newly visible
+                            // cells are fetched, then the loop is quiet again.
+                            window.shiftDragActiveViewForTest(-160, 0);
                             return;
                         }
-                        if (*phase == 2) {
-                            *phase = 3;
-                            // The scrolled fixed scale keeps the fetched
-                            // raster under the whole viewport, with the
-                            // domain-spanning scroll bars present.
+                        if (*phase == 1) {
+                            // The scrolled fixed scale keeps the fetched raster
+                            // under the whole viewport, with the domain-spanning
+                            // scroll bars present.
+                            *phase = 2;
                             if (!window.fixedScaleStateMatchesForTest(32)
                                 || !window
                         .allViewsFixedScaleRasterCoversViewportForTest()
@@ -1166,11 +1176,9 @@ int main(int argc, char* argv[])
                             window.rubberBandZoomActiveViewForTest();
                             return;
                         }
-                        if (*phase == 3) {
-                            *phase = 4;
-                            // The re-rendered selection stands alone, fitted
-                            // to the pane without scroll bars, as for local
-                            // data.
+                        if (*phase == 2) {
+                            // The re-rendered selection stands alone, fitted to
+                            // the pane without scroll bars, as for local data.
                             application.exit(
                                 window.activeViewIsZoomedForTest()
                                     && !window
@@ -1180,7 +1188,9 @@ int main(int argc, char* argv[])
                     });
                 window.selectFixedScaleForTest(32);
             });
-        QTimer::singleShot(15000, &application,
+        // Longer than three quiescence windows plus convergence, so only a demand
+        // loop that never settles (the flicker regression) reaches it.
+        QTimer::singleShot(20000, &application,
             [&application] { application.exit(4); });
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {

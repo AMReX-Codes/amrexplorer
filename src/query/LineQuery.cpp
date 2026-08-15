@@ -14,11 +14,11 @@
 namespace amrvis {
 namespace {
 
+using detail::BlockGrid;
 using detail::LoadedBlock;
 using detail::intersects;
-using detail::contains;
+using detail::lookupBlockValue;
 using detail::physicalToIndex;
-using detail::valueOffset;
 
 // A covering cell hit during the line walk: which level won, the cell index,
 // and the cell-centered value there.
@@ -85,9 +85,17 @@ LineQueryResult LineQuery::execute(
     result.line.valid.reserve(maxSamples);
     result.line.sourceLevel.reserve(maxSamples);
 
-    // Pre-load every block the line crosses, per participating level.
+    // Pre-load every block the line crosses, per participating level, and index
+    // each level's blocks for O(1)-average point lookup during the walk. The
+    // grid bins on the line axis (the walk varies only that coordinate; the
+    // off-axes are pinned to the line's fixed cell) plus one other axis to give
+    // BlockGrid two distinct axes.
     std::vector<std::vector<LoadedBlock>> loadedByLevel(
         static_cast<std::size_t>(maximumLevel) + 1);
+    std::vector<BlockGrid> gridByLevel(
+        static_cast<std::size_t>(maximumLevel) + 1);
+    const std::array<int, 2> gridAxes{
+        request.axis, (request.axis + 1) % metadata.dimension};
     for (int levelIndex = minimumLevel; levelIndex <= maximumLevel; ++levelIndex) {
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
@@ -144,6 +152,8 @@ LineQueryResult LineQuery::execute(
             }
             loaded.push_back({block.box, std::move(access.handle)});
         }
+        gridByLevel[static_cast<std::size_t>(levelIndex)]
+            = BlockGrid(loaded, gridAxes);
     }
 
     // Find the finest level covering position x (fine overrides coarse).
@@ -158,17 +168,13 @@ LineQueryResult LineQuery::execute(
                         : request.fixedCoordinates[static_cast<std::size_t>(axis)],
                     metadata, level, axis);
             }
-            for (const auto& block : loadedByLevel[static_cast<std::size_t>(levelIndex)]) {
-                if (!contains(block.validBox, point, metadata.dimension)) {
-                    continue;
-                }
-                const auto offset = valueOffset(block.data->box, point, metadata.dimension);
-                if (offset >= block.data->values.size()) {
-                    throw std::runtime_error("composed FAB index exceeds loaded block");
-                }
+            const auto entry = static_cast<std::size_t>(levelIndex);
+            if (const auto value = lookupBlockValue(
+                    gridByLevel[entry], loadedByLevel[entry], point,
+                    metadata.dimension)) {
                 cover.level = levelIndex;
                 cover.point = point;
-                cover.value = static_cast<float>(block.data->values[offset]);
+                cover.value = static_cast<float>(*value);
                 return true;
             }
         }

@@ -9,20 +9,27 @@ void MainWindow::requestVisibleSyncForTest()
 
 void MainWindow::armVisibleSyncGateForTest()
 {
-    visible_sync_test::released.store(false);
-    visible_sync_test::workerWaiting.store(false);
+    visible_sync_test::releaseGrants.store(0);
+    visible_sync_test::passed.store(0);
+    visible_sync_test::waiting.store(0);
     visible_sync_test::gateArmed.store(true);
 }
 
 void MainWindow::releaseVisibleSyncGateForTest()
 {
+    // Grant exactly one parked worker leave to proceed.
+    visible_sync_test::releaseGrants.fetch_add(1);
+}
+
+void MainWindow::disarmVisibleSyncGateForTest()
+{
+    // Free everything (used on test exit so no worker stays parked).
     visible_sync_test::gateArmed.store(false);
-    visible_sync_test::released.store(true);
 }
 
 bool MainWindow::visibleSyncWorkerWaitingForTest() const
 {
-    return visible_sync_test::workerWaiting.load();
+    return visible_sync_test::waiting.load() > 0;
 }
 
 void MainWindow::setViewDisplayRangesForTest(double minimum, double maximum)
@@ -33,20 +40,6 @@ void MainWindow::setViewDisplayRangesForTest(double minimum, double maximum)
     for (auto* state : {&m_planeViews[0], &m_planeViews[1], &m_planeViews[2]}) {
         state->displayMinimum = minimum;
         state->displayMaximum = maximum;
-    }
-}
-
-void MainWindow::setRangeModeVisibleForTest(bool visible)
-{
-    // Silently switch between Visible and File (no re-slice), so a re-slice
-    // driven while File is active takes the syncVisibleRanges early-return path
-    // and does not arm the rerun flag -- the mid-sync-invalidation path the
-    // per-panel identity/rerun signals both miss.
-    const QSignalBlocker blocker(m_rangeMode);
-    const auto index = m_rangeMode->findData(static_cast<int>(
-        visible ? RangeMode::Visible : RangeMode::File));
-    if (index >= 0) {
-        m_rangeMode->setCurrentIndex(index);
     }
 }
 

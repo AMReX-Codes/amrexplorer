@@ -1781,18 +1781,20 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1])
-            == "--overlapping-visible-sync-smoke-test") {
+            == "--visible-sync-staleness-smoke-test") {
         // Regression for the visible-range sync staleness guard (all-or-nothing
-        // form). A panel re-sliced while the sync runs makes the sync's union
-        // stale for that panel; cached-plane reuse keeps the pointer identical
-        // and a mode-flip re-slice never arms rerun, so the guard keys on a
-        // per-view render generation and drops the whole outcome. Drive that
-        // exact path: sentinel the panels' ranges, gate a sync mid-flight,
-        // re-slice one panel for real under a silently-switched File mode (so it
-        // rewrites the plane without arming rerun), switch back to Visible,
-        // release, and require the sync dropped -- leaving the two untouched
-        // panels still on the sentinel range. (The reuse contract itself is
-        // pinned by test_display_transitions.)
+        // form) and the single-flight dispatch gate. A panel re-sliced while a
+        // sync runs makes the sync's union stale for it; cached-plane reuse keeps
+        // the pointer identical, so the guard keys on a per-view render
+        // generation, drops the whole outcome, and the rerun recomputes a
+        // coherent one. Drive that exact path: gate a sync mid-flight, re-slice
+        // one panel for real (rewriting its plane via showSlice), release the
+        // now-stale sync and require it dropped, and -- while the self-healing
+        // rerun is still gated -- require the two untouched panels still on a
+        // sentinel range set beforehand (the stale union was not applied). Then
+        // release the rerun. Gate coverage: a clean multi-panel setup batch must
+        // drop nothing (skips == 0); per-arrival dispatch would drop one.
+        // (The reuse contract itself is pinned by test_display_transitions.)
         constexpr double kSentinelMin = -98765.0;
         constexpr double kSentinelMax = -98764.0;
         const std::filesystem::path path(argv[2]);
@@ -1800,37 +1802,38 @@ int main(int argc, char* argv[])
         poll->setInterval(5);
         auto phase = std::make_shared<int>(0);
         auto attempts = std::make_shared<int>(0);
-        // The drop counter's sole writer is the all-or-nothing stale drop.
-        // Captured before the gated sync so the assertion sees only this test's
-        // drop; single-flight means the setup batch itself drops nothing.
-        auto baseline = std::make_shared<std::uint64_t>(0);
         // Active panel's render generation just before the invalidating zoom, so
         // phase 2 can wait for the (debounced) re-slice to actually rewrite the
-        // plane -- slicesInFlight is still zero right after scheduleSliceRequest.
+        // plane -- slicesInFlight is zero again right after scheduleSliceRequest.
         auto zoomGen = std::make_shared<std::uint64_t>(0);
+        auto sentinelsHeld = std::make_shared<bool>(false);
         const auto finish = [&application, poll, &window](int code) {
-            // Free any parked worker (so QThreadPool can join) and leave a sane
-            // range mode, then exit.
-            window.releaseVisibleSyncGateForTest();
-            window.setRangeModeVisibleForTest(true);
+            window.disarmVisibleSyncGateForTest();  // free any parked worker
             poll->stop();  // no stray timeout fires after we ask to exit
             application.exit(code);
         };
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
             &application,
-            [&window, &application, finish, poll, phase, baseline](bool success) {
+            [&window, &application, finish, poll, phase](bool success) {
                 if (!success) {
                     finish(1);
                     return;
                 }
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application, [&window, poll, phase, baseline] {
+                    &application, [&window, finish, poll, phase] {
                         if (*phase != 0) {
                             return;
                         }
                         *phase = 1;
-                        *baseline = window.visibleSyncStaleSkipsForTest();
+                        // Single-flight gate coverage: the setup was a clean
+                        // multi-panel batch, so one all-current sync ran and
+                        // nothing was dropped. Per-arrival dispatch would have
+                        // dropped the first (premature) sync.
+                        if (window.visibleSyncStaleSkipsForTest() != 0) {
+                            finish(7);
+                            return;
+                        }
                         // Sentinel the panel ranges, then gate a sync so it
                         // cannot land before we invalidate a panel below.
                         window.setViewDisplayRangesForTest(
@@ -1843,21 +1846,20 @@ int main(int argc, char* argv[])
                 window.configureContourSyncForTest(3, false, {0.5, 0.5, 0.5});
             });
         QObject::connect(poll, &QTimer::timeout, &application,
-            [&window, finish, phase, attempts, baseline, zoomGen] {
+            [&window, finish, phase, attempts, zoomGen, sentinelsHeld] {
                 if (++*attempts > 3000) {
                     finish(3);
                     return;
                 }
                 if (*phase == 1) {
                     if (!window.visibleSyncWorkerWaitingForTest()) {
-                        return;  // wait for the gated worker to reach the gate
+                        return;  // wait for the gated sync to reach the gate
                     }
                     *phase = 2;
-                    // Re-slice one panel for real while the sync is parked, in
-                    // File mode so its arrival rewrites that panel's plane
-                    // (bumping the render stamp) without arming rerun.
+                    // Re-slice one panel for real while the sync is parked; its
+                    // plane rewrite (via showSlice) makes the parked sync's
+                    // snapshot stale for that panel.
                     *zoomGen = window.activeViewRenderGenerationForTest();
-                    window.setRangeModeVisibleForTest(false);
                     window.zoomActiveViewForTest();
                     return;
                 }
@@ -1866,20 +1868,23 @@ int main(int argc, char* argv[])
                         return;  // wait for the debounced re-slice to rewrite
                     }
                     *phase = 3;
-                    // Back to Visible so the sync's completion sees a current
-                    // mode, then release it: it must find one panel's stamp
-                    // changed and drop the whole (now-stale) outcome.
-                    window.setRangeModeVisibleForTest(true);
-                    window.releaseVisibleSyncGateForTest();
+                    window.releaseVisibleSyncGateForTest();  // let the stale sync land
                     return;
                 }
                 if (*phase == 3) {
-                    if (window.visibleSyncStaleSkipsForTest() <= *baseline) {
-                        return;  // wait for the released sync to land and drop
+                    // The stale sync must drop the whole outcome, then re-dispatch
+                    // a rerun that parks at the gate. Wait for both.
+                    if (window.visibleSyncStaleSkipsForTest() == 0
+                        || !window.visibleSyncWorkerWaitingForTest()) {
+                        return;
                     }
-                    // Dropped. The two panels the re-slice never touched must
-                    // still hold the sentinel range: the stale union was not
-                    // applied to them. (The re-sliced panel took a File range.)
+                    if (window.visibleSyncStaleSkipsForTest() != 1) {
+                        finish(5);  // exactly one drop expected; more is a bug
+                        return;
+                    }
+                    // The rerun is still gated. The two panels the re-slice never
+                    // touched must still hold the sentinel range -- the stale
+                    // union was dropped, not applied to them.
                     const auto probes = window.contourViewProbesForTest();
                     int atSentinel = 0;
                     for (const auto& probe : probes) {
@@ -1888,7 +1893,13 @@ int main(int argc, char* argv[])
                             ++atSentinel;
                         }
                     }
-                    finish(atSentinel == 2 ? 0 : 6);
+                    *sentinelsHeld = (atSentinel == 2);
+                    *phase = 4;
+                    window.releaseVisibleSyncGateForTest();  // let the rerun apply
+                    return;
+                }
+                if (*phase == 4) {
+                    finish(*sentinelsHeld ? 0 : 6);
                 }
             });
         QTimer::singleShot(20000, &application,

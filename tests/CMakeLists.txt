@@ -920,17 +920,17 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_contour_sync_smoke_3d PROPERTIES TIMEOUT 30)
     add_test(
-        NAME qt_overlapping_visible_sync_smoke_3d
+        NAME qt_visible_sync_staleness_smoke_3d
         COMMAND "${CMAKE_COMMAND}"
             "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
             "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
             "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
-            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_overlapping_visible_sync_3d"
-            -DMODE=overlapping-visible-sync
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_visible_sync_staleness_3d"
+            -DMODE=visible-sync-staleness
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(
-        qt_overlapping_visible_sync_smoke_3d PROPERTIES TIMEOUT 30)
+        qt_visible_sync_staleness_smoke_3d PROPERTIES TIMEOUT 30)
     add_test(
         NAME qt_quit_smoke_3d
         COMMAND "${CMAKE_COMMAND}"

@@ -312,32 +312,38 @@ inline QPainterPath sphericalSectorPath(const PlaneMapping& mapping,
 }
 
 #ifdef AMREXPLORER_QT_TEST_ACCESS
-// A gate the visible-range sync worker waits on when armed, so the overlapping-
-// sync regression test can hold a sync mid-flight, queue a second one (setting
-// the rerun flag), then release the first and observe it being dropped as
-// superseded. Compiled only into the test-access build.
+// A gate the visible-range sync worker waits on when armed, so the staleness
+// regression test can hold a sync mid-flight, invalidate a panel, then release
+// workers one at a time -- first the now-stale sync (to observe it dropped),
+// then the self-healing rerun -- and check the transient in between. Grants are
+// counted, not a single boolean, precisely so the sync and its rerun can be
+// released independently. Compiled only into the test-access build.
 namespace visible_sync_test {
 
 inline std::atomic<bool> gateArmed{false};
-inline std::atomic<bool> released{false};
-inline std::atomic<bool> workerWaiting{false};
+inline std::atomic<int> releaseGrants{0};  // # of "proceed" grants issued
+inline std::atomic<int> passed{0};         // # of workers that have proceeded
+inline std::atomic<int> waiting{0};        // # of workers currently parked
 
 inline void waitAtGate()
 {
     if (!gateArmed.load()) {
         return;
     }
-    workerWaiting.store(true);
-    // Bounded wait: if the test dies before releasing the gate, the worker
-    // must still return so QThreadPool's destructor can join it. Parking here
-    // forever would surface as a ctest TIMEOUT that masks the real exit code.
-    for (int waited = 0; waited < 10000 && !released.load(); ++waited) {
+    waiting.fetch_add(1);
+    // Park until a grant is free (passed < grants) -- or the gate is disarmed,
+    // or the bounded wait elapses. The bound matters: if the test dies without
+    // releasing, the worker must still return so QThreadPool's destructor can
+    // join it, rather than hanging into a ctest TIMEOUT that masks the exit code.
+    for (int waited = 0; waited < 10000; ++waited) {
+        if (!gateArmed.load()
+            || passed.load() < releaseGrants.load()) {
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    // Clear so the flag reflects "a worker is parked now", not "one ever was":
-    // a later gated run's poll would otherwise see a stale true before its
-    // worker arrives.
-    workerWaiting.store(false);
+    passed.fetch_add(1);
+    waiting.fetch_sub(1);
 }
 
 } // namespace visible_sync_test

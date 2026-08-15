@@ -143,17 +143,18 @@ public:
 
     // Test-only: drive the visible-range sync staleness guard deterministically.
     // Set sentinel display ranges, gate a sync mid-flight, re-slice one panel
-    // for real (zoomActiveViewForTest) under a silently-switched File mode so it
-    // rewrites that panel's plane without arming rerun, switch back to Visible,
-    // and release. The completion must drop the whole (now-stale) outcome --
-    // tallied in the test-only m_visibleSyncStaleSkips, read through
-    // visibleSyncStaleSkipsForTest() -- leaving the two untouched panels on the
-    // sentinel range. See the staleness smoke test and syncVisibleRanges.
+    // for real (zoomActiveViewForTest) so it rewrites that panel's plane, then
+    // release workers one at a time: first the now-stale sync, which must drop
+    // the whole outcome (tallied in the test-only m_visibleSyncStaleSkips, read
+    // via visibleSyncStaleSkipsForTest()); while the self-healing rerun is still
+    // gated, the two untouched panels must remain on the sentinel range (the
+    // stale union was not applied to them); then release the rerun. See the
+    // staleness smoke test and syncVisibleRanges.
     void requestVisibleSyncForTest();
     void armVisibleSyncGateForTest();
     void releaseVisibleSyncGateForTest();
+    void disarmVisibleSyncGateForTest();
     void setViewDisplayRangesForTest(double minimum, double maximum);
-    void setRangeModeVisibleForTest(bool visible);
     [[nodiscard]] std::uint64_t activeViewRenderGenerationForTest() const;
     [[nodiscard]] bool visibleSyncWorkerWaitingForTest() const;
     [[nodiscard]] std::uint64_t visibleSyncStaleSkipsForTest() const noexcept;
@@ -462,13 +463,13 @@ private:
         // Bumped every time `plane` (and its contour companions) is rewritten:
         // each showSlice apply and each dataset reset. The 3-D visible-range
         // sync snapshots this per panel at dispatch and, at completion, applies
-        // only to panels whose stamp is unchanged -- a panel re-sliced mid-sync
-        // has this outcome dropped for it alone (it rendered from the previous
-        // plane), and its own arrival drives a fresh sync. This is the
-        // staleness key cached-plane reuse defeated for pointer identity;
-        // distinct from sliceGeneration, which bumps at *request dispatch*
-        // (before the plane lands) and so would mark a not-yet-arrived panel
-        // current. See syncVisibleRanges.
+        // its shared range/log across all three panels only if *every* panel's
+        // stamp still matches -- otherwise it drops the whole outcome (the
+        // union would be over a superseded plane) and the rerun recomputes one.
+        // This is the staleness key cached-plane reuse defeated for pointer
+        // identity; distinct from sliceGeneration, which bumps at *request
+        // dispatch* (before the plane lands) and so would mark a not-yet-arrived
+        // panel current. See syncVisibleRanges.
         std::uint64_t renderGeneration = 0;
         // Slice requests currently on a worker for this view; the sweep
         // playback skips ticks while one is in flight.
@@ -694,10 +695,13 @@ private:
     // Visible-range mode in 3-D: recompute the min/max from all three panels'
     // planes so the single color bar maps them consistently. The heavy part
     // (extrema scans, contour re-extraction, up to three full raster renders)
-    // runs on a worker over the panels' immutable plane snapshots;
-    // completions apply per panel only while its snapshot is still the
-    // displayed one (pointer identity). Coalesced single-flight: a call while
-    // a sync worker is in flight marks a rerun instead of stacking workers.
+    // runs on a worker over the panels' immutable plane snapshots. Single-flight:
+    // dispatch waits until the panel batch settles (slicesInFlight() == 0) and no
+    // sync is running; a call in the meantime marks a rerun instead of stacking
+    // workers. At completion the shared result is applied all-or-nothing, keyed
+    // on the per-view render generation (see PlaneViewState::renderGeneration) --
+    // if any panel was re-sliced mid-sync the whole outcome is dropped and the
+    // rerun recomputes it.
     void syncVisibleRanges();
     // Panel slices currently on a worker (summed PlaneViewState::pendingRequests);
     // the visible-range sync defers dispatch until this is zero. Panel work only

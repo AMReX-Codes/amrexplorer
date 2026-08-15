@@ -29,6 +29,125 @@ struct LevelBlocks {
     std::vector<LoadedBlock> blocks;
 };
 
+// A uniform bin grid over one level's loaded blocks, on the two plane axes, for
+// O(1)-average point->block lookup. The composited-value lookup below runs once
+// per output pixel (five times per pixel for linear sampling), and a linear scan
+// of every intersecting block per pixel was O(pixels * blocks) -- seconds on a
+// full-resolution view of a block-heavy fine level. Blocks within an AMReX level
+// are non-overlapping, so a point lands in at most one; the grid narrows the scan
+// to the one tile the point falls in.
+//
+// A block that spans several tiles is listed in each, so every block covering a
+// point shares that point's tile and the bucket scan sees all candidates. Scans
+// run in ascending block index (buckets are filled in block order), so a
+// malformed overlapping catalog resolves to the smallest index -- identical to
+// the first-match order of the linear scan this replaces.
+class BlockGrid {
+public:
+    BlockGrid(const std::vector<LoadedBlock>& blocks,
+        const std::array<int, 2>& axes)
+        : m_axis0(axes[0])
+        , m_axis1(axes[1])
+    {
+        if (blocks.empty()) {
+            return;
+        }
+        const auto a0 = static_cast<std::size_t>(m_axis0);
+        const auto a1 = static_cast<std::size_t>(m_axis1);
+        auto hi0 = std::numeric_limits<std::int64_t>::min();
+        auto hi1 = std::numeric_limits<std::int64_t>::min();
+        m_lo0 = std::numeric_limits<std::int64_t>::max();
+        m_lo1 = std::numeric_limits<std::int64_t>::max();
+        for (const auto& block : blocks) {
+            m_lo0 = std::min(m_lo0,
+                static_cast<std::int64_t>(block.validBox.lower[a0]));
+            m_lo1 = std::min(m_lo1,
+                static_cast<std::int64_t>(block.validBox.lower[a1]));
+            hi0 = std::max(hi0,
+                static_cast<std::int64_t>(block.validBox.upper[a0]));
+            hi1 = std::max(hi1,
+                static_cast<std::int64_t>(block.validBox.upper[a1]));
+        }
+        const auto span0 = hi0 - m_lo0 + 1;
+        const auto span1 = hi1 - m_lo1 + 1;
+        // Aim for ~one block per tile (sqrt(blocks) tiles per axis), capped so
+        // the bucket array stays bounded no matter how many blocks intersect.
+        constexpr std::int64_t maxTilesPerAxis = 256;
+        const auto target = std::clamp<std::int64_t>(
+            static_cast<std::int64_t>(std::llround(
+                std::sqrt(static_cast<double>(blocks.size())))),
+            1, maxTilesPerAxis);
+        m_tile0 = std::max<std::int64_t>(1, (span0 + target - 1) / target);
+        m_tile1 = std::max<std::int64_t>(1, (span1 + target - 1) / target);
+        m_n0 = static_cast<int>((span0 + m_tile0 - 1) / m_tile0);
+        m_n1 = static_cast<int>((span1 + m_tile1 - 1) / m_tile1);
+        m_buckets.assign(
+            static_cast<std::size_t>(m_n0) * static_cast<std::size_t>(m_n1), {});
+        for (std::size_t index = 0; index < blocks.size(); ++index) {
+            const auto& box = blocks[index].validBox;
+            for (int t1 = tile1(box.lower[a1]); t1 <= tile1(box.upper[a1]); ++t1) {
+                for (int t0 = tile0(box.lower[a0]);
+                     t0 <= tile0(box.upper[a0]); ++t0) {
+                    m_buckets[bucket(t0, t1)].push_back(static_cast<int>(index));
+                }
+            }
+        }
+    }
+
+    // Index into `blocks` of the block containing `point`, or -1 if none does.
+    [[nodiscard]] int find(const std::vector<LoadedBlock>& blocks,
+        const Int3& point, int dimension) const
+    {
+        if (m_buckets.empty()) {
+            return -1;
+        }
+        const auto p0 = static_cast<std::int64_t>(
+            point[static_cast<std::size_t>(m_axis0)]);
+        const auto p1 = static_cast<std::int64_t>(
+            point[static_cast<std::size_t>(m_axis1)]);
+        if (p0 < m_lo0 || p1 < m_lo1) {
+            return -1;
+        }
+        const auto t0 = tile0(p0);
+        const auto t1 = tile1(p1);
+        if (t0 >= m_n0 || t1 >= m_n1) {
+            return -1;
+        }
+        for (const auto index : m_buckets[bucket(t0, t1)]) {
+            if (contains(blocks[static_cast<std::size_t>(index)].validBox,
+                    point, dimension)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+private:
+    [[nodiscard]] int tile0(std::int64_t coordinate) const noexcept
+    {
+        return static_cast<int>((coordinate - m_lo0) / m_tile0);
+    }
+    [[nodiscard]] int tile1(std::int64_t coordinate) const noexcept
+    {
+        return static_cast<int>((coordinate - m_lo1) / m_tile1);
+    }
+    [[nodiscard]] std::size_t bucket(int t0, int t1) const noexcept
+    {
+        return static_cast<std::size_t>(t1) * static_cast<std::size_t>(m_n0)
+            + static_cast<std::size_t>(t0);
+    }
+
+    int m_axis0 = 0;
+    int m_axis1 = 1;
+    std::int64_t m_lo0 = 0;
+    std::int64_t m_lo1 = 0;
+    std::int64_t m_tile0 = 1;
+    std::int64_t m_tile1 = 1;
+    int m_n0 = 0;
+    int m_n1 = 0;
+    std::vector<std::vector<int>> m_buckets;
+};
+
 
 // The index box a physical region covers at one level. Piecewise sampling
 // passes the visible region; linear sampling passes a halo-expanded region
@@ -184,13 +303,21 @@ SliceQueryResult SliceQuery::execute(
         levels.push_back(std::move(levelBlocks));
     }
 
+    // One point->block index per participating level, parallel to `levels`.
+    std::vector<BlockGrid> levelGrids;
+    levelGrids.reserve(levels.size());
+    for (const auto& levelBlocks : levels) {
+        levelGrids.emplace_back(levelBlocks.blocks, axes);
+    }
+
     // The composed piecewise-constant field at a physical point: the finest
     // participating level with a block covering the point's cell wins.
     // Returns the value and the covering level, or nothing when the point
     // is outside every grid.
-    const auto valueAt = [&metadata, &levels](const Real3& position)
+    const auto valueAt = [&metadata, &levels, &levelGrids](const Real3& position)
         -> std::optional<std::pair<double, int>> {
-        for (const auto& levelBlocks : levels) {
+        for (std::size_t entry = 0; entry < levels.size(); ++entry) {
+            const auto& levelBlocks = levels[entry];
             const auto& level =
                 metadata.levels[static_cast<std::size_t>(levelBlocks.levelIndex)];
             Int3 point;
@@ -198,17 +325,19 @@ SliceQueryResult SliceQuery::execute(
                 point[static_cast<std::size_t>(axis)] = physicalToIndex(
                     position[static_cast<std::size_t>(axis)], metadata, level, axis);
             }
-            for (const auto& block : levelBlocks.blocks) {
-                if (!contains(block.validBox, point, metadata.dimension)) {
-                    continue;
-                }
-                const auto offset =
-                    valueOffset(block.data->box, point, metadata.dimension);
-                if (offset >= block.data->values.size()) {
-                    throw std::runtime_error("composed FAB index exceeds loaded block");
-                }
-                return std::pair{block.data->values[offset], levelBlocks.levelIndex};
+            const auto blockIndex = levelGrids[entry].find(
+                levelBlocks.blocks, point, metadata.dimension);
+            if (blockIndex < 0) {
+                continue;
             }
+            const auto& block =
+                levelBlocks.blocks[static_cast<std::size_t>(blockIndex)];
+            const auto offset =
+                valueOffset(block.data->box, point, metadata.dimension);
+            if (offset >= block.data->values.size()) {
+                throw std::runtime_error("composed FAB index exceeds loaded block");
+            }
+            return std::pair{block.data->values[offset], levelBlocks.levelIndex};
         }
         return std::nullopt;
     };

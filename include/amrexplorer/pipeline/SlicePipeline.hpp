@@ -38,6 +38,14 @@ struct SliceDisplayResult {
     SliceRequest request;
     SliceQueryResult slice;
     ImageBuffer image;
+    // Re-render-from-cache fast path: the view's existing display plane is
+    // immutable and unchanged, so refreshCachedSlice hands it back by
+    // shared_ptr instead of deep-copying it into slice.plane (which is up to
+    // ~110 MB). When set, displayPlane() and showSlice read through it and
+    // adopt it directly; empty on the executeSlice path, which produces a
+    // fresh slice.plane. (Contour planes are contour-resolution and still copy
+    // by value; that copy retires with the wider round-tripping cleanup.)
+    std::shared_ptr<const ScalarPlane> reusedPlane;
     // Coordinate system of the dataset (AMReX Header code). 2 (spherical) warps
     // `image` into physical (R, Z); all others leave it in logical space.
     int coordinateSystem = 0;
@@ -78,6 +86,14 @@ struct SliceDisplayResult {
     // InitialSliceResult (see cache-budget-exceeded-hard-fails-after-load).
     int cacheFallbackFromLevel = -1;
     int cacheFallbackToLevel = -1;
+
+    // The display plane, whether freshly produced (slice.plane) or reused from
+    // the cache (reusedPlane). Every reader of the display plane goes through
+    // this so the two producers stay interchangeable.
+    [[nodiscard]] const ScalarPlane& displayPlane() const noexcept
+    {
+        return reusedPlane ? *reusedPlane : slice.plane;
+    }
 };
 
 struct InitialSliceResult {
@@ -253,7 +269,8 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
 // depend on palette/log/range.
 [[nodiscard]] SliceDisplayResult refreshCachedSlice(
     const std::shared_ptr<DatasetSession>& dataset,
-    const SliceRequest& request, ScalarPlane displayPlane,
+    const SliceRequest& request,
+    std::shared_ptr<const ScalarPlane> displayPlane,
     ScalarPlane contourPlane, ScalarPlane contourFinePlane,
     int contourFineFactor, std::vector<VectorSegment> vectors,
     RangeMode rangeMode,

@@ -206,7 +206,7 @@ void requireDisplayInvariants(const amrvis::DatasetMetadata& metadata,
     // I3: the raster is exactly the plane rendered against the displayed
     // range (bit-identical rgba).
     if (!d.rasterUnchanged) {
-        const auto reference = amrvis::renderScalarPlane(d.slice.plane,
+        const auto reference = amrvis::renderScalarPlane(d.displayPlane(),
             amrvis::ScalarRenderSettings{
                 .minimum = d.minimum,
                 .maximum = d.maximum,
@@ -683,7 +683,9 @@ int main()
         bool rangeCancellationPreserved = false;
         try {
             static_cast<void>(amrvis::refreshCachedSlice(recording,
-                d0.request, d0.slice.plane, d0.contourPlane,
+                d0.request,
+                std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane),
+                d0.contourPlane,
                 d0.contourFinePlane, d0.contourFineFactor, {},
                 amrvis::RangeMode::File, std::nullopt, true, palette,
                 amrvis::DisplayMode::RasterContours, 0, 0, 4, true,
@@ -698,7 +700,9 @@ int main()
 
         // Log toggle re-ranges, re-renders, and re-contours the cached planes.
         const auto log = amrvis::refreshCachedSlice(baseLoad.dataset,
-            d0.request, d0.slice.plane, d0.contourPlane, d0.contourFinePlane,
+            d0.request,
+            std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane),
+            d0.contourPlane, d0.contourFinePlane,
             d0.contourFineFactor, {}, amrvis::RangeMode::File, std::nullopt,
             true, palette, amrvis::DisplayMode::RasterContours, 0, 0, 4, true);
         require(log.logarithmic, "cached-plane log toggle fell back");
@@ -706,7 +710,9 @@ int main()
 
         // A contour-count change with a clean raster leaves the image alone.
         const auto recount = amrvis::refreshCachedSlice(baseLoad.dataset,
-            d0.request, d0.slice.plane, d0.contourPlane, d0.contourFinePlane,
+            d0.request,
+            std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane),
+            d0.contourPlane, d0.contourFinePlane,
             d0.contourFineFactor, {}, amrvis::RangeMode::File, std::nullopt,
             false, palette, amrvis::DisplayMode::RasterContours, 0, 0, 2,
             false);
@@ -718,7 +724,9 @@ int main()
 
         // A range-mode change to User re-renders against the user range.
         const auto user = amrvis::refreshCachedSlice(baseLoad.dataset,
-            d0.request, d0.slice.plane, d0.contourPlane, d0.contourFinePlane,
+            d0.request,
+            std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane),
+            d0.contourPlane, d0.contourFinePlane,
             d0.contourFineFactor, {}, amrvis::RangeMode::User,
             std::pair{2.0, 3.0}, false, palette,
             amrvis::DisplayMode::RasterContours, 0, 0, 4, true);

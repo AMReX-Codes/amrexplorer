@@ -247,7 +247,7 @@ void applyDisplayCoordinates(
     const DatasetMetadata& metadata, SliceDisplayResult& result)
 {
     result.coordinateSystem = metadata.coordinateSystem;
-    const auto& logical = result.slice.plane.physicalRegion;  // (r, theta)
+    const auto& logical = result.displayPlane().physicalRegion;  // (r, theta)
     if (!isSpherical2D(metadata)) {
         result.displayRegion = logical;
         return;
@@ -463,7 +463,8 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
 
 SliceDisplayResult refreshCachedSlice(
     const std::shared_ptr<DatasetSession>& dataset,
-    const SliceRequest& request, ScalarPlane displayPlane,
+    const SliceRequest& request,
+    std::shared_ptr<const ScalarPlane> displayPlane,
     ScalarPlane contourPlane, ScalarPlane contourFinePlane, int contourFineFactor,
     std::vector<VectorSegment> vectors,
     RangeMode rangeMode,
@@ -478,17 +479,21 @@ SliceDisplayResult refreshCachedSlice(
     result.vectorUField = vectorUField;
     result.vectorVField = vectorVField;
     result.contourCount = contourCount;
-    result.slice.plane = std::move(displayPlane);
+    // Adopt the cached plane by shared_ptr; the raster is unchanged on this
+    // path, so slice.plane stays empty and every reader goes through
+    // displayPlane(). This is what removes the per-tweak ~110 MB plane copy.
+    result.reusedPlane = std::move(displayPlane);
+    const auto& plane = result.displayPlane();
     const auto range = resolveDisplayRange(dataset, request.field,
         request.maximumLevel, request.composition, rangeMode, userRange,
-        logarithmic, result.slice.plane, cancellation);
+        logarithmic, plane, cancellation);
     result.minimum = range.minimum;
     result.maximum = range.maximum;
     result.logarithmic = range.logarithmic;
     result.fieldName = dataset->metadata().fields[request.field.value].name;
     result.rasterUnchanged = !rasterDirty;
     if (rasterDirty) {
-        result.image = renderScalarPlane(result.slice.plane,
+        result.image = renderScalarPlane(plane,
             ScalarRenderSettings{
                 .minimum = range.minimum,
                 .maximum = range.maximum,

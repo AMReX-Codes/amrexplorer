@@ -320,11 +320,13 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     if (fromCache) {
         // Cheap path: re-range, re-render, and re-contour the cached planes
         // on a worker; no SliceQuery runs at all. The captures are shared_ptr
-        // snapshots — refcount bumps, not the former ~110 MB plane deep copy
-        // on the GUI thread. A newer arrival can safely replace the view's
-        // pointers meanwhile; this worker keeps reading its own snapshots.
-        // (refreshCachedSlice's by-value parameters still copy the planes,
-        // but on the worker thread.)
+        // snapshots — refcount bumps, not a plane deep copy. The immutable
+        // display plane is passed straight through by shared_ptr and adopted by
+        // showSlice, so the former ~110 MB copy per range/log/palette tweak is
+        // gone. A newer arrival can safely replace the view's pointers
+        // meanwhile; this worker keeps reading its own snapshots. (The
+        // contour-resolution planes still copy by value on the worker; small,
+        // and retires with the wider round-tripping cleanup.)
         future = QtConcurrent::run([dataset, request,
             displayPlane = state.plane,
             contourPlane = state.contourPlane,
@@ -334,7 +336,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             rangeMode, userRange, logarithmic, palette, displayMode,
             vectorUField, vectorVField, contourCount, rasterDirty,
             cancellation]() mutable {
-            return refreshCachedSlice(dataset, request, *displayPlane,
+            return refreshCachedSlice(dataset, request, displayPlane,
                 *contourPlane, *contourFinePlane,
                 contourFineFactor, std::move(vectors), rangeMode, userRange,
                 logarithmic, palette, displayMode, vectorUField, vectorVField,
@@ -835,13 +837,13 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
             const bool ownerChanged = state.hasCachedRequest
                 && state.cachedRequest.dataset != display.request.dataset;
             const bool densityChanged = DisplayCoordinator::planeDensitiesDiffer(
-                *state.plane, display.slice.plane, axes);
+                *state.plane, display.displayPlane(), axes);
             if (transformPolicy == ImageTransformPolicy::Preserve
                 && state.view->transformMode()
                     == ImageView::TransformMode::Custom
                 && (ownerChanged || densityChanged)) {
                 dataWindowInNewScene = preservedDataWindow(
-                    state, display.slice.plane);
+                    state, display.displayPlane());
             }
             const auto image = displayImageFor(display.image);
             // A view on a virtual canvas keeps it: the raster lands at its
@@ -849,10 +851,10 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
             std::optional<ImageView::VirtualPlacement> placement;
             if (state.view->virtualCanvasActive() && !displayIsSpherical()) {
                 placement = virtualPlacementFor(
-                    state, display.slice.plane.physicalRegion);
+                    state, display.displayPlane().physicalRegion);
             }
             state.view->setImage(image, transformPolicy,
-                logicalImageSize(state, display.slice.plane, image),
+                logicalImageSize(state, display.displayPlane(), image),
                 placement);
             if (dataWindowInNewScene) {
                 state.view->zoomToRect(*dataWindowInNewScene);
@@ -861,9 +863,12 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
         }
     }
     // Fresh immutable snapshots: replace the pointers, never mutate the
-    // pointees a cached-planes refresh worker may still be reading.
-    state.plane
-        = std::make_shared<const ScalarPlane>(std::move(display.slice.plane));
+    // pointees a cached-planes refresh worker may still be reading. The cache
+    // fast path already holds the plane by shared_ptr, so adopt it directly;
+    // the executeSlice path produces a fresh plane to wrap.
+    state.plane = display.reusedPlane
+        ? display.reusedPlane
+        : std::make_shared<const ScalarPlane>(std::move(display.slice.plane));
     // Spherical warps the raster into physical (R, Z); overlays and the probe
     // map through displayRegion, which for every other system is just the
     // plane's logical bounds (see PlaneMapping).

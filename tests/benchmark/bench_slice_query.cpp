@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <span>
@@ -94,7 +95,7 @@ int positiveArg(const char* text)
 
 } // namespace
 
-int main(int argc, char** argv)
+int runBenchmark(int argc, char** argv)
 {
     // A single level tiled into blocksPerAxis^2 blocks of cellsPerBlock^2 cells,
     // unit cell size, field phi(i, j) = i + j.
@@ -111,6 +112,11 @@ int main(int argc, char** argv)
     }
     const int domain = static_cast<int>(domainLL);
     const int outputDim = argc > 3 ? positiveArg(argv[3]) : domain;
+    // Bound the pixel count so the plane index below stays well inside int and
+    // the fixture doesn't try to allocate an absurd raster.
+    if (static_cast<long long>(outputDim) * outputDim > 100000000) {
+        die("outputDim too large: pixel count capped at 1e8");
+    }
     const int iterations = argc > 4 ? positiveArg(argv[4]) : 5;
     const int blockCount = static_cast<int>(blockCountLL);
 
@@ -189,20 +195,31 @@ int main(int argc, char** argv)
         request.sampling = sampling;
         // Warm the block cache so we time the composite lookup, not the FAB I/O.
         const auto warm = query.execute(request);
-        // Output pixel (x, y) samples physical position ((x+0.5)*scale,
-        // (y+0.5)*scale), not cell (x, y) -- they coincide only at
-        // outputDim == domain. Derive the expected value from that position so
-        // the check holds at every outputDim, and require *complete* coverage:
-        // this is the full domain, so a block-lookup regression that dropped
-        // blocks (fewer valid pixels) must fail here, not read as "faster".
-        const double scale = static_cast<double>(domain)
-            / static_cast<double>(outputDim);
+        // Guard the plane shape before indexing it below, so a shape regression
+        // is a clean failure rather than an out-of-bounds read.
+        if (warm.plane.width != outputDim || warm.plane.height != outputDim) {
+            die("benchmark warm slice returned the wrong size");
+        }
+        // Output pixel (x, y) samples a physical position, not cell (x, y) --
+        // they coincide only at outputDim == domain. Derive the expected value
+        // from that position, computed with the *same* operation order as
+        // SliceQuery (lower + (out+0.5)*(upper-lower)/outputSize), so float
+        // rounding lands in the same cell on the boundary cases. Require
+        // *complete* coverage: this is the full domain, so a block-lookup
+        // regression that dropped blocks must fail here, not read as "faster".
+        const double lower = 0.0;                            // visibleRegion.lower
+        const double extent = static_cast<double>(domain);   // upper - lower
         std::size_t covered = 0;
+        std::size_t linearChecked = 0;
         for (int y = 0; y < outputDim; ++y) {
-            const double py = (static_cast<double>(y) + 0.5) * scale;
+            const double py = lower + (static_cast<double>(y) + 0.5) * extent
+                / static_cast<double>(outputDim);
             for (int x = 0; x < outputDim; ++x) {
-                const double px = (static_cast<double>(x) + 0.5) * scale;
-                const auto off = static_cast<std::size_t>(x + outputDim * y);
+                const double px = lower + (static_cast<double>(x) + 0.5) * extent
+                    / static_cast<double>(outputDim);
+                const auto off = static_cast<std::size_t>(x)
+                    + static_cast<std::size_t>(outputDim)
+                        * static_cast<std::size_t>(y);
                 if (warm.plane.valid[off] == 0) {
                     continue;
                 }
@@ -218,12 +235,13 @@ int main(int argc, char** argv)
                     if (value != static_cast<double>(i + j)) {
                         die("benchmark piecewise slice value is wrong");
                     }
-                } else if (px >= 0.5 && px <= domain - 0.5
-                    && py >= 0.5 && py <= domain - 0.5) {
+                } else if (px >= 0.5 && px <= extent - 0.5
+                    && py >= 0.5 && py <= extent - 0.5) {
                     // Linear over the linear field phi = i + j is exact away
                     // from the clamped border: phi(px, py) = px + py - 1 (cell
                     // centers sit at half-integers). Border pixels clamp, so
                     // only require them to be covered.
+                    ++linearChecked;
                     if (std::fabs(value - (px + py - 1.0)) > 1e-2) {
                         die("benchmark linear slice value is wrong");
                     }
@@ -233,6 +251,9 @@ int main(int argc, char** argv)
         if (covered != static_cast<std::size_t>(outputDim)
                 * static_cast<std::size_t>(outputDim)) {
             die("benchmark slice left output pixels uncovered");
+        }
+        if (sampling == amrvis::SamplingPolicy::Linear && linearChecked == 0) {
+            die("benchmark linear run validated no pixels");
         }
         std::vector<double> samples;
         samples.reserve(static_cast<std::size_t>(iterations));
@@ -260,4 +281,21 @@ int main(int argc, char** argv)
 
     std::filesystem::remove_all(root);
     return 0;
+}
+
+int main(int argc, char** argv)
+{
+    // Every SliceQuery/IO error path is an exception; catch here so a failure
+    // (the regression class the guard exists to catch) exits cleanly and still
+    // removes the fixture tree instead of terminating and leaking it.
+    try {
+        return runBenchmark(argc, argv);
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "bench_slice_query: %s\n", error.what());
+        if (!g_fixtureRoot.empty()) {
+            std::error_code ignore;
+            std::filesystem::remove_all(g_fixtureRoot, ignore);
+        }
+        return 1;
+    }
 }

@@ -1351,6 +1351,11 @@ add_executable(bench_slice_query benchmark/bench_slice_query.cpp)
 target_link_libraries(
     bench_slice_query PRIVATE amrexplorer::query amrexplorer::warnings)
 add_test(NAME slice_query_benchmark COMMAND bench_slice_query)
-# RUN_SERIAL so the printed timings aren't measured under ctest --parallel core
-# contention (same reason the remote_frame timing test sets it).
-set_tests_properties(slice_query_benchmark PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+set_tests_properties(slice_query_benchmark PROPERTIES TIMEOUT 120)
+# A second run at a non-1:1 outputDim: at outputDim == domain every bilinear
+# weight is exactly 0, so only this one actually exercises linear blending (and
+# the outputDim-derived expectation) in CI. No RUN_SERIAL: this asserts nothing
+# about wall clock and ctest hides its timings on success.
+add_test(NAME slice_query_benchmark_resampled
+    COMMAND bench_slice_query 16 8 200 1)
+set_tests_properties(slice_query_benchmark_resampled PROPERTIES TIMEOUT 120)

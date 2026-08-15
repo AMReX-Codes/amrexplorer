@@ -297,12 +297,12 @@ SliceDisplayResult executeSlice(const std::shared_ptr<DatasetSession>& dataset,
     result.slice = requestSlice(*dataset, request, cancellation);
     const auto range = resolveDisplayRange(dataset, request.field,
         request.maximumLevel, request.composition, rangeMode, userRange,
-        logarithmic, result.slice.plane, cancellation);
+        logarithmic, result.displayPlane(), cancellation);
     result.minimum = range.minimum;
     result.maximum = range.maximum;
     result.logarithmic = range.logarithmic;
     result.fieldName = dataset->metadata().fields[request.field.value].name;
-    result.image = renderScalarPlane(result.slice.plane,
+    result.image = renderScalarPlane(result.displayPlane(),
         ScalarRenderSettings{
             .minimum = range.minimum,
             .maximum = range.maximum,
@@ -464,7 +464,7 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
 SliceDisplayResult refreshCachedSlice(
     const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request,
-    std::shared_ptr<const ScalarPlane> displayPlane,
+    std::shared_ptr<const ScalarPlane> displayPlanePtr,
     ScalarPlane contourPlane, ScalarPlane contourFinePlane, int contourFineFactor,
     std::vector<VectorSegment> vectors,
     RangeMode rangeMode,
@@ -473,17 +473,25 @@ SliceDisplayResult refreshCachedSlice(
     std::uint32_t vectorUField, std::uint32_t vectorVField,
     int contourCount, bool rasterDirty, StopToken cancellation)
 {
+    // The cache path exists to reuse an existing display plane; a null one is a
+    // caller bug. Reject it here so displayPlane() never silently substitutes an
+    // empty plane (the old by-value parameter made null unrepresentable).
+    if (!displayPlanePtr) {
+        throw std::invalid_argument(
+            "refreshCachedSlice requires a non-null display plane");
+    }
     SliceDisplayResult result;
     result.request = request;
     result.mode = displayMode;
     result.vectorUField = vectorUField;
     result.vectorVField = vectorVField;
     result.contourCount = contourCount;
-    // Adopt the cached plane by shared_ptr; the raster is unchanged on this
-    // path, so slice.plane stays empty and every reader goes through
-    // displayPlane(). This is what removes the per-tweak ~110 MB plane copy.
-    result.reusedPlane = std::move(displayPlane);
-    const auto& plane = result.displayPlane();
+    // Adopt the cached plane by shared_ptr instead of deep-copying it into
+    // slice.plane (up to ~110 MB); every reader goes through displayPlane().
+    // `plane` binds to the shared pointee (stable, external to `result`), not
+    // into `result`'s own storage, so populating `result` below can't dangle it.
+    result.reusedPlane = std::move(displayPlanePtr);
+    const auto& plane = *result.reusedPlane;
     const auto range = resolveDisplayRange(dataset, request.field,
         request.maximumLevel, request.composition, rangeMode, userRange,
         logarithmic, plane, cancellation);
@@ -706,9 +714,9 @@ InitialSliceResult executeSessionFrameLoad(
             // across all three planes and re-render each display with the shared range.
             if (result.displays.size() == 3 && rangeMode == RangeMode::Visible) {
                 const std::array<const ScalarPlane*, 3> planes{
-                    &result.displays[0].slice.plane,
-                    &result.displays[1].slice.plane,
-                    &result.displays[2].slice.plane};
+                    &result.displays[0].displayPlane(),
+                    &result.displays[1].displayPlane(),
+                    &result.displays[2].displayPlane()};
                 const auto shared = DisplayCoordinator::sharedVisibleRange(
                     planes, spec.logarithmic);
                 // No finite samples anywhere: fall back to a neutral range so
@@ -728,7 +736,7 @@ InitialSliceResult executeSessionFrameLoad(
                     d.minimum = globalMin;
                     d.maximum = globalMax;
                     d.logarithmic = sharedLog;
-                    d.image = renderScalarPlane(d.slice.plane,
+                    d.image = renderScalarPlane(d.displayPlane(),
                         ScalarRenderSettings{
                             .minimum = globalMin,
                             .maximum = globalMax,

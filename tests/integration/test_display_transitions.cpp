@@ -699,14 +699,38 @@ int main()
             "cached range RPC ignored slice cancellation");
 
         // Log toggle re-ranges, re-renders, and re-contours the cached planes.
+        // The input plane is passed by shared_ptr and must be *reused* by
+        // pointer identity, not deep-copied: this pins the ~110 MB-saving
+        // contract so a regression that restores `slice.plane = *displayPlane`
+        // (leaving reusedPlane null) fails here instead of silently.
+        const auto reusedInput
+            = std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane);
         const auto log = amrvis::refreshCachedSlice(baseLoad.dataset,
-            d0.request,
-            std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane),
+            d0.request, reusedInput,
             d0.contourPlane, d0.contourFinePlane,
             d0.contourFineFactor, {}, amrvis::RangeMode::File, std::nullopt,
             true, palette, amrvis::DisplayMode::RasterContours, 0, 0, 4, true);
         require(log.logarithmic, "cached-plane log toggle fell back");
+        require(log.reusedPlane.get() == reusedInput.get()
+                && &log.displayPlane() == reusedInput.get(),
+            "cached refresh copied the display plane instead of reusing it");
+        require(log.slice.plane.width == 0 && log.slice.plane.height == 0,
+            "cached refresh materialized a redundant slice.plane copy");
         requireDisplayInvariants(metadata, log, palette, "refresh log");
+
+        // A null display plane is a caller bug on this path, not a silent
+        // empty-plane substitution.
+        bool nullPlaneRejected = false;
+        try {
+            static_cast<void>(amrvis::refreshCachedSlice(baseLoad.dataset,
+                d0.request, nullptr, d0.contourPlane, d0.contourFinePlane,
+                d0.contourFineFactor, {}, amrvis::RangeMode::File, std::nullopt,
+                false, palette, amrvis::DisplayMode::Raster, 0, 0, 0, true));
+        } catch (const std::invalid_argument&) {
+            nullPlaneRejected = true;
+        }
+        require(nullPlaneRejected,
+            "refreshCachedSlice accepted a null display plane");
 
         // A contour-count change with a clean raster leaves the image alone.
         const auto recount = amrvis::refreshCachedSlice(baseLoad.dataset,

@@ -334,6 +334,10 @@ inline void waitAtGate()
     for (int waited = 0; waited < 10000 && !released.load(); ++waited) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    // Clear so the flag reflects "a worker is parked now", not "one ever was":
+    // a later gated run's poll would otherwise see a stale true before its
+    // worker arrives.
+    workerWaiting.store(false);
 }
 
 } // namespace visible_sync_test

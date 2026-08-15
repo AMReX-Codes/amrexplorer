@@ -141,17 +141,19 @@ public:
     void configureContourSyncForTest(
         int count, bool logarithmic, std::array<double, 3> slicePositions);
 
-    // Test-only: drive an overlapping visible-range sync deterministically.
-    // The gate blocks the sync worker so the test can queue a second sync
-    // (setting the rerun flag) before the first completes; a superseded
-    // outcome is dropped and tallied in the test-only m_visibleSyncStaleSkips,
-    // which the test reads through visibleSyncStaleSkipsForTest(). See the
-    // overlapping-sync smoke test and syncVisibleRanges.
+    // Test-only: drive the visible-range sync staleness guard deterministically.
+    // The gate holds the sync worker mid-flight; the test then bumps a panel's
+    // render generation (bumpViewRenderGenerationForTest, simulating that panel
+    // being re-sliced) and releases the worker. Its completion must drop that
+    // panel's stale outcome, tallied in the test-only m_visibleSyncStaleSkips
+    // and read through visibleSyncStaleSkipsForTest(). See the overlapping-sync
+    // smoke test and syncVisibleRanges.
     void requestVisibleSyncForTest();
     void armVisibleSyncGateForTest();
     void releaseVisibleSyncGateForTest();
+    void bumpViewRenderGenerationForTest();
     [[nodiscard]] bool visibleSyncWorkerWaitingForTest() const;
-    [[nodiscard]] int visibleSyncStaleSkipsForTest() const noexcept;
+    [[nodiscard]] std::uint64_t visibleSyncStaleSkipsForTest() const noexcept;
 
     // Test-only: for each current view (ordered by normal axis; 2-D has one),
     // the display range and the distinct contour levels present in its overlay
@@ -454,6 +456,17 @@ private:
         int cachedContourCount = 0;
         StopSource stopSource;
         std::uint64_t sliceGeneration = 0;
+        // Bumped every time `plane` (and its contour companions) is rewritten:
+        // each showSlice apply and each dataset reset. The 3-D visible-range
+        // sync snapshots this per panel at dispatch and, at completion, applies
+        // only to panels whose stamp is unchanged -- a panel re-sliced mid-sync
+        // has this outcome dropped for it alone (it rendered from the previous
+        // plane), and its own arrival drives a fresh sync. This is the
+        // staleness key cached-plane reuse defeated for pointer identity;
+        // distinct from sliceGeneration, which bumps at *request dispatch*
+        // (before the plane lands) and so would mark a not-yet-arrived panel
+        // current. See syncVisibleRanges.
+        std::uint64_t renderGeneration = 0;
         // Slice requests currently on a worker for this view; the sweep
         // playback skips ticks while one is in flight.
         int pendingRequests = 0;
@@ -869,7 +882,7 @@ private:
     // rerun guard. Sole writer is that drop, so the overlapping-sync test can
     // assert an exact count. m_staleResults carries the same event for the
     // user-facing diagnostics panel.
-    int m_visibleSyncStaleSkips = 0;
+    std::uint64_t m_visibleSyncStaleSkips = 0;
 #endif
     QTreeWidget* m_metadataTree = nullptr;
     QPlainTextEdit* m_diagnostics = nullptr;

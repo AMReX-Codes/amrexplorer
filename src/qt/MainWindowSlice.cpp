@@ -868,7 +868,7 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
     // fast path already holds the plane by shared_ptr, so adopt it directly;
     // the executeSlice path produces a fresh plane to wrap.
     state.plane = display.reusedPlane
-        ? display.reusedPlane
+        ? std::move(display.reusedPlane)
         : std::make_shared<const ScalarPlane>(std::move(display.slice.plane));
     // Spherical warps the raster into physical (R, Z); overlays and the probe
     // map through displayRegion, which for every other system is just the
@@ -882,6 +882,10 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
         std::move(display.contourFinePlane));
     state.contourFineFactor = display.contourFineFactor;
     state.contourPolylines = std::move(display.contourPolylines);
+    // Stamp the rewrite: a visible-range sync in flight rendered from the
+    // previous plane/contours, so its completion drops this panel's outcome
+    // (see PlaneViewState::renderGeneration).
+    ++state.renderGeneration;
     const auto fieldName = QString::fromStdString(display.fieldName);
     state.fieldName = fieldName;
     state.displayMinimum = display.minimum;
@@ -978,6 +982,7 @@ void MainWindow::syncVisibleRanges()
         std::shared_ptr<const ScalarPlane> contourFinePlane;
         int contourFineFactor = 1;
         std::array<int, 2> outputSize{0, 0};
+        std::uint64_t renderGeneration = 0;
     };
     std::array<PlaneViewState*, 3> views{
         &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
@@ -985,7 +990,8 @@ void MainWindow::syncVisibleRanges()
     for (std::size_t index = 0; index < views.size(); ++index) {
         const auto* state = views[index];
         snapshots[index] = {state->plane, state->contourFinePlane,
-            state->contourFineFactor, state->cachedRequest.outputSize};
+            state->contourFineFactor, state->cachedRequest.outputSize,
+            state->renderGeneration};
     }
 
     struct SyncOutcome {
@@ -993,6 +999,9 @@ void MainWindow::syncVisibleRanges()
         std::array<QImage, 3> images;   // display-ready (flipped) rasters
     };
 
+    // This dispatch consumes any deferred request; a request that lands while
+    // the worker runs re-arms the flag and reruns from the completion below.
+    m_visibleSyncRerun = false;
     m_visibleSyncInFlight = true;
     // The sync participates in the interactive batch: the settled signal
     // (which the smoke tests use to read synchronized state) must not fire
@@ -1001,7 +1010,7 @@ void MainWindow::syncVisibleRanges()
     const auto generation = m_generation;
     auto* watcher = new QFutureWatcher<SyncOutcome>(this);
     connect(watcher, &QFutureWatcher<SyncOutcome>::finished, this,
-        [this, watcher, generation, views] {
+        [this, watcher, generation, snapshots, views] {
             m_visibleSyncInFlight = false;
             --m_activeRequests;
             if (m_closing) {
@@ -1014,23 +1023,33 @@ void MainWindow::syncVisibleRanges()
             const bool current = generation == m_generation
                 && m_viewDimension == 3 && m_dataset
                 && nowMode == RangeMode::Visible;
-            // Dispatch gating means a sync only runs against fully-settled
-            // panels, so the outcome is current *unless* a newer request
-            // (a fresh arrival or a cosmetic palette/log/contour refresh)
-            // landed mid-flight and set the rerun flag. Because cached-plane
-            // reuse keeps the plane pointer identical across a cosmetic
-            // refresh, pointer identity can no longer tell such an outcome is
-            // stale -- so gate on the rerun flag instead: apply when nothing
-            // superseded us, otherwise drop this outcome and let the queued
-            // rerun recompute against the current settings rather than flash
-            // the old rendering over the newer one.
-            if (current && outcome.sync && !m_visibleSyncRerun) {
+            // Apply per panel, keyed on the render-generation stamp captured at
+            // dispatch. A panel re-sliced while this sync ran (stamp bumped)
+            // gets its outcome dropped -- the sync rendered from the previous
+            // plane, and cached-plane reuse means pointer identity can't tell
+            // (the pointer is reused), while the global rerun flag is both too
+            // coarse (drops every panel) and not always armed (syncVisibleRanges
+            // early-returns on a mode/dimension flip without setting it). The
+            // unchanged panels still apply, so the color bar and the deferred
+            // range store are not forgone; a dropped panel's own arrival reruns.
+            if (current && outcome.sync) {
                 const auto [globalMin, globalMax] = outcome.sync->range;
                 bool activeApplied = false;
                 for (std::size_t index = 0; index < views.size(); ++index) {
                     auto* state = views[index];
                     auto& update = outcome.sync->panels[index];
                     if (!update.applies) {
+                        continue;
+                    }
+                    if (state->renderGeneration
+                        != snapshots[index].renderGeneration) {
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+                        // Sole writer of this test-only tally: the
+                        // overlapping-sync regression test asserts its exact
+                        // delta. m_staleResults is deliberately not touched --
+                        // per-panel drops are normal churn, not a user signal.
+                        ++m_visibleSyncStaleSkips;
+#endif
                         continue;
                     }
                     state->displayMinimum = globalMin;
@@ -1103,18 +1122,6 @@ void MainWindow::syncVisibleRanges()
                     }
                     m_pendingRangeStore.reset();
                 }
-            } else if (current && outcome.sync && m_visibleSyncRerun) {
-                // Superseded by a request that landed mid-sync: leave the newer
-                // image in place and let the queued rerun apply the current
-                // settings. Counted as a dropped stale result for the
-                // diagnostics panel.
-                ++m_staleResults;
-#ifdef AMREXPLORER_QT_TEST_ACCESS
-                // A dedicated, test-only tally with this drop as its sole
-                // writer: the regression test asserts an exact count, which a
-                // multi-writer counter like m_staleResults cannot support.
-                ++m_visibleSyncStaleSkips;
-#endif
             } else if (generation != m_generation) {
                 m_pendingRangeStore.reset();
                 m_visibleSyncRerun = false;

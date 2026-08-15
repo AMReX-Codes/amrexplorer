@@ -25,7 +25,17 @@ bool MainWindow::visibleSyncWorkerWaitingForTest() const
     return visible_sync_test::workerWaiting.load();
 }
 
-int MainWindow::visibleSyncStaleSkipsForTest() const noexcept
+void MainWindow::bumpViewRenderGenerationForTest()
+{
+    // Simulate one 3-D panel being re-sliced mid-sync: bump its render
+    // generation so an in-flight sync's snapshot no longer matches. Bumping the
+    // stamp alone (not the plane) is enough to exercise the completion guard,
+    // and deliberately does not arm m_visibleSyncRerun -- the exact path the
+    // per-panel guard exists to cover.
+    ++m_planeViews[0].renderGeneration;
+}
+
+std::uint64_t MainWindow::visibleSyncStaleSkipsForTest() const noexcept
 {
     return m_visibleSyncStaleSkips;
 }

@@ -1782,24 +1782,26 @@ int main(int argc, char* argv[])
     } else if (argc == 3
         && std::string_view(argv[1])
             == "--overlapping-visible-sync-smoke-test") {
-        // Regression for cached-plane reuse defeating the sync staleness guard:
-        // a refresh that lands mid-sync keeps the plane pointer identical, so
-        // the sync completion can no longer tell its outcome is stale by pointer
-        // identity alone. Drive it deterministically -- gate the sync worker,
-        // queue a second sync so the rerun flag is set, release, and require the
-        // first outcome to be dropped as superseded rather than applied.
+        // Regression for the per-panel visible-range sync staleness guard.
+        // Cached-plane reuse keeps a panel's plane pointer identical across a
+        // refresh, so identity can't tell a mid-sync outcome is stale; the
+        // guard keys on the panel's render generation instead. Drive it
+        // deterministically: gate the sync worker mid-flight, bump one panel's
+        // render generation (as a re-slice would) *without* arming the rerun
+        // flag, release, and require exactly that panel's outcome to be dropped.
+        // (The reuse contract itself is pinned by test_display_transitions.)
         const std::filesystem::path path(argv[2]);
         auto* poll = new QTimer(&window);
         poll->setInterval(5);
         auto phase = std::make_shared<int>(0);
         auto attempts = std::make_shared<int>(0);
-        // Dedicated skip count captured the instant before the gated overlap
-        // is set up, so the assertion measures only the drop this overlap
-        // causes: without single-flight gating the setup batch's own arrivals
-        // also overlap and drop once, and that lands in the baseline. This
-        // counter's sole writer is the rerun-drop, so an exact delta is safe
-        // (unlike m_staleResults, which five subsystems write).
-        auto baseline = std::make_shared<int>(0);
+        // Dedicated per-panel-drop count captured the instant before the gated
+        // sync is set up, so the assertion measures only the drop this test
+        // causes: per-arrival dispatch means the setup batch's own syncs drop a
+        // panel or two, and that lands in the baseline. This counter's sole
+        // writer is the drop, so an exact delta is safe (unlike m_staleResults,
+        // which five subsystems write).
+        auto baseline = std::make_shared<std::uint64_t>(0);
         const auto finish = [&application, poll, &window](int code) {
             // Release the gate first: a worker still parked on it (e.g. on an
             // early-exit path) must be freed so QThreadPool can join it,
@@ -1824,7 +1826,7 @@ int main(int argc, char* argv[])
                         *phase = 1;
                         *baseline = window.visibleSyncStaleSkipsForTest();
                         // Start a sync with the worker gated so it cannot finish
-                        // before we queue the superseding one.
+                        // before we invalidate one panel below.
                         window.armVisibleSyncGateForTest();
                         window.requestVisibleSyncForTest();
                         poll->start();
@@ -1843,18 +1845,20 @@ int main(int argc, char* argv[])
                         return;  // wait for the gated worker to reach the gate
                     }
                     *phase = 2;
-                    // Queue a second sync while the first is in flight: this
-                    // sets the rerun flag the completion must honor.
-                    window.requestVisibleSyncForTest();
+                    // Invalidate one panel while the sync is in flight, then
+                    // release: the completion must drop that panel's outcome
+                    // (its render generation no longer matches the snapshot)
+                    // and apply the rest. The bump does not arm the rerun flag,
+                    // which is exactly the path the per-panel guard covers.
+                    window.bumpViewRenderGenerationForTest();
                     window.releaseVisibleSyncGateForTest();
                     return;
                 }
                 if (*phase == 2) {
-                    // The released gated worker's completion runs on this (GUI)
-                    // thread; once it lands it must have dropped exactly one
-                    // outcome as superseded rather than applied it over the
-                    // newer state. More than one drop means an unexpected
-                    // second overlap -- fail loudly rather than pass on it.
+                    // The released worker's completion runs on this (GUI)
+                    // thread; once it lands it must have dropped exactly the one
+                    // invalidated panel. More than one drop means an unexpected
+                    // extra invalidation -- fail loudly rather than pass on it.
                     const auto skips = window.visibleSyncStaleSkipsForTest();
                     if (skips > *baseline + 1) {
                         finish(5);
@@ -1864,7 +1868,7 @@ int main(int argc, char* argv[])
                     // else keep polling; the attempts guard above fails on hang.
                 }
             });
-        QTimer::singleShot(15000, &application,
+        QTimer::singleShot(20000, &application,
             [finish] { finish(4); });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3

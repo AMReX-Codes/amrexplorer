@@ -157,6 +157,37 @@ jobs:
       - name: Test
         run: ctest --preset windows --parallel 4
 
+  # The only job that compiles the tests-off shape. MainWindowTestAccess.cpp and
+  # main.cpp's ~56 gated CLI branches are excluded by AMREXPLORER_QT_TEST_ACCESS,
+  # which follows AMREXPLORER_BUILD_TESTS, so every other job here compiles the
+  # gate's ON side only. Without this, reordering a branch inside a guarded run
+  # -- or a formatter rejoining the `} else` / `#endif` / `if` splice -- breaks
+  # a build nobody runs while CI stays green.
+  #
+  # Build only: there are no tests to run in this configuration, which is the
+  # whole point of it.
+  release-shape:
+    name: Linux / no tests (release shape)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes cmake g++ ninja-build qt6-base-dev
+
+      - name: Configure
+        run: >-
+          cmake --preset default
+          -DAMREXPLORER_BUILD_TESTS=OFF
+          -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build --preset default --parallel 4
+
   sanitizers:
     name: Linux / ASan + UBSan
     runs-on: ubuntu-24.04

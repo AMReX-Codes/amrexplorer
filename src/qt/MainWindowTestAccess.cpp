@@ -268,6 +268,15 @@ int MainWindow::slicesInFlightForTest() const
     return slicesInFlight();
 }
 
+bool MainWindow::sliceRequestPendingForTest() const
+{
+    // The debounce timer is normally active while a request is queued, but some
+    // paths stop it without clearing the queue (see openDataset), so check the
+    // pending views too -- the header promises "queued behind the debounce".
+    return (m_sliceDebounce != nullptr && m_sliceDebounce->isActive())
+        || m_pendingAllViews || !m_pendingViews.empty();
+}
+
 bool MainWindow::allViewsFixedScaleRasterCoversViewportForTest() const
 {
     const auto check = [](const PlaneViewState& state) {

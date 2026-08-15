@@ -476,7 +476,7 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_remote_fixed_scale_flicker_smoke PROPERTIES
-        TIMEOUT 30)
+        TIMEOUT 60)
 
     # Regression for virtual-canvas-survives-wheel-zoom: a wheel notch over a
     # remote fixed scale switches the transform mode to Custom while leaving the

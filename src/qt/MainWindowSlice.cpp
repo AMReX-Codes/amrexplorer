@@ -1315,21 +1315,18 @@ void MainWindow::prepareSequence(std::size_t frameCount)
     closeSequence();
     resetRangeState();
     resetFabState();
-    m_particleStopSource.request_stop();
-    m_particleSamples.clear();
+    m_particleController->cancel();
+    m_particleController->clearSamples();
     // A sequence is a different dataset, so it starts from defaults exactly as
     // a plain open does.
-    resetParticleSettings();
-    m_particleLoading = false;
-    m_particleProgress->setVisible(false);
-    ++m_particleGeneration;
+    m_particleController->resetSettings();
     m_remoteSequenceConnectionGeneration = 0;
     // Frame 0 is not installed yet, so m_dataset still describes the outgoing
     // one. Take the overlay dialogs' menu items down with the dialogs above,
     // the way a plain open's teardown does; configureSequenceControls and
-    // configureParticleControls bring them back when a frame arrives.
+    // the particle controller bring them back when a frame arrives.
     m_contoursAction->setEnabled(false);
-    m_particlesAction->setEnabled(false);
+    m_particleController->setActionEnabled(false);
 
     m_animationPanel->setSequenceFrameCount(static_cast<int>(frameCount));
     m_animationPanel->setSequenceVisible(true);
@@ -1346,11 +1343,7 @@ void MainWindow::prepareSequence(std::size_t frameCount)
     // open; this path never runs that, so a sequence open would otherwise leave
     // them on screen writing the old dataset's names back on Apply. Frame steps
     // do not come through here, so both survive stepping, as intended.
-    auto* particlesDialog = m_particlesDialog;
-    m_particlesDialog = nullptr;
-    if (particlesDialog != nullptr) {
-        particlesDialog->close();
-    }
+    m_particleController->closeDialog();
     auto* contoursDialog = m_contoursDialog;
     m_contoursDialog = nullptr;
     if (contoursDialog != nullptr) {
@@ -1486,8 +1479,8 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
         m_remoteSequenceConnectionGeneration = result.connectionGeneration;
     }
     m_dataset = result.dataset;
-    m_particleSamples = std::move(result.particles);
-    configureParticleControls(true);
+    m_particleController->setSamples(std::move(result.particles));
+    m_particleController->configureForDataset(true);
     const auto& metadata = m_dataset->metadata();
     m_viewDimension = metadata.dimension;
 
@@ -1729,12 +1722,13 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     // starts the new dataset at its domain midpoints.
     spec.defaultPositions = m_viewDimension != 3;
     spec.slicePositions = m_slicePosition3d;
-    spec.particleSelectionInitialized = m_particleSelectionInitialized;
-    if (m_particleSelectionInitialized) {
-        spec.particleSpecies = m_selectedParticleSpecies;
+    const auto& particles = m_particleController->settings();
+    spec.particleSelectionInitialized = particles.selectionInitialized;
+    if (particles.selectionInitialized) {
+        spec.particleSpecies = particles.species;
     }
-    spec.particleFraction = m_particleFraction;
-    spec.particleSeed = m_particleSeed;
+    spec.particleFraction = particles.fraction;
+    spec.particleSeed = particles.seed;
     spec.includeGridBoxes = m_boxesAction->isChecked();
     const auto views = currentViews();
     spec.visibleRegions.reserve(views.size());

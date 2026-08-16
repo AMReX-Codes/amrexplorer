@@ -29,6 +29,8 @@ add_executable(amrexplorer_qt
     NumberFormat.hpp
     PaletteController.cpp
     PaletteController.hpp
+    ParticleController.cpp
+    ParticleController.hpp
     QtErrorText.hpp
     RemoteEndpoint.hpp
     RemoteFileDialog.cpp

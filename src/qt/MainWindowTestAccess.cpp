@@ -776,42 +776,43 @@ std::uint64_t MainWindow::cacheResidentBytesForTest() const
 void MainWindow::setParticleSelectionForTest(
     std::vector<std::string> species, double fraction, std::uint64_t seed)
 {
-    applyParticleSelection(
-        std::move(species), fraction, m_particlePointSize, seed);
+    m_particleController->applySelection(std::move(species), fraction,
+        m_particleController->settings().pointSize, seed);
 }
 
 std::uint64_t MainWindow::particleSeedForTest() const noexcept
 {
-    return m_particleSeed;
+    return m_particleController->settings().seed;
 }
 
 double MainWindow::particleFractionForTest() const noexcept
 {
-    return m_particleFraction;
+    return m_particleController->settings().fraction;
 }
 
 void MainWindow::setParticlePointSizeForTest(int pointSize)
 {
-    applyParticleSelection(m_selectedParticleSpecies, m_particleFraction,
-        pointSize, m_particleSeed);
+    const auto& settings = m_particleController->settings();
+    m_particleController->applySelection(
+        settings.species, settings.fraction, pointSize, settings.seed);
 }
 
 int MainWindow::particlePointSizeForTest() const noexcept
 {
-    return m_particlePointSize;
+    return m_particleController->settings().pointSize;
 }
 
 QColor MainWindow::particleColorForTest(const std::string& species) const
 {
-    const auto color = m_particleColors.find(species);
-    return color != m_particleColors.end() ? color->second : QColor();
+    const auto& colors = m_particleController->settings().colors;
+    const auto color = colors.find(species);
+    return color != colors.end() ? color->second : QColor();
 }
 
 void MainWindow::setParticleColorForTest(
     const std::string& species, const QColor& color)
 {
-    m_particleColors[species] = color;
-    updateParticleOverlays();
+    m_particleController->setColor(species, color);
 }
 
 bool MainWindow::particleOverlaysUseColorForTest(const QColor& color)
@@ -831,7 +832,7 @@ bool MainWindow::particleOverlaysUseColorForTest(const QColor& color)
 std::size_t MainWindow::particleSampleCountForTest() const
 {
     std::size_t count = 0;
-    for (const auto& sample : m_particleSamples) {
+    for (const auto& sample : m_particleController->samples()) {
         count += sample.points.size();
     }
     return count;
@@ -848,17 +849,17 @@ std::size_t MainWindow::particleOverlayCountForTest()
 
 bool MainWindow::particleLoadingForTest() const noexcept
 {
-    return m_particleLoading;
+    return m_particleController->loading();
 }
 
 bool MainWindow::particleLoadingUiActiveForTest() const
 {
-    return m_particleProgress->isVisible() && !m_particlesAction->isEnabled();
+    return m_particleController->loadingUiActive();
 }
 
 bool MainWindow::particleLoadingUiSettledForTest() const
 {
-    return !m_particleProgress->isVisible() && m_particlesAction->isEnabled();
+    return m_particleController->loadingUiSettled();
 }
 
 void MainWindow::openStandaloneFabForTest(const std::filesystem::path& path)

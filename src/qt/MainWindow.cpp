@@ -354,9 +354,7 @@ MainWindow::MainWindow(QWidget* parent)
             }
             m_initialStopSource.request_stop();
             m_linePlotStopSource.request_stop();
-            m_particleStopSource.request_stop();
-            m_particleLoading = false;
-            m_particleProgress->setVisible(false);
+            m_particleController->cancel();
             m_pendingAllViews = false;
             m_pendingViews.clear();
             m_sliceDebounce->stop();
@@ -391,6 +389,49 @@ MainWindow::MainWindow(QWidget* parent)
         this, [this](const QString& message) {
             statusBar()->showMessage(message);
         });
+
+    // The particle overlay's selection, samples and sample load live in their
+    // controller; this window draws the samples, decides how a changed
+    // selection is applied (reload, or restart an in-flight sequence frame so
+    // it is baked into the frame spec), and folds the load's bookkeeping into
+    // its diagnostics.
+    m_particleController = new ParticleController(
+        ParticleController::Hooks{
+            [this] { return m_dataset; },
+            [this] { return m_closing; },
+        },
+        this);
+    connect(m_particleController, &ParticleController::overlaysChanged, this,
+        [this] { updateParticleOverlays(); });
+    connect(m_particleController, &ParticleController::sampleSelectionChanged,
+        this, [this] {
+            m_sequenceController->invalidatePrefetch();
+            if (m_sequenceController->inFlight()
+                && m_sequenceController->currentIndex() >= 0) {
+                goToSequenceFrame(m_sequenceController->currentIndex(), true);
+            } else {
+                m_particleController->reload();
+            }
+        });
+    connect(m_particleController, &ParticleController::loadActivityChanged,
+        this, [this](int delta) {
+            if (delta > 0) {
+                m_activeRequests += static_cast<std::uint64_t>(delta);
+            } else {
+                m_activeRequests -= static_cast<std::uint64_t>(-delta);
+            }
+            updateDiagnostics();
+        });
+    connect(m_particleController, &ParticleController::statusMessage, this,
+        [this](const QString& message, int timeoutMs) {
+            statusBar()->showMessage(message, timeoutMs);
+        });
+    connect(m_particleController, &ParticleController::loadFailed, this,
+        [this](const QString& message) { reportBackgroundError(message); });
+    connect(m_particleController, &ParticleController::staleResultDropped,
+        this, [this] { ++m_staleResults; });
+    connect(m_particleController, &ParticleController::loadFinished, this,
+        [this] { updateDiagnostics(); });
     connect(m_sequenceController, &SequenceController::frameDisplayed,
         this, [this](int index) {
             m_animationPanel->setSequenceFrame(index);
@@ -511,13 +552,8 @@ MainWindow::MainWindow(QWidget* parent)
     }
 
     m_probeLabel = new QLabel(statusBar());
-    m_particleProgress = new QProgressBar(statusBar());
-    m_particleProgress->setRange(0, 0);
-    m_particleProgress->setFormat(tr("Loading particles..."));
-    m_particleProgress->setAccessibleName(tr("Loading particle sample"));
-    m_particleProgress->setFixedWidth(170);
-    m_particleProgress->setVisible(false);
-    statusBar()->addPermanentWidget(m_particleProgress);
+    statusBar()->addPermanentWidget(
+        m_particleController->createProgress(statusBar()));
     statusBar()->addPermanentWidget(m_probeLabel);
     statusBar()->showMessage(tr("No dataset open"));
     updateDiagnostics();
@@ -1163,11 +1199,9 @@ void MainWindow::createMenus()
     connect(m_contoursAction, &QAction::triggered,
         this, [this] { showContoursDialog(); });
 
-    m_particlesAction = new QAction(tr("Par&ticles..."), this);
-    m_particlesAction->setObjectName(QStringLiteral("particlesAction"));
-    m_particlesAction->setEnabled(false);
-    connect(m_particlesAction, &QAction::triggered,
-        this, [this] { showParticlesDialog(); });
+    auto* particlesAction = m_particleController->createAction(this);
+    connect(particlesAction, &QAction::triggered, this,
+        [this] { m_particleController->showDialog(this); });
 
     m_datasetAction = new QAction(tr("&Dataset..."), this);
     m_datasetAction->setEnabled(false);
@@ -1191,7 +1225,7 @@ void MainWindow::createMenus()
     viewMenu->addMenu(m_sphericalMenu);
     viewMenu->addSeparator();
     viewMenu->addAction(m_contoursAction);
-    viewMenu->addAction(m_particlesAction);
+    viewMenu->addAction(particlesAction);
     viewMenu->addAction(m_datasetAction);
     viewMenu->addAction(numberFormatAction);
     viewMenu->addSeparator();

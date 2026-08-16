@@ -361,6 +361,10 @@ target_link_libraries(
 )
 add_test(NAME display_transitions COMMAND test_display_transitions)
 
+add_executable(test_block_lookup unit/test_block_lookup.cpp)
+target_link_libraries(test_block_lookup PRIVATE amrexplorer::query amrexplorer::warnings)
+add_test(NAME block_lookup COMMAND test_block_lookup)
+
 add_executable(test_slice_query integration/test_slice_query.cpp)
 target_link_libraries(test_slice_query PRIVATE amrexplorer::query amrexplorer::warnings)
 add_test(NAME slice_query COMMAND test_slice_query)

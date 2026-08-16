@@ -190,10 +190,15 @@ int main(int argc, char* argv[])
                 && samePath(selected.front(), root / "plt00000"),
             "browser did not return the selected plotfile");
 
-        // Enter the subdirectory the way a double-click does.
+        // Enter the subdirectory the way a double-click does. While the
+        // listing is in flight the old one is greyed out and Open is off, so
+        // the selection made before navigating cannot be opened.
         emit entries->itemActivated(sub, 0);
+        require(!open->isEnabled() && !entries->isEnabled(),
+            "Open or the listing stayed live during a directory change");
         require(waitForEntry(application, *entries, "plt00002") != nullptr,
             "browser did not enter the subdirectory");
+        require(entries->isEnabled(), "listing stayed greyed out after loading");
         require(samePath(dialog.currentDirectory().toStdString(), root / "sub"),
             "current directory did not follow the navigation");
         require(!open->isEnabled(), "Open survived a directory change");
@@ -205,10 +210,15 @@ int main(int argc, char* argv[])
                 && samePath(dialog.currentDirectory().toStdString(), root),
             "Up did not return to the parent directory");
 
-        // A path that is not a directory: error shown, listing kept.
+        // A path that is not a directory: error shown, listing and selection
+        // kept, Open off while loading and back afterwards.
+        findEntry(*entries, "plt00001")->setSelected(true);
+        application.processEvents();
+        require(open->isEnabled(), "Open stayed disabled with a selection");
         pathEdit->setText(
             QString::fromStdString((root / "plt00000" / "Header").string()));
         goButton->click();
+        require(!open->isEnabled(), "Open stayed enabled during a listing");
         require(waitFor(application,
                     [&] {
                         return status->text().contains(
@@ -218,8 +228,13 @@ int main(int argc, char* argv[])
         require(samePath(dialog.currentDirectory().toStdString(), root)
                 && findEntry(*entries, "plt00001") != nullptr,
             "a failed listing replaced the previous one");
-        require(pathEdit->isEnabled() && goButton->isEnabled(),
+        require(pathEdit->isEnabled() && goButton->isEnabled()
+                && entries->isEnabled(),
             "controls stayed disabled after a failed listing");
+        selected = dialog.selectedPaths();
+        require(open->isEnabled() && selected.size() == 1
+                && samePath(selected.front(), root / "plt00001"),
+            "a failed listing lost the selection or left Open disabled");
     }
 
     // Sequence mode: several plotfiles, returned in name order regardless of

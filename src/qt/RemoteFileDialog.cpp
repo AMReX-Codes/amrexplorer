@@ -136,8 +136,10 @@ void RemoteFileDialog::loadDirectory(const QString& path)
     m_upButton->setEnabled(false);
     m_goButton->setEnabled(false);
     // Greyed out until the new listing lands: on a slow link the old one
-    // stays visible for a moment and must not read as the current one.
+    // stays visible for a moment and must not read as the current one, and
+    // Open must not act on its selection either.
     m_entries->setEnabled(false);
+    m_buttons->button(QDialogButtonBox::Open)->setEnabled(false);
     m_watcher->setFuture(QtConcurrent::run(
         [connection = m_connection, requestedPath = path.toStdString(),
             cancellation = m_browseStop.get_token()] {
@@ -161,9 +163,11 @@ void RemoteFileDialog::finishLoad()
     m_upButton->setEnabled(!m_parentDirectory.isEmpty()
         && m_parentDirectory != m_currentDirectory);
     if (!result.error.isEmpty()) {
-        // The previous listing stays up; only the message changes.
+        // The previous listing stays up, selection included; only the
+        // message changes.
         m_status->setText(
             tr("Could not list the remote directory: %1").arg(result.error));
+        updateOpenButton();
         m_pathEdit->setFocus();
         m_pathEdit->selectAll();
         return;

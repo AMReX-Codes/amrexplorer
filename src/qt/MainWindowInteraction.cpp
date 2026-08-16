@@ -1878,6 +1878,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // queued work; the pool clear happens only on aboutToQuit (see
     // cancelInFlight).
     cancelInFlight();
+    m_sshRemoteSession.reset();
     // Secondary top-level windows are parentless or non-modal; close them with
     // the main window so none lingers and keeps the process alive.
     if (m_linePlotWindow != nullptr) {

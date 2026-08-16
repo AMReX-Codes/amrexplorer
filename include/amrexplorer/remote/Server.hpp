@@ -43,7 +43,14 @@ struct ServerOptions {
 
 class Server {
 public:
+    // Listens on loopback at options.port (0 = kernel-assigned) and serves
+    // every accepted connection.
     explicit Server(ServerOptions options = {});
+    // Serves exactly one peer over an already-connected channel, such as the
+    // process's own stdin/stdout when launched over ssh; never listens, so
+    // port() is 0 and options.port is ignored. run() returns when that
+    // session ends.
+    Server(std::unique_ptr<Channel> channel, ServerOptions options = {});
     ~Server();
 
     Server(const Server&) = delete;

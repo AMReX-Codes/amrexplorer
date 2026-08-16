@@ -1,7 +1,7 @@
 #include "MainWindow.hpp"
 #include "FabSelectorDock.hpp"
-#include "RemoteConnectArguments.hpp"
 #include "RemoteEndpoint.hpp"
+#include "SshConnectArguments.hpp"
 
 #include <QAction>
 #include <QApplication>
@@ -14,8 +14,10 @@
 #include <QGuiApplication>
 #include <QIcon>
 #include <QInputDialog>
+#include <QLabel>
 #include <QLineEdit>
 #include <QLoggingCategory>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QProcess>
@@ -29,7 +31,7 @@
 #include <QTimer>
 
 #include <amrexplorer/render2d/Contours.hpp>
-#include <amrexplorer/remote/Frame.hpp>
+#include <amrexplorer/remote/Connection.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
 #include <algorithm>
@@ -53,6 +55,104 @@
 namespace {
 
 QtMessageHandler g_previousMessageHandler = nullptr;
+
+void printUsage(std::FILE* output)
+{
+    std::fprintf(output,
+        "usage: amrexplorer [PLOTFILE...]\n"
+        "       amrexplorer --ssh SSH_DESTINATION [--server PATH] "
+        "[REMOTE_PLOTFILE...]\n\n"
+        "Open one plotfile directory, or several to play them as a\n"
+        "sequence, or none for an empty window.\n\n"
+        "  --ssh SSH_DESTINATION  run amrexplorer-server on the destination\n"
+        "                         through ssh and open the remote plotfile\n"
+        "                         paths there; with no paths, only establish\n"
+        "                         the session\n"
+        "  --server PATH          remote amrexplorer-server executable, for\n"
+        "                         when it is not on the non-interactive\n"
+        "                         remote PATH; remembered per destination\n"
+        "  -h, --help             show this help\n\n"
+        "See docs/user-guide.md for details.\n");
+}
+
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+// The smoke tests speak to an in-process loopback server; the handshake
+// against it takes milliseconds, so it runs right here on the GUI thread.
+void attachSmokeServer(amrvis::qt::MainWindow& window,
+    const std::shared_ptr<amrvis::remote::Server>& server)
+{
+    window.useRemoteConnection(
+        std::make_shared<amrvis::remote::Connection>("127.0.0.1",
+            server->port(),
+            amrvis::remote::ConnectionOptions{
+                .clientName = "AMReXplorer Qt smoke",
+                .sessionToken = server->token()}),
+        QStringLiteral("127.0.0.1:%1").arg(server->port()));
+}
+#endif
+
+bool writeAskpassResponse(const QByteArray& response)
+{
+    if (std::fwrite(response.constData(), 1,
+            static_cast<std::size_t>(response.size()), stdout)
+            != static_cast<std::size_t>(response.size())
+        || std::fputc('\n', stdout) == EOF) {
+        return false;
+    }
+    std::fflush(stdout);
+    return true;
+}
+
+// OpenSSH runs $SSH_ASKPASS with the prompt as its argument and reads one line
+// from its stdout. SSH_ASKPASS_PROMPT says what kind of prompt it is: unset
+// for a secret (password, passphrase, MFA code), "confirm" for a yes/no
+// question such as accepting a new host key, "none" for a notification that
+// expects no answer (a hardware-key touch); ssh ends the notification process
+// itself once the wait is over.
+int runSshAskpass(const QString& prompt)
+{
+    if (prompt.isEmpty()) {
+        return 1;
+    }
+    const auto destination = qEnvironmentVariable("AMREXPLORER_SSH_DESTINATION");
+    const auto title = destination.isEmpty()
+        ? QStringLiteral("SSH authentication")
+        : QStringLiteral("SSH authentication — %1").arg(destination);
+    const auto kind = qEnvironmentVariable("SSH_ASKPASS_PROMPT");
+    if (kind == QLatin1String("confirm")) {
+        QMessageBox box(QMessageBox::Question, title, prompt,
+            QMessageBox::Yes | QMessageBox::No);
+        box.setTextFormat(Qt::PlainText);
+        box.setWindowFlag(Qt::WindowStaysOnTopHint);
+        const auto answer = box.exec();
+        return writeAskpassResponse(
+                   answer == QMessageBox::Yes ? "yes" : "no")
+            ? 0 : 1;
+    }
+    if (kind == QLatin1String("none")) {
+        QMessageBox box(QMessageBox::Information, title, prompt,
+            QMessageBox::Ok);
+        box.setTextFormat(Qt::PlainText);
+        box.setWindowFlag(Qt::WindowStaysOnTopHint);
+        box.exec();
+        return 0;
+    }
+    QInputDialog dialog;
+    dialog.setWindowTitle(title);
+    dialog.setLabelText(prompt);
+    dialog.setInputMode(QInputDialog::TextInput);
+    dialog.setTextEchoMode(QLineEdit::Password);
+    dialog.setOkButtonText(QStringLiteral("Respond"));
+    dialog.setCancelButtonText(QStringLiteral("Cancel"));
+    dialog.setWindowFlag(Qt::WindowStaysOnTopHint);
+    if (auto* label = dialog.findChild<QLabel*>()) {
+        label->setTextFormat(Qt::PlainText);
+    }
+    if (dialog.exec() != QDialog::Accepted) {
+        return 1;
+    }
+    return writeAskpassResponse(dialog.textValue().toUtf8()) ? 0 : 1;
+}
 
 // Qt 6 on Wayland logs a benign xdg-shell warning whenever a new grabbing popup
 // -- a menu, submenu, combo-box dropdown, or tooltip -- opens while another
@@ -656,6 +756,28 @@ int main(int argc, char* argv[])
         QStringLiteral("qt.qpa.wayland.textinput=false\n"
                        "qt.qpa.services.warning=false"));
 
+    if (qEnvironmentVariableIsSet("AMREXPLORER_SSH_ASKPASS_MODE")) {
+        if (argc < 2) {
+            return 1;
+        }
+        QStringList promptParts;
+        promptParts.reserve(argc - 1);
+        for (int index = 1; index < argc; ++index) {
+            promptParts.push_back(QString::fromLocal8Bit(argv[index]));
+        }
+        // Do not let QApplication interpret a server-controlled prompt as a
+        // Qt command-line option. It needs only argv[0] in askpass mode.
+        int askpassArgc = 1;
+        QApplication askpassApplication(askpassArgc, argv);
+        return runSshAskpass(promptParts.join(QLatin1Char(' ')));
+    }
+    // Answered before QApplication exists, so it works without a display.
+    if (argc >= 2
+        && (std::string_view(argv[1]) == "--help"
+            || std::string_view(argv[1]) == "-h")) {
+        printUsage(stdout);
+        return 0;
+    }
     QApplication application(argc, argv);
     // Undo, for numeric conversion only, what QApplication just did. Qt calls
     // setlocale(LC_ALL, "") on Unix, which hands the C locale to the
@@ -718,15 +840,14 @@ int main(int argc, char* argv[])
     window.show();
     std::shared_ptr<amrvis::remote::Server> smokeServer;
     std::optional<std::thread> smokeServerThread;
-    std::optional<std::thread> smokePeerThread;
     // The option chain below carries two kinds of branch. The production
-    // options -- --connect, and the bare plotfile paths at the end -- always
+    // options -- --ssh, and the bare plotfile paths at the end -- always
     // compile. The ~55 "--...-smoke-test" branches drive the offscreen test
     // harness through MainWindow's ForTest accessors, so they compile only
     // where those accessors do, and the release binary carries neither. The
-    // chain is split into two guarded runs because --connect sits between
-    // them; the trailing `else` of the first run attaches to it, so removing
-    // the run leaves --connect as the leading `if`.
+    // chain is split into two guarded runs because --ssh sits between them;
+    // the trailing `else` of the first run attaches to --ssh, so removing the
+    // run leaves it as the leading `if`.
 #ifdef AMREXPLORER_QT_TEST_ACCESS
     if ((argc == 8 || argc == 10)
         && std::string_view(argv[1])
@@ -792,8 +913,28 @@ int main(int argc, char* argv[])
                                 = window.activeViewVisibleDataWindowForTest();
                             probe->localViewportImage
                                 = window.activeViewViewportImageForTest();
-                            window.openRemoteDataset(endpoint.host,
-                                endpoint.port, remotePath, token);
+                            try {
+                                window.useRemoteConnection(
+                                    std::make_shared<
+                                        amrvis::remote::Connection>(
+                                        endpoint.host, endpoint.port,
+                                        amrvis::remote::ConnectionOptions{
+                                            .clientName
+                                            = "AMReXplorer Qt repro",
+                                            .sessionToken = token}),
+                                    QStringLiteral("%1:%2")
+                                        .arg(QString::fromStdString(
+                                            endpoint.host))
+                                        .arg(endpoint.port));
+                            } catch (const std::exception& error) {
+                                std::cerr << "cannot connect to "
+                                          << endpoint.host << ':'
+                                          << endpoint.port << ": "
+                                          << error.what() << '\n';
+                                QCoreApplication::exit(2);
+                                return;
+                            }
+                            window.openRemoteDataset(remotePath);
                         });
                     return;
                 }
@@ -999,8 +1140,8 @@ int main(int argc, char* argv[])
             [&application] { application.exit(4); });
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
-                window.openRemoteDataset(
-                    "127.0.0.1", server->port(), path, server->token());
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(path);
             });
     } else if (argc == 3
         && std::string_view(argv[1])
@@ -1088,8 +1229,8 @@ int main(int argc, char* argv[])
             [&application] { application.exit(3); });
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
-                window.openRemoteDataset(
-                    "127.0.0.1", server->port(), path, server->token());
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(path);
             });
     } else if (argc == 3 && std::string_view(argv[1])
             == "--remote-fixed-scale-flicker-smoke-test") {
@@ -1217,8 +1358,8 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
                 window.resize(420, 301);
-                window.openRemoteDataset(
-                    "127.0.0.1", server->port(), path, server->token());
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(path);
             });
     } else if (argc == 3
         && std::string_view(argv[1])
@@ -1403,8 +1544,8 @@ int main(int argc, char* argv[])
                             return;
                         }
                         probe->remotePhase = true;
-                        window.openRemoteDataset("127.0.0.1", server->port(),
-                            path, server->token());
+                        attachSmokeServer(window, server);
+                        window.openRemoteDataset(path);
                     });
             });
         QTimer::singleShot(30000, &application,
@@ -1430,8 +1571,8 @@ int main(int argc, char* argv[])
             [&application] { application.exit(1); });
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
-                window.openRemoteDataset(
-                    "127.0.0.1", server->port(), path, server->token());
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(path);
             });
     } else if (argc == 3
         && std::string_view(argv[1])
@@ -1462,41 +1603,8 @@ int main(int argc, char* argv[])
             [&application] { application.exit(1); });
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
-                window.openRemoteDataset(
-                    "127.0.0.1", server->port(), path, server->token());
-            });
-    } else if (argc == 2
-        && (std::string_view(argv[1])
-                == "--remote-silent-hello-close-smoke-test"
-            || std::string_view(argv[1])
-                == "--remote-silent-verification-close-smoke-test")) {
-        const bool verification
-            = std::string_view(argv[1])
-            == "--remote-silent-verification-close-smoke-test";
-        auto listener = std::make_shared<amrvis::remote::Listener>(
-            amrvis::remote::listenOnLoopback(0));
-        smokePeerThread.emplace([listener, &window] {
-            auto peer = amrvis::remote::acceptConnection(listener->socket);
-            // Wait until the client has entered the hello transaction before
-            // closing the window. A second read then remains silent until the
-            // cancelled Connection constructor releases its socket.
-            static_cast<void>(amrvis::remote::readFrame(peer));
-            QMetaObject::invokeMethod(&window,
-                [&window] { window.close(); }, Qt::QueuedConnection);
-            static_cast<void>(amrvis::remote::readFrame(peer));
-        });
-        QTimer::singleShot(5000, &application,
-            [&application] { application.exit(1); });
-        QTimer::singleShot(0, &window,
-            [&window, port = listener->port, verification] {
-                if (verification) {
-                    window.verifyRemoteEndpoint(
-                        "127.0.0.1", port, "test-token");
-                } else {
-                    window.openRemoteDataset(
-                        "127.0.0.1", port, "/not-opened-before-hello",
-                        "test-token");
-                }
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(path);
             });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--remote-rubber-aspect-smoke-test") {
@@ -1549,8 +1657,8 @@ int main(int argc, char* argv[])
             [&application] { application.exit(1); });
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
-                window.openRemoteDataset(
-                    "127.0.0.1", server->port(), path, server->token());
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(path);
             });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--remote-grid-boxes-smoke-test") {
@@ -1586,8 +1694,8 @@ int main(int argc, char* argv[])
             [&application] { application.exit(1); });
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
-                window.openRemoteDataset(
-                    "127.0.0.1", server->port(), path, server->token());
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(path);
             });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--remote-sequence-smoke-test") {
@@ -1619,36 +1727,26 @@ int main(int argc, char* argv[])
             [&application] { application.exit(1); });
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
-                window.openRemoteSequence(
-                    "127.0.0.1", server->port(), {path, path},
-                    server->token());
+                attachSmokeServer(window, server);
+                window.openRemoteSequence({path, path});
             });
     } else
 #endif
-    if (argc >= 2
-        && std::string_view(argv[1]) == "--connect") {
+    if (argc >= 2 && std::string_view(argv[1]) == "--ssh") {
         std::vector<std::string_view> arguments;
         arguments.reserve(static_cast<std::size_t>(argc - 2));
         for (int index = 2; index < argc; ++index) {
             arguments.emplace_back(argv[index]);
         }
-        auto parsed
-            = amrvis::qt::parseRemoteConnectArguments(arguments, std::cin);
+        auto parsed = amrvis::qt::parseSshConnectArguments(arguments);
         if (!parsed.request) {
             qCritical("%s", parsed.error.c_str());
             return 2;
         }
         QTimer::singleShot(0, &window,
             [&window, request = std::move(*parsed.request)] {
-                if (request.paths.size() == 1) {
-                    window.openRemoteDataset(request.endpoint.host,
-                        request.endpoint.port, request.paths.front(),
-                        request.endpoint.token);
-                } else {
-                    window.openRemoteSequence(request.endpoint.host,
-                        request.endpoint.port, request.paths,
-                        request.endpoint.token);
-                }
+                window.startSshRemoteSession(request.destination,
+                    request.serverExecutable, request.paths);
             });
     }
 #ifdef AMREXPLORER_QT_TEST_ACCESS
@@ -3019,8 +3117,8 @@ int main(int argc, char* argv[])
                     return;
                 }
                 *opened = true;
-                window.openRemoteSequence("127.0.0.1", server->port(),
-                    {first, second}, server->token());
+                attachSmokeServer(window, server);
+                window.openRemoteSequence({first, second});
             });
         QObject::connect(&window,
             &amrvis::qt::MainWindow::sequenceFrameDisplayed,
@@ -3147,8 +3245,8 @@ int main(int argc, char* argv[])
             [&application] { application.exit(3); });
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
-                window.openRemoteDataset(
-                    "127.0.0.1", server->port(), path, server->token());
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(path);
             });
     } else if (argc == 4
         && std::string_view(argv[1]) == "--effective-scale-smoke-test") {
@@ -3948,14 +4046,9 @@ int main(int argc, char* argv[])
         // matched one with the wrong number of arguments. Both used to fall
         // through to an empty window with no diagnostic, which reads as the
         // option having been accepted and done nothing.
-        std::fprintf(stderr,
-            "amrexplorer: unrecognized option '%s'\n\n"
-            "usage: amrexplorer [PLOTFILE...]\n"
-            "       amrexplorer --connect HOST:PORT [--token-stdin] "
-            "REMOTE_PLOTFILE...\n\n"
-            "Open one plotfile directory, or several to play them as a\n"
-            "sequence. See docs/user-guide.md for the remote options.\n",
-            argv[1]);
+        std::fprintf(
+            stderr, "amrexplorer: unrecognized option '%s'\n\n", argv[1]);
+        printUsage(stderr);
         return 2;
     }
     const auto result = application.exec();
@@ -3964,9 +4057,6 @@ int main(int argc, char* argv[])
     }
     if (smokeServerThread) {
         smokeServerThread->join();
-    }
-    if (smokePeerThread) {
-        smokePeerThread->join();
     }
     return result;
 }

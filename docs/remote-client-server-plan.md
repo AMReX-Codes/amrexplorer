@@ -1,7 +1,12 @@
 # Remote client/server architecture plan
 
 Status: implemented and validated by the remote client/server PR stack; the
-PR #119 review remediation completed on 2026-08-01.
+PR #119 review remediation completed on 2026-08-01. Amended 2026-08-16: the
+production deployment transport is now the server's stdin/stdout carried over
+an ssh session started by the client (`amrexplorer --ssh`, `amrexplorer-server
+--stdio`); the loopback TCP listener and the `--connect`/SSH-tunnel workflow
+it served remain as the test and tools transport. Sections below note the
+amendment where it changes them.
 
 The implementation follows the design below: a shared local/remote
 dataset-session boundary, viewport- and page-bounded queries, a verified
@@ -27,18 +32,23 @@ local Qt UI
     |
     | viewport-bounded view requests
     v
-remote client ---- framed FlatBuffers over TCP ---- headless server
-                                                     |
-                                                     v
-                                              PlotfileDataset
-                                              view planning
-                                              clipped extraction
+remote client ---- framed FlatBuffers over a Channel ---- headless server
+                   (deployment: ssh stdio;                |
+                    tests/tools: loopback TCP)            v
+                                                   PlotfileDataset
+                                                   view planning
+                                                   clipped extraction
 ```
 
-The supported deployment model is a server bound to the remote loopback
-interface and a client connected through an SSH port forward. SSH remains
-responsible for authentication, encryption, host verification, and optional
-transport compression.
+The supported deployment model (amended 2026-08-16): the client starts
+`amrexplorer-server --stdio` on the remote machine as an ssh command and
+speaks the framed protocol over that command's stdin/stdout -- the git/sftp
+model. Nothing listens on either machine, no forwarding permission is needed,
+the session works through `ProxyJump` bastions, and the server's lifetime is
+bounded by the ssh session: end-of-stream ends it. SSH remains responsible for
+authentication, encryption, host verification, and optional transport
+compression. The loopback TCP listener remains the transport for tests and
+in-process tooling.
 
 ## 2. Prototype findings to retain
 
@@ -231,10 +241,11 @@ Add a value type that distinguishes:
 - local path;
 - remote endpoint plus server-visible path.
 
-One `MainWindow` will own at most one active `WireConnection`. Dataset
-sessions and prefetched sequence frames from that window may share the
-connection. Independent top-level windows will use independent connections,
-matching their existing independent dataset/cache state.
+One `MainWindow` owns at most one active connection -- the ssh session's.
+Dataset sessions and prefetched sequence frames from that window share the
+connection (its receive thread multiplexes responses by request ID).
+Independent top-level windows use independent connections, matching their
+existing independent dataset/cache state.
 
 Remote dataset handles are scoped to a single server connection. After a
 disconnect they are invalid and are never silently reused on a new
@@ -449,7 +460,8 @@ This decision is explicitly part of the review for this plan.
 
 `WireConnection` will own:
 
-- one TCP socket;
+- one `Channel` (a TCP socket, or the descriptor pair of the ssh stdio
+  stream);
 - a monotonically increasing atomic request-ID source;
 - a send mutex;
 - a dedicated receive thread;
@@ -497,24 +509,34 @@ remote, data, query, I/O, cache, and core libraries.
 Startup interface:
 
 ```text
-amrexplorer-server [--port PORT] [--threads COUNT]
+amrexplorer-server [--stdio | --port PORT] [--threads COUNT]
                [--max-frame-mib SIZE] [--max-datasets COUNT]
 ```
 
-The server will always bind to `127.0.0.1`. Port zero will remain available
-for tests and automation. At startup the server generates a random 128-bit
-session token (from the OS CSPRNG via `std::random_device`) that every client
-must echo in its handshake; the check is mandatory and cannot be disabled. The
-startup line carries it in a machine-readable form:
+In `--stdio` mode (the deployment mode, amended 2026-08-16) the server serves
+exactly one session over its own stdin/stdout and exits when the stream ends.
+The wire moves to private duplicates of the original descriptors, stdout is
+redirected to stderr so stray output cannot corrupt a frame, and the first
+bytes on the wire are one machine-readable ready line the client scans for
+past any login-shell noise:
 
 ```text
-LISTENING 127.0.0.1 <port> TOKEN <token>
+AMREXPLORER-STDIO 1 TOKEN <token>
 ```
+
+In `--port` mode the server binds `127.0.0.1` and serves every accepted
+connection; port zero remains available for tests and automation, and the
+startup line is `LISTENING 127.0.0.1 <port> TOKEN <token>` on stdout. In both
+modes the server generates a random 128-bit session token (from the OS CSPRNG
+via `std::random_device`) that every client must echo in its handshake; the
+check is mandatory and cannot be disabled. Over stdio the token authenticates
+nothing beyond the already-authenticated ssh channel; it stays so that the
+handshake, and the loopback mode's security story, are one code path.
 
 The server process will have:
 
-- one loopback listener;
-- an accept loop supporting multiple client connections;
+- one loopback listener (port mode) or one pre-connected channel (stdio);
+- an accept loop supporting multiple client connections (port mode);
 - a bounded shared worker pool;
 - configured frame, dataset, cache, and outstanding-request limits;
 - signal-driven orderly shutdown.
@@ -556,77 +578,78 @@ The current query and block-read cancellation checkpoints will be reused.
 Cancellation latency is therefore bounded by the longest uncancellable
 filesystem operation, not by network handling.
 
-## 8. Socket portability
+## 8. Transport portability
 
-Promote `Frame` into a production transport implementation with:
+The frame layer reads and writes an abstract `Channel` (amended 2026-08-16):
 
-- POSIX sockets on Linux and macOS;
-- Winsock initialization, close, shutdown, and error mapping on Windows;
-- `getaddrinfo` for client connections;
-- explicit loopback bind for the server;
-- suppression/avoidance of process-terminating broken-pipe behavior;
-- RAII socket ownership;
-- a shutdown operation that interrupts blocked reads.
+- `Socket : Channel` -- POSIX sockets on Linux and macOS, Winsock
+  initialization, close, shutdown, and error mapping on Windows; explicit
+  loopback bind for the server; RAII ownership; a shutdown operation that
+  interrupts blocked reads.
+- `DescriptorChannel : Channel` (POSIX only) -- a read/write descriptor pair
+  such as a process's stdin/stdout. The two descriptors may share one open
+  socket (Linux sshd gives a no-pty command exactly that), so its shutdown
+  half-closes rather than closing one descriptor. Both directions poll before
+  every transfer, keeping deadlines and stop tokens authoritative on pipes
+  and sockets alike.
+- Broken-pipe termination is suppressed per transfer for sockets
+  (`MSG_NOSIGNAL`/`SO_NOSIGPIPE`); a process using `DescriptorChannel`
+  ignores `SIGPIPE` so a departed peer surfaces as `EPIPE`.
 
 No networking types will appear in the dataset or Qt-facing APIs.
 
 ## 9. UI and command-line workflow
 
-### 9.1 Server and SSH tunnel
+### 9.1 The ssh session (amended 2026-08-16)
 
-Document the normal workflow:
+The client starts the server itself; the user supplies only an ssh
+destination:
 
 ```bash
-# Remote machine (prints: LISTENING 127.0.0.1 8642 TOKEN <token>)
-amrexplorer-server --port 8642
-
-# Local machine (read the token without placing it in argv or shell history)
-ssh -N -L 8642:127.0.0.1:8642 user@remote
-read -rs AMREXPLORER_TOKEN && printf '\n'
-amrexplorer --connect 127.0.0.1:8642 --token-stdin \
-    /remote/path/to/plt00010 <<<"$AMREXPLORER_TOKEN"
-unset AMREXPLORER_TOKEN
+amrexplorer --ssh user@remote /remote/path/to/plt00010
+amrexplorer --ssh user@remote --server "~/bin/amrexplorer-server" \
+    /remote/path/to/plt00010
 ```
 
-On a shared host prefer `--port 0` (kernel-assigned, printed on the
-`LISTENING` line) and avoid the ephemeral range (32768–60999 on Linux). If the
-server host is reached through a login gateway that only relays the SSH
-session, forward through the compute host with `ssh -J gateway -L ... host`.
+Under the hood: `ssh -T <keepalives> -- DEST 'exec amrexplorer-server --stdio
+--threads 8'`, with the ssh child's stdin/stdout attached to a socket pair the
+client holds. The client discards everything up to the ready line, takes the
+token from it, and completes the protocol handshake over the same stream.
+Authentication prompts (password, keyboard-interactive MFA, host-key
+confirmation) are routed through the client binary via `SSH_ASKPASS`. Closing
+the session closes the stream; the server reads end-of-stream and exits, so
+no process outlives the client on the remote machine.
+
+The loopback listener workflow (`amrexplorer-server --port` plus an SSH
+`-L` tunnel) is no longer a client workflow; the `--port` mode serves the
+integration tests, the Qt smoke harness, and `amrexplorer-render-equivalence`.
 
 ### 9.2 Desktop actions
 
-Add:
-
-- **File > Connect to Remote Server...**
-- **File > Open Remote Plotfile...**
-- **File > Open Remote Plotfile Sequence...**
-- a connection-status entry in diagnostics.
-
-The connection dialog will collect host and port. The remote-open dialog will
-accept server-visible paths; protocol 1.0 will not browse the server
-filesystem. The sequence dialog will accept multiple paths and preserve their
-entered order.
+- **File > Open Remote Plotfile...** / **File > Open Remote Plotfile
+  Sequence...** -- one dialog each: ssh destination, server executable, and
+  server-visible path(s) (protocol 1.0 does not browse the server
+  filesystem). Unchanged connection fields reuse the live session; a changed
+  destination starts a new one.
+- a session-status entry in diagnostics.
 
 Switching back to a local open remains supported without restarting the
-application. Changing remote endpoints closes the old remote datasets after
-cancelling their work.
+application. Starting a new session replaces the old connection; datasets
+open on it fail on their next request rather than being silently migrated.
 
 ### 9.3 CLI
 
-Preserve all current local and smoke-test forms. Add:
+Preserve all current local and smoke-test forms. The remote form is:
 
 ```text
-amrexplorer --connect HOST:PORT --token-stdin \
-    REMOTE_PATH [REMOTE_PATH ...]
+amrexplorer --ssh SSH_DESTINATION [--server PATH] [REMOTE_PATH ...]
 ```
 
-`--token-stdin` reads one token line from standard input so the bearer token is
-not exposed in the long-lived GUI process arguments or recorded literally in
-shell history.
-
-One path opens a dataset and multiple paths open a sequence, matching the
-current local positional behavior. Invalid endpoints or conflicting options
-will produce a usage error before the Qt event loop starts.
+One path opens a dataset, multiple paths open a sequence, and no paths only
+establishes the session. The token never appears on a command line: the
+server generates it and the client reads it from the session's own stream.
+Invalid destinations or conflicting options produce a usage error before the
+Qt event loop starts.
 
 ## 10. Build and source layout
 
@@ -848,8 +871,9 @@ The architecture is complete when:
 - full FABs, whole levels, native-resolution lines, volume data, and volume
   geometry never cross the wire;
 - server resource limits prevent unbounded client-controlled allocation;
-- the server binds only to loopback, enforces a mandatory per-session access
-  token on the handshake, and the SSH security boundary is documented;
+- the server serves the deployment session over ssh stdio (binding nothing)
+  or binds only to loopback for tests, enforces a mandatory per-session
+  access token on the handshake, and the SSH security boundary is documented;
 - the server and client shut down without blocked receive or worker threads;
 - generated bindings come only from the checked-in schema at build time;
 - production tests replace the prototype demo, and the prototype is removed.
@@ -860,15 +884,17 @@ Please review these choices before implementation:
 
 1. `DatasetSession` is the shared local/remote boundary; block reads are not a
    public remote operation.
-2. The server is loopback-only and relies on SSH for transport security, plus
-   a mandatory per-session token so a shared loopback interface does not expose
-   one user's server to another local user.
+2. The server relies on SSH for transport security. In deployment it speaks
+   over the ssh session's stdio and binds nothing (amended 2026-08-16); the
+   loopback listener remains for tests, protected by a mandatory per-session
+   token so a shared loopback interface does not expose one user's server to
+   another local user.
 3. Protocol 1.0 transfers only the cells, masks, clipped AMR
    coverage/geometry, requested components, and interpolation halo needed to
    rasterize the current 1-D/2-D view.
 4. Remote paths are entered explicitly; there is no remote file browser.
-5. Reconnect is explicit and reopens datasets; requests are never
-   automatically replayed.
+5. Reconnect is explicit -- a new ssh session -- and reopens datasets;
+   requests are never automatically replayed.
 6. Remote support is built by default for the Qt application, with generated
    code kept out of git.
 7. The first production release aims for the listed feature parity rather

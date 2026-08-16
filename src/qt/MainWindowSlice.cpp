@@ -1358,25 +1358,26 @@ void MainWindow::prepareSequence(std::size_t frameCount)
     }
 }
 
-void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
-    const std::vector<std::string>& remotePaths, std::string token)
+void MainWindow::openRemoteSequence(
+    const std::vector<std::string>& remotePaths)
 {
+    if (!m_remoteConnection) {
+        emit sequenceFrameFailed();
+        reportBackgroundError(tr("Open a remote session first "
+                                 "(File > Open Remote Plotfile...)."));
+        return;
+    }
     if (remotePaths.size() < 2
         || std::any_of(remotePaths.begin(), remotePaths.end(),
             [](const auto& path) { return path.empty(); })) {
         emit sequenceFrameFailed();
         QMessageBox::warning(this, tr("Cannot open remote sequence"),
-            tr("Enter two or more plotfile paths as they appear on %1:%2. "
-               "Remote frames are named by their path on the server, not "
-               "chosen from a local file dialog.")
-                .arg(QString::fromStdString(host))
-                .arg(port));
+            tr("Enter two or more plotfile paths as they appear on the "
+               "remote machine. Remote frames are named by their path on "
+               "the server, not chosen from a local file dialog."));
         return;
     }
 
-    m_remoteHost = host;
-    m_remotePort = port;
-    m_remoteToken = token;
     prepareSequence(remotePaths.size());
     m_remoteSequence = true;
 
@@ -1385,52 +1386,23 @@ void MainWindow::openRemoteSequence(std::string host, std::uint16_t port,
     for (const auto& path : remotePaths) {
         frames.emplace_back(path);
     }
-    struct SharedRemoteConnection {
-        std::mutex mutex;
-        std::shared_ptr<remote::Connection> connection;
-        std::uint64_t generation = 0;
-    };
-    auto shared = std::make_shared<SharedRemoteConnection>();
-    auto loader = [shared, host = std::move(host), port,
-                      token = std::move(token)](
+    // Foreground loads and prefetches share the session's connection, which
+    // multiplexes their requests. There is no reconnect: the connection lives
+    // as long as the ssh session, and a lost session is reported to the user
+    // rather than silently re-established.
+    auto loader = [connection = m_remoteConnection,
+                      generation = m_remoteConnectionGeneration](
                       const std::filesystem::path& path, DatasetId,
                       const FrameSliceSpec& spec, StopToken cancellation) {
-        std::shared_ptr<remote::Connection> connection;
-        std::uint64_t connectionGeneration = 0;
-        {
-            std::scoped_lock lock(shared->mutex);
-            connection = shared->connection;
-            connectionGeneration = shared->generation;
-        }
-        if (!connection || !connection->connected()) {
-            // Connect outside the shared-state mutex. Foreground loads and
-            // prefetches may overlap, and neither should inherit the other's
-            // network wait or lose its own cancellation deadline.
-            auto candidate = std::make_shared<remote::Connection>(host, port,
-                remote::ConnectionOptions{
-                    .clientName = "AMReXplorer Qt sequence",
-                    .softwareVersion = kVersion,
-                    .sessionToken = token},
-                cancellation);
-            {
-                std::scoped_lock lock(shared->mutex);
-                if (!shared->connection || !shared->connection->connected()) {
-                    shared->connection = std::move(candidate);
-                    ++shared->generation;
-                }
-                connection = shared->connection;
-                connectionGeneration = shared->generation;
-            }
-            // If another load won the connection race, release this redundant
-            // connection only after dropping the shared-state mutex.
-            candidate.reset();
+        if (!connection->connected()) {
+            throw std::runtime_error("remote session is not connected: "
+                + connection->disconnectReason());
         }
         auto session = remote::RemoteDatasetSession::open(
-            std::move(connection), path.string(), initialCacheBudget(),
-            cancellation);
+            connection, path.string(), initialCacheBudget(), cancellation);
         auto result = executeSessionFrameLoad(
             std::move(session), spec, cancellation);
-        result.connectionGeneration = connectionGeneration;
+        result.connectionGeneration = generation;
         return result;
     };
     m_sequenceController->open(std::move(frames), std::move(loader));
@@ -1505,9 +1477,10 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     if (result.connectionGeneration != 0
         && result.connectionGeneration
             != m_remoteSequenceConnectionGeneration) {
-        // DatasetId is allocated by the server and can restart at one after a
-        // reconnect. Drop every dataset-scoped display range before publishing
-        // a frame from a new connection generation so an old ID cannot alias.
+        // DatasetId is allocated by the server and restarts at one on every
+        // connection. Drop every dataset-scoped display range before
+        // publishing a frame from a newly installed connection so an old ID
+        // cannot alias.
         m_displayCoordinator.invalidateRangeCache();
         m_pendingRangeStore.reset();
         m_remoteSequenceConnectionGeneration = result.connectionGeneration;
@@ -1909,20 +1882,21 @@ void MainWindow::updateDiagnostics()
             .arg(m_cachePinnedBytes)
             .arg(m_cacheEvictions)
             .arg(m_sequenceController->lastFrameSwitchMs());
-    if (m_remotePort != 0) {
-        text += tr("\nremote endpoint: %1:%2")
-                    .arg(QString::fromStdString(m_remoteHost))
-                    .arg(m_remotePort);
+    if (m_remoteConnection) {
+        text += tr("\nremote session: %1 (%2)")
+                    .arg(m_remoteLabel,
+                        m_remoteConnection->connected() ? tr("connected")
+                                                        : tr("disconnected"));
         if (auto remoteSession = std::dynamic_pointer_cast<
                 remote::RemoteDatasetSession>(m_dataset)) {
-            text += tr("\nremote status: %1\nremote path: %2")
-                        .arg(remoteSession->connection()->connected()
-                                ? tr("connected") : tr("disconnected"),
-                            QString::fromStdString(
-                                remoteSession->remotePath()));
-        } else {
-            text += tr("\nremote status: configured");
+            text += tr("\nremote path: %1")
+                        .arg(QString::fromStdString(
+                            remoteSession->remotePath()));
         }
+    } else if (m_sshRemoteSession) {
+        text += tr("\nremote session: ssh %1 (starting)")
+                    .arg(QString::fromStdString(
+                        m_sshRemoteSession->destination()));
     }
     for (const auto& line : m_probeLines) {
         text += QLatin1Char('\n');

@@ -37,11 +37,35 @@ enum class ResponseWait {
 
 class Connection::Impl {
 public:
-    Impl(std::string host, std::uint16_t port, ConnectionOptions options,
-        StopToken cancellation)
-        : m_connectionDeadline(deadlineAfter(
-              options.connectionTimeout, "connection timeout"))
-        , m_socket(connectTo(host, port, m_connectionDeadline, cancellation))
+    static std::unique_ptr<Impl> connectLoopback(const std::string& host,
+        std::uint16_t port, ConnectionOptions options, StopToken cancellation)
+    {
+        const auto deadline
+            = deadlineAfter(options.connectionTimeout, "connection timeout");
+        auto channel = std::make_unique<Socket>(
+            connectTo(host, port, deadline, cancellation));
+        return std::make_unique<Impl>(
+            std::move(channel), std::move(options), cancellation, deadline);
+    }
+
+    static std::unique_ptr<Impl> adopt(std::unique_ptr<Channel> channel,
+        ConnectionOptions options, StopToken cancellation)
+    {
+        if (!channel) {
+            throw std::invalid_argument("connection channel must not be null");
+        }
+        const auto deadline
+            = deadlineAfter(options.connectionTimeout, "connection timeout");
+        return std::make_unique<Impl>(
+            std::move(channel), std::move(options), cancellation, deadline);
+    }
+
+    // The channel is already connected; the deadline bounds the handshake.
+    Impl(std::unique_ptr<Channel> channel, ConnectionOptions options,
+        StopToken cancellation,
+        std::chrono::steady_clock::time_point handshakeDeadline)
+        : m_connectionDeadline(handshakeDeadline)
+        , m_channel(std::move(channel))
         , m_maximumFrameBytes(options.maximumFrameBytes)
         , m_requestTimeout(options.requestTimeout)
         , m_receiver([this] { receiveLoop(); })
@@ -136,10 +160,22 @@ public:
             m_pending.emplace(requestId, pending);
             ++m_outstandingRequests;
         }
+        // Cancellation is honoured here, at the frame boundary, and never
+        // during the write: an interrupted write leaves a partial frame on
+        // the stream, and the only recovery from that is retiring the whole
+        // connection -- far too big an effect for one cancelled request on a
+        // connection other requests share. The write deadline and the
+        // lifecycle stop still bound the write itself, and a request whose
+        // cancellation arrives later falls back to the protocol's
+        // CancelRequest below.
+        if (cancellation.stop_requested()) {
+            erasePending(requestId);
+            throw ReadCancelled();
+        }
         try {
             auto bytes = codec::encode(
                 requestId, std::move(payload), m_selectedMinorVersion);
-            send(bytes, writeDeadline, cancellation);
+            send(bytes, writeDeadline);
         } catch (...) {
             erasePending(requestId);
             // A failed write may have emitted only part of the frame. Retire
@@ -366,7 +402,7 @@ public:
         std::scoped_lock closeLock(m_closeMutex);
         {
             std::scoped_lock lock(m_stateMutex);
-            if (!m_connected && !m_socket.valid()) {
+            if (!m_connected && m_channelClosed) {
                 return;
             }
             m_connected = false;
@@ -378,8 +414,12 @@ public:
         }
         {
             std::scoped_lock lock(m_sendMutex);
-            m_socket.shutdown();
-            m_socket.close();
+            m_channel->shutdown();
+            m_channel->close();
+        }
+        {
+            std::scoped_lock lock(m_stateMutex);
+            m_channelClosed = true;
         }
         failPending("remote connection closed");
     }
@@ -421,7 +461,7 @@ private:
         try {
             for (;;) {
                 const auto frame
-                    = readFrame(m_socket, m_maximumFrameBytes.load(),
+                    = readFrame(*m_channel, m_maximumFrameBytes.load(),
                           std::chrono::steady_clock::time_point::max(),
                           m_lifecycleStop.get_token());
                 if (!frame) {
@@ -507,16 +547,15 @@ private:
     }
 
     void send(const codec::Bytes& bytes,
-        std::chrono::steady_clock::time_point deadline,
-        StopToken cancellation = {})
+        std::chrono::steady_clock::time_point deadline)
     {
         std::scoped_lock lock(m_sendMutex);
         {
             std::scoped_lock stateLock(m_stateMutex);
             ensureConnected();
         }
-        writeFrame(m_socket, bytes, m_maximumFrameBytes.load(),
-            deadline, cancellation, m_lifecycleStop.get_token());
+        writeFrame(*m_channel, bytes, m_maximumFrameBytes.load(),
+            deadline, {}, m_lifecycleStop.get_token());
     }
 
     void sendCancellation(std::uint64_t target,
@@ -597,7 +636,7 @@ private:
     }
 
     std::chrono::steady_clock::time_point m_connectionDeadline;
-    Socket m_socket;
+    std::unique_ptr<Channel> m_channel;
     std::uint16_t m_selectedMinorVersion = protocolMinorVersion;
     std::atomic<std::uint32_t> m_maximumFrameBytes;
     std::chrono::milliseconds m_requestTimeout;
@@ -611,6 +650,7 @@ private:
     std::mutex m_closeMutex;
     mutable std::mutex m_stateMutex;
     bool m_connected = true;
+    bool m_channelClosed = false;
     std::string m_disconnectReason;
     std::unordered_map<std::uint64_t, std::shared_ptr<Pending>> m_pending;
     std::uint32_t m_outstandingRequests = 0;
@@ -623,8 +663,13 @@ private:
 
 Connection::Connection(std::string host, std::uint16_t port,
     ConnectionOptions options, StopToken cancellation)
-    : m_impl(std::make_unique<Impl>(
-          std::move(host), port, std::move(options), cancellation))
+    : m_impl(Impl::connectLoopback(host, port, std::move(options), cancellation))
+{
+}
+
+Connection::Connection(std::unique_ptr<Channel> channel,
+    ConnectionOptions options, StopToken cancellation)
+    : m_impl(Impl::adopt(std::move(channel), std::move(options), cancellation))
 {
 }
 

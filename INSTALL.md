@@ -6,7 +6,7 @@ The build produces two programs:
 
 - `amrexplorer` — the application. Opens plotfiles on the machine it runs on.
 - `amrexplorer-server` — optional. Run it where the data lives, typically an HPC
-  login node, and connect to it from `amrexplorer` over an SSH tunnel.
+  login node; `amrexplorer` starts it and talks to it through ssh.
 
 ## Requirements
 
@@ -115,8 +115,8 @@ build does not overwrite another:
 cmake --install build-remote --prefix ${HOME}/perlmutter
 ```
 
-See the **[User Guide](docs/user-guide.md)** for connecting the application to a
-running server over an SSH tunnel.
+See the **[User Guide](docs/user-guide.md)** for connecting the application to
+this server over SSH.
 
 ## Next steps
 

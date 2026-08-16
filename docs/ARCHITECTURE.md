@@ -23,7 +23,7 @@ whole compute path can run — and be tested — headless.
    |             |             |             |          io:      plotfile readers, FitsWriter
   core         cache         core          remote      core:    Geometry, Metadata, Request, Result
                                                         cache:   ByteLruCache
-                                                        remote:  Frame, Codec, Connection, Server
+                                                        remote:  Frame/Channel, Codec, Connection, Server
 ```
 
 The guiding split: **the GUI orchestrates, the pipeline computes.** `MainWindow`
@@ -84,6 +84,6 @@ either should preserve its invariants.
 |---|---|
 | A slice request end to end | `src/pipeline/SlicePipeline.cpp` → `src/query/SliceQuery.cpp` |
 | Plotfile reading / hardening | `src/io/plotfile/`, `include/amrexplorer/io/detail/FabHeaderParsing.hpp` |
-| The remote protocol | `src/remote/Codec.hpp`, `Frame.cpp`, `Server.cpp`, `Connection.cpp` |
+| The remote protocol | `src/remote/Codec.hpp`, `Frame.cpp` (Channel/Socket), `Server.cpp`, `Connection.cpp` |
 | Response validation | `src/data/SessionValidation.cpp` |
 | The GUI ↔ worker handoff | `src/qt/MainWindowSlice.cpp` (request/arrival), `SequenceController` |

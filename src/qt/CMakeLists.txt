@@ -27,10 +27,12 @@ add_executable(amrexplorer_qt
     NumberFormat.cpp
     NumberFormat.hpp
     QtErrorText.hpp
-    RemoteConnectArguments.hpp
     RemoteEndpoint.hpp
     ScientificDoubleSpinBox.cpp
     ScientificDoubleSpinBox.hpp
+    SshConnectArguments.hpp
+    SshRemoteSession.cpp
+    SshRemoteSession.hpp
     SequenceController.cpp
     SequenceController.hpp
     SetContoursDialog.cpp

@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -22,7 +21,9 @@
 namespace amrvis::detail {
 
 // One cached block pinned for a query: the grid's valid box plus the cache
-// handle that keeps its values resident.
+// handle that keeps its values resident. BlockGrid reads only the box, so a
+// grid can be built and searched over blocks with no payload; IndexedBlocks
+// (whose lookupBlockValue reads the payload) rejects a null one when built.
 struct LoadedBlock {
     IntBox validBox;
     PlotfileDataset::BlockCache::Handle data;
@@ -127,6 +128,19 @@ struct LoadedBlock {
 // tile count is capped (a few per block), so sparse levels coarsen their tiles
 // instead of allocating a bucket per empty cell.
 //
+// That cap is also what bounds the work per lookup on any *non-overlapping*
+// layout (the level invariant), clustered ones included: such blocks each
+// take about one (block, tile) entry, and with at least a quarter as many
+// tiles as blocks the candidates scanned *averaged over points spread across
+// the bounding box* -- which is what a slice's pixels and a line's samples
+// are, since a query indexes only the blocks meeting its visible region --
+// come to blocks/tiles, at most a few. A level of two refined regions far
+// apart does coarsen to dozens of blocks per occupied bucket, but only the
+// corresponding fraction of points lands in them; an index that keeps
+// block-sized tiles there (hashed sparse tiles behind a coarse occupancy map)
+// measured within noise of this one end to end. Overlapping catalogs get no
+// such bound -- identical boxes all share one tile -- only the memory cap.
+//
 // A block that spans several tiles is listed in each, so every block covering a
 // point shares that point's tile and the bucket scan sees all candidates. Scans
 // run in ascending block index (buckets are filled in block order), so a
@@ -208,11 +222,21 @@ public:
             = static_cast<std::int64_t>(4 * blocks.size() + 64);
         auto n0 = (span0 + m_tile0 - 1) / m_tile0;
         auto n1 = (span1 + m_tile1 - 1) / m_tile1;
-        while (n0 > maxTiles / n1) {
+        // Terminates when both tiles reach their spans (one tile each); that
+        // takes at most ~33 doublings for int32 spans, so the bound below is
+        // slack -- it turns a future edit that stops one axis from coarsening
+        // into a merely coarse index instead of a hang on the query thread.
+        for (int guard = 0; guard < 64 && n0 > maxTiles / n1; ++guard) {
             m_tile0 = std::min(span0, m_tile0 * 2);
             m_tile1 = std::min(span1, m_tile1 * 2);
             n0 = (span0 + m_tile0 - 1) / m_tile0;
             n1 = (span1 + m_tile1 - 1) / m_tile1;
+        }
+        if (n0 > maxTiles / n1) {
+            // Only reachable if the loop above stops coarsening an axis; the
+            // bucket array below relies on the cap, so scan instead.
+            m_linearScan = true;
+            return;
         }
         m_n0 = static_cast<int>(n0);
         m_n1 = static_cast<int>(n1);
@@ -277,10 +301,14 @@ public:
         }
     }
 
-    // Whether lookups go through the index (false after the overlap fallback,
-    // where find() is the linear scan the index replaces). For tests and
-    // diagnostics; the result is the same either way.
-    [[nodiscard]] bool usesIndex() const noexcept { return !m_linearScan; }
+    // Whether lookups go through a built index: false for a grid over no
+    // blocks or one never built, and after the overlap fallback (where find()
+    // is the linear scan the index replaces). For tests and diagnostics; the
+    // result is the same either way.
+    [[nodiscard]] bool usesIndex() const noexcept
+    {
+        return !m_linearScan && !m_offsets.empty();
+    }
 
     // Index into `blocks` of the block containing `point`, or -1 if none does.
     // `blocks` must be the same vector the grid was built from: the grid holds
@@ -369,46 +397,102 @@ private:
     std::vector<int> m_indices;          // block indices, bucket by bucket
 };
 
+// The property every reader of a loaded block relies on, checked in one place:
+// the FAB's payload covers the catalog box the block was loaded for. Two
+// halves. The catalog box (the grid's valid box, what find()/intersects()
+// route by) must lie inside the FAB's own header box, which is what offsets
+// are computed in -- nothing upstream cross-checks the two (a v1 VisMF FAB
+// header can disagree with the Header's grid box), and a disagreement aliases
+// into the wrong cell without leaving the payload. And the payload must hold
+// every cell of that header box: PlotfileBlockReader sizes it so, but FabBlock
+// is an aggregate any producer can fill and FabValues::operator[] is
+// unchecked, so the reader's invariant is asserted here rather than assumed.
+// Both are per block, so a consumer checks once per block, not per cell.
+inline void requireBlockPayload(
+    const FabBlock& fab, const IntBox& catalogBox, int dimension)
+{
+    if (!contains(fab.box, catalogBox.lower, dimension)
+        || !contains(fab.box, catalogBox.upper, dimension)) {
+        throw std::runtime_error("FAB does not cover its catalog box");
+    }
+    // valueOffset of the header box's last cell is pointCount - 1, and it is
+    // overflow-checked. (An inverted header box never gets here: it contains
+    // no point, so the check above already threw.)
+    if (fab.values.size() <= valueOffset(fab.box, fab.box.upper, dimension)) {
+        throw std::runtime_error("FAB payload is smaller than its box");
+    }
+}
+
 // One level's loaded blocks together with the point->block grid over them.
-// The grid stores indices into `blocks`, so the two travel as one value:
+// The grid stores indices into the blocks, so the two travel as one value:
 // build it from the loaded vector and query it through lookupBlockValue.
-struct IndexedBlocks {
+// Construction validates every block for the dataset's dimension (a payload
+// is present and requireBlockPayload holds against its valid box), which is
+// what lets the per-hit lookup below read the FAB with no checks of its own;
+// the members -- the dimension included, since it is what the validation was
+// for -- are read-only after that so the validated state cannot drift.
+class IndexedBlocks {
+public:
     IndexedBlocks() = default;
 
-    IndexedBlocks(std::vector<LoadedBlock> loaded, int axis)
-        : blocks(std::move(loaded))
-        , grid(blocks, axis)
-    {}
+    IndexedBlocks(int dimension, std::vector<LoadedBlock> loaded, int axis)
+        : m_dimension(dimension)
+        , m_blocks(std::move(loaded))
+        , m_grid(m_blocks, axis)
+    {
+        validate();
+    }
 
-    IndexedBlocks(
-        std::vector<LoadedBlock> loaded, const std::array<int, 2>& axes)
-        : blocks(std::move(loaded))
-        , grid(blocks, axes)
-    {}
+    IndexedBlocks(int dimension, std::vector<LoadedBlock> loaded,
+        const std::array<int, 2>& axes)
+        : m_dimension(dimension)
+        , m_blocks(std::move(loaded))
+        , m_grid(m_blocks, axes)
+    {
+        validate();
+    }
 
-    std::vector<LoadedBlock> blocks;
-    BlockGrid grid;
+    [[nodiscard]] int dimension() const noexcept { return m_dimension; }
+    [[nodiscard]] const std::vector<LoadedBlock>& blocks() const noexcept
+    {
+        return m_blocks;
+    }
+    [[nodiscard]] const BlockGrid& grid() const noexcept { return m_grid; }
+
+private:
+    void validate() const
+    {
+        for (const auto& block : m_blocks) {
+            if (!block.data) {
+                throw std::logic_error("indexed block has no loaded payload");
+            }
+            requireBlockPayload(*block.data, block.validBox, m_dimension);
+        }
+    }
+
+    // Zero for a default-constructed (empty) set, whose grid finds nothing.
+    int m_dimension = 0;
+    std::vector<LoadedBlock> m_blocks;
+    BlockGrid m_grid;
 };
 
 // The value at `point` in the block of one level's `indexed` blocks that
-// covers it, or nullopt when none does. Throws if the covering block's FAB
-// index is out of range (a corrupt block whose loaded payload is smaller than
-// its box). The shared composed-sample tail for the slice and line queries;
-// the caller walks the levels finest first and keeps the point and covering
-// level.
+// covers it, or nullopt when none does. The shared composed-sample tail for
+// the slice and line queries; the caller walks the levels finest first and
+// keeps the point and covering level. No per-hit checks: a point find() places
+// in a block's valid box is inside that block's FAB box with a payload that
+// covers it, by IndexedBlocks' construction-time validation.
 [[nodiscard]] inline std::optional<double> lookupBlockValue(
-    const IndexedBlocks& indexed, const Int3& point, int dimension)
+    const IndexedBlocks& indexed, const Int3& point)
 {
-    const auto blockIndex = indexed.grid.find(indexed.blocks, point, dimension);
+    const auto dimension = indexed.dimension();
+    const auto blockIndex
+        = indexed.grid().find(indexed.blocks(), point, dimension);
     if (blockIndex < 0) {
         return std::nullopt;
     }
-    const auto& block = indexed.blocks[static_cast<std::size_t>(blockIndex)];
-    const auto offset = valueOffset(block.data->box, point, dimension);
-    if (offset >= block.data->values.size()) {
-        throw std::runtime_error("composed FAB index exceeds loaded block");
-    }
-    return block.data->values[offset];
+    const auto& block = indexed.blocks()[static_cast<std::size_t>(blockIndex)];
+    return block.data->values[valueOffset(block.data->box, point, dimension)];
 }
 
 } // namespace amrvis::detail

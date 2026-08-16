@@ -180,7 +180,8 @@ SliceQueryResult SliceQuery::execute(
             }
             loaded.push_back({block.box, std::move(access.handle)});
         }
-        levels.push_back({levelIndex, IndexedBlocks(std::move(loaded), axes)});
+        levels.push_back({levelIndex,
+            IndexedBlocks(metadata.dimension, std::move(loaded), axes)});
     }
 
     // The composed piecewise-constant field at a physical point: the finest
@@ -197,8 +198,8 @@ SliceQueryResult SliceQuery::execute(
                 point[static_cast<std::size_t>(axis)] = physicalToIndex(
                     position[static_cast<std::size_t>(axis)], metadata, level, axis);
             }
-            if (const auto value = lookupBlockValue(
-                    levelBlocks.indexed, point, metadata.dimension)) {
+            if (const auto value
+                = lookupBlockValue(levelBlocks.indexed, point)) {
                 return std::pair{*value, levelBlocks.levelIndex};
             }
         }

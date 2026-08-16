@@ -150,6 +150,10 @@ DatasetPage extractDatasetPage(PlotfileDataset& dataset,
         const auto iUpper = std::min(validBox.upper[xAxis], page.upper[0]);
         const auto jLower = std::max(validBox.lower[yAxis], page.lower[1]);
         const auto jUpper = std::min(validBox.upper[yAxis], page.upper[1]);
+        // Once per block: the FAB covers the catalog box the cells below are
+        // taken from, and its payload covers the FAB box (see
+        // requireBlockPayload for why neither can be assumed).
+        detail::requireBlockPayload(fab, validBox, metadata.dimension);
         for (auto j = jLower; j <= jUpper; ++j) {
             if (cancellation.stop_requested()) {
                 throw ReadCancelled();

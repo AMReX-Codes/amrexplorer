@@ -302,6 +302,10 @@ add_executable(test_fits_writer unit/test_fits_writer.cpp)
 target_link_libraries(test_fits_writer PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME fits_writer COMMAND test_fits_writer)
 
+add_executable(test_block_lookup unit/test_block_lookup.cpp)
+target_link_libraries(test_block_lookup PRIVATE amrexplorer::query amrexplorer::warnings)
+add_test(NAME block_lookup COMMAND test_block_lookup)
+
 add_executable(test_plotfile_metadata integration/test_plotfile_metadata.cpp)
 target_link_libraries(test_plotfile_metadata PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(
@@ -360,10 +364,6 @@ target_link_libraries(
     PRIVATE amrexplorer::pipeline amrexplorer::warnings
 )
 add_test(NAME display_transitions COMMAND test_display_transitions)
-
-add_executable(test_block_lookup unit/test_block_lookup.cpp)
-target_link_libraries(test_block_lookup PRIVATE amrexplorer::query amrexplorer::warnings)
-add_test(NAME block_lookup COMMAND test_block_lookup)
 
 add_executable(test_slice_query integration/test_slice_query.cpp)
 target_link_libraries(test_slice_query PRIVATE amrexplorer::query amrexplorer::warnings)
@@ -1401,6 +1401,13 @@ set_tests_properties(slice_query_benchmark PROPERTIES TIMEOUT 120)
 add_test(NAME slice_query_benchmark_resampled
     COMMAND bench_slice_query 16 8 200 1)
 set_tests_properties(slice_query_benchmark_resampled PROPERTIES TIMEOUT 120)
+# Two clusters of blocks far apart (the ordinary AMR shape): exercises the
+# block index's sparse-tile path and the layout-aware coverage checks.
+# The trailing 1 requires the linear pass to have validated interpolated
+# values, so a change to these arguments cannot make the run vacuous.
+add_test(NAME slice_query_benchmark_clustered
+    COMMAND bench_slice_query 8 8 200 1 24 1)
+set_tests_properties(slice_query_benchmark_clustered PROPERTIES TIMEOUT 120)
 
 # Fuzz/property harness for the crafted-plotfile header parsers. No remote
 # dependency, so it builds and runs (including under the sanitizers preset)

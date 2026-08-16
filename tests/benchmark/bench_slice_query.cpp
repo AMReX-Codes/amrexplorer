@@ -12,8 +12,14 @@
 // though the per-pixel lookup is O(1) -- that is the planning, not a regression.
 //
 //   bench_slice_query [blocksPerAxis] [cellsPerBlock] [outputDim] [iterations]
+//                     [clusterGap]
 //
-// The default workload is small so it stays fast in CI.
+// clusterGap = 0 (the default) tiles the whole domain uniformly. A positive
+// clusterGap instead places two blocksPerAxis^2 clusters at opposite corners
+// of a domain that many blocks wider and taller -- the ordinary AMR shape of
+// separate refined regions -- so the block index is measured on a level whose
+// blocks occupy a small fraction of their bounding box, not only on a dense
+// tiling. The default workload is small so it stays fast in CI.
 #include <amrexplorer/query/SliceQuery.hpp>
 
 #include <amrexplorer/io/PlotfileDataset.hpp>
@@ -98,19 +104,24 @@ int positiveArg(const char* text)
 
 int runBenchmark(int argc, char** argv)
 {
-    // A single level tiled into blocksPerAxis^2 blocks of cellsPerBlock^2 cells,
-    // unit cell size, field phi(i, j) = i + 3j (asymmetric so a transposed
-    // result is not bit-identical to the correct one).
+    // A single level of cellsPerBlock^2-cell blocks, unit cell size, field
+    // phi(i, j) = i + 3j (asymmetric so a transposed result is not
+    // bit-identical to the correct one). Uniform: blocksPerAxis^2 blocks tile
+    // the domain. Clustered (clusterGap > 0): two such clusters at opposite
+    // corners of a domain clusterGap blocks wider, the rest empty.
     const int blocksPerAxis = argc > 1 ? positiveArg(argv[1]) : 16;
     const int cellsPerBlock = argc > 2 ? positiveArg(argv[2]) : 8;
+    const int clusterGap = argc > 5 ? positiveArg(argv[5]) : 0;
+    const int blocksAcross
+        = clusterGap > 0 ? 2 * blocksPerAxis + clusterGap : blocksPerAxis;
     // Guard the derived sizes (long long) before narrowing to int, so a large
     // pair can't overflow the multiply.
     const long long domainLL
-        = static_cast<long long>(blocksPerAxis) * cellsPerBlock;
-    const long long blockCountLL
-        = static_cast<long long>(blocksPerAxis) * blocksPerAxis;
+        = static_cast<long long>(blocksAcross) * cellsPerBlock;
+    const long long blockCountLL = (clusterGap > 0 ? 2LL : 1LL)
+        * static_cast<long long>(blocksPerAxis) * blocksPerAxis;
     if (domainLL > 65536 || blockCountLL > 1000000) {
-        die("fixture too large: reduce blocksPerAxis / cellsPerBlock");
+        die("fixture too large: reduce blocksPerAxis / cellsPerBlock / gap");
     }
     const int domain = static_cast<int>(domainLL);
     const int outputDim = argc > 3 ? positiveArg(argv[3]) : domain;
@@ -121,6 +132,20 @@ int runBenchmark(int argc, char** argv)
     }
     const int iterations = argc > 4 ? positiveArg(argv[4]) : 5;
     const int blockCount = static_cast<int>(blockCountLL);
+    // Whether block coordinate (gi, gj) holds a block, and whether cell (i, j)
+    // lies in one; the value checks below key on this rather than assuming
+    // full coverage.
+    const auto blockAt = [&](int gi, int gj) {
+        if (clusterGap == 0) {
+            return true;
+        }
+        const int second = blocksPerAxis + clusterGap;
+        return (gi < blocksPerAxis && gj < blocksPerAxis)
+            || (gi >= second && gj >= second);
+    };
+    const auto cellCovered = [&](int i, int j) {
+        return blockAt(i / cellsPerBlock, j / cellsPerBlock);
+    };
 
     const auto unique
         = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -140,8 +165,11 @@ int runBenchmark(int argc, char** argv)
     std::string minRows;
     std::string maxRows;
     int fabNumber = 0;
-    for (int gj = 0; gj < blocksPerAxis; ++gj) {
-        for (int gi = 0; gi < blocksPerAxis; ++gi) {
+    for (int gj = 0; gj < blocksAcross; ++gj) {
+        for (int gi = 0; gi < blocksAcross; ++gi) {
+            if (!blockAt(gi, gj)) {
+                continue;
+            }
             const int i0 = gi * cellsPerBlock;
             const int j0 = gj * cellsPerBlock;
             const int i1 = i0 + cellsPerBlock - 1;
@@ -246,7 +274,27 @@ int runBenchmark(int argc, char** argv)
                 const auto off = static_cast<std::size_t>(x)
                     + static_cast<std::size_t>(outputDim)
                         * static_cast<std::size_t>(y);
-                if (warm.plane.valid[off] == 0) {
+                // Coverage must follow the layout exactly: a pixel whose every
+                // candidate cell lies in a block is covered, one whose none
+                // does is not (a block-lookup regression that dropped blocks
+                // must fail here, not read as "faster"); on a block edge
+                // either bracketing cell decides.
+                int inBlock = 0;
+                int candidates = 0;
+                for (const int i : sampleCells(px)) {
+                    for (const int j : sampleCells(py)) {
+                        ++candidates;
+                        inBlock += cellCovered(i, j) ? 1 : 0;
+                    }
+                }
+                const bool isCovered = warm.plane.valid[off] != 0;
+                if (inBlock == candidates && !isCovered) {
+                    die("benchmark slice left a block pixel uncovered");
+                }
+                if (inBlock == 0 && isCovered) {
+                    die("benchmark slice covered a pixel outside every block");
+                }
+                if (!isCovered) {
                     continue;
                 }
                 ++covered;
@@ -257,7 +305,8 @@ int runBenchmark(int argc, char** argv)
                     bool matched = false;
                     for (const int i : sampleCells(px)) {
                         for (const int j : sampleCells(py)) {
-                            if (value == static_cast<double>(i + 3 * j)) {
+                            if (cellCovered(i, j)
+                                && value == static_cast<double>(i + 3 * j)) {
                                 matched = true;
                             }
                         }
@@ -265,21 +314,28 @@ int runBenchmark(int argc, char** argv)
                     if (!matched) {
                         die("benchmark piecewise slice value is wrong");
                     }
-                } else if (px >= 0.5 && px <= extent - 0.5
-                    && py >= 0.5 && py <= extent - 0.5) {
-                    // Linear over the linear field phi = i + 3j is exact away
-                    // from the clamped border: phi(px, py) = px + 3py - 2 (cell
-                    // centers sit at half-integers). Border pixels clamp, so
-                    // only require them to be covered.
-                    ++linearChecked;
-                    if (std::fabs(value - (px + 3.0 * py - 2.0)) > 1e-2) {
-                        die("benchmark linear slice value is wrong");
+                } else {
+                    // Linear over the linear field phi = i + 3j is exact where
+                    // all four bracketing cell centers exist (cell centers sit
+                    // at half-integers): phi(px, py) = px + 3py - 2. Pixels
+                    // whose bracket reaches the domain border or an empty
+                    // region clamp, so only require those to be covered.
+                    const int i0 = static_cast<int>(std::floor(px - 0.5));
+                    const int j0 = static_cast<int>(std::floor(py - 0.5));
+                    if (i0 >= 0 && j0 >= 0 && i0 + 1 <= domain - 1
+                        && j0 + 1 <= domain - 1 && cellCovered(i0, j0)
+                        && cellCovered(i0 + 1, j0) && cellCovered(i0, j0 + 1)
+                        && cellCovered(i0 + 1, j0 + 1)) {
+                        ++linearChecked;
+                        if (std::fabs(value - (px + 3.0 * py - 2.0)) > 1e-2) {
+                            die("benchmark linear slice value is wrong");
+                        }
                     }
                 }
             }
         }
-        if (covered != pixelCount) {
-            die("benchmark slice left output pixels uncovered");
+        if (covered == 0) {
+            die("benchmark slice covered no pixels");
         }
         // Require a validated linear pixel only where an interior pixel can
         // exist: at domain 1 the interior interval [0.5, 0.5] is a single point
@@ -314,8 +370,8 @@ int runBenchmark(int argc, char** argv)
             static_cast<double>(outputDim) * outputDim / (ms * 1000.0));
     };
 
-    std::printf("slice-query benchmark (cache-warm, median of %d):\n",
-        iterations);
+    std::printf("slice-query benchmark (cache-warm, median of %d%s):\n",
+        iterations, clusterGap > 0 ? ", two clusters" : "");
     run(amrvis::SamplingPolicy::PiecewiseConstant, "piecewise");
     run(amrvis::SamplingPolicy::Linear, "linear");
 

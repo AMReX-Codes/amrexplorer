@@ -63,18 +63,29 @@ std::uint64_t nextRandom(std::uint64_t& state)
 
 // Grid and linear scan must agree at every probed point, over the block set's
 // bounding box widened by a margin (so out-of-range points are exercised too).
-void requireAgrees(const std::vector<LoadedBlock>& blocks,
-    const std::array<int, 2>& axes, int lo, int hi, const char* context)
+// `lo`/`hi` bound the probe range on every axis of `dimension`.
+void requireAgreesWith(const BlockGrid& grid,
+    const std::vector<LoadedBlock>& blocks, int dimension, int lo, int hi,
+    const char* context)
 {
-    const BlockGrid grid(blocks, axes);
     std::uint64_t rng = 0xabcd1234ULL;
     const auto span = static_cast<std::uint64_t>(hi - lo + 1);
     for (int trial = 0; trial < 20000; ++trial) {
-        const auto p = point(
-            lo + static_cast<int>(nextRandom(rng) % span),
-            lo + static_cast<int>(nextRandom(rng) % span));
-        require(grid.find(blocks, p, 2) == linearFind(blocks, p), context);
+        Int3 p{};
+        for (int axis = 0; axis < dimension; ++axis) {
+            p[static_cast<std::size_t>(axis)]
+                = lo + static_cast<int>(nextRandom(rng) % span);
+        }
+        require(grid.find(blocks, p, dimension)
+                == linearFind(blocks, p, dimension),
+            context);
     }
+}
+
+void requireAgrees(const std::vector<LoadedBlock>& blocks,
+    const std::array<int, 2>& axes, int lo, int hi, const char* context)
+{
+    requireAgreesWith(BlockGrid(blocks, axes), blocks, 2, lo, hi, context);
 }
 
 } // namespace
@@ -168,8 +179,10 @@ int main()
         requireAgrees(blocks, axes, -2, 66, "overlap-fallback differential");
     }
 
-    // Identical boxes alone are not an overlap pathology for the index: with
-    // tiles sized to the blocks they all share one tile, so the index stays.
+    // Identical boxes alone must not trip the fill cap (memory-boundedness is
+    // what this pins): with tiles sized to the blocks they all share one tile,
+    // and find() there is the bucket scan over all of them -- the linear scan
+    // in all but name, which is the right answer for a fully overlapping set.
     {
         std::vector<LoadedBlock> blocks;
         for (int i = 0; i < 400; ++i) {
@@ -238,6 +251,64 @@ int main()
             "single-axis grid matched a point off the pinned cell");
         require(grid.find(blocks, Int3{{-1, 8, 8}}, 3) == -1,
             "single-axis grid matched a point before the first block");
+        // Differential over random y/z as well as x: the unbinned coordinates
+        // are checked by contains(), not by the tiles, and must still be.
+        {
+            std::vector<LoadedBlock> few;
+            for (int i = 0; i < 40; ++i) {
+                IntBox box;
+                box.lower = {{16 * i, i % 3, i % 5}};
+                box.upper = {{16 * i + 15, i % 3 + 12, i % 5 + 10}};
+                box.centering = {{0, 0, 0}};
+                few.push_back(LoadedBlock{box, {}});
+            }
+            requireAgreesWith(BlockGrid(few, 0), few, 3, -4, 660,
+                "single-axis differential");
+        }
+    }
+
+    // Single-axis overlap fallback: many blocks straddling one cell on the
+    // binned axis, with tiles set to one cell by a majority of single-cell
+    // blocks, trip the cap; the fallback must still be exact.
+    {
+        std::vector<LoadedBlock> blocks;
+        for (int i = 0; i < 100; ++i) {
+            blocks.push_back(block(0, 0, 63, 3));  // 64 cells on x, overlapping
+        }
+        for (int i = 0; i < 200; ++i) {
+            blocks.push_back(block(i % 64, 0, i % 64, 3));  // single cells
+        }
+        const BlockGrid grid(blocks, 0);
+        require(!grid.usesIndex(),
+            "single-axis overlapping catalog did not trip the fill cap");
+        requireAgreesWith(grid, blocks, 2, -2, 66,
+            "single-axis fallback differential");
+    }
+
+    // The ordinary AMR shape: two refined regions far apart. The tiles coarsen
+    // to fit the bounding box (dozens of blocks per occupied bucket), but the
+    // index must be kept and stay exact; averaged over points spread across
+    // the bounding box the candidates per lookup are still bounded by
+    // blocks/tiles (see the BlockGrid comment).
+    {
+        std::vector<LoadedBlock> blocks;
+        for (const int corner : {0, 4096 - 16 * 16}) {
+            for (int gj = 0; gj < 16; ++gj) {
+                for (int gi = 0; gi < 16; ++gi) {
+                    blocks.push_back(block(corner + 16 * gi, corner + 16 * gj,
+                        corner + 16 * gi + 15, corner + 16 * gj + 15));
+                }
+            }
+        }
+        const BlockGrid grid(blocks, axes);
+        require(grid.usesIndex(), "two-cluster layout tripped the fill cap");
+        for (std::size_t i = 0; i < blocks.size(); ++i) {
+            const auto& box = blocks[i].validBox;
+            require(grid.find(blocks, point(box.lower[0] + 3, box.upper[1] - 2), 2)
+                    == static_cast<int>(i),
+                "two-cluster layout routed a point to the wrong block");
+        }
+        requireAgrees(blocks, axes, -8, 4103, "two-cluster differential");
     }
 
     // Irregular non-overlapping layout (varied block sizes) as a differential
@@ -251,9 +322,9 @@ int main()
         requireAgrees(blocks, axes, -3, 18, "irregular differential");
     }
 
-    // The axis selection: production grids bin on {plane axes} for a slice and
-    // {line axis, next axis} for a line -- {1, 0}, {2, 0}, and {0, 0} in 1-D --
-    // not only {0, 1}. 3-D blocks laid out along z, indexed on {2, 0} and
+    // The axis selection: a slice bins on its plane axes -- {1, 2}, {0, 2},
+    // {0, 1} -- so the pairs are not only {0, 1}, and equal axes are the
+    // single-axis mode. 3-D blocks laid out along z, indexed on {2, 0} and
     // {1, 2}, and the same-axis case {2, 2}, each against the linear scan.
     {
         std::vector<LoadedBlock> blocks;

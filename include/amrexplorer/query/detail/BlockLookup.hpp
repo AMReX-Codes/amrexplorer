@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -22,7 +21,9 @@
 namespace amrvis::detail {
 
 // One cached block pinned for a query: the grid's valid box plus the cache
-// handle that keeps its values resident.
+// handle that keeps its values resident. BlockGrid reads only the box, so a
+// grid can be built and searched over blocks with no payload; lookupBlockValue
+// needs the handle and rejects a null one.
 struct LoadedBlock {
     IntBox validBox;
     PlotfileDataset::BlockCache::Handle data;
@@ -127,6 +128,17 @@ struct LoadedBlock {
 // tile count is capped (a few per block), so sparse levels coarsen their tiles
 // instead of allocating a bucket per empty cell.
 //
+// That cap is also what bounds the work per lookup on any layout, clustered
+// ones included: with about one (block, tile) entry per block and at least a
+// quarter as many tiles as blocks, the candidates scanned *averaged over
+// points spread across the bounding box* -- which is what a slice's pixels
+// and a line's samples are, since a query indexes only the blocks meeting its
+// visible region -- come to blocks/tiles, at most a few. A level of two
+// refined regions far apart does coarsen to dozens of blocks per occupied
+// bucket, but only the corresponding fraction of points lands in them; an
+// index that keeps block-sized tiles there (hashed sparse tiles behind a
+// coarse occupancy map) measured within noise of this one end to end.
+//
 // A block that spans several tiles is listed in each, so every block covering a
 // point shares that point's tile and the bucket scan sees all candidates. Scans
 // run in ascending block index (buckets are filled in block order), so a
@@ -208,7 +220,11 @@ public:
             = static_cast<std::int64_t>(4 * blocks.size() + 64);
         auto n0 = (span0 + m_tile0 - 1) / m_tile0;
         auto n1 = (span1 + m_tile1 - 1) / m_tile1;
-        while (n0 > maxTiles / n1) {
+        // Terminates when both tiles reach their spans (one tile each); that
+        // takes at most ~33 doublings for int32 spans, so the bound below is
+        // slack -- it turns a future edit that stops one axis from coarsening
+        // into a merely coarse index instead of a hang on the query thread.
+        for (int guard = 0; guard < 64 && n0 > maxTiles / n1; ++guard) {
             m_tile0 = std::min(span0, m_tile0 * 2);
             m_tile1 = std::min(span1, m_tile1 * 2);
             n0 = (span0 + m_tile0 - 1) / m_tile0;
@@ -404,6 +420,9 @@ struct IndexedBlocks {
         return std::nullopt;
     }
     const auto& block = indexed.blocks[static_cast<std::size_t>(blockIndex)];
+    if (!block.data) {
+        throw std::logic_error("covering block has no loaded payload");
+    }
     const auto offset = valueOffset(block.data->box, point, dimension);
     if (offset >= block.data->values.size()) {
         throw std::runtime_error("composed FAB index exceeds loaded block");

@@ -9,6 +9,7 @@
 #include <amrexplorer/io/ParticleReader.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -106,10 +107,16 @@ struct RemoteDirectoryEntry {
     bool isPlotfile = false;
 };
 
+// The most subdirectories one DirectoryListing carries: the first this many
+// in name order, with `truncated` set when more exist. A bound both sides
+// enforce, so a listing cannot grow past what a dialog can show.
+inline constexpr std::size_t maximumDirectoryEntries = 4096;
+
 // A directory as the server sees it, with `path` resolved and normalized the
 // same way dataset paths are (see resolveDatasetPath in Server.cpp). At the
 // root `parentPath` equals `path`. `truncated` is set when the listing was
-// cut at the server's entry cap; the entries present are still sorted.
+// cut at maximumDirectoryEntries; the entries present are the first ones in
+// name order.
 struct RemoteDirectoryListing {
     std::string path;
     std::string parentPath;

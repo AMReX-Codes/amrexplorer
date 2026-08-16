@@ -66,6 +66,9 @@ RemoteFileDialog::RemoteFileDialog(
 
     m_status = new QLabel(this);
     m_status->setWordWrap(true);
+    // Server-supplied names and error text are shown verbatim, never parsed
+    // as rich text.
+    m_status->setTextFormat(Qt::PlainText);
     layout->addWidget(m_status);
     m_buttons = new QDialogButtonBox(
         QDialogButtonBox::Open | QDialogButtonBox::Cancel, this);
@@ -144,6 +147,7 @@ void RemoteFileDialog::loadDirectory(const QString& path)
         [connection = m_connection, requestedPath = path.toStdString(),
             cancellation = m_browseStop.get_token()] {
             BrowseResult result;
+            result.requestedPath = QString::fromStdString(requestedPath);
             try {
                 result.listing
                     = connection->listDirectory(requestedPath, cancellation);
@@ -160,13 +164,21 @@ void RemoteFileDialog::finishLoad()
     m_pathEdit->setEnabled(true);
     m_goButton->setEnabled(true);
     m_entries->setEnabled(true);
-    m_upButton->setEnabled(!m_parentDirectory.isEmpty()
-        && m_parentDirectory != m_currentDirectory);
     if (!result.error.isEmpty()) {
-        // The previous listing stays up, selection included; only the
-        // message changes.
         m_status->setText(
             tr("Could not list the remote directory: %1").arg(result.error));
+        if (m_currentDirectory.isEmpty() && !result.requestedPath.isEmpty()) {
+            // Nothing is shown yet and the remembered start directory is
+            // gone; the home directory is the fallback that always exists.
+            m_fallbackNotice
+                = tr("Could not list %1 (%2), so this is the home directory. ")
+                      .arg(result.requestedPath, result.error);
+            loadDirectory(QString());
+            return;
+        }
+        // The previous listing stays up, selection included; only the
+        // message changes.
+        m_upButton->setEnabled(m_parentDirectory != m_currentDirectory);
         updateOpenButton();
         m_pathEdit->setFocus();
         m_pathEdit->selectAll();
@@ -211,14 +223,16 @@ void RemoteFileDialog::finishLoad()
                      "subdirectory path to narrow the listing.")
                       .arg(result.listing.entries.size());
     }
-    m_status->setText(status);
+    m_status->setText(m_fallbackNotice + status);
+    m_fallbackNotice.clear();
     m_entries->setFocus();
     updateOpenButton();
 }
 
 void RemoteFileDialog::updateOpenButton()
 {
-    const auto count = selectedPaths().size();
+    // Only plotfiles are selectable, so the selection count is the answer.
+    const auto count = m_entries->selectedItems().size();
     m_buttons->button(QDialogButtonBox::Open)
         ->setEnabled(m_mode == SelectionMode::SinglePlotfile ? count == 1
                                                              : count >= 1);

@@ -582,6 +582,12 @@ fb::DirectoryListingT toWire(const RemoteDirectoryListing& value)
 
 RemoteDirectoryListing fromWire(const fb::DirectoryListingT& value)
 {
+    if (value.entries.size() > maximumDirectoryEntries) {
+        throw std::invalid_argument("directory listing exceeds the entry cap");
+    }
+    if (value.path.empty() || value.parent_path.empty()) {
+        throw std::invalid_argument("directory listing names no directory");
+    }
     RemoteDirectoryListing listing;
     listing.path = value.path;
     listing.parentPath = value.parent_path;

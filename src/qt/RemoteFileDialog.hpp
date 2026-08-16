@@ -50,6 +50,7 @@ public:
 
 private:
     struct BrowseResult {
+        QString requestedPath;
         remote::RemoteDirectoryListing listing;
         QString error;
     };
@@ -63,6 +64,9 @@ private:
     SelectionMode m_mode = SelectionMode::SinglePlotfile;
     QString m_currentDirectory;
     QString m_parentDirectory;
+    // Why the first listing fell back to the home directory, prepended to
+    // the status once that listing lands.
+    QString m_fallbackNotice;
     QLineEdit* m_pathEdit = nullptr;
     QPushButton* m_upButton = nullptr;
     QPushButton* m_goButton = nullptr;

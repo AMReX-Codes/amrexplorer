@@ -19,6 +19,7 @@
 #include <QTreeWidget>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -128,17 +129,27 @@ void makeFakePlotfile(const std::filesystem::path& directory)
 
 int main(int argc, char* argv[])
 {
-    QApplication application(argc, argv);
-    using amrvis::qt::RemoteFileDialog;
-    using Mode = RemoteFileDialog::SelectionMode;
-
-    // A scratch tree: two plotfiles and a subdirectory holding a third.
+    // A scratch tree: two plotfiles, a subdirectory holding a third, and a
+    // directory with more subdirectories than one listing carries. It is
+    // also the server's home for the fallback check, set before any thread
+    // exists (setenv is not thread-safe against getenv).
     QTemporaryDir scratch;
     require(scratch.isValid(), "could not create a scratch directory");
     const auto root = std::filesystem::path(scratch.path().toStdString());
+    qputenv("HOME", scratch.path().toUtf8());
     makeFakePlotfile(root / "plt00000");
     makeFakePlotfile(root / "plt00001");
     makeFakePlotfile(root / "sub" / "plt00002");
+    const auto overCap = amrvis::remote::maximumDirectoryEntries + 5;
+    for (std::size_t index = 0; index < overCap; ++index) {
+        char name[16];
+        std::snprintf(name, sizeof(name), "d%05zu", index);
+        std::filesystem::create_directories(root / "many" / name);
+    }
+
+    QApplication application(argc, argv);
+    using amrvis::qt::RemoteFileDialog;
+    using Mode = RemoteFileDialog::SelectionMode;
 
     amrvis::remote::Server server;
     RunningServer running(server);
@@ -147,6 +158,19 @@ int main(int argc, char* argv[])
         amrvis::remote::ConnectionOptions{
             .clientName = "remote file dialog test",
             .sessionToken = server.token()});
+
+    // The listing protocol itself: over the cap, the first entries in name
+    // order are returned and the truncation is flagged.
+    {
+        const auto listing
+            = connection->listDirectory((root / "many").string());
+        require(listing.truncated
+                && listing.entries.size()
+                    == amrvis::remote::maximumDirectoryEntries
+                && listing.entries.front().name == "d00000"
+                && listing.entries.back().name == "d04095",
+            "over-cap listing was not the first entries in name order");
+    }
 
     // Single mode: listing, selection, entering a directory, up, bad path.
     {
@@ -164,6 +188,8 @@ int main(int argc, char* argv[])
             "browser did not create its widgets");
         require(entries->selectionMode() == QAbstractItemView::SingleSelection,
             "single browser allows more than one selection");
+        require(status->textFormat() == Qt::PlainText,
+            "status label would render server text as rich text");
         auto* open = buttons->button(QDialogButtonBox::Open);
         require(open != nullptr && !open->isEnabled(),
             "Open was enabled before anything was selected");
@@ -264,6 +290,28 @@ int main(int argc, char* argv[])
         require(buttons->button(QDialogButtonBox::Open)->isEnabled(),
             "Open stayed disabled with plotfiles selected");
     }
+
+#ifndef _WIN32
+    // A remembered start directory that no longer exists: the browser says
+    // so and shows the server's home instead of an empty tree. (A Windows
+    // server has no home resolution.)
+    {
+        RemoteFileDialog dialog(connection,
+            QString::fromStdString((root / "gone").string()),
+            Mode::SinglePlotfile);
+        auto* entries = dialog.findChild<QTreeWidget*>();
+        auto* status = dialog.findChild<QLabel*>();
+        require(entries != nullptr && status != nullptr,
+            "fallback browser did not create its widgets");
+        require(waitForEntry(application, *entries, "plt00000") != nullptr,
+            "browser did not fall back to the home directory");
+        require(samePath(dialog.currentDirectory().toStdString(), root),
+            "fallback did not land in the home directory");
+        require(status->text().contains(QStringLiteral("gone"))
+                && status->text().contains(QStringLiteral("home directory")),
+            "fallback did not explain itself");
+    }
+#endif
 
     connection->close();
     return 0;

@@ -214,9 +214,12 @@ std::string resolveDatasetPath(const std::string& path)
 #endif
 }
 
-// An AMReX plotfile is a directory holding a Header file and per-level
-// subdirectories; Level_0 always exists. Two stats, no directory scan, so a
-// listing of thousands of entries stays cheap on a networked filesystem.
+// An AMReX plotfile is a directory holding a Header file and one Level_<n>
+// subdirectory per level; levels run from 0, so Level_0 is always present.
+// This is the Qt-side isAmrexPlotfile rule (Header plus a Level_* directory)
+// answered with two stats instead of a directory scan per entry, which is
+// what keeps a listing of thousands of entries cheap on a networked
+// filesystem.
 bool isPlotfileDirectory(const std::filesystem::path& directory)
 {
     std::error_code error;
@@ -225,15 +228,16 @@ bool isPlotfileDirectory(const std::filesystem::path& directory)
 }
 
 // The directory listing a browsing client sees: subdirectories only (files
-// are not navigable and plotfiles are directories), sorted by name, cut at
-// maximumDirectoryEntries with the truncated flag set. Path resolution is
-// the dataset-open one, so what a user browses to is what a typed path
-// opens. Entries that cannot be stat'ed are skipped rather than failing the
-// whole listing.
+// are not navigable and plotfiles are directories), sorted by name, the
+// first maximumDirectoryEntries of them with the truncated flag set when
+// more exist. Path resolution is the dataset-open one, so what a user
+// browses to is what a typed path opens. The scan itself collects only
+// names; the per-entry plotfile stats are spent on the entries actually
+// returned. Entries that cannot be stat'ed are skipped rather than failing
+// the whole listing.
 RemoteDirectoryListing listServerDirectory(
     const std::string& requestedPath, StopToken cancellation)
 {
-    constexpr std::size_t maximumDirectoryEntries = 4096;
     std::error_code error;
     auto path = std::filesystem::path(
         resolveDatasetPath(requestedPath.empty() ? "~" : requestedPath))
@@ -252,6 +256,7 @@ RemoteDirectoryListing listServerDirectory(
     listing.path = path.string();
     listing.parentPath = path.has_parent_path() ? path.parent_path().string()
                                                 : listing.path;
+    std::vector<std::filesystem::path> subdirectories;
     for (std::filesystem::directory_iterator entries(path,
              std::filesystem::directory_options::skip_permission_denied,
              error),
@@ -261,24 +266,30 @@ RemoteDirectoryListing listServerDirectory(
             throw ReadCancelled();
         }
         std::error_code entryError;
-        if (!entries->is_directory(entryError) || entryError) {
-            continue;
+        if (entries->is_directory(entryError) && !entryError) {
+            subdirectories.push_back(entries->path());
         }
-        if (listing.entries.size() >= maximumDirectoryEntries) {
-            listing.truncated = true;
-            break;
-        }
-        listing.entries.push_back({entries->path().filename().string(),
-            entries->path().string(), isPlotfileDirectory(entries->path())});
     }
     if (error) {
         throw std::runtime_error(
             "could not read " + listing.path + ": " + error.message());
     }
-    std::sort(listing.entries.begin(), listing.entries.end(),
+    std::sort(subdirectories.begin(), subdirectories.end(),
         [](const auto& left, const auto& right) {
-            return left.name < right.name;
+            return left.filename().native() < right.filename().native();
         });
+    if (subdirectories.size() > maximumDirectoryEntries) {
+        subdirectories.resize(maximumDirectoryEntries);
+        listing.truncated = true;
+    }
+    listing.entries.reserve(subdirectories.size());
+    for (const auto& subdirectory : subdirectories) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
+        listing.entries.push_back({subdirectory.filename().string(),
+            subdirectory.string(), isPlotfileDirectory(subdirectory)});
+    }
     return listing;
 }
 

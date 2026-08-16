@@ -181,14 +181,18 @@ void checkConverted(
 void checkConverted(const fb::DirectoryListingT& wire,
     const amrvis::remote::RemoteDirectoryListing& result)
 {
-    if (result.entries.size() != wire.entries.size()) {
-        fail("DirectoryListing converter changed the entry count");
+    if (result.path != wire.path || result.parentPath != wire.parent_path
+        || result.truncated != wire.truncated
+        || result.entries.size() != wire.entries.size()
+        || result.entries.size() > amrvis::remote::maximumDirectoryEntries) {
+        fail("DirectoryListing converter did not carry the listing over");
     }
-    for (const auto& entry : result.entries) {
-        if (entry.name.empty() || entry.name == "." || entry.name == ".."
-            || entry.name.find('/') != std::string::npos
-            || entry.path.empty()) {
-            fail("DirectoryListing converter accepted an invalid entry");
+    for (std::size_t index = 0; index < result.entries.size(); ++index) {
+        const auto& entry = result.entries[index];
+        const auto& wireEntry = *wire.entries[index];
+        if (entry.name != wireEntry.name || entry.path != wireEntry.path
+            || entry.isPlotfile != wireEntry.is_plotfile) {
+            fail("DirectoryListing converter did not carry an entry over");
         }
     }
 }

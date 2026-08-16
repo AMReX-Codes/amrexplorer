@@ -6,6 +6,7 @@
 // by the harness loop). The harnesses are ordinary bounded ctests; run them
 // under the sanitizers preset to turn UB/OOB into a failure.
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -74,8 +75,26 @@ inline std::vector<std::uint8_t> randomBytes(
     return bytes;
 }
 
+// Overwrite an aligned `size`-byte slot of `out` with `value`, little-endian
+// (the FlatBuffers wire order), if the buffer has room for one.
+inline void writeAligned(std::vector<std::uint8_t>& out, std::uint64_t& rng,
+    std::uint64_t value, std::size_t size)
+{
+    if (out.size() < size) {
+        return;
+    }
+    const auto slot = (nextRandom(rng) % (out.size() / size)) * size;
+    for (std::size_t i = 0; i < size; ++i) {
+        out[slot + i] = static_cast<std::uint8_t>(value >> (8 * i));
+    }
+}
+
 // Copy `seed` and apply one random mutation, so the input stays near a valid
-// structure -- the region where boundary bugs hide.
+// structure -- the region where boundary bugs hide. Besides byte-level edits
+// this plants "interesting" scalars (NaN, infinities, zero, all-ones, the
+// sign bit) at aligned offsets, the way libFuzzer does: they are what a
+// decoder's finite/range checks exist for, and a single byte or bit change to
+// a valid double or count practically never produces one.
 inline std::vector<std::uint8_t> mutate(
     std::uint64_t& rng, const std::vector<std::uint8_t>& seed)
 {
@@ -83,7 +102,25 @@ inline std::vector<std::uint8_t> mutate(
     if (out.empty()) {
         return randomBytes(rng, 64);
     }
-    switch (nextRandom(rng) % 4U) {
+    static constexpr std::array<std::uint64_t, 6> interesting64{
+        0x7FF8'0000'0000'0000ULL,  // NaN
+        0x7FF0'0000'0000'0000ULL,  // +inf
+        0xFFF0'0000'0000'0000ULL,  // -inf
+        0ULL, ~0ULL, 0x8000'0000'0000'0000ULL};
+    static constexpr std::array<std::uint32_t, 6> interesting32{
+        0x7FC0'0000U,  // NaN
+        0x7F80'0000U,  // +inf
+        0xFF80'0000U,  // -inf
+        0U, ~0U, 0x8000'0000U};
+    switch (nextRandom(rng) % 6U) {
+    case 4:
+        writeAligned(out, rng,
+            interesting64[nextRandom(rng) % interesting64.size()], 8);
+        break;
+    case 5:
+        writeAligned(out, rng,
+            interesting32[nextRandom(rng) % interesting32.size()], 4);
+        break;
     case 0:
         out[nextRandom(rng) % out.size()]
             ^= static_cast<std::uint8_t>(1U << (nextRandom(rng) % 8U));

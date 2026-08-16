@@ -3,7 +3,8 @@
 # CI and the sanitizers preset exercise the untrusted-input parsers on every
 # run. ON (Clang only): each harness is compiled as a coverage-guided libFuzzer
 # driver (LLVMFuzzerTestOneInput, its own main from the fuzzer runtime) to run
-# by hand; the coverage instrumentation itself is project-wide (see
+# by hand -- pair it with AMREXPLORER_ENABLE_SANITIZERS=ON, or the fuzzer
+# only sees hard crashes; the coverage instrumentation itself is project-wide (see
 # amrexplorer_enable_libfuzzer_instrumentation), so the fuzzer sees the
 # parsers' own branches. Only the driver main is linked per target: it is
 # what would conflict with the compiler check and every other executable.

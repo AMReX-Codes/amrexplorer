@@ -10,9 +10,9 @@ namespace amrvis::qt {
 
 struct SshConnectArguments {
     std::string destination;
-    // Empty when --server was not given: the client then resolves it from its
-    // settings -- the executable last used for this destination, else the one
-    // last used anywhere, else "amrexplorer-server" from the remote PATH.
+    // Empty when --server was not given: the client then uses the executable
+    // last used for this destination, else "amrexplorer-server" from the
+    // remote PATH.
     std::string serverExecutable;
     std::vector<std::string> paths;
 };

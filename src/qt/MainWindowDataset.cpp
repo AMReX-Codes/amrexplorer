@@ -978,6 +978,11 @@ bool MainWindow::hasRemoteConnection() const
 
 QString MainWindow::remoteServerExecutableFor(const QString& destination)
 {
+    // An explicit executable path is a property of one machine, so nothing
+    // stored for another destination is consulted: a destination without its
+    // own entry gets the name every install puts on the remote PATH. (An
+    // earlier revision fell back to the executable last used anywhere, which
+    // let one machine's path break the destinations that worked by default.)
     auto settings = makeSettings();
     const auto forDestination
         = settings
@@ -985,13 +990,8 @@ QString MainWindow::remoteServerExecutableFor(const QString& destination)
                       .arg(destination))
               .toString()
               .trimmed();
-    if (!forDestination.isEmpty()) {
-        return forDestination;
-    }
-    return settings
-        .value(QStringLiteral("remote/serverExecutable"),
-            QStringLiteral("amrexplorer-server"))
-        .toString();
+    return forDestination.isEmpty() ? QStringLiteral("amrexplorer-server")
+                                    : forDestination;
 }
 
 void MainWindow::startSshRemoteSession(std::string destination,
@@ -1008,14 +1008,12 @@ void MainWindow::startSshRemoteSession(std::string destination,
             = remoteServerExecutableFor(destinationText).toStdString();
     }
     {
-        // Remember the working set: this destination, its executable, and the
-        // executable as the default for destinations not seen before. The CLI
-        // teaches the dialog this way too.
+        // Remember this destination and its executable; the CLI teaches the
+        // dialog this way too. Per destination only -- see
+        // remoteServerExecutableFor.
         auto settings = makeSettings();
         settings.setValue(
             QStringLiteral("remote/sshDestination"), destinationText);
-        settings.setValue(QStringLiteral("remote/serverExecutable"),
-            QString::fromStdString(serverExecutable));
         settings.setValue(QStringLiteral("remote/serverExecutables/%1")
                               .arg(destinationText),
             QString::fromStdString(serverExecutable));

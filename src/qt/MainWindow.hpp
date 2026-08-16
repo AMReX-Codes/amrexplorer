@@ -502,7 +502,7 @@ private:
     // the user cancelled.
     bool promptSshRemoteSession(std::vector<std::string> remotePaths);
     // The server executable to use for a destination: the one last used for
-    // it, else the one last used anywhere, else "amrexplorer-server".
+    // it, else "amrexplorer-server".
     [[nodiscard]] static QString remoteServerExecutableFor(
         const QString& destination);
 

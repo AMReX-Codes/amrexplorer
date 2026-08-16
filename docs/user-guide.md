@@ -67,6 +67,10 @@ machine rather than by the local shell:
     /remote/path/plt00010
 ```
 
+The client remembers the path for each destination, so `--server` is needed
+only the first time; later connections to the same destination use it
+automatically, from the CLI and the GUI alike.
+
 The GUI equivalent is **File > Connect to Remote Server...**: enter the SSH
 destination and, optionally, a different server executable. Once the session
 is ready, use **Open Remote Plotfile...** or **Open Remote Plotfile

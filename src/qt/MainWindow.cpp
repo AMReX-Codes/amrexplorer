@@ -672,6 +672,8 @@ void MainWindow::promptRemoteOpen(bool sequence)
     QDialog dialog(this);
     dialog.setWindowTitle(sequence ? tr("Open Remote Plotfile Sequence")
                                    : tr("Open Remote Plotfile"));
+    // Wide enough that a typical scratch-filesystem path is visible whole.
+    dialog.setMinimumWidth(560);
     auto* layout = new QFormLayout(&dialog);
     auto* explanation = new QLabel(
         tr("AMReXplorer runs amrexplorer-server on the destination through "
@@ -725,7 +727,7 @@ void MainWindow::promptRemoteOpen(bool sequence)
         layout->addRow(tr("Plotfile paths on the remote machine:"), pathsEdit);
     } else {
         pathEdit = new QLineEdit(&dialog);
-        pathEdit->setPlaceholderText(tr("/path/to/plt00010"));
+        pathEdit->setPlaceholderText(tr("/path/to/plt00010 or ~/run/plt00010"));
         layout->addRow(tr("Plotfile path on the remote machine:"), pathEdit);
     }
     auto* buttons = new QDialogButtonBox(

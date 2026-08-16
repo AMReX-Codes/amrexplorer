@@ -56,7 +56,8 @@ works with the `ssh` command, including a hostname or alias from
 
 where `remote-hostname` is replaced with the actual remote hostname or alias.
 Give several paths to play them as a sequence, or none to only establish the
-session. The plotfile paths are named as they appear on the remote machine.
+session. The plotfile paths are named as they appear on the remote machine;
+a leading `~/` is expanded to the home directory there.
 
 If `amrexplorer-server` is not on the non-interactive remote `PATH`, give its
 path explicitly. Quote a home-relative path so `~` is expanded on the remote

@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <exception>
 #include <functional>
@@ -174,6 +175,23 @@ bool constantTimeEquals(std::string_view lhs, std::string_view rhs)
         difference |= static_cast<unsigned char>(lhs[index]) ^ other;
     }
     return difference == 0;
+}
+
+// Clients send dataset paths as the user typed them, and "~/..." is a shell
+// habit no filesystem call honors. The server is the only side that knows its
+// home directory, so the leading tilde is resolved here, once, for every way
+// a path arrives. Other forms ("~user/...") pass through and fail with the
+// ordinary not-found error.
+std::string expandLeadingTilde(const std::string& path)
+{
+    if (path != "~" && !path.starts_with("~/")) {
+        return path;
+    }
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || *home == '\0') {
+        return path;
+    }
+    return std::string(home) + path.substr(1);
 }
 
 ErrorData classifyError(const std::exception& error)
@@ -490,7 +508,8 @@ private:
         bool reservationActive = true;
         try {
             dataset = std::make_shared<LocalDatasetSession>(
-                request->path, id, request->cache_budget_bytes, cancellation);
+                expandLeadingTilde(request->path), id,
+                request->cache_budget_bytes, cancellation);
             OpenedDataset opened;
             opened.id = id;
             opened.catalog = dataset->metadata();

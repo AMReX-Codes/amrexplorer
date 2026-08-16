@@ -116,6 +116,16 @@ void exerciseDataset(amrvis::remote::Connection& connection,
     const std::string& datasetPath)
 {
     connection.ping();
+    // main() pointed HOME at the fixture's parent, so the home-relative
+    // spelling of the same dataset must open as well: the server expands a
+    // leading tilde, since "~/..." never means anything to the filesystem.
+    const auto homeRelative = "~/"
+        + std::filesystem::path(datasetPath).filename().string();
+    const auto viaTilde
+        = connection.openDataset(homeRelative, 16ULL * 1024ULL * 1024ULL);
+    require(viaTilde.catalog.dimension == 2,
+        "server did not expand a home-relative dataset path");
+    connection.closeDataset(viaTilde.id);
     const auto opened
         = connection.openDataset(datasetPath, 16ULL * 1024ULL * 1024ULL);
     require(opened.catalog.dimension == 2,
@@ -306,6 +316,10 @@ int main(int argc, char* argv[])
     // Every peer departure in these tests must arrive as an error code.
     std::signal(SIGPIPE, SIG_IGN);
     const auto datasetPath = std::filesystem::path(argv[1]).string();
+    // For the "~/..." expansion checks, in this process and the subprocess.
+    // Before any thread exists: setenv is not thread-safe against getenv.
+    ::setenv("HOME",
+        std::filesystem::path(datasetPath).parent_path().c_str(), 1);
     inProcessOverSocketPair(datasetPath);
     subprocessOverPipes(datasetPath, argv[2]);
     return 0;

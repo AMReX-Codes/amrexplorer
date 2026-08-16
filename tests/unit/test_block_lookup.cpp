@@ -269,8 +269,16 @@ int main()
                 box.centering = {{0, 0, 0}};
                 few.push_back(LoadedBlock{box, {}});
             }
-            requireAgreesWith(BlockGrid(few, 0), few, 3, -4, 660,
+            const BlockGrid fewGrid(few, 0);
+            require(fewGrid.usesIndex(),
+                "single-axis few-block grid tripped the fill cap");
+            requireAgreesWith(fewGrid, few, 3, -4, 660,
                 "single-axis differential");
+            // The same over a range that mostly straddles the y/z edges (the
+            // blocks lie in y, z <= 14): a grid that skipped contains() on
+            // the unbinned axes would pass few of these probes.
+            requireAgreesWith(fewGrid, few, 3, -4, 20,
+                "single-axis edge differential");
         }
     }
 
@@ -288,8 +296,14 @@ int main()
         const BlockGrid grid(blocks, 0);
         require(!grid.usesIndex(),
             "single-axis overlapping catalog did not trip the fill cap");
-        requireAgreesWith(grid, blocks, 2, -2, 66,
-            "single-axis fallback differential");
+        // Hand-computed answers rather than a differential: in fallback the
+        // grid *is* the linear scan, so comparing the two asserts nothing.
+        require(grid.find(blocks, point(20, 2), 2) == 0,
+            "single-axis fallback did not return the smallest covering block");
+        require(grid.find(blocks, point(64, 0), 2) == -1,
+            "single-axis fallback matched a point past the binned axis");
+        require(grid.find(blocks, point(20, 4), 2) == -1,
+            "single-axis fallback matched a point past the unbinned axis");
     }
 
     // The ordinary AMR shape: two refined regions far apart. The tiles coarsen
@@ -515,7 +529,7 @@ int main()
         rejects("a payload shorter than its FAB box was accepted",
             {second, pin(3, second, {10.0, 11.0, 12.0})}, true);
         rejects("a block with no payload was accepted", {second, {}}, false);
-        // And an inverted FAB header box, which valueOffset refuses.
+        // And an inverted FAB header box, which cannot contain the catalog box.
         rejects("an inverted FAB header box was accepted",
             {second, pin(4, box2d(5, 1, 4, 0), {0.0})}, true);
     }

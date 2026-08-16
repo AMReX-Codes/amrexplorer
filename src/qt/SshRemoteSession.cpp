@@ -44,10 +44,14 @@ struct HandshakeOutcome {
     QString error;
 };
 
+#ifndef _WIN32
+// Only POSIX paths report raw errno values; on Windows MSVC deprecates
+// strerror outright and nothing here needs it.
 QString describeReadError(int error)
 {
     return QString::fromLocal8Bit(std::strerror(error));
 }
+#endif
 
 } // namespace
 

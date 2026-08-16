@@ -15,8 +15,9 @@ class PlotfileDataset;
 
 class LocalDatasetSession final : public DatasetSession {
 public:
-    explicit LocalDatasetSession(
-        std::shared_ptr<PlotfileDataset> dataset, std::string fileVersion = {});
+    // The file version comes from the dataset's own metadata read; nothing
+    // re-opens the Header for it.
+    explicit LocalDatasetSession(std::shared_ptr<PlotfileDataset> dataset);
     LocalDatasetSession(const std::filesystem::path& path, DatasetId id,
         std::uint64_t cacheBudgetBytes, StopToken cancellation = {});
     LocalDatasetSession(std::filesystem::path dataRoot, DatasetId id,

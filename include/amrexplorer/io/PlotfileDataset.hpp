@@ -32,6 +32,16 @@ public:
 
     [[nodiscard]] const DatasetMetadata& metadata() const noexcept;
     [[nodiscard]] const MetadataReadMetrics& metadataReadMetrics() const noexcept;
+    // The Header's version *token* -- its first whitespace-delimited word --
+    // as the bounded metadata read already parsed it. Exposed so no caller has
+    // to open and re-read the Header for it.
+    //
+    // Narrower than the whole first line, which is what the session used to
+    // re-read with its own getline. AMReX writes the version alone on that
+    // line ("HyperCLaw-V1.1"), so the two agree on every real plotfile; they
+    // differ only where a Header carries something after it, and this is the
+    // string the UI's Format field and the wire catalog show.
+    [[nodiscard]] const std::string& fileVersion() const noexcept;
     [[nodiscard]] DatasetId id() const noexcept;
     [[nodiscard]] const std::vector<ParticleSpeciesMetadata>& particleSpecies()
         const noexcept;

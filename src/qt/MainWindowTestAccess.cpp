@@ -2,6 +2,57 @@
 
 namespace amrvis::qt {
 
+void MainWindow::requestVisibleSyncForTest()
+{
+    syncVisibleRanges();
+}
+
+void MainWindow::armVisibleSyncGateForTest()
+{
+    visible_sync_test::releaseGrants.store(0);
+    visible_sync_test::passed.store(0);
+    visible_sync_test::waiting.store(0);
+    visible_sync_test::gateArmed.store(true);
+}
+
+void MainWindow::releaseVisibleSyncGateForTest()
+{
+    // Grant exactly one parked worker leave to proceed.
+    visible_sync_test::releaseGrants.fetch_add(1);
+}
+
+void MainWindow::disarmVisibleSyncGateForTest()
+{
+    // Free everything (used on test exit so no worker stays parked).
+    visible_sync_test::gateArmed.store(false);
+}
+
+bool MainWindow::visibleSyncWorkerWaitingForTest() const
+{
+    return visible_sync_test::waiting.load() > 0;
+}
+
+void MainWindow::setViewDisplayRangesForTest(double minimum, double maximum)
+{
+    // Stamp a sentinel range onto every 3-D panel so a subsequent sync's
+    // real union is observably different: whichever panels the sync applies to
+    // leave the sentinel, whichever it drops keep it.
+    for (auto* state : {&m_planeViews[0], &m_planeViews[1], &m_planeViews[2]}) {
+        state->displayMinimum = minimum;
+        state->displayMaximum = maximum;
+    }
+}
+
+std::uint64_t MainWindow::activeViewRenderGenerationForTest() const
+{
+    return m_activeView == nullptr ? 0 : m_activeView->renderGeneration;
+}
+
+std::uint64_t MainWindow::visibleSyncStaleSkipsForTest() const noexcept
+{
+    return m_visibleSyncStaleSkips;
+}
+
 void MainWindow::configureContourSyncForTest(
     int count, bool logarithmic, std::array<double, 3> slicePositions)
 {
@@ -95,6 +146,36 @@ void MainWindow::setAnimationDockVisibleForTest(bool visible)
     }
 }
 
+QStringList MainWindow::paletteMenuLabelsForTest() const
+{
+    QStringList labels;
+    if (m_paletteGroup == nullptr) {
+        return labels;
+    }
+    for (const auto* action : m_paletteGroup->actions()) {
+        labels.append(action->text());
+    }
+    return labels;
+}
+
+QStringList MainWindow::paletteSelectorLabelsForTest() const
+{
+    QStringList labels;
+    if (m_paletteSelector == nullptr) {
+        return labels;
+    }
+    for (int item = 0; item < m_paletteSelector->count(); ++item) {
+        const auto entryData = m_paletteSelector->itemData(item);
+        // Skip the separator, the custom-palette entry (-2) and the reverse
+        // toggle (-3): only the builtins have a non-negative index, and only
+        // they are built from the shared label helper.
+        if (entryData.isValid() && entryData.toInt() >= 0) {
+            labels.append(m_paletteSelector->itemText(item));
+        }
+    }
+    return labels;
+}
+
 QString MainWindow::viewPlaceholderForTest()
 {
     QString shared;
@@ -184,16 +265,16 @@ bool MainWindow::allViewsUseViewportBoundedOutputForTest() const
 
 int MainWindow::slicesInFlightForTest() const
 {
-    if (m_viewDimension == 2) {
-        return m_view2d.pendingRequests;
-    }
-    const std::array<const PlaneViewState*, 3> threeDimensional{
-        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
-    int total = 0;
-    for (const auto* state : threeDimensional) {
-        total += state->pendingRequests;
-    }
-    return total;
+    return slicesInFlight();
+}
+
+bool MainWindow::sliceRequestPendingForTest() const
+{
+    // The debounce timer is normally active while a request is queued, but some
+    // paths stop it without clearing the queue (see openDataset), so check the
+    // pending views too -- the header promises "queued behind the debounce".
+    return (m_sliceDebounce != nullptr && m_sliceDebounce->isActive())
+        || m_pendingAllViews || !m_pendingViews.empty();
 }
 
 bool MainWindow::allViewsFixedScaleRasterCoversViewportForTest() const
@@ -281,6 +362,48 @@ void MainWindow::rubberBandZoomRectangularActiveViewForTest()
     const auto height = static_cast<double>(m_activeView->plane->height);
     rubberBandZoom(*m_activeView,
         QRectF(0.275 * width, 0.35 * height, 0.45 * width, 0.2 * height));
+}
+
+void MainWindow::rubberBandZoomTallActiveViewForTest()
+{
+    if (m_activeView == nullptr || m_activeView->plane->width <= 0
+        || m_activeView->plane->height <= 0) {
+        return;
+    }
+    // The transpose of the rectangular selection above. A wide and a tall
+    // selection err on opposite sides when the arrival is framed through a
+    // padded window, so a framing regression needs both signs covered.
+    const auto width = static_cast<double>(m_activeView->plane->width);
+    const auto height = static_cast<double>(m_activeView->plane->height);
+    rubberBandZoom(*m_activeView,
+        QRectF(0.35 * width, 0.275 * height, 0.2 * width, 0.45 * height));
+}
+
+bool MainWindow::activeViewRasterSnugForTest() const
+{
+    if (m_activeView == nullptr || m_activeView->view == nullptr
+        || !m_activeView->view->hasImage()
+        || m_activeView->view->viewport() == nullptr) {
+        return false;
+    }
+    const auto* view = m_activeView->view;
+    const auto shown = view->mapFromScene(
+        view->imageSceneRect()).boundingRect();
+    const auto viewport = view->viewport()->rect();
+    // A raster fitted to the pane touches both borders on its limiting axis
+    // and never spills past the pane. fitInView keeps a hardcoded 2-pixel
+    // margin per side, hence the tolerances: one pixel of overflow for
+    // round-off, six pixels of slack (the 2x2 margin plus rounding) before
+    // the limiting axis counts as falling short of the pane. Six is
+    // deliberate: framing the arrival through a window that was itself
+    // produced by a fitInView applies the margin twice, which reads as
+    // eight-plus pixels of slack and must fail here.
+    if (!viewport.adjusted(-1, -1, 1, 1).contains(shown)) {
+        return false;
+    }
+    const auto slackX = viewport.width() - shown.width();
+    const auto slackY = viewport.height() - shown.height();
+    return std::min(slackX, slackY) <= 6;
 }
 
 bool MainWindow::allViewsRubberBandZoomedForTest()

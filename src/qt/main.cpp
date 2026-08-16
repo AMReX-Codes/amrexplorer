@@ -282,6 +282,12 @@ void ensureDesktopEntry()
 #endif
 }
 
+// Everything from here to the end of the namespace serves the smoke-test
+// branches in main() and nothing else, so it is gated with them: without this
+// a release build compiles a few hundred lines it cannot reach, and -Werror
+// reports every one of them as unused.
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+
 bool rangeSelectorMatches(
     const amrvis::qt::MainWindow& window, bool metadataRangesAvailable)
 {
@@ -636,6 +642,36 @@ std::optional<ViewportDifference> viewportDifference(
     return difference;
 }
 
+// The sequence preserve smokes assert that the *data window* survives the
+// step: rubberBandZoomActiveViewForTest selects the domain's centered half,
+// and after the density change the view must still show exactly that window.
+// They used to assert the transform differed from a fresh fit instead, but
+// that proxy only held while the rubber-band feedback disturbed the viewport
+// (transient scroll bars): once the arrival is framed cleanly, preserving a
+// window that the raster covers exactly *is* numerically a fit, while a
+// broken preserve (refit to the whole frame) still moves the window and
+// fails here.
+bool centeredHalfWindowPreserved(const amrvis::qt::MainWindow& window)
+{
+    const auto domain = window.datasetPhysicalDomainForTest();
+    const auto shown = window.activeViewVisibleDataWindowForTest();
+    if (domain.isEmpty() || shown.isEmpty()) {
+        return false;
+    }
+    const QRectF expected(
+        domain.left() + 0.25 * domain.width(),
+        domain.top() + 0.25 * domain.height(),
+        0.5 * domain.width(), 0.5 * domain.height());
+    const auto tolerance
+        = 0.02 * std::max(domain.width(), domain.height());
+    return std::abs(shown.left() - expected.left()) <= tolerance
+        && std::abs(shown.top() - expected.top()) <= tolerance
+        && std::abs(shown.right() - expected.right()) <= tolerance
+        && std::abs(shown.bottom() - expected.bottom()) <= tolerance;
+}
+
+#endif // AMREXPLORER_QT_TEST_ACCESS
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -733,6 +769,15 @@ int main(int argc, char* argv[])
     std::shared_ptr<amrvis::remote::Server> smokeServer;
     std::optional<std::thread> smokeServerThread;
     std::optional<std::thread> smokePeerThread;
+    // The option chain below carries two kinds of branch. The production
+    // options -- --connect, and the bare plotfile paths at the end -- always
+    // compile. The ~55 "--...-smoke-test" branches drive the offscreen test
+    // harness through MainWindow's ForTest accessors, so they compile only
+    // where those accessors do, and the release binary carries neither. The
+    // chain is split into two guarded runs because --ssh and --connect sit
+    // between them; the trailing `else` of the first run attaches to --ssh, so
+    // removing the run leaves it as the leading `if`.
+#ifdef AMREXPLORER_QT_TEST_ACCESS
     if ((argc == 8 || argc == 10)
         && std::string_view(argv[1])
             == "--fixed-scale-local-remote-repro") {
@@ -1105,88 +1150,120 @@ int main(int argc, char* argv[])
         // the demand-driven fixed scale must settle with the viewport fully
         // backed by fetched raster, stay quiet with no input (the demand used
         // to re-issue itself endlessly through the as-needed scrollbars,
-        // flickering through one remote render per flip), refetch exactly
-        // once when the virtual scroll bars pan to unfetched cells, and drop
-        // the domain-spanning scroll bars on a rubber-band zoom, whose
-        // selection is re-rendered fitted to the pane exactly as for local
-        // data.
+        // flickering through one remote render per flip), refetch when the
+        // virtual scroll bars pan to unfetched cells, and drop the
+        // domain-spanning scroll bars on a rubber-band zoom, whose selection is
+        // re-rendered fitted to the pane exactly as for local data. The step
+        // gating below waits for quiescence, so it does not count the refetches.
         auto phase = std::make_shared<int>(0);
+        // Judge each step once the demand loop has quiesced -- nothing on a
+        // worker and no settle since the last tick -- rather than after a fixed
+        // delay. A slow runner's extra convergence settle just costs a tick;
+        // a step that needs no refetch is quiet on the next tick instead of
+        // hanging; and the flicker regression (the demand endlessly re-issuing
+        // itself) never quiesces, so it trips the bounded-tick guard with its
+        // own exit code rather than being conflated with the watchdog. Same
+        // model as the fixed-scale-parity poll above.
+        auto* poll = new QTimer(&window);
+        poll->setInterval(100);
         auto settles = std::make_shared<int>(0);
+        auto settlesLastTick = std::make_shared<int>(-1);
+        // Settle count when the current step's action was issued. The flicker
+        // guard bounds settles-per-step (fetch *rounds*), not elapsed ticks: a
+        // legitimate convergence is a few rounds however slow the runner, while
+        // the flicker re-issues without bound. Counting ticks instead would
+        // misread a starved-but-finite fetch chain as a loop.
+        auto settlesAtStep = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [settles] { ++*settles; });
         QObject::connect(&window,
             &amrvis::qt::MainWindow::initialSliceFinished,
-            &application,
-            [&window, &application, phase, settles](bool success) {
+            &application, [&window, &application, poll](bool success) {
                 if (!success) {
                     application.exit(2);
                     return;
                 }
-                QObject::connect(&window,
-                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application,
-                    [&window, &application, phase, settles] {
-                        ++*settles;
-                        if (*phase == 0) {
-                            *phase = 1;
-                            if (!window.fixedScaleStateMatchesForTest(32)
-                                || !window
-                        .allViewsFixedScaleRasterCoversViewportForTest()) {
-                                application.exit(1);
-                                return;
-                            }
-                            // A quiet period several render round-trips long:
-                            // any settle in here means the demand feeds back
-                            // on itself.
-                            const auto armed = *settles;
-                            QTimer::singleShot(2000, &application,
-                                [&window, &application, phase, settles,
-                                    armed] {
-                                    if (*settles != armed
-                                        || !window
-                        .allViewsFixedScaleRasterCoversViewportForTest()) {
-                                        application.exit(1);
-                                        return;
-                                    }
-                                    *phase = 2;
-                                    // Five cells' worth of pixels at 32x,
-                                    // sent through the real Shift+left mouse
-                                    // event path: the newly visible cells must
-                                    // be fetched, giving exactly one settle.
-                                    window.shiftDragActiveViewForTest(-160, 0);
-                                });
-                            return;
-                        }
-                        if (*phase == 2) {
-                            *phase = 3;
-                            // The scrolled fixed scale keeps the fetched
-                            // raster under the whole viewport, with the
-                            // domain-spanning scroll bars present.
-                            if (!window.fixedScaleStateMatchesForTest(32)
-                                || !window
-                        .allViewsFixedScaleRasterCoversViewportForTest()
-                                || !window
-                                    .activeViewScrollBarsVisibleForTest()) {
-                                application.exit(1);
-                                return;
-                            }
-                            window.rubberBandZoomActiveViewForTest();
-                            return;
-                        }
-                        if (*phase == 3) {
-                            *phase = 4;
-                            // The re-rendered selection stands alone, fitted
-                            // to the pane without scroll bars, as for local
-                            // data.
-                            application.exit(
-                                window.activeViewIsZoomedForTest()
-                                    && !window
-                                        .activeViewScrollBarsVisibleForTest()
-                                    ? 0 : 1);
-                        }
-                    });
+                poll->start();
                 window.selectFixedScaleForTest(32);
             });
-        QTimer::singleShot(15000, &application,
-            [&application] { application.exit(4); });
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, &application, poll, phase, settles, settlesLastTick,
+                settlesAtStep] {
+                // Quiescence also requires no request queued behind the slice
+                // debounce: a pan/zoom schedules its refetch there, so between
+                // the input and the debounce firing nothing is on a worker yet
+                // and a bare in-flight check would read that gap as converged.
+                const auto quiet = !window.sliceRequestPendingForTest()
+                    && window.slicesInFlightForTest() == 0
+                    && *settles == *settlesLastTick;
+                *settlesLastTick = *settles;
+                if (!quiet) {
+                    // Too many fetch rounds for one step is the flicker
+                    // regression (the demand loop re-issuing itself endlessly);
+                    // a legitimate step converges in a handful. A pure hang with
+                    // no settles is left to the watchdog, not misreported here.
+                    if (*settles - *settlesAtStep > 20) {
+                        poll->stop();
+                        std::cerr << "the fixed-scale demand loop never "
+                                     "quiesced (flicker regression)\n";
+                        application.exit(5);
+                    }
+                    return;
+                }
+                if (*phase == 0) {
+                    // Fixed scale converged: the raster backs the whole viewport
+                    // and the demand loop stays quiet, rather than re-issuing
+                    // itself through the as-needed scroll bars.
+                    *phase = 1;
+                    if (!window.fixedScaleStateMatchesForTest(32)
+                        || !window
+                            .allViewsFixedScaleRasterCoversViewportForTest()) {
+                        poll->stop();
+                        application.exit(1);
+                        return;
+                    }
+                    // Five cells' worth of pixels at 32x through the real
+                    // Shift+left mouse event path; the newly visible cells are
+                    // fetched, then the loop is quiet again.
+                    *settlesAtStep = *settles;
+                    window.shiftDragActiveViewForTest(-160, 0);
+                    return;
+                }
+                if (*phase == 1) {
+                    // The scrolled fixed scale keeps the fetched raster under the
+                    // whole viewport, with the domain-spanning scroll bars.
+                    *phase = 2;
+                    if (!window.fixedScaleStateMatchesForTest(32)
+                        || !window
+                            .allViewsFixedScaleRasterCoversViewportForTest()
+                        || !window.activeViewScrollBarsVisibleForTest()) {
+                        poll->stop();
+                        application.exit(1);
+                        return;
+                    }
+                    *settlesAtStep = *settles;
+                    window.rubberBandZoomActiveViewForTest();
+                    return;
+                }
+                if (*phase == 2) {
+                    // The re-rendered selection stands alone, fitted to the pane
+                    // without scroll bars, as for local data.
+                    poll->stop();
+                    application.exit(
+                        window.activeViewIsZoomedForTest()
+                            && !window.activeViewScrollBarsVisibleForTest()
+                            ? 0 : 1);
+                }
+            });
+        // Backstop for a hang outside the poll (e.g. the initial load never
+        // finishing); the poll's own settle-count guard catches a flicker first.
+        // Stop the poll so a tick in the same pass can't overwrite exit(4).
+        QTimer::singleShot(20000, &application,
+            [&application, poll] {
+                poll->stop();
+                application.exit(4);
+            });
         QTimer::singleShot(0, &window,
             [&window, path = std::string(argv[2]), server = smokeServer] {
                 window.resize(420, 301);
@@ -1483,14 +1560,39 @@ int main(int argc, char* argv[])
                     application.exit(2);
                     return;
                 }
+                // Three settles: the wide selection, the reset back to the
+                // whole domain, the tall selection. The wide and tall
+                // selections err on opposite sides of the pane when the
+                // arrival's framing regresses, so both must end snug — and
+                // already at the first settle: the transient-scroll-bar
+                // double fetch showed a mis-framed raster there before its
+                // correction arrived.
+                auto step = std::make_shared<int>(0);
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application, [&window, &application] {
-                        application.exit(window.activeViewIsZoomedForTest()
-                                && window.activeViewHasPhysicalAspectForTest(
+                    &application, [&window, &application, step] {
+                        switch ((*step)++) {
+                        case 0:
+                            if (!window.activeViewIsZoomedForTest()
+                                || !window.activeViewHasPhysicalAspectForTest(
                                     9.0 / 4.0)
-                            ? 0 : 1);
-                    }, Qt::SingleShotConnection);
+                                || !window.activeViewRasterSnugForTest()) {
+                                application.exit(1);
+                                return;
+                            }
+                            window.resetZoomAllViewsForTest();
+                            return;
+                        case 1:
+                            window.rubberBandZoomTallActiveViewForTest();
+                            return;
+                        default:
+                            application.exit(window.activeViewIsZoomedForTest()
+                                    && window.activeViewHasPhysicalAspectForTest(
+                                        4.0 / 9.0)
+                                    && window.activeViewRasterSnugForTest()
+                                ? 0 : 1);
+                        }
+                    });
                 window.rubberBandZoomRectangularActiveViewForTest();
             });
         QTimer::singleShot(15000, &application,
@@ -1571,7 +1673,9 @@ int main(int argc, char* argv[])
                     "127.0.0.1", server->port(), {path, path},
                     server->token());
             });
-    } else if (argc >= 2 && std::string_view(argv[1]) == "--ssh") {
+    } else
+#endif
+    if (argc >= 2 && std::string_view(argv[1]) == "--ssh") {
         std::vector<std::string_view> arguments;
         arguments.reserve(static_cast<std::size_t>(argc - 2));
         for (int index = 2; index < argc; ++index) {
@@ -1612,6 +1716,46 @@ int main(int argc, char* argv[])
                         request.endpoint.token);
                 }
             });
+    }
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+    else if (argc == 2
+        && std::string_view(argv[1]) == "--palette-labels-smoke-test") {
+        // The Palette menu and the palette selector are built in different
+        // translation units from one label helper, and must therefore show the
+        // same names. They did not: the menu used the helper's result raw while
+        // the selector capitalized it by hand, so the menu read "rainbow" where
+        // the selector read "Rainbow". Needs no dataset -- both lists are built
+        // during construction.
+        const auto menu = window.paletteMenuLabelsForTest();
+        auto selector = window.paletteSelectorLabelsForTest();
+        // The reversal suffix is a selector-only presentation rule: with
+        // "Reverse Colormap" on, syncPaletteSelector appends "_r" while the
+        // menu actions keep their original text. That divergence is real and
+        // outside what this case is about, so it is normalized away rather
+        // than asserted on -- the property here is that the two agree on the
+        // *name*. Isolated settings make reversal off anyway; this keeps the
+        // case honest on the platforms where XDG_CONFIG_HOME does not isolate
+        // QSettings, and stops it claiming an invariant the product does not
+        // hold. Unifying the suffix into the shared helper is follow-up work.
+        for (auto& label : selector) {
+            if (label.endsWith(QStringLiteral("_r"))) {
+                label.chop(2);
+            }
+        }
+        if (menu.isEmpty() || menu != selector) {
+            qCritical("palette menu labels %s do not match the selector's %s",
+                qPrintable(menu.join(QStringLiteral(","))),
+                qPrintable(selector.join(QStringLiteral(","))));
+            return 1;
+        }
+        // Pinned as a literal rather than derived from the same helper the
+        // widgets used, which would pass whatever that helper produced.
+        if (menu.front() != QStringLiteral("Rainbow")) {
+            qCritical("the first palette is labelled '%s', not 'Rainbow'",
+                qPrintable(menu.front()));
+            return 1;
+        }
+        return 0;
     } else if (argc == 3 && std::string_view(argv[1]) == "--smoke-test") {
         const std::filesystem::path path(argv[2]);
         QObject::connect(&window, &amrvis::qt::MainWindow::datasetOpenFinished,
@@ -1732,6 +1876,132 @@ int main(int argc, char* argv[])
                 window.configureContourSyncForTest(
                     3, true, {0.875, 0.625, 0.375});
             });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1])
+            == "--visible-sync-staleness-smoke-test") {
+        // Regression for the visible-range sync staleness guard (all-or-nothing
+        // form) and the single-flight dispatch gate. A panel re-sliced while a
+        // sync runs makes the sync's union stale for it; cached-plane reuse keeps
+        // the pointer identical, so the guard keys on a per-view render
+        // generation, drops the whole outcome, and the rerun recomputes a
+        // coherent one. Drive that exact path: gate a sync mid-flight, re-slice
+        // one panel for real (rewriting its plane via showSlice), release the
+        // now-stale sync and require it dropped, and -- while the self-healing
+        // rerun is still gated -- require the two untouched panels still on a
+        // sentinel range set beforehand (the stale union was not applied). Then
+        // release the rerun. Gate coverage: a clean multi-panel setup batch must
+        // drop nothing (skips == 0); per-arrival dispatch would drop one.
+        // (The reuse contract itself is pinned by test_display_transitions.)
+        constexpr double kSentinelMin = -98765.0;
+        constexpr double kSentinelMax = -98764.0;
+        const std::filesystem::path path(argv[2]);
+        auto* poll = new QTimer(&window);
+        poll->setInterval(5);
+        auto phase = std::make_shared<int>(0);
+        auto attempts = std::make_shared<int>(0);
+        // Active panel's render generation just before the invalidating zoom, so
+        // phase 2 can wait for the (debounced) re-slice to actually rewrite the
+        // plane -- slicesInFlight is zero again right after scheduleSliceRequest.
+        auto zoomGen = std::make_shared<std::uint64_t>(0);
+        auto sentinelsHeld = std::make_shared<bool>(false);
+        const auto finish = [&application, poll, &window](int code) {
+            window.disarmVisibleSyncGateForTest();  // free any parked worker
+            poll->stop();  // no stray timeout fires after we ask to exit
+            application.exit(code);
+        };
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application,
+            [&window, &application, finish, poll, phase](bool success) {
+                if (!success) {
+                    finish(1);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, finish, poll, phase] {
+                        if (*phase != 0) {
+                            return;
+                        }
+                        *phase = 1;
+                        // Single-flight gate coverage: the setup was a clean
+                        // multi-panel batch, so one all-current sync ran and
+                        // nothing was dropped. Per-arrival dispatch would have
+                        // dropped the first (premature) sync.
+                        if (window.visibleSyncStaleSkipsForTest() != 0) {
+                            finish(7);
+                            return;
+                        }
+                        // Sentinel the panel ranges, then gate a sync so it
+                        // cannot land before we invalidate a panel below.
+                        window.setViewDisplayRangesForTest(
+                            kSentinelMin, kSentinelMax);
+                        window.armVisibleSyncGateForTest();
+                        window.requestVisibleSyncForTest();
+                        poll->start();
+                    });
+                // Into 3-D Visible + contours; its re-slice settles into a sync.
+                window.configureContourSyncForTest(3, false, {0.5, 0.5, 0.5});
+            });
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, finish, phase, attempts, zoomGen, sentinelsHeld] {
+                if (++*attempts > 3000) {
+                    finish(3);
+                    return;
+                }
+                if (*phase == 1) {
+                    if (!window.visibleSyncWorkerWaitingForTest()) {
+                        return;  // wait for the gated sync to reach the gate
+                    }
+                    *phase = 2;
+                    // Re-slice one panel for real while the sync is parked; its
+                    // plane rewrite (via showSlice) makes the parked sync's
+                    // snapshot stale for that panel.
+                    *zoomGen = window.activeViewRenderGenerationForTest();
+                    window.zoomActiveViewForTest();
+                    return;
+                }
+                if (*phase == 2) {
+                    if (window.activeViewRenderGenerationForTest() <= *zoomGen) {
+                        return;  // wait for the debounced re-slice to rewrite
+                    }
+                    *phase = 3;
+                    window.releaseVisibleSyncGateForTest();  // let the stale sync land
+                    return;
+                }
+                if (*phase == 3) {
+                    // The stale sync must drop the whole outcome, then re-dispatch
+                    // a rerun that parks at the gate. Wait for both.
+                    if (window.visibleSyncStaleSkipsForTest() == 0
+                        || !window.visibleSyncWorkerWaitingForTest()) {
+                        return;
+                    }
+                    if (window.visibleSyncStaleSkipsForTest() != 1) {
+                        finish(5);  // exactly one drop expected; more is a bug
+                        return;
+                    }
+                    // The rerun is still gated. The two panels the re-slice never
+                    // touched must still hold the sentinel range -- the stale
+                    // union was dropped, not applied to them.
+                    const auto probes = window.contourViewProbesForTest();
+                    int atSentinel = 0;
+                    for (const auto& probe : probes) {
+                        if (probe.displayMinimum == kSentinelMin
+                            && probe.displayMaximum == kSentinelMax) {
+                            ++atSentinel;
+                        }
+                    }
+                    *sentinelsHeld = (atSentinel == 2);
+                    *phase = 4;
+                    window.releaseVisibleSyncGateForTest();  // let the rerun apply
+                    return;
+                }
+                if (*phase == 4) {
+                    finish(*sentinelsHeld ? 0 : 6);
+                }
+            });
+        QTimer::singleShot(20000, &application,
+            [finish] { finish(4); });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1])
@@ -3574,7 +3844,7 @@ int main(int argc, char* argv[])
                     application.exit(
                         *zoomSettled
                             && window.activeViewIsZoomedForTest()
-                            && !window.activeViewIsFitToWindowForTest()
+                            && centeredHalfWindowPreserved(window)
                         ? 0 : 1);
                 }
             });
@@ -3602,7 +3872,7 @@ int main(int argc, char* argv[])
                 } else if (index == 1) {
                     application.exit(
                         window.activeViewIsZoomedForTest()
-                            && !window.activeViewIsFitToWindowForTest()
+                            && centeredHalfWindowPreserved(window)
                         ? 0 : 1);
                 }
             });
@@ -3721,7 +3991,9 @@ int main(int argc, char* argv[])
         QTimer::singleShot(0, &window, [&window, first, second] {
             window.openSequence({first, second});
         });
-    } else if (argc >= 2 && !std::string_view(argv[1]).starts_with("--")) {
+    }
+#endif
+    else if (argc >= 2 && !std::string_view(argv[1]).starts_with("--")) {
         // One or more plotfile paths: a single path opens a dataset, two or
         // more open a plotfile sequence (matching the GUI's Open Plotfile
         // Sequence, which also takes plotfile directories).

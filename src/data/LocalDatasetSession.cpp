@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <fstream>
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
@@ -17,21 +16,6 @@
 
 namespace amrvis {
 namespace {
-
-std::string readFileVersion(
-    const std::filesystem::path& path, StopToken cancellation)
-{
-    if (cancellation.stop_requested()) {
-        throw ReadCancelled();
-    }
-    std::ifstream header(path / "Header");
-    std::string version;
-    std::getline(header, version);
-    while (!version.empty() && version.back() == '\r') {
-        version.pop_back();
-    }
-    return version;
-}
 
 std::optional<ValueRange> compositeMetadataRange(const DatasetMetadata& metadata,
     const RangeRequest& request)
@@ -62,12 +46,12 @@ std::optional<ValueRange> compositeMetadataRange(const DatasetMetadata& metadata
 } // namespace
 
 LocalDatasetSession::LocalDatasetSession(
-    std::shared_ptr<PlotfileDataset> dataset, std::string fileVersion)
+    std::shared_ptr<PlotfileDataset> dataset)
     : m_id(dataset ? dataset->id() : DatasetId{})
     , m_metadata(dataset ? dataset->metadata() : DatasetMetadata{})
     , m_metadataMetrics(
           dataset ? dataset->metadataReadMetrics() : MetadataReadMetrics{})
-    , m_fileVersion(std::move(fileVersion))
+    , m_fileVersion(dataset ? dataset->fileVersion() : std::string{})
     , m_particleSpecies(
           dataset ? dataset->particleSpecies()
                   : std::vector<ParticleSpeciesMetadata>{})
@@ -81,8 +65,7 @@ LocalDatasetSession::LocalDatasetSession(
 LocalDatasetSession::LocalDatasetSession(const std::filesystem::path& path,
     DatasetId id, std::uint64_t cacheBudgetBytes, StopToken cancellation)
     : LocalDatasetSession(std::make_shared<PlotfileDataset>(
-          path, id, cacheBudgetBytes, cancellation),
-          readFileVersion(path, cancellation))
+          path, id, cacheBudgetBytes, cancellation))
 {
 }
 
@@ -90,8 +73,7 @@ LocalDatasetSession::LocalDatasetSession(std::filesystem::path dataRoot,
     DatasetId id, std::uint64_t cacheBudgetBytes,
     PlotfileMetadataResult metadata, StopToken cancellation)
     : LocalDatasetSession(std::make_shared<PlotfileDataset>(dataRoot, id,
-          cacheBudgetBytes, metadata, cancellation),
-          metadata.fileVersion)
+          cacheBudgetBytes, std::move(metadata), cancellation))
 {
 }
 

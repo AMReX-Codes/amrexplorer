@@ -10,7 +10,7 @@ extern const char* const kVersion =
 #ifdef AMREXPLORER_VERSION
     AMREXPLORER_VERSION
 #else
-    "0.1.0-dev"
+    "0.2.0-dev"
 #endif
     ;
 
@@ -310,10 +310,7 @@ MainWindow::MainWindow(QWidget* parent)
     const QFontMetrics paletteFm(m_paletteSelector->font());
     int widestBuiltin = 0;
     for (std::size_t index = 0; index < builtinPalettes.size(); ++index) {
-        auto label = builtinPaletteLabel(index);
-        if (!label.isEmpty()) {
-            label[0] = label[0].toUpper();
-        }
+        const auto label = builtinPaletteLabel(index);
         // Reserve room for the reversed form ("Plasma_r") so the closed
         // selector never elides the "_r" suffix syncPaletteSelector appends.
         widestBuiltin = std::max(widestBuiltin,
@@ -1512,13 +1509,6 @@ void MainWindow::syncPaletteSelector()
         m_paletteSelector->removeItem(custom);
     }
 
-    const auto builtinLabel = [](int index) {
-        auto label = builtinPaletteLabel(static_cast<std::size_t>(index));
-        if (!label.isEmpty()) {
-            label[0] = label[0].toUpper();
-        }
-        return label;
-    };
     // Reversal is a global modifier, so every palette name carries the "_r"
     // suffix (the plasma_r convention) while it is on -- including the closed
     // selector, which shows the active one.
@@ -1530,7 +1520,8 @@ void MainWindow::syncPaletteSelector()
         }
         const auto value = entryData.toInt();
         if (value >= 0) {
-            m_paletteSelector->setItemText(item, builtinLabel(value) + suffix);
+            m_paletteSelector->setItemText(item,
+                builtinPaletteLabel(static_cast<std::size_t>(value)) + suffix);
         } else if (value == -3) {
             // The toggle item shows a check mark while reversal is on.
             m_paletteSelector->setItemText(item,

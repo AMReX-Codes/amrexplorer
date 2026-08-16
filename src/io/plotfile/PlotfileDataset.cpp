@@ -87,6 +87,11 @@ const MetadataReadMetrics& PlotfileDataset::metadataReadMetrics() const noexcept
     return m_metadataResult.metrics;
 }
 
+const std::string& PlotfileDataset::fileVersion() const noexcept
+{
+    return m_metadataResult.fileVersion;
+}
+
 DatasetId PlotfileDataset::id() const noexcept
 {
     return m_id;

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
     amrexplorer
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "Demand-driven AMR visualization"
     LANGUAGES CXX
 )
@@ -19,6 +19,8 @@ option(AMREXPLORER_BUILD_MACOS_APP_BUNDLE
 option(AMREXPLORER_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(AMREXPLORER_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(AMREXPLORER_ENABLE_TSAN "Enable ThreadSanitizer (mutually exclusive with AMREXPLORER_ENABLE_SANITIZERS)" OFF)
+option(AMREXPLORER_LIBFUZZER
+    "Build the fuzz harnesses as coverage-guided libFuzzer drivers (Clang)" OFF)
 option(AMREXPLORER_FORCE_FETCH_FLATBUFFERS
     "Skip installed FlatBuffers discovery and use the pinned fallback" OFF)
 # Off under the sanitizers, where it is both pointless and a hazard: every
@@ -170,6 +172,11 @@ if(AMREXPLORER_ENABLE_TSAN)
     amrexplorer_enable_tsan()
 endif()
 
+if(AMREXPLORER_LIBFUZZER)
+    include(amrexplorer_sanitizers)
+    amrexplorer_enable_libfuzzer_instrumentation()
+endif()
+
 add_subdirectory(src/core)
 add_subdirectory(src/cache)
 add_subdirectory(src/io)
@@ -202,6 +209,7 @@ if(AMREXPLORER_ENABLE_REMOTE)
             GIT_REPOSITORY https://github.com/google/flatbuffers.git
             GIT_TAG v25.12.19
             GIT_SHALLOW TRUE
+            SYSTEM
         )
         FetchContent_MakeAvailable(flatbuffers)
         # GCC reports a bogus -Wstringop-overflow inside the std::vector insert

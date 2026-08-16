@@ -433,6 +433,7 @@ void testAcceptsTrailingContent(const std::filesystem::path& path)
         "\n"
         "((8, (64 11 52 0 1 12 0 1023)),(8, (8 7 6 5 4 3 2 1)))\n"
         "a future section this reader does not consume\n"
+        + std::string(30000, 'z') + "\n"
         "999\n");
     const auto index = readHeader(path, 2, "2+trailing");
     require(index.version == 2, "trailing-content version mismatch");
@@ -462,6 +463,112 @@ void testRejectsV4MissingComma(const std::filesystem::path& path)
         "malformed FabArray minima");
 }
 
+// A _H header is walked as text, so without ceilings one enormous line or
+// whitespace-free run is accumulated whole before any parse can reject it.
+// These cases pin each ceiling: the reject must be a MetadataReadError naming
+// the length, not a bad_alloc and not a silent misparse of a truncated token.
+void testRejectsOverlongFabName(const std::filesystem::path& path)
+{
+    expectRejected(path, version2Body(std::string(5000, 'f')), 2,
+        "an over-long FAB filename was not rejected",
+        "exceeds the supported length");
+}
+
+void testAcceptsMaximumLengthFabName(const std::filesystem::path& path)
+{
+    // The other half of the bound, and the reason it is not a plain length
+    // test: a complete token of exactly the limit is well formed, and refusing
+    // it along with the truncated ones would be wrong. What separates the two
+    // is the character that follows -- whitespace or end of file for a complete
+    // token, more token for a truncated one -- so this header must parse, and
+    // the name must arrive whole rather than clipped.
+    const std::string name(4096, 'f');
+    writeHeader(path, version2Body(name));
+    const auto index = readHeader(path, 2, "2-maximum-length-name");
+    require(index.fileNames.size() == 2, "maximum-length name box count mismatch");
+    require(index.fileNames.front() == name,
+        "a FAB filename of exactly the token limit was not read whole");
+}
+
+void testRejectsOverlongLine(const std::filesystem::path& path)
+{
+    // The ghost-width line, read whole before it is parsed for integers.
+    expectRejected(path,
+        "1\n1\n2\n" + std::string(20000, '0') + "\n",
+        2,
+        "an over-long header line was not rejected",
+        "header line exceeds the supported length");
+}
+
+void testAcceptsUnterminatedDescriptor(const std::filesystem::path& path)
+{
+    // A file whose final line has no trailing newline. The RealDescriptor is
+    // the last field a v2 _H carries and is read as a line, so this is the one
+    // shape that exercises the bounded reader's end-of-input-with-content
+    // branch -- the one that returns the partial line instead of discarding
+    // it, and clears the failbit that would otherwise make it look like a
+    // failed read. Nothing else in the suite reaches it: every other case
+    // either ends on a newline or trips the length ceiling first. A reader
+    // that got this wrong would reject every Header written without a final
+    // newline.
+    writeHeader(path,
+        "2\n1\n2\n0\n"
+        "(2 0\n"
+        "((0,0) (1,3) (0,0))\n"
+        "((2,0) (3,3) (0,0))\n"
+        ")\n"
+        "2\n"
+        "FabOnDisk: Cell_D_00000 0\n"
+        "FabOnDisk: Cell_D_00000 4096\n"
+        "\n"
+        "((8, (64 11 52 0 1 12 0 1023)),(8, (8 7 6 5 4 3 2 1)))");
+    const auto index = readHeader(path, 2, "2-unterminated");
+    require(index.realDescriptor == kRealDescriptor,
+        "a RealDescriptor without a trailing newline was not read whole");
+    require(index.boxes.size() == 2,
+        "unterminated-descriptor box count mismatch");
+}
+
+void testRejectsOverlongMultiFabLine(const std::filesystem::path& path)
+{
+    // readMultiFab infers the dimension by scanning the header for the first
+    // BoxArray entry, one line at a time -- the same unbounded read as the
+    // plotfile path's, through a different reader, so it needs its own case.
+    // inferMultiFabDimension runs before readVisMfIndex, so this pins that
+    // scan rather than the index parse that follows it.
+    writeHeader(path, "2\n1\n2\n0\n" + std::string(20000, 'q') + "\n");
+    bool threw = false;
+    try {
+        (void)amrvis::StandaloneMetadataReader{}.readMultiFab(path);
+    } catch (const amrvis::MetadataReadError& error) {
+        threw = true;
+        if (std::string(error.what()).find("header line exceeds the supported "
+                                           "length") == std::string::npos) {
+            std::cerr << "FAILED: an over-long MultiFab header line was "
+                         "rejected for the wrong reason: " << error.what()
+                      << '\n';
+            ++g_failures;
+            return;
+        }
+    } catch (const std::exception& other) {
+        std::cerr << "FAILED: an over-long MultiFab header line threw the "
+                     "wrong exception: " << other.what() << '\n';
+        ++g_failures;
+        return;
+    }
+    require(threw, "an over-long MultiFab header line was not rejected");
+}
+
+void testRejectsOverlongStatistic(const std::filesystem::path& path)
+{
+    // A statistic is accumulated character by character up to its comma, so a
+    // run without one is unbounded input. The ceiling makes it malformed.
+    expectRejected(path,
+        std::string(kV1Prefix) + "2,2\n" + std::string(5000, '9') + ",\n", 2,
+        "an over-long statistic token was not rejected",
+        "exceeds the supported length");
+}
+
 } // namespace
 
 int main()
@@ -487,6 +594,12 @@ int main()
     testRejectsTruncatedBoxArray(scratch / "trunc_boxarray_H");
     testRejectsMissingDescriptor(scratch / "missing_descriptor_H");
     testAcceptsTrailingContent(scratch / "trailing_H");
+    testRejectsOverlongFabName(scratch / "long_name_H");
+    testAcceptsMaximumLengthFabName(scratch / "limit_name_H");
+    testRejectsOverlongLine(scratch / "long_line_H");
+    testAcceptsUnterminatedDescriptor(scratch / "unterminated_H");
+    testRejectsOverlongMultiFabLine(scratch / "long_multifab_line_H");
+    testRejectsOverlongStatistic(scratch / "long_statistic_H");
 
     std::error_code removeError;
     std::filesystem::remove_all(scratch, removeError);

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -45,6 +46,36 @@ amrvis::remote::codec::Bytes preCapabilitiesHelloFixture()
         amrvis::remote::protocolMajor,
         amrvis::remote::protocolMinorVersion, 41,
         codec::fb::Payload::HelloRequest, hello.Union());
+    codec::fb::FinishEnvelopeBuffer(builder, envelope);
+    return {builder.GetBufferPointer(),
+        builder.GetBufferPointer() + builder.GetSize()};
+}
+
+// A LineViewResponse whose [double] positions vector is only 4-byte aligned,
+// which flatbuffers' own Verifier permits (it checks the vector's length
+// prefix, not its elements). `pad` shifts the vector by four bytes relative to
+// the buffer start, so exactly one of the two layouts leaves the doubles
+// misaligned and the other is the control that must still decode.
+amrvis::remote::codec::Bytes fourByteAlignedPositionsFixture(bool pad)
+{
+    namespace codec = amrvis::remote::codec;
+    flatbuffers::FlatBufferBuilder builder;
+    if (pad) {
+        // An orphan empty vector: four bytes nothing references, which shifts
+        // everything built after it (hence before it in memory) by four.
+        static_cast<void>(builder.CreateVector(std::vector<std::uint8_t>{}));
+    }
+    std::uint8_t* raw = nullptr;
+    const flatbuffers::Offset<flatbuffers::Vector<double>> positions(
+        builder.CreateUninitializedVector(2, sizeof(double), 4, &raw));
+    const std::array<double, 2> values{0.5, 1.5};
+    std::memcpy(raw, values.data(), sizeof(values));
+    const auto response
+        = codec::fb::CreateLineViewResponse(builder, 0, false, positions);
+    const auto envelope = codec::fb::CreateEnvelope(builder,
+        amrvis::remote::protocolMajor,
+        amrvis::remote::protocolMinorVersion, 43,
+        codec::fb::Payload::LineViewResponse, response.Union());
     codec::fb::FinishEnvelopeBuffer(builder, envelope);
     return {builder.GetBufferPointer(),
         builder.GetBufferPointer() + builder.GetSize()};
@@ -212,6 +243,33 @@ int main()
         zeroIdBuilder.GetBufferPointer(), zeroIdBuilder.GetSize());
     requireRejected([&] { static_cast<void>(codec::decode(zeroIdBytes)); },
         "zero request ID was accepted while decoding");
+
+    // flatbuffers' Verifier does not check vector element alignment, so
+    // decode must reject a misaligned [double] vector itself rather than let
+    // UnPack read it.
+    int misalignedLayouts = 0;
+    for (const bool pad : {false, true}) {
+        const auto layout = fourByteAlignedPositionsFixture(pad);
+        flatbuffers::Verifier verifier(layout.data(), layout.size());
+        require(codec::fb::VerifyEnvelopeBuffer(verifier),
+            "four-byte-aligned positions layout failed the verifier");
+        const auto* positions = codec::fb::GetEnvelope(layout.data())
+            ->payload_as_LineViewResponse()->positions();
+        const bool aligned = static_cast<std::size_t>(
+            positions->Data() - layout.data()) % alignof(double) == 0;
+        if (aligned) {
+            const auto decodedLayout = codec::decode(layout);
+            require(decodedLayout->payload.AsLineViewResponse()->positions
+                    == std::vector<double>{0.5, 1.5},
+                "aligned positions layout did not decode");
+        } else {
+            ++misalignedLayouts;
+            requireRejected([&] { static_cast<void>(codec::decode(layout)); },
+                "misaligned [double] vector was accepted while decoding");
+        }
+    }
+    require(misalignedLayouts == 1,
+        "the fixture did not produce a misaligned [double] layout");
 
     codec::fb::SliceViewResponseT inconsistent;
     inconsistent.width = 2;

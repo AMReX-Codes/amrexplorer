@@ -1,5 +1,8 @@
 #include "Codec.hpp"
 
+#include "amrexplorer_wire_bfbs_generated.h"
+
+#include <flatbuffers/reflection.h>
 #include <flatbuffers/verifier.h>
 
 #include <algorithm>
@@ -224,6 +227,137 @@ void validateResultVectors(
     }
 }
 
+// flatbuffers' Verifier checks the alignment of table scalars and of a
+// vector's 4-byte length prefix, but not of the vector's elements, so a
+// hostile buffer can place a [double] or [ulong] vector at a 4-byte offset
+// and still verify; UnPack then reads misaligned 8-byte scalars, which is UB
+// (and a fault on strict-alignment targets). A conforming builder aligns
+// every vector's elements naturally relative to the buffer start, so anything
+// else is malformed. This walks a verified buffer with the schema's own
+// reflection data and rejects it -- generic over the schema, so new vector
+// fields are covered without a hand-kept list. Everything dereferenced here
+// was bounds-checked by the Verifier against the same schema.
+class VectorAlignmentWalk
+{
+public:
+    VectorAlignmentWalk(
+        const reflection::Schema& schema, const std::uint8_t* base)
+        : schema_(schema), base_(base)
+    {}
+
+    bool aligned(
+        const reflection::Object& object,
+        const flatbuffers::Table& table) const
+    {
+        for (const auto* field : *object.fields()) {
+            const auto& type = *field->type();
+            switch (type.base_type()) {
+            case reflection::Obj: {
+                // Structs are stored inline and alignment-checked by the
+                // Verifier; only tables have contents to walk.
+                const auto& child = objectAt(type.index());
+                const auto* sub = child.is_struct()
+                    ? nullptr : flatbuffers::GetFieldT(table, *field);
+                if (sub && !aligned(child, *sub)) {
+                    return false;
+                }
+                break;
+            }
+            case reflection::Union: {
+                const auto* sub = flatbuffers::GetFieldT(table, *field);
+                if (sub && !alignedUnion(object, *field, table, *sub)) {
+                    return false;
+                }
+                break;
+            }
+            case reflection::Vector:
+                if (!alignedVector(*field, table)) {
+                    return false;
+                }
+                break;
+            default:
+                // Scalars and strings: the Verifier already checks them.
+                break;
+            }
+        }
+        return true;
+    }
+
+private:
+    bool alignedUnion(
+        const reflection::Object& parent, const reflection::Field& field,
+        const flatbuffers::Table& table, const flatbuffers::Table& sub) const
+    {
+        const auto* typeField = parent.fields()->LookupByKey(
+            (field.name()->str() + flatbuffers::UnionTypeFieldSuffix())
+                .c_str());
+        if (!typeField) {
+            return false;
+        }
+        const auto* member = schema_.enums()
+            ->Get(static_cast<flatbuffers::uoffset_t>(field.type()->index()))
+            ->values()->LookupByKey(
+                flatbuffers::GetFieldI<std::uint8_t>(table, *typeField));
+        // NONE and members this build does not know have no table to walk;
+        // decode rejects both before UnPack. Struct members are stored
+        // inline and alignment-checked by the Verifier.
+        if (!member || !member->union_type()
+            || member->union_type()->base_type() != reflection::Obj
+            || objectAt(member->union_type()->index()).is_struct()) {
+            return true;
+        }
+        return aligned(objectAt(member->union_type()->index()), sub);
+    }
+
+    bool alignedVector(
+        const reflection::Field& field, const flatbuffers::Table& table) const
+    {
+        const auto* vec = flatbuffers::GetFieldAnyV(table, field);
+        if (!vec || vec->size() == 0) {
+            return true;
+        }
+        const auto& type = *field.type();
+        const reflection::Object* element = type.element() == reflection::Obj
+            ? &objectAt(type.index()) : nullptr;
+        const std::size_t align = element
+            ? (element->is_struct()
+                ? static_cast<std::size_t>(element->minalign())
+                : sizeof(flatbuffers::uoffset_t))
+            : flatbuffers::GetTypeSize(type.element());
+        if (align > 1
+            && static_cast<std::size_t>(vec->Data() - base_) % align != 0) {
+            return false;
+        }
+        if (element && !element->is_struct()) {
+            const auto* tables = flatbuffers::GetFieldV<
+                flatbuffers::Offset<flatbuffers::Table>>(table, field);
+            for (const auto* sub : *tables) {
+                if (!aligned(*element, *sub)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    const reflection::Object& objectAt(std::int32_t index) const
+    {
+        return *schema_.objects()->Get(
+            static_cast<flatbuffers::uoffset_t>(index));
+    }
+
+    const reflection::Schema& schema_;
+    const std::uint8_t* base_;
+};
+
+bool vectorsAligned(std::span<const std::uint8_t> bytes)
+{
+    static const reflection::Schema& schema
+        = *reflection::GetSchema(fb::EnvelopeBinarySchema::data());
+    return VectorAlignmentWalk(schema, bytes.data())
+        .aligned(*schema.root_table(), *flatbuffers::GetAnyRoot(bytes.data()));
+}
+
 } // namespace
 
 std::unique_ptr<NativeEnvelope> decode(
@@ -237,6 +371,9 @@ std::unique_ptr<NativeEnvelope> decode(
     flatbuffers::Verifier verifier(bytes.data(), bytes.size());
     if (!fb::VerifyEnvelopeBuffer(verifier)) {
         throw std::invalid_argument("wire payload failed verification");
+    }
+    if (!vectorsAligned(bytes)) {
+        throw std::invalid_argument("wire payload has misaligned vector data");
     }
     const auto* wireEnvelope = fb::GetEnvelope(bytes.data());
     if (wireEnvelope->request_id() == 0

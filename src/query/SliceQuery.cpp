@@ -15,20 +15,19 @@
 namespace amrvis {
 namespace {
 
+using detail::IndexedBlocks;
 using detail::LoadedBlock;
 using detail::intersects;
-using detail::contains;
+using detail::lookupBlockValue;
 using detail::physicalToIndex;
-using detail::valueOffset;
 
-// The blocks of one level that intersect the planning region. Levels are
-// processed finest first so the composed per-point lookup resolves fine
-// over coarse by construction.
+// The blocks of one level that intersect the planning region, with the point->
+// block index over them. Levels are processed finest first so the composed
+// per-point lookup resolves fine over coarse by construction.
 struct LevelBlocks {
     int levelIndex = 0;
-    std::vector<LoadedBlock> blocks;
+    IndexedBlocks indexed;
 };
-
 
 // The index box a physical region covers at one level. Piecewise sampling
 // passes the visible region; linear sampling passes a halo-expanded region
@@ -123,7 +122,7 @@ SliceQueryResult SliceQuery::execute(
         const auto& level = metadata.levels[static_cast<std::size_t>(levelIndex)];
         const auto queryBox = requestIndexBox(
             planningRegion, request, metadata, level, axes);
-        LevelBlocks levelBlocks{levelIndex, {}};
+        std::vector<LoadedBlock> loaded;
         for (std::size_t grid = 0; grid < level.blocks.size(); ++grid) {
             const auto& block = level.blocks[grid];
             if (!intersects(block.box, queryBox, metadata.dimension)) {
@@ -179,9 +178,10 @@ SliceQueryResult SliceQuery::execute(
                 ++result.metrics.blocksRead;
                 result.metrics.payloadBytesRead += access.io.bytesRead;
             }
-            levelBlocks.blocks.push_back({block.box, std::move(access.handle)});
+            loaded.push_back({block.box, std::move(access.handle)});
         }
-        levels.push_back(std::move(levelBlocks));
+        levels.push_back({levelIndex,
+            IndexedBlocks(metadata.dimension, std::move(loaded), axes)});
     }
 
     // The composed piecewise-constant field at a physical point: the finest
@@ -198,16 +198,9 @@ SliceQueryResult SliceQuery::execute(
                 point[static_cast<std::size_t>(axis)] = physicalToIndex(
                     position[static_cast<std::size_t>(axis)], metadata, level, axis);
             }
-            for (const auto& block : levelBlocks.blocks) {
-                if (!contains(block.validBox, point, metadata.dimension)) {
-                    continue;
-                }
-                const auto offset =
-                    valueOffset(block.data->box, point, metadata.dimension);
-                if (offset >= block.data->values.size()) {
-                    throw std::runtime_error("composed FAB index exceeds loaded block");
-                }
-                return std::pair{block.data->values[offset], levelBlocks.levelIndex};
+            if (const auto value
+                = lookupBlockValue(levelBlocks.indexed, point)) {
+                return std::pair{*value, levelBlocks.levelIndex};
             }
         }
         return std::nullopt;

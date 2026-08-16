@@ -14,11 +14,11 @@
 namespace amrvis {
 namespace {
 
+using detail::IndexedBlocks;
 using detail::LoadedBlock;
 using detail::intersects;
-using detail::contains;
+using detail::lookupBlockValue;
 using detail::physicalToIndex;
-using detail::valueOffset;
 
 // A covering cell hit during the line walk: which level won, the cell index,
 // and the cell-centered value there.
@@ -85,8 +85,12 @@ LineQueryResult LineQuery::execute(
     result.line.valid.reserve(maxSamples);
     result.line.sourceLevel.reserve(maxSamples);
 
-    // Pre-load every block the line crosses, per participating level.
-    std::vector<std::vector<LoadedBlock>> loadedByLevel(
+    // Pre-load every block the line crosses, per participating level, and index
+    // each level's blocks for O(1)-average point lookup during the walk. The
+    // grid bins on the line axis alone: the walk varies only that coordinate,
+    // and every loaded block straddles the line's pinned cell on the other
+    // axes, so binning one of those would list every block in every tile.
+    std::vector<IndexedBlocks> blocksByLevel(
         static_cast<std::size_t>(maximumLevel) + 1);
     for (int levelIndex = minimumLevel; levelIndex <= maximumLevel; ++levelIndex) {
         if (cancellation.stop_requested()) {
@@ -123,7 +127,7 @@ LineQueryResult LineQuery::execute(
                 continue;  // the region misses this level entirely
             }
         }
-        auto& loaded = loadedByLevel[static_cast<std::size_t>(levelIndex)];
+        std::vector<LoadedBlock> loaded;
         for (std::size_t grid = 0; grid < level.blocks.size(); ++grid) {
             const auto& block = level.blocks[grid];
             if (!intersects(block.box, lineBox, metadata.dimension)) {
@@ -144,6 +148,8 @@ LineQueryResult LineQuery::execute(
             }
             loaded.push_back({block.box, std::move(access.handle)});
         }
+        blocksByLevel[static_cast<std::size_t>(levelIndex)]
+            = IndexedBlocks(metadata.dimension, std::move(loaded), request.axis);
     }
 
     // Find the finest level covering position x (fine overrides coarse).
@@ -158,17 +164,12 @@ LineQueryResult LineQuery::execute(
                         : request.fixedCoordinates[static_cast<std::size_t>(axis)],
                     metadata, level, axis);
             }
-            for (const auto& block : loadedByLevel[static_cast<std::size_t>(levelIndex)]) {
-                if (!contains(block.validBox, point, metadata.dimension)) {
-                    continue;
-                }
-                const auto offset = valueOffset(block.data->box, point, metadata.dimension);
-                if (offset >= block.data->values.size()) {
-                    throw std::runtime_error("composed FAB index exceeds loaded block");
-                }
+            if (const auto value = lookupBlockValue(
+                    blocksByLevel[static_cast<std::size_t>(levelIndex)],
+                    point)) {
                 cover.level = levelIndex;
                 cover.point = point;
-                cover.value = static_cast<float>(block.data->values[offset]);
+                cover.value = static_cast<float>(*value);
                 return true;
             }
         }

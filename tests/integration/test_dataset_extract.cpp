@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iostream>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -150,6 +151,45 @@ void writeSplitXPlotfile3d(const std::filesystem::path& root)
         "((2,0,0) (3,3,3) (0,0,0))", gridB);
 }
 
+// The 2-D split-coverage plotfile with grid B's FAB header box disagreeing
+// with the catalog: the Header/Cell_H say (0,3)-(2,3), the FAB on disk says
+// (0,3)-(1,3) and holds two values. A v1 VisMF layout permits this and nothing
+// upstream cross-checks the two boxes; reading it must fail, not alias.
+void writeMismatchedFabPlotfile(const std::filesystem::path& root)
+{
+    writeSplitCoveragePlotfile(root);
+    const std::vector<double> gridB{30.0, 31.0};
+    writeFab(root / "Level_0" / "Cell_D_00001", "((0,3) (1,3) (0,0))", gridB);
+}
+
+// The 3-D split-x plotfile with grid 1's FAB header box one z-plane short of
+// its catalog box: catalog (2,0,0)-(3,3,3), FAB (2,0,0)-(3,3,2), 24 values.
+void writeMismatchedFabPlotfile3d(const std::filesystem::path& root)
+{
+    writeSplitXPlotfile3d(root);
+    std::vector<double> gridB;
+    for (int z = 0; z <= 2; ++z) {
+        for (int y = 0; y <= 3; ++y) {
+            for (int x = 2; x <= 3; ++x) {
+                gridB.push_back(100.0 * x + 10.0 * y + z);
+            }
+        }
+    }
+    writeFab(root / "Level_0" / "Cell_D_00001",
+        "((2,0,0) (3,3,2) (0,0,0))", gridB);
+}
+
+template <typename Function>
+bool throwsRuntimeError(Function&& function)
+{
+    try {
+        function();
+    } catch (const std::runtime_error&) {
+        return true;
+    }
+    return false;
+}
+
 } // namespace
 
 int main()
@@ -284,6 +324,46 @@ int main()
 
         std::error_code cleanup3d;
         std::filesystem::remove_all(root3d, cleanup3d);
+    }
+
+    // --- a FAB that does not cover its catalog box is refused, not aliased ---
+    // 2-D: a whole-domain page touches grid B; 3-D: any z-slice reads grid 1,
+    // and its FAB is short on z. Both go through the page path's per-block
+    // requireBlockPayload, including the 3-D normal-axis handling.
+    {
+        const auto badRoot = std::filesystem::temp_directory_path()
+            / ("amrexplorer-dataset-extract-bad2d-" + std::to_string(unique));
+        writeMismatchedFabPlotfile(badRoot);
+        PlotfileDataset badDataset(badRoot, DatasetId{3}, 1ULL << 20);
+        require(throwsRuntimeError([&] {
+            static_cast<void>(extractDatasetLevel(badDataset, FieldId{0}, 0,
+                box2d(0.0, 4.0), 1, 0.0, datasetExtractMaxExtent));
+        }), "a 2-D FAB smaller than its catalog box was read");
+        std::error_code cleanupBad;
+        std::filesystem::remove_all(badRoot, cleanupBad);
+    }
+    {
+        const auto badRoot = std::filesystem::temp_directory_path()
+            / ("amrexplorer-dataset-extract-bad3d-" + std::to_string(unique));
+        writeMismatchedFabPlotfile3d(badRoot);
+        PlotfileDataset badDataset(badRoot, DatasetId{4}, 1ULL << 20);
+        RealBox full;
+        full.lower = {{0.0, 0.0, 0.0}};
+        full.upper = {{4.0, 4.0, 4.0}};
+        require(throwsRuntimeError([&] {
+            static_cast<void>(extractDatasetLevel(badDataset, FieldId{0}, 0,
+                full, /*normalAxis=*/2, /*slicePosition=*/0.5,
+                datasetExtractMaxExtent));
+        }), "a 3-D FAB short on the normal axis was read");
+        // A yz page at x = 3 reads grid 1 alone, and its cells at z = 3 lie
+        // past the short FAB: it must fail before reading them.
+        require(throwsRuntimeError([&] {
+            static_cast<void>(extractDatasetLevel(badDataset, FieldId{0}, 0,
+                full, /*normalAxis=*/0, /*slicePosition=*/3.5,
+                datasetExtractMaxExtent));
+        }), "a yz page over the short FAB was read");
+        std::error_code cleanupBad;
+        std::filesystem::remove_all(badRoot, cleanupBad);
     }
 
     std::error_code cleanupError;

@@ -175,6 +175,28 @@ int main()
         }
     }
 
+    // Forward compatibility meets the new ceilings: an AMReX Header may carry
+    // content past what this reader consumes, and that content is not the
+    // reader's to validate. A trailing section holding a line far longer than
+    // maximumHeaderLineBytes must therefore still parse -- the bounds apply to
+    // fields the parser actually reads, not to the whole file.
+    {
+        const auto dir = scratch / "valid_extra_long";
+        writeValidPlotfile(dir);
+        writeFile(dir / "Header",
+            validHeaderBody() + std::string(30000, 'z') + "\n");
+        try {
+            const auto result = amrvis::PlotfileMetadataReader{}.read(dir);
+            require(result.metadata->levels.size() == 2,
+                "a Header with an over-long trailing line parsed to the wrong shape");
+        } catch (const std::exception& error) {
+            std::cerr << "FAILED: an over-long line in trailing content the "
+                         "reader never consumes was rejected: "
+                      << error.what() << '\n';
+            ++g_failures;
+        }
+    }
+
     // Truncation: the Header ends before a required field. Each case names the
     // first field the reader cannot read.
     expectHeaderRejected(scratch / "trunc_version",
@@ -202,6 +224,90 @@ int main()
         headerThroughBoundaryWidth() + "1 1 0.0 0\n",  // level 1 record first
         "out-of-order grid records were not rejected",
         "out of order");
+
+    // Integer fields are bounded too, and stop where they always did. The
+    // ceiling matters on libc++, which buffers a digit run rather than
+    // accumulating a value, so an enormous one allocates in full there.
+    expectHeaderRejected(scratch / "long_component_count",
+        "HyperCLaw-V1.1\n" + std::string(5000, '9') + "\ndensity\n",
+        "an over-long component count was not rejected",
+        "exceeds the supported length");
+    // ...and the delimiters are unchanged: a Box packs its integers against
+    // commas and parens, which a whitespace-delimited read would swallow. The
+    // baseline plotfile above already proves the positive case; this pins the
+    // negative one, where the value is followed by punctuation it must not eat.
+    expectHeaderRejected(scratch / "negative_component_count",
+        "HyperCLaw-V1.1\n-3\ndensity\n",
+        "a negative component count was not rejected",
+        "component count");
+
+    // Bounding the numeric fields must not widen what they accept. strtod
+    // takes "nan", "inf" and an overflowing exponent where operator>> refuses
+    // all three, and `time` is not among the fields validateMetadata checks
+    // for finiteness -- so without an explicit rejection a Header declaring
+    // time = nan would open and carry a NaN into the metadata, the wire
+    // catalog and the UI. Non-finite values stay legal only in VisMF block
+    // statistics, where AMReX genuinely writes them.
+    for (const auto* value : {"nan", "inf", "-inf", "1e999"}) {
+        const auto dir = scratch / (std::string("nonfinite_time_") + value);
+        expectHeaderRejected(dir,
+            "HyperCLaw-V1.1\n1\ndensity\n2\n" + std::string(value) + "\n0\n",
+            "a non-finite time field was not rejected",
+            "time");
+    }
+    // The other direction: a denormal is finite and must still parse, which is
+    // why the check is isfinite rather than errno -- strtod reports ERANGE for
+    // underflow, where the extraction this replaced accepted the value.
+    {
+        const auto dir = scratch / "denormal_time";
+        writeValidPlotfile(dir);
+        writeFile(dir / "Header",
+            "HyperCLaw-V1.1\n1\ndensity\n2\n4.9e-324\n1\n"
+            "0.0\n0.0\n1.0\n1.0\n2\n"
+            "((0,0) (7,7) (0,0))\n((0,0) (15,15) (0,0))\n0\n0\n"
+            "0.125 0.125\n0.0625 0.0625\n0\n0\n"
+            "0 1 0.0 0\n0.0 1.0 0.0 1.0\nLevel_0/Cell\n"
+            "1 1 0.0 0\n0.0 1.0 0.0 1.0\nLevel_1/Cell\n");
+        try {
+            const auto result = amrvis::PlotfileMetadataReader{}.read(dir);
+            require(result.metadata->levels.size() == 2,
+                "a denormal time field parsed to the wrong shape");
+        } catch (const std::exception& error) {
+            std::cerr << "FAILED: a denormal time field was rejected: "
+                      << error.what() << '\n';
+            ++g_failures;
+        }
+    }
+
+    // Crafted input, bounded rather than allocated: the reader walks this file
+    // as text, so without a ceiling one enormous line or token is accumulated
+    // whole before any parse can reject it. Kilobyte-scale input then forces an
+    // allocation limited only by the file's length -- and in the long-lived
+    // server that cost lands on every session, not one process. Each case must
+    // fault with a MetadataReadError, never a std::bad_alloc.
+    expectHeaderRejected(scratch / "long_version",
+        std::string(5000, 'V') + "\n1\ndensity\n2\n0.0\n0\n",
+        "an over-long version token was not rejected",
+        "exceeds the supported length");
+    expectHeaderRejected(scratch / "long_component_name",
+        "HyperCLaw-V1.1\n1\n" + std::string(20000, 'c') + "\n",
+        "an over-long component-name line was not rejected",
+        "header line exceeds the supported length");
+    expectHeaderRejected(scratch / "long_data_path",
+        headerThroughBoundaryWidth()
+            + "0 1 0.0 0\n0.0 1.0 0.0 1.0\n" + std::string(5000, 'p') + "\n",
+        "an over-long level data path was not rejected",
+        "exceeds the supported length");
+    // The unterminated variant, which is the shape the line bound exists for:
+    // a line that never ends makes plain getline accumulate the whole rest of
+    // the file before the parse can look at it. This trips the ceiling at
+    // 16 KiB and never reaches end of input, so it does *not* cover the
+    // bound's end-of-input path -- see the unterminated-descriptor case in
+    // test_vismf_index for that.
+    expectHeaderRejected(scratch / "no_newline",
+        "HyperCLaw-V1.1\n1\n" + std::string(30000, 'z'),
+        "an unterminated over-long line was not rejected",
+        "header line exceeds the supported length");
 
     std::error_code removeError;
     std::filesystem::remove_all(scratch, removeError);

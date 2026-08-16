@@ -41,7 +41,9 @@ int inferMultiFabDimension(const std::filesystem::path& headerPath)
         throw MetadataReadError("cannot open MultiFab header '" + headerPath.string() + "'");
     }
     std::string line;
-    while (std::getline(input, line)) {
+    // Bounded like every other header line: a MultiFab header with no newline
+    // would otherwise be accumulated whole before the "((" search rejected it.
+    while (detail::readBoundedLine<MetadataReadError>(input, line)) {
         const auto boxStart = line.find("((");
         if (boxStart != std::string::npos) {
             return inferBoxDimension(line.substr(boxStart));

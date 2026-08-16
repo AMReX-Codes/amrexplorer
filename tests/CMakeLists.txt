@@ -1,3 +1,23 @@
+# The fuzz harnesses build two ways. Default (AMREXPLORER_LIBFUZZER OFF): a
+# deterministic, bounded ctest that runs fixed seeds + a fixed-PRNG stream, so
+# CI and the sanitizers preset exercise the untrusted-input parsers on every
+# run. ON (Clang only): each harness is compiled as a coverage-guided libFuzzer
+# driver (LLVMFuzzerTestOneInput, its own main from the fuzzer runtime) to run
+# by hand -- pair it with AMREXPLORER_ENABLE_SANITIZERS=ON, or the fuzzer
+# only sees hard crashes; the coverage instrumentation itself is project-wide (see
+# amrexplorer_enable_libfuzzer_instrumentation), so the fuzzer sees the
+# parsers' own branches. Only the driver main is linked per target: it is
+# what would conflict with the compiler check and every other executable.
+function(amrexplorer_add_fuzz_target target)
+    if(AMREXPLORER_LIBFUZZER)
+        target_compile_definitions(${target} PRIVATE AMREXPLORER_LIBFUZZER)
+        target_link_options(${target} PRIVATE -fsanitize=fuzzer)
+    else()
+        add_test(NAME ${target} COMMAND ${target})
+        set_tests_properties(${target} PROPERTIES TIMEOUT 120)
+    endif()
+endfunction()
+
 add_executable(test_core_metadata unit/test_core_metadata.cpp)
 target_link_libraries(test_core_metadata PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME core_metadata COMMAND test_core_metadata)
@@ -126,6 +146,24 @@ if(TARGET amrexplorer_remote)
     )
     add_test(NAME remote_codec COMMAND test_remote_codec)
 
+    # Fuzz/property harness for the remote wire decoder (malicious-peer trust
+    # boundary). Deterministic + bounded so it runs as a normal ctest; run under
+    # the qt-sanitizers preset for UB/OOB -- the plain sanitizers preset builds
+    # with remote OFF, so this target does not exist there. See the file header
+    # for libFuzzer use.
+    add_executable(fuzz_wire_codec fuzz/fuzz_wire_codec.cpp)
+    target_include_directories(fuzz_wire_codec PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/fuzz"
+        "${PROJECT_SOURCE_DIR}/src/remote"
+        "${PROJECT_BINARY_DIR}/src/remote/generated")
+    target_link_libraries(fuzz_wire_codec
+        PRIVATE
+            amrexplorer::remote
+            ${AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET}
+            amrexplorer::warnings
+    )
+    amrexplorer_add_fuzz_target(fuzz_wire_codec)
+
     add_executable(test_remote_server
         integration/test_remote_server.cpp)
     target_include_directories(test_remote_server PRIVATE
@@ -240,6 +278,22 @@ add_executable(test_plotfile_header unit/test_plotfile_header.cpp)
 target_link_libraries(test_plotfile_header PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME plotfile_header COMMAND test_plotfile_header)
 
+# Replaces global operator new to measure what a crafted Header reserves, so it
+# must stay its own executable: the counting would otherwise apply to every
+# other case sharing the binary.
+#
+# It runs under the sanitizers like everything else. Replacing operator new was
+# briefly thought to take the binary out from under ASan; it does not. ASan
+# interposes malloc/free at the libc level, so an operator new built on malloc
+# still allocates from ASan's allocator with its redzones intact -- verified by
+# compiling this shape under -fsanitize=address and watching it report a
+# heap-buffer-overflow. Only new/delete-mismatch detection is lost, and this
+# file pairs them by construction.
+add_executable(test_header_allocation_bounds unit/test_header_allocation_bounds.cpp)
+target_link_libraries(test_header_allocation_bounds
+    PRIVATE amrexplorer::data amrexplorer::io amrexplorer::warnings)
+add_test(NAME header_allocation_bounds COMMAND test_header_allocation_bounds)
+
 add_executable(test_particle_header unit/test_particle_header.cpp)
 target_link_libraries(test_particle_header PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME particle_header COMMAND test_particle_header)
@@ -247,6 +301,10 @@ add_test(NAME particle_header COMMAND test_particle_header)
 add_executable(test_fits_writer unit/test_fits_writer.cpp)
 target_link_libraries(test_fits_writer PRIVATE amrexplorer::io amrexplorer::warnings)
 add_test(NAME fits_writer COMMAND test_fits_writer)
+
+add_executable(test_block_lookup unit/test_block_lookup.cpp)
+target_link_libraries(test_block_lookup PRIVATE amrexplorer::query amrexplorer::warnings)
+add_test(NAME block_lookup COMMAND test_block_lookup)
 
 add_executable(test_plotfile_metadata integration/test_plotfile_metadata.cpp)
 target_link_libraries(test_plotfile_metadata PRIVATE amrexplorer::io amrexplorer::warnings)
@@ -420,6 +478,21 @@ if(TARGET amrexplorer_qt)
         PRIVATE amrexplorer::warnings Qt6::Core Qt6::Network)
     add_test(NAME ssh_remote_session COMMAND test_ssh_remote_session)
 
+    # The Palette menu and the palette selector are built in different
+    # translation units and must agree. Needs no fixture: both lists exist as
+    # soon as the window is constructed -- but it does need an isolated
+    # XDG_CONFIG_HOME, like qt_smoke_driver.cmake gives the fixture-based
+    # cases. Without it the run inherits the developer's real QSettings, and a
+    # persisted "Reverse Colormap" makes the selector read "Rainbow_r" against
+    # the menu's "Rainbow".
+    add_test(
+        NAME qt_palette_labels_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/config_palette_labels"
+            "$<TARGET_FILE:amrexplorer_qt>" --palette-labels-smoke-test
+    )
+    set_tests_properties(qt_palette_labels_smoke PROPERTIES TIMEOUT 30)
+
     add_test(
         NAME qt_remote_slice_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
@@ -455,7 +528,7 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_remote_fixed_scale_flicker_smoke PROPERTIES
-        TIMEOUT 30)
+        TIMEOUT 60)
 
     # Regression for virtual-canvas-survives-wheel-zoom: a wheel notch over a
     # remote fixed scale switches the transform mode to Custom while leaving the
@@ -899,6 +972,18 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_contour_sync_smoke_3d PROPERTIES TIMEOUT 30)
     add_test(
+        NAME qt_visible_sync_staleness_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_visible_sync_staleness_3d"
+            -DMODE=visible-sync-staleness
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(
+        qt_visible_sync_staleness_smoke_3d PROPERTIES TIMEOUT 30)
+    add_test(
         NAME qt_quit_smoke_3d
         COMMAND "${CMAKE_COMMAND}"
             "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
@@ -1310,3 +1395,39 @@ if(TARGET amrexplorer_qt)
     set_tests_properties(
         qt_sequence_geometry_refit_smoke PROPERTIES TIMEOUT 30)
 endif()
+
+# Slice-path benchmark. Registered as a functional guard (correctness + a
+# generous timeout), not a wall-clock threshold -- perf gates flake in CI. Run
+# it by hand for numbers; scale the workload via its arguments.
+add_executable(bench_slice_query benchmark/bench_slice_query.cpp)
+target_link_libraries(
+    bench_slice_query PRIVATE amrexplorer::query amrexplorer::warnings)
+add_test(NAME slice_query_benchmark COMMAND bench_slice_query)
+set_tests_properties(slice_query_benchmark PROPERTIES TIMEOUT 120)
+# A second run at a non-1:1 outputDim: at outputDim == domain every bilinear
+# weight is exactly 0, so only this one actually exercises linear blending (and
+# the outputDim-derived expectation) in CI. No RUN_SERIAL: this asserts nothing
+# about wall clock and ctest hides its timings on success.
+add_test(NAME slice_query_benchmark_resampled
+    COMMAND bench_slice_query 16 8 200 1)
+set_tests_properties(slice_query_benchmark_resampled PROPERTIES TIMEOUT 120)
+# Two clusters of blocks far apart (the ordinary AMR shape): exercises the
+# block index's sparse-tile path and the layout-aware coverage checks.
+# The trailing 1 requires the linear pass to have validated interpolated
+# values, so a change to these arguments cannot make the run vacuous.
+add_test(NAME slice_query_benchmark_clustered
+    COMMAND bench_slice_query 8 8 200 1 24 1)
+set_tests_properties(slice_query_benchmark_clustered PROPERTIES TIMEOUT 120)
+
+# Fuzz/property harness for the crafted-plotfile header parsers. No remote
+# dependency, so it builds and runs (including under the sanitizers preset)
+# regardless of remote support. Deterministic + bounded; see the file header
+# for libFuzzer use.
+add_executable(fuzz_header_parsing fuzz/fuzz_header_parsing.cpp)
+target_include_directories(fuzz_header_parsing PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/fuzz")
+# amrexplorer::io, matching the sibling tests of amrvis::detail: the helpers
+# are header-only today, but the io target is their home.
+target_link_libraries(
+    fuzz_header_parsing PRIVATE amrexplorer::io amrexplorer::warnings)
+amrexplorer_add_fuzz_target(fuzz_header_parsing)

@@ -38,6 +38,22 @@ struct SliceDisplayResult {
     SliceRequest request;
     SliceQueryResult slice;
     ImageBuffer image;
+    // Re-render-from-cache fast path: the view's existing display plane is
+    // immutable and unchanged, so refreshCachedSlice hands it back by
+    // shared_ptr instead of deep-copying it into slice.plane (which is up to
+    // ~110 MB). When set, displayPlane() and showSlice read through it and
+    // adopt it directly; empty on the executeSlice path, which produces a
+    // fresh slice.plane. Note this makes a cache-path arrival *reuse* the same
+    // pointer the view already holds — pointer identity is no longer a proxy
+    // for "changed", so identity-keyed staleness guards must gate on something
+    // else (see PlaneViewState::plane in MainWindow.hpp).
+    //
+    // NOT covered by this fast path: the contour-mode companion plane
+    // (contourPlane below) is still deep-copied by value, ~14 MB per view. It
+    // retires with the wider "stop round-tripping planes through
+    // SliceDisplayResult" cleanup, which also removes this dual
+    // reusedPlane/slice.plane slot.
+    std::shared_ptr<const ScalarPlane> reusedPlane;
     // Coordinate system of the dataset (AMReX Header code). 2 (spherical) warps
     // `image` into physical (R, Z); all others leave it in logical space.
     int coordinateSystem = 0;
@@ -50,17 +66,11 @@ struct SliceDisplayResult {
     // Overlays and the probe map through this.
     RealBox displayRegion;
     std::vector<VectorSegment> vectors;
-    // Contour modes only: the piecewise plane at data resolution the
-    // contours were extracted from (the display plane itself when the data
-    // is finer than the display), the plane the contours were traced on, and
-    // the polylines extracted from it, already mapped to display-plane pixel
-    // space (empty otherwise).
+    // Contour modes only: the plane the contours were traced on (at contour
+    // resolution, which since #56 removed supersampling is the plane the
+    // contours are extracted from directly), and the polylines extracted from
+    // it, already mapped to display-plane pixel space (empty otherwise).
     ScalarPlane contourPlane;
-    ScalarPlane contourFinePlane;
-    // Always 1: #8 removed contour supersampling, so contourFinePlane above is
-    // just a copy of contourPlane. Both retire together when the "stop
-    // round-tripping planes through SliceDisplayResult" cleanup lands.
-    int contourFineFactor = 1;
     std::vector<ContourPolyline> contourPolylines;
     std::string fieldName;
     double minimum = 0.0;
@@ -78,6 +88,17 @@ struct SliceDisplayResult {
     // InitialSliceResult (see cache-budget-exceeded-hard-fails-after-load).
     int cacheFallbackFromLevel = -1;
     int cacheFallbackToLevel = -1;
+
+    // The display plane, whether freshly produced (slice.plane) or reused from
+    // the cache (reusedPlane). Every reader of the display plane goes through
+    // this so the two producers stay interchangeable. The ternary is not a null
+    // fallback: reusedPlane is either unset (executeSlice path -> slice.plane)
+    // or a valid plane (refreshCachedSlice rejects a null argument), so this
+    // never substitutes an empty plane for a missing one.
+    [[nodiscard]] const ScalarPlane& displayPlane() const noexcept
+    {
+        return reusedPlane ? *reusedPlane : slice.plane;
+    }
 };
 
 struct InitialSliceResult {
@@ -237,7 +258,7 @@ void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
     StopToken cancellation);
 
 // Extracts contour polylines for the request at data resolution and maps
-// them to display-plane pixel space; caches the fine plane on the result so
+// them to display-plane pixel space; caches the contour plane on the result so
 // range and contour-count changes can re-extract without a new SliceQuery.
 void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request, int contourCount, double minimum,
@@ -253,24 +274,24 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
 // depend on palette/log/range.
 [[nodiscard]] SliceDisplayResult refreshCachedSlice(
     const std::shared_ptr<DatasetSession>& dataset,
-    const SliceRequest& request, ScalarPlane displayPlane,
-    ScalarPlane contourPlane, ScalarPlane contourFinePlane,
-    int contourFineFactor, std::vector<VectorSegment> vectors,
+    const SliceRequest& request,
+    std::shared_ptr<const ScalarPlane> displayPlanePtr,
+    ScalarPlane contourPlane, std::vector<VectorSegment> vectors,
     RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField,
     int contourCount, bool rasterDirty, StopToken cancellation = {});
 
-// Re-extract contour polylines from an already-populated fine plane after the
-// display range is replaced downstream of appendContours/refreshCachedSlice —
-// full-domain-range reuse, the 3-D shared Visible range, or syncVisibleRanges.
-// Cheap: the fine plane is cached, so no SliceQuery runs. Returns empty when
+// Re-extract contour polylines from an already-populated contour plane after
+// the display range is replaced downstream of appendContours/refreshCachedSlice
+// — full-domain-range reuse, the 3-D shared Visible range, or syncVisibleRanges.
+// Cheap: the contour plane is cached, so no SliceQuery runs. Returns empty when
 // the range is unusable (non-positive log range, zero extent), so a bad range
 // clears the overlay rather than throwing. See the
 // contours-stale-after-visible-range-sync issue.
 [[nodiscard]] std::vector<ContourPolyline> recomputeContourPolylines(
-    const ScalarPlane& finePlane, int fineFactor, double minimum,
+    const ScalarPlane& plane, double minimum,
     double maximum, bool logarithmic, int contourCount,
     int displayWidth, int displayHeight);
 

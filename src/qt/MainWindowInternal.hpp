@@ -126,6 +126,12 @@
 #include <utility>
 #include <vector>
 
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+// Used only by the visible_sync_test gate below (test-access builds only).
+#include <chrono>
+#include <thread>
+#endif
+
 namespace amrvis::qt {
 
 // Fed from the project version through a CMake compile definition; the
@@ -139,6 +145,14 @@ inline constexpr std::array<BuiltinPalette, 7> builtinPalettes{
     BuiltinPalette::Rainbow, BuiltinPalette::Turbo, BuiltinPalette::Viridis,
     BuiltinPalette::Plasma, BuiltinPalette::Parula, BuiltinPalette::Coolwarm,
     BuiltinPalette::Blackbody};
+
+// This array is what the Palette menu, the selector and restoreSettings all
+// enumerate, so a palette missing from it exists in render2d and nowhere a user
+// can reach. test_palette pins the seven names but cannot catch that: adding an
+// enumerator leaves this at seven and every name it does check still matches.
+static_assert(builtinPalettes.size()
+        == static_cast<std::size_t>(BuiltinPalette::Count),
+    "every BuiltinPalette must be listed in builtinPalettes");
 
 // The QSettings value for a builtin palette. This string is on disk in every
 // user's settings, and it comes from amrvis::builtinPaletteName(), which
@@ -154,12 +168,21 @@ inline QString builtinPaletteKey(std::size_t index)
     return QString::fromLatin1(name.data(), static_cast<qsizetype>(name.size()));
 }
 
-// The palette's name for the menu and the selector. Identical to the settings
-// key today, and kept apart so it can take presentation rules -- two call
-// sites already capitalize it -- without rewriting anyone's stored settings.
+// The palette's name for the menu and the selector, and the one definition of
+// its capitalization -- where the settings key above stays lowercase. Not the
+// only presentation rule: syncPaletteSelector still appends the "_r" reversal
+// suffix to the selector alone, so with reversal on the two surfaces differ by
+// that suffix. Folding it in here is the remaining half of the job. Kept apart from that key precisely so this rule can live here
+// without rewriting anyone's stored settings. It used to be a pass-through
+// with the capitalization spelled out at two of its three call sites, so the
+// Palette menu showed "rainbow" while the selector showed "Rainbow".
 inline QString builtinPaletteLabel(std::size_t index)
 {
-    return builtinPaletteKey(index);
+    auto label = builtinPaletteKey(index);
+    if (!label.isEmpty()) {
+        label[0] = label[0].toUpper();
+    }
+    return label;
 }
 
 // The single conversion from a rendered ImageBuffer to the QImage the views
@@ -188,6 +211,16 @@ inline QSettings makeSettings()
 // An AMReX plotfile directory holds a Header file plus one Level_N
 // subdirectory per refinement level (Level_0, Level_1, ...). Detecting by
 // structure rather than by a "plt" name prefix avoids false matches.
+//
+// Every filesystem call here reports through an error_code, including the
+// iterator's advance. A range-for cannot: it steps with operator++(), which has
+// no error_code overload, so a readdir that fails *after* a successful open --
+// an unmounted directory, an NFS mount dropping mid-scan -- threw
+// filesystem_error out of a function whose signature promises a bool. Both
+// callers -- chooseDataset and openSequence -- run on the GUI thread inside a
+// Qt event handler, where an escaping exception terminates the process instead
+// of raising a dialog: the user picks a directory and the application dies. A
+// directory that cannot be walked is simply not a plotfile.
 inline bool isAmrexPlotfile(const std::filesystem::path& directory)
 {
     std::error_code ec;
@@ -195,10 +228,21 @@ inline bool isAmrexPlotfile(const std::filesystem::path& directory)
         || !std::filesystem::is_regular_file(directory / "Header", ec)) {
         return false;
     }
-    for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
-        if (entry.is_directory(ec)
-            && entry.path().filename().string().starts_with("Level_")) {
+    std::filesystem::directory_iterator entry(directory, ec);
+    if (ec) {
+        return false;
+    }
+    const std::filesystem::directory_iterator end;
+    while (entry != end) {
+        if (entry->is_directory(ec)
+            && entry->path().filename().string().starts_with("Level_")) {
             return true;
+        }
+        // Checked before the iterator is used again: after a failed advance its
+        // value is not something to dereference or compare against end.
+        entry.increment(ec);
+        if (ec) {
+            return false;
         }
     }
     return false;
@@ -267,5 +311,43 @@ inline QPainterPath sphericalSectorPath(const PlaneMapping& mapping,
     path.closeSubpath();
     return path;
 }
+
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+// A gate the visible-range sync worker waits on when armed, so the staleness
+// regression test can hold a sync mid-flight, invalidate a panel, then release
+// workers one at a time -- first the now-stale sync (to observe it dropped),
+// then the self-healing rerun -- and check the transient in between. Grants are
+// counted, not a single boolean, precisely so the sync and its rerun can be
+// released independently. Compiled only into the test-access build.
+namespace visible_sync_test {
+
+inline std::atomic<bool> gateArmed{false};
+inline std::atomic<int> releaseGrants{0};  // # of "proceed" grants issued
+inline std::atomic<int> passed{0};         // # of workers that have proceeded
+inline std::atomic<int> waiting{0};        // # of workers currently parked
+
+inline void waitAtGate()
+{
+    if (!gateArmed.load()) {
+        return;
+    }
+    waiting.fetch_add(1);
+    // Park until a grant is free (passed < grants) -- or the gate is disarmed,
+    // or the bounded wait elapses. The bound matters: if the test dies without
+    // releasing, the worker must still return so QThreadPool's destructor can
+    // join it, rather than hanging into a ctest TIMEOUT that masks the exit code.
+    for (int waited = 0; waited < 10000; ++waited) {
+        if (!gateArmed.load()
+            || passed.load() < releaseGrants.load()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    passed.fetch_add(1);
+    waiting.fetch_sub(1);
+}
+
+} // namespace visible_sync_test
+#endif
 
 } // namespace amrvis::qt

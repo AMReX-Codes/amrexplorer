@@ -434,6 +434,7 @@ const Palette& builtinPalette(BuiltinPalette palette)
     case BuiltinPalette::Parula: return parula;
     case BuiltinPalette::Coolwarm: return coolwarm;
     case BuiltinPalette::Blackbody: return blackbody;
+    case BuiltinPalette::Count: break;  // sentinel, not a palette
     }
     return rainbow;
 }
@@ -448,6 +449,7 @@ std::string_view builtinPaletteName(BuiltinPalette palette) noexcept
     case BuiltinPalette::Parula: return "parula";
     case BuiltinPalette::Coolwarm: return "coolwarm";
     case BuiltinPalette::Blackbody: return "blackbody";
+    case BuiltinPalette::Count: break;  // sentinel, not a palette
     }
     return "rainbow";
 }

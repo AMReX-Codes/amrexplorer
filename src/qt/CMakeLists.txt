@@ -24,7 +24,6 @@ add_executable(amrexplorer_qt
     MainWindowInteraction.cpp
     MainWindowInternal.hpp
     MainWindowSlice.cpp
-    MainWindowTestAccess.cpp
     NumberFormat.cpp
     NumberFormat.hpp
     QtErrorText.hpp
@@ -47,6 +46,17 @@ add_executable(amrexplorer_qt
     ${CMAKE_SOURCE_DIR}/resources/user-guide.qrc
 )
 set_target_properties(amrexplorer_qt PROPERTIES OUTPUT_NAME amrexplorer AUTOMOC ON AUTORCC ON)
+
+# MainWindowTestAccess.cpp defines the ~70 ForTest accessors the offscreen
+# smoke tests reach through, and main.cpp's "--...-smoke-test" branches are
+# their only callers. Both are gated on the same definition, so a release build
+# carries neither -- the same shape AMREXPLORER_ENABLE_SERVER_TEST_HOOKS uses
+# for the remote library. The smoke tests run against this executable, so they
+# need AMREXPLORER_BUILD_TESTS=ON, which is the default and what CI configures.
+if(AMREXPLORER_BUILD_TESTS)
+    target_sources(amrexplorer_qt PRIVATE MainWindowTestAccess.cpp)
+    target_compile_definitions(amrexplorer_qt PRIVATE AMREXPLORER_QT_TEST_ACCESS)
+endif()
 
 if(APPLE AND AMREXPLORER_BUILD_MACOS_APP_BUNDLE)
     set(amrexplorer_macos_icon "${CMAKE_SOURCE_DIR}/resources/amrexplorer.icns")

@@ -73,7 +73,15 @@ private:
     std::array<Rgb, slotCount> slots_{};
 };
 
-enum class BuiltinPalette { Rainbow, Turbo, Viridis, Plasma, Parula, Coolwarm, Blackbody };
+// Count is a sentinel rather than a palette. It exists so a consumer that
+// enumerates the builtins -- the Qt layer's builtinPalettes array, which drives
+// the menu, the selector and settings restore -- can static_assert that it
+// covers all of them. Without it a new enumerator simply never reaches the UI,
+// and the palette tests still pass because they pin the names, not the count.
+// Add new palettes above it, and handle it in switches by falling through to
+// the default palette.
+enum class BuiltinPalette {
+    Rainbow, Turbo, Viridis, Plasma, Parula, Coolwarm, Blackbody, Count };
 
 // Compiled-in copies of the palette files shipped under palettes/; Rainbow
 // is byte-identical to the legacy default `Palette` file and is the default
@@ -82,8 +90,9 @@ enum class BuiltinPalette { Rainbow, Turbo, Viridis, Plasma, Parula, Coolwarm, B
 // (the Moreland diverging map shared by ParaView/VisIt), and blackbody (a
 // black-body radiation thermal ramp).
 [[nodiscard]] const Palette& builtinPalette(BuiltinPalette palette);
-// The palette's menu label / settings key, without a file extension, e.g.
-// "rainbow".
+// The palette's settings key, without a file extension, e.g. "rainbow". Also
+// the basis for its UI label, which the Qt layer capitalizes -- so this string
+// is what goes on disk and must not change with presentation.
 [[nodiscard]] std::string_view builtinPaletteName(BuiltinPalette palette) noexcept;
 
 } // namespace amrvis

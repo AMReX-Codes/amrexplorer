@@ -287,7 +287,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
         && state.cachedVectorVField == vectorVField
         && state.cachedVectorUField == vectorUField
         && displayMode == state.cachedMode
-        && (!isContourMode(displayMode) || state.contourFinePlane->width > 0)
+        && (!isContourMode(displayMode) || state.contourPlane->width > 0)
         && (displayMode != DisplayMode::VelocityVectors
             || (!state.vectorSegments.empty()
                 && contourCount == state.cachedContourCount
@@ -320,23 +320,23 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     if (fromCache) {
         // Cheap path: re-range, re-render, and re-contour the cached planes
         // on a worker; no SliceQuery runs at all. The captures are shared_ptr
-        // snapshots — refcount bumps, not the former ~110 MB plane deep copy
-        // on the GUI thread. A newer arrival can safely replace the view's
-        // pointers meanwhile; this worker keeps reading its own snapshots.
-        // (refreshCachedSlice's by-value parameters still copy the planes,
-        // but on the worker thread.)
+        // snapshots — refcount bumps, not a plane deep copy. The immutable
+        // display plane is passed straight through by shared_ptr and adopted by
+        // showSlice, so the former ~110 MB copy per range/log/palette tweak is
+        // gone. A newer arrival can safely replace the view's pointers
+        // meanwhile; this worker keeps reading its own snapshots. (The
+        // contour-resolution plane is still deref'd into a by-value copy at
+        // the call below -- ~14 MB; see SliceDisplayResult::reusedPlane for
+        // why it is not yet reused.)
         future = QtConcurrent::run([dataset, request,
             displayPlane = state.plane,
             contourPlane = state.contourPlane,
-            contourFinePlane = state.contourFinePlane,
-            contourFineFactor = state.contourFineFactor,
             vectors = state.vectorSegments,
             rangeMode, userRange, logarithmic, palette, displayMode,
             vectorUField, vectorVField, contourCount, rasterDirty,
             cancellation]() mutable {
-            return refreshCachedSlice(dataset, request, *displayPlane,
-                *contourPlane, *contourFinePlane,
-                contourFineFactor, std::move(vectors), rangeMode, userRange,
+            return refreshCachedSlice(dataset, request, std::move(displayPlane),
+                *contourPlane, std::move(vectors), rangeMode, userRange,
                 logarithmic, palette, displayMode, vectorUField, vectorVField,
                 contourCount, rasterDirty, cancellation);
         });
@@ -410,7 +410,6 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     const auto fallbackToLevel = result.cacheFallbackToLevel;
                     const auto fallbackFromLevel = result.cacheFallbackFromLevel;
                     showSlice(state, std::move(result));
-                    syncVisibleRanges();
                     // Cache the full-domain range. In 3-D the store defers to
                     // the (async) shared-range sync's completion so the union
                     // across all panels is captured; 2-D has no later sync
@@ -454,6 +453,25 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                 } else {
                     ++m_staleResults;
                 }
+            }
+            // Dispatch the 3-D shared-range sync after the try/catch, not inside
+            // the success path: under single-flight only the settling arrival
+            // dispatches, so a throwing arrival must not leave the batch without
+            // its sync. syncVisibleRanges no-ops outside 3-D Visible and defers
+            // while slices are still in flight, so calling it on every arrival
+            // (stale or thrown included) is safe. It is now outside the try
+            // above, so guard it too: a bad_alloc while allocating the sync
+            // worker must not escape this slot (syncVisibleRanges itself resets
+            // its own in-flight state before any such throw).
+            try {
+                syncVisibleRanges();
+            } catch (const std::exception& error) {
+                // The shared-range sync could not be scheduled; surface it (as
+                // the arrival path above does) rather than fail silently. The
+                // panels keep their per-view ranges until the next arrival
+                // retries.
+                reportBackgroundError(tr("Cannot synchronize views: %1")
+                    .arg(exceptionMessage(error)));
             }
             updateDiagnostics();
             watcher->deleteLater();
@@ -746,7 +764,26 @@ std::optional<QRectF> MainWindow::preservedDataWindow(
     if (window.isEmpty()) {
         return std::nullopt;
     }
-    return window;
+    // Clamped to the raster that actually arrived. The window is the *viewport*
+    // mapped through the old plane, and after a rubber-band zoom the viewport
+    // shows more than the selection: the feedback zoom fits the selection with
+    // KeepAspectRatio, which pads the slack axis. Framing that padded window
+    // over a raster that stops at the selection leaves the raster short of the
+    // pane -- the gap that only the next pan corrected, by refitting.
+    //
+    // There is nothing outside the raster to show anyway, so clamping is the
+    // whole fix, and it is a no-op for the case this function exists for: a
+    // density change mid-view preserves a window that lies *inside* the new
+    // raster. Local rubber-band zooms never reach here at all, since their
+    // density is unchanged -- which is why they never showed the gap.
+    const QRectF rasterBounds(0.0, 0.0,
+        static_cast<double>(incoming.width),
+        static_cast<double>(incoming.height));
+    const auto clamped = window.intersected(rasterBounds);
+    if (clamped.isEmpty()) {
+        return std::nullopt;
+    }
+    return clamped;
 }
 
 std::optional<QRectF> MainWindow::sphericalReframe(
@@ -816,13 +853,13 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
             const bool ownerChanged = state.hasCachedRequest
                 && state.cachedRequest.dataset != display.request.dataset;
             const bool densityChanged = DisplayCoordinator::planeDensitiesDiffer(
-                *state.plane, display.slice.plane, axes);
+                *state.plane, display.displayPlane(), axes);
             if (transformPolicy == ImageTransformPolicy::Preserve
                 && state.view->transformMode()
                     == ImageView::TransformMode::Custom
                 && (ownerChanged || densityChanged)) {
                 dataWindowInNewScene = preservedDataWindow(
-                    state, display.slice.plane);
+                    state, display.displayPlane());
             }
             const auto image = displayImageFor(display.image);
             // A view on a virtual canvas keeps it: the raster lands at its
@@ -830,10 +867,10 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
             std::optional<ImageView::VirtualPlacement> placement;
             if (state.view->virtualCanvasActive() && !displayIsSpherical()) {
                 placement = virtualPlacementFor(
-                    state, display.slice.plane.physicalRegion);
+                    state, display.displayPlane().physicalRegion);
             }
             state.view->setImage(image, transformPolicy,
-                logicalImageSize(state, display.slice.plane, image),
+                logicalImageSize(state, display.displayPlane(), image),
                 placement);
             if (dataWindowInNewScene) {
                 state.view->zoomToRect(*dataWindowInNewScene);
@@ -842,9 +879,21 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
         }
     }
     // Fresh immutable snapshots: replace the pointers, never mutate the
-    // pointees a cached-planes refresh worker may still be reading.
-    state.plane
-        = std::make_shared<const ScalarPlane>(std::move(display.slice.plane));
+    // pointees a cached-planes refresh worker may still be reading. The cache
+    // fast path already holds the plane by shared_ptr, so adopt it directly;
+    // the executeSlice path produces a fresh plane to wrap.
+    // Copy (not move) the reused pointer: moving it would leave `display` in a
+    // state where displayPlane() returns an empty plane, violating its "never
+    // empty" contract for anything that reads `display` afterward. The copy is
+    // a single shared_ptr refcount bump.
+    state.plane = display.reusedPlane
+        ? display.reusedPlane
+        : std::make_shared<const ScalarPlane>(std::move(display.slice.plane));
+    // Stamp the rewrite immediately -- before the contour make_shared calls
+    // below, any of which can throw. The stamp is the entire staleness key for
+    // the 3-D shared-range sync; it must never lag the plane it stamps, or a
+    // sync that rendered the previous plane could be mistaken for current.
+    ++state.renderGeneration;
     // Spherical warps the raster into physical (R, Z); overlays and the probe
     // map through displayRegion, which for every other system is just the
     // plane's logical bounds (see PlaneMapping).
@@ -853,9 +902,6 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
     state.displayRegion = display.displayRegion;
     state.contourPlane
         = std::make_shared<const ScalarPlane>(std::move(display.contourPlane));
-    state.contourFinePlane = std::make_shared<const ScalarPlane>(
-        std::move(display.contourFinePlane));
-    state.contourFineFactor = display.contourFineFactor;
     state.contourPolylines = std::move(display.contourPolylines);
     const auto fieldName = QString::fromStdString(display.fieldName);
     state.fieldName = fieldName;
@@ -912,6 +958,20 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
     statusBar()->clearMessage();
 }
 
+int MainWindow::slicesInFlight() const
+{
+    if (m_viewDimension == 2) {
+        return m_view2d.pendingRequests;
+    }
+    const std::array<const PlaneViewState*, 3> threeDimensional{
+        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+    int total = 0;
+    for (const auto* state : threeDimensional) {
+        total += state->pendingRequests;
+    }
+    return total;
+}
+
 void MainWindow::syncVisibleRanges()
 {
     if (m_viewDimension != 3 || !m_dataset) {
@@ -922,9 +982,17 @@ void MainWindow::syncVisibleRanges()
     if (rangeMode != RangeMode::Visible) {
         return;
     }
-    if (m_visibleSyncInFlight) {
-        // Coalesce: rerun with fresh state once the in-flight worker lands
-        // instead of stacking a worker per arrival.
+    // Single-flight: dispatch one sync only once the panel slice batch has
+    // settled (no view has a slice on a worker) and no sync is already running.
+    // While slices are still arriving -- or a sync is in flight -- defer; the
+    // settling arrival, or the running sync's completion, dispatches then,
+    // against fully-current panels. Running against a settled batch is what lets
+    // the completion apply all-or-nothing (a coherent shared range/log/color bar
+    // across all three panels) instead of a stale subset. Gate on panel slice
+    // work only (slicesInFlight), never the global m_activeRequests -- particle
+    // loads, line plots, and sequence prefetch bump that, and would wedge the
+    // sync shut for the whole operation.
+    if (slicesInFlight() != 0 || m_visibleSyncInFlight) {
         m_visibleSyncRerun = true;
         return;
     }
@@ -946,17 +1014,21 @@ void MainWindow::syncVisibleRanges()
 
     struct PanelSnapshot {
         std::shared_ptr<const ScalarPlane> plane;
-        std::shared_ptr<const ScalarPlane> contourFinePlane;
-        int contourFineFactor = 1;
+        std::shared_ptr<const ScalarPlane> contourPlane;
         std::array<int, 2> outputSize{0, 0};
     };
     std::array<PlaneViewState*, 3> views{
         &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
     std::array<PanelSnapshot, 3> snapshots;
+    // Render-generation stamps captured at dispatch, kept separate from the
+    // plane snapshots so the completion (which only compares these integers)
+    // need not capture the heavy plane shared_ptrs the worker uses.
+    std::array<std::uint64_t, 3> snapshotGenerations{};
     for (std::size_t index = 0; index < views.size(); ++index) {
         const auto* state = views[index];
-        snapshots[index] = {state->plane, state->contourFinePlane,
-            state->contourFineFactor, state->cachedRequest.outputSize};
+        snapshots[index] = {state->plane, state->contourPlane,
+            state->cachedRequest.outputSize};
+        snapshotGenerations[index] = state->renderGeneration;
     }
 
     struct SyncOutcome {
@@ -964,15 +1036,16 @@ void MainWindow::syncVisibleRanges()
         std::array<QImage, 3> images;   // display-ready (flipped) rasters
     };
 
-    m_visibleSyncInFlight = true;
-    // The sync participates in the interactive batch: the settled signal
-    // (which the smoke tests use to read synchronized state) must not fire
-    // until its results are applied.
-    ++m_activeRequests;
+    // This dispatch consumes any deferred request; a request that lands while
+    // the worker runs re-arms the flag and reruns from the completion below.
+    m_visibleSyncRerun = false;
     const auto generation = m_generation;
+    // Allocate the watcher and register the completion before committing to
+    // "in flight": if either throws (bad_alloc), the flags stay clean and the
+    // (call-site-guarded) exception unwinds without latching the sync shut.
     auto* watcher = new QFutureWatcher<SyncOutcome>(this);
     connect(watcher, &QFutureWatcher<SyncOutcome>::finished, this,
-        [this, watcher, generation, snapshots, views] {
+        [this, watcher, generation, snapshotGenerations, views] {
             m_visibleSyncInFlight = false;
             --m_activeRequests;
             if (m_closing) {
@@ -985,17 +1058,43 @@ void MainWindow::syncVisibleRanges()
             const bool current = generation == m_generation
                 && m_viewDimension == 3 && m_dataset
                 && nowMode == RangeMode::Visible;
-            if (current && outcome.sync) {
+            // All-or-nothing, keyed on the render-generation stamp captured per
+            // panel at dispatch. The shared range and log flag are joint across
+            // all three panels, so they must not land on a subset. If any panel
+            // was re-sliced while this sync ran (stamp bumped), the sync rendered
+            // it from the previous plane -- and cached-plane reuse means pointer
+            // identity can't tell (the pointer is reused), while the rerun flag
+            // is not always armed (syncVisibleRanges early-returns on a
+            // mode/dimension flip without setting it). Drop the whole outcome and
+            // let the rerun, or the superseding batch's settle, produce a fresh
+            // coherent one. Single-flight makes the common case all-current, so
+            // this drops only on a genuine mid-sync re-slice, not every tweak.
+            //
+            // Chosen tradeoff (vs. the earlier per-panel partial apply): during
+            // sweep playback or animation export, if a sync outlasts the frame
+            // delay every sync is superseded and nothing lands for the sweep's
+            // duration (it self-heals when playback stops), where partial apply
+            // kept the untouched panels coherent. Coherence-by-construction is
+            // worth that: partial apply could leave the three panels on different
+            // ranges/log flags. If sweep coherence ever matters, gate playbackTick
+            // on the sync too (it currently waits only on pendingRequests).
+            bool allCurrent = outcome.sync.has_value();
+            if (outcome.sync) {
+                for (std::size_t index = 0; index < views.size(); ++index) {
+                    if (views[index]->renderGeneration
+                        != snapshotGenerations[index]) {
+                        allCurrent = false;
+                        break;
+                    }
+                }
+            }
+            if (current && outcome.sync && allCurrent) {
                 const auto [globalMin, globalMax] = outcome.sync->range;
                 bool activeApplied = false;
                 for (std::size_t index = 0; index < views.size(); ++index) {
                     auto* state = views[index];
                     auto& update = outcome.sync->panels[index];
-                    // Apply only while the snapshot this update was computed
-                    // from is still the displayed plane (pointer identity);
-                    // a superseded panel's own arrival re-syncs.
-                    if (!update.applies
-                        || state->plane != snapshots[index].plane) {
+                    if (!update.applies) {
                         continue;
                     }
                     state->displayMinimum = globalMin;
@@ -1043,10 +1142,11 @@ void MainWindow::syncVisibleRanges()
                     m_rangeMaximum->setValue(globalMax);
                 }
                 // The deferred full-domain range store (see the slice-arrival
-                // completion): the union is only known here. When a rerun is
-                // queued the union is about to be recomputed with newer
-                // planes — leave the store for the rerun's completion.
-                if (m_pendingRangeStore && !m_visibleSyncRerun) {
+                // completion): the union is only known here. This block runs
+                // only for an all-current outcome (every panel's stamp matched),
+                // so the stored union is over the current planes -- a stale
+                // outcome is dropped in the else branch and never stored.
+                if (m_pendingRangeStore) {
                     // Only store if the pending key still describes the current
                     // (dataset, field, level, composition): a full-domain
                     // arrival's key can outlive its own sync (e.g. its
@@ -1068,6 +1168,16 @@ void MainWindow::syncVisibleRanges()
                     }
                     m_pendingRangeStore.reset();
                 }
+            } else if (current && outcome.sync) {
+                // Dropped as stale (a panel was re-sliced mid-sync): the union
+                // is over at least one now-superseded plane, so it is neither
+                // applied nor stored -- the pending key stays for the rerun,
+                // which recomputes the union over the current planes.
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+                // Sole writer of this test-only tally; the staleness smoke test
+                // asserts its exact delta. m_staleResults is not touched.
+                ++m_visibleSyncStaleSkips;
+#endif
             } else if (generation != m_generation) {
                 m_pendingRangeStore.reset();
                 m_visibleSyncRerun = false;
@@ -1076,37 +1186,64 @@ void MainWindow::syncVisibleRanges()
             watcher->deleteLater();
             if (m_visibleSyncRerun) {
                 m_visibleSyncRerun = false;
-                syncVisibleRanges();
+                // Re-dispatch inside a slot: guard as at the arrival site so a
+                // bad_alloc allocating the next worker cannot escape, and
+                // surface it rather than fail silently.
+                try {
+                    syncVisibleRanges();
+                } catch (const std::exception& error) {
+                    reportBackgroundError(tr("Cannot synchronize views: %1")
+                        .arg(exceptionMessage(error)));
+                }
             }
             if (m_activeRequests == 0) {
                 emit interactiveSlicesSettled();
             }
         });
-    watcher->setFuture(QtConcurrent::run([cachedRange, snapshots,
-        logarithmic = m_logarithmic->isChecked(),
-        contourMode = isContourMode(m_displayMode),
-        contourCount = m_contourCount, palette = m_palette] {
-        std::array<DisplayCoordinator::PanelSyncInput, 3> inputs;
-        for (std::size_t index = 0; index < snapshots.size(); ++index) {
-            const auto& snapshot = snapshots[index];
-            inputs[index] = {snapshot.plane.get(),
-                snapshot.contourFinePlane.get(), snapshot.contourFineFactor,
-                snapshot.outputSize};
-        }
-        SyncOutcome outcome;
-        outcome.sync = DisplayCoordinator::renderPanelsToSharedRange(
-            cachedRange, inputs, logarithmic, contourMode, contourCount,
-            palette);
-        if (outcome.sync) {
-            for (std::size_t index = 0; index < inputs.size(); ++index) {
-                const auto& image = outcome.sync->panels[index].image;
-                if (image.valid() && image.width > 0) {
-                    outcome.images[index] = displayImageFor(image);
+    // Commit to "in flight" only now that the throwing allocations above
+    // succeeded; the sync joins the interactive batch (++m_activeRequests) so
+    // interactiveSlicesSettled waits for it. Guard the launch: if
+    // QtConcurrent::run throws (bad_alloc), un-latch so a later arrival can
+    // retry, drop the watcher, and swallow -- the failure must not escape this
+    // slot or wedge the sync shut for the session.
+    m_visibleSyncInFlight = true;
+    ++m_activeRequests;
+    try {
+        watcher->setFuture(QtConcurrent::run([cachedRange, snapshots,
+            logarithmic = m_logarithmic->isChecked(),
+            contourMode = isContourMode(m_displayMode),
+            contourCount = m_contourCount, palette = m_palette] {
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+            // Held only when the staleness test has armed the gate.
+            visible_sync_test::waitAtGate();
+#endif
+            std::array<DisplayCoordinator::PanelSyncInput, 3> inputs;
+            for (std::size_t index = 0; index < snapshots.size(); ++index) {
+                const auto& snapshot = snapshots[index];
+                inputs[index] = {snapshot.plane.get(),
+                    snapshot.contourPlane.get(), snapshot.outputSize};
+            }
+            SyncOutcome outcome;
+            outcome.sync = DisplayCoordinator::renderPanelsToSharedRange(
+                cachedRange, inputs, logarithmic, contourMode, contourCount,
+                palette);
+            if (outcome.sync) {
+                for (std::size_t index = 0; index < inputs.size(); ++index) {
+                    const auto& image = outcome.sync->panels[index].image;
+                    if (image.valid() && image.width > 0) {
+                        outcome.images[index] = displayImageFor(image);
+                    }
                 }
             }
-        }
-        return outcome;
-    }));
+            return outcome;
+        }));
+    } catch (const std::exception& error) {
+        m_visibleSyncInFlight = false;
+        --m_activeRequests;
+        watcher->deleteLater();
+        reportBackgroundError(tr("Cannot synchronize views: %1")
+            .arg(exceptionMessage(error)));
+    }
 }
 
 void MainWindow::choosePlotfileSequence()

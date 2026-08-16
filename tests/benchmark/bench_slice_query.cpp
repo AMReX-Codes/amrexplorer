@@ -87,17 +87,23 @@ double medianMillis(std::vector<double>& samples)
     return samples[samples.size() / 2];
 }
 
-// Strictly-positive, bounded integer argument. std::atoi returns 0 on garbage
-// (silently truncating to the "positive" guard); parse explicitly and bound so
+// Bounded integer argument, at least `minimum`. std::atoi returns 0 on
+// garbage (silently truncating to the guard); parse explicitly and bound so
 // the derived fixture sizes below cannot overflow int.
-int positiveArg(const char* text)
+int boundedArg(const char* text, long minimum)
 {
     char* end = nullptr;
     const long value = std::strtol(text, &end, 10);
-    if (end == text || *end != '\0' || value < 1 || value > 65536) {
-        die("arguments must be positive integers <= 65536");
+    if (end == text || *end != '\0' || value < minimum || value > 65536) {
+        die("arguments must be integers <= 65536 (clusterGap may be 0, the "
+            "rest at least 1)");
     }
     return static_cast<int>(value);
+}
+
+int positiveArg(const char* text)
+{
+    return boundedArg(text, 1);
 }
 
 } // namespace
@@ -111,7 +117,7 @@ int runBenchmark(int argc, char** argv)
     // corners of a domain clusterGap blocks wider, the rest empty.
     const int blocksPerAxis = argc > 1 ? positiveArg(argv[1]) : 16;
     const int cellsPerBlock = argc > 2 ? positiveArg(argv[2]) : 8;
-    const int clusterGap = argc > 5 ? positiveArg(argv[5]) : 0;
+    const int clusterGap = argc > 5 ? boundedArg(argv[5], 0) : 0;
     const int blocksAcross
         = clusterGap > 0 ? 2 * blocksPerAxis + clusterGap : blocksPerAxis;
     // Guard the derived sizes (long long) before narrowing to int, so a large
@@ -334,14 +340,17 @@ int runBenchmark(int argc, char** argv)
                 }
             }
         }
-        if (covered == 0) {
+        // The per-pixel checks above are exact for any layout; these two only
+        // refuse parameters that would make them vacuous, and only for the
+        // uniform tiling, where every pixel is a block pixel and (at domain >=
+        // 2) an interior pixel exists. A clustered layout may legitimately put
+        // no pixel center in a block or no bracket fully inside one; there the
+        // printed counts show how much was validated.
+        if (clusterGap == 0 && covered == 0) {
             die("benchmark slice covered no pixels");
         }
-        // Require a validated linear pixel only where an interior pixel can
-        // exist: at domain 1 the interior interval [0.5, 0.5] is a single point
-        // no pixel center lands on.
-        if (sampling == amrvis::SamplingPolicy::Linear && domain >= 2
-            && linearChecked == 0) {
+        if (clusterGap == 0 && sampling == amrvis::SamplingPolicy::Linear
+            && domain >= 2 && linearChecked == 0) {
             die("benchmark linear run validated no pixels");
         }
         std::vector<double> samples;
@@ -365,9 +374,16 @@ int runBenchmark(int argc, char** argv)
         }
         const auto ms = medianMillis(samples);
         std::printf("  %-10s %5d blocks  %d x %d px  median %8.3f ms  "
-            "(%6.1f Mpx/s)\n",
+            "(%6.1f Mpx/s)",
             label, blockCount, outputDim, outputDim, ms,
             static_cast<double>(outputDim) * outputDim / (ms * 1000.0));
+        if (clusterGap > 0 && sampling == amrvis::SamplingPolicy::Linear) {
+            std::printf("  [%zu px covered, %zu linear-validated]", covered,
+                linearChecked);
+        } else if (clusterGap > 0) {
+            std::printf("  [%zu px covered]", covered);
+        }
+        std::printf("\n");
     };
 
     std::printf("slice-query benchmark (cache-warm, median of %d%s):\n",

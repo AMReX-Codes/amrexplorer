@@ -121,7 +121,13 @@ void writeFully(int descriptor, const std::string& text)
                 continue;
             }
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // The channel made the descriptor nonblocking already.
+                // The channel made the descriptor nonblocking already. The
+                // signal handlers are installed by now and SignalWatcher is
+                // not, so a stop request is honored here or not at all.
+                if (stopRequested != 0) {
+                    throw std::runtime_error(
+                        "interrupted while writing the ready line");
+                }
                 pollfd waiting{descriptor, POLLOUT, 0};
                 static_cast<void>(::poll(&waiting, 1, 1000));
                 continue;

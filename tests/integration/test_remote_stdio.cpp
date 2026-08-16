@@ -137,8 +137,8 @@ void exerciseDataset(amrvis::remote::Connection& connection,
     // "~user/..." is neither expanded nor anchored at home: it passes through
     // untouched, so the error names the path the client sent.
     try {
-        connection.openDataset(
-            "~nobody-such-user/plt00000", 16ULL * 1024ULL * 1024ULL);
+        static_cast<void>(connection.openDataset(
+            "~nobody-such-user/plt00000", 16ULL * 1024ULL * 1024ULL));
         require(false, "server opened a ~user path");
     } catch (const std::exception& error) {
         const std::string what = error.what();

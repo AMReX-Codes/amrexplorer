@@ -176,7 +176,8 @@ int main()
             "overlap fallback did not return the smallest covering block");
         require(grid.find(blocks, point(64, 0), 2) == -1,
             "overlap fallback matched a point past the domain");
-        requireAgrees(blocks, axes, -2, 66, "overlap-fallback differential");
+        requireAgreesWith(grid, blocks, 2, -2, 66,
+            "overlap-fallback differential");
     }
 
     // Identical boxes alone must not trip the fill cap (memory-boundedness is
@@ -308,7 +309,8 @@ int main()
                     == static_cast<int>(i),
                 "two-cluster layout routed a point to the wrong block");
         }
-        requireAgrees(blocks, axes, -8, 4103, "two-cluster differential");
+        requireAgreesWith(grid, blocks, 2, -8, 4103,
+            "two-cluster differential");
     }
 
     // Irregular non-overlapping layout (varied block sizes) as a differential
@@ -417,8 +419,10 @@ int main()
 
     // lookupBlockValue over IndexedBlocks with real cache handles: the value
     // is read at valueOffset within the covering block's FAB, a point outside
-    // every block is nullopt, and a block whose loaded payload is smaller than
-    // its box (corrupt) throws rather than reads past the end.
+    // every block is nullopt, a FAB whose header box does not cover the
+    // catalog box it was loaded for throws rather than aliasing into the
+    // wrong cell (the payload is always sized to the header box, so payload
+    // size cannot catch that), and a block with no payload is refused.
     {
         amrvis::PlotfileDataset::BlockCache cache(1 << 20);
         const auto pin = [&cache](int grid, const IntBox& box,
@@ -438,12 +442,12 @@ int main()
         first.centering = {{0, 0, 0}};
         loaded.push_back({first,
             pin(0, first, {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0})});
-        // Block 1: cells x 4..5, y 0..1, but only three values loaded.
-        IntBox corrupt;
-        corrupt.lower = {{4, 0, 0}};
-        corrupt.upper = {{5, 1, 0}};
-        corrupt.centering = {{0, 0, 0}};
-        loaded.push_back({corrupt, pin(1, corrupt, {10.0, 11.0, 12.0})});
+        // Block 1: cells x 4..5, y 0..1 -> values 10..13.
+        IntBox second;
+        second.lower = {{4, 0, 0}};
+        second.upper = {{5, 1, 0}};
+        second.centering = {{0, 0, 0}};
+        loaded.push_back({second, pin(1, second, {10.0, 11.0, 12.0, 13.0})});
         const amrvis::detail::IndexedBlocks indexed(std::move(loaded), axes);
 
         const auto at = [&indexed](int x, int y) {
@@ -455,15 +459,47 @@ int main()
         require(!at(0, 2).has_value() && !at(-1, 0).has_value()
                 && !at(6, 0).has_value(),
             "lookupBlockValue returned a value outside every block");
-        require(at(4, 0) == 10.0 && at(4, 1) == 12.0,
+        require(at(4, 0) == 10.0 && at(4, 1) == 12.0 && at(5, 1) == 13.0,
             "lookupBlockValue misread the second block");
-        bool threw = false;
+
+        // A block whose FAB header box does not cover its catalog box aliases
+        // into the wrong cell if only the payload size is checked; and a
+        // block with no payload at all must be refused, not dereferenced.
+        std::vector<LoadedBlock> mismatched;
+        IntBox catalog;
+        catalog.lower = {{0, 0, 0}};
+        catalog.upper = {{3, 3, 0}};  // 4x4 per the catalog ...
+        catalog.centering = {{0, 0, 0}};
+        IntBox header;
+        header.lower = {{0, 0, 0}};
+        header.upper = {{1, 3, 0}};   // ... but the FAB holds 2x4
+        header.centering = {{0, 0, 0}};
+        mismatched.push_back({catalog, pin(2, header,
+            {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0})});
+        mismatched.push_back({second, {}});  // no payload
+        const amrvis::detail::IndexedBlocks mismatchedIndexed(
+            std::move(mismatched), axes);
+        const auto atMismatched = [&mismatchedIndexed](int x, int y) {
+            return amrvis::detail::lookupBlockValue(
+                mismatchedIndexed, point(x, y), 2);
+        };
+        require(atMismatched(1, 1) == 3.0,
+            "lookupBlockValue misread a cell inside both boxes");
+        bool boxThrew = false;
         try {
-            static_cast<void>(at(5, 1));  // offset 3 into three values
+            static_cast<void>(atMismatched(3, 0));  // offset 3 < 8, cell (1,1)
         } catch (const std::runtime_error&) {
-            threw = true;
+            boxThrew = true;
         }
-        require(threw, "lookupBlockValue read past a short FAB payload");
+        require(boxThrew,
+            "lookupBlockValue aliased a cell outside the FAB header box");
+        bool nullThrew = false;
+        try {
+            static_cast<void>(atMismatched(4, 0));  // the payload-less block
+        } catch (const std::logic_error&) {
+            nullThrew = true;
+        }
+        require(nullThrew, "lookupBlockValue dereferenced a null payload");
     }
 
     std::cout << "block lookup tests passed\n";

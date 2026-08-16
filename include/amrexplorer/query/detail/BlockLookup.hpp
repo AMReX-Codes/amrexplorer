@@ -128,16 +128,18 @@ struct LoadedBlock {
 // tile count is capped (a few per block), so sparse levels coarsen their tiles
 // instead of allocating a bucket per empty cell.
 //
-// That cap is also what bounds the work per lookup on any layout, clustered
-// ones included: with about one (block, tile) entry per block and at least a
-// quarter as many tiles as blocks, the candidates scanned *averaged over
-// points spread across the bounding box* -- which is what a slice's pixels
-// and a line's samples are, since a query indexes only the blocks meeting its
-// visible region -- come to blocks/tiles, at most a few. A level of two
-// refined regions far apart does coarsen to dozens of blocks per occupied
-// bucket, but only the corresponding fraction of points lands in them; an
-// index that keeps block-sized tiles there (hashed sparse tiles behind a
-// coarse occupancy map) measured within noise of this one end to end.
+// That cap is also what bounds the work per lookup on any *non-overlapping*
+// layout (the level invariant), clustered ones included: such blocks each
+// take about one (block, tile) entry, and with at least a quarter as many
+// tiles as blocks the candidates scanned *averaged over points spread across
+// the bounding box* -- which is what a slice's pixels and a line's samples
+// are, since a query indexes only the blocks meeting its visible region --
+// come to blocks/tiles, at most a few. A level of two refined regions far
+// apart does coarsen to dozens of blocks per occupied bucket, but only the
+// corresponding fraction of points lands in them; an index that keeps
+// block-sized tiles there (hashed sparse tiles behind a coarse occupancy map)
+// measured within noise of this one end to end. Overlapping catalogs get no
+// such bound -- identical boxes all share one tile -- only the memory cap.
 //
 // A block that spans several tiles is listed in each, so every block covering a
 // point shares that point's tile and the bucket scan sees all candidates. Scans
@@ -229,6 +231,12 @@ public:
             m_tile1 = std::min(span1, m_tile1 * 2);
             n0 = (span0 + m_tile0 - 1) / m_tile0;
             n1 = (span1 + m_tile1 - 1) / m_tile1;
+        }
+        if (n0 > maxTiles / n1) {
+            // Only reachable if the loop above stops coarsening an axis; the
+            // bucket array below relies on the cap, so scan instead.
+            m_linearScan = true;
+            return;
         }
         m_n0 = static_cast<int>(n0);
         m_n1 = static_cast<int>(n1);
@@ -423,11 +431,15 @@ struct IndexedBlocks {
     if (!block.data) {
         throw std::logic_error("covering block has no loaded payload");
     }
-    const auto offset = valueOffset(block.data->box, point, dimension);
-    if (offset >= block.data->values.size()) {
-        throw std::runtime_error("composed FAB index exceeds loaded block");
+    // The point was found in the catalog's valid box; the offset is computed
+    // in the FAB's own header box. Nothing upstream cross-checks the two, and
+    // a disagreement aliases into the wrong cell without leaving the payload
+    // (which is sized to the FAB box exactly), so containment -- not payload
+    // size -- is the guard.
+    if (!contains(block.data->box, point, dimension)) {
+        throw std::runtime_error("composed FAB does not cover its catalog box");
     }
-    return block.data->values[offset];
+    return block.data->values[valueOffset(block.data->box, point, dimension)];
 }
 
 } // namespace amrvis::detail

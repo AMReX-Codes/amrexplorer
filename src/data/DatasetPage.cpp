@@ -150,6 +150,32 @@ DatasetPage extractDatasetPage(PlotfileDataset& dataset,
         const auto iUpper = std::min(validBox.upper[xAxis], page.upper[0]);
         const auto jLower = std::max(validBox.lower[yAxis], page.lower[1]);
         const auto jUpper = std::min(validBox.upper[yAxis], page.upper[1]);
+        // The cells read below come from the catalog's box; the offsets are
+        // computed in the FAB's own header box. Nothing upstream cross-checks
+        // the two (a v1 VisMF FAB header can disagree with the Header's grid
+        // box), and a disagreement aliases into the wrong cell without ever
+        // leaving the payload -- the payload is sized to the FAB box exactly.
+        // Require the whole cell range to lie in the FAB box, once per block.
+        {
+            Int3 first{};
+            Int3 last{};
+            first[xAxis] = iLower;
+            last[xAxis] = iUpper;
+            first[yAxis] = jLower;
+            last[yAxis] = jUpper;
+            if (metadata.dimension == 3) {
+                first[static_cast<std::size_t>(request.normalAxis)]
+                    = page.sliceIndex;
+                last[static_cast<std::size_t>(request.normalAxis)]
+                    = page.sliceIndex;
+            }
+            if (iLower <= iUpper && jLower <= jUpper
+                && (!detail::contains(fab.box, first, metadata.dimension)
+                    || !detail::contains(fab.box, last, metadata.dimension))) {
+                throw std::runtime_error(
+                    "dataset page block does not cover its catalog box");
+            }
+        }
         for (auto j = jLower; j <= jUpper; ++j) {
             if (cancellation.stop_requested()) {
                 throw ReadCancelled();
@@ -164,16 +190,8 @@ DatasetPage extractDatasetPage(PlotfileDataset& dataset,
                     cell[static_cast<std::size_t>(request.normalAxis)]
                         = page.sliceIndex;
                 }
-                // Same guard as lookupBlockValue: a corrupt block whose loaded
-                // payload is smaller than its box must throw, not be read
-                // past its end.
-                const auto fabOffset = detail::valueOffset(
-                    fab.box, cell, metadata.dimension);
-                if (fabOffset >= fab.values.size()) {
-                    throw std::runtime_error(
-                        "dataset page FAB index exceeds loaded block");
-                }
-                const auto value = fab.values[fabOffset];
+                const auto value = fab.values[detail::valueOffset(
+                    fab.box, cell, metadata.dimension)];
                 const auto valueX = static_cast<std::size_t>(
                     static_cast<std::int64_t>(i) - page.lower[0]);
                 const auto offset = valueX

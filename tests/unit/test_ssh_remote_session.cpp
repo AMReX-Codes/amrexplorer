@@ -171,6 +171,9 @@ void sessionRoundTrip(const std::string& serverBinary,
     require(session.ready() && session.connection() == outcome.connection
             && outcome.connection->connected(),
         "ready callback did not carry the live connection");
+    require(session.destination() == "fake-destination"
+            && session.serverExecutable() == serverBinary,
+        "session did not report what it was started with");
     outcome.connection->ping();
     const auto opened
         = outcome.connection->openDataset(datasetPath, 16ULL << 20);

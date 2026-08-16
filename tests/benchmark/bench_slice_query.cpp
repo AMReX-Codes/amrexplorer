@@ -28,6 +28,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -98,7 +99,8 @@ int positiveArg(const char* text)
 int runBenchmark(int argc, char** argv)
 {
     // A single level tiled into blocksPerAxis^2 blocks of cellsPerBlock^2 cells,
-    // unit cell size, field phi(i, j) = i + j.
+    // unit cell size, field phi(i, j) = i + 3j (asymmetric so a transposed
+    // result is not bit-identical to the correct one).
     const int blocksPerAxis = argc > 1 ? positiveArg(argv[1]) : 16;
     const int cellsPerBlock = argc > 2 ? positiveArg(argv[2]) : 8;
     // Guard the derived sizes (long long) before narrowing to int, so a large
@@ -159,7 +161,9 @@ int runBenchmark(int argc, char** argv)
             double hi = -1e300;
             for (int j = j0; j <= j1; ++j) {
                 for (int i = i0; i <= i1; ++i) {
-                    const double v = static_cast<double>(i + j);
+                    // Asymmetric in i and j so a transposed plane (swapped
+                    // axes / weights) is not bit-identical to the correct one.
+                    const double v = static_cast<double>(i + 3 * j);
                     payload.push_back(v);
                     lo = std::min(lo, v);
                     hi = std::max(hi, v);
@@ -195,20 +199,42 @@ int runBenchmark(int argc, char** argv)
         request.sampling = sampling;
         // Warm the block cache so we time the composite lookup, not the FAB I/O.
         const auto warm = query.execute(request);
-        // Guard the plane shape before indexing it below, so a shape regression
-        // is a clean failure rather than an out-of-bounds read.
-        if (warm.plane.width != outputDim || warm.plane.height != outputDim) {
-            die("benchmark warm slice returned the wrong size");
+        const std::size_t pixelCount = static_cast<std::size_t>(outputDim)
+            * static_cast<std::size_t>(outputDim);
+        // Guard the buffers actually indexed below (sized independently of
+        // width/height), so a shape/size regression fails cleanly instead of
+        // reading out of bounds.
+        if (warm.plane.width != outputDim || warm.plane.height != outputDim
+            || warm.plane.valid.size() != pixelCount
+            || warm.plane.values.size() != pixelCount) {
+            die("benchmark warm slice has the wrong shape");
         }
         // Output pixel (x, y) samples a physical position, not cell (x, y) --
         // they coincide only at outputDim == domain. Derive the expected value
-        // from that position, computed with the *same* operation order as
-        // SliceQuery (lower + (out+0.5)*(upper-lower)/outputSize), so float
-        // rounding lands in the same cell on the boundary cases. Require
-        // *complete* coverage: this is the full domain, so a block-lookup
-        // regression that dropped blocks must fail here, not read as "faster".
+        // from that position and require *complete* coverage: this is the full
+        // domain, so a block-lookup regression that dropped blocks must fail
+        // here, not read as "faster".
         const double lower = 0.0;                            // visibleRegion.lower
         const double extent = static_cast<double>(domain);   // upper - lower
+        // The cell a position samples, boundary-tolerant. On a cell edge a
+        // 1-ULP difference between our position and SliceQuery's flips floor()
+        // and shifts the piecewise value by a whole cell, so accept either
+        // bracketing cell within a few ULP of an integer edge. This is a
+        // textual copy of SliceQuery's position formula; the tolerance is what
+        // keeps a rounding-neutral refactor of it from reinstating false
+        // failures (this line has tripped over that three times).
+        const auto sampleCells = [domain](double p) -> std::array<int, 2> {
+            const double nearest = std::round(p);
+            const double tol = 16.0 * std::numeric_limits<double>::epsilon()
+                * std::max(1.0, std::fabs(p));
+            if (std::fabs(p - nearest) <= tol) {
+                return {std::clamp(static_cast<int>(nearest) - 1, 0, domain - 1),
+                    std::clamp(static_cast<int>(nearest), 0, domain - 1)};
+            }
+            const int cell
+                = std::clamp(static_cast<int>(std::floor(p)), 0, domain - 1);
+            return {cell, cell};
+        };
         std::size_t covered = 0;
         std::size_t linearChecked = 0;
         for (int y = 0; y < outputDim; ++y) {
@@ -227,32 +253,39 @@ int runBenchmark(int argc, char** argv)
                 const auto value = static_cast<double>(warm.plane.values[off]);
                 if (sampling == amrvis::SamplingPolicy::Nearest
                     || sampling == amrvis::SamplingPolicy::PiecewiseConstant) {
-                    // Piecewise returns the containing cell's phi = i + j.
-                    const int i = std::clamp(
-                        static_cast<int>(px), 0, domain - 1);
-                    const int j = std::clamp(
-                        static_cast<int>(py), 0, domain - 1);
-                    if (value != static_cast<double>(i + j)) {
+                    // Piecewise returns the containing cell's phi = i + 3j.
+                    bool matched = false;
+                    for (const int i : sampleCells(px)) {
+                        for (const int j : sampleCells(py)) {
+                            if (value == static_cast<double>(i + 3 * j)) {
+                                matched = true;
+                            }
+                        }
+                    }
+                    if (!matched) {
                         die("benchmark piecewise slice value is wrong");
                     }
                 } else if (px >= 0.5 && px <= extent - 0.5
                     && py >= 0.5 && py <= extent - 0.5) {
-                    // Linear over the linear field phi = i + j is exact away
-                    // from the clamped border: phi(px, py) = px + py - 1 (cell
+                    // Linear over the linear field phi = i + 3j is exact away
+                    // from the clamped border: phi(px, py) = px + 3py - 2 (cell
                     // centers sit at half-integers). Border pixels clamp, so
                     // only require them to be covered.
                     ++linearChecked;
-                    if (std::fabs(value - (px + py - 1.0)) > 1e-2) {
+                    if (std::fabs(value - (px + 3.0 * py - 2.0)) > 1e-2) {
                         die("benchmark linear slice value is wrong");
                     }
                 }
             }
         }
-        if (covered != static_cast<std::size_t>(outputDim)
-                * static_cast<std::size_t>(outputDim)) {
+        if (covered != pixelCount) {
             die("benchmark slice left output pixels uncovered");
         }
-        if (sampling == amrvis::SamplingPolicy::Linear && linearChecked == 0) {
+        // Require a validated linear pixel only where an interior pixel can
+        // exist: at domain 1 the interior interval [0.5, 0.5] is a single point
+        // no pixel center lands on.
+        if (sampling == amrvis::SamplingPolicy::Linear && domain >= 2
+            && linearChecked == 0) {
             die("benchmark linear run validated no pixels");
         }
         std::vector<double> samples;
@@ -261,8 +294,15 @@ int runBenchmark(int argc, char** argv)
             const auto start = std::chrono::steady_clock::now();
             const auto result = query.execute(request);
             const auto end = std::chrono::steady_clock::now();
-            if (result.plane.width != outputDim) {
+            if (result.plane.width != outputDim
+                || result.plane.height != outputDim) {
                 die("benchmark slice returned the wrong size");
+            }
+            // The measurement claims cache-warm: no block may be read from
+            // disk here, or the reported Mpx/s is really an I/O number (e.g. a
+            // fixture scaled past the cache budget).
+            if (result.metrics.blocksRead != 0) {
+                die("benchmark slice was not cache-warm (blocks read while timing)");
             }
             samples.push_back(
                 std::chrono::duration<double, std::milli>(end - start).count());
@@ -279,7 +319,10 @@ int runBenchmark(int argc, char** argv)
     run(amrvis::SamplingPolicy::PiecewiseConstant, "piecewise");
     run(amrvis::SamplingPolicy::Linear, "linear");
 
-    std::filesystem::remove_all(root);
+    // Non-throwing: a cleanup hiccup must not turn a fully-passing benchmark
+    // into a red ctest (e.g. on Windows).
+    std::error_code ignore;
+    std::filesystem::remove_all(root, ignore);
     return 0;
 }
 

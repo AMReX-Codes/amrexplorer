@@ -976,6 +976,24 @@ bool MainWindow::hasRemoteConnection() const
     return m_remoteConnection && m_remoteConnection->connected();
 }
 
+QString MainWindow::remoteServerExecutableFor(const QString& destination)
+{
+    auto settings = makeSettings();
+    const auto forDestination
+        = settings
+              .value(QStringLiteral("remote/serverExecutables/%1")
+                      .arg(destination))
+              .toString()
+              .trimmed();
+    if (!forDestination.isEmpty()) {
+        return forDestination;
+    }
+    return settings
+        .value(QStringLiteral("remote/serverExecutable"),
+            QStringLiteral("amrexplorer-server"))
+        .toString();
+}
+
 void MainWindow::startSshRemoteSession(std::string destination,
     std::string serverExecutable, std::vector<std::string> remotePaths)
 {
@@ -983,6 +1001,24 @@ void MainWindow::startSshRemoteSession(std::string destination,
         || destination.find_first_of(" \t\r\n") != std::string::npos) {
         reportBackgroundError(tr("Invalid SSH destination."));
         return;
+    }
+    const auto destinationText = QString::fromStdString(destination);
+    if (serverExecutable.empty()) {
+        serverExecutable
+            = remoteServerExecutableFor(destinationText).toStdString();
+    }
+    {
+        // Remember the working set: this destination, its executable, and the
+        // executable as the default for destinations not seen before. The CLI
+        // teaches the dialog this way too.
+        auto settings = makeSettings();
+        settings.setValue(
+            QStringLiteral("remote/sshDestination"), destinationText);
+        settings.setValue(QStringLiteral("remote/serverExecutable"),
+            QString::fromStdString(serverExecutable));
+        settings.setValue(QStringLiteral("remote/serverExecutables/%1")
+                              .arg(destinationText),
+            QString::fromStdString(serverExecutable));
     }
     // A previous session's connection is closed with it; a dataset still open
     // on it fails on its next request, and the new server gets fresh opens.

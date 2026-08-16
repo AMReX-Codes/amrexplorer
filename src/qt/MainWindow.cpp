@@ -687,13 +687,24 @@ bool MainWindow::promptSshRemoteSession(std::vector<std::string> remotePaths)
     destinationEdit->setPlaceholderText(tr("user@host or ssh alias"));
     layout->addRow(tr("SSH destination:"), destinationEdit);
     auto* executableEdit = new QLineEdit(
-        settings.value(QStringLiteral("remote/serverExecutable"),
-            QStringLiteral("amrexplorer-server")).toString(),
+        remoteServerExecutableFor(destinationEdit->text().trimmed()),
         &dialog);
     executableEdit->setToolTip(
         tr("Name on the remote PATH, or a path such as "
-           "~/bin/amrexplorer-server"));
+           "~/bin/amrexplorer-server. Remembered per destination."));
     layout->addRow(tr("Remote amrexplorer-server:"), executableEdit);
+    // The executable follows the destination (each remembers its own) until
+    // the user edits it in this dialog; textEdited fires only on user edits.
+    auto executableEdited = std::make_shared<bool>(false);
+    connect(executableEdit, &QLineEdit::textEdited, &dialog,
+        [executableEdited] { *executableEdited = true; });
+    connect(destinationEdit, &QLineEdit::textChanged, &dialog,
+        [executableEdit, executableEdited](const QString& text) {
+            if (!*executableEdited) {
+                executableEdit->setText(
+                    remoteServerExecutableFor(text.trimmed()));
+            }
+        });
     auto* buttons = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->button(QDialogButtonBox::Ok)->setText(tr("Connect"));
@@ -711,8 +722,7 @@ bool MainWindow::promptSshRemoteSession(std::vector<std::string> remotePaths)
                "required."));
         return false;
     }
-    settings.setValue(QStringLiteral("remote/sshDestination"), destination);
-    settings.setValue(QStringLiteral("remote/serverExecutable"), executable);
+    // startSshRemoteSession persists the destination and executable.
     startSshRemoteSession(destination.toStdString(),
         executable.toStdString(), std::move(remotePaths));
     return true;

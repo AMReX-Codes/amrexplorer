@@ -501,6 +501,10 @@ private:
     // starts the session, opening `remotePaths` once it is ready. False when
     // the user cancelled.
     bool promptSshRemoteSession(std::vector<std::string> remotePaths);
+    // The server executable to use for a destination: the one last used for
+    // it, else the one last used anywhere, else "amrexplorer-server".
+    [[nodiscard]] static QString remoteServerExecutableFor(
+        const QString& destination);
 
     // Clears standalone FAB/MultiFab view state (mode flag, MultiFab-return
     // record, source metadata/paths) and hides the FAB selector dock. Any path

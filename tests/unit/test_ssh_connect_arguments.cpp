@@ -25,8 +25,7 @@ int main()
         = amrvis::qt::parseSshConnectArguments(sshDefault);
     require(defaultServer.request
             && defaultServer.request->destination == "frontier"
-            && defaultServer.request->serverExecutable
-                == "amrexplorer-server"
+            && defaultServer.request->serverExecutable.empty()
             && defaultServer.request->paths.size() == 1,
         "SSH config alias arguments were not accepted");
 

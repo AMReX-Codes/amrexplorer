@@ -42,14 +42,21 @@ true physical space — see [2-D spherical coordinates](#2-d-spherical-coordinat
 ## Remote datasets
 
 AMReXplorer can display plotfiles that live on another Linux machine, such as
-an HPC login node. The client can launch the server, create the SSH tunnel, and
-pass the generated bearer token automatically. Give it any destination that
-works with `ssh`, including a hostname or alias from `~/.ssh/config`:
+an HPC login node. The client runs `amrexplorer-server` on the remote machine
+through `ssh` and speaks its protocol over that ssh connection's own
+input/output stream -- the way `git` and `sftp` work. No ports are opened on
+either machine, no tunnel or port forwarding is involved, and the server exits
+by itself as soon as the session ends. Give the client any destination that
+works with the `ssh` command, including a hostname or alias from
+`~/.ssh/config`:
 
 ```text
 (local) $ amrexplorer --ssh user@remote-hostname /remote/path/plt00010
 ```
+
 where `remote-hostname` is replaced with the actual remote hostname or alias.
+Give several paths to play them as a sequence, or none to only establish the
+session. The plotfile paths are named as they appear on the remote machine.
 
 If `amrexplorer-server` is not on the non-interactive remote `PATH`, give its
 path explicitly. Quote a home-relative path so `~` is expanded on the remote
@@ -60,84 +67,64 @@ machine rather than by the local shell:
     /remote/path/plt00010
 ```
 
-The GUI equivalent is **File > Start Remote Session via SSH...**. Enter the
-SSH destination and, optionally, a different server executable. Once the
-session is ready, use **Open Remote Plotfile...** or **Open Remote Plotfile
-Sequence...**.
+The GUI equivalent is **File > Connect to Remote Server...**: enter the SSH
+destination and, optionally, a different server executable. Once the session
+is ready, use **Open Remote Plotfile...** or **Open Remote Plotfile
+Sequence...**. Both of those also offer to connect first when no session is
+live. Once open, a remote dataset is driven exactly like a local one.
+
+If the destination requires a password or keyboard-interactive MFA,
+AMReXplorer opens a response dialog for each OpenSSH prompt, including the
+first-connection host-key confirmation. Everything happens on one SSH
+connection, so the session requires only one authentication flow and does not
+rely on SSH multiplexing.
 
 The client keeps the SSH process alive for the session and stops it when the
-window closes. The server remains bound to remote loopback, the tunnel is
-bound to local loopback, and the token is passed in memory rather than in a
+window closes; the server reads end-of-stream and exits, so nothing is left
+running on the remote machine. The server binds no sockets at all in this
+mode, and the session's access token is passed in memory rather than in a
 process argument or shell history.
 
-If the SSH destination requires password or keyboard-interactive MFA,
-AMReXplorer opens a secure response dialog for each OpenSSH prompt. The server
-command and tunnel share one SSH connection, so the session requires only one
-authentication flow and does not rely on SSH multiplexing.
+**Gateways and firewalls.** Because nothing is forwarded, the session needs no
+port-forwarding permission from the remote sshd, and it works through a
+bastion with `ProxyJump` in `~/.ssh/config` (or `ssh -J`) exactly as plain
+`ssh` does. A gateway whose login script runs an inner `ssh` onward also works,
+provided the script passes the remote command through (`exec ssh target
+"$@"`); if it ignores the command and only opens an interactive shell, use a
+`ProxyJump` alias instead.
 
-The manual workflow remains available for troubleshooting or externally
-managed tunnels. The commands below are labelled `(remote) $` for the machine
-that holds the plotfiles and `(local) $` for your own desktop.
+**Windows.** Remote sessions are not available from a Windows client yet.
 
-**Step 1 — On the remote machine, start the server.** It prints a port number
-and an access token that you will use in the next two steps:
+**Troubleshooting.**
 
-```text
-(remote) $ amrexplorer-server
-LISTENING 127.0.0.1 41419 TOKEN 58f50743dff4f653b58c3a1fe5858904
-```
-
-The port and token are new every time you start the server, so use the values
-from your own output (here, port `41419`), not the ones printed above.
-
-**Step 2 — On your local machine, open an SSH tunnel** using the port from
-step 1. Leave this running while you work:
-
-```text
-(local) $ ssh -N -L 41419:127.0.0.1:41419 user@remote
-```
-
-If you reach the remote machine through a separate login gateway, add
-`-J user@gateway`:
-
-```text
-(local) $ ssh -N -J user@gateway -L 41419:127.0.0.1:41419 user@remote
-```
-
-**Step 3 — On your local machine, open the dataset.** Read the token from step
-1 into a silent shell variable, then pass it to AMReXplorer through standard
-input. This keeps the token out of process listings and shell history. Give the
-plotfile path as it appears on the remote machine:
-
-```text
-(local) $ read -rs AMREXPLORER_TOKEN && printf '\n'
-(local) $ amrexplorer --connect 127.0.0.1:41419 --token-stdin \
-    /remote/path/plt00010 <<<"$AMREXPLORER_TOKEN"
-(local) $ unset AMREXPLORER_TOKEN
-```
-
-To open several plotfiles as a sequence, list more than one path.
-
-The manual workflow is available from the menus: **File > Connect to Remote
-Server...** (enter `127.0.0.1:PORT`, then the token when prompted), followed by
-**Open Remote Plotfile...** or **Open Remote Plotfile Sequence...** and the
-remote path.
-
-Once open, a remote dataset is driven exactly like a local one.
-
-**Tip — use a fixed local port.** In the tunnel command the first number is a
-port on your own machine and can be any value you pick. Choose a fixed one and
-step 3 always uses the same number, even though the server's port changes each
-run.
+- *"amrexplorer-server is installed in its PATH"*: the login shell on the
+  remote machine could not find the server for a non-interactive command. Pass
+  the full path with `--server` (CLI) or in the connect dialog's second field.
+- *"unknown option: --stdio"*: the `amrexplorer-server` installed on the
+  remote machine predates this client. Build and install a current one -- see
+  [INSTALL.md](../INSTALL.md).
+- The tail of the remote side's error output is included in the failure
+  message, and the Diagnostics dock shows the session's state at any time.
+- A shell startup file that prints output is harmless before the session
+  starts (the client skips banners), but anything that writes to the
+  command's standard output *after* startup -- a background job in `.bashrc`,
+  for example -- corrupts the stream and ends the session.
 
 **Slow links.** The server disconnects a client that stalls: by default it
 allows 30 seconds with no write progress, and expects a response to average at
 least 64 KiB/s. If a slow or intermittent link keeps dropping the connection,
-relax both limits:
+relax both limits with a small wrapper script on the remote machine and pass
+it as the server executable:
 
 ```text
-(remote) $ amrexplorer-server --write-stall-timeout-seconds 120 \
-    --write-min-kib-per-second 8
+(remote) $ cat > ~/bin/amrexplorer-server-slow <<'EOF'
+#!/bin/sh
+exec amrexplorer-server --write-stall-timeout-seconds 120 \
+    --write-min-kib-per-second 8 "$@"
+EOF
+(remote) $ chmod +x ~/bin/amrexplorer-server-slow
+(local)  $ amrexplorer --ssh remote-hostname \
+    --server "~/bin/amrexplorer-server-slow" /remote/path/plt00010
 ```
 
 ## User interface overview

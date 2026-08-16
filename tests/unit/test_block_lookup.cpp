@@ -418,11 +418,14 @@ int main()
     }
 
     // lookupBlockValue over IndexedBlocks with real cache handles: the value
-    // is read at valueOffset within the covering block's FAB, a point outside
-    // every block is nullopt, a FAB whose header box does not cover the
-    // catalog box it was loaded for throws rather than aliasing into the
-    // wrong cell (the payload is always sized to the header box, so payload
-    // size cannot catch that), and a block with no payload is refused.
+    // is read at valueOffset within the covering block's FAB and a point
+    // outside every block is nullopt. IndexedBlocks validates every block
+    // when built -- a FAB whose header box does not cover its catalog box
+    // (which would alias into the wrong cell without leaving the payload), a
+    // payload shorter than the FAB box (which would read past its end; the
+    // reader never produces one, but FabBlock is an aggregate any producer can
+    // fill), and a missing payload are each refused there, so the per-hit
+    // lookup carries no checks.
     {
         amrvis::PlotfileDataset::BlockCache cache(1 << 20);
         const auto pin = [&cache](int grid, const IntBox& box,
@@ -434,21 +437,28 @@ int main()
             key.grid = grid;
             return cache.insertAndPin(key, std::move(fab), 64);
         };
+        const auto box2d = [](int x0, int y0, int x1, int y1) {
+            IntBox box;
+            box.lower = {{x0, y0, 0}};
+            box.upper = {{x1, y1, 0}};
+            box.centering = {{0, 0, 0}};
+            return box;
+        };
         std::vector<LoadedBlock> loaded;
         // Block 0: cells x 0..3, y 0..1 -> values 0..7 (x fastest).
-        IntBox first;
-        first.lower = {{0, 0, 0}};
-        first.upper = {{3, 1, 0}};
-        first.centering = {{0, 0, 0}};
+        const auto first = box2d(0, 0, 3, 1);
         loaded.push_back({first,
             pin(0, first, {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0})});
-        // Block 1: cells x 4..5, y 0..1 -> values 10..13.
-        IntBox second;
-        second.lower = {{4, 0, 0}};
-        second.upper = {{5, 1, 0}};
-        second.centering = {{0, 0, 0}};
-        loaded.push_back({second, pin(1, second, {10.0, 11.0, 12.0, 13.0})});
-        const amrvis::detail::IndexedBlocks indexed(std::move(loaded), axes);
+        // Block 1: cells x 4..5, y 0..1 -> values 10..13, in a FAB box grown
+        // by one cell on every side (ghost cells), as loaded FABs often are.
+        const auto second = box2d(4, 0, 5, 1);
+        std::vector<double> grown(16, -1.0);
+        grown[5] = 10.0;   // (4,0) in the 4x4 grown box (3..6, -1..2)
+        grown[6] = 11.0;   // (5,0)
+        grown[9] = 12.0;   // (4,1)
+        grown[10] = 13.0;  // (5,1)
+        loaded.push_back({second, pin(1, box2d(3, -1, 6, 2), grown)});
+        const amrvis::detail::IndexedBlocks indexed(2, std::move(loaded), axes);
 
         const auto at = [&indexed](int x, int y) {
             return amrvis::detail::lookupBlockValue(indexed, point(x, y), 2);
@@ -460,46 +470,40 @@ int main()
                 && !at(6, 0).has_value(),
             "lookupBlockValue returned a value outside every block");
         require(at(4, 0) == 10.0 && at(4, 1) == 12.0 && at(5, 1) == 13.0,
-            "lookupBlockValue misread the second block");
+            "lookupBlockValue misread the ghost-grown block");
 
-        // A block whose FAB header box does not cover its catalog box aliases
-        // into the wrong cell if only the payload size is checked; and a
-        // block with no payload at all must be refused, not dereferenced.
-        std::vector<LoadedBlock> mismatched;
-        IntBox catalog;
-        catalog.lower = {{0, 0, 0}};
-        catalog.upper = {{3, 3, 0}};  // 4x4 per the catalog ...
-        catalog.centering = {{0, 0, 0}};
-        IntBox header;
-        header.lower = {{0, 0, 0}};
-        header.upper = {{1, 3, 0}};   // ... but the FAB holds 2x4
-        header.centering = {{0, 0, 0}};
-        mismatched.push_back({catalog, pin(2, header,
-            {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0})});
-        mismatched.push_back({second, {}});  // no payload
-        const amrvis::detail::IndexedBlocks mismatchedIndexed(
-            std::move(mismatched), axes);
-        const auto atMismatched = [&mismatchedIndexed](int x, int y) {
-            return amrvis::detail::lookupBlockValue(
-                mismatchedIndexed, point(x, y), 2);
+        // Each rejected shape, at construction, with the right exception:
+        // std::runtime_error for a corrupt payload, std::logic_error for the
+        // programming error of an unloaded block.
+        const auto rejects = [&](const char* what, LoadedBlock block,
+                                 bool corrupt) {
+            std::vector<LoadedBlock> blocks;
+            blocks.push_back(std::move(block));
+            bool threw = false;
+            try {
+                const amrvis::detail::IndexedBlocks bad(2, std::move(blocks), axes);
+            } catch (const std::runtime_error&) {
+                threw = corrupt;
+            } catch (const std::logic_error&) {
+                threw = !corrupt;
+            }
+            require(threw, what);
         };
-        require(atMismatched(1, 1) == 3.0,
-            "lookupBlockValue misread a cell inside both boxes");
-        bool boxThrew = false;
-        try {
-            static_cast<void>(atMismatched(3, 0));  // offset 3 < 8, cell (1,1)
-        } catch (const std::runtime_error&) {
-            boxThrew = true;
-        }
-        require(boxThrew,
-            "lookupBlockValue aliased a cell outside the FAB header box");
-        bool nullThrew = false;
-        try {
-            static_cast<void>(atMismatched(4, 0));  // the payload-less block
-        } catch (const std::logic_error&) {
-            nullThrew = true;
-        }
-        require(nullThrew, "lookupBlockValue dereferenced a null payload");
+        // Catalog 4x4, FAB header 2x4: cell (3,0) would be offset 3 < 8, i.e.
+        // cell (1,1)'s value, if only the payload size were checked.
+        rejects("a FAB header box smaller than its catalog box was accepted",
+            {box2d(0, 0, 3, 3),
+                pin(2, box2d(0, 0, 1, 3),
+                    {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0})},
+            true);
+        // Header box 2x2 but only three values: cell (5,1) would read past
+        // the payload.
+        rejects("a payload shorter than its FAB box was accepted",
+            {second, pin(3, second, {10.0, 11.0, 12.0})}, true);
+        rejects("a block with no payload was accepted", {second, {}}, false);
+        // And an inverted FAB header box, which valueOffset refuses.
+        rejects("an inverted FAB header box was accepted",
+            {second, pin(4, box2d(5, 1, 4, 0), {0.0})}, true);
     }
 
     std::cout << "block lookup tests passed\n";

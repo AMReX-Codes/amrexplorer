@@ -180,7 +180,8 @@ SliceQueryResult SliceQuery::execute(
             }
             loaded.push_back({block.box, std::move(access.handle)});
         }
-        levels.push_back({levelIndex, IndexedBlocks(std::move(loaded), axes)});
+        levels.push_back({levelIndex,
+            IndexedBlocks(metadata.dimension, std::move(loaded), axes)});
     }
 
     // The composed piecewise-constant field at a physical point: the finest

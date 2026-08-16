@@ -149,7 +149,7 @@ LineQueryResult LineQuery::execute(
             loaded.push_back({block.box, std::move(access.handle)});
         }
         blocksByLevel[static_cast<std::size_t>(levelIndex)]
-            = IndexedBlocks(std::move(loaded), request.axis);
+            = IndexedBlocks(metadata.dimension, std::move(loaded), request.axis);
     }
 
     // Find the finest level covering position x (fine overrides coarse).

@@ -150,32 +150,10 @@ DatasetPage extractDatasetPage(PlotfileDataset& dataset,
         const auto iUpper = std::min(validBox.upper[xAxis], page.upper[0]);
         const auto jLower = std::max(validBox.lower[yAxis], page.lower[1]);
         const auto jUpper = std::min(validBox.upper[yAxis], page.upper[1]);
-        // The cells read below come from the catalog's box; the offsets are
-        // computed in the FAB's own header box. Nothing upstream cross-checks
-        // the two (a v1 VisMF FAB header can disagree with the Header's grid
-        // box), and a disagreement aliases into the wrong cell without ever
-        // leaving the payload -- the payload is sized to the FAB box exactly.
-        // Require the whole cell range to lie in the FAB box, once per block.
-        {
-            Int3 first{};
-            Int3 last{};
-            first[xAxis] = iLower;
-            last[xAxis] = iUpper;
-            first[yAxis] = jLower;
-            last[yAxis] = jUpper;
-            if (metadata.dimension == 3) {
-                first[static_cast<std::size_t>(request.normalAxis)]
-                    = page.sliceIndex;
-                last[static_cast<std::size_t>(request.normalAxis)]
-                    = page.sliceIndex;
-            }
-            if (iLower <= iUpper && jLower <= jUpper
-                && (!detail::contains(fab.box, first, metadata.dimension)
-                    || !detail::contains(fab.box, last, metadata.dimension))) {
-                throw std::runtime_error(
-                    "dataset page block does not cover its catalog box");
-            }
-        }
+        // Once per block: the FAB covers the catalog box the cells below are
+        // taken from, and its payload covers the FAB box (see
+        // requireBlockPayload for why neither can be assumed).
+        detail::requireBlockPayload(fab, validBox, metadata.dimension);
         for (auto j = jLower; j <= jUpper; ++j) {
             if (cancellation.stop_requested()) {
                 throw ReadCancelled();

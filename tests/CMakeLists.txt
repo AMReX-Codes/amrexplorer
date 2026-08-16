@@ -1,23 +1,15 @@
-# The fuzz harnesses build two ways. Default (OFF): a deterministic, bounded
-# ctest that runs fixed seeds + a fixed-PRNG stream, so CI and the sanitizers
-# preset exercise the untrusted-input parsers on every run. ON (Clang only):
-# each harness is compiled as a coverage-guided libFuzzer driver
-# (LLVMFuzzerTestOneInput, its own main from the fuzzer runtime) to run by hand.
-# The flags are per target, not global, so they don't break the compiler check
-# with the fuzzer runtime's conflicting main.
-option(AMREXPLORER_LIBFUZZER
-    "Build the fuzz harnesses as coverage-guided libFuzzer drivers (Clang)" OFF)
-if(AMREXPLORER_LIBFUZZER AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    message(FATAL_ERROR
-        "AMREXPLORER_LIBFUZZER requires Clang (libFuzzer runtime).")
-endif()
-
-# Wire a fuzz-harness target for the mode selected above: a libFuzzer driver, or
-# a plain bounded ctest.
+# The fuzz harnesses build two ways. Default (AMREXPLORER_LIBFUZZER OFF): a
+# deterministic, bounded ctest that runs fixed seeds + a fixed-PRNG stream, so
+# CI and the sanitizers preset exercise the untrusted-input parsers on every
+# run. ON (Clang only): each harness is compiled as a coverage-guided libFuzzer
+# driver (LLVMFuzzerTestOneInput, its own main from the fuzzer runtime) to run
+# by hand; the coverage instrumentation itself is project-wide (see
+# amrexplorer_enable_libfuzzer_instrumentation), so the fuzzer sees the
+# parsers' own branches. Only the driver main is linked per target: it is
+# what would conflict with the compiler check and every other executable.
 function(amrexplorer_add_fuzz_target target)
     if(AMREXPLORER_LIBFUZZER)
         target_compile_definitions(${target} PRIVATE AMREXPLORER_LIBFUZZER)
-        target_compile_options(${target} PRIVATE -fsanitize=fuzzer-no-link)
         target_link_options(${target} PRIVATE -fsanitize=fuzzer)
     else()
         add_test(NAME ${target} COMMAND ${target})

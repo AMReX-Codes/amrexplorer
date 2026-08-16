@@ -98,8 +98,23 @@ provided the script passes the remote command through (`exec ssh target
 **Troubleshooting.**
 
 - *"amrexplorer-server is installed in its PATH"*: the login shell on the
-  remote machine could not find the server for a non-interactive command. Pass
-  the full path with `--server` (CLI) or in the connect dialog's second field.
+  remote machine could not find the server for a non-interactive command --
+  ssh commands skip most of the shell start-up that builds an interactive
+  session's `PATH`. Two fixes:
+  - Pass the full path with `--server` (CLI) or in the connect dialog's
+    second field. It is remembered per destination, so this is a one-time
+    entry.
+  - Or make the directory reachable non-interactively: on the remote machine
+    put the export at the *top* of `~/.bashrc`, before the interactivity
+    guard (`case $- in ... esac` or `[ -z "$PS1" ] && return`) that most
+    distributions ship -- lines below that guard never run for ssh commands:
+
+    ```bash
+    # ~/.bashrc on the remote machine, first line
+    export PATH="$HOME/.local/bin:$PATH"
+    ```
+
+    Check with `ssh remote-hostname 'amrexplorer-server --help'`.
 - *"unknown option: --stdio"*: the `amrexplorer-server` installed on the
   remote machine predates this client. Build and install a current one -- see
   [INSTALL.md](../INSTALL.md).

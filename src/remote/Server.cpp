@@ -231,10 +231,9 @@ bool isPlotfileDirectory(const std::filesystem::path& directory)
 // are not navigable and plotfiles are directories), sorted by name, the
 // first maximumDirectoryEntries of them with the truncated flag set when
 // more exist. Path resolution is the dataset-open one, so what a user
-// browses to is what a typed path opens. The scan itself collects only
-// names; the per-entry plotfile stats are spent on the entries actually
-// returned. Entries that cannot be stat'ed are skipped rather than failing
-// the whole listing.
+// browses to is what a typed path opens. The scan keeps only the names it
+// will return; the per-entry plotfile stats are spent on those. Entries that
+// cannot be stat'ed are skipped rather than failing the whole listing.
 RemoteDirectoryListing listServerDirectory(
     const std::string& requestedPath, StopToken cancellation)
 {
@@ -256,7 +255,11 @@ RemoteDirectoryListing listServerDirectory(
     listing.path = path.string();
     listing.parentPath = path.has_parent_path() ? path.parent_path().string()
                                                 : listing.path;
-    std::vector<std::filesystem::path> subdirectories;
+    // The smallest maximumDirectoryEntries names, kept as a max-heap while
+    // scanning, so memory and work are bounded by the cap rather than by the
+    // directory, and the scan stays cancellable at every entry.
+    std::vector<std::string> names;
+    names.reserve(maximumDirectoryEntries + 1);
     for (std::filesystem::directory_iterator entries(path,
              std::filesystem::directory_options::skip_permission_denied,
              error),
@@ -266,29 +269,35 @@ RemoteDirectoryListing listServerDirectory(
             throw ReadCancelled();
         }
         std::error_code entryError;
-        if (entries->is_directory(entryError) && !entryError) {
-            subdirectories.push_back(entries->path());
+        if (!entries->is_directory(entryError) || entryError) {
+            continue;
         }
+        auto name = entries->path().filename().string();
+        if (names.size() == maximumDirectoryEntries) {
+            listing.truncated = true;
+            if (!(name < names.front())) {
+                continue;
+            }
+            std::pop_heap(names.begin(), names.end());
+            names.pop_back();
+        }
+        names.push_back(std::move(name));
+        std::push_heap(names.begin(), names.end());
     }
     if (error) {
         throw std::runtime_error(
             "could not read " + listing.path + ": " + error.message());
     }
-    std::sort(subdirectories.begin(), subdirectories.end(),
-        [](const auto& left, const auto& right) {
-            return left.filename().native() < right.filename().native();
-        });
-    if (subdirectories.size() > maximumDirectoryEntries) {
-        subdirectories.resize(maximumDirectoryEntries);
-        listing.truncated = true;
-    }
-    listing.entries.reserve(subdirectories.size());
-    for (const auto& subdirectory : subdirectories) {
+    std::sort_heap(names.begin(), names.end());
+    listing.entries.reserve(names.size());
+    for (auto& name : names) {
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
         }
-        listing.entries.push_back({subdirectory.filename().string(),
-            subdirectory.string(), isPlotfileDirectory(subdirectory)});
+        auto subdirectory = path / name;
+        const bool plotfile = isPlotfileDirectory(subdirectory);
+        listing.entries.push_back(
+            {std::move(name), subdirectory.string(), plotfile});
     }
     return listing;
 }

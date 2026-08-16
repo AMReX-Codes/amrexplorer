@@ -270,6 +270,7 @@ int runBenchmark(int argc, char** argv)
             return {cell, cell};
         };
         std::size_t covered = 0;
+        std::size_t blockPixels = 0;     // every candidate cell in a block
         std::size_t linearChecked = 0;
         for (int y = 0; y < outputDim; ++y) {
             const double py = lower + (static_cast<double>(y) + 0.5) * extent
@@ -294,6 +295,9 @@ int runBenchmark(int argc, char** argv)
                     }
                 }
                 const bool isCovered = warm.plane.valid[off] != 0;
+                if (inBlock == candidates) {
+                    ++blockPixels;
+                }
                 if (inBlock == candidates && !isCovered) {
                     die("benchmark slice left a block pixel uncovered");
                 }
@@ -340,18 +344,20 @@ int runBenchmark(int argc, char** argv)
                 }
             }
         }
-        // The per-pixel checks above are exact for any layout; these two only
-        // refuse parameters that would make them vacuous, and only for the
-        // uniform tiling, where every pixel is a block pixel and (at domain >=
-        // 2) an interior pixel exists. A clustered layout may legitimately put
-        // no pixel center in a block or no bracket fully inside one; there the
-        // printed counts show how much was validated.
-        if (clusterGap == 0 && covered == 0) {
-            die("benchmark slice covered no pixels");
+        // The per-pixel checks above are exact for any layout; these two
+        // refuse parameters under which they would have checked nothing, from
+        // the expectations the loop just computed: no pixel centre inside a
+        // block at all, or (for linear, past domain 1 where no interior
+        // interval exists) no pixel whose whole bracket lies in a block. A
+        // run that trips them measured something but validated nothing.
+        if (blockPixels == 0) {
+            die("no pixel centre lies inside a block: these parameters "
+                "validate nothing");
         }
-        if (clusterGap == 0 && sampling == amrvis::SamplingPolicy::Linear
-            && domain >= 2 && linearChecked == 0) {
-            die("benchmark linear run validated no pixels");
+        if (sampling == amrvis::SamplingPolicy::Linear && domain >= 2
+            && linearChecked == 0) {
+            die("no pixel has its whole linear bracket inside a block: these "
+                "parameters validate no interpolated value");
         }
         std::vector<double> samples;
         samples.reserve(static_cast<std::size_t>(iterations));

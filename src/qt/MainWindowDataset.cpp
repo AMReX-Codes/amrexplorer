@@ -994,8 +994,8 @@ void MainWindow::startSshRemoteSession(std::string destination,
             .arg(QString::fromStdString(destination)));
     updateDiagnostics();
     m_sshRemoteSession->start(destination, std::move(serverExecutable),
-        remote::ConnectionOptions{
-            .clientName = "AMReXplorer Qt", .softwareVersion = kVersion},
+        remote::ConnectionOptions{.clientName = "AMReXplorer Qt",
+            .softwareVersion = kVersion, .sessionToken = {}},
         [this, destination, paths = std::move(remotePaths)](
             std::shared_ptr<remote::Connection> connection) {
             if (m_closing) {

@@ -8,6 +8,7 @@
 #include "MainWindow.hpp"
 #include "QtErrorText.hpp"
 #include "AnimationExporter.hpp"
+#include "PaletteController.hpp"
 #include "SequenceController.hpp"
 #include "AnimationPanel.hpp"
 #include "CacheConfig.hpp"
@@ -141,50 +142,6 @@ namespace amrvis::qt {
 // is PRIVATE to amrexplorer_qt, so an inline variable would acquire a second,
 // conflicting definition in any other target that included this header.
 extern const char* const kVersion;
-
-inline constexpr std::array<BuiltinPalette, 7> builtinPalettes{
-    BuiltinPalette::Rainbow, BuiltinPalette::Turbo, BuiltinPalette::Viridis,
-    BuiltinPalette::Plasma, BuiltinPalette::Parula, BuiltinPalette::Coolwarm,
-    BuiltinPalette::Blackbody};
-
-// This array is what the Palette menu, the selector and restoreSettings all
-// enumerate, so a palette missing from it exists in render2d and nowhere a user
-// can reach. test_palette pins the seven names but cannot catch that: adding an
-// enumerator leaves this at seven and every name it does check still matches.
-static_assert(builtinPalettes.size()
-        == static_cast<std::size_t>(BuiltinPalette::Count),
-    "every BuiltinPalette must be listed in builtinPalettes");
-
-// The QSettings value for a builtin palette. This string is on disk in every
-// user's settings, and it comes from amrvis::builtinPaletteName(), which
-// render2d documents as the menu label *and* the settings key -- so renaming a
-// palette there is a settings-format change, not a presentation tweak.
-// test_palette pins the seven strings so that cannot happen silently.
-inline QString builtinPaletteKey(std::size_t index)
-{
-    if (index >= builtinPalettes.size()) {
-        return {};
-    }
-    const auto name = builtinPaletteName(builtinPalettes[index]);
-    return QString::fromLatin1(name.data(), static_cast<qsizetype>(name.size()));
-}
-
-// The palette's name for the menu and the selector, and the one definition of
-// its capitalization -- where the settings key above stays lowercase. Not the
-// only presentation rule: syncPaletteSelector still appends the "_r" reversal
-// suffix to the selector alone, so with reversal on the two surfaces differ by
-// that suffix. Folding it in here is the remaining half of the job. Kept apart from that key precisely so this rule can live here
-// without rewriting anyone's stored settings. It used to be a pass-through
-// with the capitalization spelled out at two of its three call sites, so the
-// Palette menu showed "rainbow" while the selector showed "Rainbow".
-inline QString builtinPaletteLabel(std::size_t index)
-{
-    auto label = builtinPaletteKey(index);
-    if (!label.isEmpty()) {
-        label[0] = label[0].toUpper();
-    }
-    return label;
-}
 
 // The single conversion from a rendered ImageBuffer to the QImage the views
 // display: ARGB32 over the buffer's rgba, mirrored vertically because plane

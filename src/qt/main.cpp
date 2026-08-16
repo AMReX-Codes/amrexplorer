@@ -1761,7 +1761,7 @@ int main(int argc, char* argv[])
         const auto menu = window.paletteMenuLabelsForTest();
         auto selector = window.paletteSelectorLabelsForTest();
         // The reversal suffix is a selector-only presentation rule: with
-        // "Reverse Colormap" on, syncPaletteSelector appends "_r" while the
+        // "Reverse Colormap" on, the selector appends "_r" while the
         // menu actions keep their original text. That divergence is real and
         // outside what this case is about, so it is normalized away rather
         // than asserted on -- the property here is that the two agree on the

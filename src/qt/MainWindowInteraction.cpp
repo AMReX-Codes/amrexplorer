@@ -189,7 +189,7 @@ QColor MainWindow::overlayColor() const
     }
     if (m_contourColor >= 0 && m_contourColor < Palette::slotCount) {
         return QColor::fromRgba(static_cast<QRgb>(
-            m_palette.slotArgb(m_contourColor)));
+            m_paletteController->palette().slotArgb(m_contourColor)));
     }
     return QColor(0, 0, 0);
 }
@@ -200,7 +200,7 @@ QColor MainWindow::sliceAxisColor(int axis) const
     // x -> slot 65, y -> slot 220, z -> slot 255.
     constexpr std::array<int, 3> paletteSlots{65, 220, 255};
     return QColor::fromRgba(static_cast<QRgb>(
-        m_palette.slotArgb(paletteSlots[static_cast<std::size_t>(axis)])));
+        m_paletteController->palette().slotArgb(paletteSlots[static_cast<std::size_t>(axis)])));
 }
 
 void MainWindow::updateOverlay(PlaneViewState& state)

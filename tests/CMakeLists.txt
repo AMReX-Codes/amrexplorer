@@ -469,6 +469,28 @@ if(TARGET amrexplorer_qt)
     )
     add_test(NAME sequence_controller COMMAND test_sequence_controller)
 
+    add_executable(test_palette_controller
+        unit/test_palette_controller.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/PaletteController.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/PaletteController.hpp"
+    )
+    set_target_properties(test_palette_controller PROPERTIES AUTOMOC ON)
+    target_include_directories(test_palette_controller
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_palette_controller
+        PRIVATE
+            amrexplorer::render2d
+            amrexplorer::warnings
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Widgets
+    )
+    # The controller builds real widgets (menu, selector), so it needs a QPA
+    # platform; offscreen keeps it headless like the Qt smoke tests.
+    add_test(NAME palette_controller
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_palette_controller>")
+
     add_executable(test_remote_endpoint unit/test_remote_endpoint.cpp)
     target_include_directories(test_remote_endpoint
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")

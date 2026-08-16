@@ -149,45 +149,8 @@ void MainWindow::restoreSettings()
 {
     const auto settings = makeSettings();
 
-    auto paletteRestored = false;
-    if (settings.value(QStringLiteral("palette/fromFile"), false).toBool()) {
-        const auto path = settings.value(QStringLiteral("palette/filePath")).toString();
-        if (!path.isEmpty()) {
-            try {
-                m_basePalette = Palette::load(path.toStdString());
-                m_paletteFromFile = true;
-                m_paletteFilePath = path;
-                paletteRestored = true;
-            } catch (const std::exception&) {
-                paletteRestored = false;
-            }
-        }
-    }
-    if (!paletteRestored) {
-        const auto name = settings.value(QStringLiteral("palette/builtin"),
-            QStringLiteral("rainbow")).toString();
-        m_builtinIndex = 0;
-        for (std::size_t index = 0; index < builtinPalettes.size(); ++index) {
-            if (name == builtinPaletteKey(index)) {
-                m_builtinIndex = static_cast<int>(index);
-                break;
-            }
-        }
-        m_basePalette = builtinPalette(
-            builtinPalettes[static_cast<std::size_t>(m_builtinIndex)]);
-        m_paletteFromFile = false;
-        m_paletteFilePath.clear();
-    }
-    m_reversePalette = settings.value(QStringLiteral("palette/reversed"), false)
-        .toBool();
-    if (m_reversePaletteAction != nullptr) {
-        const QSignalBlocker blocker(m_reversePaletteAction);
-        m_reversePaletteAction->setChecked(m_reversePalette);
-    }
-    m_palette = m_reversePalette ? m_basePalette.reversed() : m_basePalette;
-    m_colorBar->setPalette(&m_palette);
-    syncPaletteChecks();
-    syncPaletteSelector();
+    m_paletteController->restore(settings);
+    m_colorBar->setPalette(&m_paletteController->palette());
 
     {
         const QSignalBlocker logarithmicBlocker(m_logarithmic);
@@ -257,11 +220,7 @@ void MainWindow::saveSettings()
     // depends on the dataset and restoring a different mode from a previous
     // session would produce unexpected color bars.
     settings.setValue(QStringLiteral("range/logarithmic"), m_logarithmic->isChecked());
-    settings.setValue(QStringLiteral("palette/fromFile"), m_paletteFromFile);
-    settings.setValue(QStringLiteral("palette/filePath"), m_paletteFilePath);
-    settings.setValue(QStringLiteral("palette/builtin"),
-        builtinPaletteKey(static_cast<std::size_t>(m_builtinIndex)));
-    settings.setValue(QStringLiteral("palette/reversed"), m_reversePalette);
+    m_paletteController->save(settings);
     settings.setValue(QStringLiteral("numberFormat"), m_numberFormat);
     settings.setValue(QStringLiteral("animation/speed"),
         m_animationPanel->speedValue());
@@ -1434,7 +1393,7 @@ void MainWindow::requestInitialSlice(
     // unavailable), linear scale, whole domain, midpoint positions.
     FrameSliceSpec spec = initialSpec.value_or(FrameSliceSpec{});
     if (!initialSpec) {
-        spec.palette = m_palette;
+        spec.palette = m_paletteController->palette();
         spec.displayMode = m_displayMode;
         spec.includeGridBoxes = m_boxesAction->isChecked();
         spec.vectorUField =

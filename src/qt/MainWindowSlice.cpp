@@ -268,7 +268,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
         userRange = std::pair{m_rangeMinimum->value(), m_rangeMaximum->value()};
     }
     const auto logarithmic = m_logarithmic->isChecked();
-    const auto palette = m_palette;
+    const auto palette = m_paletteController->palette();
     const auto displayMode = m_displayMode;
     // Each 3-D panel uses a different pair of vector components:
     //   XY (normal=2) → U,V   XZ (normal=1) → U,W   YZ (normal=0) → V,W
@@ -402,7 +402,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                         // it skips) realigns the raster and contours here —
                         // that also avoids rendering each 3-D panel twice.
                         DisplayCoordinator::realignArrivalToRange(result,
-                            *cachedRange, m_palette, m_viewDimension != 3);
+                            *cachedRange, m_paletteController->palette(), m_viewDimension != 3);
                     }
                     // showSlice takes the arrival by value; the fallback levels
                     // are still needed below, so copy them out first rather
@@ -524,7 +524,7 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
         const auto color = levelIndex == firstLevel
             ? QColor(Qt::white)
             : QColor::fromRgb(static_cast<QRgb>(
-                m_palette.levelColor(levelIndex, lastLevel)));
+                m_paletteController->palette().levelColor(levelIndex, lastLevel)));
         if (spherical) {
             // xAxis is r, yAxis is theta. Branch on the state's mode (the
             // raster on screen), not m_sphericalDisplay (the menu
@@ -1212,7 +1212,7 @@ void MainWindow::syncVisibleRanges()
         watcher->setFuture(QtConcurrent::run([cachedRange, snapshots,
             logarithmic = m_logarithmic->isChecked(),
             contourMode = isContourMode(m_displayMode),
-            contourCount = m_contourCount, palette = m_palette] {
+            contourCount = m_contourCount, palette = m_paletteController->palette()] {
 #ifdef AMREXPLORER_QT_TEST_ACCESS
             // Held only when the staleness test has armed the gate.
             visible_sync_test::waitAtGate();
@@ -1708,7 +1708,7 @@ FrameSliceSpec MainWindow::buildFrameSpec()
 {
     FrameSliceSpec spec;
     spec.displayMode = m_displayMode;
-    spec.palette = m_palette;
+    spec.palette = m_paletteController->palette();
     spec.contourCount = m_contourCount;
     spec.sphericalSupersample = m_sphericalSupersample;
     spec.sphericalDisplay = m_sphericalDisplay;

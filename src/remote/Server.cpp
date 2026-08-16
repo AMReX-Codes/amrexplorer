@@ -19,6 +19,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -197,8 +198,9 @@ ErrorData classifyError(const std::exception& error)
 
 class Session : public std::enable_shared_from_this<Session> {
 public:
-    Session(Socket socket, ThreadPool& workers, const ServerOptions& options)
-        : m_socket(std::move(socket))
+    Session(std::unique_ptr<Channel> channel, ThreadPool& workers,
+        const ServerOptions& options)
+        : m_channel(std::move(channel))
         , m_workers(workers)
         , m_options(options)
         , m_handshakeDeadline(
@@ -212,10 +214,10 @@ public:
         try {
             while (!m_stopping.load()) {
                 const auto frame = m_handshakeComplete
-                    ? readFrame(m_socket, m_maximumFrameBytes.load(),
+                    ? readFrame(*m_channel, m_maximumFrameBytes.load(),
                           std::chrono::steady_clock::time_point::max(),
                           m_lifecycleStop.get_token())
-                    : readFrame(m_socket,
+                    : readFrame(*m_channel,
                           std::min(m_options.maximumFrameBytes,
                               m_options.maximumHandshakeFrameBytes),
                           m_handshakeDeadline,
@@ -234,8 +236,8 @@ public:
         // that writer before releasing the socket handle so closesocket never
         // overlaps another Winsock operation.
         std::scoped_lock lock(m_writeMutex);
-        m_socket.shutdown();
-        m_socket.close();
+        m_channel->shutdown();
+        m_channel->close();
     }
 
     void stop() noexcept
@@ -916,7 +918,7 @@ private:
                 // sockets live in the same process.
                 const testing::ResponseWriteScope pacingScope;
 #endif
-                writeFrameWithBudget(m_socket, bytes,
+                writeFrameWithBudget(*m_channel, bytes,
                     m_maximumFrameBytes.load(), writeBudget(), {},
                     m_lifecycleStop.get_token());
             }
@@ -936,7 +938,7 @@ private:
             }
             std::scoped_lock lock(m_writeMutex);
             if (!m_stopping.load()) {
-                writeFrameWithBudget(m_socket, bytes,
+                writeFrameWithBudget(*m_channel, bytes,
                     m_maximumFrameBytes.load(), writeBudget(), {},
                     m_lifecycleStop.get_token());
             }
@@ -955,7 +957,7 @@ private:
             m_options.responseWriteMinimumBytesPerSecond};
     }
 
-    Socket m_socket;
+    std::unique_ptr<Channel> m_channel;
     static constexpr std::uint64_t responseOverheadReserveBytes
         = sliceResponseOverheadBytes;
     ThreadPool& m_workers;
@@ -979,28 +981,17 @@ private:
 
 class Server::Impl {
 public:
-    explicit Impl(ServerOptions options)
-        : m_options(std::move(options))
-        , m_listener(listenOnLoopback(m_options.port))
-        , m_workers(resolveWorkerCount(m_options.workerCount))
+    // With a channel, the server serves that one pre-connected peer and never
+    // listens; without one it listens on loopback. Options are validated
+    // before either a listener or the worker pool exists.
+    Impl(ServerOptions options, std::unique_ptr<Channel> channel)
+        : m_options(validated(std::move(options)))
+        , m_channel(std::move(channel))
+        , m_listener(m_channel ? std::optional<Listener>{}
+                               : std::optional<Listener>{
+                                     listenOnLoopback(m_options.port)})
+        , m_workers(m_options.workerCount)
     {
-        if (m_options.maximumConnections == 0
-            || m_options.maximumDatasets == 0
-            || m_options.maximumOutstandingRequests == 0
-            || m_options.maximumFrameBytes == 0
-            || m_options.maximumHandshakeFrameBytes == 0
-            || m_options.handshakeTimeout
-                <= std::chrono::milliseconds::zero()
-            || m_options.responseWriteStallTimeout
-                <= std::chrono::milliseconds::zero()
-            || m_options.responseWriteMinimumBytesPerSecond == 0) {
-            throw std::invalid_argument(
-                "server resource limits must be greater than zero");
-        }
-        m_options.workerCount = resolveWorkerCount(m_options.workerCount);
-        if (m_options.sessionToken.empty()) {
-            m_options.sessionToken = generateSessionToken();
-        }
     }
 
     ~Impl()
@@ -1010,7 +1001,7 @@ public:
 
     std::uint16_t port() const noexcept
     {
-        return m_listener.port;
+        return m_listener ? m_listener->port : 0;
     }
 
     std::string lastError() const
@@ -1026,11 +1017,15 @@ public:
 
     void run()
     {
+        if (!m_listener) {
+            runSingleSession();
+            return;
+        }
         auto retryDelay = std::chrono::milliseconds{10};
         while (!m_stopping.load()) {
             try {
-                auto socket = acceptConnection(
-                    m_listener.socket, m_acceptStop.get_token());
+                auto socket = std::make_unique<Socket>(acceptConnection(
+                    m_listener->socket, m_acceptStop.get_token()));
                 auto session = std::make_shared<Session>(
                     std::move(socket), m_workers, m_options);
                 std::scoped_lock lock(m_sessionsMutex);
@@ -1074,7 +1069,7 @@ public:
                     retryDelay * 2, std::chrono::milliseconds{250});
             }
         }
-        m_listener.socket.close();
+        m_listener->socket.close();
     }
 
     void requestStop() noexcept
@@ -1086,9 +1081,12 @@ public:
         std::vector<std::shared_ptr<Session>> sessions;
         {
             std::scoped_lock lock(m_sessionsMutex);
-            sessions.reserve(m_sessions.size());
+            sessions.reserve(m_sessions.size() + 1);
             for (const auto& worker : m_sessions) {
                 sessions.push_back(worker.session);
+            }
+            if (m_singleSession) {
+                sessions.push_back(m_singleSession);
             }
         }
         for (const auto& session : sessions) {
@@ -1097,11 +1095,52 @@ public:
     }
 
 private:
+    static ServerOptions validated(ServerOptions options)
+    {
+        if (options.maximumConnections == 0
+            || options.maximumDatasets == 0
+            || options.maximumOutstandingRequests == 0
+            || options.maximumFrameBytes == 0
+            || options.maximumHandshakeFrameBytes == 0
+            || options.handshakeTimeout
+                <= std::chrono::milliseconds::zero()
+            || options.responseWriteStallTimeout
+                <= std::chrono::milliseconds::zero()
+            || options.responseWriteMinimumBytesPerSecond == 0) {
+            throw std::invalid_argument(
+                "server resource limits must be greater than zero");
+        }
+        options.workerCount = resolveWorkerCount(options.workerCount);
+        if (options.sessionToken.empty()) {
+            options.sessionToken = generateSessionToken();
+        }
+        return options;
+    }
+
     static unsigned int resolveWorkerCount(unsigned int requested)
     {
         return requested == 0
             ? std::max(1U, std::thread::hardware_concurrency())
             : requested;
+    }
+
+    // One session over the pre-connected channel, run on the caller's thread.
+    // Returns when the peer closes the stream, the session fails, or
+    // requestStop() is called; the process that owns the channel then exits,
+    // which is what ties an ssh-launched server's lifetime to its session.
+    void runSingleSession()
+    {
+        std::shared_ptr<Session> session;
+        {
+            std::scoped_lock lock(m_sessionsMutex);
+            if (m_stopping.load() || !m_channel) {
+                return;
+            }
+            session = std::make_shared<Session>(
+                std::move(m_channel), m_workers, m_options);
+            m_singleSession = session;
+        }
+        session->run();
     }
 
     struct SessionWorker {
@@ -1110,18 +1149,28 @@ private:
     };
 
     ServerOptions m_options;
-    Listener m_listener;
+    std::unique_ptr<Channel> m_channel;
+    std::optional<Listener> m_listener;
     ThreadPool m_workers;
     std::atomic_bool m_stopping{false};
     StopSource m_acceptStop;
     std::mutex m_sessionsMutex;
     std::vector<SessionWorker> m_sessions;
+    std::shared_ptr<Session> m_singleSession;
     mutable std::mutex m_errorMutex;
     std::string m_lastError;
 };
 
 Server::Server(ServerOptions options)
-    : m_impl(std::make_unique<Impl>(std::move(options)))
+    : m_impl(std::make_unique<Impl>(std::move(options), nullptr))
+{
+}
+
+Server::Server(std::unique_ptr<Channel> channel, ServerOptions options)
+    : m_impl(std::make_unique<Impl>(std::move(options),
+          channel ? std::move(channel)
+                  : throw std::invalid_argument(
+                        "server channel must not be null")))
 {
 }
 

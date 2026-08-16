@@ -30,6 +30,7 @@
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -343,47 +344,27 @@ void waitForWritable(NativeSocket socket,
     }
 }
 
-bool readExact(NativeSocket descriptor, std::span<std::uint8_t> destination,
+bool readExact(const Channel& channel, std::span<std::uint8_t> destination,
     bool allowCleanEof,
     std::chrono::steady_clock::time_point deadline,
     StopToken cancellation)
 {
     std::size_t completed = 0;
     while (completed < destination.size()) {
-        waitForReadable(descriptor, deadline, cancellation);
-#ifdef _WIN32
-        const auto remaining = std::min<std::size_t>(
-            destination.size() - completed,
-            static_cast<std::size_t>(std::numeric_limits<int>::max()));
-        const auto count = ::recv(descriptor,
-            reinterpret_cast<char*>(destination.data() + completed),
-            static_cast<int>(remaining), 0);
-#else
-        const auto count = ::recv(descriptor, destination.data() + completed,
-            destination.size() - completed, 0);
-#endif
+        const auto count = channel.readSome(
+            destination.subspan(completed), deadline, cancellation);
         if (count == 0) {
             if (completed == 0 && allowCleanEof) {
                 return false;
             }
             throw std::runtime_error("connection closed inside a wire frame");
         }
-        if (count < 0) {
-            const auto error = lastSocketError();
-            if (interrupted(error) || wouldBlock(error)) {
-                continue;
-            }
-            throwSocketError("recv", error);
-        }
-        completed += static_cast<std::size_t>(count);
+        completed += count;
     }
     return true;
 }
 
-void writeExact(
-    NativeSocket descriptor, std::span<const std::uint8_t> source);
-
-void writeExact(NativeSocket descriptor,
+void writeExact(const Channel& channel,
     std::span<const std::uint8_t> source,
     std::chrono::steady_clock::time_point deadline,
     StopToken cancellation, StopToken lifecycle,
@@ -405,37 +386,13 @@ void writeExact(NativeSocket descriptor,
                 ? "wire frame write stalled"
                 : "wire frame write stayed below the minimum throughput";
         }
-        waitForWritable(descriptor, limit, cancellation, lifecycle, reason);
         auto offered = source.size() - completed;
 #ifdef AMREXPLORER_SERVER_TEST_HOOKS
         offered = testing::writeChunkLimit(offered);
 #endif
-#ifdef _WIN32
-        const auto remaining = std::min<std::size_t>(offered, 64U * 1024U);
-        const auto count = ::send(descriptor,
-            reinterpret_cast<const char*>(source.data() + completed),
-            static_cast<int>(remaining), 0);
-#else
-        constexpr int noSignal =
-#ifdef MSG_NOSIGNAL
-            MSG_NOSIGNAL |
-#endif
-            MSG_DONTWAIT;
-        const auto count = ::send(
-            descriptor, source.data() + completed, offered, noSignal);
-#endif
-        if (count < 0) {
-            const auto error = lastSocketError();
-            if (interrupted(error) || wouldBlock(error)) {
-                continue;
-            }
-            throwSocketError("send", error);
-        }
-        if (count == 0) {
-            throw std::runtime_error(
-                "connection closed during wire frame write");
-        }
-        completed += static_cast<std::size_t>(count);
+        const auto count = channel.writeSome(source.subspan(completed, offered),
+            limit, cancellation, lifecycle, reason);
+        completed += count;
         if (stallTimeout) {
             progressDeadline
                 = std::chrono::steady_clock::now() + *stallTimeout;
@@ -443,10 +400,9 @@ void writeExact(NativeSocket descriptor,
     }
 }
 
-void writeExact(
-    NativeSocket descriptor, std::span<const std::uint8_t> source)
+void writeExact(const Channel& channel, std::span<const std::uint8_t> source)
 {
-    writeExact(descriptor, source,
+    writeExact(channel, source,
         std::chrono::steady_clock::time_point::max(), {}, {});
 }
 
@@ -505,6 +461,200 @@ void Socket::close() noexcept
         m_descriptor = -1;
     }
 }
+
+std::size_t Socket::readSome(std::span<std::uint8_t> destination,
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation) const
+{
+    const auto descriptor = native(m_descriptor);
+    for (;;) {
+        waitForReadable(descriptor, deadline, cancellation);
+#ifdef _WIN32
+        const auto remaining = std::min<std::size_t>(destination.size(),
+            static_cast<std::size_t>(std::numeric_limits<int>::max()));
+        const auto count = ::recv(descriptor,
+            reinterpret_cast<char*>(destination.data()),
+            static_cast<int>(remaining), 0);
+#else
+        const auto count
+            = ::recv(descriptor, destination.data(), destination.size(), 0);
+#endif
+        if (count >= 0) {
+            return static_cast<std::size_t>(count);
+        }
+        const auto error = lastSocketError();
+        if (interrupted(error) || wouldBlock(error)) {
+            continue;
+        }
+        throwSocketError("recv", error);
+    }
+}
+
+std::size_t Socket::writeSome(std::span<const std::uint8_t> source,
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation, StopToken lifecycle,
+    const char* timeoutMessage) const
+{
+    const auto descriptor = native(m_descriptor);
+    for (;;) {
+        waitForWritable(
+            descriptor, deadline, cancellation, lifecycle, timeoutMessage);
+#ifdef _WIN32
+        const auto remaining = std::min<std::size_t>(source.size(), 64U * 1024U);
+        const auto count = ::send(descriptor,
+            reinterpret_cast<const char*>(source.data()),
+            static_cast<int>(remaining), 0);
+#else
+        constexpr int noSignal =
+#ifdef MSG_NOSIGNAL
+            MSG_NOSIGNAL |
+#endif
+            MSG_DONTWAIT;
+        const auto count
+            = ::send(descriptor, source.data(), source.size(), noSignal);
+#endif
+        if (count < 0) {
+            const auto error = lastSocketError();
+            if (interrupted(error) || wouldBlock(error)) {
+                continue;
+            }
+            throwSocketError("send", error);
+        }
+        if (count == 0) {
+            throw std::runtime_error(
+                "connection closed during wire frame write");
+        }
+        return static_cast<std::size_t>(count);
+    }
+}
+
+Socket adoptStreamSocket(Socket::Native descriptor)
+{
+    ensureSockets();
+    Socket socket(descriptor);
+    if (!socket.valid() || native(descriptor) == invalidSocket) {
+        throw std::runtime_error("adoptStreamSocket: invalid descriptor");
+    }
+#ifdef SO_NOSIGPIPE
+    setIntegerSocketOption(
+        native(descriptor), SOL_SOCKET, SO_NOSIGPIPE, 1, "SO_NOSIGPIPE");
+#endif
+    setNonBlocking(native(descriptor), true);
+    return socket;
+}
+
+#ifndef _WIN32
+DescriptorChannel::DescriptorChannel(int readDescriptor, int writeDescriptor)
+    : m_read(readDescriptor)
+    , m_write(writeDescriptor)
+{
+    try {
+        if (m_read < 0 || m_write < 0) {
+            throw std::runtime_error("DescriptorChannel: invalid descriptor");
+        }
+        // Both directions wait through poll first; a blocking write of a large
+        // frame into a pipe would otherwise ignore the deadline entirely.
+        setNonBlocking(m_read, true);
+        if (m_write != m_read) {
+            setNonBlocking(m_write, true);
+        }
+    } catch (...) {
+        close();
+        throw;
+    }
+}
+
+DescriptorChannel::~DescriptorChannel()
+{
+    close();
+}
+
+int DescriptorChannel::readDescriptor() const noexcept
+{
+    return m_read;
+}
+
+int DescriptorChannel::writeDescriptor() const noexcept
+{
+    return m_write;
+}
+
+std::size_t DescriptorChannel::readSome(std::span<std::uint8_t> destination,
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation) const
+{
+    for (;;) {
+        waitForReadable(m_read, deadline, cancellation);
+        const auto count
+            = ::read(m_read, destination.data(), destination.size());
+        if (count >= 0) {
+            return static_cast<std::size_t>(count);
+        }
+        const auto error = errno;
+        if (interrupted(error) || wouldBlock(error)) {
+            continue;
+        }
+        throwSocketError("read", error);
+    }
+}
+
+std::size_t DescriptorChannel::writeSome(std::span<const std::uint8_t> source,
+    std::chrono::steady_clock::time_point deadline,
+    StopToken cancellation, StopToken lifecycle,
+    const char* timeoutMessage) const
+{
+    for (;;) {
+        waitForWritable(
+            m_write, deadline, cancellation, lifecycle, timeoutMessage);
+        // No MSG_NOSIGNAL for write(); a process using this channel is
+        // expected to ignore SIGPIPE so a departed peer surfaces as EPIPE.
+        const auto count = ::write(m_write, source.data(), source.size());
+        if (count < 0) {
+            const auto error = errno;
+            if (interrupted(error) || wouldBlock(error)) {
+                continue;
+            }
+            throwSocketError("write", error);
+        }
+        if (count == 0) {
+            throw std::runtime_error(
+                "connection closed during wire frame write");
+        }
+        return static_cast<std::size_t>(count);
+    }
+}
+
+void DescriptorChannel::shutdown() noexcept
+{
+    if (m_write < 0) {
+        return;
+    }
+    struct stat status {};
+    if (::fstat(m_write, &status) == 0 && S_ISSOCK(status.st_mode)) {
+        // The read and write descriptors may share one socket; closing the
+        // write descriptor alone would then leave the socket open. Half-closing
+        // delivers end of stream to the peer either way.
+        ::shutdown(m_write, SHUT_WR);
+        return;
+    }
+    if (m_write != m_read) {
+        ::close(m_write);
+    }
+    m_write = -1;
+}
+
+void DescriptorChannel::close() noexcept
+{
+    if (m_write >= 0 && m_write != m_read) {
+        ::close(m_write);
+    }
+    m_write = -1;
+    if (m_read >= 0) {
+        ::close(m_read);
+        m_read = -1;
+    }
+}
+#endif
 
 Listener listenOnLoopback(std::uint16_t port, int backlog)
 {
@@ -660,7 +810,7 @@ Socket connectTo(const std::string& host, std::uint16_t port,
     throwSocketError("connect", lastError);
 }
 
-void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
+void writeFrame(const Channel& channel, std::span<const std::uint8_t> payload,
     std::uint32_t maximumBytes)
 {
     if (payload.empty() || payload.size() > maximumBytes
@@ -670,12 +820,12 @@ void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
     const auto networkSize = htonl(static_cast<std::uint32_t>(payload.size()));
     const auto* sizeBytes
         = reinterpret_cast<const std::uint8_t*>(&networkSize);
-    writeExact(native(socket.descriptor()),
+    writeExact(channel,
         std::span<const std::uint8_t>(sizeBytes, sizeof(networkSize)));
-    writeExact(native(socket.descriptor()), payload);
+    writeExact(channel, payload);
 }
 
-void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
+void writeFrame(const Channel& channel, std::span<const std::uint8_t> payload,
     std::uint32_t maximumBytes,
     std::chrono::steady_clock::time_point deadline,
     StopToken cancellation, StopToken lifecycle)
@@ -687,10 +837,10 @@ void writeFrame(const Socket& socket, std::span<const std::uint8_t> payload,
     const auto networkSize = htonl(static_cast<std::uint32_t>(payload.size()));
     const auto* sizeBytes
         = reinterpret_cast<const std::uint8_t*>(&networkSize);
-    writeExact(native(socket.descriptor()),
+    writeExact(channel,
         std::span<const std::uint8_t>(sizeBytes, sizeof(networkSize)),
         deadline, cancellation, lifecycle);
-    writeExact(native(socket.descriptor()), payload, deadline, cancellation,
+    writeExact(channel, payload, deadline, cancellation,
         lifecycle);
 }
 
@@ -716,7 +866,7 @@ std::chrono::milliseconds FrameWriteBudget::total(
         static_cast<std::chrono::milliseconds::rep>(total));
 }
 
-void writeFrameWithBudget(const Socket& socket,
+void writeFrameWithBudget(const Channel& channel,
     std::span<const std::uint8_t> payload, std::uint32_t maximumBytes,
     const FrameWriteBudget& budget, StopToken cancellation,
     StopToken lifecycle)
@@ -740,29 +890,27 @@ void writeFrameWithBudget(const Socket& socket,
     const auto networkSize = htonl(static_cast<std::uint32_t>(payload.size()));
     const auto* sizeBytes
         = reinterpret_cast<const std::uint8_t*>(&networkSize);
-    writeExact(native(socket.descriptor()),
+    writeExact(channel,
         std::span<const std::uint8_t>(sizeBytes, sizeof(networkSize)),
         deadline, cancellation, lifecycle, budget.stallTimeout);
-    writeExact(native(socket.descriptor()), payload, deadline, cancellation,
+    writeExact(channel, payload, deadline, cancellation,
         lifecycle, budget.stallTimeout);
 }
 
 std::optional<std::vector<std::uint8_t>> readFrame(
-    const Socket& socket, std::uint32_t maximumBytes)
+    const Channel& channel, std::uint32_t maximumBytes)
 {
-    return readFrame(socket, maximumBytes,
+    return readFrame(channel, maximumBytes,
         std::chrono::steady_clock::time_point::max(), {});
 }
 
-std::optional<std::vector<std::uint8_t>> readFrame(const Socket& socket,
+std::optional<std::vector<std::uint8_t>> readFrame(const Channel& channel,
     std::uint32_t maximumBytes,
     std::chrono::steady_clock::time_point deadline,
     StopToken cancellation)
 {
     std::array<std::uint8_t, sizeof(std::uint32_t)> sizeBytes{};
-    if (!readExact(
-            native(socket.descriptor()), sizeBytes, true, deadline,
-            cancellation)) {
+    if (!readExact(channel, sizeBytes, true, deadline, cancellation)) {
         return std::nullopt;
     }
     std::uint32_t networkSize = 0;
@@ -772,8 +920,7 @@ std::optional<std::vector<std::uint8_t>> readFrame(const Socket& socket,
         throw std::runtime_error("wire frame size is outside the allowed range");
     }
     std::vector<std::uint8_t> payload(size);
-    static_cast<void>(readExact(
-        native(socket.descriptor()), payload, false, deadline, cancellation));
+    static_cast<void>(readExact(channel, payload, false, deadline, cancellation));
     return payload;
 }
 

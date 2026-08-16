@@ -31,7 +31,13 @@ struct ConnectionOptions {
 
 class Connection : public std::enable_shared_from_this<Connection> {
 public:
+    // Connects to a loopback listener (tests and tools on one host).
     Connection(std::string host, std::uint16_t port,
+        ConnectionOptions options = {}, StopToken cancellation = {});
+    // Speaks the protocol over an already-connected channel, such as the
+    // client's end of the stdio stream of an ssh-launched server. The
+    // connection timeout then bounds only the handshake.
+    Connection(std::unique_ptr<Channel> channel,
         ConnectionOptions options = {}, StopToken cancellation = {});
     ~Connection();
 

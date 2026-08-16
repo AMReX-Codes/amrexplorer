@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <deque>
 #include <exception>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -179,19 +180,28 @@ bool constantTimeEquals(std::string_view lhs, std::string_view rhs)
 
 // Clients send dataset paths as the user typed them, and "~/..." is a shell
 // habit no filesystem call honors. The server is the only side that knows its
-// home directory, so the leading tilde is resolved here, once, for every way
-// a path arrives. Other forms ("~user/...") pass through and fail with the
-// ordinary not-found error.
-std::string expandLeadingTilde(const std::string& path)
+// home directory, so it resolves here, once, for every way a path arrives:
+// a leading tilde expands, and a relative path is anchored at home as well --
+// documented behavior rather than an accident of the process's working
+// directory (sshd happens to start the login shell at home; a --port server
+// is launched from anywhere). "~user/..." passes through and fails with the
+// ordinary not-found error, and with no HOME the path is left untouched.
+std::string resolveDatasetPath(const std::string& path)
 {
-    if (path != "~" && !path.starts_with("~/")) {
-        return path;
-    }
     const char* home = std::getenv("HOME");
     if (home == nullptr || *home == '\0') {
         return path;
     }
-    return std::string(home) + path.substr(1);
+    if (path == "~") {
+        return home;
+    }
+    if (path.starts_with("~/")) {
+        return std::string(home) + path.substr(1);
+    }
+    if (!std::filesystem::path(path).is_absolute()) {
+        return (std::filesystem::path(home) / path).string();
+    }
+    return path;
 }
 
 ErrorData classifyError(const std::exception& error)
@@ -508,7 +518,7 @@ private:
         bool reservationActive = true;
         try {
             dataset = std::make_shared<LocalDatasetSession>(
-                expandLeadingTilde(request->path), id,
+                resolveDatasetPath(request->path), id,
                 request->cache_budget_bytes, cancellation);
             OpenedDataset opened;
             opened.id = id;

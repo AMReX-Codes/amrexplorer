@@ -126,6 +126,14 @@ void exerciseDataset(amrvis::remote::Connection& connection,
     require(viaTilde.catalog.dimension == 2,
         "server did not expand a home-relative dataset path");
     connection.closeDataset(viaTilde.id);
+    // A bare relative path is anchored at home too, by contract rather than
+    // by the accident of the server's working directory.
+    const auto viaRelative = connection.openDataset(
+        std::filesystem::path(datasetPath).filename().string(),
+        16ULL * 1024ULL * 1024ULL);
+    require(viaRelative.catalog.dimension == 2,
+        "server did not anchor a relative dataset path at home");
+    connection.closeDataset(viaRelative.id);
     const auto opened
         = connection.openDataset(datasetPath, 16ULL * 1024ULL * 1024ULL);
     require(opened.catalog.dimension == 2,

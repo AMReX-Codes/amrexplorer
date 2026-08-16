@@ -41,3 +41,23 @@ if(NOT stall_timeout_combined_output MATCHES
         "amrexplorer-server did not print the expected stall-timeout "
         "diagnostic:\n${stall_timeout_combined_output}")
 endif()
+
+execute_process(
+    COMMAND "${AMREXPLORER_SERVER}" --stdio --port 1
+    RESULT_VARIABLE stdio_port_result
+    OUTPUT_VARIABLE stdio_port_output
+    ERROR_VARIABLE stdio_port_error
+)
+
+if(stdio_port_result EQUAL 0)
+    message(FATAL_ERROR
+        "amrexplorer-server accepted --stdio together with --port")
+endif()
+
+set(stdio_port_combined_output "${stdio_port_output}${stdio_port_error}")
+if(NOT stdio_port_combined_output MATCHES
+        "--stdio and --port are mutually exclusive")
+    message(FATAL_ERROR
+        "amrexplorer-server did not print the expected --stdio/--port "
+        "diagnostic:\n${stdio_port_combined_output}")
+endif()

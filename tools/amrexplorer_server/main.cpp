@@ -1,6 +1,7 @@
 #include <amrexplorer/core/StopToken.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -10,6 +11,13 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+
+#ifndef _WIN32
+#include <fcntl.h>
+#include <memory>
+#include <poll.h>
+#include <unistd.h>
+#endif
 
 #ifndef AMREXPLORER_VERSION
 #define AMREXPLORER_VERSION "0.2.0-dev"
@@ -28,7 +36,11 @@ void printUsage(std::ostream& output)
 {
     output
         << "usage: amrexplorer-server [options]\n"
-        << "  --port PORT          loopback port; 0 selects an available port\n"
+        << "  --stdio              serve one client over stdin/stdout; this is\n"
+        << "                       how the AMReXplorer client runs the server\n"
+        << "                       through ssh\n"
+        << "  --port PORT          listen on a loopback port instead; 0 selects\n"
+        << "                       an available port (tests and tools)\n"
         << "  --threads COUNT      worker threads; 0 selects hardware concurrency\n"
         << "  --max-frame-mib MIB  maximum negotiated frame size\n"
         << "  --max-datasets COUNT maximum open datasets per connection\n"
@@ -92,6 +104,71 @@ Value parseUnsigned(const char* text, const char* option)
     return static_cast<Value>(parsed);
 }
 
+#ifdef _WIN32
+int serveStdio(amrvis::remote::ServerOptions)
+{
+    throw std::runtime_error("--stdio is not supported on Windows");
+}
+#else
+void writeFully(int descriptor, const std::string& text)
+{
+    std::size_t written = 0;
+    while (written < text.size()) {
+        const auto count = ::write(
+            descriptor, text.data() + written, text.size() - written);
+        if (count < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // The channel made the descriptor nonblocking already.
+                pollfd waiting{descriptor, POLLOUT, 0};
+                static_cast<void>(::poll(&waiting, 1, 1000));
+                continue;
+            }
+            throw std::runtime_error("could not write the ready line");
+        }
+        written += static_cast<std::size_t>(count);
+    }
+}
+
+// One session over the process's own stdin/stdout, which under ssh is the
+// channel to the client. The wire moves to private duplicates so that stray
+// stdout output from anything in the process lands on stderr instead of
+// corrupting a frame, and stdin reads nothing but the wire.
+int serveStdio(amrvis::remote::ServerOptions options)
+{
+    const int wireIn = ::dup(STDIN_FILENO);
+    const int wireOut = ::dup(STDOUT_FILENO);
+    if (wireIn < 0 || wireOut < 0) {
+        throw std::runtime_error("could not duplicate stdin/stdout");
+    }
+    const int devNull = ::open("/dev/null", O_RDWR);
+    if (devNull < 0 || ::dup2(devNull, STDIN_FILENO) < 0
+        || ::dup2(STDERR_FILENO, STDOUT_FILENO) < 0) {
+        throw std::runtime_error("could not redirect stdin/stdout");
+    }
+    ::close(devNull);
+    // A departed peer must surface as EPIPE from the channel, not kill us.
+    std::signal(SIGPIPE, SIG_IGN);
+    // The single peer is the authenticated ssh user; the loopback default is
+    // sized against local port scanners.
+    options.handshakeTimeout = std::chrono::seconds{30};
+    amrvis::remote::Server server(
+        std::make_unique<amrvis::remote::DescriptorChannel>(wireIn, wireOut),
+        std::move(options));
+    // The client discards everything up to this line (login-shell chatter),
+    // then speaks frames. Nothing else may ever be written to the wire outside
+    // the frame layer, and the token stays off stderr: that stream is shown to
+    // the user in the client's diagnostics.
+    writeFully(wireOut, "AMREXPLORER-STDIO 1 TOKEN " + server.token() + "\n");
+    std::cerr << "amrexplorer-server ready (stdio)\n";
+    SignalWatcher signalWatcher(server);
+    server.run();
+    return 0;
+}
+#endif
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -99,11 +176,17 @@ int main(int argc, char* argv[])
     try {
         amrvis::remote::ServerOptions options;
         options.softwareVersion = AMREXPLORER_VERSION;
+        bool stdio = false;
+        bool portGiven = false;
         for (int index = 1; index < argc; ++index) {
             const std::string option(argv[index]);
             if (option == "--help") {
                 printUsage(std::cout);
                 return 0;
+            }
+            if (option == "--stdio") {
+                stdio = true;
+                continue;
             }
             if (index + 1 >= argc) {
                 throw std::invalid_argument(
@@ -113,6 +196,7 @@ int main(int argc, char* argv[])
             if (option == "--port") {
                 options.port
                     = parseUnsigned<std::uint16_t>(value, "--port");
+                portGiven = true;
             } else if (option == "--threads") {
                 options.workerCount
                     = parseUnsigned<unsigned int>(value, "--threads");
@@ -165,8 +249,16 @@ int main(int argc, char* argv[])
             }
         }
 
+        if (stdio && portGiven) {
+            throw std::invalid_argument(
+                "--stdio and --port are mutually exclusive");
+        }
+
         std::signal(SIGINT, handleSignal);
         std::signal(SIGTERM, handleSignal);
+        if (stdio) {
+            return serveStdio(std::move(options));
+        }
         amrvis::remote::Server server(options);
         // The token gates every connection; clients must present it in their
         // handshake. It is printed here (and only here) so it travels over the

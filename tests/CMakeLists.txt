@@ -260,6 +260,23 @@ if(TARGET amrexplorer_remote)
         FIXTURES_REQUIRED remote_server_materialized
         TIMEOUT 30)
 
+    if(NOT WIN32)
+        add_executable(test_remote_stdio
+            integration/test_remote_stdio.cpp)
+        target_link_libraries(test_remote_stdio
+            PRIVATE
+                amrexplorer::remote
+                amrexplorer::warnings
+                Threads::Threads
+        )
+        add_test(NAME remote_stdio
+            COMMAND test_remote_stdio "${remote_server_fixture_dir}"
+                "$<TARGET_FILE:amrexplorer_server>")
+        set_tests_properties(remote_stdio PROPERTIES
+            FIXTURES_REQUIRED remote_server_materialized
+            TIMEOUT 60)
+    endif()
+
     add_test(NAME remote_server_help
         COMMAND "$<TARGET_FILE:amrexplorer_server>" --help)
     set_tests_properties(remote_server_help PROPERTIES

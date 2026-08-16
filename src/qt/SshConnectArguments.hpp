@@ -21,8 +21,8 @@ struct SshConnectParseResult {
 
 inline SshConnectParseResult parseSshConnectArguments(std::span<const std::string_view> arguments) {
     constexpr std::string_view usage = "usage: amrexplorer --ssh SSH_DESTINATION [--server PATH] "
-                                       "REMOTE_PATH [REMOTE_PATH ...]";
-    if (arguments.size() < 2 || arguments.front().empty()) {
+                                       "[REMOTE_PATH ...]";
+    if (arguments.empty() || arguments.front().empty()) {
         return {{}, std::string(usage)};
     }
     const auto destination = arguments.front();
@@ -34,7 +34,7 @@ inline SshConnectParseResult parseSshConnectArguments(std::span<const std::strin
     request.destination = destination;
     std::size_t pathBegin = 1;
     if (arguments.size() >= 2 && arguments[1] == "--server") {
-        if (arguments.size() < 4 || arguments[2].empty()) {
+        if (arguments.size() < 3 || arguments[2].empty()) {
             return {{}, std::string(usage)};
         }
         request.serverExecutable = arguments[2];

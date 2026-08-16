@@ -27,7 +27,6 @@ add_executable(amrexplorer_qt
     NumberFormat.cpp
     NumberFormat.hpp
     QtErrorText.hpp
-    RemoteConnectArguments.hpp
     RemoteEndpoint.hpp
     ScientificDoubleSpinBox.cpp
     ScientificDoubleSpinBox.hpp
@@ -87,7 +86,6 @@ target_link_libraries(amrexplorer_qt
         Qt6::Concurrent
         Qt6::Core
         Qt6::Gui
-        Qt6::Network
         Qt6::Widgets
 )
 target_link_libraries(amrexplorer_qt PRIVATE amrexplorer::remote)

@@ -4,33 +4,6 @@ namespace amrvis::qt {
 
 namespace {
 
-// Recovers a remote error code from a worker exception, unwrapping the
-// QUnhandledException that Qt Concurrent wraps around a thrown std exception.
-// Returns nullopt for local failures and any non-remote error.
-std::optional<remote::ErrorCode> remoteErrorCode(const std::exception& error)
-{
-    try {
-        rethrowUnwrapped(error);
-    } catch (const remote::RemoteError& remoteError) {
-        return remoteError.code();
-    } catch (...) {
-        return std::nullopt;
-    }
-    if (const auto* remoteError
-            = dynamic_cast<const remote::RemoteError*>(&error)) {
-        return remoteError->code();
-    }
-    return std::nullopt;
-}
-
-// Result of the cheap connect-time handshake used to validate an endpoint and
-// token before any dataset is opened.
-struct RemoteVerifyOutcome {
-    bool ok = false;
-    bool unauthorized = false;
-    QString message;
-};
-
 // Everything the FAB selector dock needs for a source, computed off the GUI
 // thread (see buildFabSelector) so its header scans / per-block preads never
 // block the event loop. `matched` distinguishes a recognized FAB or
@@ -163,8 +136,6 @@ void MainWindow::cancelInFlight()
     }
     m_initialStopSource.request_stop();
     m_metadataStopSource.request_stop();
-    m_remoteVerifyStopSource.request_stop();
-    ++m_remoteVerifyGeneration;
     m_sequenceController->cancelActiveWork();
     m_linePlotStopSource.request_stop();
     m_particleStopSource.request_stop();
@@ -277,17 +248,6 @@ void MainWindow::restoreSettings()
     if (!geometry.isEmpty()) {
         restoreGeometry(geometry);
     }
-}
-
-void MainWindow::saveRemoteSettings()
-{
-    // Only the port is persisted, purely to prefill the Connect dialog after a
-    // client restart against a still-running server. The token is a secret and
-    // is deliberately never written to disk; the host is always loopback via
-    // the SSH tunnel.
-    auto settings = makeSettings();
-    settings.setValue(QStringLiteral("remote/port"),
-        static_cast<uint>(m_remotePort));
 }
 
 void MainWindow::saveSettings()
@@ -1002,71 +962,18 @@ void MainWindow::resetFabState()
     m_fabSelectorDock->setVisible(false);
 }
 
-void MainWindow::verifyRemoteEndpoint(
-    std::string host, std::uint16_t port, std::string token)
+void MainWindow::useRemoteConnection(
+    std::shared_ptr<remote::Connection> connection, QString label)
 {
-    m_remoteVerifyStopSource.request_stop();
-    m_remoteVerifyStopSource = StopSource{};
-    const auto cancellation = m_remoteVerifyStopSource.get_token();
-    const auto generation = ++m_remoteVerifyGeneration;
-    statusBar()->showMessage(tr("Verifying connection to %1:%2...")
-            .arg(QString::fromStdString(host))
-            .arg(port));
-    auto* watcher = new QFutureWatcher<RemoteVerifyOutcome>(this);
-    connect(watcher, &QFutureWatcher<RemoteVerifyOutcome>::finished, this,
-        [this, watcher, host, port, token, generation] {
-            const auto outcome = watcher->result();
-            watcher->deleteLater();
-            if (m_closing || generation != m_remoteVerifyGeneration) {
-                return;
-            }
-            // Skip a stale check whose endpoint the user has since changed.
-            if (host != m_remoteHost || port != m_remotePort
-                || token != m_remoteToken) {
-                return;
-            }
-            if (outcome.ok) {
-                statusBar()->showMessage(
-                    tr("Connected to %1:%2 — session token accepted")
-                        .arg(QString::fromStdString(host))
-                        .arg(port));
-            } else if (outcome.unauthorized) {
-                statusBar()->showMessage(tr("Remote authentication failed"));
-                QMessageBox::warning(this, tr("Remote authentication failed"),
-                    tr("The server at %1:%2 rejected the session token.\n\n"
-                       "Enter the token exactly as the server printed it after "
-                       "\"TOKEN\" on its startup line. A new token is generated "
-                       "each time the server starts.")
-                        .arg(QString::fromStdString(host))
-                        .arg(port));
-            } else {
-                statusBar()->showMessage(tr("Could not reach remote server"));
-                reportBackgroundError(tr("Could not connect to %1:%2: %3")
-                        .arg(QString::fromStdString(host))
-                        .arg(port)
-                        .arg(outcome.message));
-            }
-            updateDiagnostics();
-        });
-    watcher->setFuture(QtConcurrent::run(
-        [host, port, token, cancellation]() -> RemoteVerifyOutcome {
-            try {
-                remote::Connection connection(host, port,
-                    remote::ConnectionOptions{
-                        .clientName = "AMReXplorer Qt",
-                        .softwareVersion = kVersion,
-                        .sessionToken = token},
-                    cancellation);
-                connection.ping(cancellation);
-                return {true, false, {}};
-            } catch (const remote::RemoteError& error) {
-                return {false,
-                    error.code() == remote::ErrorCode::Unauthorized,
-                    QString::fromUtf8(error.what())};
-            } catch (const std::exception& error) {
-                return {false, false, QString::fromUtf8(error.what())};
-            }
-        }));
+    m_remoteConnection = std::move(connection);
+    m_remoteLabel = std::move(label);
+    ++m_remoteConnectionGeneration;
+    updateDiagnostics();
+}
+
+bool MainWindow::hasRemoteConnection() const
+{
+    return m_remoteConnection && m_remoteConnection->connected();
 }
 
 void MainWindow::startSshRemoteSession(std::string destination,
@@ -1077,40 +984,43 @@ void MainWindow::startSshRemoteSession(std::string destination,
         reportBackgroundError(tr("Invalid SSH destination."));
         return;
     }
-    m_remoteVerifyStopSource.request_stop();
+    // A previous session's connection is closed with it; a dataset still open
+    // on it fails on its next request, and the new server gets fresh opens.
+    m_sshRemoteSession.reset();
+    m_remoteConnection.reset();
+    m_remoteLabel.clear();
     m_sshRemoteSession = std::make_unique<SshRemoteSession>(this);
     statusBar()->showMessage(tr("Starting remote session on %1...")
             .arg(QString::fromStdString(destination)));
     updateDiagnostics();
     m_sshRemoteSession->start(destination, std::move(serverExecutable),
-        [this, destination,
-            paths = std::move(remotePaths)](SshRemoteSession::Endpoint endpoint) {
+        remote::ConnectionOptions{
+            .clientName = "AMReXplorer Qt", .softwareVersion = kVersion},
+        [this, destination, paths = std::move(remotePaths)](
+            std::shared_ptr<remote::Connection> connection) {
             if (m_closing) {
                 return;
             }
-            m_remoteHost = std::move(endpoint.host);
-            m_remotePort = endpoint.port;
-            m_remoteToken = std::move(endpoint.token);
-            saveRemoteSettings();
-            statusBar()->showMessage(tr("SSH session to %1 is ready")
-                    .arg(QString::fromStdString(destination)));
-            updateDiagnostics();
-            if (paths.empty()) {
-                verifyRemoteEndpoint(
-                    m_remoteHost, m_remotePort, m_remoteToken);
-            } else if (paths.size() == 1) {
-                openRemoteDataset(m_remoteHost, m_remotePort, paths.front(),
-                    m_remoteToken);
-            } else {
-                openRemoteSequence(
-                    m_remoteHost, m_remotePort, paths, m_remoteToken);
+            const auto& server = connection->serverInfo();
+            useRemoteConnection(std::move(connection),
+                tr("ssh %1").arg(QString::fromStdString(destination)));
+            statusBar()->showMessage(
+                tr("Remote session on %1 is ready (%2 %3, %4 worker threads)")
+                    .arg(QString::fromStdString(destination),
+                        QString::fromStdString(server.serverName),
+                        QString::fromStdString(server.softwareVersion))
+                    .arg(server.workerCount));
+            if (paths.size() == 1) {
+                openRemoteDataset(paths.front());
+            } else if (paths.size() > 1) {
+                openRemoteSequence(paths);
             }
         },
         [this, destination](const QString& message) {
             if (m_closing) {
                 return;
             }
-            statusBar()->showMessage(tr("Could not start SSH session"));
+            statusBar()->showMessage(tr("Could not start the remote session"));
             reportBackgroundError(tr("Could not start the remote session on "
                                      "%1: %2")
                     .arg(QString::fromStdString(destination), message));
@@ -1120,24 +1030,23 @@ void MainWindow::startSshRemoteSession(std::string destination,
             if (m_closing) {
                 return;
             }
-            statusBar()->showMessage(tr("SSH remote session ended"));
+            statusBar()->showMessage(tr("Remote session ended"));
             reportBackgroundError(tr("The remote session on %1 ended: %2")
                     .arg(QString::fromStdString(destination), message));
             updateDiagnostics();
         });
 }
 
-void MainWindow::openRemoteDataset(std::string host, std::uint16_t port,
-    std::string remotePath, std::string token)
+void MainWindow::openRemoteDataset(std::string remotePath)
 {
-    m_remoteHost = host;
-    m_remotePort = port;
-    m_remoteToken = token;
+    if (!m_remoteConnection) {
+        reportBackgroundError(tr("Connect to a remote server first "
+                                 "(File > Connect to Remote Server...)."));
+        return;
+    }
     const auto displayPath = std::filesystem::path(remotePath);
     openDatasetImpl(displayPath, false, std::nullopt, {}, false,
-        std::nullopt,
-        std::tuple{std::move(host), port, std::move(remotePath),
-            std::move(token)});
+        std::nullopt, RemoteOpen{m_remoteConnection, std::move(remotePath)});
 }
 
 void MainWindow::openDatasetImpl(const std::filesystem::path& path,
@@ -1145,9 +1054,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     std::optional<PlotfileMetadataResult> preparedMetadata,
     std::filesystem::path dataRoot, bool preserveFabSelector,
     std::optional<FrameSliceSpec> initialSpec,
-    std::optional<
-        std::tuple<std::string, std::uint16_t, std::string, std::string>>
-        remoteOpen)
+    std::optional<RemoteOpen> remoteOpen)
 {
     if (!preserveFabSelector) {
         resetFabState();
@@ -1346,23 +1253,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                 }
             } catch (const std::exception& error) {
                 if (generation == m_generation) {
-                    if (remoteErrorCode(error)
-                        == remote::ErrorCode::Unauthorized) {
-                        QMessageBox::warning(this,
-                            tr("Remote authentication failed"),
-                            tr("The server at %1:%2 rejected the session "
-                               "token.\n\nEnter the token exactly as the "
-                               "server printed it after \"TOKEN\" on its "
-                               "startup line, via File → Connect to "
-                               "Remote Server… (or paste it as "
-                               "HOST:PORT#TOKEN). A new token is generated "
-                               "each time the server starts.")
-                                .arg(QString::fromStdString(m_remoteHost))
-                                .arg(m_remotePort));
-                    } else {
-                        reportBackgroundError(tr("Cannot open dataset: %1")
-                                .arg(exceptionMessage(error)));
-                    }
+                    reportBackgroundError(tr("Cannot open dataset: %1")
+                            .arg(exceptionMessage(error)));
                     // The prior dataset was torn down before this attempt even
                     // began, so leaving "Loading dataset..." up would claim a
                     // load is still coming. Name what failed instead; the
@@ -1392,15 +1284,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
             remoteOpen = std::move(remoteOpen)]() mutable {
         OpenedDataset opened;
         if (remoteOpen) {
-            auto& [host, port, remotePath, token] = *remoteOpen;
-            auto connection = std::make_shared<remote::Connection>(
-                host, port, remote::ConnectionOptions{
-                    .clientName = "AMReXplorer Qt",
-                    .softwareVersion = kVersion,
-                    .sessionToken = token},
-                cancellation);
             opened.session = remote::RemoteDatasetSession::open(
-                std::move(connection), remotePath,
+                std::move(remoteOpen->connection), remoteOpen->remotePath,
                 initialCacheBudget(), cancellation);
             opened.metadata.metadata
                 = std::make_shared<const DatasetMetadata>(

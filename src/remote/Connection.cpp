@@ -160,10 +160,22 @@ public:
             m_pending.emplace(requestId, pending);
             ++m_outstandingRequests;
         }
+        // Cancellation is honoured here, at the frame boundary, and never
+        // during the write: an interrupted write leaves a partial frame on
+        // the stream, and the only recovery from that is retiring the whole
+        // connection -- far too big an effect for one cancelled request on a
+        // connection other requests share. The write deadline and the
+        // lifecycle stop still bound the write itself, and a request whose
+        // cancellation arrives later falls back to the protocol's
+        // CancelRequest below.
+        if (cancellation.stop_requested()) {
+            erasePending(requestId);
+            throw ReadCancelled();
+        }
         try {
             auto bytes = codec::encode(
                 requestId, std::move(payload), m_selectedMinorVersion);
-            send(bytes, writeDeadline, cancellation);
+            send(bytes, writeDeadline);
         } catch (...) {
             erasePending(requestId);
             // A failed write may have emitted only part of the frame. Retire
@@ -535,8 +547,7 @@ private:
     }
 
     void send(const codec::Bytes& bytes,
-        std::chrono::steady_clock::time_point deadline,
-        StopToken cancellation = {})
+        std::chrono::steady_clock::time_point deadline)
     {
         std::scoped_lock lock(m_sendMutex);
         {
@@ -544,7 +555,7 @@ private:
             ensureConnected();
         }
         writeFrame(*m_channel, bytes, m_maximumFrameBytes.load(),
-            deadline, cancellation, m_lifecycleStop.get_token());
+            deadline, {}, m_lifecycleStop.get_token());
     }
 
     void sendCancellation(std::uint64_t target,

@@ -19,7 +19,6 @@
 #include "LinePlotRequest.hpp"
 #include "LinePlotWindow.hpp"
 #include "PlaneMapping.hpp"
-#include "RemoteEndpoint.hpp"
 #include "ScientificDoubleSpinBox.hpp"
 #include "SshRemoteSession.hpp"
 #include "SetContoursDialog.hpp"
@@ -61,6 +60,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontMetrics>
+#include <QFormLayout>
 #include <QFutureWatcher>
 #include <QGridLayout>
 #include <QHeaderView>

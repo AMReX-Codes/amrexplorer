@@ -60,6 +60,9 @@ class QWidget;
 namespace amrvis {
 struct DatasetMetadata;
 struct LineResult;
+namespace remote {
+class Connection;
+}
 enum class CompositionPolicy : std::uint8_t;
 }
 
@@ -95,24 +98,24 @@ public:
     ~MainWindow() override;
 
     void openDataset(const std::filesystem::path& path, bool metadataOnly = false);
-    void openRemoteDataset(std::string host, std::uint16_t port,
-        std::string remotePath, std::string token);
-    void openRemoteSequence(std::string host, std::uint16_t port,
-        const std::vector<std::string>& remotePaths, std::string token);
-    // Cheap connect-time check: runs a handshake (and ping) off the GUI thread
-    // to confirm the endpoint is reachable and the token is accepted, without
-    // opening a dataset.
-    void verifyRemoteEndpoint(
-        std::string host, std::uint16_t port, std::string token);
-    // Launches amrexplorer-server through the named OpenSSH destination,
-    // creates a loopback tunnel, and opens the supplied server-visible paths.
-    // An empty path list only establishes and verifies the session.
+    // Installs the connection every remote open goes through, with its
+    // handshake already complete: the SSH session's once it is ready, or a
+    // loopback one from a test harness. Replaces any previous connection;
+    // datasets open on that one fail on their next request.
+    void useRemoteConnection(
+        std::shared_ptr<remote::Connection> connection, QString label);
+    // True while an installed remote connection is live.
+    [[nodiscard]] bool hasRemoteConnection() const;
+    // Open a server-visible path, or a sequence of them, over the installed
+    // remote connection.
+    void openRemoteDataset(std::string remotePath);
+    void openRemoteSequence(const std::vector<std::string>& remotePaths);
+    // Runs amrexplorer-server on the named OpenSSH destination with the wire
+    // protocol over ssh's stdio, installs the connection once its handshake
+    // completes, and opens the supplied server-visible paths. An empty path
+    // list only establishes the session.
     void startSshRemoteSession(std::string destination,
         std::string serverExecutable, std::vector<std::string> remotePaths);
-    // Persists only the remote port, to prefill the Connect dialog after a
-    // client restart against a still-running server. The token is never
-    // written to disk.
-    void saveRemoteSettings();
     // Opens a plotfile sequence (the legacy "-a" file animation): frames are
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.
@@ -485,13 +488,19 @@ private:
 
     void chooseDataset();
     void chooseStandaloneDataset(const QString& caption, bool rawFab);
+    struct RemoteOpen {
+        std::shared_ptr<remote::Connection> connection;
+        std::string remotePath;
+    };
     void openDatasetImpl(const std::filesystem::path& path, bool metadataOnly,
         std::optional<PlotfileMetadataResult> preparedMetadata,
         std::filesystem::path dataRoot, bool preserveFabSelector,
         std::optional<FrameSliceSpec> initialSpec,
-        std::optional<
-            std::tuple<std::string, std::uint16_t, std::string, std::string>>
-            remoteOpen = std::nullopt);
+        std::optional<RemoteOpen> remoteOpen = std::nullopt);
+    // Asks for an SSH destination and server executable, remembers them, and
+    // starts the session, opening `remotePaths` once it is ready. False when
+    // the user cancelled.
+    bool promptSshRemoteSession(std::vector<std::string> remotePaths);
 
     // Clears standalone FAB/MultiFab view state (mode flag, MultiFab-return
     // record, source metadata/paths) and hides the FAB selector dock. Any path
@@ -965,8 +974,6 @@ private:
     bool m_pendingRasterDirty = false;
     StopSource m_initialStopSource;
     StopSource m_metadataStopSource;
-    StopSource m_remoteVerifyStopSource;
-    std::uint64_t m_remoteVerifyGeneration = 0;
     DisplayMode m_displayMode = DisplayMode::Raster;
     int m_contourCount = 15;
     // 2-D spherical warp supersample factor (see SliceRequest::sphericalSupersample).
@@ -989,9 +996,11 @@ private:
     StopSource m_particleStopSource;
     std::uint64_t m_particleGeneration = 0;
     std::filesystem::path m_datasetPath;
-    std::string m_remoteHost;
-    std::uint16_t m_remotePort = 0;
-    std::string m_remoteToken;
+    std::shared_ptr<remote::Connection> m_remoteConnection;
+    QString m_remoteLabel;
+    // Counts installed connections. Server DatasetIds restart at one per
+    // connection, so dataset-scoped caches are keyed by this as well.
+    std::uint64_t m_remoteConnectionGeneration = 0;
     std::unique_ptr<SshRemoteSession> m_sshRemoteSession;
     bool m_remoteSequence = false;
     std::uint64_t m_remoteSequenceConnectionGeneration = 0;

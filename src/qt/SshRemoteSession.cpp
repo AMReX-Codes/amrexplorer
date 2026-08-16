@@ -1,48 +1,90 @@
 #include "SshRemoteSession.hpp"
 
-#include <QAbstractSocket>
-#include <QCoreApplication>
-#include <QHostAddress>
-#include <QProcess>
-#include <QTcpServer>
-#include <QTcpSocket>
-#include <QTimer>
+#include <amrexplorer/remote/Frame.hpp>
 
+#include <QCoreApplication>
+#include <QFutureWatcher>
+#include <QProcess>
+#include <QSocketNotifier>
+#include <QTimer>
+#include <QtConcurrent/QtConcurrentRun>
+
+#include <cerrno>
 #include <charconv>
+#include <chrono>
+#include <cstring>
 #include <string_view>
 #include <utility>
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 namespace amrvis::qt {
 
-std::optional<SshServerReadyLine> parseSshServerReadyLine(std::string_view line) {
+namespace {
+
+// Worker threads the launched server gets. Modest on purpose: the typical
+// destination is a shared login node, and the server's own default is the
+// machine's hardware concurrency.
+constexpr int launchedServerThreads = 8;
+
+// Bounds ssh start-up including any interactive authentication; fetching an
+// MFA code from a phone must fit comfortably.
+constexpr int startupTimeoutMilliseconds = 300000;
+
+// Everything before the ready line is discarded; a preamble larger than this
+// is not a login banner but a stream that will never carry the line.
+constexpr std::size_t maximumPreambleBytes = 64U * 1024U;
+
+struct HandshakeOutcome {
+    std::shared_ptr<remote::Connection> connection;
+    QString error;
+};
+
+QString describeReadError(int error)
+{
+    return QString::fromLocal8Bit(std::strerror(error));
+}
+
+} // namespace
+
+std::optional<SshServerReadyLine> parseSshServerReadyLine(std::string_view line)
+{
     if (!line.empty() && line.back() == '\r') {
         line.remove_suffix(1);
     }
-    constexpr std::string_view prefix = "LISTENING 127.0.0.1 ";
+    constexpr std::string_view marker = "AMREXPLORER-STDIO ";
     constexpr std::string_view separator = " TOKEN ";
-    if (!line.starts_with(prefix)) {
+    const auto markerAt = line.find(marker);
+    if (markerAt == std::string_view::npos) {
         return std::nullopt;
     }
-    line.remove_prefix(prefix.size());
+    line.remove_prefix(markerAt + marker.size());
     const auto separatorAt = line.find(separator);
     if (separatorAt == std::string_view::npos) {
         return std::nullopt;
     }
-    const auto portText = line.substr(0, separatorAt);
+    const auto versionText = line.substr(0, separatorAt);
     const auto token = line.substr(separatorAt + separator.size());
-    unsigned int port = 0;
-    const auto [end, error] =
-        std::from_chars(portText.data(), portText.data() + portText.size(), port);
-    if (error != std::errc{} || end != portText.data() + portText.size() || port == 0 ||
-        port > 65535 || token.empty() || token.find_first_of(" \t\r\n") != std::string_view::npos) {
+    int version = 0;
+    const auto [end, error] = std::from_chars(
+        versionText.data(), versionText.data() + versionText.size(), version);
+    if (error != std::errc{} || end != versionText.data() + versionText.size()
+        || version != sshStdioReadyVersion || token.empty()
+        || token.find_first_of(" \t\r\n") != std::string_view::npos) {
         return std::nullopt;
     }
-    return SshServerReadyLine{static_cast<std::uint16_t>(port), std::string(token)};
+    return SshServerReadyLine{version, std::string(token)};
 }
 
-std::optional<std::string> sshRemoteServerCommand(std::string_view executable, std::uint16_t port) {
-    if (executable.empty() || executable.find_first_of("\r\n") != std::string_view::npos ||
-        executable.find('\0') != std::string_view::npos || port == 0) {
+std::optional<std::string> sshRemoteServerCommand(std::string_view executable)
+{
+    if (executable.empty()
+        || executable.find_first_of("\r\n") != std::string_view::npos
+        || executable.find('\0') != std::string_view::npos) {
         return std::nullopt;
     }
     std::string command = "exec ";
@@ -66,209 +108,384 @@ std::optional<std::string> sshRemoteServerCommand(std::string_view executable, s
         }
         command += '\'';
     }
-    command += " --port ";
-    command += std::to_string(port);
+    command += " --stdio --threads ";
+    command += std::to_string(launchedServerThreads);
     return command;
 }
 
-std::optional<QStringList> sshRemoteProcessArguments(std::string_view destination,
-                                                     std::string_view executable,
-                                                     std::uint16_t port) {
-    if (destination.empty() || destination.front() == '-' ||
-        destination.find_first_of(" \t\r\n") != std::string_view::npos) {
+std::optional<QStringList> sshRemoteProcessArguments(
+    std::string_view destination, std::string_view executable)
+{
+    if (destination.empty() || destination.front() == '-'
+        || destination.find_first_of(" \t\r\n") != std::string_view::npos) {
         return std::nullopt;
     }
-    const auto remoteCommand = sshRemoteServerCommand(executable, port);
+    const auto remoteCommand = sshRemoteServerCommand(executable);
     if (!remoteCommand) {
         return std::nullopt;
     }
-    const auto forwarding = QStringLiteral("127.0.0.1:%1:127.0.0.1:%1").arg(port);
+    // -T: no pty, so the channel carries bytes verbatim. No forwardings, even
+    // from the user's config: none is needed and a failing one would end the
+    // session. Keepalives so a dead link is noticed in under a minute rather
+    // than whenever TCP gives up.
     return QStringList{QStringLiteral("-T"), QStringLiteral("-o"),
-                       QStringLiteral("ExitOnForwardFailure=yes"), QStringLiteral("-L"), forwarding,
-                       QStringLiteral("--"), QString::fromUtf8(destination.data(),
-                                                               static_cast<qsizetype>(destination.size())),
-                       QString::fromStdString(*remoteCommand)};
+        QStringLiteral("ClearAllForwardings=yes"), QStringLiteral("-o"),
+        QStringLiteral("ServerAliveInterval=15"), QStringLiteral("-o"),
+        QStringLiteral("ServerAliveCountMax=3"), QStringLiteral("-o"),
+        QStringLiteral("ConnectTimeout=30"), QStringLiteral("--"),
+        QString::fromUtf8(
+            destination.data(), static_cast<qsizetype>(destination.size())),
+        QString::fromStdString(*remoteCommand)};
 }
 
-QProcessEnvironment sshAskpassEnvironment(const QString& applicationExecutable) {
+QProcessEnvironment sshAskpassEnvironment(const QString& applicationExecutable)
+{
     auto environment = QProcessEnvironment::systemEnvironment();
     environment.insert(QStringLiteral("SSH_ASKPASS"), applicationExecutable);
-    environment.insert(QStringLiteral("SSH_ASKPASS_REQUIRE"), QStringLiteral("force"));
-    environment.insert(QStringLiteral("AMREXPLORER_SSH_ASKPASS_MODE"), QStringLiteral("1"));
+    environment.insert(
+        QStringLiteral("SSH_ASKPASS_REQUIRE"), QStringLiteral("force"));
+    environment.insert(
+        QStringLiteral("AMREXPLORER_SSH_ASKPASS_MODE"), QStringLiteral("1"));
     return environment;
 }
 
-SshRemoteSession::SshRemoteSession(QObject* parent)
-    : QObject(parent), m_server(new QProcess(this)), m_probe(new QTcpSocket(this)),
-      m_startupTimer(new QTimer(this)) {
-    m_startupTimer->setSingleShot(true);
-    connect(m_startupTimer, &QTimer::timeout, this, [this] {
-        drainProcessErrors(m_server, m_serverErrors, m_serverErrorPending, true, true);
-        fail(tr("Timed out while starting the remote AMReXplorer session.%1")
-                 .arg(m_serverErrors.isEmpty() ? QString()
-                                               : QStringLiteral("\n") + m_serverErrors));
-    });
-    connect(m_server, &QProcess::readyReadStandardOutput, this, [this] { readServerOutput(); });
-    connect(m_server, &QProcess::readyReadStandardError, this,
-            [this] { drainProcessErrors(m_server, m_serverErrors, m_serverErrorPending, true); });
-    connect(m_server, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
-        if (!m_stopping && error == QProcess::FailedToStart) {
-            fail(tr("Could not start ssh: %1").arg(m_server->errorString()));
-        }
-    });
-    connect(m_server, &QProcess::started, this, [this] {
-        if (m_stopping) {
-            m_server->terminate();
-        }
-    });
-    connect(m_server, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
-            [this](int, QProcess::ExitStatus) {
-                drainProcessErrors(m_server, m_serverErrors, m_serverErrorPending, true, true);
-                processEnded(tr("The SSH server process exited.%1")
-                                 .arg(m_serverErrors.isEmpty()
-                                          ? QString()
-                                          : QStringLiteral("\n") + m_serverErrors));
-            });
-    connect(m_probe, &QTcpSocket::connected, this, [this] {
-        m_probe->abort();
-        if (m_stopping || m_ready) {
-            return;
-        }
-        m_ready = true;
-        m_startupTimer->stop();
-        if (m_readyHandler) {
-            m_readyHandler(Endpoint{"127.0.0.1", m_localPort, std::move(m_token)});
-        }
-    });
-    connect(m_probe, &QTcpSocket::errorOccurred, this, [this](QAbstractSocket::SocketError) {
-        if (!m_stopping && !m_ready) {
-            QTimer::singleShot(100, this, [this] { probeTunnel(); });
-        }
-    });
+QString sshProgram()
+{
+    const auto override = qEnvironmentVariable("AMREXPLORER_SSH");
+    return override.isEmpty() ? QStringLiteral("ssh") : override;
 }
 
-SshRemoteSession::~SshRemoteSession() {
+SshRemoteSession::SshRemoteSession(QObject* parent)
+    : QObject(parent)
+    , m_process(new QProcess(this))
+    , m_startupTimer(new QTimer(this))
+{
+    m_startupTimer->setSingleShot(true);
+    connect(m_startupTimer, &QTimer::timeout, this, [this] {
+        drainProcessErrors(true);
+        fail(tr("Timed out while starting the remote AMReXplorer session.%1")
+                .arg(errorSuffix()));
+    });
+    connect(m_process, &QProcess::readyReadStandardError, this,
+        [this] { drainProcessErrors(false); });
+    connect(m_process, &QProcess::errorOccurred, this,
+        [this](QProcess::ProcessError error) {
+            if (!m_stopping && error == QProcess::FailedToStart) {
+                fail(tr("Could not start %1: %2")
+                        .arg(m_process->program(), m_process->errorString()));
+            }
+        });
+    connect(m_process, &QProcess::started, this, [this] {
+        if (m_stopping) {
+            m_process->terminate();
+        }
+    });
+    connect(m_process,
+        qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+        [this](int, QProcess::ExitStatus) {
+            drainProcessErrors(true);
+            processEnded(tr("The ssh process exited.%1").arg(errorSuffix()));
+        });
+}
+
+SshRemoteSession::~SshRemoteSession()
+{
     stop();
-    if (m_server->state() != QProcess::NotRunning && !m_server->waitForFinished(1000)) {
-        m_server->kill();
-        m_server->waitForFinished(1000);
+    // The connection is closed, so the server exits on end of stream and ssh
+    // follows within a round trip; the wait covers that. Anything slower is
+    // ended here rather than left running.
+    if (m_process->state() != QProcess::NotRunning
+        && !m_process->waitForFinished(1000)) {
+        m_process->terminate();
+        if (!m_process->waitForFinished(500)) {
+            m_process->kill();
+            m_process->waitForFinished(1000);
+        }
     }
 }
 
-void SshRemoteSession::start(std::string destination, std::string serverExecutable,
-                             ReadyHandler ready, ErrorHandler error, LostHandler lost) {
+void SshRemoteSession::start(std::string destination,
+    std::string serverExecutable, remote::ConnectionOptions options,
+    ReadyHandler ready, ErrorHandler error, LostHandler lost)
+{
     m_destination = std::move(destination);
+    m_options = std::move(options);
     m_readyHandler = std::move(ready);
     m_errorHandler = std::move(error);
     m_lostHandler = std::move(lost);
     m_stopping = false;
     m_ready = false;
-    m_serverOutput.clear();
-    m_serverErrors.clear();
-    m_serverErrorPending.clear();
-    m_token.clear();
-    m_localPort = 0;
-    m_startupTimer->start(60000);
+    m_preamble.clear();
+    m_errors.clear();
+    m_errorPending.clear();
+    m_connection.reset();
+    m_handshakeStop = StopSource{};
+    m_startupTimer->start(startupTimeoutMilliseconds);
 
-    QTcpServer reservation;
-    if (!reservation.listen(QHostAddress::LocalHost, 0)) {
-        fail(tr("Could not allocate a local port for the SSH tunnel: %1")
-                 .arg(reservation.errorString()));
-        return;
-    }
-    m_localPort = reservation.serverPort();
-    reservation.close();
-
-    const auto sshArguments =
-        sshRemoteProcessArguments(m_destination, serverExecutable, m_localPort);
+#ifdef _WIN32
+    static_cast<void>(serverExecutable);
+    fail(tr("SSH remote sessions are not supported on Windows yet."));
+#else
+    const auto sshArguments
+        = sshRemoteProcessArguments(m_destination, serverExecutable);
     if (!sshArguments) {
-        fail(tr("The SSH destination or remote server executable path is invalid."));
+        fail(tr("The SSH destination or remote server executable path is "
+                "invalid."));
         return;
     }
-    auto environment = sshAskpassEnvironment(QCoreApplication::applicationFilePath());
+
+    // One socket pair: our end stays here, the other becomes the child's
+    // stdin and stdout, so ssh's stdio *is* the wire and no port or pipe
+    // buffer sits in between. Both ends are close-on-exec; dup2 in the child
+    // clears the flag on 0 and 1 only.
+    int pair[2] = {-1, -1};
+    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) {
+        fail(tr("Could not create the ssh channel: %1")
+                .arg(describeReadError(errno)));
+        return;
+    }
+    for (const int descriptor : pair) {
+        ::fcntl(descriptor, F_SETFD, FD_CLOEXEC);
+    }
+    ::fcntl(pair[0], F_SETFL, ::fcntl(pair[0], F_GETFL, 0) | O_NONBLOCK);
+    m_wire = pair[0];
+    const int childEnd = pair[1];
+
+    // QProcess's own stdio pipes are not used; the modifier runs in the child
+    // after QProcess has set the standard descriptors up and before exec, and
+    // puts our socket in their place.
+    m_process->setStandardInputFile(QProcess::nullDevice());
+    m_process->setStandardOutputFile(QProcess::nullDevice());
+    m_process->setChildProcessModifier([childEnd] {
+        ::dup2(childEnd, STDIN_FILENO);
+        ::dup2(childEnd, STDOUT_FILENO);
+    });
+    auto environment
+        = sshAskpassEnvironment(QCoreApplication::applicationFilePath());
     environment.insert(QStringLiteral("AMREXPLORER_SSH_DESTINATION"),
-                       QString::fromStdString(m_destination));
-    m_server->setProcessEnvironment(environment);
+        QString::fromStdString(m_destination));
+    m_process->setProcessEnvironment(environment);
     // QProcess passes each item as an argument without a local shell. OpenSSH
-    // does invoke the remote login shell, so remoteCommand single-quotes the
-    // user-provided executable path as one shell word.
-    m_server->start(QStringLiteral("ssh"), *sshArguments);
+    // does invoke the remote login shell, so the remote command single-quotes
+    // the user-provided executable path as one shell word.
+    m_process->start(sshProgram(), *sshArguments);
+    // start() has forked by the time it returns; the child holds its own copy.
+    ::close(childEnd);
+    if (m_stopping) {
+        return;
+    }
+    m_wireNotifier = new QSocketNotifier(m_wire, QSocketNotifier::Read, this);
+    connect(m_wireNotifier, &QSocketNotifier::activated, this,
+        [this] { readPreamble(); });
+#endif
 }
 
-void SshRemoteSession::drainProcessErrors(QProcess* process, QString& buffer, QString& pending,
-                                          bool redactTokens, bool flush) {
-    // Always drain stderr so a chatty SSH/server process cannot deadlock on a
-    // full pipe. Never retain lines containing TOKEN: the server deliberately
-    // repeats its bearer token on stderr for manual use.
-    pending += QString::fromLocal8Bit(process->readAllStandardError());
-    auto appendLine = [&](const QString& line) {
-        if ((!redactTokens || !line.contains(QStringLiteral("token"), Qt::CaseInsensitive)) &&
-            !line.trimmed().isEmpty()) {
-            buffer += line.trimmed() + QLatin1Char('\n');
+void SshRemoteSession::readPreamble()
+{
+#ifndef _WIN32
+    char buffer[4096];
+    for (;;) {
+        const auto count = ::read(m_wire, buffer, sizeof(buffer));
+        if (count < 0) {
+            const auto error = errno;
+            if (error == EINTR) {
+                continue;
+            }
+            if (error == EAGAIN || error == EWOULDBLOCK) {
+                return;
+            }
+            fail(tr("Could not read from ssh: %1")
+                    .arg(describeReadError(error)));
+            return;
+        }
+        if (count == 0) {
+            // The stream ended before the server was ready. Let the process
+            // exit report it -- that path has the whole of stderr -- and only
+            // fall back to a report of our own if ssh lingers.
+            closeWire();
+            QTimer::singleShot(1500, this, [this] {
+                drainProcessErrors(true);
+                fail(tr("The remote server ended the stream before it was "
+                        "ready.%1")
+                        .arg(errorSuffix()));
+            });
+            return;
+        }
+        m_preamble.append(buffer, static_cast<std::size_t>(count));
+        break;
+    }
+    for (auto newline = m_preamble.find('\n'); newline != std::string::npos;
+         newline = m_preamble.find('\n')) {
+        const auto line = m_preamble.substr(0, newline);
+        m_preamble.erase(0, newline + 1);
+        if (const auto ready = parseSshServerReadyLine(line)) {
+            if (!m_preamble.empty()) {
+                // The server sends nothing after the ready line until it has
+                // our hello, so bytes here are from something else sharing
+                // the stream; framing them would be guesswork.
+                fail(tr("Unexpected output after the remote server's ready "
+                        "line."));
+                return;
+            }
+            delete m_wireNotifier;
+            m_wireNotifier = nullptr;
+            beginHandshake(std::exchange(m_wire, -1), ready->token);
+            return;
+        }
+    }
+    if (m_preamble.size() > maximumPreambleBytes) {
+        drainProcessErrors(true);
+        fail(tr("The remote server produced no valid ready line.%1")
+                .arg(errorSuffix()));
+    }
+#endif
+}
+
+void SshRemoteSession::beginHandshake(int wire, std::string token)
+{
+    auto* watcher = new QFutureWatcher<HandshakeOutcome>(this);
+    connect(watcher, &QFutureWatcher<HandshakeOutcome>::finished, this,
+        [this, watcher] {
+            auto outcome = watcher->result();
+            watcher->deleteLater();
+            if (m_stopping) {
+                if (outcome.connection) {
+                    outcome.connection->close();
+                }
+                return;
+            }
+            if (!outcome.connection) {
+                drainProcessErrors(true);
+                fail(tr("The remote server did not complete the protocol "
+                        "handshake: %1%2")
+                        .arg(outcome.error, errorSuffix()));
+                return;
+            }
+            m_ready = true;
+            m_startupTimer->stop();
+            m_connection = std::move(outcome.connection);
+            if (m_readyHandler) {
+                m_readyHandler(m_connection);
+            }
+        });
+    auto options = m_options;
+    options.sessionToken = std::move(token);
+    watcher->setFuture(QtConcurrent::run(
+        [wire, options = std::move(options),
+            cancellation = m_handshakeStop.get_token()]() -> HandshakeOutcome {
+            try {
+                auto socket = std::make_unique<remote::Socket>(
+                    remote::adoptStreamSocket(wire));
+                return {std::make_shared<remote::Connection>(
+                            std::move(socket), options, cancellation),
+                    {}};
+            } catch (const std::exception& error) {
+                return {nullptr, QString::fromUtf8(error.what())};
+            }
+        }));
+}
+
+void SshRemoteSession::drainProcessErrors(bool flush)
+{
+    // Always drain stderr so a chatty ssh or server cannot deadlock on a full
+    // pipe. The tail is kept for diagnostics; the server prints no secrets on
+    // stderr in stdio mode.
+    m_errorPending
+        += QString::fromLocal8Bit(m_process->readAllStandardError());
+    const auto appendLine = [this](const QString& line) {
+        if (!line.trimmed().isEmpty()) {
+            m_errors += line.trimmed() + QLatin1Char('\n');
         }
     };
-    for (auto newline = pending.indexOf(QLatin1Char('\n')); newline >= 0;
-         newline = pending.indexOf(QLatin1Char('\n'))) {
-        appendLine(pending.left(newline));
-        pending.remove(0, newline + 1);
+    for (auto newline = m_errorPending.indexOf(QLatin1Char('\n'));
+         newline >= 0; newline = m_errorPending.indexOf(QLatin1Char('\n'))) {
+        appendLine(m_errorPending.left(newline));
+        m_errorPending.remove(0, newline + 1);
     }
-    if (flush && !pending.isEmpty()) {
-        appendLine(pending);
-        pending.clear();
+    if (flush && !m_errorPending.isEmpty()) {
+        appendLine(m_errorPending);
+        m_errorPending.clear();
     }
     constexpr qsizetype maximumErrorCharacters = 8192;
-    if (buffer.size() > maximumErrorCharacters) {
-        buffer = buffer.right(maximumErrorCharacters);
+    if (m_errors.size() > maximumErrorCharacters) {
+        m_errors = m_errors.right(maximumErrorCharacters);
     }
     if (flush) {
-        buffer = buffer.trimmed();
+        m_errors = m_errors.trimmed();
     }
 }
 
-void SshRemoteSession::stop() {
+QString SshRemoteSession::errorSuffix() const
+{
+    return m_errors.isEmpty() ? QString() : QStringLiteral("\n") + m_errors;
+}
+
+void SshRemoteSession::closeWire()
+{
+    delete m_wireNotifier;
+    m_wireNotifier = nullptr;
+#ifndef _WIN32
+    if (m_wire >= 0) {
+        ::close(m_wire);
+        m_wire = -1;
+    }
+#endif
+}
+
+void SshRemoteSession::stop()
+{
     if (m_stopping) {
         return;
     }
     m_stopping = true;
     m_startupTimer->stop();
-    m_probe->abort();
-    // The server command and local forward share this process and SSH
-    // connection, so terminating it tears down both together.
-    if (m_server->state() != QProcess::NotRunning) {
-        m_server->terminate();
+    m_handshakeStop.request_stop();
+    closeWire();
+    if (m_connection) {
+        // End of stream is the shutdown signal: the server exits when it
+        // reads it, and ssh exits when the server does.
+        m_connection->close();
     }
-}
-
-void SshRemoteSession::readServerOutput() {
-    m_serverOutput += m_server->readAllStandardOutput().toStdString();
-    for (auto newline = m_serverOutput.find('\n'); newline != std::string::npos;
-         newline = m_serverOutput.find('\n')) {
-        auto line = m_serverOutput.substr(0, newline);
-        m_serverOutput.erase(0, newline + 1);
-        if (const auto ready = parseSshServerReadyLine(line)) {
-            if (ready->port != m_localPort) {
-                fail(tr("The remote server listened on an unexpected port."));
-                return;
+    if (m_process->state() != QProcess::NotRunning) {
+        QTimer::singleShot(2000, m_process, [process = m_process] {
+            if (process->state() != QProcess::NotRunning) {
+                process->terminate();
             }
-            m_token = ready->token;
-            probeTunnel();
-            return;
-        }
-    }
-    if (m_serverOutput.size() > 16384) {
-        fail(tr("The remote server produced no valid startup line."));
+        });
     }
 }
 
-void SshRemoteSession::probeTunnel() {
-    if (m_stopping || m_ready) {
-        return;
-    }
-    m_probe->abort();
-    m_probe->connectToHost(QHostAddress::LocalHost, m_localPort);
+const std::string& SshRemoteSession::destination() const noexcept
+{
+    return m_destination;
 }
 
-void SshRemoteSession::fail(const QString& message) {
+std::shared_ptr<remote::Connection> SshRemoteSession::connection() const
+{
+    return m_connection;
+}
+
+bool SshRemoteSession::ready() const noexcept
+{
+    return m_ready;
+}
+
+bool SshRemoteSession::processRunning() const
+{
+    return m_process->state() != QProcess::NotRunning;
+}
+
+std::optional<int> SshRemoteSession::processExitCode() const
+{
+    if (m_process->state() != QProcess::NotRunning
+        || m_process->exitStatus() != QProcess::NormalExit) {
+        return std::nullopt;
+    }
+    return m_process->exitCode();
+}
+
+void SshRemoteSession::fail(const QString& message)
+{
     if (m_stopping) {
         return;
     }
@@ -279,13 +496,19 @@ void SshRemoteSession::fail(const QString& message) {
     }
 }
 
-void SshRemoteSession::processEnded(const QString& description) {
+void SshRemoteSession::processEnded(const QString& description)
+{
     if (m_stopping) {
         return;
     }
     if (!m_ready) {
-        fail(description + tr(" Make sure the SSH destination is reachable and "
-                              "amrexplorer-server is installed in its PATH."));
+        auto hint = tr(" Make sure the SSH destination is reachable and "
+                       "amrexplorer-server is installed in its PATH.");
+        if (m_errors.contains(QStringLiteral("unknown option: --stdio"))) {
+            hint = tr(" The amrexplorer-server on the destination is too old "
+                      "for this client; install a current one.");
+        }
+        fail(description + hint);
         return;
     }
     auto handler = m_lostHandler;

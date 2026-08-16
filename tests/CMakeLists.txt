@@ -476,15 +476,18 @@ if(TARGET amrexplorer_qt)
         PRIVATE amrexplorer::remote amrexplorer::warnings)
     add_test(NAME remote_endpoint COMMAND test_remote_endpoint)
 
-    add_executable(test_remote_connect_arguments
-        unit/test_remote_connect_arguments.cpp)
-    target_include_directories(test_remote_connect_arguments
+    add_executable(test_ssh_connect_arguments
+        unit/test_ssh_connect_arguments.cpp)
+    target_include_directories(test_ssh_connect_arguments
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
-    target_link_libraries(test_remote_connect_arguments
-        PRIVATE amrexplorer::remote amrexplorer::warnings)
-    add_test(NAME remote_connect_arguments
-        COMMAND test_remote_connect_arguments)
+    target_link_libraries(test_ssh_connect_arguments
+        PRIVATE amrexplorer::warnings)
+    add_test(NAME ssh_connect_arguments COMMAND test_ssh_connect_arguments)
 
+    # The argument builders and the ready-line parser, then -- where the
+    # transport exists -- the whole client flow against the real server binary
+    # run by a stand-in ssh script: socket pair, preamble, handshake, ready
+    # callback, stop() ending the server on end of stream.
     add_executable(test_ssh_remote_session
         unit/test_ssh_remote_session.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/SshRemoteSession.cpp"
@@ -492,8 +495,16 @@ if(TARGET amrexplorer_qt)
     target_include_directories(test_ssh_remote_session
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
     target_link_libraries(test_ssh_remote_session
-        PRIVATE amrexplorer::warnings Qt6::Core Qt6::Network)
-    add_test(NAME ssh_remote_session COMMAND test_ssh_remote_session)
+        PRIVATE amrexplorer::remote amrexplorer::warnings
+            Qt6::Core Qt6::Concurrent)
+    add_test(NAME ssh_remote_session
+        COMMAND test_ssh_remote_session
+            "${remote_server_fixture_dir}"
+            "$<TARGET_FILE:amrexplorer_server>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/fake_ssh.sh")
+    set_tests_properties(ssh_remote_session PROPERTIES
+        FIXTURES_REQUIRED remote_server_materialized
+        TIMEOUT 60)
 
     # The Palette menu and the palette selector are built in different
     # translation units and must agree. Needs no fixture: both lists exist as
@@ -651,24 +662,6 @@ if(TARGET amrexplorer_qt)
     set_tests_properties(qt_remote_spherical_initial_geometry_smoke PROPERTIES
         FIXTURES_REQUIRED remote_server_spherical_materialized
         TIMEOUT 30)
-
-    add_test(
-        NAME qt_remote_silent_hello_close_smoke
-        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
-            "$<TARGET_FILE:amrexplorer_qt>"
-            --remote-silent-hello-close-smoke-test
-    )
-    set_tests_properties(qt_remote_silent_hello_close_smoke PROPERTIES
-        TIMEOUT 10)
-
-    add_test(
-        NAME qt_remote_silent_verification_close_smoke
-        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
-            "$<TARGET_FILE:amrexplorer_qt>"
-            --remote-silent-verification-close-smoke-test
-    )
-    set_tests_properties(qt_remote_silent_verification_close_smoke PROPERTIES
-        TIMEOUT 10)
 
     add_test(
         NAME qt_remote_grid_boxes_smoke

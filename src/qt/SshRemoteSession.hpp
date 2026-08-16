@@ -83,6 +83,7 @@ public:
     void stop();
 
     [[nodiscard]] const std::string& destination() const noexcept;
+    [[nodiscard]] const std::string& serverExecutable() const noexcept;
     [[nodiscard]] std::shared_ptr<remote::Connection> connection() const;
     [[nodiscard]] bool ready() const noexcept;
     // The ssh process: whether it is still running, and once it is not, its
@@ -105,6 +106,7 @@ private:
     // Our end of the socket pair, until the handshake takes it over.
     int m_wire = -1;
     std::string m_destination;
+    std::string m_serverExecutable;
     std::string m_preamble;
     QString m_errors;
     QString m_errorPending;

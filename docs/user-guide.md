@@ -71,11 +71,12 @@ The client remembers the path for each destination, so `--server` is needed
 only the first time; later connections to the same destination use it
 automatically, from the CLI and the GUI alike.
 
-The GUI equivalent is **File > Connect to Remote Server...**: enter the SSH
-destination and, optionally, a different server executable. Once the session
-is ready, use **Open Remote Plotfile...** or **Open Remote Plotfile
-Sequence...**. Both of those also offer to connect first when no session is
-live. Once open, a remote dataset is driven exactly like a local one.
+The GUI equivalents are **File > Open Remote Plotfile...** and **File > Open
+Remote Plotfile Sequence...**: one dialog asks for the SSH destination, the
+server executable, and the plotfile path (or paths, one per line). The
+connection fields are prefilled; leaving them unchanged opens further paths
+over the current session, and entering a different destination starts a new
+one. Once open, a remote dataset is driven exactly like a local one.
 
 If the destination requires a password or keyboard-interactive MFA,
 AMReXplorer opens a response dialog for each OpenSSH prompt, including the
@@ -105,9 +106,8 @@ provided the script passes the remote command through (`exec ssh target
   remote machine could not find the server for a non-interactive command --
   ssh commands skip most of the shell start-up that builds an interactive
   session's `PATH`. Two fixes:
-  - Pass the full path with `--server` (CLI) or in the connect dialog's
-    second field. It is remembered per destination, so this is a one-time
-    entry.
+  - Pass the full path with `--server` (CLI) or in the open dialog's server
+    field. It is remembered per destination, so this is a one-time entry.
   - Or make the server's directory reachable non-interactively: on the
     remote machine put the export at the *top* of `~/.bashrc`, before the
     interactivity guard (`case $- in ... esac` or `[ -z "$PS1" ] && return`)

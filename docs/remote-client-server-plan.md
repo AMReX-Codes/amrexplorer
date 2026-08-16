@@ -626,12 +626,11 @@ integration tests, the Qt smoke harness, and `amrexplorer-render-equivalence`.
 
 ### 9.2 Desktop actions
 
-- **File > Connect to Remote Server...** -- collects the ssh destination and
-  the server executable, starts the session.
 - **File > Open Remote Plotfile...** / **File > Open Remote Plotfile
-  Sequence...** -- accept server-visible paths (protocol 1.0 does not browse
-  the server filesystem); both offer to connect first when no session is
-  live.
+  Sequence...** -- one dialog each: ssh destination, server executable, and
+  server-visible path(s) (protocol 1.0 does not browse the server
+  filesystem). Unchanged connection fields reuse the live session; a changed
+  destination starts a new one.
 - a session-status entry in diagnostics.
 
 Switching back to a local open remains supported without restarting the

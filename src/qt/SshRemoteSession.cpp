@@ -213,6 +213,7 @@ void SshRemoteSession::start(std::string destination,
     ReadyHandler ready, ErrorHandler error, LostHandler lost)
 {
     m_destination = std::move(destination);
+    m_serverExecutable = serverExecutable;
     m_options = std::move(options);
     m_readyHandler = std::move(ready);
     m_errorHandler = std::move(error);
@@ -227,7 +228,6 @@ void SshRemoteSession::start(std::string destination,
     m_startupTimer->start(startupTimeoutMilliseconds);
 
 #ifdef _WIN32
-    static_cast<void>(serverExecutable);
     fail(tr("SSH remote sessions are not supported on Windows yet."));
 #else
     const auto sshArguments
@@ -462,6 +462,11 @@ void SshRemoteSession::stop()
 const std::string& SshRemoteSession::destination() const noexcept
 {
     return m_destination;
+}
+
+const std::string& SshRemoteSession::serverExecutable() const noexcept
+{
+    return m_serverExecutable;
 }
 
 std::shared_ptr<remote::Connection> SshRemoteSession::connection() const

@@ -497,10 +497,11 @@ private:
         std::filesystem::path dataRoot, bool preserveFabSelector,
         std::optional<FrameSliceSpec> initialSpec,
         std::optional<RemoteOpen> remoteOpen = std::nullopt);
-    // Asks for an SSH destination and server executable, remembers them, and
-    // starts the session, opening `remotePaths` once it is ready. False when
-    // the user cancelled.
-    bool promptSshRemoteSession(std::vector<std::string> remotePaths);
+    // One dialog for the Open Remote actions: SSH destination, server
+    // executable, and the path (or paths, when `sequence`). Reuses the live
+    // session when the connection fields are unchanged; otherwise starts a
+    // new one and opens the paths once it is ready.
+    void promptRemoteOpen(bool sequence);
     // The server executable to use for a destination: the one last used for
     // it, else "amrexplorer-server".
     [[nodiscard]] static QString remoteServerExecutableFor(

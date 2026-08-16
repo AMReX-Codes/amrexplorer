@@ -1074,8 +1074,8 @@ void MainWindow::startSshRemoteSession(std::string destination,
 void MainWindow::openRemoteDataset(std::string remotePath)
 {
     if (!m_remoteConnection) {
-        reportBackgroundError(tr("Connect to a remote server first "
-                                 "(File > Connect to Remote Server...)."));
+        reportBackgroundError(tr("Open a remote session first "
+                                 "(File > Open Remote Plotfile...)."));
         return;
     }
     const auto displayPath = std::filesystem::path(remotePath);

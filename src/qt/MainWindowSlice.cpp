@@ -1363,8 +1363,8 @@ void MainWindow::openRemoteSequence(
 {
     if (!m_remoteConnection) {
         emit sequenceFrameFailed();
-        reportBackgroundError(tr("Connect to a remote server first "
-                                 "(File > Connect to Remote Server...)."));
+        reportBackgroundError(tr("Open a remote session first "
+                                 "(File > Open Remote Plotfile...)."));
         return;
     }
     if (remotePaths.size() < 2

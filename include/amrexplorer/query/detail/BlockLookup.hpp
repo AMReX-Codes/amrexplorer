@@ -22,8 +22,8 @@ namespace amrvis::detail {
 
 // One cached block pinned for a query: the grid's valid box plus the cache
 // handle that keeps its values resident. BlockGrid reads only the box, so a
-// grid can be built and searched over blocks with no payload; lookupBlockValue
-// needs the handle and rejects a null one.
+// grid can be built and searched over blocks with no payload; IndexedBlocks
+// (whose lookupBlockValue reads the payload) rejects a null one when built.
 struct LoadedBlock {
     IntBox validBox;
     PlotfileDataset::BlockCache::Handle data;
@@ -428,26 +428,30 @@ inline void requireBlockPayload(
 // Construction validates every block for the dataset's dimension (a payload
 // is present and requireBlockPayload holds against its valid box), which is
 // what lets the per-hit lookup below read the FAB with no checks of its own;
-// the members are read-only after that so the validated state cannot drift.
+// the members -- the dimension included, since it is what the validation was
+// for -- are read-only after that so the validated state cannot drift.
 class IndexedBlocks {
 public:
     IndexedBlocks() = default;
 
     IndexedBlocks(int dimension, std::vector<LoadedBlock> loaded, int axis)
-        : m_blocks(std::move(loaded))
+        : m_dimension(dimension)
+        , m_blocks(std::move(loaded))
         , m_grid(m_blocks, axis)
     {
-        validate(dimension);
+        validate();
     }
 
     IndexedBlocks(int dimension, std::vector<LoadedBlock> loaded,
         const std::array<int, 2>& axes)
-        : m_blocks(std::move(loaded))
+        : m_dimension(dimension)
+        , m_blocks(std::move(loaded))
         , m_grid(m_blocks, axes)
     {
-        validate(dimension);
+        validate();
     }
 
+    [[nodiscard]] int dimension() const noexcept { return m_dimension; }
     [[nodiscard]] const std::vector<LoadedBlock>& blocks() const noexcept
     {
         return m_blocks;
@@ -455,16 +459,18 @@ public:
     [[nodiscard]] const BlockGrid& grid() const noexcept { return m_grid; }
 
 private:
-    void validate(int dimension) const
+    void validate() const
     {
         for (const auto& block : m_blocks) {
             if (!block.data) {
                 throw std::logic_error("indexed block has no loaded payload");
             }
-            requireBlockPayload(*block.data, block.validBox, dimension);
+            requireBlockPayload(*block.data, block.validBox, m_dimension);
         }
     }
 
+    // Zero for a default-constructed (empty) set, whose grid finds nothing.
+    int m_dimension = 0;
     std::vector<LoadedBlock> m_blocks;
     BlockGrid m_grid;
 };
@@ -476,8 +482,9 @@ private:
 // in a block's valid box is inside that block's FAB box with a payload that
 // covers it, by IndexedBlocks' construction-time validation.
 [[nodiscard]] inline std::optional<double> lookupBlockValue(
-    const IndexedBlocks& indexed, const Int3& point, int dimension)
+    const IndexedBlocks& indexed, const Int3& point)
 {
+    const auto dimension = indexed.dimension();
     const auto blockIndex
         = indexed.grid().find(indexed.blocks(), point, dimension);
     if (blockIndex < 0) {

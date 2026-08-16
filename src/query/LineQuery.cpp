@@ -165,8 +165,8 @@ LineQueryResult LineQuery::execute(
                     metadata, level, axis);
             }
             if (const auto value = lookupBlockValue(
-                    blocksByLevel[static_cast<std::size_t>(levelIndex)], point,
-                    metadata.dimension)) {
+                    blocksByLevel[static_cast<std::size_t>(levelIndex)],
+                    point)) {
                 cover.level = levelIndex;
                 cover.point = point;
                 cover.value = static_cast<float>(*value);

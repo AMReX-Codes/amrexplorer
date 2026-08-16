@@ -198,8 +198,8 @@ SliceQueryResult SliceQuery::execute(
                 point[static_cast<std::size_t>(axis)] = physicalToIndex(
                     position[static_cast<std::size_t>(axis)], metadata, level, axis);
             }
-            if (const auto value = lookupBlockValue(
-                    levelBlocks.indexed, point, metadata.dimension)) {
+            if (const auto value
+                = lookupBlockValue(levelBlocks.indexed, point)) {
                 return std::pair{*value, levelBlocks.levelIndex};
             }
         }

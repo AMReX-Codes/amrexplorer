@@ -94,15 +94,21 @@ int main()
 {
     const std::array<int, 2> axes{0, 1};
 
-    // A default-constructed grid and a grid over no blocks reject every point.
+    // A default-constructed grid and a grid over no blocks reject every point
+    // and report no index (so a usesIndex() assertion cannot pass on a grid
+    // that was never built).
     {
         const BlockGrid empty;
         require(empty.find({}, point(0, 0), 2) == -1,
             "default-constructed grid returned a block");
+        require(!empty.usesIndex(),
+            "a default-constructed grid claims to use an index");
         const std::vector<LoadedBlock> none;
         const BlockGrid overNone(none, axes);
         require(overNone.find(none, point(3, 4), 2) == -1,
             "grid over no blocks returned a block");
+        require(!overNone.usesIndex(),
+            "a grid over no blocks claims to use an index");
     }
 
     // A real multi-tile grid: a 4x4 arrangement of 4x4-cell blocks over a 16x16
@@ -461,7 +467,7 @@ int main()
         const amrvis::detail::IndexedBlocks indexed(2, std::move(loaded), axes);
 
         const auto at = [&indexed](int x, int y) {
-            return amrvis::detail::lookupBlockValue(indexed, point(x, y), 2);
+            return amrvis::detail::lookupBlockValue(indexed, point(x, y));
         };
         require(at(0, 0) == 0.0 && at(3, 0) == 3.0 && at(0, 1) == 4.0
                 && at(2, 1) == 6.0,
@@ -495,6 +501,14 @@ int main()
             {box2d(0, 0, 3, 3),
                 pin(2, box2d(0, 0, 1, 3),
                     {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0})},
+            true);
+        // The other corner: a FAB header box that starts above the catalog
+        // box (its upper corner inside, its lower corner not).
+        rejects("a FAB header box starting past its catalog box was accepted",
+            {box2d(0, 0, 3, 3),
+                pin(5, box2d(1, 0, 3, 3),
+                    {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0,
+                        11.0})},
             true);
         // Header box 2x2 but only three values: cell (5,1) would read past
         // the payload.

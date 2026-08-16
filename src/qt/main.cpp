@@ -56,6 +56,25 @@ namespace {
 
 QtMessageHandler g_previousMessageHandler = nullptr;
 
+void printUsage(std::FILE* output)
+{
+    std::fprintf(output,
+        "usage: amrexplorer [PLOTFILE...]\n"
+        "       amrexplorer --ssh SSH_DESTINATION [--server PATH] "
+        "[REMOTE_PLOTFILE...]\n\n"
+        "Open one plotfile directory, or several to play them as a\n"
+        "sequence, or none for an empty window.\n\n"
+        "  --ssh SSH_DESTINATION  run amrexplorer-server on the destination\n"
+        "                         through ssh and open the remote plotfile\n"
+        "                         paths there; with no paths, only establish\n"
+        "                         the session\n"
+        "  --server PATH          remote amrexplorer-server executable, for\n"
+        "                         when it is not on the non-interactive\n"
+        "                         remote PATH; remembered per destination\n"
+        "  -h, --help             show this help\n\n"
+        "See docs/user-guide.md for details.\n");
+}
+
 #ifdef AMREXPLORER_QT_TEST_ACCESS
 // The smoke tests speak to an in-process loopback server; the handshake
 // against it takes milliseconds, so it runs right here on the GUI thread.
@@ -751,6 +770,13 @@ int main(int argc, char* argv[])
         int askpassArgc = 1;
         QApplication askpassApplication(askpassArgc, argv);
         return runSshAskpass(promptParts.join(QLatin1Char(' ')));
+    }
+    // Answered before QApplication exists, so it works without a display.
+    if (argc >= 2
+        && (std::string_view(argv[1]) == "--help"
+            || std::string_view(argv[1]) == "-h")) {
+        printUsage(stdout);
+        return 0;
     }
     QApplication application(argc, argv);
     // Undo, for numeric conversion only, what QApplication just did. Qt calls
@@ -4020,14 +4046,9 @@ int main(int argc, char* argv[])
         // matched one with the wrong number of arguments. Both used to fall
         // through to an empty window with no diagnostic, which reads as the
         // option having been accepted and done nothing.
-        std::fprintf(stderr,
-            "amrexplorer: unrecognized option '%s'\n\n"
-            "usage: amrexplorer [PLOTFILE...]\n"
-            "       amrexplorer --ssh SSH_DESTINATION [--server PATH] "
-            "[REMOTE_PLOTFILE...]\n\n"
-            "Open one plotfile directory, or several to play them as a\n"
-            "sequence. See docs/user-guide.md for the remote option.\n",
-            argv[1]);
+        std::fprintf(
+            stderr, "amrexplorer: unrecognized option '%s'\n\n", argv[1]);
+        printUsage(stderr);
         return 2;
     }
     const auto result = application.exec();

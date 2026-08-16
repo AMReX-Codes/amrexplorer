@@ -506,6 +506,13 @@ if(TARGET amrexplorer_qt)
         FIXTURES_REQUIRED remote_server_materialized
         TIMEOUT 60)
 
+    # --help exits before QApplication is constructed, so it needs no display.
+    add_test(NAME qt_help
+        COMMAND "$<TARGET_FILE:amrexplorer_qt>" --help)
+    set_tests_properties(qt_help PROPERTIES
+        PASS_REGULAR_EXPRESSION "usage: amrexplorer"
+        TIMEOUT 10)
+
     # The Palette menu and the palette selector are built in different
     # translation units and must agree. Needs no fixture: both lists exist as
     # soon as the window is constructed -- but it does need an isolated

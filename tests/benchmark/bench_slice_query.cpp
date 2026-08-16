@@ -101,8 +101,8 @@ int boundedArg(const char* text, long minimum)
     char* end = nullptr;
     const long value = std::strtol(text, &end, 10);
     if (end == text || *end != '\0' || value < minimum || value > 65536) {
-        die("arguments must be integers <= 65536 (clusterGap may be 0, the "
-            "rest at least 1)");
+        die("arguments must be integers <= 65536 (clusterGap and "
+            "requireLinear may be 0, the rest at least 1)");
     }
     return static_cast<int>(value);
 }
@@ -350,8 +350,10 @@ int runBenchmark(int argc, char** argv)
         }
         // The per-pixel checks above are exact for any layout; these two
         // refuse parameters under which they checked nothing. `covered` is
-        // exactly the pixels whose value was compared, so the first is exact
-        // for any layout. The second, for linear sampling, holds when the
+        // the pixels whose value was read -- every one of them compared under
+        // piecewise sampling, a subset under linear -- so covered == 0 means
+        // no value was compared in either mode and the first is exact for
+        // any layout. The second, for linear sampling, holds when the
         // layout guarantees a pixel with its whole bracket inside a block
         // (uniform, domain >= 2) or when the caller vouched for the
         // parameters with requireLinear; for other clustered runs the printed

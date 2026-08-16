@@ -416,7 +416,8 @@ inline void requireBlockPayload(
         throw std::runtime_error("FAB does not cover its catalog box");
     }
     // valueOffset of the header box's last cell is pointCount - 1, and it is
-    // overflow-checked (an inverted header box throws there).
+    // overflow-checked. (An inverted header box never gets here: it contains
+    // no point, so the check above already threw.)
     if (fab.values.size() <= valueOffset(fab.box, fab.box.upper, dimension)) {
         throw std::runtime_error("FAB payload is smaller than its box");
     }

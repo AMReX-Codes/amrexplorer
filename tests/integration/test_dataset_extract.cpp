@@ -163,7 +163,7 @@ void writeMismatchedFabPlotfile(const std::filesystem::path& root)
 }
 
 // The 3-D split-x plotfile with grid 1's FAB header box one z-plane short of
-// its catalog box: catalog (2,0,0)-(3,3,3), FAB (2,0,0)-(3,3,2), 48 values.
+// its catalog box: catalog (2,0,0)-(3,3,3), FAB (2,0,0)-(3,3,2), 24 values.
 void writeMismatchedFabPlotfile3d(const std::filesystem::path& root)
 {
     writeSplitXPlotfile3d(root);
@@ -355,8 +355,8 @@ int main()
                 full, /*normalAxis=*/2, /*slicePosition=*/0.5,
                 datasetExtractMaxExtent));
         }), "a 3-D FAB short on the normal axis was read");
-        // Grid 0's FAB is intact, but a page over the whole plane reads
-        // grid 1 too, so it must fail even where grid 0 alone would do.
+        // A yz page at x = 3 reads grid 1 alone, and its cells at z = 3 lie
+        // past the short FAB: it must fail before reading them.
         require(throwsRuntimeError([&] {
             static_cast<void>(extractDatasetLevel(badDataset, FieldId{0}, 0,
                 full, /*normalAxis=*/0, /*slicePosition=*/3.5,

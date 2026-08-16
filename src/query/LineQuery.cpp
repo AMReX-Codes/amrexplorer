@@ -14,7 +14,7 @@
 namespace amrvis {
 namespace {
 
-using detail::BlockGrid;
+using detail::IndexedBlocks;
 using detail::LoadedBlock;
 using detail::intersects;
 using detail::lookupBlockValue;
@@ -87,16 +87,11 @@ LineQueryResult LineQuery::execute(
 
     // Pre-load every block the line crosses, per participating level, and index
     // each level's blocks for O(1)-average point lookup during the walk. The
-    // grid bins on the line axis (the walk varies only that coordinate; the
-    // off-axes are pinned to the line's fixed cell) plus the next axis. In 1-D
-    // that is the line axis again, which BlockGrid tolerates: it bins the same
-    // coordinate twice, no less correctly.
-    std::vector<std::vector<LoadedBlock>> loadedByLevel(
+    // grid bins on the line axis alone: the walk varies only that coordinate,
+    // and every loaded block straddles the line's pinned cell on the other
+    // axes, so binning one of those would list every block in every tile.
+    std::vector<IndexedBlocks> blocksByLevel(
         static_cast<std::size_t>(maximumLevel) + 1);
-    std::vector<BlockGrid> gridByLevel(
-        static_cast<std::size_t>(maximumLevel) + 1);
-    const std::array<int, 2> gridAxes{
-        request.axis, (request.axis + 1) % metadata.dimension};
     for (int levelIndex = minimumLevel; levelIndex <= maximumLevel; ++levelIndex) {
         if (cancellation.stop_requested()) {
             throw ReadCancelled();
@@ -132,7 +127,7 @@ LineQueryResult LineQuery::execute(
                 continue;  // the region misses this level entirely
             }
         }
-        auto& loaded = loadedByLevel[static_cast<std::size_t>(levelIndex)];
+        std::vector<LoadedBlock> loaded;
         for (std::size_t grid = 0; grid < level.blocks.size(); ++grid) {
             const auto& block = level.blocks[grid];
             if (!intersects(block.box, lineBox, metadata.dimension)) {
@@ -153,8 +148,8 @@ LineQueryResult LineQuery::execute(
             }
             loaded.push_back({block.box, std::move(access.handle)});
         }
-        gridByLevel[static_cast<std::size_t>(levelIndex)]
-            = BlockGrid(loaded, gridAxes);
+        blocksByLevel[static_cast<std::size_t>(levelIndex)]
+            = IndexedBlocks(std::move(loaded), request.axis);
     }
 
     // Find the finest level covering position x (fine overrides coarse).
@@ -169,9 +164,8 @@ LineQueryResult LineQuery::execute(
                         : request.fixedCoordinates[static_cast<std::size_t>(axis)],
                     metadata, level, axis);
             }
-            const auto entry = static_cast<std::size_t>(levelIndex);
             if (const auto value = lookupBlockValue(
-                    gridByLevel[entry], loadedByLevel[entry], point,
+                    blocksByLevel[static_cast<std::size_t>(levelIndex)], point,
                     metadata.dimension)) {
                 cover.level = levelIndex;
                 cover.point = point;

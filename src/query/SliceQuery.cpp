@@ -15,19 +15,18 @@
 namespace amrvis {
 namespace {
 
-using detail::BlockGrid;
+using detail::IndexedBlocks;
 using detail::LoadedBlock;
 using detail::intersects;
 using detail::lookupBlockValue;
 using detail::physicalToIndex;
 
-// The blocks of one level that intersect the planning region, plus a point->
+// The blocks of one level that intersect the planning region, with the point->
 // block index over them. Levels are processed finest first so the composed
 // per-point lookup resolves fine over coarse by construction.
 struct LevelBlocks {
     int levelIndex = 0;
-    std::vector<LoadedBlock> blocks;
-    BlockGrid grid;
+    IndexedBlocks indexed;
 };
 
 // The index box a physical region covers at one level. Piecewise sampling
@@ -123,7 +122,7 @@ SliceQueryResult SliceQuery::execute(
         const auto& level = metadata.levels[static_cast<std::size_t>(levelIndex)];
         const auto queryBox = requestIndexBox(
             planningRegion, request, metadata, level, axes);
-        LevelBlocks levelBlocks{levelIndex, {}, {}};
+        std::vector<LoadedBlock> loaded;
         for (std::size_t grid = 0; grid < level.blocks.size(); ++grid) {
             const auto& block = level.blocks[grid];
             if (!intersects(block.box, queryBox, metadata.dimension)) {
@@ -179,10 +178,9 @@ SliceQueryResult SliceQuery::execute(
                 ++result.metrics.blocksRead;
                 result.metrics.payloadBytesRead += access.io.bytesRead;
             }
-            levelBlocks.blocks.push_back({block.box, std::move(access.handle)});
+            loaded.push_back({block.box, std::move(access.handle)});
         }
-        levelBlocks.grid = BlockGrid(levelBlocks.blocks, axes);
-        levels.push_back(std::move(levelBlocks));
+        levels.push_back({levelIndex, IndexedBlocks(std::move(loaded), axes)});
     }
 
     // The composed piecewise-constant field at a physical point: the finest
@@ -200,8 +198,7 @@ SliceQueryResult SliceQuery::execute(
                     position[static_cast<std::size_t>(axis)], metadata, level, axis);
             }
             if (const auto value = lookupBlockValue(
-                    levelBlocks.grid, levelBlocks.blocks, point,
-                    metadata.dimension)) {
+                    levelBlocks.indexed, point, metadata.dimension)) {
                 return std::pair{*value, levelBlocks.levelIndex};
             }
         }

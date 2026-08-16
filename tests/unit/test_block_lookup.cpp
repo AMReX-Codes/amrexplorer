@@ -4,7 +4,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -143,20 +145,99 @@ int main()
             "far-positive y was not reported as uncovered");
     }
 
-    // Overlap fallback: many identical full-domain boxes exceed the grid's fill
-    // cap, so it falls back to a linear scan. The result must still match a
-    // linear scan exactly (smallest covering index), and out-of-range misses.
+    // Overlap fallback: a degenerate catalog where 150 full-domain boxes sit
+    // over 250 single-cell ones. The single cells (the majority) set the
+    // median extent, so tiles are cells, every big box lands in every tile,
+    // and the fill cap trips; the grid must fall back to a linear scan whose
+    // result still matches a linear scan exactly (smallest covering index).
     {
         std::vector<LoadedBlock> blocks;
-        for (int i = 0; i < 400; ++i) {
-            blocks.push_back(block(0, 0, 63, 63));  // all identical, overlapping
+        for (int i = 0; i < 150; ++i) {
+            blocks.push_back(block(0, 0, 63, 63));  // identical, overlapping
+        }
+        for (int i = 0; i < 250; ++i) {
+            blocks.push_back(block(i % 64, i / 64, i % 64, i / 64));
         }
         const BlockGrid grid(blocks, axes);
+        require(!grid.usesIndex(),
+            "overlapping catalog did not trip the fill cap");
         require(grid.find(blocks, point(20, 40), 2) == 0,
             "overlap fallback did not return the smallest covering block");
         require(grid.find(blocks, point(64, 0), 2) == -1,
             "overlap fallback matched a point past the domain");
         requireAgrees(blocks, axes, -2, 66, "overlap-fallback differential");
+    }
+
+    // Identical boxes alone are not an overlap pathology for the index: with
+    // tiles sized to the blocks they all share one tile, so the index stays.
+    {
+        std::vector<LoadedBlock> blocks;
+        for (int i = 0; i < 400; ++i) {
+            blocks.push_back(block(0, 0, 63, 63));
+        }
+        const BlockGrid grid(blocks, axes);
+        require(grid.usesIndex(), "identical boxes tripped the fill cap");
+        require(grid.find(blocks, point(20, 40), 2) == 0,
+            "identical boxes did not resolve to the smallest index");
+    }
+
+    // A pencil decomposition -- 1000 non-overlapping 1x1000 columns -- is an
+    // ordinary layout, not overlap: the index must be kept (square tiles would
+    // list every column in dozens of buckets and trip the cap) and route each
+    // point to its column.
+    {
+        std::vector<LoadedBlock> blocks;
+        for (int i = 0; i < 1000; ++i) {
+            blocks.push_back(block(i, 0, i, 999));
+        }
+        const BlockGrid grid(blocks, axes);
+        require(grid.usesIndex(), "pencil layout tripped the fill cap");
+        for (int x = 0; x < 1000; x += 7) {
+            require(grid.find(blocks, point(x, 500), 2) == x,
+                "pencil layout routed a point to the wrong column");
+        }
+        requireAgrees(blocks, axes, -3, 1002, "pencil differential");
+    }
+
+    // A sparse level: a few small blocks scattered over a huge span. The tile
+    // count must be capped near the block count (not one tile per block-sized
+    // cell of empty space) while lookups stay exact.
+    {
+        std::vector<LoadedBlock> blocks;
+        std::uint64_t rng = 0x5ca7'7e12ULL;
+        for (int i = 0; i < 16; ++i) {
+            const auto x = static_cast<int>(nextRandom(rng) % 4088);
+            const auto y = static_cast<int>(nextRandom(rng) % 4088);
+            blocks.push_back(block(x, y, x + 7, y + 7));
+        }
+        const BlockGrid grid(blocks, axes);
+        require(grid.usesIndex(), "sparse layout tripped the fill cap");
+        requireAgrees(blocks, axes, -8, 4103, "sparse differential");
+    }
+
+    // The line query's single-axis grid: 4096 blocks along x that all straddle
+    // the pinned y/z cell. Binning y as well would list every block in every
+    // y tile and trip the cap; binning x alone must keep the index and route
+    // each sample to its block.
+    {
+        std::vector<LoadedBlock> blocks;
+        for (int i = 0; i < 4096; ++i) {
+            IntBox box;
+            box.lower = {{16 * i, 0, 0}};
+            box.upper = {{16 * i + 15, 15, 15}};
+            box.centering = {{0, 0, 0}};
+            blocks.push_back(LoadedBlock{box, {}});
+        }
+        const BlockGrid grid(blocks, 0);
+        require(grid.usesIndex(), "single-axis line grid tripped the fill cap");
+        for (int x = 0; x < 16 * 4096; x += 1001) {
+            require(grid.find(blocks, Int3{{x, 8, 8}}, 3) == x / 16,
+                "single-axis grid routed a sample to the wrong block");
+        }
+        require(grid.find(blocks, Int3{{40, 16, 8}}, 3) == -1,
+            "single-axis grid matched a point off the pinned cell");
+        require(grid.find(blocks, Int3{{-1, 8, 8}}, 3) == -1,
+            "single-axis grid matched a point before the first block");
     }
 
     // Irregular non-overlapping layout (varied block sizes) as a differential
@@ -212,6 +293,57 @@ int main()
             rejected = true;
         }
         require(rejected, "grid accepted a block set of the wrong size");
+    }
+
+    // lookupBlockValue over IndexedBlocks with real cache handles: the value
+    // is read at valueOffset within the covering block's FAB, a point outside
+    // every block is nullopt, and a block whose loaded payload is smaller than
+    // its box (corrupt) throws rather than reads past the end.
+    {
+        amrvis::PlotfileDataset::BlockCache cache(1 << 20);
+        const auto pin = [&cache](int grid, const IntBox& box,
+                             std::vector<double> values) {
+            auto fab = std::make_shared<amrvis::FabBlock>();
+            fab->box = box;
+            fab->values = amrvis::FabValues(std::move(values));
+            amrvis::BlockKey key;
+            key.grid = grid;
+            return cache.insertAndPin(key, std::move(fab), 64);
+        };
+        std::vector<LoadedBlock> loaded;
+        // Block 0: cells x 0..3, y 0..1 -> values 0..7 (x fastest).
+        IntBox first;
+        first.lower = {{0, 0, 0}};
+        first.upper = {{3, 1, 0}};
+        first.centering = {{0, 0, 0}};
+        loaded.push_back({first,
+            pin(0, first, {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0})});
+        // Block 1: cells x 4..5, y 0..1, but only three values loaded.
+        IntBox corrupt;
+        corrupt.lower = {{4, 0, 0}};
+        corrupt.upper = {{5, 1, 0}};
+        corrupt.centering = {{0, 0, 0}};
+        loaded.push_back({corrupt, pin(1, corrupt, {10.0, 11.0, 12.0})});
+        const amrvis::detail::IndexedBlocks indexed(std::move(loaded), axes);
+
+        const auto at = [&indexed](int x, int y) {
+            return amrvis::detail::lookupBlockValue(indexed, point(x, y), 2);
+        };
+        require(at(0, 0) == 0.0 && at(3, 0) == 3.0 && at(0, 1) == 4.0
+                && at(2, 1) == 6.0,
+            "lookupBlockValue read the wrong FAB value");
+        require(!at(0, 2).has_value() && !at(-1, 0).has_value()
+                && !at(6, 0).has_value(),
+            "lookupBlockValue returned a value outside every block");
+        require(at(4, 0) == 10.0 && at(4, 1) == 12.0,
+            "lookupBlockValue misread the second block");
+        bool threw = false;
+        try {
+            static_cast<void>(at(5, 1));  // offset 3 into three values
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        require(threw, "lookupBlockValue read past a short FAB payload");
     }
 
     std::cout << "block lookup tests passed\n";

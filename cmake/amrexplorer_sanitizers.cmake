@@ -41,3 +41,19 @@ function(amrexplorer_enable_tsan)
         -fno-sanitize-recover=all
     )
 endfunction()
+
+# libFuzzer coverage instrumentation, project-wide. The harness alone being
+# instrumented would leave the fuzzer blind to the branches that matter -- the
+# ones inside the parsers and validators it drives -- so every target is
+# compiled with the coverage hooks. fuzzer-no-link at link time supplies the
+# hooks' runtime without libFuzzer's main, so ordinary executables still link
+# and run as usual; only the fuzz drivers add -fsanitize=fuzzer for the driver
+# main (see amrexplorer_add_fuzz_target in tests/CMakeLists.txt).
+function(amrexplorer_enable_libfuzzer_instrumentation)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR
+            "AMREXPLORER_LIBFUZZER requires Clang (libFuzzer runtime).")
+    endif()
+    add_compile_options(-fsanitize=fuzzer-no-link)
+    add_link_options(-fsanitize=fuzzer-no-link)
+endfunction()

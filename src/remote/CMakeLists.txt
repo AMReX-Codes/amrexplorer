@@ -4,15 +4,20 @@ set(amrexplorer_wire_generated_dir
     "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(amrexplorer_wire_generated
     "${amrexplorer_wire_generated_dir}/amrexplorer_wire_generated.h")
+# The embedded binary schema drives the reflection walk in Codec.cpp that
+# rejects vectors flatbuffers' Verifier leaves misaligned.
+set(amrexplorer_wire_bfbs_generated
+    "${amrexplorer_wire_generated_dir}/amrexplorer_wire_bfbs_generated.h")
 
 add_custom_command(
-    OUTPUT "${amrexplorer_wire_generated}"
+    OUTPUT "${amrexplorer_wire_generated}" "${amrexplorer_wire_bfbs_generated}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory
         "${amrexplorer_wire_generated_dir}"
     COMMAND "$<TARGET_FILE:${AMREXPLORER_FLATC_TARGET}>"
         --cpp
         --gen-object-api
         --scoped-enums
+        --bfbs-gen-embed
         --warnings-as-errors
         -o "${amrexplorer_wire_generated_dir}"
         "${amrexplorer_wire_schema}"
@@ -29,6 +34,7 @@ add_library(amrexplorer_remote
     RemoteDatasetSession.cpp
     Server.cpp
     "${amrexplorer_wire_generated}"
+    "${amrexplorer_wire_bfbs_generated}"
 )
 if(AMREXPLORER_ENABLE_SERVER_TEST_HOOKS)
     target_sources(amrexplorer_remote PRIVATE ServerTestHooks.cpp)

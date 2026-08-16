@@ -1,3 +1,30 @@
+# The fuzz harnesses build two ways. Default (OFF): a deterministic, bounded
+# ctest that runs fixed seeds + a fixed-PRNG stream, so CI and the sanitizers
+# preset exercise the untrusted-input parsers on every run. ON (Clang only):
+# each harness is compiled as a coverage-guided libFuzzer driver
+# (LLVMFuzzerTestOneInput, its own main from the fuzzer runtime) to run by hand.
+# The flags are per target, not global, so they don't break the compiler check
+# with the fuzzer runtime's conflicting main.
+option(AMREXPLORER_LIBFUZZER
+    "Build the fuzz harnesses as coverage-guided libFuzzer drivers (Clang)" OFF)
+if(AMREXPLORER_LIBFUZZER AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR
+        "AMREXPLORER_LIBFUZZER requires Clang (libFuzzer runtime).")
+endif()
+
+# Wire a fuzz-harness target for the mode selected above: a libFuzzer driver, or
+# a plain bounded ctest.
+function(amrexplorer_add_fuzz_target target)
+    if(AMREXPLORER_LIBFUZZER)
+        target_compile_definitions(${target} PRIVATE AMREXPLORER_LIBFUZZER)
+        target_compile_options(${target} PRIVATE -fsanitize=fuzzer-no-link)
+        target_link_options(${target} PRIVATE -fsanitize=fuzzer)
+    else()
+        add_test(NAME ${target} COMMAND ${target})
+        set_tests_properties(${target} PROPERTIES TIMEOUT 120)
+    endif()
+endfunction()
+
 add_executable(test_core_metadata unit/test_core_metadata.cpp)
 target_link_libraries(test_core_metadata PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME core_metadata COMMAND test_core_metadata)
@@ -128,7 +155,9 @@ if(TARGET amrexplorer_remote)
 
     # Fuzz/property harness for the remote wire decoder (malicious-peer trust
     # boundary). Deterministic + bounded so it runs as a normal ctest; run under
-    # the sanitizers preset for UB/OOB. See the file header for libFuzzer use.
+    # the qt-sanitizers preset for UB/OOB -- the plain sanitizers preset builds
+    # with remote OFF, so this target does not exist there. See the file header
+    # for libFuzzer use.
     add_executable(fuzz_wire_codec fuzz/fuzz_wire_codec.cpp)
     target_include_directories(fuzz_wire_codec PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/fuzz"
@@ -140,8 +169,7 @@ if(TARGET amrexplorer_remote)
             ${AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET}
             amrexplorer::warnings
     )
-    add_test(NAME fuzz_wire_codec COMMAND fuzz_wire_codec)
-    set_tests_properties(fuzz_wire_codec PROPERTIES TIMEOUT 120)
+    amrexplorer_add_fuzz_target(fuzz_wire_codec)
 
     add_executable(test_remote_server
         integration/test_remote_server.cpp)
@@ -1384,7 +1412,8 @@ set_tests_properties(slice_query_benchmark_resampled PROPERTIES TIMEOUT 120)
 add_executable(fuzz_header_parsing fuzz/fuzz_header_parsing.cpp)
 target_include_directories(fuzz_header_parsing PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/fuzz")
+# amrexplorer::io, matching the sibling tests of amrvis::detail: the helpers
+# are header-only today, but the io target is their home.
 target_link_libraries(
-    fuzz_header_parsing PRIVATE amrexplorer::core amrexplorer::warnings)
-add_test(NAME fuzz_header_parsing COMMAND fuzz_header_parsing)
-set_tests_properties(fuzz_header_parsing PROPERTIES TIMEOUT 120)
+    fuzz_header_parsing PRIVATE amrexplorer::io amrexplorer::warnings)
+amrexplorer_add_fuzz_target(fuzz_header_parsing)

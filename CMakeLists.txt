@@ -202,6 +202,7 @@ if(AMREXPLORER_ENABLE_REMOTE)
             GIT_REPOSITORY https://github.com/google/flatbuffers.git
             GIT_TAG v25.12.19
             GIT_SHALLOW TRUE
+            SYSTEM
         )
         FetchContent_MakeAvailable(flatbuffers)
         # GCC reports a bogus -Wstringop-overflow inside the std::vector insert

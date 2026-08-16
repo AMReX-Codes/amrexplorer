@@ -12,14 +12,20 @@
 // though the per-pixel lookup is O(1) -- that is the planning, not a regression.
 //
 //   bench_slice_query [blocksPerAxis] [cellsPerBlock] [outputDim] [iterations]
-//                     [clusterGap]
+//                     [clusterGap] [requireLinear]
 //
 // clusterGap = 0 (the default) tiles the whole domain uniformly. A positive
 // clusterGap instead places two blocksPerAxis^2 clusters at opposite corners
 // of a domain that many blocks wider and taller -- the ordinary AMR shape of
 // separate refined regions -- so the block index is measured on a level whose
 // blocks occupy a small fraction of their bounding box, not only on a dense
-// tiling. The default workload is small so it stays fast in CI.
+// tiling. requireLinear (0/1) says whether a linear run that validated no
+// interpolated value is a failure: on by default for the uniform tiling,
+// where a domain of at least two cells guarantees such a pixel exists, and
+// off by default for clustered layouts, where whether any pixel's whole
+// bracket falls inside a cluster is a property of the parameters -- a
+// registered clustered run passes 1 explicitly so it cannot silently become
+// vacuous. The default workload is small so it stays fast in CI.
 #include <amrexplorer/query/SliceQuery.hpp>
 
 #include <amrexplorer/io/PlotfileDataset.hpp>
@@ -118,6 +124,8 @@ int runBenchmark(int argc, char** argv)
     const int blocksPerAxis = argc > 1 ? positiveArg(argv[1]) : 16;
     const int cellsPerBlock = argc > 2 ? positiveArg(argv[2]) : 8;
     const int clusterGap = argc > 5 ? boundedArg(argv[5], 0) : 0;
+    const bool requireLinear
+        = argc > 6 ? boundedArg(argv[6], 0) != 0 : clusterGap == 0;
     const int blocksAcross
         = clusterGap > 0 ? 2 * blocksPerAxis + clusterGap : blocksPerAxis;
     // Guard the derived sizes (long long) before narrowing to int, so a large
@@ -270,7 +278,6 @@ int runBenchmark(int argc, char** argv)
             return {cell, cell};
         };
         std::size_t covered = 0;
-        std::size_t blockPixels = 0;     // every candidate cell in a block
         std::size_t linearChecked = 0;
         for (int y = 0; y < outputDim; ++y) {
             const double py = lower + (static_cast<double>(y) + 0.5) * extent
@@ -295,9 +302,6 @@ int runBenchmark(int argc, char** argv)
                     }
                 }
                 const bool isCovered = warm.plane.valid[off] != 0;
-                if (inBlock == candidates) {
-                    ++blockPixels;
-                }
                 if (inBlock == candidates && !isCovered) {
                     die("benchmark slice left a block pixel uncovered");
                 }
@@ -345,17 +349,19 @@ int runBenchmark(int argc, char** argv)
             }
         }
         // The per-pixel checks above are exact for any layout; these two
-        // refuse parameters under which they would have checked nothing, from
-        // the expectations the loop just computed: no pixel centre inside a
-        // block at all, or (for linear, past domain 1 where no interior
-        // interval exists) no pixel whose whole bracket lies in a block. A
-        // run that trips them measured something but validated nothing.
-        if (blockPixels == 0) {
+        // refuse parameters under which they checked nothing. `covered` is
+        // exactly the pixels whose value was compared, so the first is exact
+        // for any layout. The second, for linear sampling, holds when the
+        // layout guarantees a pixel with its whole bracket inside a block
+        // (uniform, domain >= 2) or when the caller vouched for the
+        // parameters with requireLinear; for other clustered runs the printed
+        // count is the record.
+        if (covered == 0) {
             die("no pixel centre lies inside a block: these parameters "
                 "validate nothing");
         }
-        if (sampling == amrvis::SamplingPolicy::Linear && domain >= 2
-            && linearChecked == 0) {
+        if (sampling == amrvis::SamplingPolicy::Linear && requireLinear
+            && domain >= 2 && linearChecked == 0) {
             die("no pixel has its whole linear bracket inside a block: these "
                 "parameters validate no interpolated value");
         }

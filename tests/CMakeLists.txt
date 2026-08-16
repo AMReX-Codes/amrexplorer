@@ -1403,8 +1403,10 @@ add_test(NAME slice_query_benchmark_resampled
 set_tests_properties(slice_query_benchmark_resampled PROPERTIES TIMEOUT 120)
 # Two clusters of blocks far apart (the ordinary AMR shape): exercises the
 # block index's sparse-tile path and the layout-aware coverage checks.
+# The trailing 1 requires the linear pass to have validated interpolated
+# values, so a change to these arguments cannot make the run vacuous.
 add_test(NAME slice_query_benchmark_clustered
-    COMMAND bench_slice_query 8 8 200 1 24)
+    COMMAND bench_slice_query 8 8 200 1 24 1)
 set_tests_properties(slice_query_benchmark_clustered PROPERTIES TIMEOUT 120)
 
 # Fuzz/property harness for the crafted-plotfile header parsers. No remote

@@ -203,6 +203,9 @@ std::string resolveDatasetPath(const std::string& path)
     if (path.starts_with("~/")) {
         return std::string(home) + path.substr(1);
     }
+    if (path.starts_with('~')) {
+        return path;
+    }
     if (!std::filesystem::path(path).is_absolute()) {
         return (std::filesystem::path(home) / path).string();
     }

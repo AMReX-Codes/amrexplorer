@@ -1026,7 +1026,6 @@ void MainWindow::startSshRemoteSession(std::string destination,
     m_sshRemoteSession = std::make_unique<SshRemoteSession>(this);
     statusBar()->showMessage(tr("Starting remote session on %1...")
             .arg(QString::fromStdString(destination)));
-    updateDiagnostics();
     m_sshRemoteSession->start(destination, std::move(serverExecutable),
         remote::ConnectionOptions{.clientName = "AMReXplorer Qt",
             .softwareVersion = kVersion, .sessionToken = {}},
@@ -1069,6 +1068,8 @@ void MainWindow::startSshRemoteSession(std::string destination,
                     .arg(QString::fromStdString(destination), message));
             updateDiagnostics();
         });
+    // After start(): the session reports its destination only from then on.
+    updateDiagnostics();
 }
 
 void MainWindow::openRemoteDataset(std::string remotePath)

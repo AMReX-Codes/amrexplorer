@@ -86,6 +86,18 @@ first-connection host-key confirmation. Everything happens on one SSH
 connection, so the session requires only one authentication flow and does not
 rely on SSH multiplexing.
 
+**Sharing the connection.** If `~/.ssh/config` sets `ControlMaster auto` and a
+`ControlPath` for the destination, AMReXplorer's ssh becomes the master and a
+later `ssh` to the same destination from a terminal rides on its connection.
+Quitting AMReXplorer stops that ssh, which takes the master and every session
+sharing it down too. To keep them, add `ControlPersist 10m` (or `yes`) to the
+host's entry: OpenSSH then runs the master as a background process of its own,
+so quitting AMReXplorer ends only its session, terminal sessions survive, and
+the next AMReXplorer session reuses the connection without authenticating
+again. With a duration the master closes that long after its last client
+disconnects; with `yes` it stays until `ssh -O exit destination` or the
+connection drops.
+
 The client keeps the SSH process alive for the session and stops it when the
 window closes; the server reads end-of-stream and exits, so nothing is left
 running on the remote machine. The server binds no sockets at all in this

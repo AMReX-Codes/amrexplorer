@@ -109,7 +109,10 @@ struct RemoteDirectoryEntry {
 
 // The most subdirectories one DirectoryListing carries: the first this many
 // in name order, with `truncated` set when more exist. A bound both sides
-// enforce, so a listing cannot grow past what a dialog can show.
+// enforce, so a listing cannot grow past what a dialog can show. It is part
+// of protocol 1.1: a client rejects a larger listing, so raising it is a
+// minor-version change, and a server keeps sending at most this many to a
+// peer that negotiated 1.1.
 inline constexpr std::size_t maximumDirectoryEntries = 4096;
 
 // A directory as the server sees it, with `path` resolved and normalized the

@@ -133,6 +133,7 @@ void RemoteFileDialog::loadDirectory(const QString& path)
         return;
     }
     m_browseStop = StopSource{};
+    m_requestedPath = path;
     m_status->setText(tr("Listing %1...")
             .arg(path.isEmpty() ? tr("the home directory") : path));
     m_pathEdit->setEnabled(false);
@@ -147,7 +148,6 @@ void RemoteFileDialog::loadDirectory(const QString& path)
         [connection = m_connection, requestedPath = path.toStdString(),
             cancellation = m_browseStop.get_token()] {
             BrowseResult result;
-            result.requestedPath = QString::fromStdString(requestedPath);
             try {
                 result.listing
                     = connection->listDirectory(requestedPath, cancellation);
@@ -161,21 +161,25 @@ void RemoteFileDialog::loadDirectory(const QString& path)
 void RemoteFileDialog::finishLoad()
 {
     const auto result = m_watcher->result();
+    const bool initialLoad = std::exchange(m_initialLoad, false);
     m_pathEdit->setEnabled(true);
     m_goButton->setEnabled(true);
     m_entries->setEnabled(true);
     if (!result.error.isEmpty()) {
-        m_status->setText(
-            tr("Could not list the remote directory: %1").arg(result.error));
-        if (m_currentDirectory.isEmpty() && !result.requestedPath.isEmpty()) {
-            // Nothing is shown yet and the remembered start directory is
-            // gone; the home directory is the fallback that always exists.
+        if (initialLoad && !m_requestedPath.isEmpty()) {
+            // The remembered start directory is gone; the home directory is
+            // the fallback that always exists. Said in the status once that
+            // listing lands, so the user learns why they are not where the
+            // browser last left off.
             m_fallbackNotice
                 = tr("Could not list %1 (%2), so this is the home directory. ")
-                      .arg(result.requestedPath, result.error);
+                      .arg(m_requestedPath, result.error);
             loadDirectory(QString());
             return;
         }
+        m_fallbackNotice.clear();
+        m_status->setText(
+            tr("Could not list the remote directory: %1").arg(result.error));
         // The previous listing stays up, selection included; only the
         // message changes.
         m_upButton->setEnabled(m_parentDirectory != m_currentDirectory);

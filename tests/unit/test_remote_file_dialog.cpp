@@ -140,11 +140,16 @@ int main(int argc, char* argv[])
     makeFakePlotfile(root / "plt00000");
     makeFakePlotfile(root / "plt00001");
     makeFakePlotfile(root / "sub" / "plt00002");
-    const auto overCap = amrvis::remote::maximumDirectoryEntries + 5;
-    for (std::size_t index = 0; index < overCap; ++index) {
+    const auto capName = [](std::size_t index) {
         char name[16];
         std::snprintf(name, sizeof(name), "d%05zu", index);
-        std::filesystem::create_directories(root / "many" / name);
+        return std::string(name);
+    };
+    const auto many = root / "many";
+    std::filesystem::create_directory(many);
+    for (std::size_t index = 0;
+         index < amrvis::remote::maximumDirectoryEntries + 5; ++index) {
+        std::filesystem::create_directory(many / capName(index));
     }
 
     QApplication application(argc, argv);
@@ -162,13 +167,13 @@ int main(int argc, char* argv[])
     // The listing protocol itself: over the cap, the first entries in name
     // order are returned and the truncation is flagged.
     {
-        const auto listing
-            = connection->listDirectory((root / "many").string());
+        const auto listing = connection->listDirectory(many.string());
         require(listing.truncated
                 && listing.entries.size()
                     == amrvis::remote::maximumDirectoryEntries
-                && listing.entries.front().name == "d00000"
-                && listing.entries.back().name == "d04095",
+                && listing.entries.front().name == capName(0)
+                && listing.entries.back().name
+                    == capName(amrvis::remote::maximumDirectoryEntries - 1),
             "over-cap listing was not the first entries in name order");
     }
 

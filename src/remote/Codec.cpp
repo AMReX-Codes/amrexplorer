@@ -11,6 +11,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace amrvis::remote::codec {
@@ -556,6 +557,12 @@ HelloResponseData fromWire(const fb::HelloResponseT& value)
     return result;
 }
 
+bool isValidDirectoryEntryName(std::string_view name) noexcept
+{
+    return !name.empty() && name != "." && name != ".."
+        && name.find('/') == std::string_view::npos;
+}
+
 fb::ListDirectoryRequestT toWireDirectoryRequest(const std::string& path)
 {
     fb::ListDirectoryRequestT wire;
@@ -594,10 +601,7 @@ RemoteDirectoryListing fromWire(const fb::DirectoryListingT& value)
     listing.truncated = value.truncated;
     listing.entries.reserve(value.entries.size());
     for (const auto& entry : value.entries) {
-        // A backslash is a legal filename character on the Linux servers this
-        // client browses; only genuinely impossible names are rejected.
-        if (entry == nullptr || entry->name.empty() || entry->name == "."
-            || entry->name == ".." || entry->name.find('/') != std::string::npos
+        if (entry == nullptr || !isValidDirectoryEntryName(entry->name)
             || entry->path.empty()) {
             throw std::invalid_argument(
                 "directory listing contains an invalid entry");

@@ -194,6 +194,11 @@ void checkConverted(const fb::DirectoryListingT& wire,
             || entry.isPlotfile != wireEntry.is_plotfile) {
             fail("DirectoryListing converter did not carry an entry over");
         }
+        // The converter's own predicate: an accepted entry is one path
+        // component with a path, so its removal from fromWire shows here.
+        if (!codec::isValidDirectoryEntryName(entry.name) || entry.path.empty()) {
+            fail("DirectoryListing converter accepted an invalid entry");
+        }
     }
 }
 
@@ -624,6 +629,22 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         error.code = fb::ErrorCode::InvalidRequest;
         error.message = "boom";
         add(std::move(error));
+    }
+    {
+        fb::DirectoryListingT listing;
+        listing.path = "/scratch/run";
+        listing.parent_path = "/scratch";
+        listing.truncated = false;
+        auto plotfile = std::make_unique<fb::DirectoryEntryT>();
+        plotfile->name = "plt00010";
+        plotfile->path = "/scratch/run/plt00010";
+        plotfile->is_plotfile = true;
+        listing.entries.push_back(std::move(plotfile));
+        auto directory = std::make_unique<fb::DirectoryEntryT>();
+        directory->name = "inputs";
+        directory->path = "/scratch/run/inputs";
+        listing.entries.push_back(std::move(directory));
+        add(std::move(listing));
     }
     return seeds;
 }

@@ -812,11 +812,7 @@ void MainWindow::probeClicked(PlaneViewState& state, int x, int displayY)
     setActiveView(state);
     const auto line = probeReadout(state, x, displayY);
     m_probeLabel->setText(line);
-    constexpr int maximumProbeLines = 100;
-    m_probeLines.append(line);
-    while (m_probeLines.size() > maximumProbeLines) {
-        m_probeLines.removeFirst();
-    }
+    m_diagnosticsModel->appendProbeLine(line);
     updateDiagnostics();
 }
 
@@ -1379,7 +1375,7 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
         m_linePlotStopSource = StopSource{};
     }
     const auto cancellation = m_linePlotStopSource.get_token();
-    ++m_activeRequests;
+    m_diagnosticsModel->adjustActivity(1);
     statusBar()->showMessage(tr("Loading line plot for %1...").arg(
         QString::fromStdString(fieldName)));
     updateDiagnostics();
@@ -1389,7 +1385,7 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
     connect(watcher, &QFutureWatcher<LineQueryResult>::finished, this,
         [this, watcher, dataset, generation, cancellation, request, fieldName,
             dimension, primaryFixedAxis, maximumLevel, composition, view] {
-            --m_activeRequests;
+            m_diagnosticsModel->adjustActivity(-1);
             if (m_closing) {
                 watcher->deleteLater();
                 return;
@@ -1401,20 +1397,16 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
             try {
                 auto result = watcher->future().takeResult();
                 if (generation != m_generation || cancellation.stop_requested()) {
-                    ++m_staleResults;
+                    m_diagnosticsModel->noteStaleResult();
                 } else {
                     appendLinePlotCurve(result.line, fieldName, dimension,
                         primaryFixedAxis, request.axis,
                         request.fixedCoordinates,
                         maximumLevel, composition);
                     const auto cache = dataset->cacheMetrics();
-                    m_cacheBudgetBytes = cache.budgetBytes;
-                    m_cacheResidentBytes = cache.residentBytes;
-                    m_cachePinnedBytes = cache.pinnedBytes;
-                    m_cacheEvictions = cache.evictions;
-                    m_lastBlocksRead = result.metrics.blocksRead;
-                    m_lastCacheHits = result.metrics.cacheHits;
-                    m_lastPayloadBytesRead = result.metrics.payloadBytesRead;
+                    m_diagnosticsModel->setCacheMetrics(cache);
+                    m_diagnosticsModel->setSliceMetrics(result.metrics.blocksRead,
+                        result.metrics.cacheHits, result.metrics.payloadBytesRead);
                     statusBar()->showMessage(tr("Added line plot curve for %1")
                         .arg(QString::fromStdString(fieldName)));
                 }
@@ -1430,14 +1422,14 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
                         .arg(cacheBudgetText(
                             dataset->cacheMetrics().budgetBytes)));
                 } else {
-                    ++m_staleResults;
+                    m_diagnosticsModel->noteStaleResult();
                 }
             } catch (const std::exception& error) {
                 if (generation == m_generation && !cancellation.stop_requested()) {
                     reportBackgroundError(
                         tr("Cannot load line plot: %1").arg(exceptionMessage(error)));
                 } else {
-                    ++m_staleResults;
+                    m_diagnosticsModel->noteStaleResult();
                 }
             }
             updateDiagnostics();

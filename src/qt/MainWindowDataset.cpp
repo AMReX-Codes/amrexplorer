@@ -336,7 +336,7 @@ void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
     bool preserveFabSelector, std::optional<FrameSliceSpec> initialSpec,
     QString failureTitle, std::optional<FabSelectorRollback> rollback)
 {
-    ++m_activeRequests;
+    m_diagnosticsModel->adjustActivity(1);
     const auto generation = m_generation;
     // Two of these can be in flight at once -- clicking a second raw record
     // while the first is still reading, which is reachable precisely because
@@ -371,7 +371,7 @@ void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
             dataRoot = std::move(dataRoot), preserveFabSelector,
             initialSpec = std::move(initialSpec),
             failureTitle = std::move(failureTitle)]() mutable {
-            --m_activeRequests;
+            m_diagnosticsModel->adjustActivity(-1);
             if (m_closing) {
                 watcher->deleteLater();
                 return;
@@ -403,7 +403,7 @@ void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
                         std::move(dataRoot), preserveFabSelector,
                         std::move(initialSpec));
                 } else {
-                    ++m_staleResults;
+                    m_diagnosticsModel->noteStaleResult();
                 }
             } catch (const std::exception& error) {
                 if (current) {
@@ -416,7 +416,7 @@ void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
                     reportBackgroundError(
                         tr("%1: %2").arg(failureTitle, exceptionMessage(error)));
                 } else {
-                    ++m_staleResults;
+                    m_diagnosticsModel->noteStaleResult();
                 }
             }
             updateDiagnostics();
@@ -1172,13 +1172,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     // so closing it on every open only discarded whatever the user had typed
     // but not yet applied.
     m_datasetPath = path;
-    m_lastBlocksRead = 0;
-    m_lastCacheHits = 0;
-    m_lastPayloadBytesRead = 0;
-    m_cacheBudgetBytes = 0;
-    m_cacheResidentBytes = 0;
-    m_cachePinnedBytes = 0;
-    m_cacheEvictions = 0;
+    m_diagnosticsModel->resetDatasetMetrics();
     m_fieldSelector->setEnabled(false);
     m_levelSelector->setEnabled(false);
     m_rangeMode->setEnabled(false);
@@ -1196,7 +1190,6 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_exportAnimationAction->setEnabled(false);
     m_openMetadata.reset();
     m_fileVersion.clear();
-    m_probeLines.clear();
     m_vectorUField = -1;
     m_vectorVField = -1;
     m_vectorWField = -1;
@@ -1219,7 +1212,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_metadataStopSource.request_stop();
     m_metadataStopSource = StopSource{};
     const auto metadataCancellation = m_metadataStopSource.get_token();
-    ++m_activeRequests;
+    m_diagnosticsModel->adjustActivity(1);
     statusBar()->showMessage(tr("Reading metadata for %1...").arg(
         QString::fromStdString(path.string())));
     updateDiagnostics();
@@ -1229,7 +1222,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         [this, watcher, generation, path, metadataOnly,
             dataRoot = std::move(dataRoot),
             initialSpec = std::move(initialSpec)]() mutable {
-            --m_activeRequests;
+            m_diagnosticsModel->adjustActivity(-1);
             if (m_closing) {
                 watcher->deleteLater();
                 return;
@@ -1282,7 +1275,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                             std::move(result.session));
                     }
                 } else {
-                    ++m_staleResults;
+                    m_diagnosticsModel->noteStaleResult();
                 }
             } catch (const std::exception& error) {
                 if (generation == m_generation) {
@@ -1305,7 +1298,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                     updateAnimationDockVisibility();
                     emit datasetOpenFinished(false);
                 } else {
-                    ++m_staleResults;
+                    m_diagnosticsModel->noteStaleResult();
                 }
             }
             updateDiagnostics();
@@ -1425,7 +1418,7 @@ void MainWindow::requestInitialSlice(
     for (const auto* state : views) {
         viewGenerations.push_back(state->sliceGeneration);
     }
-    ++m_activeRequests;
+    m_diagnosticsModel->adjustActivity(1);
     statusBar()->showMessage(tr("Loading initial slice..."));
     updateDiagnostics();
 
@@ -1433,7 +1426,7 @@ void MainWindow::requestInitialSlice(
     connect(watcher, &QFutureWatcher<InitialSliceResult>::finished, this,
         [this, watcher, generation, cancellation, views, viewGenerations,
             restoredSpec, isRemote] {
-            --m_activeRequests;
+            m_diagnosticsModel->adjustActivity(-1);
             if (m_closing) {
                 watcher->deleteLater();
                 return;
@@ -1552,10 +1545,7 @@ void MainWindow::requestInitialSlice(
                         }
                     }
                     const auto cache = m_dataset->cacheMetrics();
-                    m_cacheBudgetBytes = cache.budgetBytes;
-                    m_cacheResidentBytes = cache.residentBytes;
-                    m_cachePinnedBytes = cache.pinnedBytes;
-                    m_cacheEvictions = cache.evictions;
+                    m_diagnosticsModel->setCacheMetrics(cache);
                     if (result.cacheFallbackToLevel >= 0) {
                         // Non-modal: an informational cache-fallback notice must
                         // not pop a modal dialog that would block the quit path.
@@ -1565,7 +1555,7 @@ void MainWindow::requestInitialSlice(
                     }
                     emit initialSliceFinished(true);
                 } else {
-                    ++m_staleResults;
+                    m_diagnosticsModel->noteStaleResult();
                 }
             } catch (const std::exception& error) {
                 if (generation == m_generation && !cancellation.stop_requested()) {
@@ -1580,7 +1570,7 @@ void MainWindow::requestInitialSlice(
                             .arg(QString::fromStdString(m_datasetPath.string())));
                     emit initialSliceFinished(false);
                 } else {
-                    ++m_staleResults;
+                    m_diagnosticsModel->noteStaleResult();
                 }
             }
             updateDiagnostics();

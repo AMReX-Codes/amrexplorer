@@ -309,7 +309,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     const auto generation = m_generation;
     const auto sliceGeneration = ++state.sliceGeneration;
     ++state.pendingRequests;
-    ++m_activeRequests;
+    m_diagnosticsModel->adjustActivity(1);
     const auto tag = m_viewDimension == 3
         ? tr(" (%1)").arg(state.label) : QString();
     statusBar()->showMessage(tr("Loading %1%2...").arg(
@@ -359,7 +359,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
         [this, watcher, dataset, generation, sliceGeneration, cancellation,
          &state, rangeMode] {
             --state.pendingRequests;
-            --m_activeRequests;
+            m_diagnosticsModel->adjustActivity(-1);
             if (m_closing) {
                 watcher->deleteLater();
                 return;
@@ -424,10 +424,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                         }
                     }
                     const auto cache = dataset->cacheMetrics();
-                    m_cacheBudgetBytes = cache.budgetBytes;
-                    m_cacheResidentBytes = cache.residentBytes;
-                    m_cachePinnedBytes = cache.pinnedBytes;
-                    m_cacheEvictions = cache.evictions;
+                    m_diagnosticsModel->setCacheMetrics(cache);
                     // A cache-pressure fallback lowered the composite level;
                     // reflect it in the level combo (no re-slice) and inform the
                     // user, matching the initial-load handling.
@@ -442,7 +439,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                             *dataset, fallbackFromLevel, fallbackToLevel));
                     }
                 } else {
-                    ++m_staleResults;
+                    m_diagnosticsModel->noteStaleResult();
                 }
             } catch (const std::exception& error) {
                 if (generation == m_generation
@@ -451,7 +448,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     reportBackgroundError(
                         tr("Cannot load slice: %1").arg(exceptionMessage(error)));
                 } else {
-                    ++m_staleResults;
+                    m_diagnosticsModel->noteStaleResult();
                 }
             }
             // Dispatch the 3-D shared-range sync after the try/catch, not inside
@@ -477,7 +474,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             watcher->deleteLater();
             // The interactive re-slice batch has drained once no view has work
             // in flight; the smoke test waits on this to read settled state.
-            if (m_activeRequests == 0) {
+            if (m_diagnosticsModel->activeRequests() == 0) {
                 emit interactiveSlicesSettled();
             }
         });
@@ -691,8 +688,8 @@ void MainWindow::showMetadata(
     m_fileVersion = result.fileVersion;
     updateWindowTitle();
 
-    m_lastFilesRead = result.metrics.filesRead;
-    m_lastBytesRead = result.metrics.bytesRead;
+    m_diagnosticsModel->setMetadataMetrics(
+        result.metrics.filesRead, result.metrics.bytesRead);
     statusBar()->showMessage(standalone
         ? tr("Metadata loaded: %1 field(s), %2 grid(s)")
               .arg(metadata.fields.size())
@@ -952,9 +949,8 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
     // loop.
     refreshScaleReport();
 
-    m_lastBlocksRead = display.slice.metrics.blocksRead;
-    m_lastCacheHits = display.slice.metrics.cacheHits;
-    m_lastPayloadBytesRead = display.slice.metrics.payloadBytesRead;
+    m_diagnosticsModel->setSliceMetrics(display.slice.metrics.blocksRead,
+        display.slice.metrics.cacheHits, display.slice.metrics.payloadBytesRead);
     statusBar()->clearMessage();
 }
 
@@ -1047,7 +1043,7 @@ void MainWindow::syncVisibleRanges()
     connect(watcher, &QFutureWatcher<SyncOutcome>::finished, this,
         [this, watcher, generation, snapshotGenerations, views] {
             m_visibleSyncInFlight = false;
-            --m_activeRequests;
+            m_diagnosticsModel->adjustActivity(-1);
             if (m_closing) {
                 watcher->deleteLater();
                 return;
@@ -1196,7 +1192,7 @@ void MainWindow::syncVisibleRanges()
                         .arg(exceptionMessage(error)));
                 }
             }
-            if (m_activeRequests == 0) {
+            if (m_diagnosticsModel->activeRequests() == 0) {
                 emit interactiveSlicesSettled();
             }
         });
@@ -1207,7 +1203,7 @@ void MainWindow::syncVisibleRanges()
     // retry, drop the watcher, and swallow -- the failure must not escape this
     // slot or wedge the sync shut for the session.
     m_visibleSyncInFlight = true;
-    ++m_activeRequests;
+    m_diagnosticsModel->adjustActivity(1);
     try {
         watcher->setFuture(QtConcurrent::run([cachedRange, snapshots,
             logarithmic = m_logarithmic->isChecked(),
@@ -1239,7 +1235,7 @@ void MainWindow::syncVisibleRanges()
         }));
     } catch (const std::exception& error) {
         m_visibleSyncInFlight = false;
-        --m_activeRequests;
+        m_diagnosticsModel->adjustActivity(-1);
         watcher->deleteLater();
         reportBackgroundError(tr("Cannot synchronize views: %1")
             .arg(exceptionMessage(error)));
@@ -1506,10 +1502,7 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
         showSlice(*views[index], std::move(result.displays[index]));
     }
     const auto cache = m_dataset->cacheMetrics();
-    m_cacheBudgetBytes = cache.budgetBytes;
-    m_cacheResidentBytes = cache.residentBytes;
-    m_cachePinnedBytes = cache.pinnedBytes;
-    m_cacheEvictions = cache.evictions;
+    m_diagnosticsModel->setCacheMetrics(cache);
     validateVectorMode();
     // Frames need not share a domain, and the clamped scale report is computed
     // from one. A scale picked on an earlier frame otherwise kept that frame's
@@ -1844,38 +1837,13 @@ void MainWindow::reportBackgroundError(const QString& message)
     if (m_closing) {
         return;
     }
-    qWarning("%s", message.toUtf8().constData());
-    m_backgroundErrors.append(message);
-    constexpr int maximumErrors = 50;
-    while (m_backgroundErrors.size() > maximumErrors) {
-        m_backgroundErrors.removeFirst();
-    }
     statusBar()->showMessage(message.section(QLatin1Char('\n'), 0, 0));
-    m_diagnosticsDock->setVisible(true);
-    updateDiagnostics();
+    m_diagnosticsModel->reportBackgroundError(message);
 }
 
-void MainWindow::updateDiagnostics()
+QString MainWindow::remoteDiagnosticsLines() const
 {
-    auto text = tr("generation: %1\nactive background requests: %2\n"
-           "stale results discarded: %3\nmetadata files read: %4\n"
-           "metadata bytes read: %5\nblocks read: %6\ncache hits: %7\n"
-           "payload bytes read: %8\ncache budget bytes: %9\n"
-           "cache resident bytes: %10\ncache pinned bytes: %11\n"
-           "cache evictions: %12\nlast frame switch: %13 ms")
-            .arg(m_generation)
-            .arg(m_activeRequests)
-            .arg(m_staleResults)
-            .arg(m_lastFilesRead)
-            .arg(m_lastBytesRead)
-            .arg(m_lastBlocksRead)
-            .arg(m_lastCacheHits)
-            .arg(m_lastPayloadBytesRead)
-            .arg(m_cacheBudgetBytes)
-            .arg(m_cacheResidentBytes)
-            .arg(m_cachePinnedBytes)
-            .arg(m_cacheEvictions)
-            .arg(m_sequenceController->lastFrameSwitchMs());
+    QString text;
     if (m_remoteConnection) {
         text += tr("\nremote session: %1 (%2)")
                     .arg(m_remoteLabel,
@@ -1892,15 +1860,12 @@ void MainWindow::updateDiagnostics()
                     .arg(QString::fromStdString(
                         m_sshRemoteSession->destination()));
     }
-    for (const auto& line : m_probeLines) {
-        text += QLatin1Char('\n');
-        text += line;
-    }
-    for (const auto& error : m_backgroundErrors) {
-        text += QLatin1Char('\n');
-        text += tr("background error: %1").arg(error);
-    }
-    m_diagnostics->setPlainText(text);
+    return text;
+}
+
+void MainWindow::updateDiagnostics()
+{
+    m_diagnosticsModel->refresh();
 }
 
 } // namespace amrvis::qt

@@ -18,8 +18,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <span>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -88,6 +90,9 @@ void exerciseFromWire(const codec::NativeEnvelope& envelope)
     case fb::Payload::RangeResponse:
         convert(envelope.payload.AsRangeResponse());
         break;
+    case fb::Payload::ErrorResponse:
+        convert(envelope.payload.AsErrorResponse());
+        break;
     default:
         break;  // trivial payloads (ping/pong/cancel/...) have no converter
     }
@@ -114,38 +119,137 @@ void exerciseWire(std::span<const std::uint8_t> bytes)
 }
 
 #if !defined(AMREXPLORER_LIBFUZZER)
-// Seeds across the payload arms, including the vector-bearing responses whose
-// fromWire converters hold the length/content validation -- mutations of these
-// are what actually reach validateResultVectors with near-valid data.
+std::unique_ptr<fb::Real3T> real3(double x, double y, double z)
+{
+    auto value = std::make_unique<fb::Real3T>();
+    value->values = {x, y, z};
+    return value;
+}
+
+std::unique_ptr<fb::Int3T> int3(int x, int y, int z)
+{
+    auto value = std::make_unique<fb::Int3T>();
+    value->values = {x, y, z};
+    return value;
+}
+
+std::unique_ptr<fb::RealBoxT> unitBox()
+{
+    auto box = std::make_unique<fb::RealBoxT>();
+    box->lower = real3(0.0, 0.0, 0.0);
+    box->upper = real3(1.0, 1.0, 1.0);
+    return box;
+}
+
+// One seed per fromWire converter arm (plus a trivial ping), each valid enough
+// to pass its converter unmutated -- main() checks that -- so mutations reach
+// the deep validators (validateResultVectors, finite-value and enum checks)
+// with near-valid data instead of dying at a converter's first check.
 std::vector<std::vector<std::uint8_t>> wireSeeds()
 {
     std::vector<std::vector<std::uint8_t>> seeds;
+    std::uint64_t requestId = 0;
+    const auto add = [&](auto payload) {
+        seeds.push_back(codec::encode(++requestId, std::move(payload)));
+    };
     {
         fb::PingRequestT ping;
         ping.nonce = 7;
-        seeds.push_back(codec::encode(1, std::move(ping)));
+        add(std::move(ping));
     }
     {
         fb::HelloRequestT hello;
         hello.client_name = "fuzz";
         hello.maximum_frame_bytes = 1 << 20;
         hello.maximum_minor_version = 1;
-        seeds.push_back(codec::encode(2, std::move(hello)));
+        add(std::move(hello));
     }
     {
-        fb::ErrorResponseT error;
-        error.message = "boom";
-        seeds.push_back(codec::encode(3, std::move(error)));
+        fb::HelloResponseT hello;
+        hello.server_name = "fuzz";
+        hello.maximum_frame_bytes = 1 << 20;
+        hello.maximum_datasets = 2;
+        hello.capabilities = {1, 2};
+        add(std::move(hello));
+    }
+    {
+        fb::OpenDatasetRequestT open;
+        open.path = "/plt00000";
+        open.cache_budget_bytes = 1 << 20;
+        add(std::move(open));
+    }
+    {
+        // Two fields on a one-level, two-box catalog: the smallest shape that
+        // exercises every count check in fromWire(DatasetOpenedT).
+        fb::DatasetOpenedT opened;
+        opened.dataset_id = 1;
+        opened.dimension = 3;
+        opened.finest_level = 0;
+        opened.time = 0.5;
+        opened.physical_domain = unitBox();
+        for (const char* name : {"density", "pressure"}) {
+            auto field = std::make_unique<fb::FieldCatalogT>();
+            field->name = name;
+            opened.fields.push_back(std::move(field));
+        }
+        auto level = std::make_unique<fb::LevelCatalogT>();
+        auto domain = std::make_unique<fb::IntBoxT>();
+        domain->lower = int3(0, 0, 0);
+        domain->upper = int3(3, 3, 3);
+        domain->centering = int3(0, 0, 0);
+        level->domain = std::move(domain);
+        level->cell_size = real3(0.25, 0.25, 0.25);
+        level->index_origin = real3(0.0, 0.0, 0.0);
+        for (int lo : {0, 2}) {
+            auto box = std::make_unique<fb::IntBoxT>();
+            box->lower = int3(lo, 0, 0);
+            box->upper = int3(lo + 1, 3, 3);
+            box->centering = int3(0, 0, 0);
+            level->boxes.push_back(std::move(box));
+        }
+        opened.levels.push_back(std::move(level));
+        auto species = std::make_unique<fb::ParticleSpeciesCatalogT>();
+        species->name = "electrons";
+        species->dimension = 3;
+        opened.particle_species.push_back(std::move(species));
+        opened.file_range_available = {1, 1};
+        opened.level_range_available = {1, 0};
+        opened.metadata_metrics = std::make_unique<fb::MetadataReadMetricsT>();
+        opened.cache = std::make_unique<fb::CacheStateT>();
+        add(std::move(opened));
+    }
+    {
+        fb::SliceViewRequestT request;
+        request.dataset_id = 1;
+        request.field = 0;
+        request.visible_region = unitBox();
+        request.width = 4;
+        request.height = 4;
+        add(std::move(request));
     }
     {
         fb::SliceViewResponseT slice;
         slice.width = 2;
         slice.height = 2;
-        slice.physical_region = std::make_unique<fb::RealBoxT>();
+        slice.physical_region = unitBox();
         slice.values = {1.0F, 2.0F, 3.0F, 4.0F};
         slice.valid = {1, 1, 1, 1};
         slice.source_level = {0, 0, 0, 0};
-        seeds.push_back(codec::encode(4, std::move(slice)));
+        auto gridBox = std::make_unique<fb::SliceGridBoxT>();
+        gridBox->physical_region = unitBox();
+        slice.grid_boxes.push_back(std::move(gridBox));
+        slice.cache = std::make_unique<fb::CacheStateT>();
+        add(std::move(slice));
+    }
+    {
+        fb::LineViewRequestT request;
+        request.dataset_id = 1;
+        request.axis = 0;
+        request.fixed_coordinates = real3(0.5, 0.5, 0.5);
+        request.region = unitBox();
+        request.has_region = true;
+        request.output_width = 8;
+        add(std::move(request));
     }
     {
         fb::LineViewResponseT line;
@@ -153,22 +257,69 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         line.values = {1.0, 2.0};
         line.valid = {1, 1};
         line.source_level = {0, 0};
-        seeds.push_back(codec::encode(5, std::move(line)));
+        line.cache = std::make_unique<fb::CacheStateT>();
+        add(std::move(line));
+    }
+    {
+        fb::DatasetPageRequestT request;
+        request.dataset_id = 1;
+        request.region = unitBox();
+        request.slice_position = 0.5;
+        request.maximum_extent = 8;
+        add(std::move(request));
+    }
+    {
+        fb::DatasetPageResponseT page;
+        page.lower = {0, 0};
+        page.upper = {1, 1};
+        page.nx = 2;
+        page.ny = 2;
+        page.values = {1.0F, 2.0F, 3.0F, 4.0F};
+        page.covered = {1, 1, 1, 1};
+        page.minimum = 1.0;
+        page.maximum = 4.0;
+        page.has_finite_values = true;
+        page.cache = std::make_unique<fb::CacheStateT>();
+        add(std::move(page));
+    }
+    {
+        fb::ParticleSampleRequestT request;
+        request.dataset_id = 1;
+        request.species = "electrons";
+        request.fraction = 0.5;
+        request.seed = 3;
+        add(std::move(request));
     }
     {
         fb::ParticleSampleResponseT particles;
+        particles.species = std::make_unique<fb::ParticleSpeciesCatalogT>();
+        particles.species->name = "electrons";
+        particles.species->dimension = 3;
         particles.ids = {11, 12};
         particles.positions = {0.0, 0.0, 0.0, 1.0, 1.0, 1.0};
-        seeds.push_back(codec::encode(6, std::move(particles)));
+        particles.cache = std::make_unique<fb::CacheStateT>();
+        add(std::move(particles));
     }
     {
-        fb::SliceViewRequestT request;
+        fb::RangeRequestT request;
         request.dataset_id = 1;
         request.field = 0;
-        request.visible_region = std::make_unique<fb::RealBoxT>();
-        request.width = 4;
-        request.height = 4;
-        seeds.push_back(codec::encode(7, std::move(request)));
+        request.scope = fb::RangeScope::Level;
+        add(std::move(request));
+    }
+    {
+        fb::RangeResponseT range;
+        range.has_range = true;
+        range.minimum = -1.0;
+        range.maximum = 1.0;
+        range.cache = std::make_unique<fb::CacheStateT>();
+        add(std::move(range));
+    }
+    {
+        fb::ErrorResponseT error;
+        error.code = fb::ErrorCode::InvalidRequest;
+        error.message = "boom";
+        add(std::move(error));
     }
     return seeds;
 }
@@ -190,6 +341,16 @@ int main()
     std::uint64_t rng = 0x1234'5678'9abc'def0ULL;
     const auto seeds = wireSeeds();
     long iteration = 0;
+    // A seed its own converter rejects would only ever exercise that first
+    // check, so require every seed to decode and convert unmutated.
+    for (const auto& seed : seeds) {
+        amrvis::fuzz::setCurrentInput(iteration++, seed.data(), seed.size());
+        try {
+            exerciseFromWire(*codec::decode(seed));
+        } catch (const std::exception&) {
+            amrvis::fuzz::fail("a wire seed is rejected before mutation");
+        }
+    }
     for (int i = 0; i < iterations; ++i) {
         // Purely random bytes can never carry the AVR2 file identifier, so
         // decode would reject every one at its first check and the verifier

@@ -188,6 +188,11 @@ bool constantTimeEquals(std::string_view lhs, std::string_view rhs)
 // ordinary not-found error, and with no HOME the path is left untouched.
 std::string resolveDatasetPath(const std::string& path)
 {
+#ifdef _WIN32
+    // The deployment server is Linux; a Windows server serves tests and
+    // tools, whose paths are absolute, and MSVC deprecates getenv outright.
+    return path;
+#else
     const char* home = std::getenv("HOME");
     if (home == nullptr || *home == '\0') {
         return path;
@@ -202,6 +207,7 @@ std::string resolveDatasetPath(const std::string& path)
         return (std::filesystem::path(home) / path).string();
     }
     return path;
+#endif
 }
 
 ErrorData classifyError(const std::exception& error)

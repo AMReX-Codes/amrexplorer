@@ -104,10 +104,12 @@ provided the script passes the remote command through (`exec ssh target
   - Pass the full path with `--server` (CLI) or in the connect dialog's
     second field. It is remembered per destination, so this is a one-time
     entry.
-  - Or make the directory reachable non-interactively: on the remote machine
-    put the export at the *top* of `~/.bashrc`, before the interactivity
-    guard (`case $- in ... esac` or `[ -z "$PS1" ] && return`) that most
-    distributions ship -- lines below that guard never run for ssh commands:
+  - Or make the server's directory reachable non-interactively: on the
+    remote machine put the export at the *top* of `~/.bashrc`, before the
+    interactivity guard (`case $- in ... esac` or `[ -z "$PS1" ] && return`)
+    that most distributions ship -- lines below that guard never run for ssh
+    commands. The example assumes `amrexplorer-server` is installed in
+    `~/.local/bin`; use the directory it actually lives in:
 
     ```bash
     # ~/.bashrc on the remote machine, first line

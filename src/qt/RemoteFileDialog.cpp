@@ -135,6 +135,9 @@ void RemoteFileDialog::loadDirectory(const QString& path)
     m_pathEdit->setEnabled(false);
     m_upButton->setEnabled(false);
     m_goButton->setEnabled(false);
+    // Greyed out until the new listing lands: on a slow link the old one
+    // stays visible for a moment and must not read as the current one.
+    m_entries->setEnabled(false);
     m_watcher->setFuture(QtConcurrent::run(
         [connection = m_connection, requestedPath = path.toStdString(),
             cancellation = m_browseStop.get_token()] {
@@ -154,6 +157,7 @@ void RemoteFileDialog::finishLoad()
     const auto result = m_watcher->result();
     m_pathEdit->setEnabled(true);
     m_goButton->setEnabled(true);
+    m_entries->setEnabled(true);
     m_upButton->setEnabled(!m_parentDirectory.isEmpty()
         && m_parentDirectory != m_currentDirectory);
     if (!result.error.isEmpty()) {
@@ -168,6 +172,11 @@ void RemoteFileDialog::finishLoad()
     m_parentDirectory = QString::fromStdString(result.listing.parentPath);
     m_pathEdit->setText(m_currentDirectory);
     m_upButton->setEnabled(m_parentDirectory != m_currentDirectory);
+    // Repopulate with updates off, then lay out and repaint the whole view in
+    // one go. Left to the view's own delayed relayout, the first row (made
+    // current by setFocus below) can repaint over the stale layout while the
+    // rest of the old listing lingers until the next repaint trigger.
+    m_entries->setUpdatesEnabled(false);
     m_entries->clear();
     const auto directoryIcon = style()->standardIcon(QStyle::SP_DirIcon);
     const auto plotfileIcon = style()->standardIcon(QStyle::SP_FileIcon);
@@ -184,6 +193,9 @@ void RemoteFileDialog::finishLoad()
                 ? Qt::ItemIsEnabled | Qt::ItemIsSelectable
                 : Qt::ItemIsEnabled);
     }
+    m_entries->doItemsLayout();
+    m_entries->scrollToTop();
+    m_entries->setUpdatesEnabled(true);
     auto status = m_mode == SelectionMode::SinglePlotfile
         ? tr("Select a plotfile, or double-click a directory to enter it.")
         : tr("Select one or more plotfiles; they play in name order.");

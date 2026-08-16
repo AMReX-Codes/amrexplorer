@@ -4,19 +4,6 @@ namespace amrvis::qt {
 
 namespace {
 
-// Everything the FAB selector dock needs for a source, computed off the GUI
-// thread (see buildFabSelector) so its header scans / per-block preads never
-// block the event loop. `matched` distinguishes a recognized FAB or
-// single-level-VisMF source (whose m_fabMode/source state should be applied)
-// from anything else (leave that state untouched, just hide the dock).
-struct FabSelectorBuild {
-    bool matched = false;
-    bool fabMode = false;
-    bool hasSourceMetadata = false;
-    std::vector<FabSelectorEntry> entries;
-    std::filesystem::path root;
-};
-
 // The result of a dataset open worker: the metadata plus, when the caller did
 // not ask to preserve the existing selector, the FAB selector contents built
 // alongside it (so the GUI-thread completion only blits, never reads files).
@@ -25,86 +12,6 @@ struct OpenedDataset {
     std::optional<FabSelectorBuild> fabSelector;
     std::shared_ptr<DatasetSession> session;
 };
-
-// Reads FAB/MultiFab record headers and builds the selector entries. Runs on a
-// worker thread; QCoreApplication::translate is thread-safe, and it touches no
-// widgets or member state.
-FabSelectorBuild buildFabSelector(
-    const PlotfileMetadataResult& result, const std::filesystem::path& path)
-{
-    const auto precisionLabel = [](FabRealPrecision precision) {
-        return precision == FabRealPrecision::Single
-            ? QCoreApplication::translate("MainWindow", "IEEE-32")
-            : QCoreApplication::translate("MainWindow", "IEEE-64");
-    };
-
-    FabSelectorBuild build;
-    build.root = path.parent_path();
-    if (build.root.empty()) {
-        build.root = ".";
-    }
-
-    if (result.fileVersion == "FAB") {
-        const auto records = scanFabFile(path);
-        build.entries.reserve(records.size());
-        for (const auto& record : records) {
-            build.entries.push_back({
-                .ordinal = record.ordinal,
-                .level = 0,
-                .blockIndex = record.ordinal,
-                .filePath = path,
-                .fileOffset = record.headerOffset,
-                .validBox = record.storedBox,
-                .storedBox = record.storedBox,
-                .dimension = record.dimension,
-                .components = record.components,
-                .precision = precisionLabel(record.precision),
-                .rawRecord = true
-            });
-        }
-        build.matched = true;
-        build.fabMode = true;
-        build.hasSourceMetadata = false;
-    } else if (result.fileVersion.starts_with("VisMF-")
-        && result.metadata->levels.size() == 1) {
-        const auto& metadata = *result.metadata;
-        const auto& level = metadata.levels.front();
-        build.entries.reserve(level.blocks.size());
-        for (std::size_t index = 0; index < level.blocks.size(); ++index) {
-            const auto& block = level.blocks[index];
-            // Overflow-guarded shared grow (this copy previously used
-            // plain int).
-            auto storedBox = amrvis::detail::grownBox<MetadataReadError>(
-                block.box, level.ghostWidth, metadata.dimension);
-            auto precision = FabRealPrecision::Double;
-            if (level.visMfHeaderVersion == 1) {
-                const auto record = inspectFabRecord(
-                    build.root / block.filePath, block.fileOffset);
-                storedBox = record.storedBox;
-                precision = record.precision;
-            } else {
-                precision = fabPrecisionFromDescriptor(level.realDescriptor);
-            }
-            build.entries.push_back({
-                .ordinal = index,
-                .level = level.level,
-                .blockIndex = index,
-                .filePath = build.root / block.filePath,
-                .fileOffset = block.fileOffset,
-                .validBox = block.box,
-                .storedBox = storedBox,
-                .dimension = metadata.dimension,
-                .components = level.storedComponents,
-                .precision = precisionLabel(precision),
-                .rawRecord = false
-            });
-        }
-        build.matched = true;
-        build.fabMode = false;
-        build.hasSourceMetadata = true;
-    }
-    return build;
-}
 
 } // namespace
 
@@ -250,7 +157,7 @@ void MainWindow::updateWindowTitle()
     }
     // Standalone FABs and MultiFabs carry neither a simulation time nor an
     // AMR hierarchy, so their titles show just the format name.
-    if (m_fabMode) {
+    if (m_fabNavigator->fabMode()) {
         setWindowTitle(tr("AMReXplorer — %1 — FAB").arg(name));
     } else if (!metadata.hasPhysicalGeometry) {
         setWindowTitle(tr("AMReXplorer — %1 — MultiFab").arg(name));
@@ -307,206 +214,12 @@ void MainWindow::chooseStandaloneDataset(const QString& caption, bool rawFab)
         tr("AMReX data (*)"));
     if (!filename.isEmpty()) {
         if (rawFab) {
-            const auto path = std::filesystem::path(filename.toStdString());
-            auto root = path.parent_path();
-            if (root.empty()) {
-                root = ".";
-            }
-            openStandaloneFabAsync(path, std::nullopt, std::move(root), false,
-                std::nullopt, tr("Cannot open FAB"));
+            m_fabNavigator->openStandaloneFab(
+                std::filesystem::path(filename.toStdString()));
         } else {
             openDataset(filename.toStdString());
         }
     }
-}
-
-void MainWindow::applyFabSelectorRollback(const FabSelectorRollback& rollback)
-{
-    m_fabMode = rollback.fabMode;
-    m_fabSelectorDock->setBackAvailable(rollback.backAvailable);
-    if (rollback.ordinal) {
-        m_fabSelectorDock->selectEntry(*rollback.ordinal);
-    } else {
-        m_fabSelectorDock->clearSelection();
-    }
-}
-
-void MainWindow::openStandaloneFabAsync(std::filesystem::path path,
-    std::optional<std::uint64_t> fileOffset, std::filesystem::path dataRoot,
-    bool preserveFabSelector, std::optional<FrameSliceSpec> initialSpec,
-    QString failureTitle, std::optional<FabSelectorRollback> rollback)
-{
-    m_diagnosticsModel->adjustActivity(1);
-    const auto generation = m_generation;
-    // Two of these can be in flight at once -- clicking a second raw record
-    // while the first is still reading, which is reachable precisely because
-    // the read no longer freezes the GUI. Without a per-request token both
-    // completions match the generation they captured and the *first* to arrive
-    // opens, while the selector already shows the second: oldest-wins, and the
-    // window disagrees with the dock.
-    //
-    // Inheritance is decided here rather than at the call sites, because every
-    // request supersedes whatever was live -- including the direct-open entry
-    // point, which brings no rollback of its own. The read it supersedes will
-    // retire without restoring anything, so if this one fails the state to
-    // return to is still the one that was last displayed. Checked before the
-    // token moves, since moving it is what retires the other request.
-    const bool supersedesLive = m_pendingFabOpen
-        && m_pendingFabOpen->generation == generation
-        && m_pendingFabOpen->requestId == m_fabOpenGeneration;
-    if (supersedesLive) {
-        rollback = m_pendingFabOpen->rollback;
-    }
-    const auto requestId = ++m_fabOpenGeneration;
-    if (rollback) {
-        m_pendingFabOpen = PendingFabOpen{generation, requestId, *rollback};
-    } else {
-        // Nothing live and nothing to fall back to: this request owns the slot
-        // and a failure of it has nowhere to return to.
-        m_pendingFabOpen.reset();
-    }
-    auto* watcher = new QFutureWatcher<PlotfileMetadataResult>(this);
-    connect(watcher, &QFutureWatcher<PlotfileMetadataResult>::finished, this,
-        [this, watcher, generation, requestId, path,
-            dataRoot = std::move(dataRoot), preserveFabSelector,
-            initialSpec = std::move(initialSpec),
-            failureTitle = std::move(failureTitle)]() mutable {
-            m_diagnosticsModel->adjustActivity(-1);
-            if (m_closing) {
-                watcher->deleteLater();
-                return;
-            }
-            // A dataset opened while this read was in flight owns the window
-            // now, and so does a newer FAB read or a selector teardown;
-            // publishing over any of them would be a stale result.
-            const bool current = generation == m_generation
-                && requestId == m_fabOpenGeneration;
-            // Only the completion that recorded the pending entry may consume
-            // it. Anything that revoked it -- a dataset open, a teardown, a
-            // newer click -- has already made `current` false.
-            // Taken out of the member up front, not read back later: this
-            // completion decides the entry's fate either way, and openDatasetImpl
-            // below can throw *after* the success path has given the entry up.
-            // Reading `m_pendingFabOpen->rollback` in the catch would then
-            // dereference a disengaged optional.
-            std::optional<FabSelectorRollback> owned;
-            if (current && m_pendingFabOpen
-                && m_pendingFabOpen->generation == generation
-                && m_pendingFabOpen->requestId == requestId) {
-                owned = m_pendingFabOpen->rollback;
-                m_pendingFabOpen.reset();
-            }
-            try {
-                auto metadata = watcher->future().takeResult();
-                if (current) {
-                    openDatasetImpl(path, false, std::move(metadata),
-                        std::move(dataRoot), preserveFabSelector,
-                        std::move(initialSpec));
-                } else {
-                    m_diagnosticsModel->noteStaleResult();
-                }
-            } catch (const std::exception& error) {
-                if (current) {
-                    // The caller may have moved the selector to this FAB
-                    // before the read returned; the open did not happen, so
-                    // put it back before saying so.
-                    if (owned) {
-                        applyFabSelectorRollback(*owned);
-                    }
-                    reportBackgroundError(
-                        tr("%1: %2").arg(failureTitle, exceptionMessage(error)));
-                } else {
-                    m_diagnosticsModel->noteStaleResult();
-                }
-            }
-            updateDiagnostics();
-            watcher->deleteLater();
-        });
-    watcher->setFuture(QtConcurrent::run([path, fileOffset] {
-        return fileOffset
-            ? StandaloneMetadataReader{}.readFab(path, *fileOffset)
-            : StandaloneMetadataReader{}.readFab(path);
-    }));
-    updateDiagnostics();
-}
-
-void MainWindow::viewFab(std::size_t entryIndex)
-{
-    const auto& entries = m_fabSelectorDock->entries();
-    if (entryIndex >= entries.size()) {
-        return;
-    }
-    const auto entry = entries[entryIndex];
-    try {
-        auto selectedSpec = m_dataset
-            ? std::optional<FrameSliceSpec>{buildFrameSpec()}
-            : std::nullopt;
-        if (selectedSpec) {
-            selectedSpec->levelSelection = -1;
-            selectedSpec->rangeMode = RangeMode::File;
-            selectedSpec->userRange.reset();
-        }
-        PlotfileMetadataResult selected;
-        if (entry.rawRecord) {
-            // The record's own header has to be read; do it off the GUI thread
-            // and let the completion open it. The selector state is moved to
-            // the pending record immediately so the dock reflects the choice
-            // without waiting for the read -- but only a read that succeeds
-            // actually changes what the window displays, so a failure has to
-            // put the previous state back rather than leave the dock claiming
-            // a FAB that is not on screen.
-            //
-            // Snapshot what is displayed now; openStandaloneFabAsync prefers a
-            // still-live pending rollback over it, because from a displayed FAB
-            // X, clicking A then B and having B fail must return to X, not to
-            // the A the dock is merely showing -- A lost the request token and
-            // will never open.
-            const FabSelectorRollback rollback{m_fabMode,
-                m_fabSelectorDock->backAvailable(),
-                m_fabSelectorDock->selectedOrdinal()};
-            m_fabMode = true;
-            m_fabSelectorDock->setBackAvailable(m_multifabReturn.has_value());
-            m_fabSelectorDock->selectEntry(entry.ordinal);
-            openStandaloneFabAsync(m_fabSourcePath, entry.fileOffset,
-                m_fabDataRoot, true, std::move(selectedSpec),
-                tr("Cannot view FAB"), rollback);
-            return;
-        }
-        {
-            if (!m_fabSourceMetadata) {
-                throw std::runtime_error(
-                    "the source MultiFab is no longer available");
-            }
-            if (!m_multifabReturn) {
-                m_multifabReturn = MultiFabReturnState{
-                    m_fabSourcePath, m_fabDataRoot,
-                    *m_fabSourceMetadata, buildFrameSpec()};
-            }
-            selected = makeSelectedFabMetadata(*m_fabSourceMetadata->metadata,
-                entry.level, entry.blockIndex, m_fabDataRoot);
-        }
-        m_fabMode = true;
-        m_fabSelectorDock->setBackAvailable(m_multifabReturn.has_value());
-        m_fabSelectorDock->selectEntry(entry.ordinal);
-        openDatasetImpl(m_fabSourcePath, false, std::move(selected),
-            m_fabDataRoot, true, std::move(selectedSpec));
-    } catch (const std::exception& error) {
-        QMessageBox::critical(this, tr("Cannot view FAB"),
-            exceptionMessage(error));
-    }
-}
-
-void MainWindow::backToMultiFab()
-{
-    if (!m_multifabReturn) {
-        return;
-    }
-    auto state = std::move(*m_multifabReturn);
-    m_multifabReturn.reset();
-    m_fabMode = false;
-    m_fabSelectorDock->setBackAvailable(false);
-    openDatasetImpl(state.path, false, std::move(state.metadata),
-        std::move(state.dataRoot), true, std::move(state.spec));
 }
 
 void MainWindow::exportImage()
@@ -894,33 +607,6 @@ void MainWindow::openDataset(
         path, metadataOnly, std::nullopt, {}, false, std::nullopt);
 }
 
-void MainWindow::resetFabState()
-{
-    // Belt-and-braces, not the guarantee. Tearing the selector down has to
-    // revoke any read still in flight against it, but the dataset generation
-    // already does that at both call sites: openDatasetImpl bumps it further
-    // down the same straight-line body, and prepareSequence's callers reach
-    // MainWindow's frameSwitchStarted handler -- a direct connection, so the
-    // same event-loop slot -- which bumps it too. No completion can be
-    // delivered in between, so `generation == m_generation` is already false
-    // for every earlier read and this token bump has never been what retires
-    // one. It is kept because it is cheap and because relying on a bump that
-    // happens a frame up the stack, in a signal handler, is not a property
-    // this function can see. Do not read it as load-bearing: it is not
-    // covered by a test, and it cannot be, because the state it would guard
-    // is unreachable.
-    ++m_fabOpenGeneration;
-    m_pendingFabOpen.reset();
-    m_fabMode = false;
-    m_multifabReturn.reset();
-    m_fabSourceMetadata.reset();
-    m_fabSourcePath.clear();
-    m_fabDataRoot.clear();
-    m_fabSelectorDock->setEntries({});
-    m_fabSelectorDock->setBackAvailable(false);
-    m_fabSelectorDock->setVisible(false);
-}
-
 void MainWindow::useRemoteConnection(
     std::shared_ptr<remote::Connection> connection, QString label)
 {
@@ -1093,7 +779,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     std::optional<RemoteOpen> remoteOpen)
 {
     if (!preserveFabSelector) {
-        resetFabState();
+        m_fabNavigator->reset();
     }
     // Opening a single dataset ends any plotfile sequence and stops playback
     // of either animation mode.
@@ -1235,26 +921,9 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                     // metadata (when not preserving the existing selector);
                     // here we only apply them, no file I/O on the GUI thread.
                     if (result.fabSelector) {
-                        auto& fab = *result.fabSelector;
-                        if (fab.matched) {
-                            m_fabMode = fab.fabMode;
-                            if (fab.hasSourceMetadata) {
-                                m_fabSourceMetadata = result.metadata;
-                            } else {
-                                m_fabSourceMetadata.reset();
-                            }
-                        }
-                        if (fab.entries.empty()) {
-                            m_fabSelectorDock->setVisible(false);
-                        } else {
-                            m_fabSourcePath = path;
-                            m_fabDataRoot = fab.root;
-                            m_fabSelectorDock->setEntries(std::move(fab.entries));
-                            m_fabSelectorDock->setBackAvailable(false);
-                            m_fabSelectorDock->setVisible(true);
-                            m_fabSelectorDock->raise();
-                            updateWindowTitle();
-                        }
+                        m_fabNavigator->applySelectorBuild(
+                            std::move(*result.fabSelector), path,
+                            result.metadata);
                     }
                     emit datasetOpenFinished(true);
                     if (!metadataOnly) {
@@ -1329,7 +998,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         // header scans / per-block preads it needs never freeze the event
         // loop. Skipped when the caller preserves the existing selector.
         if (!preserveFabSelector && !remoteOpen) {
-            opened.fabSelector = buildFabSelector(opened.metadata, path);
+            opened.fabSelector
+                = FabNavigator::buildSelector(opened.metadata, path);
         }
         return opened;
     }));

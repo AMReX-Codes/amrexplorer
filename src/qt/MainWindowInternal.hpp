@@ -9,6 +9,7 @@
 #include "QtErrorText.hpp"
 #include "AnimationExporter.hpp"
 #include "DiagnosticsModel.hpp"
+#include "FabNavigator.hpp"
 #include "PaletteController.hpp"
 #include "ParticleController.hpp"
 #include "SequenceController.hpp"

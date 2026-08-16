@@ -77,6 +77,7 @@ class IsoWidget;
 class LinePlotWindow;
 class ScientificDoubleSpinBox;
 class DiagnosticsModel;
+class FabNavigator;
 class PaletteController;
 class ParticleController;
 class SequenceController;
@@ -512,15 +513,6 @@ private:
     [[nodiscard]] static QString remoteServerExecutableFor(
         const QString& destination);
 
-    // Clears standalone FAB/MultiFab view state (mode flag, MultiFab-return
-    // record, source metadata/paths) and hides the FAB selector dock. Any path
-    // that replaces the displayed dataset with a non-FAB one -- a plain dataset
-    // open, or a plotfile sequence -- must call this or stale FAB state leaks
-    // into the new view (see open-sequence-stale-fab-state).
-    void resetFabState();
-
-    void viewFab(std::size_t entry);
-    void backToMultiFab();
     // A fresh independent top-level window (WA_DeleteOnClose) for the
     // "Open New Window" menu action; it shares no view/cache state with this one.
     MainWindow* createNewWindow();
@@ -763,47 +755,6 @@ private:
     // demand-driven and never clamped. Zero when there is nothing to report.
     // See agent-notes/issues/fixed-scale-clamped-native-raster.md.
     [[nodiscard]] double effectiveFixedScale(int factor) const;
-    // Reads a standalone FAB header off the GUI thread and opens it from the
-    // completion. The read is one small pread, but it is a *blocking* one, and
-    // on the network filesystems these datasets usually live on it freezes the
-    // event loop for as long as the server takes. Every other header read in
-    // this window already runs on a worker (see buildFabSelector); these two
-    // entry points were the exceptions.
-    //
-    // The selector state a failed standalone-FAB open falls back to: the last
-    // one actually committed to the window, not merely highlighted.
-    struct FabSelectorRollback {
-        bool fabMode = false;
-        bool backAvailable = false;
-        std::optional<std::size_t> ordinal;
-    };
-    // A launched standalone-FAB header read that has not resolved yet, carrying
-    // the state to restore if it fails. The pair (generation, requestId) is what
-    // makes this safe without any site reaching in to clear it: only the
-    // completion holding both may consume the entry, so opening a dataset
-    // (which bumps m_generation) or tearing the selector down (which bumps
-    // m_fabOpenGeneration) revokes it as a side effect of what it already does.
-    // A second click while a read is in flight inherits the pending rollback
-    // rather than snapshotting the dock, because what the dock shows then is
-    // that pending selection, which was never displayed.
-    struct PendingFabOpen {
-        std::uint64_t generation = 0;
-        std::uint64_t requestId = 0;
-        FabSelectorRollback rollback;
-    };
-
-    // A caller that moves the selector to the pending record before the read
-    // returns passes the state to fall back to; a read that fails while it is
-    // still the current request puts it back. Failures are reported through
-    // reportBackgroundError: this one arrives from a worker, like every other
-    // background load failure, and a modal dialog here would open a nested
-    // event loop on the arrival path.
-    void openStandaloneFabAsync(std::filesystem::path path,
-        std::optional<std::uint64_t> fileOffset,
-        std::filesystem::path dataRoot, bool preserveFabSelector,
-        std::optional<FrameSliceSpec> initialSpec, QString failureTitle,
-        std::optional<FabSelectorRollback> rollback = std::nullopt);
-    void applyFabSelectorRollback(const FabSelectorRollback& rollback);
     void configureSliceControls();
     // Enable the dataset-dependent field/level/range/menu controls once a
     // dataset (single or sequence frame) is loaded. Shared by
@@ -923,6 +874,10 @@ private:
     bool m_animationDockThreeD = false;
     // Arrow-key pan requests that reached a view, for the routing regression.
     std::size_t m_panStepRequests = 0;
+    // Standalone-FAB / MultiFab navigation: mode, source, return record,
+    // the selector dock and the async header reads. Its dock is what the
+    // View menu toggles.
+    FabNavigator* m_fabNavigator = nullptr;
     FabSelectorDock* m_fabSelectorDock = nullptr;
     QToolBar* m_sliceToolbar = nullptr;
     QToolBar* m_rangeToolbar = nullptr;
@@ -988,29 +943,12 @@ private:
     std::unique_ptr<SshRemoteSession> m_sshRemoteSession;
     bool m_remoteSequence = false;
     std::uint64_t m_remoteSequenceConnectionGeneration = 0;
-    struct MultiFabReturnState {
-        std::filesystem::path path;
-        std::filesystem::path dataRoot;
-        PlotfileMetadataResult metadata;
-        FrameSliceSpec spec;
-    };
-    std::optional<MultiFabReturnState> m_multifabReturn;
-    std::optional<PlotfileMetadataResult> m_fabSourceMetadata;
-    std::filesystem::path m_fabSourcePath;
-    std::filesystem::path m_fabDataRoot;
-    bool m_fabMode = false;
     // Owns the palette selection, its widgets and persistence; palette() is
     // what the renderer, color bar and overlays use.
     PaletteController* m_paletteController = nullptr;
     QString m_numberFormat = defaultNumberFormat();
     bool m_controlsReady = false;
     std::uint64_t m_generation = 0;
-    // Newest-wins among overlapping standalone-FAB header reads. m_generation
-    // alone cannot order them: it is bumped by openDatasetImpl, which only runs
-    // once a read has already completed, so two reads in flight together both
-    // still match the generation they captured.
-    std::uint64_t m_fabOpenGeneration = 0;
-    std::optional<PendingFabOpen> m_pendingFabOpen;
     bool m_closing = false;
     // Owns the Diagnostics panel's counters (background requests, stale
     // results), the last read's metrics, the cache state, the probe history

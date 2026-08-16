@@ -1311,7 +1311,7 @@ void MainWindow::prepareSequence(std::size_t frameCount)
     setPlaybackMode(PlaybackMode::None);
     closeSequence();
     resetRangeState();
-    resetFabState();
+    m_fabNavigator->reset();
     m_particleController->cancel();
     m_particleController->clearSamples();
     // A sequence is a different dataset, so it starts from defaults exactly as

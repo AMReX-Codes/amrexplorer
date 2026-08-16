@@ -302,10 +302,7 @@ bool MainWindow::activeViewHasPhysicalAspectForTest(
 
 bool MainWindow::fabStateClearedForTest() const
 {
-    return !m_fabMode && !m_multifabReturn && !m_fabSourceMetadata
-        && m_fabSourcePath.empty() && m_fabDataRoot.empty()
-        && m_fabSelectorDock->entries().empty()
-        && !m_fabSelectorDock->isVisible()
+    return m_fabNavigator->cleared()
         && !windowTitle().endsWith(QStringLiteral(" FAB"));
 }
 
@@ -702,7 +699,7 @@ bool MainWindow::activeViewShowsWholeImageForTest() const
 
 void MainWindow::viewFabForTest(std::size_t index)
 {
-    viewFab(index);
+    m_fabNavigator->viewEntry(index);
 }
 
 bool MainWindow::activeViewIsZoomedForTest() const
@@ -864,12 +861,7 @@ bool MainWindow::particleLoadingUiSettledForTest() const
 
 void MainWindow::openStandaloneFabForTest(const std::filesystem::path& path)
 {
-    auto root = path.parent_path();
-    if (root.empty()) {
-        root = ".";
-    }
-    openStandaloneFabAsync(path, std::nullopt, std::move(root), false,
-        std::nullopt, tr("Cannot open FAB"));
+    m_fabNavigator->openStandaloneFab(path);
 }
 
 void MainWindow::startAnimationExportForTest(const QString& path,

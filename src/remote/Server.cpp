@@ -26,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -211,6 +212,74 @@ std::string resolveDatasetPath(const std::string& path)
     }
     return path;
 #endif
+}
+
+// An AMReX plotfile is a directory holding a Header file and per-level
+// subdirectories; Level_0 always exists. Two stats, no directory scan, so a
+// listing of thousands of entries stays cheap on a networked filesystem.
+bool isPlotfileDirectory(const std::filesystem::path& directory)
+{
+    std::error_code error;
+    return std::filesystem::is_regular_file(directory / "Header", error)
+        && std::filesystem::is_directory(directory / "Level_0", error);
+}
+
+// The directory listing a browsing client sees: subdirectories only (files
+// are not navigable and plotfiles are directories), sorted by name, cut at
+// maximumDirectoryEntries with the truncated flag set. Path resolution is
+// the dataset-open one, so what a user browses to is what a typed path
+// opens. Entries that cannot be stat'ed are skipped rather than failing the
+// whole listing.
+RemoteDirectoryListing listServerDirectory(
+    const std::string& requestedPath, StopToken cancellation)
+{
+    constexpr std::size_t maximumDirectoryEntries = 4096;
+    std::error_code error;
+    auto path = std::filesystem::path(
+        resolveDatasetPath(requestedPath.empty() ? "~" : requestedPath))
+                    .lexically_normal();
+    if (!path.has_filename() && path.has_parent_path()
+        && path.parent_path() != path) {
+        // "dir/" normalizes with a trailing separator; drop it so
+        // parent_path() is the parent rather than the directory itself.
+        path = path.parent_path();
+    }
+    if (!std::filesystem::is_directory(path, error) || error) {
+        throw std::invalid_argument(
+            "not a readable directory: " + path.string());
+    }
+    RemoteDirectoryListing listing;
+    listing.path = path.string();
+    listing.parentPath = path.has_parent_path() ? path.parent_path().string()
+                                                : listing.path;
+    for (std::filesystem::directory_iterator entries(path,
+             std::filesystem::directory_options::skip_permission_denied,
+             error),
+         end;
+         !error && entries != end; entries.increment(error)) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
+        std::error_code entryError;
+        if (!entries->is_directory(entryError) || entryError) {
+            continue;
+        }
+        if (listing.entries.size() >= maximumDirectoryEntries) {
+            listing.truncated = true;
+            break;
+        }
+        listing.entries.push_back({entries->path().filename().string(),
+            entries->path().string(), isPlotfileDirectory(entries->path())});
+    }
+    if (error) {
+        throw std::runtime_error(
+            "could not read " + listing.path + ": " + error.message());
+    }
+    std::sort(listing.entries.begin(), listing.entries.end(),
+        [](const auto& left, const auto& right) {
+            return left.name < right.name;
+        });
+    return listing;
 }
 
 ErrorData classifyError(const std::exception& error)
@@ -483,6 +552,9 @@ private:
                 break;
             case PayloadKind::SetCacheBudgetRequest:
                 setCacheBudget(*envelope);
+                break;
+            case PayloadKind::ListDirectoryRequest:
+                listDirectory(*envelope, cancellation);
                 break;
             default:
                 throw std::invalid_argument(
@@ -805,6 +877,22 @@ private:
         const auto dataset = requireDataset(DatasetId{request->dataset_id});
         dataset->clearUnpinnedCache();
         sendCache(envelope.request_id, *dataset);
+    }
+
+    void listDirectory(
+        const codec::NativeEnvelope& envelope, StopToken cancellation)
+    {
+        const auto* request = envelope.payload.AsListDirectoryRequest();
+        if (request == nullptr
+            || request->path.find(char{}) != std::string::npos) {
+            throw std::invalid_argument("directory path is invalid");
+        }
+        if (m_selectedMinorVersion < 1) {
+            throw RemoteError(ErrorCode::UnsupportedProtocol,
+                "directory browsing requires protocol 1.1");
+        }
+        send(envelope.request_id,
+            codec::toWire(listServerDirectory(request->path, cancellation)));
     }
 
     void setCacheBudget(const codec::NativeEnvelope& envelope)

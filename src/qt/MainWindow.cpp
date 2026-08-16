@@ -680,7 +680,8 @@ void MainWindow::promptRemoteOpen(bool sequence)
            "ssh and talks to it over that connection. Any destination that "
            "works for the ssh command works here, including aliases from "
            "~/.ssh/config. An unchanged destination keeps the current "
-           "session."),
+           "session. Enter the plotfile path, or use Browse... to pick it "
+           "on the remote machine."),
         &dialog);
     explanation->setWordWrap(true);
     layout->addRow(explanation);
@@ -733,6 +734,17 @@ void MainWindow::promptRemoteOpen(bool sequence)
     auto* buttons = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->button(QDialogButtonBox::Ok)->setText(tr("Open"));
+    // Browse... needs only the connection fields: it starts (or reuses) the
+    // session and picks the path in the remote browser once it is ready.
+    auto* browseButton = buttons->addButton(
+        tr("Browse..."), QDialogButtonBox::ActionRole);
+    browseButton->setToolTip(
+        tr("Connect and choose the plotfile on the remote machine"));
+    bool browse = false;
+    connect(browseButton, &QPushButton::clicked, &dialog, [&] {
+        browse = true;
+        dialog.accept();
+    });
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addRow(buttons);
@@ -741,6 +753,25 @@ void MainWindow::promptRemoteOpen(bool sequence)
     }
     const auto destination = destinationEdit->text().trimmed();
     const auto executable = executableEdit->text().trimmed();
+    const bool sessionMatches = hasRemoteConnection() && m_sshRemoteSession
+        && destination.toStdString() == m_sshRemoteSession->destination()
+        && executable.toStdString() == m_sshRemoteSession->serverExecutable();
+    if (browse) {
+        if (destination.isEmpty() || executable.isEmpty()) {
+            QMessageBox::warning(this, dialog.windowTitle(),
+                tr("The SSH destination and the server executable are "
+                   "required."));
+            return;
+        }
+        if (sessionMatches) {
+            browseRemotePlotfiles(sequence);
+        } else {
+            startSshRemoteSession(destination.toStdString(),
+                executable.toStdString(), {},
+                [this, sequence] { browseRemotePlotfiles(sequence); });
+        }
+        return;
+    }
     std::vector<std::string> paths;
     if (sequence) {
         for (const auto& line : pathsEdit->toPlainText().split(
@@ -761,10 +792,7 @@ void MainWindow::promptRemoteOpen(bool sequence)
     }
     // An unchanged destination and executable mean the current session is the
     // one asked for; open over it directly instead of starting ssh again.
-    if (hasRemoteConnection() && m_sshRemoteSession
-        && destination.toStdString() == m_sshRemoteSession->destination()
-        && executable.toStdString()
-            == m_sshRemoteSession->serverExecutable()) {
+    if (sessionMatches) {
         if (sequence) {
             openRemoteSequence(paths);
         } else {

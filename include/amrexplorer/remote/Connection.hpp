@@ -50,6 +50,11 @@ public:
 
     [[nodiscard]] OpenedDataset openDataset(const std::string& path,
         std::uint64_t cacheBudgetBytes, StopToken cancellation = {});
+    // Lists the subdirectories of a server-side directory (protocol 1.1);
+    // an empty path is the server's home. Throws when the server negotiated
+    // protocol 1.0, i.e. predates browsing.
+    [[nodiscard]] RemoteDirectoryListing listDirectory(
+        const std::string& path, StopToken cancellation = {});
     void closeDataset(DatasetId dataset, StopToken cancellation = {});
     void closeDatasetBestEffort(DatasetId dataset) noexcept;
     [[nodiscard]] ViewDataResult requestView(

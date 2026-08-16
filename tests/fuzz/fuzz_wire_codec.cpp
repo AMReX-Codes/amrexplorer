@@ -178,6 +178,21 @@ void checkConverted(
     }
 }
 
+void checkConverted(const fb::DirectoryListingT& wire,
+    const amrvis::remote::RemoteDirectoryListing& result)
+{
+    if (result.entries.size() != wire.entries.size()) {
+        fail("DirectoryListing converter changed the entry count");
+    }
+    for (const auto& entry : result.entries) {
+        if (entry.name.empty() || entry.name == "." || entry.name == ".."
+            || entry.name.find('/') != std::string::npos
+            || entry.path.empty()) {
+            fail("DirectoryListing converter accepted an invalid entry");
+        }
+    }
+}
+
 void checkConverted(
     const fb::DatasetPageRequestT& wire, const amrvis::DatasetPageRequest& result)
 {
@@ -341,7 +356,11 @@ void exerciseFromWire(const codec::NativeEnvelope& envelope)
     case fb::Payload::ErrorResponse:
         convert(envelope.payload.AsErrorResponse());
         break;
+    case fb::Payload::DirectoryListing:
+        convert(envelope.payload.AsDirectoryListing());
+        break;
     case fb::Payload::NONE:
+    case fb::Payload::ListDirectoryRequest:
     case fb::Payload::CloseDatasetRequest:
     case fb::Payload::DatasetClosed:
     case fb::Payload::ClearCacheRequest:

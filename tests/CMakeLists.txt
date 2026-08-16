@@ -484,6 +484,22 @@ if(TARGET amrexplorer_qt)
         PRIVATE amrexplorer::warnings)
     add_test(NAME ssh_connect_arguments COMMAND test_ssh_connect_arguments)
 
+    # The remote browser against a loopback Server: listing, navigation, an
+    # unreadable path, and both selection modes. Offscreen; no display needed.
+    add_executable(test_remote_file_dialog
+        unit/test_remote_file_dialog.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/RemoteFileDialog.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/RemoteFileDialog.hpp")
+    target_include_directories(test_remote_file_dialog
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_remote_file_dialog
+        PRIVATE amrexplorer::remote amrexplorer::warnings
+            Qt6::Widgets Qt6::Concurrent)
+    add_test(NAME remote_file_dialog
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_remote_file_dialog>")
+    set_tests_properties(remote_file_dialog PROPERTIES TIMEOUT 60)
+
     # The argument builders and the ready-line parser, then -- where the
     # transport exists -- the whole client flow against the real server binary
     # run by a stand-in ssh script: socket pair, preamble, handshake, ready

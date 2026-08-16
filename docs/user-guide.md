@@ -78,7 +78,15 @@ Remote Plotfile Sequence...**: one dialog asks for the SSH destination, the
 server executable, and the plotfile path (or paths, one per line). The
 connection fields are prefilled; leaving them unchanged opens further paths
 over the current session, and entering a different destination starts a new
-one. Once open, a remote dataset is driven exactly like a local one.
+one. Instead of typing the path, **Browse...** connects (or reuses the
+session) and opens a browser of the remote machine's directories, starting at
+the last one browsed there or the home directory. Plotfiles are marked as
+such; double-click one to open it, or select several for a sequence, which
+plays in name order. Its path box accepts the same spellings as the CLI
+(`~/run`, `run`, `/scratch/run`). Browsing needs a current
+`amrexplorer-server` on the remote machine; with an older one the browser
+reports that and the path can still be typed. Once open, a remote dataset is
+driven exactly like a local one.
 
 If the destination requires a password or keyboard-interactive MFA,
 AMReXplorer opens a response dialog for each OpenSSH prompt, including the

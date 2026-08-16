@@ -17,7 +17,7 @@
 namespace amrvis::remote {
 
 inline constexpr std::uint16_t protocolMajor = 1;
-inline constexpr std::uint16_t protocolMinorVersion = 0;
+inline constexpr std::uint16_t protocolMinorVersion = 1;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,
@@ -44,7 +44,10 @@ enum class PayloadKind : std::uint8_t {
     CancelAcknowledged = 21,
     PingRequest = 22,
     PongResponse = 23,
-    ErrorResponse = 24
+    ErrorResponse = 24,
+    // Protocol 1.1: directory browsing.
+    ListDirectoryRequest = 25,
+    DirectoryListing = 26
 };
 
 enum class ErrorCode : std::uint16_t {
@@ -92,6 +95,26 @@ struct HelloResponseData {
 struct OpenDatasetData {
     std::string path;
     std::uint64_t cacheBudgetBytes = 0;
+};
+
+// One subdirectory of a listed directory. Only directories are listed:
+// plotfiles are directories, and files are not navigable. `path` is the
+// server-side absolute path of the entry.
+struct RemoteDirectoryEntry {
+    std::string name;
+    std::string path;
+    bool isPlotfile = false;
+};
+
+// A directory as the server sees it, with `path` resolved and normalized the
+// same way dataset paths are (see resolveDatasetPath in Server.cpp). At the
+// root `parentPath` equals `path`. `truncated` is set when the listing was
+// cut at the server's entry cap; the entries present are still sorted.
+struct RemoteDirectoryListing {
+    std::string path;
+    std::string parentPath;
+    std::vector<RemoteDirectoryEntry> entries;
+    bool truncated = false;
 };
 
 struct OpenedDataset {

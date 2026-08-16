@@ -152,31 +152,52 @@ public:
         : m_axis0(axes[0])
         , m_axis1(axes[1])
     {
-        if (blocks.empty()) {
-            return;
-        }
         m_blockCount = blocks.size();
         const bool singleAxis = m_axis0 == m_axis1;
         const auto a0 = static_cast<std::size_t>(m_axis0);
         const auto a1 = static_cast<std::size_t>(m_axis1);
+        // A box inverted on a binned axis contains no point (contains() can
+        // never match it), so it takes no part in the index: not in the
+        // bounds, the tile sizing, or either CSR pass -- the one predicate
+        // every pass shares, so the count and the fill cannot disagree. (The
+        // readers reject inverted boxes long before this, but the class is a
+        // public one, and a negative extent here would wrap the entry count
+        // and under-allocate the fill.)
+        const auto indexable = [a0, a1](const IntBox& box) {
+            return box.lower[a0] <= box.upper[a0]
+                && box.lower[a1] <= box.upper[a1];
+        };
         m_lo0 = std::numeric_limits<std::int64_t>::max();
         m_lo1 = std::numeric_limits<std::int64_t>::max();
         m_hi0 = std::numeric_limits<std::int64_t>::min();
         m_hi1 = std::numeric_limits<std::int64_t>::min();
+        std::vector<std::int64_t> extents0;
+        std::vector<std::int64_t> extents1;
+        extents0.reserve(blocks.size());
+        extents1.reserve(blocks.size());
         for (const auto& block : blocks) {
-            m_lo0 = std::min(m_lo0,
-                static_cast<std::int64_t>(block.validBox.lower[a0]));
-            m_lo1 = std::min(m_lo1,
-                static_cast<std::int64_t>(block.validBox.lower[a1]));
-            m_hi0 = std::max(m_hi0,
-                static_cast<std::int64_t>(block.validBox.upper[a0]));
-            m_hi1 = std::max(m_hi1,
-                static_cast<std::int64_t>(block.validBox.upper[a1]));
+            const auto& box = block.validBox;
+            if (!indexable(box)) {
+                continue;
+            }
+            m_lo0 = std::min(m_lo0, static_cast<std::int64_t>(box.lower[a0]));
+            m_lo1 = std::min(m_lo1, static_cast<std::int64_t>(box.lower[a1]));
+            m_hi0 = std::max(m_hi0, static_cast<std::int64_t>(box.upper[a0]));
+            m_hi1 = std::max(m_hi1, static_cast<std::int64_t>(box.upper[a1]));
+            extents0.push_back(
+                static_cast<std::int64_t>(box.upper[a0]) - box.lower[a0] + 1);
+            extents1.push_back(
+                static_cast<std::int64_t>(box.upper[a1]) - box.lower[a1] + 1);
+        }
+        if (extents0.empty()) {
+            return;  // nothing indexable: the inverted default bounds reject all
         }
         const auto span0 = m_hi0 - m_lo0 + 1;
         const auto span1 = m_hi1 - m_lo1 + 1;
-        m_tile0 = medianExtent(blocks, a0);
-        m_tile1 = singleAxis ? span1 : medianExtent(blocks, a1);
+        // Tiles of the median block extent per axis (at least 1): the size
+        // that puts a typical block in about one tile.
+        m_tile0 = medianOf(extents0);
+        m_tile1 = singleAxis ? span1 : medianOf(extents1);
         // Cap the tile count at a few per block: a sparse level (few blocks in
         // a large span) would otherwise get a bucket per block-sized cell of
         // empty space. Coarsen by doubling the tiles of the axes that still
@@ -206,12 +227,15 @@ public:
         // identical result) rather than build an enormous index.
         const auto maxEntries = 8 * (blocks.size() + tileCount);
         // CSR build: count per tile, prefix-sum into offsets, then fill.
-        // Box coordinates are within [m_lo, m_hi], so the tile indices never
-        // overflow the narrowing cast in tile0()/tile1().
+        // Indexable box coordinates are within [m_lo, m_hi], so the tile
+        // indices never overflow the narrowing cast in tile0()/tile1().
         std::vector<std::uint32_t> counts(tileCount, 0);
         std::size_t entries = 0;
         for (const auto& block : blocks) {
             const auto& box = block.validBox;
+            if (!indexable(box)) {
+                continue;
+            }
             const auto t0First = tile0(box.lower[a0]);
             const auto t0Last = tile0(box.upper[a0]);
             const auto t1First = tile1(box.lower[a1]);
@@ -238,6 +262,9 @@ public:
         std::fill(counts.begin(), counts.end(), 0U);
         for (std::size_t index = 0; index < blocks.size(); ++index) {
             const auto& box = blocks[index].validBox;
+            if (!indexable(box)) {
+                continue;
+            }
             const auto t0Last = tile0(box.upper[a0]);
             const auto t1Last = tile1(box.upper[a1]);
             for (int t1 = tile1(box.lower[a1]); t1 <= t1Last; ++t1) {
@@ -300,18 +327,9 @@ public:
     }
 
 private:
-    // The median block extent along `axis` (at least 1): the tile size that
-    // puts a typical block in about one tile.
-    [[nodiscard]] static std::int64_t medianExtent(
-        const std::vector<LoadedBlock>& blocks, std::size_t axis)
+    // The median of a non-empty list of positive extents (reordered in place).
+    [[nodiscard]] static std::int64_t medianOf(std::vector<std::int64_t>& extents)
     {
-        std::vector<std::int64_t> extents;
-        extents.reserve(blocks.size());
-        for (const auto& block : blocks) {
-            extents.push_back(
-                static_cast<std::int64_t>(block.validBox.upper[axis])
-                - block.validBox.lower[axis] + 1);
-        }
         const auto middle = extents.begin()
             + static_cast<std::ptrdiff_t>(extents.size() / 2);
         std::nth_element(extents.begin(), middle, extents.end());

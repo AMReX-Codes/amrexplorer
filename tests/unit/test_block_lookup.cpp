@@ -295,6 +295,55 @@ int main()
         require(rejected, "grid accepted a block set of the wrong size");
     }
 
+    // Degenerate boxes (upper < lower on a binned axis) contain no point, and
+    // must neither be found nor break the build: an all-inverted set yields an
+    // empty grid, a mix leaves the inverted ones out (a negative extent would
+    // otherwise wrap the CSR entry count and under-allocate the fill), and a
+    // box inverted only on an unbinned axis is simply never matched. Each
+    // case must agree with the linear scan, which never matches them either.
+    {
+        std::vector<LoadedBlock> inverted;
+        inverted.push_back(block(5, 5, 4, 4));
+        const BlockGrid empty(inverted, axes);
+        require(empty.find(inverted, point(4, 4), 2) == -1
+                && empty.find(inverted, point(5, 5), 2) == -1,
+            "an inverted box was matched");
+        const BlockGrid emptySingle(inverted, 0);
+        require(emptySingle.find(inverted, point(4, 4), 2) == -1,
+            "an inverted box was matched by a single-axis grid");
+
+        std::vector<LoadedBlock> mixed;
+        mixed.push_back(block(0, 0, 3, 3));
+        mixed.push_back(block(4, 0, 7, 3));
+        mixed.push_back(block(8, 3, 11, 0));    // inverted on y
+        mixed.push_back(block(12, 0, 15, 3));
+        mixed.push_back(block(20, 0, 16, 3));   // inverted on x
+        for (const std::array<int, 2> gridAxes :
+            {std::array<int, 2>{0, 1}, std::array<int, 2>{1, 0},
+                std::array<int, 2>{0, 0}}) {
+            const BlockGrid grid(mixed, gridAxes);
+            require(grid.usesIndex(), "inverted boxes tripped the fill cap");
+            for (int y = -1; y <= 4; ++y) {
+                for (int x = -1; x <= 21; ++x) {
+                    require(grid.find(mixed, point(x, y), 2)
+                            == linearFind(mixed, point(x, y)),
+                        "grid with inverted boxes disagrees with a linear scan");
+                }
+            }
+        }
+
+        std::vector<LoadedBlock> zInverted;
+        IntBox box;
+        box.lower = {{0, 0, 3}};
+        box.upper = {{3, 3, 0}};  // inverted on z, the unbinned axis
+        box.centering = {{0, 0, 0}};
+        zInverted.push_back(LoadedBlock{box, {}});
+        const BlockGrid grid(zInverted, axes);
+        require(grid.find(zInverted, Int3{{1, 1, 0}}, 3) == -1
+                && grid.find(zInverted, Int3{{1, 1, 3}}, 3) == -1,
+            "a box inverted on the unbinned axis was matched");
+    }
+
     // lookupBlockValue over IndexedBlocks with real cache handles: the value
     // is read at valueOffset within the covering block's FAB, a point outside
     // every block is nullopt, and a block whose loaded payload is smaller than

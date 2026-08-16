@@ -1,9 +1,8 @@
 #pragma once
 
-// Shared per-point block-lookup helpers for the query layer. These were
-// previously copied verbatim between SliceQuery.cpp and LineQuery.cpp, with a
-// third, unchecked valueOffset variant in the GUI's DatasetExtract — this is
-// the one overflow-checked definition.
+// Shared per-point block-lookup helpers for the query layer: the one
+// overflow-checked valueOffset, and the point->block grid the slice and line
+// queries both index their loaded blocks with.
 
 #include <amrexplorer/core/Geometry.hpp>
 #include <amrexplorer/core/Metadata.hpp>
@@ -137,6 +136,7 @@ public:
         if (blocks.empty()) {
             return;
         }
+        m_blockCount = blocks.size();
         const auto a0 = static_cast<std::size_t>(m_axis0);
         const auto a1 = static_cast<std::size_t>(m_axis1);
         m_lo0 = std::numeric_limits<std::int64_t>::max();
@@ -199,10 +199,17 @@ public:
     }
 
     // Index into `blocks` of the block containing `point`, or -1 if none does.
-    // `blocks` must be the same vector the grid was built from.
+    // `blocks` must be the same vector the grid was built from: the grid holds
+    // indices into it, so a different vector would be read through stale
+    // ones. The size check is the cheap part of that contract that can be
+    // enforced.
     [[nodiscard]] int find(const std::vector<LoadedBlock>& blocks,
         const Int3& point, int dimension) const
     {
+        if (blocks.size() != m_blockCount) {
+            throw std::logic_error(
+                "BlockGrid::find given a block set other than its own");
+        }
         if (m_linearScan) {
             for (std::size_t index = 0; index < blocks.size(); ++index) {
                 if (contains(blocks[index].validBox, point, dimension)) {
@@ -261,13 +268,15 @@ private:
     int m_n0 = 0;
     int m_n1 = 0;
     bool m_linearScan = false;
+    std::size_t m_blockCount = 0;
     std::vector<std::vector<int>> m_buckets;
 };
 
-// The value at `point` in the finest-covering block located by `grid`, or
-// nullopt when no block covers it. Throws if the covering block's FAB index is
-// out of range (a corrupt block whose loaded payload is smaller than its box).
-// The shared composed-sample tail for the slice and line queries; callers keep
+// The value at `point` in the block of one level's `blocks` that covers it,
+// located by that level's `grid`, or nullopt when none does. Throws if the
+// covering block's FAB index is out of range (a corrupt block whose loaded
+// payload is smaller than its box). The shared composed-sample tail for the
+// slice and line queries; the caller walks the levels finest first and keeps
 // the point and covering level.
 [[nodiscard]] inline std::optional<double> lookupBlockValue(
     const BlockGrid& grid, const std::vector<LoadedBlock>& blocks,

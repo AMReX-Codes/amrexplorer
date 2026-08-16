@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -38,10 +39,11 @@ Int3 point(int a, int b)
 
 // The behavior the grid must reproduce exactly: the first (smallest-index)
 // block whose valid box contains the point, or -1.
-int linearFind(const std::vector<LoadedBlock>& blocks, const Int3& p)
+int linearFind(
+    const std::vector<LoadedBlock>& blocks, const Int3& p, int dimension = 2)
 {
     for (std::size_t i = 0; i < blocks.size(); ++i) {
-        if (amrvis::detail::contains(blocks[i].validBox, p, 2)) {
+        if (amrvis::detail::contains(blocks[i].validBox, p, dimension)) {
             return static_cast<int>(i);
         }
     }
@@ -166,6 +168,50 @@ int main()
         blocks.push_back(block(4, 4, 9, 9));
         blocks.push_back(block(10, 0, 15, 15));
         requireAgrees(blocks, axes, -3, 18, "irregular differential");
+    }
+
+    // The axis selection: production grids bin on {plane axes} for a slice and
+    // {line axis, next axis} for a line -- {1, 0}, {2, 0}, and {0, 0} in 1-D --
+    // not only {0, 1}. 3-D blocks laid out along z, indexed on {2, 0} and
+    // {1, 2}, and the same-axis case {2, 2}, each against the linear scan.
+    {
+        std::vector<LoadedBlock> blocks;
+        for (int k = 0; k < 6; ++k) {
+            IntBox box;
+            box.lower = {{0, k % 2 == 0 ? 0 : 4, 8 * k}};
+            box.upper = {{7, k % 2 == 0 ? 3 : 7, 8 * k + 7}};
+            box.centering = {{0, 0, 0}};
+            blocks.push_back(LoadedBlock{box, {}});
+        }
+        for (const std::array<int, 2> gridAxes : {std::array<int, 2>{2, 0},
+                 std::array<int, 2>{1, 2}, std::array<int, 2>{2, 2}}) {
+            const BlockGrid grid(blocks, gridAxes);
+            std::uint64_t rng = 0x5eed'0000ULL;
+            for (int trial = 0; trial < 20000; ++trial) {
+                const Int3 p{{-2 + static_cast<int>(nextRandom(rng) % 12),
+                    -2 + static_cast<int>(nextRandom(rng) % 12),
+                    -4 + static_cast<int>(nextRandom(rng) % 56)}};
+                require(grid.find(blocks, p, 3) == linearFind(blocks, p, 3),
+                    "grid on non-default axes disagrees with a linear scan");
+            }
+        }
+    }
+
+    // A grid refuses a block set other than the one it indexes.
+    {
+        std::vector<LoadedBlock> two;
+        two.push_back(block(0, 0, 3, 3));
+        two.push_back(block(4, 0, 7, 3));
+        std::vector<LoadedBlock> one;
+        one.push_back(block(0, 0, 3, 3));
+        const BlockGrid grid(two, axes);
+        bool rejected = false;
+        try {
+            static_cast<void>(grid.find(one, point(1, 1), 2));
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        require(rejected, "grid accepted a block set of the wrong size");
     }
 
     std::cout << "block lookup tests passed\n";

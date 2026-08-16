@@ -88,8 +88,9 @@ LineQueryResult LineQuery::execute(
     // Pre-load every block the line crosses, per participating level, and index
     // each level's blocks for O(1)-average point lookup during the walk. The
     // grid bins on the line axis (the walk varies only that coordinate; the
-    // off-axes are pinned to the line's fixed cell) plus one other axis to give
-    // BlockGrid two distinct axes.
+    // off-axes are pinned to the line's fixed cell) plus the next axis. In 1-D
+    // that is the line axis again, which BlockGrid tolerates: it bins the same
+    // coordinate twice, no less correctly.
     std::vector<std::vector<LoadedBlock>> loadedByLevel(
         static_cast<std::size_t>(maximumLevel) + 1);
     std::vector<BlockGrid> gridByLevel(

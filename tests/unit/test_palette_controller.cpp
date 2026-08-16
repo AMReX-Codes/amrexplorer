@@ -80,7 +80,6 @@ int main(int argc, char** argv)
     QApplication application(argc, argv);
     using amrvis::qt::PaletteController;
     using amrvis::qt::builtinPalettes;
-    using amrvis::qt::builtinPaletteLabel;
 
     // Menu and selector present the same builtin names, in order, and the
     // first is "Rainbow" (pinned as a literal, not derived from the helper).
@@ -311,7 +310,9 @@ int main(int argc, char** argv)
     }
 
     // apply(State) is the viewer-state import path: it restores a selection
-    // wholesale and does emit, since consumers are wired by then.
+    // wholesale and does emit, since consumers are wired by then. A builtin
+    // index it does not have falls back to the first, as restore does for an
+    // unknown name.
     {
         PaletteController controller;
         int changes = 0;
@@ -326,6 +327,12 @@ int main(int argc, char** argv)
         require(changes == 2 && !controller.state().fromFile
                 && controller.state().builtinIndex == 2,
             "apply with an unloadable file did not fall back");
+        controller.apply(PaletteController::State{99, false, {}, false});
+        require(changes == 3 && controller.state().builtinIndex == 0,
+            "apply with an unknown builtin index did not fall back");
+        controller.apply(PaletteController::State{-1, false, {}, false});
+        require(changes == 4 && controller.state().builtinIndex == 0,
+            "apply with a negative builtin index did not fall back");
     }
 
     std::cout << "palette controller tests passed\n";

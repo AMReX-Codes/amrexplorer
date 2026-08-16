@@ -51,8 +51,9 @@ inline QString builtinPaletteKey(std::size_t index)
 // its capitalization -- where the settings key above stays lowercase. Not the
 // only presentation rule: the selector still appends the "_r" reversal suffix
 // to its labels alone, so with reversal on the two surfaces differ by that
-// suffix. Kept apart from the key precisely so this rule can live here without
-// rewriting anyone's stored settings.
+// suffix. Folding it in here is the remaining half of the job. Kept apart from
+// the key precisely so this rule can live here without rewriting anyone's
+// stored settings.
 inline QString builtinPaletteLabel(std::size_t index)
 {
     auto label = builtinPaletteKey(index);
@@ -114,8 +115,10 @@ public:
     void apply(const State& state);
 
     // The palette keys of the application settings ("palette/…"). restore()
-    // does not emit paletteChanged: it runs before the host's consumers exist,
-    // and the host reads palette() itself once it has built them.
+    // does not emit paletteChanged: it reproduces a saved selection rather
+    // than changing one, so a host that has already wired the signal (persist,
+    // re-render) is not made to write the settings straight back and redraw
+    // nothing. The host reads palette() itself once restored.
     void restore(const QSettings& settings);
     void save(QSettings& settings) const;
 

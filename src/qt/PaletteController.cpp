@@ -38,6 +38,12 @@ QMenu* PaletteController::createMenu(QWidget* parent)
 {
     auto* menu = new QMenu(tr("&Palette"), parent);
     m_menuGroup = new QActionGroup(menu);
+    // A file palette leaves no builtin checked. ExclusiveOptional is the policy
+    // that documents an all-unchecked group (Exclusive only happens to allow
+    // it programmatically); a user click on the checked action still lands in
+    // selectBuiltin, which re-checks it.
+    m_menuGroup->setExclusionPolicy(
+        QActionGroup::ExclusionPolicy::ExclusiveOptional);
     for (std::size_t index = 0; index < builtinPalettes.size(); ++index) {
         auto* action = new QAction(builtinPaletteLabel(index), menu);
         action->setCheckable(true);
@@ -152,8 +158,13 @@ void PaletteController::setReversed(bool reversed)
 void PaletteController::apply(const State& requested)
 {
     State state = requested;
-    state.builtinIndex = std::clamp(state.builtinIndex, 0,
-        static_cast<int>(builtinPalettes.size()) - 1);
+    // An index the builtins do not have (an imported state from a build with
+    // more of them, say) falls back to the first, as restore() does for an
+    // unknown name -- one policy for one kind of bad input.
+    if (state.builtinIndex < 0
+        || state.builtinIndex >= static_cast<int>(builtinPalettes.size())) {
+        state.builtinIndex = 0;
+    }
     if (state.fromFile && !state.filePath.isEmpty()) {
         std::optional<Palette> loaded;
         try {

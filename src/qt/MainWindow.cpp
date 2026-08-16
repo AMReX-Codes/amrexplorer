@@ -2,7 +2,6 @@
 #include "SshRemoteSession.hpp"
 
 #include "CurrentRowBulletDelegate.hpp"
-#include "PaletteController.hpp"
 
 #include <QKeySequence>
 #include <QStyle>
@@ -25,13 +24,9 @@ MainWindow::MainWindow(QWidget* parent)
 
     // The palette selection lives in its controller. Consumers keep a pointer
     // to its palette(), the toolbar shows its selector, the View menu its
-    // menu, and paletteChanged drives the color bar and a re-render.
+    // menu, and paletteChanged (wired at the end of construction, once the
+    // widgets its handler touches exist) drives the color bar and a re-render.
     m_paletteController = new PaletteController(this);
-    connect(m_paletteController, &PaletteController::paletteChanged, this,
-        [this] {
-            saveSettings();
-            refreshPaletteDisplay();
-        });
     connect(m_paletteController, &PaletteController::loadFileRequested, this,
         [this] { loadPaletteFile(); });
 
@@ -527,6 +522,14 @@ MainWindow::MainWindow(QWidget* parent)
     statusBar()->showMessage(tr("No dataset open"));
     updateDiagnostics();
     restoreSettings();
+    // Only now: the handler persists settings and redraws through the color
+    // bar, views and iso widget, all of which exist by here, and restoreSettings
+    // above read the restored palette into the color bar itself.
+    connect(m_paletteController, &PaletteController::paletteChanged, this,
+        [this] {
+            saveSettings();
+            refreshPaletteDisplay();
+        });
     // Cancel in-flight async work on any quit path (last-window close, Cmd-Q,
     // menu Quit) so QThreadPool teardown does not block on an outstanding read
     // and the process can exit promptly. Only here -- where every window is

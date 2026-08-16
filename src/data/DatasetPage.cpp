@@ -164,8 +164,16 @@ DatasetPage extractDatasetPage(PlotfileDataset& dataset,
                     cell[static_cast<std::size_t>(request.normalAxis)]
                         = page.sliceIndex;
                 }
-                const auto value = fab.values[detail::valueOffset(
-                    fab.box, cell, metadata.dimension)];
+                // Same guard as lookupBlockValue: a corrupt block whose loaded
+                // payload is smaller than its box must throw, not be read
+                // past its end.
+                const auto fabOffset = detail::valueOffset(
+                    fab.box, cell, metadata.dimension);
+                if (fabOffset >= fab.values.size()) {
+                    throw std::runtime_error(
+                        "dataset page FAB index exceeds loaded block");
+                }
+                const auto value = fab.values[fabOffset];
                 const auto valueX = static_cast<std::size_t>(
                     static_cast<std::int64_t>(i) - page.lower[0]);
                 const auto offset = valueX

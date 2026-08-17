@@ -1055,7 +1055,13 @@ void MainWindow::syncVisibleRanges()
                 && m_viewDimension == 3 && m_dataset
                 && m_range->mode() == RangeMode::Visible;
             // Everything after the outcome is in hand, on both paths.
-            const auto finish = [this, watcher] {
+            const auto finish = [this, watcher, generation] {
+                if (generation != m_generation) {
+                    // Superseded by a new dataset (or frame): the deferred store
+                    // key and any armed rerun belong to the old generation.
+                    m_pendingRangeStore.reset();
+                    m_visibleSyncRerun = false;
+                }
                 updateDiagnostics();
                 watcher->deleteLater();
                 if (m_visibleSyncRerun) {
@@ -1096,10 +1102,6 @@ void MainWindow::syncVisibleRanges()
                     m_pendingRangeStore.reset();
                 } else {
                     m_diagnosticsModel->noteStaleResult();
-                    if (generation != m_generation) {
-                        m_pendingRangeStore.reset();
-                        m_visibleSyncRerun = false;
-                    }
                 }
                 finish();
                 return;
@@ -1213,9 +1215,6 @@ void MainWindow::syncVisibleRanges()
                 // is not touched.
                 ++m_visibleSyncStaleSkips;
 #endif
-            } else if (generation != m_generation) {
-                m_pendingRangeStore.reset();
-                m_visibleSyncRerun = false;
             }
             finish();
         });
@@ -1235,8 +1234,7 @@ void MainWindow::syncVisibleRanges()
 #ifdef AMREXPLORER_QT_TEST_ACCESS
             // Held only when the staleness test has armed the gate; the throw
             // only when it has asked for one (the failure-path checks).
-            visible_sync_test::waitAtGate();
-            if (visible_sync_test::failNext.exchange(false)) {
+            if (visible_sync_test::waitAtGate()) {
                 throw std::runtime_error("injected visible-sync failure");
             }
 #endif

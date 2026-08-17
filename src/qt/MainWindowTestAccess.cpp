@@ -12,6 +12,7 @@ void MainWindow::armVisibleSyncGateForTest()
     visible_sync_test::releaseGrants.store(0);
     visible_sync_test::passed.store(0);
     visible_sync_test::waiting.store(0);
+    visible_sync_test::failNext.store(false);  // no throw carries over
     visible_sync_test::gateArmed.store(true);
 }
 

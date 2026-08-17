@@ -1539,6 +1539,10 @@ Outcome dispatch(Context& context)
         // plane -- slicesInFlight is zero again right after scheduleSliceRequest.
         auto zoomGen = std::make_shared<std::uint64_t>(0);
         auto sentinelsHeld = std::make_shared<bool>(false);
+        // Reported-failure count before the two injected throws; the failure
+        // phases assert on its delta (monotonic, unlike the status-bar text,
+        // which clearMessage or a "Loading..." can overwrite between polls).
+        auto baselineErrors = std::make_shared<int>(0);
         const auto finish = [&application, poll, &window](int code) {
             window.disarmVisibleSyncGateForTest();  // free any parked worker
             poll->stop();  // no stray timeout fires after we ask to exit
@@ -1578,7 +1582,8 @@ Outcome dispatch(Context& context)
                 window.configureContourSyncForTest(3, false, {0.5, 0.5, 0.5});
             });
         QObject::connect(poll, &QTimer::timeout, &application,
-            [&window, finish, phase, attempts, zoomGen, sentinelsHeld] {
+            [&window, finish, phase, attempts, zoomGen, sentinelsHeld,
+                baselineErrors] {
                 if (++*attempts > 3000) {
                     finish(3);
                     return;
@@ -1636,13 +1641,15 @@ Outcome dispatch(Context& context)
                         return;
                     }
                     if (window.visibleSyncWorkerWaitingForTest()
-                        || window.slicesInFlightForTest() != 0) {
+                        || window.slicesInFlightForTest() != 0
+                        || window.sliceRequestPendingForTest()) {
                         return;  // the rerun is still applying
                     }
                     // Failure path, superseded: park a sync that will throw,
                     // invalidate a panel under it, release it. Its throw must
                     // be counted stale, not reported -- the panels it rendered
                     // are gone. (The self-healing rerun then parks.)
+                    *baselineErrors = window.backgroundErrorCountForTest();
                     *zoomGen = window.activeViewRenderGenerationForTest();
                     window.armVisibleSyncGateForTest();
                     window.failNextVisibleSyncForTest();
@@ -1667,12 +1674,14 @@ Outcome dispatch(Context& context)
                     return;
                 }
                 if (*phase == 7) {
-                    // The rerun (armed by the re-slice arrival) parks next.
+                    // The rerun (armed by the re-slice arrival) parks next; it
+                    // is dispatched from the throwing sync's completion, so by
+                    // now that completion has decided whether to report.
                     if (!window.visibleSyncWorkerWaitingForTest()) {
                         return;
                     }
-                    if (window.statusBar()->currentMessage().contains(
-                            QStringLiteral("Cannot synchronize views"))) {
+                    if (window.backgroundErrorCountForTest()
+                        != *baselineErrors) {
                         finish(10);  // a superseded failure was reported
                         return;
                     }
@@ -1682,7 +1691,8 @@ Outcome dispatch(Context& context)
                 }
                 if (*phase == 8) {
                     if (window.visibleSyncWorkerWaitingForTest()
-                        || window.slicesInFlightForTest() != 0) {
+                        || window.slicesInFlightForTest() != 0
+                        || window.sliceRequestPendingForTest()) {
                         return;
                     }
                     // Failure path, current: the same throw with nothing
@@ -1702,12 +1712,14 @@ Outcome dispatch(Context& context)
                     return;
                 }
                 if (*phase == 10) {
-                    if (window.visibleSyncWorkerWaitingForTest()) {
-                        return;
-                    }
-                    if (!window.statusBar()->currentMessage().contains(
-                            QStringLiteral("Cannot synchronize views"))) {
+                    const auto reported = window.backgroundErrorCountForTest()
+                        - *baselineErrors;
+                    if (reported == 0) {
                         return;  // the completion has not run yet
+                    }
+                    if (reported != 1) {
+                        finish(11);  // one throw, one report
+                        return;
                     }
                     finish(0);
                 }

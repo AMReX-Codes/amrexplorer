@@ -122,6 +122,11 @@ int main(int argc, char* argv[])
             "the sequence dialog did not report its paths in order");
         require(dialog.executable() == QStringLiteral("amrexplorer-server"),
             "an unknown destination did not default the executable");
+        auto* buttons = dialog.findChild<QDialogButtonBox*>();
+        require(buttons != nullptr, "the sequence dialog has no buttons");
+        buttons->button(QDialogButtonBox::Cancel)->click();
+        require(dialog.result() == QDialog::Rejected && !dialog.browseRequested(),
+            "Cancel did not reject, or set the browse flag");
     }
 
     std::cout << "remote open dialog tests passed\n";

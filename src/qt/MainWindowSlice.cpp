@@ -1351,7 +1351,10 @@ void MainWindow::prepareSequence(std::size_t frameCount)
 void MainWindow::openRemoteSequence(
     const std::vector<std::string>& remotePaths)
 {
+    // Read together, before anything else runs: the generation belongs to
+    // this connection and must be the one the loader captures.
     auto connection = m_remoteSession->connection();
+    const auto connectionGeneration = m_remoteSession->connectionGeneration();
     if (!connection) {
         emit sequenceFrameFailed();
         reportBackgroundError(tr("Open a remote session first "
@@ -1382,7 +1385,7 @@ void MainWindow::openRemoteSequence(
     // as long as the ssh session, and a lost session is reported to the user
     // rather than silently re-established.
     auto loader = [connection = std::move(connection),
-                      generation = m_remoteSession->connectionGeneration()](
+                      generation = connectionGeneration](
                       const std::filesystem::path& path, DatasetId,
                       const FrameSliceSpec& spec, StopToken cancellation) {
         if (!connection->connected()) {

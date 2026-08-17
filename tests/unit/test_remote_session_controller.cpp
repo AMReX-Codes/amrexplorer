@@ -1,20 +1,35 @@
 // RemoteSessionController against a loopback Server (install) and the real
 // amrexplorer-server run by the stand-in ssh script (start): what it installs,
 // what it asks the host to open, what it remembers per destination, and what
-// its diagnostics lines say in each state. The dialogs it owns are covered by
-// their own tests; this one never opens a modal dialog.
+// its diagnostics lines say in each state, plus the Open Remote dialog and
+// the browser driven from inside their exec() by a timer, the way a user
+// would drive them.
 
+#include "RemoteFileDialog.hpp"
+#include "RemoteOpenDialog.hpp"
 #include "RemoteSessionController.hpp"
 
 #include <amrexplorer/remote/Connection.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
+#include <QAbstractButton>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDialogButtonBox>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QLineEdit>
+#include <QMessageBox>
+#include <QPlainTextEdit>
+#include <QPushButton>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QTimer>
+#include <QTreeWidget>
+
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
 
 #include <cstdlib>
 #include <exception>
@@ -77,6 +92,53 @@ bool waitUntil(const std::function<bool()>& predicate, int milliseconds)
     }
     return true;
 }
+
+// The visible top-level dialog of a type, if one is up (a modal exec() is
+// running under it).
+template <typename Dialog>
+Dialog* visibleDialog()
+{
+    for (auto* widget : QApplication::topLevelWidgets()) {
+        // dynamic_cast: the dialogs have no Q_OBJECT (nothing to moc).
+        if (auto* dialog = dynamic_cast<Dialog*>(widget);
+            dialog != nullptr && dialog->isVisible()) {
+            return dialog;
+        }
+    }
+    return nullptr;
+}
+
+QPushButton* buttonNamed(QWidget& dialog, const QString& text)
+{
+    const auto buttons = dialog.findChildren<QPushButton*>();
+    const auto found = std::find_if(buttons.begin(), buttons.end(),
+        [&](QPushButton* button) { return button->text() == text; });
+    return found == buttons.end() ? nullptr : *found;
+}
+
+// Drives a modal dialog from inside its own exec() loop: `step` runs every
+// few milliseconds until it returns true. What a user would do with the
+// mouse, done by a timer.
+class Driver {
+public:
+    explicit Driver(std::function<bool()> step)
+        : m_step(std::move(step))
+    {
+        QObject::connect(&m_timer, &QTimer::timeout, &m_timer, [this] {
+            if (m_step()) {
+                m_done = true;
+                m_timer.stop();
+            }
+        });
+        m_timer.start(20);
+    }
+    [[nodiscard]] bool done() const noexcept { return m_done; }
+
+private:
+    std::function<bool()> m_step;
+    QTimer m_timer;
+    bool m_done = false;
+};
 
 // Everything the host would react to.
 struct Observed {
@@ -181,10 +243,20 @@ int main(int argc, char* argv[])
         Observed observed;
         RemoteSessionController controller(hooks(), "test");
         observe(controller, observed);
-        controller.start("-bad", "", {});
-        require(observed.errors.size() == 1
-                && observed.errors.front()
-                    == QStringLiteral("Invalid SSH destination.")
+        // The destination goes into ssh's argv after "--", so an option-like
+        // or multi-word one is refused before anything is remembered or
+        // started: neither "-oProxyCommand=..." nor "host -o ProxyCommand=..."
+        // nor a shell-looking "host; touch /tmp/x" may reach ssh.
+        for (const char* bad : {"-bad", "-oProxyCommand=touch /tmp/x",
+                 "host -o ProxyCommand=touch /tmp/x", "host; touch /tmp/x",
+                 "host\tuser", "host\n", ""}) {
+            controller.start(bad, "", {});
+        }
+        require(observed.errors.size() == 7
+                && std::all_of(observed.errors.begin(), observed.errors.end(),
+                    [](const QString& error) {
+                        return error == QStringLiteral("Invalid SSH destination.");
+                    })
                 && observed.sessionChanges == 0
                 && controller.diagnosticsLines().isEmpty(),
             "an invalid destination was not rejected up front");
@@ -202,6 +274,13 @@ int main(int argc, char* argv[])
     }
     const std::string serverBinary = argv[1];
     qputenv("AMREXPLORER_SSH", argv[2]);
+    // The server the stand-in ssh runs inherits this process's HOME; point it
+    // at the scratch directory holding one fake plotfile so the browser has
+    // something to pick.
+    const auto home = std::filesystem::path(scratch.path().toStdString());
+    std::filesystem::create_directories(home / "plt00000" / "Level_0");
+    std::ofstream(home / "plt00000" / "Header") << "fake plotfile header\n";
+    qputenv("HOME", scratch.path().toUtf8());
 
     // start() over the stand-in ssh: the connection is installed, the paths
     // go to the host (one as a dataset, two as a sequence), onReady runs
@@ -251,6 +330,11 @@ int main(int argc, char* argv[])
         require(controller.serverExecutableFor(QStringLiteral("fake-destination"))
                 == QString::fromStdString(serverBinary),
             "serverExecutableFor did not read the remembered executable");
+        // Per destination only: what one machine remembers must not leak to
+        // another (the bug the executable key's comment describes).
+        require(controller.serverExecutableFor(QStringLiteral("elsewhere"))
+                == QStringLiteral("amrexplorer-server"),
+            "a remembered executable leaked to another destination");
 
         // A second start with the remembered executable (empty argument) and
         // two paths replaces the session and asks for a sequence.
@@ -262,9 +346,154 @@ int main(int argc, char* argv[])
                 && observed.opens.back().size() == 2
                 && controller.connectionGeneration() == 2,
             "two paths were not requested as a sequence over a new session");
+
+        // The Open Remote dialog, driven from inside its exec(): with the
+        // live session's fields left alone, Open asks the host to open the
+        // typed path directly (no new session); the sequence dialog asks for
+        // a sequence; an empty path is refused with a warning; Cancel does
+        // nothing; a different destination starts a new session; Browse...
+        // opens the remote browser over the live session, whose pick is
+        // opened.
+        using amrvis::qt::RemoteOpenDialog;
+        const auto statusesBefore = observed.statuses.size();
+        {
+            Driver driver([] {
+                auto* dialog = visibleDialog<RemoteOpenDialog>();
+                if (dialog == nullptr) {
+                    return false;
+                }
+                dialog->findChildren<QLineEdit*>()[2]->setText(
+                    QStringLiteral("/scratch/plt00030"));
+                buttonNamed(*dialog, QStringLiteral("Open"))->click();
+                return true;
+            });
+            controller.promptOpen(nullptr, false);
+            require(driver.done() && observed.opens.size() == 3
+                    && observed.opens.back()
+                        == std::vector<std::string>{"/scratch/plt00030"}
+                    && !observed.openAsSequence.back()
+                    && observed.statuses.size() == statusesBefore,
+                "Open over the live session did not open the path directly");
+        }
+        {
+            Driver driver([] {
+                auto* dialog = visibleDialog<RemoteOpenDialog>();
+                if (dialog == nullptr) {
+                    return false;
+                }
+                dialog->findChild<QPlainTextEdit*>()->setPlainText(
+                    QStringLiteral("/a/plt00010\n/a/plt00020\n"));
+                buttonNamed(*dialog, QStringLiteral("Open"))->click();
+                return true;
+            });
+            controller.promptOpen(nullptr, true);
+            require(driver.done() && observed.opens.size() == 4
+                    && observed.opens.back().size() == 2
+                    && observed.openAsSequence.back(),
+                "the sequence dialog did not ask for a sequence");
+        }
+        {
+            bool warned = false;
+            Driver driver([&warned] {
+                if (auto* warning = visibleDialog<QMessageBox>()) {
+                    warned = true;
+                    warning->buttons().first()->click();
+                    return true;
+                }
+                if (auto* dialog = visibleDialog<RemoteOpenDialog>()) {
+                    buttonNamed(*dialog, QStringLiteral("Open"))->click();
+                }
+                return false;
+            });
+            controller.promptOpen(nullptr, false);
+            require(driver.done() && warned && observed.opens.size() == 4
+                    && observed.statuses.size() == statusesBefore,
+                "an empty path was opened, or the warning did not show");
+        }
+        {
+            Driver driver([] {
+                auto* dialog = visibleDialog<RemoteOpenDialog>();
+                if (dialog == nullptr) {
+                    return false;
+                }
+                buttonNamed(*dialog, QStringLiteral("Cancel"))->click();
+                return true;
+            });
+            controller.promptOpen(nullptr, false);
+            require(driver.done() && observed.opens.size() == 4
+                    && observed.statuses.size() == statusesBefore,
+                "Cancel opened or started something");
+        }
+        {
+            Driver driver([&serverBinary] {
+                auto* dialog = visibleDialog<RemoteOpenDialog>();
+                if (dialog == nullptr) {
+                    return false;
+                }
+                const auto edits = dialog->findChildren<QLineEdit*>();
+                edits[0]->setText(QStringLiteral("other-destination"));
+                edits[1]->setText(QString::fromStdString(serverBinary));
+                edits[2]->setText(QStringLiteral("/scratch/plt00040"));
+                buttonNamed(*dialog, QStringLiteral("Open"))->click();
+                return true;
+            });
+            controller.promptOpen(nullptr, false);
+            require(driver.done()
+                    && observed.statuses.size() == statusesBefore + 1
+                    && observed.statuses.back().contains(QStringLiteral(
+                        "Starting remote session on other-destination")),
+                "a changed destination did not start a new session");
+            require(waitUntil([&] { return observed.opens.size() == 5; }, 20000),
+                "the new session did not open the typed path");
+            require(observed.opens.back()
+                        == std::vector<std::string>{"/scratch/plt00040"}
+                    && controller.connectionGeneration() == 3
+                    && controller.diagnosticsLines().contains(
+                        QStringLiteral("ssh other-destination (connected)")),
+                "the new session did not replace the old one");
+        }
+        {
+            // Browse... over the (matching) live session: the browser lists
+            // the server's home -- the scratch directory -- and picking its
+            // plotfile opens it.
+            Driver driver([] {
+                if (auto* browser
+                    = visibleDialog<amrvis::qt::RemoteFileDialog>()) {
+                    auto* entries = browser->findChild<QTreeWidget*>();
+                    for (int index = 0; index < entries->topLevelItemCount();
+                         ++index) {
+                        auto* item = entries->topLevelItem(index);
+                        if (item->text(0) == QStringLiteral("plt00000")) {
+                            item->setSelected(true);
+                            browser->findChild<QDialogButtonBox*>()
+                                ->button(QDialogButtonBox::Open)
+                                ->click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                if (auto* dialog = visibleDialog<RemoteOpenDialog>()) {
+                    buttonNamed(*dialog, QStringLiteral("Browse..."))->click();
+                }
+                return false;
+            });
+            controller.promptOpen(nullptr, false);
+            require(driver.done() && observed.opens.size() == 6
+                    && observed.opens.back()
+                        == std::vector<std::string>{(home / "plt00000").string()}
+                    && !observed.openAsSequence.back(),
+                "Browse... did not open the picked plotfile");
+            require(QSettings(settingsFile, QSettings::IniFormat)
+                        .value(QStringLiteral(
+                            "remote/lastDirectories/other-destination"))
+                        .toString()
+                    == QString::fromStdString(home.string()),
+                "the browsed directory was not remembered per destination");
+        }
         controller.shutdown();
         require(controller.diagnosticsLines().contains(
-                    QStringLiteral("remote session: ssh fake-destination")),
+                    QStringLiteral("remote session: ssh other-destination")),
             "shutdown dropped the installed connection's line");
     }
 

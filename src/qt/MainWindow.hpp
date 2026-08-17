@@ -39,7 +39,6 @@
 
 class QAction;
 class QActionGroup;
-class QCheckBox;
 class QCloseEvent;
 class QComboBox;
 class QDockWidget;

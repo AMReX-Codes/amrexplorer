@@ -183,8 +183,9 @@ int main(int argc, char* argv[])
                 && observed.logarithmic == 0,
             "a blocked write announced a change");
         controller.setNumberFormat(QStringLiteral("%.3f"));
-        require(widgets.minimum->text().contains(QStringLiteral("6.000")),
-            "the number format did not reach the bounds");
+        require(widgets.minimum->text().contains(QStringLiteral("6.000"))
+                && widgets.maximum->text().contains(QStringLiteral("7.000")),
+            "the number format did not reach both bounds");
     }
 
     // Per-field memory: switching fields snapshots the old field and loads
@@ -212,7 +213,14 @@ int main(int argc, char* argv[])
         controller.switchField(3);
         require(controller.mode() == RangeMode::File,
             "switching to the same field changed something");
-        selectMode(*widgets.mode, RangeMode::Level);
+        // Field 3 gets its own User range, different from field 0's, so each
+        // swap really rewrites the boxes -- and must do so silently: a swap
+        // that announced userRangeChanged would re-slice on every field
+        // change.
+        selectMode(*widgets.mode, RangeMode::User);
+        widgets.minimum->setValue(-5.0);
+        widgets.maximum->setValue(5.0);
+        const auto edits = observed.userRange;
         controller.switchField(0);
         require(controller.trackedField() == 0
                 && controller.mode() == RangeMode::User
@@ -220,10 +228,9 @@ int main(int argc, char* argv[])
                 && widgets.minimum->isEnabled(),
             "switching back did not restore the field's User range");
         controller.switchField(3);
-        require(controller.mode() == RangeMode::Level,
+        require(controller.selection().userRange == std::pair{-5.0, 5.0},
             "the other field's snapshot was not kept");
-        // The swaps are blocked writes.
-        require(observed.mode == 2 && observed.userRange == 2,
+        require(observed.userRange == edits && observed.mode == 2,
             "a field switch announced a change");
         controller.setSelection({RangeMode::Visible, std::nullopt, false});
         controller.setTrackedField(7);

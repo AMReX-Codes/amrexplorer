@@ -8,7 +8,6 @@
 
 #include <QCoreApplication>
 #include <QFutureWatcher>
-#include <QMessageBox>
 #include <QtConcurrent>
 
 #include <exception>
@@ -21,6 +20,11 @@ FabNavigator::FabNavigator(Hooks hooks, QObject* parent)
     : QObject(parent)
     , m_hooks(std::move(hooks))
 {
+    // The other hooks default sensibly when unset (see Hooks); this one is
+    // what every navigation ends in, so it is called bare at three sites.
+    if (!m_hooks.openPrepared) {
+        throw std::invalid_argument("FabNavigator needs an openPrepared hook");
+    }
 }
 
 FabSelectorDock* FabNavigator::createDock(QWidget* parent)
@@ -177,11 +181,6 @@ std::optional<FrameSliceSpec> FabNavigator::selectedEntrySpec() const
     return spec;
 }
 
-QWidget* FabNavigator::dialogParent() const
-{
-    return m_dock ? m_dock->parentWidget() : nullptr;
-}
-
 void FabNavigator::openStandaloneFabAsync(std::filesystem::path path,
     std::optional<std::uint64_t> fileOffset, std::filesystem::path dataRoot,
     bool preserveSelector, std::optional<FrameSliceSpec> initialSpec,
@@ -289,6 +288,10 @@ void FabNavigator::viewEntry(std::size_t index)
         return;
     }
     const auto entry = entries[index];
+    // Set once the synchronous path below has moved the dock to the entry, so
+    // a failure after that puts it back (the asynchronous path carries its
+    // own rollback through the pending read).
+    std::optional<SelectorRollback> syncRollback;
     try {
         auto selectedSpec = selectedEntrySpec();
         if (entry.rawRecord) {
@@ -326,14 +329,22 @@ void FabNavigator::viewEntry(std::size_t index)
         }
         auto selected = makeSelectedFabMetadata(*m_sourceMetadata->metadata,
             entry.level, entry.blockIndex, m_dataRoot);
+        syncRollback = SelectorRollback{
+            m_fabMode, m_dock->backAvailable(), m_dock->selectedOrdinal()};
         m_fabMode = true;
         m_dock->setBackAvailable(m_multifabReturn.has_value());
         m_dock->selectEntry(entry.ordinal);
         m_hooks.openPrepared(m_sourcePath, std::move(selected), m_dataRoot,
             true, std::move(selectedSpec));
     } catch (const std::exception& error) {
-        QMessageBox::critical(
-            dialogParent(), tr("Cannot view FAB"), exceptionMessage(error));
+        if (syncRollback) {
+            applyRollback(*syncRollback);
+        }
+        // Reported the same way as an asynchronous read failure: non-modally
+        // through the host. (A modal box here never returns under the
+        // offscreen platform, so a regression would hang the unit test rather
+        // than fail it.)
+        emit openFailed(tr("Cannot view FAB"), exceptionMessage(error));
     }
 }
 

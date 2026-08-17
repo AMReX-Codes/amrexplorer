@@ -398,10 +398,16 @@ int main(int argc, char** argv)
                 && action->isEnabled(),
             "cancel did not restore the action for the dataset still shown");
         const auto overlays = observed.overlays;
-        controller.setSamples({});
+        std::vector<amrvis::ParticleSample> installed(2);
+        installed[0].points.resize(3);
+        controller.setSamples(installed);
+        require(controller.samples().size() == 2
+                && controller.samples()[0].points.size() == 3
+                && observed.overlays == overlays,
+            "setSamples did not install the samples, or redrew the overlays");
         controller.clearSamples();
-        require(observed.overlays == overlays,
-            "installing samples from outside redrew the overlays");
+        require(controller.samples().empty() && observed.overlays == overlays,
+            "clearSamples did not drop the samples, or redrew the overlays");
         waitFor(application, [&] { return observed.finished == 1; },
             "the cancelled load did not finish");
         require(observed.stale == 1 && observed.failures.isEmpty()
@@ -413,6 +419,35 @@ int main(int argc, char** argv)
         controller.cancel();
         require(!action->isEnabled(),
             "cancel enabled the action with no dataset");
+    }
+
+    // suspendAction: the host's teardown word. It holds through cancel() --
+    // a sequence open cancels twice, the second time from the frame switch
+    // its open() triggers -- and through a load's settle, and only the next
+    // configureForDataset lifts it.
+    {
+        current = session;
+        Observed observed;
+        ParticleController controller(hooks());
+        auto* action = controller.createAction(&application);
+        controller.configureForDataset(false);
+        observe(controller, observed);
+        require(action->isEnabled(), "a dataset with species left the action off");
+        controller.suspendAction();
+        require(!action->isEnabled(), "suspendAction left the action on");
+        controller.cancel();
+        require(!action->isEnabled(), "cancel() lifted a suspension");
+        controller.restoreSelection({"ions"}, 1.0, 0, true);
+        controller.reload();
+        waitFor(application, [&] { return observed.finished == 1; },
+            "the load did not finish");
+        require(!action->isEnabled(), "a settling load lifted a suspension");
+        controller.configureForDataset(true);
+        require(action->isEnabled(),
+            "configureForDataset did not lift the suspension");
+        require(controller.settings().colors.at("ions") == QColor(Qt::yellow),
+            "the suspension round trip lost the seeded colours");
+        current.reset();
     }
 
     // A failing load reports once, through loadFailed, and settles.

@@ -1191,7 +1191,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_animationPanel->setSweepVisible(false);
     m_levelMenu->setEnabled(false);
     m_contoursAction->setEnabled(false);
-    m_particleController->setActionEnabled(false);
+    m_particleController->suspendAction();
     m_datasetAction->setEnabled(false);
     m_exportAnimationAction->setEnabled(false);
     m_openMetadata.reset();

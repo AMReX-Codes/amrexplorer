@@ -1326,7 +1326,7 @@ void MainWindow::prepareSequence(std::size_t frameCount)
     // the way a plain open's teardown does; configureSequenceControls and
     // the particle controller bring them back when a frame arrives.
     m_contoursAction->setEnabled(false);
-    m_particleController->setActionEnabled(false);
+    m_particleController->suspendAction();
 
     m_animationPanel->setSequenceFrameCount(static_cast<int>(frameCount));
     m_animationPanel->setSequenceVisible(true);

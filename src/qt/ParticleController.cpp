@@ -153,27 +153,34 @@ void ParticleController::clearSelection()
 
 void ParticleController::configureForDataset(bool preserveSelection)
 {
+    // A dataset has landed (or none has): whatever the host suspended the
+    // action for is over.
+    m_suspended = false;
     const auto dataset = m_hooks.dataset ? m_hooks.dataset() : nullptr;
-    if (!dataset) {
-        setActionEnabled(false);
-        return;
+    if (dataset) {
+        const auto& species = dataset->particleSpecies();
+        if (!preserveSelection) {
+            resetSettings();
+        }
+        for (std::size_t index = 0; index < species.size(); ++index) {
+            m_settings.colors.try_emplace(
+                species[index].name, defaultParticleColor(index));
+        }
     }
-    const auto& species = dataset->particleSpecies();
-    if (!preserveSelection) {
-        resetSettings();
-    }
-    for (std::size_t index = 0; index < species.size(); ++index) {
-        m_settings.colors.try_emplace(
-            species[index].name, defaultParticleColor(index));
-    }
+    refreshActionEnabled();
+}
+
+void ParticleController::suspendAction()
+{
+    m_suspended = true;
     refreshActionEnabled();
 }
 
 void ParticleController::refreshActionEnabled()
 {
     const auto dataset = m_hooks.dataset ? m_hooks.dataset() : nullptr;
-    setActionEnabled(
-        dataset && !dataset->particleSpecies().empty() && !m_loading);
+    setActionEnabled(dataset && !dataset->particleSpecies().empty()
+        && !m_loading && !m_suspended);
 }
 
 void ParticleController::setActionEnabled(bool enabled)
@@ -208,10 +215,9 @@ void ParticleController::cancel()
     m_stopSource.request_stop();
     ++m_generation;
     setLoadingUi(false);
-    // The load took the action down; the cancelled load's result will not
-    // put it back (its generation is stale), so do it here, for whatever
-    // dataset the host still shows. Hosts that are tearing that dataset down
-    // disable the action themselves right after this call.
+    // The load took the action down and its stale result will not put it
+    // back; refresh here, for whatever dataset the host still shows -- unless
+    // the host suspended it, which holds until the next dataset lands.
     refreshActionEnabled();
 }
 
@@ -229,12 +235,12 @@ void ParticleController::reload()
     emit overlaysChanged();
     if (!dataset || selectedSpecies.empty()) {
         setLoadingUi(false);
-        configureForDataset(true);
+        refreshActionEnabled();
         return;
     }
 
     setLoadingUi(true);
-    setActionEnabled(false);
+    refreshActionEnabled();
     emit loadActivityChanged(1);
     emit statusMessage(tr("Loading particle sample..."), 0);
     auto* watcher = new QFutureWatcher<std::vector<ParticleSample>>(this);
@@ -273,7 +279,7 @@ void ParticleController::reload()
             }
             if (generation == m_generation) {
                 setLoadingUi(false);
-                configureForDataset(true);
+                refreshActionEnabled();
             }
             emit loadFinished();
             watcher->deleteLater();

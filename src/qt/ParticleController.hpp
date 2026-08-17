@@ -102,9 +102,15 @@ public:
     void clearSelection();
 
     // Seeds default colours for the dataset's species (a reset first unless
-    // preserveSelection) and enables the action for datasets with species.
+    // preserveSelection), lifts any suspension, and enables the action for
+    // datasets with species.
     void configureForDataset(bool preserveSelection);
-    void setActionEnabled(bool enabled);
+    // Takes the action down until the next configureForDataset: the host's
+    // word that the dataset on show is going away (a teardown, a sequence
+    // open) and nothing -- a cancel(), a settling load -- may bring it back
+    // in between. The action's state is otherwise derived: enabled iff the
+    // dataset has species, no load is running, and it is not suspended.
+    void suspendAction();
 
     // Installs samples a frame load produced (the host owns that load), or
     // drops them at a dataset teardown. Neither emits overlaysChanged: the
@@ -118,10 +124,11 @@ public:
     void reload();
     // Cancels an in-flight load without touching samples or settings: its
     // result, should it still arrive, is dropped. The loading UI comes down
-    // and the action goes back to what the current dataset warrants (a
-    // frame switch whose frame then fails must not leave it stranded); a
-    // host tearing the dataset down disables it again itself. Frame
-    // switches, dataset teardown and shutdown all go through here.
+    // and the action goes back to what the current dataset warrants unless
+    // suspended -- so a frame step whose frame then fails is not left
+    // stranded, while a sequence open (suspended by the host) stays down
+    // until its first frame lands. Frame switches, dataset teardown and
+    // shutdown all go through here.
     void cancel();
 
     void showDialog(QWidget* parent);
@@ -152,13 +159,16 @@ signals:
 
 private:
     void setLoadingUi(bool loading);
-    // Enabled iff the current dataset has species and no load is running.
+    void setActionEnabled(bool enabled);
+    // Enabled iff the current dataset has species, no load is running, and
+    // the host has not suspended it.
     void refreshActionEnabled();
 
     Hooks m_hooks;
     Settings m_settings;
     std::vector<ParticleSample> m_samples;
     bool m_loading = false;
+    bool m_suspended = false;
     StopSource m_stopSource;
     // Bumped by every reload and cancel: a load result whose generation no
     // longer matches is stale.

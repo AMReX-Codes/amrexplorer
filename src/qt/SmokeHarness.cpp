@@ -20,6 +20,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QStatusBar>
 #include <QRunnable>
 #include <QTableView>
 #include <QTextStream>
@@ -1630,7 +1631,85 @@ Outcome dispatch(Context& context)
                     return;
                 }
                 if (*phase == 4) {
-                    finish(*sentinelsHeld ? 0 : 6);
+                    if (!*sentinelsHeld) {
+                        finish(6);
+                        return;
+                    }
+                    if (window.visibleSyncWorkerWaitingForTest()
+                        || window.slicesInFlightForTest() != 0) {
+                        return;  // the rerun is still applying
+                    }
+                    // Failure path, superseded: park a sync that will throw,
+                    // invalidate a panel under it, release it. Its throw must
+                    // be counted stale, not reported -- the panels it rendered
+                    // are gone. (The self-healing rerun then parks.)
+                    *zoomGen = window.activeViewRenderGenerationForTest();
+                    window.armVisibleSyncGateForTest();
+                    window.failNextVisibleSyncForTest();
+                    window.requestVisibleSyncForTest();
+                    *phase = 5;
+                    return;
+                }
+                if (*phase == 5) {
+                    if (!window.visibleSyncWorkerWaitingForTest()) {
+                        return;
+                    }
+                    window.zoomActiveViewForTest();
+                    *phase = 6;
+                    return;
+                }
+                if (*phase == 6) {
+                    if (window.activeViewRenderGenerationForTest() <= *zoomGen) {
+                        return;  // wait for the re-slice to rewrite the plane
+                    }
+                    window.releaseVisibleSyncGateForTest();  // the throwing sync lands
+                    *phase = 7;
+                    return;
+                }
+                if (*phase == 7) {
+                    // The rerun (armed by the re-slice arrival) parks next.
+                    if (!window.visibleSyncWorkerWaitingForTest()) {
+                        return;
+                    }
+                    if (window.statusBar()->currentMessage().contains(
+                            QStringLiteral("Cannot synchronize views"))) {
+                        finish(10);  // a superseded failure was reported
+                        return;
+                    }
+                    window.releaseVisibleSyncGateForTest();  // let the rerun apply
+                    *phase = 8;
+                    return;
+                }
+                if (*phase == 8) {
+                    if (window.visibleSyncWorkerWaitingForTest()
+                        || window.slicesInFlightForTest() != 0) {
+                        return;
+                    }
+                    // Failure path, current: the same throw with nothing
+                    // superseding it is the user's problem and is reported.
+                    window.armVisibleSyncGateForTest();
+                    window.failNextVisibleSyncForTest();
+                    window.requestVisibleSyncForTest();
+                    *phase = 9;
+                    return;
+                }
+                if (*phase == 9) {
+                    if (!window.visibleSyncWorkerWaitingForTest()) {
+                        return;
+                    }
+                    window.releaseVisibleSyncGateForTest();
+                    *phase = 10;
+                    return;
+                }
+                if (*phase == 10) {
+                    if (window.visibleSyncWorkerWaitingForTest()) {
+                        return;
+                    }
+                    if (!window.statusBar()->currentMessage().contains(
+                            QStringLiteral("Cannot synchronize views"))) {
+                        return;  // the completion has not run yet
+                    }
+                    finish(0);
                 }
             });
         QTimer::singleShot(20000, &application,

@@ -25,6 +25,12 @@ void MainWindow::disarmVisibleSyncGateForTest()
 {
     // Free everything (used on test exit so no worker stays parked).
     visible_sync_test::gateArmed.store(false);
+    visible_sync_test::failNext.store(false);
+}
+
+void MainWindow::failNextVisibleSyncForTest()
+{
+    visible_sync_test::failNext.store(true);
 }
 
 bool MainWindow::visibleSyncWorkerWaitingForTest() const

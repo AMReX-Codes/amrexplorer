@@ -160,6 +160,10 @@ public:
     void armVisibleSyncGateForTest();
     void releaseVisibleSyncGateForTest();
     void disarmVisibleSyncGateForTest();
+    // The next sync worker to run throws instead of rendering, so the
+    // completion's failure path can be driven: a current failure is reported,
+    // a superseded one counted stale.
+    void failNextVisibleSyncForTest();
     void setViewDisplayRangesForTest(double minimum, double maximum);
     [[nodiscard]] std::uint64_t activeViewRenderGenerationForTest() const;
     [[nodiscard]] bool visibleSyncWorkerWaitingForTest() const;

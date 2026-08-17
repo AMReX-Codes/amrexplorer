@@ -273,6 +273,7 @@ inline QPainterPath sphericalSectorPath(const PlaneMapping& mapping,
 namespace visible_sync_test {
 
 inline std::atomic<bool> gateArmed{false};
+inline std::atomic<bool> failNext{false};  // the next worker to pass throws
 inline std::atomic<int> releaseGrants{0};  // # of "proceed" grants issued
 inline std::atomic<int> passed{0};         // # of workers that have proceeded
 inline std::atomic<int> waiting{0};        // # of workers currently parked

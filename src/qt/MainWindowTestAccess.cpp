@@ -130,16 +130,6 @@ void MainWindow::setAnimationDockVisibleForTest(bool visible)
     }
 }
 
-QStringList MainWindow::paletteMenuLabelsForTest() const
-{
-    return m_paletteController->menuLabels();
-}
-
-QStringList MainWindow::paletteSelectorLabelsForTest() const
-{
-    return m_paletteController->selectorLabels();
-}
-
 QString MainWindow::viewPlaceholderForTest()
 {
     QString shared;

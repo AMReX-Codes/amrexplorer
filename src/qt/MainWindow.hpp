@@ -23,7 +23,6 @@
 #include <QMainWindow>
 #include <QRectF>
 #include <QSize>
-#include <QStringList>
 
 #include <array>
 #include <atomic>
@@ -201,14 +200,6 @@ public:
     // any panel holds an image instead. A failed open must leave a settled
     // placeholder naming what failed, never the "Loading..." one it replaced.
     [[nodiscard]] QString viewPlaceholderForTest();
-
-    // Test-only: the builtin palette names as the Palette menu and the palette
-    // selector each show them. Two accessors rather than one because the point
-    // is that the two agree: they are built in different units from the same
-    // helper, and they disagreed for as long as the capitalization was spelled
-    // out at the call sites instead of living in that helper.
-    [[nodiscard]] QStringList paletteMenuLabelsForTest() const;
-    [[nodiscard]] QStringList paletteSelectorLabelsForTest() const;
 
     // Test-only: true when the active view's displayed raster is byte-identical
     // to its plane re-rendered against the current display (color-bar) range —

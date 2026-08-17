@@ -2,6 +2,8 @@
 
 #include "MainWindow.hpp"
 
+#include <amrexplorer/render2d/Contours.hpp>
+
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>

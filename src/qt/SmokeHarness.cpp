@@ -20,7 +20,6 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QSignalBlocker>
-#include <QStatusBar>
 #include <QRunnable>
 #include <QTableView>
 #include <QTextStream>

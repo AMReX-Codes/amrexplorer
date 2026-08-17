@@ -773,7 +773,8 @@ double MainWindow::particleFractionForTest() const noexcept
 
 void MainWindow::setParticlePointSizeForTest(int pointSize)
 {
-    const auto& settings = m_particleController->settings();
+    // A copy: applySelection overwrites the settings it would read from.
+    const auto settings = m_particleController->settings();
     m_particleController->applySelection(
         settings.species, settings.fraction, pointSize, settings.seed);
 }

@@ -9,7 +9,6 @@
 #include <QPointer>
 #include <QString>
 
-#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -33,8 +32,8 @@ namespace amrvis::qt {
 // to sampleSelectionChanged by reloading or restarting a sequence frame, and
 // forwards the load's bookkeeping into its diagnostics.
 //
-// Settings is the explicit, serialisable selection; a viewer-state
-// export/import round-trips it through settings()/applySettings.
+// Settings is the explicit, serialisable selection: settings() reads it
+// whole, and restoreSelection/setColor/applySelection are the ways back in.
 class ParticleController final : public QObject {
     Q_OBJECT
 
@@ -86,8 +85,6 @@ public:
     void applySelection(std::vector<std::string> species, double fraction,
         int pointSize, std::uint64_t seed);
     void setColor(const std::string& species, const QColor& color);
-    // Restores a whole selection (viewer-state import).
-    void applySettings(Settings settings);
     // Reinstalls what a restored frame spec carries (species, fraction, seed,
     // initialised), leaving colours and point size alone.
     void restoreSelection(std::vector<std::string> species, double fraction,

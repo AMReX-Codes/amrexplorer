@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <exception>
 #include <utility>
 
@@ -114,21 +115,6 @@ void ParticleController::setColor(const std::string& species, const QColor& colo
 {
     m_settings.colors[species] = color;
     emit overlaysChanged();
-}
-
-void ParticleController::applySettings(Settings settings)
-{
-    const bool sampleChanged = settings.selectionInitialized
-            != m_settings.selectionInitialized
-        || settings.species != m_settings.species
-        || settings.fraction != m_settings.fraction
-        || settings.seed != m_settings.seed;
-    m_settings = std::move(settings);
-    if (sampleChanged) {
-        emit sampleSelectionChanged();
-    } else {
-        emit overlaysChanged();
-    }
 }
 
 void ParticleController::restoreSelection(std::vector<std::string> species,
@@ -368,8 +354,9 @@ void ParticleController::showDialog(QWidget* parent)
                 .arg(QString::fromStdString(species.name))
                 .arg(species.particleCount),
             dialog);
-        const auto stored = m_settings.colors.contains(species.name)
-            ? m_settings.colors.at(species.name)
+        const auto storedColor = m_settings.colors.find(species.name);
+        const auto stored = storedColor != m_settings.colors.end()
+            ? storedColor->second
             : defaultParticleColor(speciesIndex);
         // The spin box owns opacity and the swatch shows the hue alone. Held
         // together, an Apply that folded the alpha into the swatch would

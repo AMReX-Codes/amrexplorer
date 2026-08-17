@@ -299,7 +299,10 @@ int main(int argc, char* argv[])
 #ifndef _WIN32
     // A remembered start directory that no longer exists: the browser says
     // so and shows the server's home instead of an empty tree. (A Windows
-    // server has no home resolution.)
+    // server has no home resolution.) Not covered: that only the initial
+    // listing falls back -- the case that would tell it apart from "no
+    // listing has succeeded yet" needs the home listing to fail as well,
+    // which this in-process server cannot be made to do safely.
     {
         RemoteFileDialog dialog(connection,
             QString::fromStdString((root / "gone").string()),

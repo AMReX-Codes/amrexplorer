@@ -560,7 +560,8 @@ HelloResponseData fromWire(const fb::HelloResponseT& value)
 bool isValidDirectoryEntryName(std::string_view name) noexcept
 {
     return !name.empty() && name != "." && name != ".."
-        && name.find('/') == std::string_view::npos;
+        && name.find('/') == std::string_view::npos
+        && name.find(char{}) == std::string_view::npos;
 }
 
 fb::ListDirectoryRequestT toWireDirectoryRequest(const std::string& path)

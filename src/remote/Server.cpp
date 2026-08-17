@@ -259,7 +259,6 @@ RemoteDirectoryListing listServerDirectory(
     // scanning, so memory and work are bounded by the cap rather than by the
     // directory, and the scan stays cancellable at every entry.
     std::vector<std::string> names;
-    names.reserve(maximumDirectoryEntries + 1);
     for (std::filesystem::directory_iterator entries(path,
              std::filesystem::directory_options::skip_permission_denied,
              error),

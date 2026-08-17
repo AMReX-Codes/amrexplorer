@@ -194,9 +194,15 @@ void checkConverted(const fb::DirectoryListingT& wire,
             || entry.isPlotfile != wireEntry.is_plotfile) {
             fail("DirectoryListing converter did not carry an entry over");
         }
-        // The converter's own predicate: an accepted entry is one path
-        // component with a path, so its removal from fromWire shows here.
-        if (!codec::isValidDirectoryEntryName(entry.name) || entry.path.empty()) {
+        // The converter's own predicate, so its removal from fromWire shows
+        // here, and the properties spelled out, so its weakening does too:
+        // one path component -- non-empty, not "." or "..", no '/', no NUL
+        // -- with a non-empty path.
+        if (!codec::isValidDirectoryEntryName(entry.name) || entry.name.empty()
+            || entry.name == "." || entry.name == ".."
+            || entry.name.find('/') != std::string::npos
+            || entry.name.find(char{}) != std::string::npos
+            || entry.path.empty()) {
             fail("DirectoryListing converter accepted an invalid entry");
         }
     }
@@ -634,7 +640,9 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         fb::DirectoryListingT listing;
         listing.path = "/scratch/run";
         listing.parent_path = "/scratch";
-        listing.truncated = false;
+        // Non-default, so the flag has a byte in the buffer for the
+        // corruption sweep to reach.
+        listing.truncated = true;
         auto plotfile = std::make_unique<fb::DirectoryEntryT>();
         plotfile->name = "plt00010";
         plotfile->path = "/scratch/run/plt00010";

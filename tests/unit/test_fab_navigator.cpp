@@ -111,6 +111,9 @@ struct Host {
     int titleChanges = 0;
     // When set, openPrepared throws instead of opening (a host-side failure).
     bool refuseOpens = false;
+    // The level the current display spec reports; the test moves it to stand
+    // in for the user changing the slice controls.
+    int levelSelection = 2;
 
     amrvis::qt::FabNavigator::Hooks hooks()
     {
@@ -122,7 +125,7 @@ struct Host {
                     return std::nullopt;
                 }
                 amrvis::FrameSliceSpec spec;
-                spec.levelSelection = 2;
+                spec.levelSelection = levelSelection;
                 spec.rangeMode = amrvis::RangeMode::User;
                 spec.userRange = std::pair{0.0, 1.0};
                 return spec;
@@ -309,11 +312,20 @@ int main(int argc, char** argv)
                 && !navigator.fabMode() && !dock->backAvailable()
                 && dock->selectedOrdinal() == displayed,
             "a synchronously failed drill-down was not reported and rolled back");
+        // The failed attempt left no return record: the user moves the slice
+        // controls, drills down for real, and Back returns to that display,
+        // not to the one the failed attempt saw.
         host.refuseOpens = false;
+        host.levelSelection = 4;
         navigator.viewEntry(0);
         require(host.opened.size() == 3 && navigator.fabMode()
+                && dock->backAvailable()
                 && dock->selectedOrdinal() == std::optional<std::size_t>{0},
             "the navigator did not recover after a refused open");
+        navigator.backToMultiFab();
+        require(host.opened.size() == 4 && host.opened.back().hadSpec
+                && host.opened.back().levelSelection == 4,
+            "Back returned to the spec captured by the failed drill-down");
     }
 
     // The direct "Open FAB...": an asynchronous header read that opens with

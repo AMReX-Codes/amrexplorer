@@ -71,7 +71,10 @@ set_target_properties(amrexplorer_qt PROPERTIES OUTPUT_NAME amrexplorer AUTOMOC 
 # for the remote library. The smoke tests run against this executable, so they
 # need AMREXPLORER_BUILD_TESTS=ON, which is the default and what CI configures.
 if(AMREXPLORER_BUILD_TESTS)
-    target_sources(amrexplorer_qt PRIVATE MainWindowTestAccess.cpp)
+    target_sources(amrexplorer_qt PRIVATE
+        MainWindowTestAccess.cpp
+        SmokeHarness.cpp
+        SmokeHarness.hpp)
     target_compile_definitions(amrexplorer_qt PRIVATE AMREXPLORER_QT_TEST_ACCESS)
 endif()
 

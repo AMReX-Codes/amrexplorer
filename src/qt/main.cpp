@@ -411,7 +411,7 @@ int main(int argc, char* argv[])
     ensureDesktopEntry();
     amrvis::qt::MainWindow window;
     window.show();
-    // The smoke-test harnesses (SmokeHarness.cpp) claim their options first;
+    // The smoke-test harnesses (SmokeHarness*.cpp) claim their options first;
     // they compile only where MainWindow's ForTest accessors do, and the
     // release binary carries neither. Their options and the production ones
     // below are disjoint, so the order carries no meaning beyond that.

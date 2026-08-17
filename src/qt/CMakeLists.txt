@@ -65,7 +65,7 @@ add_executable(amrexplorer_qt
 set_target_properties(amrexplorer_qt PROPERTIES OUTPUT_NAME amrexplorer AUTOMOC ON AUTORCC ON)
 
 # MainWindowTestAccess.cpp defines the ~90 ForTest accessors the offscreen
-# smoke tests reach through, and SmokeHarness.cpp's "--...-smoke-test"
+# smoke tests reach through, and the SmokeHarness*.cpp "--...-smoke-test"
 # branches (which main.cpp dispatches into) are their only callers. All are
 # gated on the same definition, so a release build carries none of them --
 # the same shape AMREXPLORER_ENABLE_SERVER_TEST_HOOKS uses for the remote
@@ -75,7 +75,14 @@ if(AMREXPLORER_BUILD_TESTS)
     target_sources(amrexplorer_qt PRIVATE
         MainWindowTestAccess.cpp
         SmokeHarness.cpp
-        SmokeHarness.hpp)
+        SmokeHarness.hpp
+        SmokeHarnessFab.cpp
+        SmokeHarnessInternal.hpp
+        SmokeHarnessLifecycle.cpp
+        SmokeHarnessRange.cpp
+        SmokeHarnessRemote.cpp
+        SmokeHarnessSequence.cpp
+        SmokeHarnessZoom.cpp)
     target_compile_definitions(amrexplorer_qt PRIVATE AMREXPLORER_QT_TEST_ACCESS)
 endif()
 

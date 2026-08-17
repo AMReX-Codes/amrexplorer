@@ -9,6 +9,7 @@
 #include "QtErrorText.hpp"
 #include "AnimationExporter.hpp"
 #include "PaletteController.hpp"
+#include "ParticleController.hpp"
 #include "SequenceController.hpp"
 #include "AnimationPanel.hpp"
 #include "CacheConfig.hpp"
@@ -82,8 +83,8 @@
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QProcess>
-#include <QProgressDialog>
 #include <QProgressBar>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QRect>
 #include <QRegularExpressionValidator>

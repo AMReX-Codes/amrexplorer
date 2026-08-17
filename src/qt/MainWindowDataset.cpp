@@ -138,7 +138,7 @@ void MainWindow::cancelInFlight()
     m_metadataStopSource.request_stop();
     m_sequenceController->cancelActiveWork();
     m_linePlotStopSource.request_stop();
-    m_particleStopSource.request_stop();
+    m_particleController->cancel();
     m_view2d.stopSource.request_stop();
     for (auto& state : m_planeViews) {
         state.stopSource.request_stop();
@@ -1131,7 +1131,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     }
     m_initialStopSource.request_stop();
     m_linePlotStopSource.request_stop();
-    m_particleStopSource.request_stop();
+    m_particleController->cancel();
     m_pendingAllViews = false;
     m_pendingViews.clear();
     m_sliceDebounce->stop();
@@ -1166,11 +1166,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     }
     // The particles dialog lists this dataset's species; the next one has its
     // own. (A sequence frame switch keeps it open -- the species are the same.)
-    if (m_particlesDialog != nullptr) {
-        auto* dialog = m_particlesDialog;
-        m_particlesDialog = nullptr;
-        dialog->close();
-    }
+    m_particleController->closeDialog();
     // The Number Format dialog is deliberately *not* closed here. Unlike the
     // contours dialog above, its setting is dataset-independent and persisted,
     // so closing it on every open only discarded whatever the user had typed
@@ -1195,7 +1191,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_animationPanel->setSweepVisible(false);
     m_levelMenu->setEnabled(false);
     m_contoursAction->setEnabled(false);
-    m_particlesAction->setEnabled(false);
+    m_particleController->suspendAction();
     m_datasetAction->setEnabled(false);
     m_exportAnimationAction->setEnabled(false);
     m_openMetadata.reset();
@@ -1204,12 +1200,13 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_vectorUField = -1;
     m_vectorVField = -1;
     m_vectorWField = -1;
-    m_particleSamples.clear();
-    m_selectedParticleSpecies.clear();
-    m_particleSelectionInitialized = false;
-    m_particleLoading = false;
-    m_particleProgress->setVisible(false);
-    ++m_particleGeneration;
+    // Runtime particle state goes (the load was cancelled above); the
+    // settings stay, because a restore reinstalls only what its spec carries
+    // (the species selection is part of that, so it is cleared here and comes
+    // back from the spec, or is reset with everything else by
+    // configureForDataset when there is none).
+    m_particleController->clearSamples();
+    m_particleController->clearSelection();
     setWindowTitle(tr("AMReXplorer"));
     {
         auto settings = makeSettings();
@@ -1385,7 +1382,7 @@ void MainWindow::requestInitialSlice(
     }
     m_initialStopSource.request_stop();
     m_linePlotStopSource.request_stop();
-    m_particleStopSource.request_stop();
+    m_particleController->cancel();
     m_initialStopSource = StopSource{};
     const auto cancellation = m_initialStopSource.get_token();
     // The initial open uses default slice state: field 0, finest available,
@@ -1445,16 +1442,17 @@ void MainWindow::requestInitialSlice(
                 auto result = watcher->future().takeResult();
                 if (generation == m_generation) {
                     m_dataset = result.dataset;
-                    m_particleSamples = std::move(result.particles);
+                    m_particleController->setSamples(
+                        std::move(result.particles));
                     if (restoredSpec) {
-                        m_selectedParticleSpecies
-                            = restoredSpec->particleSpecies;
-                        m_particleFraction = restoredSpec->particleFraction;
-                        m_particleSeed = restoredSpec->particleSeed;
-                        m_particleSelectionInitialized
-                            = restoredSpec->particleSelectionInitialized;
+                        m_particleController->restoreSelection(
+                            restoredSpec->particleSpecies,
+                            restoredSpec->particleFraction,
+                            restoredSpec->particleSeed,
+                            restoredSpec->particleSelectionInitialized);
                     }
-                    configureParticleControls(restoredSpec.has_value());
+                    m_particleController->configureForDataset(
+                        restoredSpec.has_value());
                     configureSliceControls();
                     if (restoredSpec) {
                         const QSignalBlocker fieldBlocker(m_fieldSelector);

@@ -50,7 +50,6 @@ class QLineF;
 class QMenu;
 class QPlainTextEdit;
 class QProgressDialog;
-class QProgressBar;
 class QPushButton;
 class QStackedWidget;
 class QTimer;
@@ -79,6 +78,7 @@ class IsoWidget;
 class LinePlotWindow;
 class ScientificDoubleSpinBox;
 class PaletteController;
+class ParticleController;
 class SequenceController;
 class SshRemoteSession;
 struct PlaneMapping;
@@ -558,15 +558,8 @@ private:
     void resetRangeState();
     void updateRangeModeAvailability();
     void showContoursDialog();
-    void showParticlesDialog();
-    void configureParticleControls(bool preserveSelection);
-    // Drops every particle setting back to its default: the shared reset for
-    // the two paths that install a different dataset, a plain open and a
-    // sequence open. The teardown in openDatasetImpl clears the runtime state
-    // (samples, progress, generation) separately and deliberately leaves the
-    // settings alone, because a restore reinstalls only what its spec carries.
-    void resetParticleSettings();
-    void requestParticleReload();
+    // Draws the ParticleController's samples into a view: the projection and
+    // the plane mapping are the host's, the settings and samples are its.
     void updateParticleOverlay(PlaneViewState& state);
     void updateParticleOverlays();
     void applyContourSettings(DisplayMode mode, int count, int uField, int vField,
@@ -844,9 +837,6 @@ private:
     void displayFrameResult(InitialSliceResult& result, bool defaultPositions);
     void configureSequenceControls(bool defaultPositions);
     [[nodiscard]] FrameSliceSpec buildFrameSpec();
-    void applyParticleSelection(
-        std::vector<std::string> species, double fraction, int pointSize,
-        std::uint64_t seed);
     // Stop timers and request stop on every async task this window can launch,
     // so an in-flight read that holds the global I/O mutex bails promptly and
     // does not block QThreadPool teardown. Called from closeEvent and (via a
@@ -867,7 +857,6 @@ private:
     DatasetWindow* m_datasetWindow = nullptr;
     SetContoursDialog* m_contoursDialog = nullptr;
     QDialog* m_numberFormatDialog = nullptr;
-    QDialog* m_particlesDialog = nullptr;
     UserGuideDialog* m_userGuideDialog = nullptr;
     QComboBox* m_fieldSelector = nullptr;
     QComboBox* m_levelSelector = nullptr;
@@ -954,8 +943,6 @@ private:
     QAction* m_resetZoomAction = nullptr;
     QAction* m_syncRubberBandZoomAction = nullptr;
     QAction* m_contoursAction = nullptr;
-    QAction* m_particlesAction = nullptr;
-    QProgressBar* m_particleProgress = nullptr;
     QAction* m_datasetAction = nullptr;
     QAction* m_exportAnimationAction = nullptr;
 
@@ -987,17 +974,9 @@ private:
     int m_vectorUField = -1;
     int m_vectorVField = -1;
     int m_vectorWField = -1;
-    std::vector<std::string> m_selectedParticleSpecies;
-    std::vector<ParticleSample> m_particleSamples;
-    std::unordered_map<std::string, QColor> m_particleColors;
-    double m_particleFraction = 1.0;
-    std::uint64_t m_particleSeed = 0;
-    static constexpr int defaultParticlePointSize = 3;
-    int m_particlePointSize = defaultParticlePointSize;
-    bool m_particleSelectionInitialized = false;
-    bool m_particleLoading = false;
-    StopSource m_particleStopSource;
-    std::uint64_t m_particleGeneration = 0;
+    // Owns the particle selection, samples, sample load, dialog, action and
+    // progress indicator; the host draws its samples into the views.
+    ParticleController* m_particleController = nullptr;
     std::filesystem::path m_datasetPath;
     std::shared_ptr<remote::Connection> m_remoteConnection;
     QString m_remoteLabel;

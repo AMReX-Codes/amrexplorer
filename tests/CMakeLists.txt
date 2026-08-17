@@ -491,6 +491,30 @@ if(TARGET amrexplorer_qt)
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_palette_controller>")
 
+    add_executable(test_particle_controller
+        unit/test_particle_controller.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/ParticleController.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ParticleController.hpp"
+    )
+    set_target_properties(test_particle_controller PROPERTIES AUTOMOC ON)
+    target_include_directories(test_particle_controller
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_particle_controller
+        PRIVATE
+            amrexplorer::pipeline
+            amrexplorer::warnings
+            Qt6::Concurrent
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Widgets
+    )
+    # The controller builds real widgets (the dialog, the action, the progress
+    # bar), so it needs a QPA platform; offscreen keeps it headless.
+    add_test(NAME particle_controller
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_particle_controller>")
+    set_tests_properties(particle_controller PROPERTIES TIMEOUT 60)
+
     add_executable(test_remote_endpoint unit/test_remote_endpoint.cpp)
     target_include_directories(test_remote_endpoint
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")

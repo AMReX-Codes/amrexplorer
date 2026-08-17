@@ -78,6 +78,7 @@ class ImageView;
 class IsoWidget;
 class LinePlotWindow;
 class ScientificDoubleSpinBox;
+class PaletteController;
 class SequenceController;
 class SshRemoteSession;
 struct PlaneMapping;
@@ -540,20 +541,13 @@ private:
     void rebuildVariableMenu();
     void syncMenuChecks();
     void syncVariableMenu();
-    void syncPaletteChecks();
-    void syncPaletteSelector();
-    void selectBuiltinPalette(int index);
+    // Runs the palette-file dialog for the controller's Load Palette File...
+    // and reports a load failure.
     void loadPaletteFile();
-    void applyPalette(const Palette& palette, std::optional<int> builtinIndex,
-        const QString& filePath);
-    // Derives m_palette from m_basePalette and the reverse toggle, then pushes
-    // it to the color bar, iso widget, and a re-render. Shared by applyPalette
-    // and the reverse-colormap toggle.
+    // The host's reaction to PaletteController::paletteChanged: pushes the
+    // effective palette to the color bar, iso widget, overlays and a
+    // re-render.
     void refreshPaletteDisplay();
-    // Sets the reverse-colormap state and keeps the menu action, toolbar
-    // selector, settings, and rendering in sync. The single entry point for
-    // both the menu toggle and the palette-selector toggle item.
-    void setReversePalette(bool reversed);
     // Per-field user range: each field remembers its own RangeMode and, when
     // User, its min/max. commitFieldRange snapshots the current widgets for a
     // field, applyFieldRange loads a field's snapshot (or the Visible default)
@@ -878,7 +872,6 @@ private:
     QComboBox* m_fieldSelector = nullptr;
     QComboBox* m_levelSelector = nullptr;
     QComboBox* m_rangeMode = nullptr;
-    QComboBox* m_paletteSelector = nullptr;
     QCheckBox* m_logarithmic = nullptr;
     ScientificDoubleSpinBox* m_rangeMinimum = nullptr;
     ScientificDoubleSpinBox* m_rangeMaximum = nullptr;
@@ -956,8 +949,6 @@ private:
     QActionGroup* m_scaleGroup = nullptr;
     QActionGroup* m_levelGroup = nullptr;
     QActionGroup* m_variableGroup = nullptr;
-    QActionGroup* m_paletteGroup = nullptr;
-    QAction* m_reversePaletteAction = nullptr;
     QAction* m_boxesAction = nullptr;
     QAction* m_slicePlanesAction = nullptr;
     QAction* m_resetZoomAction = nullptr;
@@ -1027,15 +1018,9 @@ private:
     std::filesystem::path m_fabSourcePath;
     std::filesystem::path m_fabDataRoot;
     bool m_fabMode = false;
-    // The selected palette before any reversal; m_palette is derived from it as
-    // m_reversePalette ? m_basePalette.reversed() : m_basePalette and is the
-    // value the renderer, color bar, and overlays actually use.
-    Palette m_basePalette = builtinPalette(BuiltinPalette::Rainbow);
-    Palette m_palette = builtinPalette(BuiltinPalette::Rainbow);
-    int m_builtinIndex = 0;
-    bool m_paletteFromFile = false;
-    bool m_reversePalette = false;
-    QString m_paletteFilePath;
+    // Owns the palette selection, its widgets and persistence; palette() is
+    // what the renderer, color bar and overlays use.
+    PaletteController* m_paletteController = nullptr;
     QString m_numberFormat = defaultNumberFormat();
     QStringList m_probeLines;
     QStringList m_backgroundErrors;

@@ -1,6 +1,8 @@
 #include "MainWindowInternal.hpp"
 #include "SshRemoteSession.hpp"
 
+#include "CurrentRowBulletDelegate.hpp"
+
 #include <QKeySequence>
 #include <QStyle>
 
@@ -14,110 +16,19 @@ extern const char* const kVersion =
 #endif
     ;
 
-namespace {
-
-// Marks the active row in the palette dropdown with a bullet. The bullet lives
-// in a reserved left column that every row's sizeHint accounts for, so names
-// align and the indented text is never clipped. Installed only on the combo's
-// popup view, so the closed combo still shows the clean palette name.
-class CurrentRowBulletDelegate : public QStyledItemDelegate {
-public:
-    explicit CurrentRowBulletDelegate(QComboBox* combo, QObject* parent)
-        : QStyledItemDelegate(parent), m_combo(combo) {}
-
-    void paint(QPainter* painter, const QStyleOptionViewItem& option,
-        const QModelIndex& index) const override
-    {
-        if (isSeparator(index)) {
-            // The default combo delegate draws separators as a thin rule; this
-            // custom delegate replaces it, so render the rule ourselves rather
-            // than leaving a tall blank row. Paint the same item-view panel the
-            // other rows use so the background matches, then draw the line.
-            QStyleOptionViewItem sepOpt = option;
-            initStyleOption(&sepOpt, index);
-            auto* const sepStyle =
-                sepOpt.widget != nullptr ? sepOpt.widget->style() : nullptr;
-            if (sepStyle != nullptr) {
-                sepStyle->drawPrimitive(
-                    QStyle::PE_PanelItemViewItem, &sepOpt, painter, sepOpt.widget);
-            }
-            painter->save();
-            painter->setPen(option.palette.color(QPalette::Mid));
-            const int y = option.rect.center().y();
-            painter->drawLine(option.rect.left() + kSeparatorMargin, y,
-                option.rect.right() - kSeparatorMargin, y);
-            painter->restore();
-            return;
-        }
-        QStyleOptionViewItem opt = option;
-        initStyleOption(&opt, index);
-        auto* const style = opt.widget != nullptr ? opt.widget->style() : nullptr;
-
-        // Full-width selection background, then the name indented past the
-        // marker column so all rows line up at the same x.
-        if (style != nullptr) {
-            style->drawPrimitive(
-                QStyle::PE_PanelItemViewItem, &opt, painter, opt.widget);
-        }
-        opt.rect.adjust(kMarkerColumn, 0, 0, 0);
-        if (style != nullptr) {
-            style->drawControl(
-                QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
-        }
-
-        if (m_combo != nullptr && index.row() == m_combo->currentIndex()) {
-            const QPalette::ColorRole role =
-                (opt.state & QStyle::State_Selected) != 0
-                    ? QPalette::HighlightedText
-                    : QPalette::WindowText;
-            painter->save();
-            painter->setRenderHint(QPainter::Antialiasing, true);
-            painter->setPen(Qt::NoPen);
-            painter->setBrush(opt.palette.brush(role));
-            const QPointF center(option.rect.left() + kMarkerColumn / 2.0,
-                option.rect.center().y());
-            painter->drawEllipse(center, 2.5, 2.5);
-            painter->restore();
-        }
-    }
-
-    QSize sizeHint(const QStyleOptionViewItem& option,
-        const QModelIndex& index) const override
-    {
-        if (isSeparator(index)) {
-            // A short row for the rule; the default sizeHint would give it a
-            // full text-row height and read as a large gap.
-            return QSize(0, kSeparatorHeight);
-        }
-        QSize size = QStyledItemDelegate::sizeHint(option, index);
-        // Reserve the marker column horizontally and add vertical padding so
-        // the names have breathing room; keeps the closed combo unaffected.
-        size.setWidth(size.width() + kMarkerColumn);
-        size.setHeight(size.height() + kRowVerticalPadding);
-        return size;
-    }
-
-private:
-    static bool isSeparator(const QModelIndex& index)
-    {
-        return index.data(Qt::AccessibleDescriptionRole).toString()
-            == QLatin1String("separator");
-    }
-
-    static constexpr int kMarkerColumn = 16;
-    static constexpr int kRowVerticalPadding = 6;
-    static constexpr int kSeparatorHeight = 9;
-    static constexpr int kSeparatorMargin = 4;
-    QPointer<QComboBox> m_combo;
-};
-
-} // namespace
-
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
     setWindowTitle(tr("AMReXplorer"));
     resize(960, 720);
+
+    // The palette selection lives in its controller. Consumers keep a pointer
+    // to its palette(), the toolbar shows its selector, the View menu its
+    // menu, and paletteChanged (wired at the end of construction, once the
+    // widgets its handler touches exist) drives the color bar and a re-render.
+    m_paletteController = new PaletteController(this);
+    connect(m_paletteController, &PaletteController::loadFileRequested, this,
+        [this] { loadPaletteFile(); });
 
     // The plot area is a stacked widget: page 0 holds the single 2-D view,
     // page 1 the 3-D grid (XY top-left, XZ top-right, YZ bottom-left, iso
@@ -153,7 +64,7 @@ MainWindow::MainWindow(QWidget* parent)
             QString::fromLatin1(vAxis[idx]));
     }
     m_isoWidget = new IsoWidget(gridPage);
-    m_isoWidget->setColorPalette(&m_palette);
+    m_isoWidget->setColorPalette(&m_paletteController->palette());
     gridLayout->addWidget(m_planeViews[2].view, 0, 0);  // XY: plane normal to Z
     gridLayout->addWidget(m_planeViews[1].view, 0, 1);  // XZ: plane normal to Y
     gridLayout->addWidget(m_planeViews[0].view, 1, 0);  // YZ: plane normal to X
@@ -306,46 +217,7 @@ MainWindow::MainWindow(QWidget* parent)
     rangeToolbar->addWidget(m_logarithmic);
     rangeToolbar->addSeparator();
     rangeToolbar->addWidget(new QLabel(tr("Palette:"), rangeToolbar));
-    m_paletteSelector = new QComboBox(rangeToolbar);
-    const QFontMetrics paletteFm(m_paletteSelector->font());
-    int widestBuiltin = 0;
-    for (std::size_t index = 0; index < builtinPalettes.size(); ++index) {
-        const auto label = builtinPaletteLabel(index);
-        // Reserve room for the reversed form ("Plasma_r") so the closed
-        // selector never elides the "_r" suffix syncPaletteSelector appends.
-        widestBuiltin = std::max(widestBuiltin,
-            paletteFm.horizontalAdvance(label + QStringLiteral("_r")));
-        m_paletteSelector->addItem(label, static_cast<int>(index));
-    }
-    // A toggle that reverses the selected palette (data -3), kept at the end of
-    // the popup. Its label reflects the state (see syncPaletteSelector); it is
-    // never the closed selection, so it does not affect the fixed width below.
-    m_paletteSelector->insertSeparator(m_paletteSelector->count());
-    m_paletteSelector->addItem(tr("Reverse Colormap"), -3);
-    // Size the closed combo to exactly fit the longest builtin name (the popup
-    // expands independently, so the "Load Palette File..." / custom entries are
-    // never truncated there). Any custom entry shows elided when closed.
-    QStyleOptionComboBox comboBoxOption;
-    comboBoxOption.initFrom(m_paletteSelector);
-    const QSize content(widestBuiltin + 4, paletteFm.height());
-    m_paletteSelector->setFixedWidth(m_paletteSelector->style()->sizeFromContents(
-        QStyle::CT_ComboBox, &comboBoxOption, content, m_paletteSelector).width());
-    m_paletteSelector->view()->setItemDelegate(new CurrentRowBulletDelegate(
-        m_paletteSelector, m_paletteSelector->view()));
-    connect(m_paletteSelector, qOverload<int>(&QComboBox::currentIndexChanged),
-        this, [this](int) {
-            const auto selection = m_paletteSelector->currentData().toInt();
-            if (selection >= 0) {
-                selectBuiltinPalette(selection);
-            } else if (selection == -3) {
-                // The "Reverse Colormap" toggle: flip the state, then
-                // syncPaletteSelector restores the current index to the palette.
-                setReversePalette(!m_reversePalette);
-            }
-            // selection == -2 is the transient "Custom: <file>" entry added by
-            // syncPaletteSelector(); selecting it is a no-op.
-        });
-    rangeToolbar->addWidget(m_paletteSelector);
+    rangeToolbar->addWidget(m_paletteController->createSelector(rangeToolbar));
 
     m_sliceDebounce = new QTimer(this);
     m_sliceDebounce->setSingleShot(true);
@@ -650,6 +522,14 @@ MainWindow::MainWindow(QWidget* parent)
     statusBar()->showMessage(tr("No dataset open"));
     updateDiagnostics();
     restoreSettings();
+    // Only now: the handler persists settings and redraws through the color
+    // bar, views and iso widget, all of which exist by here, and restoreSettings
+    // above read the restored palette into the color bar itself.
+    connect(m_paletteController, &PaletteController::paletteChanged, this,
+        [this] {
+            saveSettings();
+            refreshPaletteDisplay();
+        });
     // Cancel in-flight async work on any quit path (last-window close, Cmd-Q,
     // menu Quit) so QThreadPool teardown does not block on an outstanding read
     // and the process can exit promptly. Only here -- where every window is
@@ -1120,27 +1000,7 @@ void MainWindow::createMenus()
             chooseStandaloneDataset(tr("Open AMReX MultiFab header"), false);
         });
 
-    m_paletteGroup = new QActionGroup(this);
-    auto* paletteMenu = new QMenu(tr("&Palette"), this);
-    for (std::size_t index = 0; index < builtinPalettes.size(); ++index) {
-        auto* action = new QAction(builtinPaletteLabel(index), paletteMenu);
-        action->setCheckable(true);
-        action->setActionGroup(m_paletteGroup);
-        connect(action, &QAction::triggered, this,
-            [this, index] { selectBuiltinPalette(static_cast<int>(index)); });
-        paletteMenu->addAction(action);
-    }
-    paletteMenu->addSeparator();
-    // Reverses the selected palette's color ramp (the "_r" variant, e.g.
-    // plasma_r), applied on top of whichever builtin or file palette is active.
-    m_reversePaletteAction = paletteMenu->addAction(tr("&Reverse Colormap"));
-    m_reversePaletteAction->setCheckable(true);
-    m_reversePaletteAction->setChecked(m_reversePalette);
-    connect(m_reversePaletteAction, &QAction::toggled, this,
-        [this](bool on) { setReversePalette(on); });
-    paletteMenu->addSeparator();
-    auto* loadPaletteAction = paletteMenu->addAction(tr("&Load Palette File..."));
-    connect(loadPaletteAction, &QAction::triggered, this, [this] { loadPaletteFile(); });
+    auto* paletteMenu = m_paletteController->createMenu(this);
 
     auto* exportAction = new QAction(tr("&Export Image..."), this);
     connect(exportAction, &QAction::triggered, this, [this] { exportImage(); });
@@ -1490,67 +1350,6 @@ void MainWindow::syncVariableMenu()
     }
 }
 
-void MainWindow::syncPaletteChecks()
-{
-    const auto actions = m_paletteGroup->actions();
-    for (int index = 0; index < actions.size(); ++index) {
-        actions[index]->setChecked(!m_paletteFromFile && index == m_builtinIndex);
-    }
-}
-
-void MainWindow::syncPaletteSelector()
-{
-    const QSignalBlocker blocker(m_paletteSelector);
-    // Drop any stale "custom palette file" entry before reconciling.
-    const int custom = m_paletteSelector->findData(-2);
-    if (custom >= 0) {
-        m_paletteSelector->removeItem(custom);
-    }
-
-    // Reversal is a global modifier, so every palette name carries the "_r"
-    // suffix (the plasma_r convention) while it is on -- including the closed
-    // selector, which shows the active one.
-    const QString suffix = m_reversePalette ? QStringLiteral("_r") : QString();
-    for (int item = 0; item < m_paletteSelector->count(); ++item) {
-        const auto entryData = m_paletteSelector->itemData(item);
-        if (!entryData.isValid()) {
-            continue;  // separator
-        }
-        const auto value = entryData.toInt();
-        if (value >= 0) {
-            m_paletteSelector->setItemText(item,
-                builtinPaletteLabel(static_cast<std::size_t>(value)) + suffix);
-        } else if (value == -3) {
-            // The toggle item shows a check mark while reversal is on.
-            m_paletteSelector->setItemText(item,
-                (m_reversePalette ? QStringLiteral("✓ ") : QString())
-                    + tr("Reverse Colormap"));
-        }
-    }
-
-    if (m_paletteFromFile) {
-        const auto label =
-            tr("Custom: %1").arg(QFileInfo(m_paletteFilePath).fileName()) + suffix;
-        // Insert just after the builtins (and before the separator) so the
-        // reverse toggle stays anchored at the bottom.
-        m_paletteSelector->insertItem(
-            static_cast<int>(builtinPalettes.size()), label, -2);
-        m_paletteSelector->setCurrentIndex(m_paletteSelector->findData(-2));
-    } else {
-        m_paletteSelector->setCurrentIndex(
-            m_paletteSelector->findData(m_builtinIndex));
-    }
-}
-
-void MainWindow::selectBuiltinPalette(int index)
-{
-    if (index < 0 || index >= static_cast<int>(builtinPalettes.size())) {
-        return;
-    }
-    applyPalette(builtinPalette(builtinPalettes[static_cast<std::size_t>(index)]),
-        index, QString());
-}
-
 void MainWindow::loadPaletteFile()
 {
     const auto settings = makeSettings();
@@ -1561,58 +1360,23 @@ void MainWindow::loadPaletteFile()
     if (filename.isEmpty()) {
         return;
     }
-    try {
-        applyPalette(Palette::load(filename.toStdString()), std::nullopt, filename);
-        auto writableSettings = makeSettings();
-        writableSettings.setValue(QStringLiteral("lastOpenDirectory"),
-            QFileInfo(filename).absolutePath());
-    } catch (const std::exception& error) {
-        QMessageBox::critical(this, tr("Cannot load palette"),
-            QString::fromUtf8(error.what()));
+    if (const auto error = m_paletteController->loadFile(filename)) {
+        QMessageBox::critical(this, tr("Cannot load palette"), *error);
+        return;
     }
-}
-
-void MainWindow::applyPalette(const Palette& palette, std::optional<int> builtinIndex,
-    const QString& filePath)
-{
-    m_basePalette = palette;
-    m_paletteFromFile = !builtinIndex.has_value();
-    if (builtinIndex.has_value()) {
-        m_builtinIndex = *builtinIndex;
-        m_paletteFilePath.clear();
-    } else {
-        m_paletteFilePath = filePath;
-    }
-    syncPaletteChecks();
-    syncPaletteSelector();
-    saveSettings();
-    refreshPaletteDisplay();
+    auto writableSettings = makeSettings();
+    writableSettings.setValue(QStringLiteral("lastOpenDirectory"),
+        QFileInfo(filename).absolutePath());
 }
 
 void MainWindow::refreshPaletteDisplay()
 {
-    m_palette = m_reversePalette ? m_basePalette.reversed() : m_basePalette;
-    m_colorBar->setPalette(&m_palette);
+    m_colorBar->setPalette(&m_paletteController->palette());
     scheduleSliceRequest();
     updateGridBoxes();
     updateOverlays();
     updateCrosshairs();
     m_isoWidget->update();
-}
-
-void MainWindow::setReversePalette(bool reversed)
-{
-    if (reversed == m_reversePalette) {
-        return;
-    }
-    m_reversePalette = reversed;
-    if (m_reversePaletteAction != nullptr) {
-        const QSignalBlocker blocker(m_reversePaletteAction);
-        m_reversePaletteAction->setChecked(reversed);
-    }
-    saveSettings();
-    refreshPaletteDisplay();
-    syncPaletteSelector();
 }
 
 void MainWindow::showContoursDialog()

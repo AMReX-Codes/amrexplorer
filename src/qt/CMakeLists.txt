@@ -6,6 +6,7 @@ add_executable(amrexplorer_qt
     CacheConfig.hpp
     ColorBarWidget.cpp
     ColorBarWidget.hpp
+    CurrentRowBulletDelegate.hpp
     DatasetExtract.hpp
     DatasetWindow.cpp
     DatasetWindow.hpp
@@ -26,6 +27,8 @@ add_executable(amrexplorer_qt
     MainWindowSlice.cpp
     NumberFormat.cpp
     NumberFormat.hpp
+    PaletteController.cpp
+    PaletteController.hpp
     QtErrorText.hpp
     RemoteEndpoint.hpp
     RemoteFileDialog.cpp

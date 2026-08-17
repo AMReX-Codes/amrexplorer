@@ -39,15 +39,9 @@ bool MainWindow::visibleSyncWorkerWaitingForTest() const
     return visible_sync_test::waiting.load() > 0;
 }
 
-void MainWindow::setViewDisplayRangesForTest(double minimum, double maximum)
+void MainWindow::adjustActiveRequestsForTest(int delta)
 {
-    // Stamp a sentinel range onto every 3-D panel so a subsequent sync's
-    // real union is observably different: whichever panels the sync applies to
-    // leave the sentinel, whichever it drops keep it.
-    for (auto* state : {&m_planeViews[0], &m_planeViews[1], &m_planeViews[2]}) {
-        state->displayMinimum = minimum;
-        state->displayMaximum = maximum;
-    }
+    m_diagnosticsModel->adjustActivity(delta);
 }
 
 std::uint64_t MainWindow::activeViewRenderGenerationForTest() const

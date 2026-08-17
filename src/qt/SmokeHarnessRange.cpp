@@ -13,6 +13,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -221,34 +222,53 @@ Outcome dispatchRange(Context& context)
         && std::string_view(argv[1])
             == "--visible-sync-staleness-smoke-test") {
         // Regression for the visible-range sync staleness guard (all-or-nothing
-        // form) and the single-flight dispatch gate. A panel re-sliced while a
-        // sync runs makes the sync's union stale for it; cached-plane reuse keeps
-        // the pointer identical, so the guard keys on a per-view render
-        // generation, drops the whole outcome, and the rerun recomputes a
-        // coherent one. Drive that exact path: gate a sync mid-flight, re-slice
-        // one panel for real (rewriting its plane via showSlice), release the
-        // now-stale sync and require it dropped, and -- while the self-healing
-        // rerun is still gated -- require the two untouched panels still on a
-        // sentinel range set beforehand (the stale union was not applied). Then
-        // release the rerun. Gate coverage: a clean multi-panel setup batch must
-        // drop nothing (skips == 0); per-arrival dispatch would drop one.
-        // (The reuse contract itself is pinned by test_display_transitions.)
-        constexpr double kSentinelMin = -98765.0;
-        constexpr double kSentinelMax = -98764.0;
+        // form) and the single-flight dispatch gate. A panel re-rendered while a
+        // sync runs makes the sync's outcome stale for it. The invalidation here
+        // is a cache-path refresh (a contour-count change: refreshCachedSlice
+        // keeps every plane pointer and bumps the per-view render generation),
+        // so a guard keyed on plane identity would call the stale sync current
+        // -- exactly the regression the generation stamp exists for. Drive that
+        // path: gate a sync mid-flight, change the contour count (all three
+        // panels re-render from cache with the new count, at their local
+        // ranges), release the now-stale sync -- extracted at the OLD count --
+        // and require it dropped and the panels' contours untouched while the
+        // self-healing rerun is still gated; then release the rerun. Gate
+        // coverage: a clean multi-panel setup batch drops nothing (skips == 0),
+        // and a non-slice background request in flight must not hold a sync's
+        // dispatch (the gate is on slice work only, never the global count).
+        // Failure path: a worker that throws after being superseded is counted
+        // stale, not reported; one that throws while still current is.
+        constexpr int kSetupContours = 3;
+        constexpr int kChangedContours = 7;
+        static constexpr std::array<double, 3> kPositions{0.5, 0.5, 0.5};
         const std::filesystem::path path(argv[2]);
         auto* poll = new QTimer(&window);
         poll->setInterval(5);
         auto phase = std::make_shared<int>(0);
         auto attempts = std::make_shared<int>(0);
-        // Active panel's render generation just before the invalidating zoom, so
-        // phase 2 can wait for the (debounced) re-slice to actually rewrite the
-        // plane -- slicesInFlight is zero again right after scheduleSliceRequest.
-        auto zoomGen = std::make_shared<std::uint64_t>(0);
-        auto sentinelsHeld = std::make_shared<bool>(false);
+        // The active panel's render generation before the invalidating refresh,
+        // so phase 2 can wait for the (debounced) re-render to actually land.
+        auto refreshGen = std::make_shared<std::uint64_t>(0);
         // Reported-failure count before the two injected throws; the failure
         // phases assert on its delta (monotonic, unlike the status-bar text,
         // which clearMessage or a "Loading..." can overwrite between polls).
         auto baselineErrors = std::make_shared<int>(0);
+        // Distinct contour levels per panel: before the change, and as the
+        // refresh left them (the rerun must find them untouched).
+        using LevelSets = std::vector<std::vector<double>>;
+        auto before = std::make_shared<LevelSets>();
+        auto refreshed = std::make_shared<LevelSets>();
+        const auto levelSets = [&window] {
+            LevelSets sets;
+            for (const auto& probe : window.contourViewProbesForTest()) {
+                auto levels = probe.contourLevels;
+                std::sort(levels.begin(), levels.end());
+                levels.erase(std::unique(levels.begin(), levels.end()),
+                    levels.end());
+                sets.push_back(std::move(levels));
+            }
+            return sets;
+        };
         const auto finish = [&application, poll, &window](int code) {
             window.disarmVisibleSyncGateForTest();  // free any parked worker
             poll->stop();  // no stray timeout fires after we ask to exit
@@ -256,14 +276,16 @@ Outcome dispatchRange(Context& context)
         };
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
             &application,
-            [&window, &application, finish, poll, phase](bool success) {
+            [&window, &application, finish, poll, phase, before, levelSets](
+                bool success) {
                 if (!success) {
                     finish(1);
                     return;
                 }
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application, [&window, finish, poll, phase] {
+                    &application, [&window, finish, poll, phase, before,
+                                      levelSets] {
                         if (*phase != 0) {
                             return;
                         }
@@ -276,20 +298,20 @@ Outcome dispatchRange(Context& context)
                             finish(7);
                             return;
                         }
-                        // Sentinel the panel ranges, then gate a sync so it
-                        // cannot land before we invalidate a panel below.
-                        window.setViewDisplayRangesForTest(
-                            kSentinelMin, kSentinelMax);
+                        *before = levelSets();
+                        // Gate a sync so it cannot land before we invalidate
+                        // the panels below.
                         window.armVisibleSyncGateForTest();
                         window.requestVisibleSyncForTest();
                         poll->start();
                     });
                 // Into 3-D Visible + contours; its re-slice settles into a sync.
-                window.configureContourSyncForTest(3, false, {0.5, 0.5, 0.5});
+                window.configureContourSyncForTest(
+                    kSetupContours, false, kPositions);
             });
         QObject::connect(poll, &QTimer::timeout, &application,
-            [&window, finish, phase, attempts, zoomGen, sentinelsHeld,
-                baselineErrors] {
+            [&window, finish, phase, attempts, refreshGen, before, refreshed,
+                levelSets, baselineErrors] {
                 if (++*attempts > 3000) {
                     finish(3);
                     return;
@@ -299,22 +321,41 @@ Outcome dispatchRange(Context& context)
                         return;  // wait for the gated sync to reach the gate
                     }
                     *phase = 2;
-                    // Re-slice one panel for real while the sync is parked; its
-                    // plane rewrite (via showSlice) makes the parked sync's
-                    // snapshot stale for that panel.
-                    *zoomGen = window.activeViewRenderGenerationForTest();
-                    window.zoomActiveViewForTest();
+                    // Re-render every panel from cache while the sync is
+                    // parked: same slice spec, new contour count. The planes
+                    // keep their pointers; only the render generations move,
+                    // which is what makes the parked sync's outcome stale.
+                    *refreshGen = window.activeViewRenderGenerationForTest();
+                    window.configureContourSyncForTest(
+                        kChangedContours, false, kPositions);
                     return;
                 }
                 if (*phase == 2) {
-                    if (window.activeViewRenderGenerationForTest() <= *zoomGen) {
-                        return;  // wait for the debounced re-slice to rewrite
+                    if (window.activeViewRenderGenerationForTest() <= *refreshGen
+                        || window.sliceRequestPendingForTest()
+                        || window.slicesInFlightForTest() != 0) {
+                        return;  // wait for the debounced re-render of all panels
+                    }
+                    *refreshed = levelSets();
+                    // The change must be observable, else the check below is
+                    // vacuous: every panel's level set differs from before.
+                    if (refreshed->size() != 3 || *refreshed == *before) {
+                        finish(9);
+                        return;
                     }
                     *phase = 3;
                     window.releaseVisibleSyncGateForTest();  // let the stale sync land
                     return;
                 }
                 if (*phase == 3) {
+                    // Nothing may touch the panels until we release the rerun:
+                    // every panel must still show the refresh's contours. The
+                    // stale outcome, extracted at the old count, is the only
+                    // thing that could change them -- by being applied.
+                    if (levelSets() != *refreshed) {
+                        finish(6);
+                        return;
+                    }
                     // The stale sync must drop the whole outcome, then re-dispatch
                     // a rerun that parks at the gate. Wait for both.
                     if (window.visibleSyncStaleSkipsForTest() == 0
@@ -325,64 +366,80 @@ Outcome dispatchRange(Context& context)
                         finish(5);  // exactly one drop expected; more is a bug
                         return;
                     }
-                    // The rerun is still gated. The two panels the re-slice never
-                    // touched must still hold the sentinel range -- the stale
-                    // union was dropped, not applied to them.
-                    const auto probes = window.contourViewProbesForTest();
-                    int atSentinel = 0;
-                    for (const auto& probe : probes) {
-                        if (probe.displayMinimum == kSentinelMin
-                            && probe.displayMaximum == kSentinelMax) {
-                            ++atSentinel;
-                        }
-                    }
-                    *sentinelsHeld = (atSentinel == 2);
                     *phase = 4;
                     window.releaseVisibleSyncGateForTest();  // let the rerun apply
                     return;
                 }
                 if (*phase == 4) {
-                    if (!*sentinelsHeld) {
-                        finish(6);
-                        return;
-                    }
                     if (window.visibleSyncWorkerWaitingForTest()
                         || window.slicesInFlightForTest() != 0
                         || window.sliceRequestPendingForTest()) {
                         return;  // the rerun is still applying
                     }
-                    // Failure path, superseded: park a sync that will throw,
-                    // invalidate a panel under it, release it. Its throw must
-                    // be counted stale, not reported -- the panels it rendered
-                    // are gone. (The self-healing rerun then parks.)
-                    *baselineErrors = window.backgroundErrorCountForTest();
-                    *zoomGen = window.activeViewRenderGenerationForTest();
+                    // Gate coverage: with a non-slice background request
+                    // outstanding (a particle load, say), a requested sync
+                    // must still dispatch -- it gates on slice work alone.
+                    window.adjustActiveRequestsForTest(1);
                     window.armVisibleSyncGateForTest();
-                    window.failNextVisibleSyncForTest();
                     window.requestVisibleSyncForTest();
                     *phase = 5;
+                    *attempts = 0;
                     return;
                 }
                 if (*phase == 5) {
                     if (!window.visibleSyncWorkerWaitingForTest()) {
+                        if (*attempts > 400) {
+                            finish(8);  // a foreign request held the sync
+                        }
                         return;
                     }
-                    window.zoomActiveViewForTest();
+                    window.adjustActiveRequestsForTest(-1);
+                    window.releaseVisibleSyncGateForTest();
                     *phase = 6;
                     return;
                 }
                 if (*phase == 6) {
-                    if (window.activeViewRenderGenerationForTest() <= *zoomGen) {
-                        return;  // wait for the re-slice to rewrite the plane
+                    if (window.visibleSyncWorkerWaitingForTest()
+                        || window.slicesInFlightForTest() != 0
+                        || window.sliceRequestPendingForTest()) {
+                        return;
                     }
-                    window.releaseVisibleSyncGateForTest();  // the throwing sync lands
+                    // Failure path, superseded: park a sync that will throw,
+                    // re-render the panels under it (cache path again), release
+                    // it. Its throw must be counted stale, not reported -- the
+                    // panels it rendered are gone. (The self-healing rerun then
+                    // parks.)
+                    *baselineErrors = window.backgroundErrorCountForTest();
+                    *refreshGen = window.activeViewRenderGenerationForTest();
+                    window.armVisibleSyncGateForTest();
+                    window.failNextVisibleSyncForTest();
+                    window.requestVisibleSyncForTest();
                     *phase = 7;
                     return;
                 }
                 if (*phase == 7) {
-                    // The rerun (armed by the re-slice arrival) parks next; it
-                    // is dispatched from the throwing sync's completion, so by
-                    // now that completion has decided whether to report.
+                    if (!window.visibleSyncWorkerWaitingForTest()) {
+                        return;
+                    }
+                    window.configureContourSyncForTest(
+                        kSetupContours, false, kPositions);
+                    *phase = 8;
+                    return;
+                }
+                if (*phase == 8) {
+                    if (window.activeViewRenderGenerationForTest() <= *refreshGen
+                        || window.sliceRequestPendingForTest()
+                        || window.slicesInFlightForTest() != 0) {
+                        return;  // wait for the re-render of all panels
+                    }
+                    window.releaseVisibleSyncGateForTest();  // the throwing sync lands
+                    *phase = 9;
+                    return;
+                }
+                if (*phase == 9) {
+                    // The rerun (armed by the re-render's arrival) parks next;
+                    // it is dispatched from the throwing sync's completion, so
+                    // by now that completion has decided whether to report.
                     if (!window.visibleSyncWorkerWaitingForTest()) {
                         return;
                     }
@@ -392,10 +449,10 @@ Outcome dispatchRange(Context& context)
                         return;
                     }
                     window.releaseVisibleSyncGateForTest();  // let the rerun apply
-                    *phase = 8;
+                    *phase = 10;
                     return;
                 }
-                if (*phase == 8) {
+                if (*phase == 10) {
                     if (window.visibleSyncWorkerWaitingForTest()
                         || window.slicesInFlightForTest() != 0
                         || window.sliceRequestPendingForTest()) {
@@ -406,18 +463,18 @@ Outcome dispatchRange(Context& context)
                     window.armVisibleSyncGateForTest();
                     window.failNextVisibleSyncForTest();
                     window.requestVisibleSyncForTest();
-                    *phase = 9;
+                    *phase = 11;
                     return;
                 }
-                if (*phase == 9) {
+                if (*phase == 11) {
                     if (!window.visibleSyncWorkerWaitingForTest()) {
                         return;
                     }
                     window.releaseVisibleSyncGateForTest();
-                    *phase = 10;
+                    *phase = 12;
                     return;
                 }
-                if (*phase == 10) {
+                if (*phase == 12) {
                     const auto reported = window.backgroundErrorCountForTest()
                         - *baselineErrors;
                     if (reported == 0) {

@@ -723,7 +723,8 @@ private:
     void syncVisibleRanges();
     // Panel slices currently on a worker (summed PlaneViewState::pendingRequests);
     // the visible-range sync defers dispatch until this is zero. Panel work only
-    // -- excludes particle/line-plot/prefetch requests tracked by m_activeRequests.
+    // -- excludes particle/line-plot/prefetch requests, which the
+    // DiagnosticsModel's active count tracks.
     [[nodiscard]] int slicesInFlight() const;
 
     // Slice requests: the debounce timer coalesces into per-view requests.
@@ -904,8 +905,8 @@ private:
 #ifdef AMREXPLORER_QT_TEST_ACCESS
     // Test-only: superseded visible-range sync outcomes dropped by the
     // rerun guard. Sole writer is that drop, so the overlapping-sync test can
-    // assert an exact count. m_staleResults carries the same event for the
-    // user-facing diagnostics panel.
+    // assert an exact count. The DiagnosticsModel's stale count carries the
+    // same event for the user-facing diagnostics panel.
     std::uint64_t m_visibleSyncStaleSkips = 0;
 #endif
     QTreeWidget* m_metadataTree = nullptr;

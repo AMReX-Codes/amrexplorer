@@ -985,9 +985,9 @@ void MainWindow::syncVisibleRanges()
     // against fully-current panels. Running against a settled batch is what lets
     // the completion apply all-or-nothing (a coherent shared range/log/color bar
     // across all three panels) instead of a stale subset. Gate on panel slice
-    // work only (slicesInFlight), never the global m_activeRequests -- particle
-    // loads, line plots, and sequence prefetch bump that, and would wedge the
-    // sync shut for the whole operation.
+    // work only (slicesInFlight), never the DiagnosticsModel's global active
+    // count -- particle loads, line plots, and sequence prefetch bump that,
+    // and would wedge the sync shut for the whole operation.
     if (slicesInFlight() != 0 || m_visibleSyncInFlight) {
         m_visibleSyncRerun = true;
         return;
@@ -1171,7 +1171,8 @@ void MainWindow::syncVisibleRanges()
                 // which recomputes the union over the current planes.
 #ifdef AMREXPLORER_QT_TEST_ACCESS
                 // Sole writer of this test-only tally; the staleness smoke test
-                // asserts its exact delta. m_staleResults is not touched.
+                // asserts its exact delta. The DiagnosticsModel's stale count
+                // is not touched.
                 ++m_visibleSyncStaleSkips;
 #endif
             } else if (generation != m_generation) {
@@ -1197,8 +1198,8 @@ void MainWindow::syncVisibleRanges()
             }
         });
     // Commit to "in flight" only now that the throwing allocations above
-    // succeeded; the sync joins the interactive batch (++m_activeRequests) so
-    // interactiveSlicesSettled waits for it. Guard the launch: if
+    // succeeded; the sync joins the interactive batch (adjustActivity(1) on
+    // the DiagnosticsModel) so interactiveSlicesSettled waits for it. Guard the launch: if
     // QtConcurrent::run throws (bad_alloc), un-latch so a later arrival can
     // retry, drop the watcher, and swallow -- the failure must not escape this
     // slot or wedge the sync shut for the session.

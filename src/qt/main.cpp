@@ -420,6 +420,9 @@ int main(int argc, char* argv[])
     amrvis::qt::smoke::Context smoke{application, window, argc, argv, {}, {}};
     const auto smokeOutcome = amrvis::qt::smoke::dispatch(smoke);
     if (smokeOutcome.exitCode) {
+        // No scenario starts its server before exiting this way; the call is
+        // for the header's promise, not a known leak.
+        amrvis::qt::smoke::shutdown(smoke);
         return *smokeOutcome.exitCode;
     }
     armedBySmokeHarness = smokeOutcome.handled;

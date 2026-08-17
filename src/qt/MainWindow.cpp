@@ -331,10 +331,11 @@ MainWindow::MainWindow(QWidget* parent)
         FabNavigator::Hooks{
             [this] { return m_generation; },
             [this] { return m_closing; },
+            // Unguarded on purpose: buildFrameSpec reads the controls, not
+            // the dataset, and the MultiFab-return record must capture them
+            // even when a click lands mid-reload with no dataset installed;
+            // gating here degraded that record to defaults.
             [this]() -> std::optional<FrameSliceSpec> {
-                if (!m_dataset) {
-                    return std::nullopt;
-                }
                 return buildFrameSpec();
             },
             [this](const std::filesystem::path& path,

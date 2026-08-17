@@ -354,11 +354,13 @@ int main(int argc, char** argv)
                 && dock->selectedOrdinal() == std::optional<std::size_t>{0}
                 && host.opened.size() == 1,
             "a failed record read did not roll the dock back");
-        // Two clicks in flight: the first is superseded (stale, restores
-        // nothing), the second fails and returns to what was displayed
-        // before either -- record 0 -- not to record 1.
+        // Three clicks on record 1 in flight: the first two are superseded
+        // (stale, restore nothing), the last fails and returns to what was
+        // displayed before any of them -- record 0. Identical clicks matter:
+        // the later ones must inherit the pending rollback rather than
+        // snapshot the dock, which by then already highlights record 1.
         navigator.viewEntry(1);
-        navigator.viewEntry(0);
+        navigator.viewEntry(1);
         navigator.viewEntry(1);
         waitFor(application, [&] { return host.activityEvents == 10; },
             "the overlapping record reads did not finish");

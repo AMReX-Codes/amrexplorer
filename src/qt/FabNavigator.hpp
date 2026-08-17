@@ -50,8 +50,11 @@ public:
         std::function<std::uint64_t()> datasetGeneration;
         // True once application shutdown began; late reads are dropped.
         std::function<bool()> isShuttingDown;
-        // The current frame spec while a dataset is open (the host's
-        // buildFrameSpec), or nullopt.
+        // The frame spec the host's controls currently describe (its
+        // buildFrameSpec), or nullopt when the host cannot say. It is read
+        // both for a selected FAB's initial spec and for the MultiFab return
+        // record, so it must answer even while a reload has no dataset
+        // installed -- the controls still do.
         std::function<std::optional<FrameSliceSpec>()> currentSpec;
         // Opens prepared metadata as the displayed dataset: (path, metadata,
         // dataRoot, preserveSelector, initialSpec) -- the host's

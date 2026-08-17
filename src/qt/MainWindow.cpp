@@ -12,7 +12,7 @@ extern const char* const kVersion =
 #ifdef AMREXPLORER_VERSION
     AMREXPLORER_VERSION
 #else
-    "0.2.0-dev"
+    "0.3.0-dev"
 #endif
     ;
 

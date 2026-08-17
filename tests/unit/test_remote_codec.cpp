@@ -130,6 +130,8 @@ int main()
         PayloadKind::PingRequest,
         PayloadKind::PongResponse,
         PayloadKind::ErrorResponse,
+        PayloadKind::ListDirectoryRequest,
+        PayloadKind::DirectoryListing,
     };
     for (const auto kind : payloadKinds) {
         codec::NativeEnvelope native;
@@ -138,6 +140,36 @@ int main()
         require(codec::inspect(native).payload == kind,
             "payload enum value did not round-trip");
     }
+
+    RemoteDirectoryListing listing{"/scratch/run", "/scratch",
+        {{"plt00010", "/scratch/run/plt00010", true},
+            {"inputs", "/scratch/run/inputs", false}},
+        true};
+    const auto decodedListing = codec::fromWire(codec::toWire(listing));
+    require(decodedListing.path == listing.path
+            && decodedListing.parentPath == listing.parentPath
+            && decodedListing.truncated && decodedListing.entries.size() == 2
+            && decodedListing.entries.front().isPlotfile
+            && !decodedListing.entries.back().isPlotfile
+            && decodedListing.entries.front().path
+                == listing.entries.front().path,
+        "directory listing did not round-trip");
+    // A backslash is a legal filename character on the Linux servers this
+    // client browses; the decode must not reject the whole listing for it.
+    RemoteDirectoryListing backslashListing{"/scratch/run", "/scratch",
+        {{"run\\final", "/scratch/run/run\\final", true}}, false};
+    require(codec::fromWire(codec::toWire(backslashListing)).entries.size()
+            == 1,
+        "backslash directory entry did not round-trip");
+    bool rejectedSlashEntry = false;
+    try {
+        RemoteDirectoryListing bad{"/scratch", "/",
+            {{"a/b", "/scratch/a/b", false}}, false};
+        static_cast<void>(codec::fromWire(codec::toWire(bad)));
+    } catch (const std::invalid_argument&) {
+        rejectedSlashEntry = true;
+    }
+    require(rejectedSlashEntry, "slash in a directory entry name was accepted");
 
     const std::array errorCodes{
         ErrorCode::UnsupportedProtocol,

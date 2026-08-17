@@ -104,7 +104,8 @@ rasterize the current view.
   let other local users on the server host connect through the owning user's
   account. It is not user authentication or transport encryption; SSH still
   provides those.)
-- Remote filesystem browsing.
+- Remote filesystem browsing. (Added in protocol 1.1, 2026-08: a bounded,
+  directories-only listing -- see §5.4 and §9.2.)
 - Server-side rendering, palettes, contours, glyph generation, or image
   export for protocol 1.0.
 - Shared datasets or cache state between separate client connections.
@@ -332,6 +333,7 @@ The production schema will cover:
 | `ClearCacheRequest` | `CacheState` | Clear unpinned blocks |
 | `CancelRequest` | `CancelAcknowledged` | Request cancellation by request ID |
 | `PingRequest` | `PongResponse` | Explicit health check |
+| `ListDirectoryRequest` (1.1) | `DirectoryListing` | List a server directory's subdirectories, marking plotfiles |
 | any request | `ErrorResponse` | Typed terminal failure |
 
 Every ordinary request has exactly one terminal response with the same
@@ -628,9 +630,13 @@ integration tests, the Qt smoke harness, and `amrexplorer-render-equivalence`.
 
 - **File > Open Remote Plotfile...** / **File > Open Remote Plotfile
   Sequence...** -- one dialog each: ssh destination, server executable, and
-  server-visible path(s) (protocol 1.0 does not browse the server
-  filesystem). Unchanged connection fields reuse the live session; a changed
-  destination starts a new one.
+  server-visible path(s). Unchanged connection fields reuse the live session;
+  a changed destination starts a new one. **Browse...** starts or reuses the
+  session and then opens a directory browser over it (protocol 1.1
+  `ListDirectoryRequest`: subdirectories only, plotfiles marked, at most 4096
+  entries, path resolution identical to dataset opens). A sequence picked
+  there plays in name order. Against a 1.0 server the browser reports that
+  browsing is unsupported; typed paths still work.
 - a session-status entry in diagnostics.
 
 Switching back to a local open remains supported without restarting the

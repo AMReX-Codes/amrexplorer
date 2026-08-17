@@ -29,6 +29,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -113,9 +114,15 @@ public:
     // Runs amrexplorer-server on the named OpenSSH destination with the wire
     // protocol over ssh's stdio, installs the connection once its handshake
     // completes, and opens the supplied server-visible paths. An empty path
-    // list only establishes the session.
+    // list only establishes the session. `onReady` runs after the connection
+    // is installed and any paths are opened; the browser uses it.
     void startSshRemoteSession(std::string destination,
-        std::string serverExecutable, std::vector<std::string> remotePaths);
+        std::string serverExecutable, std::vector<std::string> remotePaths,
+        std::function<void()> onReady = {});
+    // Browses the live remote session's filesystem and opens the plotfile
+    // (or plotfiles, when `sequence`) picked there. Starts at the directory
+    // last browsed on this destination, else the server's home.
+    void browseRemotePlotfiles(bool sequence);
     // Opens a plotfile sequence (the legacy "-a" file animation): frames are
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.

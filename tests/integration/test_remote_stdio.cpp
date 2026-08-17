@@ -10,6 +10,7 @@
 #include <amrexplorer/remote/Frame.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -146,6 +147,44 @@ void exerciseDataset(amrvis::remote::Connection& connection,
                 && what.find("/~nobody-such-user") == std::string::npos,
             ("server rewrote a ~user path: " + what).c_str());
     }
+    // Directory browsing resolves paths the same way: "" and "~/" are home,
+    // where the fixture plotfile is one entry, flagged as a plotfile; the
+    // plotfile's own listing shows Level_0 as a plain directory.
+    const auto home = std::filesystem::path(datasetPath).parent_path();
+    const auto fixtureName
+        = std::filesystem::path(datasetPath).filename().string();
+    const auto atHome = connection.listDirectory("");
+    require(atHome.path == home.string(),
+        "empty browse path did not resolve to the server's home");
+    require(connection.listDirectory("~/").path == atHome.path,
+        "tilde browse path did not resolve to the server's home");
+    const auto fixtureEntry = std::find_if(atHome.entries.begin(),
+        atHome.entries.end(),
+        [&](const auto& entry) { return entry.name == fixtureName; });
+    require(fixtureEntry != atHome.entries.end() && fixtureEntry->isPlotfile
+            && fixtureEntry->path == datasetPath,
+        "home listing did not flag the fixture plotfile");
+    require(std::is_sorted(atHome.entries.begin(), atHome.entries.end(),
+                [](const auto& left, const auto& right) {
+                    return left.name < right.name;
+                }),
+        "directory listing is not sorted by name");
+    const auto inPlotfile = connection.listDirectory(fixtureName);
+    require(inPlotfile.path == datasetPath
+            && inPlotfile.parentPath == home.string(),
+        "relative browse path did not anchor at home");
+    require(std::any_of(inPlotfile.entries.begin(), inPlotfile.entries.end(),
+                [](const auto& entry) {
+                    return entry.name == "Level_0" && !entry.isPlotfile;
+                }),
+        "plotfile listing did not show Level_0 as a plain directory");
+    bool rejectedFile = false;
+    try {
+        static_cast<void>(connection.listDirectory(datasetPath + "/Header"));
+    } catch (const std::exception&) {
+        rejectedFile = true;
+    }
+    require(rejectedFile, "listing a regular file did not fail");
     const auto opened
         = connection.openDataset(datasetPath, 16ULL * 1024ULL * 1024ULL);
     require(opened.catalog.dimension == 2,

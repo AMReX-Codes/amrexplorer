@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace amrvis::remote::codec {
@@ -60,6 +62,17 @@ Bytes encode(std::uint64_t requestId, Payload payload,
 [[nodiscard]] fb::OpenDatasetRequestT toWire(const OpenDatasetData& value);
 [[nodiscard]] OpenDatasetData fromWire(
     const fb::OpenDatasetRequestT& value);
+// A directory entry name a listing may carry: one path component, so
+// non-empty, not "." or "..", and without '/' or NUL. A backslash is a legal
+// filename character on the Linux servers the client browses, so it passes.
+// Shared with the fuzz harness, which mirrors the check.
+[[nodiscard]] bool isValidDirectoryEntryName(std::string_view name) noexcept;
+[[nodiscard]] fb::ListDirectoryRequestT toWireDirectoryRequest(
+    const std::string& path);
+[[nodiscard]] fb::DirectoryListingT toWire(
+    const RemoteDirectoryListing& value);
+[[nodiscard]] RemoteDirectoryListing fromWire(
+    const fb::DirectoryListingT& value);
 [[nodiscard]] fb::DatasetOpenedT toWire(const OpenedDataset& value);
 [[nodiscard]] OpenedDataset fromWire(const fb::DatasetOpenedT& value);
 

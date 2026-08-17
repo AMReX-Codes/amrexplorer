@@ -178,6 +178,36 @@ void checkConverted(
     }
 }
 
+void checkConverted(const fb::DirectoryListingT& wire,
+    const amrvis::remote::RemoteDirectoryListing& result)
+{
+    if (result.path != wire.path || result.parentPath != wire.parent_path
+        || result.truncated != wire.truncated
+        || result.entries.size() != wire.entries.size()
+        || result.entries.size() > amrvis::remote::maximumDirectoryEntries) {
+        fail("DirectoryListing converter did not carry the listing over");
+    }
+    for (std::size_t index = 0; index < result.entries.size(); ++index) {
+        const auto& entry = result.entries[index];
+        const auto& wireEntry = *wire.entries[index];
+        if (entry.name != wireEntry.name || entry.path != wireEntry.path
+            || entry.isPlotfile != wireEntry.is_plotfile) {
+            fail("DirectoryListing converter did not carry an entry over");
+        }
+        // The converter's own predicate, so its removal from fromWire shows
+        // here, and the properties spelled out, so its weakening does too:
+        // one path component -- non-empty, not "." or "..", no '/', no NUL
+        // -- with a non-empty path.
+        if (!codec::isValidDirectoryEntryName(entry.name) || entry.name.empty()
+            || entry.name == "." || entry.name == ".."
+            || entry.name.find('/') != std::string::npos
+            || entry.name.find(char{}) != std::string::npos
+            || entry.path.empty()) {
+            fail("DirectoryListing converter accepted an invalid entry");
+        }
+    }
+}
+
 void checkConverted(
     const fb::DatasetPageRequestT& wire, const amrvis::DatasetPageRequest& result)
 {
@@ -341,7 +371,11 @@ void exerciseFromWire(const codec::NativeEnvelope& envelope)
     case fb::Payload::ErrorResponse:
         convert(envelope.payload.AsErrorResponse());
         break;
+    case fb::Payload::DirectoryListing:
+        convert(envelope.payload.AsDirectoryListing());
+        break;
     case fb::Payload::NONE:
+    case fb::Payload::ListDirectoryRequest:
     case fb::Payload::CloseDatasetRequest:
     case fb::Payload::DatasetClosed:
     case fb::Payload::ClearCacheRequest:
@@ -601,6 +635,24 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         error.code = fb::ErrorCode::InvalidRequest;
         error.message = "boom";
         add(std::move(error));
+    }
+    {
+        fb::DirectoryListingT listing;
+        listing.path = "/scratch/run";
+        listing.parent_path = "/scratch";
+        // Non-default, so the flag has a byte in the buffer for the
+        // corruption sweep to reach.
+        listing.truncated = true;
+        auto plotfile = std::make_unique<fb::DirectoryEntryT>();
+        plotfile->name = "plt00010";
+        plotfile->path = "/scratch/run/plt00010";
+        plotfile->is_plotfile = true;
+        listing.entries.push_back(std::move(plotfile));
+        auto directory = std::make_unique<fb::DirectoryEntryT>();
+        directory->name = "inputs";
+        directory->path = "/scratch/run/inputs";
+        listing.entries.push_back(std::move(directory));
+        add(std::move(listing));
     }
     return seeds;
 }

@@ -9,6 +9,7 @@
 #include <amrexplorer/io/ParticleReader.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -17,7 +18,7 @@
 namespace amrvis::remote {
 
 inline constexpr std::uint16_t protocolMajor = 1;
-inline constexpr std::uint16_t protocolMinorVersion = 0;
+inline constexpr std::uint16_t protocolMinorVersion = 1;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,
@@ -44,7 +45,10 @@ enum class PayloadKind : std::uint8_t {
     CancelAcknowledged = 21,
     PingRequest = 22,
     PongResponse = 23,
-    ErrorResponse = 24
+    ErrorResponse = 24,
+    // Protocol 1.1: directory browsing.
+    ListDirectoryRequest = 25,
+    DirectoryListing = 26
 };
 
 enum class ErrorCode : std::uint16_t {
@@ -92,6 +96,35 @@ struct HelloResponseData {
 struct OpenDatasetData {
     std::string path;
     std::uint64_t cacheBudgetBytes = 0;
+};
+
+// One subdirectory of a listed directory. Only directories are listed:
+// plotfiles are directories, and files are not navigable. `path` is the
+// server-side absolute path of the entry.
+struct RemoteDirectoryEntry {
+    std::string name;
+    std::string path;
+    bool isPlotfile = false;
+};
+
+// The most subdirectories one DirectoryListing carries: the first this many
+// in name order, with `truncated` set when more exist. A bound both sides
+// enforce, so a listing cannot grow past what a dialog can show. It is part
+// of protocol 1.1: a 1.1 client rejects a larger listing, so it cannot simply
+// be raised -- a larger cap needs a new minor version and a server that sends
+// at most this many to a peer that negotiated 1.1 (nothing does that yet).
+inline constexpr std::size_t maximumDirectoryEntries = 4096;
+
+// A directory as the server sees it, with `path` resolved and normalized the
+// same way dataset paths are (see resolveDatasetPath in Server.cpp). At the
+// root `parentPath` equals `path`. `truncated` is set when the listing was
+// cut at maximumDirectoryEntries; the entries present are the first ones in
+// name order.
+struct RemoteDirectoryListing {
+    std::string path;
+    std::string parentPath;
+    std::vector<RemoteDirectoryEntry> entries;
+    bool truncated = false;
 };
 
 struct OpenedDataset {

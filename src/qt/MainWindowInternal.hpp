@@ -19,6 +19,7 @@
 #include "LinePlotRequest.hpp"
 #include "LinePlotWindow.hpp"
 #include "PlaneMapping.hpp"
+#include "RemoteFileDialog.hpp"
 #include "ScientificDoubleSpinBox.hpp"
 #include "SshRemoteSession.hpp"
 #include "SetContoursDialog.hpp"

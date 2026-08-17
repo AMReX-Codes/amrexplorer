@@ -9,7 +9,9 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace amrvis::remote::codec {
@@ -44,6 +46,8 @@ AMREXPLORER_ASSERT_PAYLOAD_VALUE(CancelAcknowledged, CancelAcknowledged);
 AMREXPLORER_ASSERT_PAYLOAD_VALUE(PingRequest, PingRequest);
 AMREXPLORER_ASSERT_PAYLOAD_VALUE(PongResponse, PongResponse);
 AMREXPLORER_ASSERT_PAYLOAD_VALUE(ErrorResponse, ErrorResponse);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(ListDirectoryRequest, ListDirectoryRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(DirectoryListing, DirectoryListing);
 
 #undef AMREXPLORER_ASSERT_PAYLOAD_VALUE
 
@@ -189,7 +193,7 @@ ErrorCode fromWireError(fb::ErrorCode value)
 PayloadKind payloadKind(fb::Payload value)
 {
     const auto raw = static_cast<std::uint8_t>(value);
-    if (raw > static_cast<std::uint8_t>(PayloadKind::ErrorResponse)) {
+    if (raw > static_cast<std::uint8_t>(PayloadKind::DirectoryListing)) {
         throw std::invalid_argument("unknown wire payload kind");
     }
     return static_cast<PayloadKind>(raw);
@@ -551,6 +555,62 @@ HelloResponseData fromWire(const fb::HelloResponseT& value)
     result.workerCount = value.worker_count;
     result.capabilities = value.capabilities;
     return result;
+}
+
+bool isValidDirectoryEntryName(std::string_view name) noexcept
+{
+    return !name.empty() && name != "." && name != ".."
+        && name.find('/') == std::string_view::npos
+        && name.find(char{}) == std::string_view::npos;
+}
+
+fb::ListDirectoryRequestT toWireDirectoryRequest(const std::string& path)
+{
+    fb::ListDirectoryRequestT wire;
+    wire.path = path;
+    return wire;
+}
+
+fb::DirectoryListingT toWire(const RemoteDirectoryListing& value)
+{
+    fb::DirectoryListingT wire;
+    wire.path = value.path;
+    wire.parent_path = value.parentPath;
+    wire.truncated = value.truncated;
+    wire.entries.reserve(value.entries.size());
+    for (const auto& entry : value.entries) {
+        auto converted = std::make_unique<fb::DirectoryEntryT>();
+        converted->name = entry.name;
+        converted->path = entry.path;
+        converted->is_plotfile = entry.isPlotfile;
+        wire.entries.push_back(std::move(converted));
+    }
+    return wire;
+}
+
+RemoteDirectoryListing fromWire(const fb::DirectoryListingT& value)
+{
+    if (value.entries.size() > maximumDirectoryEntries) {
+        throw std::invalid_argument("directory listing exceeds the entry cap");
+    }
+    if (value.path.empty() || value.parent_path.empty()) {
+        throw std::invalid_argument("directory listing names no directory");
+    }
+    RemoteDirectoryListing listing;
+    listing.path = value.path;
+    listing.parentPath = value.parent_path;
+    listing.truncated = value.truncated;
+    listing.entries.reserve(value.entries.size());
+    for (const auto& entry : value.entries) {
+        if (entry == nullptr || !isValidDirectoryEntryName(entry->name)
+            || entry->path.empty()) {
+            throw std::invalid_argument(
+                "directory listing contains an invalid entry");
+        }
+        listing.entries.push_back(
+            {entry->name, entry->path, entry->is_plotfile});
+    }
+    return listing;
 }
 
 fb::OpenDatasetRequestT toWire(const OpenDatasetData& value)

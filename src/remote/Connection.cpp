@@ -249,6 +249,28 @@ public:
         return opened;
     }
 
+    RemoteDirectoryListing listDirectory(
+        const std::string& path, StopToken cancellation)
+    {
+        if (m_selectedMinorVersion < 1) {
+            throw std::runtime_error(
+                "the remote server predates directory browsing (protocol "
+                "1.1); install a current amrexplorer-server or enter the "
+                "path directly");
+        }
+        // Indefinite: a large directory on a slow filesystem can take longer
+        // than the request timeout; the caller's token still cancels it.
+        const auto response = transact(codec::toWireDirectoryRequest(path),
+            PayloadKind::DirectoryListing, cancellation,
+            ResponseWait::Indefinite);
+        const auto* payload = response->payload.AsDirectoryListing();
+        if (payload == nullptr) {
+            throw std::runtime_error(
+                "server omitted directory-listing payload");
+        }
+        return codec::fromWire(*payload);
+    }
+
     void closeDataset(DatasetId dataset, StopToken cancellation)
     {
         codec::fb::CloseDatasetRequestT request;
@@ -694,6 +716,12 @@ OpenedDataset Connection::openDataset(const std::string& path,
     std::uint64_t cacheBudgetBytes, StopToken cancellation)
 {
     return m_impl->openDataset(path, cacheBudgetBytes, cancellation);
+}
+
+RemoteDirectoryListing Connection::listDirectory(
+    const std::string& path, StopToken cancellation)
+{
+    return m_impl->listDirectory(path, cancellation);
 }
 
 void Connection::closeDataset(DatasetId dataset, StopToken cancellation)

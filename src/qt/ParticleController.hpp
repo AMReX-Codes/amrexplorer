@@ -106,7 +106,9 @@ public:
     void configureForDataset(bool preserveSelection);
     void setActionEnabled(bool enabled);
 
-    // Installs samples a frame load produced (the host owns that load).
+    // Installs samples a frame load produced (the host owns that load), or
+    // drops them at a dataset teardown. Neither emits overlaysChanged: the
+    // host redraws when its own view state is ready.
     void setSamples(std::vector<ParticleSample> samples);
     void clearSamples();
     // Reloads the samples for the current selection on the pool: cancels any

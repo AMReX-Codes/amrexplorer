@@ -178,14 +178,14 @@ void ParticleController::setActionEnabled(bool enabled)
 
 void ParticleController::setSamples(std::vector<ParticleSample> samples)
 {
+    // Silent: the host installs a frame's samples before it has finished
+    // switching views, and redraws the overlays itself once it has.
     m_samples = std::move(samples);
-    emit overlaysChanged();
 }
 
 void ParticleController::clearSamples()
 {
     m_samples.clear();
-    emit overlaysChanged();
 }
 
 void ParticleController::setLoadingUi(bool loading)
@@ -429,7 +429,9 @@ void ParticleController::showDialog(QWidget* parent)
             | QDialogButtonBox::Apply | QDialogButtonBox::Cancel,
         dialog);
     buttons->setObjectName(QStringLiteral("particlesDialogButtons"));
-    connect(buttons, &QDialogButtonBox::clicked, dialog,
+    // Context is this controller: the connection cannot outlive the object
+    // the lambda acts on, and it goes with the dialog's buttons anyway.
+    connect(buttons, &QDialogButtonBox::clicked, this,
         [this, dialog, buttons, speciesControls, fraction, seed, pointSize](
             QAbstractButton* button) {
             const auto role = buttons->buttonRole(button);

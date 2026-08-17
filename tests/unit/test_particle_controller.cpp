@@ -265,8 +265,8 @@ int main(int argc, char** argv)
     // redraws. setColor redraws. clearSelection/resetSettings/restoreSelection
     // shape the settings as the dataset transitions need.
     {
-        ParticleController controller(hooks());
         Observed observed;
+        ParticleController controller(hooks());
         observe(controller, observed);
         controller.applySelection({"ions"}, 0.5, 4, 7);
         require(observed.selection == 1 && observed.overlays == 0,
@@ -332,6 +332,7 @@ int main(int argc, char** argv)
     // the bookkeeping balances, and the status reports the count.
     {
         current = session;
+        Observed observed;
         ParticleController controller(hooks());
         auto* action = controller.createAction(&application);
         QWidget host;
@@ -340,7 +341,6 @@ int main(int argc, char** argv)
         // status bar does) needs a shown ancestor.
         host.show();
         controller.configureForDataset(false);
-        Observed observed;
         observe(controller, observed);
         controller.restoreSelection({"electrons", "ions"}, 1.0, 0, true);
         controller.reload();
@@ -374,8 +374,8 @@ int main(int argc, char** argv)
     {
         current = session;
         session->failing = true;
-        ParticleController controller(hooks());
         Observed observed;
+        ParticleController controller(hooks());
         observe(controller, observed);
         controller.restoreSelection({"ions"}, 1.0, 0, true);
         controller.reload();
@@ -395,8 +395,8 @@ int main(int argc, char** argv)
     {
         current = session;
         session->delayMs = 200;
-        ParticleController controller(hooks());
         Observed observed;
+        ParticleController controller(hooks());
         observe(controller, observed);
         controller.restoreSelection({"ions"}, 1.0, 0, true);
         controller.reload();
@@ -432,10 +432,10 @@ int main(int argc, char** argv)
     // closeDialog closes it.
     {
         current = session;
+        Observed observed;
         ParticleController controller(hooks());
         controller.configureForDataset(false);
         controller.restoreSelection({"ions"}, 0.5, 3, true);
-        Observed observed;
         observe(controller, observed);
         QWidget host;
         controller.showDialog(&host);

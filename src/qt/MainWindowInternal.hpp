@@ -83,8 +83,8 @@
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QProcess>
-#include <QProgressDialog>
 #include <QProgressBar>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QRect>
 #include <QRegularExpressionValidator>

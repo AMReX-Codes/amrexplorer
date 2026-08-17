@@ -50,7 +50,6 @@ class QLineF;
 class QMenu;
 class QPlainTextEdit;
 class QProgressDialog;
-class QProgressBar;
 class QPushButton;
 class QStackedWidget;
 class QTimer;

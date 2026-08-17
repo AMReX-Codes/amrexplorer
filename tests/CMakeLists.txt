@@ -575,6 +575,48 @@ if(TARGET amrexplorer_qt)
         PRIVATE amrexplorer::warnings)
     add_test(NAME ssh_connect_arguments COMMAND test_ssh_connect_arguments)
 
+    # The Open Remote dialog as a widget: prefill, the executable following
+    # the destination, the path fields, Browse... versus Open.
+    add_executable(test_remote_open_dialog
+        unit/test_remote_open_dialog.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/RemoteOpenDialog.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/RemoteOpenDialog.hpp")
+    target_include_directories(test_remote_open_dialog
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_remote_open_dialog
+        PRIVATE amrexplorer::warnings Qt6::Widgets)
+    add_test(NAME remote_open_dialog
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_remote_open_dialog>")
+    set_tests_properties(remote_open_dialog PROPERTIES TIMEOUT 60)
+
+    # RemoteSessionController: install() over a loopback Server, start() over
+    # the stand-in ssh script running the real server, per-destination
+    # settings, diagnostics lines. Never opens a modal dialog.
+    add_executable(test_remote_session_controller
+        unit/test_remote_session_controller.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/RemoteSessionController.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/RemoteSessionController.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/RemoteOpenDialog.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/RemoteOpenDialog.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/RemoteFileDialog.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/RemoteFileDialog.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/SshRemoteSession.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/SshRemoteSession.hpp")
+    set_target_properties(test_remote_session_controller
+        PROPERTIES AUTOMOC ON)
+    target_include_directories(test_remote_session_controller
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_remote_session_controller
+        PRIVATE amrexplorer::remote amrexplorer::warnings
+            Qt6::Widgets Qt6::Concurrent)
+    add_test(NAME remote_session_controller
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_remote_session_controller>"
+            "$<TARGET_FILE:amrexplorer_server>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/fake_ssh.sh")
+    set_tests_properties(remote_session_controller PROPERTIES TIMEOUT 120)
+
     # The remote browser against a loopback Server: listing, navigation, an
     # unreadable path, and both selection modes. Offscreen; no display needed.
     add_executable(test_remote_file_dialog

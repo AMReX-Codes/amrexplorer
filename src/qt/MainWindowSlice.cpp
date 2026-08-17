@@ -1351,7 +1351,8 @@ void MainWindow::prepareSequence(std::size_t frameCount)
 void MainWindow::openRemoteSequence(
     const std::vector<std::string>& remotePaths)
 {
-    if (!m_remoteConnection) {
+    auto connection = m_remoteSession->connection();
+    if (!connection) {
         emit sequenceFrameFailed();
         reportBackgroundError(tr("Open a remote session first "
                                  "(File > Open Remote Plotfile...)."));
@@ -1380,8 +1381,8 @@ void MainWindow::openRemoteSequence(
     // multiplexes their requests. There is no reconnect: the connection lives
     // as long as the ssh session, and a lost session is reported to the user
     // rather than silently re-established.
-    auto loader = [connection = m_remoteConnection,
-                      generation = m_remoteConnectionGeneration](
+    auto loader = [connection = std::move(connection),
+                      generation = m_remoteSession->connectionGeneration()](
                       const std::filesystem::path& path, DatasetId,
                       const FrameSliceSpec& spec, StopToken cancellation) {
         if (!connection->connected()) {
@@ -1840,28 +1841,6 @@ void MainWindow::reportBackgroundError(const QString& message)
     }
     statusBar()->showMessage(message.section(QLatin1Char('\n'), 0, 0));
     m_diagnosticsModel->reportBackgroundError(message);
-}
-
-QString MainWindow::remoteDiagnosticsLines() const
-{
-    QString text;
-    if (m_remoteConnection) {
-        text += tr("\nremote session: %1 (%2)")
-                    .arg(m_remoteLabel,
-                        m_remoteConnection->connected() ? tr("connected")
-                                                        : tr("disconnected"));
-        if (auto remoteSession = std::dynamic_pointer_cast<
-                remote::RemoteDatasetSession>(m_dataset)) {
-            text += tr("\nremote path: %1")
-                        .arg(QString::fromStdString(
-                            remoteSession->remotePath()));
-        }
-    } else if (m_sshRemoteSession) {
-        text += tr("\nremote session: ssh %1 (starting)")
-                    .arg(QString::fromStdString(
-                        m_sshRemoteSession->destination()));
-    }
-    return text;
 }
 
 void MainWindow::updateDiagnostics()

@@ -8,6 +8,7 @@
 #include "MainWindow.hpp"
 #include "QtErrorText.hpp"
 #include "AnimationExporter.hpp"
+#include "AppSettings.hpp"
 #include "DiagnosticsModel.hpp"
 #include "FabNavigator.hpp"
 #include "PaletteController.hpp"
@@ -23,9 +24,8 @@
 #include "LinePlotRequest.hpp"
 #include "LinePlotWindow.hpp"
 #include "PlaneMapping.hpp"
-#include "RemoteFileDialog.hpp"
+#include "RemoteSessionController.hpp"
 #include "ScientificDoubleSpinBox.hpp"
-#include "SshRemoteSession.hpp"
 #include "SetContoursDialog.hpp"
 #include "Theme.hpp"
 #include "UserGuideDialog.hpp"
@@ -160,11 +160,6 @@ inline QImage displayImageFor(const ImageBuffer& image)
 #else
     return wrapped.mirrored(false, true).copy();
 #endif
-}
-
-inline QSettings makeSettings()
-{
-    return QSettings(QStringLiteral("amrex-codes"), QStringLiteral("amrexplorer"));
 }
 
 // An AMReX plotfile directory holds a Header file plus one Level_N

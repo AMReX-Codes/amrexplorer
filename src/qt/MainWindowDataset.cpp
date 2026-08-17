@@ -610,165 +610,27 @@ void MainWindow::openDataset(
 void MainWindow::useRemoteConnection(
     std::shared_ptr<remote::Connection> connection, QString label)
 {
-    m_remoteConnection = std::move(connection);
-    m_remoteLabel = std::move(label);
-    ++m_remoteConnectionGeneration;
-    updateDiagnostics();
-}
-
-bool MainWindow::hasRemoteConnection() const
-{
-    return m_remoteConnection && m_remoteConnection->connected();
-}
-
-QString MainWindow::remoteServerExecutableFor(const QString& destination)
-{
-    // An explicit executable path is a property of one machine, so nothing
-    // stored for another destination is consulted: a destination without its
-    // own entry gets the name every install puts on the remote PATH. (An
-    // earlier revision fell back to the executable last used anywhere, which
-    // let one machine's path break the destinations that worked by default.)
-    auto settings = makeSettings();
-    const auto forDestination
-        = settings
-              .value(QStringLiteral("remote/serverExecutables/%1")
-                      .arg(destination))
-              .toString()
-              .trimmed();
-    return forDestination.isEmpty() ? QStringLiteral("amrexplorer-server")
-                                    : forDestination;
+    m_remoteSession->install(std::move(connection), std::move(label));
 }
 
 void MainWindow::startSshRemoteSession(std::string destination,
-    std::string serverExecutable, std::vector<std::string> remotePaths,
-    std::function<void()> onReady)
+    std::string serverExecutable, std::vector<std::string> remotePaths)
 {
-    if (destination.empty() || destination.front() == '-'
-        || destination.find_first_of(" \t\r\n") != std::string::npos) {
-        reportBackgroundError(tr("Invalid SSH destination."));
-        return;
-    }
-    const auto destinationText = QString::fromStdString(destination);
-    if (serverExecutable.empty()) {
-        serverExecutable
-            = remoteServerExecutableFor(destinationText).toStdString();
-    }
-    {
-        // Remember this destination and its executable; the CLI teaches the
-        // dialog this way too. Per destination only -- see
-        // remoteServerExecutableFor.
-        auto settings = makeSettings();
-        settings.setValue(
-            QStringLiteral("remote/sshDestination"), destinationText);
-        settings.setValue(QStringLiteral("remote/serverExecutables/%1")
-                              .arg(destinationText),
-            QString::fromStdString(serverExecutable));
-    }
-    // A previous session's connection is closed with it; a dataset still open
-    // on it fails on its next request, and the new server gets fresh opens.
-    m_sshRemoteSession.reset();
-    m_remoteConnection.reset();
-    m_remoteLabel.clear();
-    m_sshRemoteSession = std::make_unique<SshRemoteSession>(this);
-    statusBar()->showMessage(tr("Starting remote session on %1...")
-            .arg(QString::fromStdString(destination)));
-    m_sshRemoteSession->start(destination, std::move(serverExecutable),
-        remote::ConnectionOptions{.clientName = "AMReXplorer Qt",
-            .softwareVersion = kVersion, .sessionToken = {}},
-        [this, destination, paths = std::move(remotePaths),
-            onReady = std::move(onReady)](
-            std::shared_ptr<remote::Connection> connection) {
-            if (m_closing) {
-                return;
-            }
-            const auto& server = connection->serverInfo();
-            useRemoteConnection(std::move(connection),
-                tr("ssh %1").arg(QString::fromStdString(destination)));
-            statusBar()->showMessage(
-                tr("Remote session on %1 is ready (%2 %3, %4 worker threads)")
-                    .arg(QString::fromStdString(destination),
-                        QString::fromStdString(server.serverName),
-                        QString::fromStdString(server.softwareVersion))
-                    .arg(server.workerCount));
-            if (paths.size() == 1) {
-                openRemoteDataset(paths.front());
-            } else if (paths.size() > 1) {
-                openRemoteSequence(paths);
-            }
-            if (onReady) {
-                onReady();
-            }
-        },
-        [this, destination](const QString& message) {
-            if (m_closing) {
-                return;
-            }
-            statusBar()->showMessage(tr("Could not start the remote session"));
-            reportBackgroundError(tr("Could not start the remote session on "
-                                     "%1: %2")
-                    .arg(QString::fromStdString(destination), message));
-            updateDiagnostics();
-        },
-        [this, destination](const QString& message) {
-            if (m_closing) {
-                return;
-            }
-            statusBar()->showMessage(tr("Remote session ended"));
-            reportBackgroundError(tr("The remote session on %1 ended: %2")
-                    .arg(QString::fromStdString(destination), message));
-            updateDiagnostics();
-        });
-    // After start(): the session reports its destination only from then on.
-    updateDiagnostics();
-}
-
-void MainWindow::browseRemotePlotfiles(bool sequence)
-{
-    if (!hasRemoteConnection()) {
-        reportBackgroundError(tr("Open a remote session first "
-                                 "(File > Open Remote Plotfile...)."));
-        return;
-    }
-    // The last directory browsed is remembered per destination: a path is a
-    // property of one machine, like the server executable.
-    const auto destination = m_sshRemoteSession
-        ? QString::fromStdString(m_sshRemoteSession->destination())
-        : m_remoteLabel;
-    const auto settingsKey
-        = QStringLiteral("remote/lastDirectories/%1").arg(destination);
-    RemoteFileDialog dialog(m_remoteConnection,
-        makeSettings().value(settingsKey).toString(),
-        sequence ? RemoteFileDialog::SelectionMode::PlotfileSequence
-                 : RemoteFileDialog::SelectionMode::SinglePlotfile,
-        this);
-    if (dialog.exec() != QDialog::Accepted) {
-        return;
-    }
-    const auto paths = dialog.selectedPaths();
-    if (paths.empty()) {
-        return;
-    }
-    if (!dialog.currentDirectory().isEmpty()) {
-        makeSettings().setValue(settingsKey, dialog.currentDirectory());
-    }
-    // One plotfile picked in the sequence browser is just that plotfile.
-    if (paths.size() > 1) {
-        openRemoteSequence(paths);
-    } else {
-        openRemoteDataset(paths.front());
-    }
+    m_remoteSession->start(std::move(destination), std::move(serverExecutable),
+        std::move(remotePaths));
 }
 
 void MainWindow::openRemoteDataset(std::string remotePath)
 {
-    if (!m_remoteConnection) {
+    auto connection = m_remoteSession->connection();
+    if (!connection) {
         reportBackgroundError(tr("Open a remote session first "
                                  "(File > Open Remote Plotfile...)."));
         return;
     }
     const auto displayPath = std::filesystem::path(remotePath);
     openDatasetImpl(displayPath, false, std::nullopt, {}, false,
-        std::nullopt, RemoteOpen{m_remoteConnection, std::move(remotePath)});
+        std::nullopt, RemoteOpen{std::move(connection), std::move(remotePath)});
 }
 
 void MainWindow::openDatasetImpl(const std::filesystem::path& path,

@@ -3,6 +3,7 @@ add_executable(amrexplorer_qt
     AnimationExporter.hpp
     AnimationPanel.cpp
     AnimationPanel.hpp
+    AppSettings.hpp
     CacheConfig.hpp
     ColorBarWidget.cpp
     ColorBarWidget.hpp
@@ -39,6 +40,10 @@ add_executable(amrexplorer_qt
     RemoteEndpoint.hpp
     RemoteFileDialog.cpp
     RemoteFileDialog.hpp
+    RemoteOpenDialog.cpp
+    RemoteOpenDialog.hpp
+    RemoteSessionController.cpp
+    RemoteSessionController.hpp
     ScientificDoubleSpinBox.cpp
     ScientificDoubleSpinBox.hpp
     SshConnectArguments.hpp

@@ -202,6 +202,20 @@ int main(int argc, char** argv)
     }
     require(involution, "reversing twice did not restore the palette");
 
+    // operator== is slot-for-slot: the involution above is equality, the
+    // reversal is not, and a single differing slot breaks it.
+    require(restored == rainbow && !(reversedRainbow == rainbow),
+        "Palette equality does not follow the slots");
+    {
+        auto slots = std::array<amrvis::Palette::Rgb, amrvis::Palette::slotCount>{};
+        for (int index = 0; index < amrvis::Palette::slotCount; ++index) {
+            slots[static_cast<std::size_t>(index)] = rainbow.slot(index);
+        }
+        slots[amrvis::Palette::whiteIndex].red ^= 1U;
+        require(!(amrvis::Palette(slots) == rainbow),
+            "Palette equality ignored a reserved slot");
+    }
+
     // These seven strings are not just menu labels: the Qt layer writes the
     // active one into QSettings under "palette/builtin" and matches it back on
     // startup, so changing one silently resets that user's palette to rainbow

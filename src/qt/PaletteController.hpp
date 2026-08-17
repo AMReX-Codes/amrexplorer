@@ -103,6 +103,9 @@ public:
     [[nodiscard]] const Palette& palette() const noexcept { return m_palette; }
     [[nodiscard]] const State& state() const noexcept { return m_state; }
 
+    // Re-selecting what is already selected (the checked menu action, the
+    // same state again) resyncs the widgets but does not emit paletteChanged,
+    // so it costs no settings write and no re-render.
     void selectBuiltin(int index);
     // Loads a legacy palette file and makes it the selection. On failure the
     // selection is unchanged and the error text is returned for the host to
@@ -110,16 +113,21 @@ public:
     [[nodiscard]] std::optional<QString> loadFile(const QString& path);
     void setReversed(bool reversed);
     // Restores a whole selection (settings restore, viewer-state import). A
-    // file palette that no longer loads falls back to the builtin index the
-    // state carries, so the caller always ends up with a usable palette.
-    void apply(const State& state);
+    // file palette that does not load falls back to the builtin index the
+    // state carries, so the caller always ends up with a usable palette, and
+    // the load error is returned for the caller to report. The file is not
+    // forgotten: save() keeps persisting it as the wanted selection until an
+    // explicit selection replaces it, so a transient failure (an unmounted
+    // filesystem at startup) does not drop the preference.
+    [[nodiscard]] std::optional<QString> apply(const State& state);
 
     // The palette keys of the application settings ("palette/…"). restore()
     // does not emit paletteChanged: it reproduces a saved selection rather
     // than changing one, so a host that has already wired the signal (persist,
     // re-render) is not made to write the settings straight back and redraw
-    // nothing. The host reads palette() itself once restored.
-    void restore(const QSettings& settings);
+    // nothing. The host reads palette() itself once restored. Returns the
+    // load error of a stored file palette that fell back, as apply() does.
+    [[nodiscard]] std::optional<QString> restore(const QSettings& settings);
     void save(QSettings& settings) const;
 
     // The builtin names as the menu actions and the selector items show them
@@ -139,7 +147,9 @@ signals:
 
 private:
     // Installs a selection and its base palette, syncs the widgets, derives
-    // the effective palette and emits paletteChanged.
+    // the effective palette and emits paletteChanged -- unless neither the
+    // selection nor the base palette changed, in which case only the widgets
+    // are resynced.
     void install(Palette basePalette, State state);
     void syncMenu();
     void syncSelector();
@@ -149,6 +159,10 @@ private:
     Palette m_basePalette = builtinPalette(BuiltinPalette::Rainbow);
     Palette m_palette = builtinPalette(BuiltinPalette::Rainbow);
     State m_state;
+    // The file palette the last apply() asked for and could not load: the
+    // selection fell back to a builtin, but save() persists this as the
+    // wanted file until selectBuiltin, loadFile or apply replaces it.
+    QString m_unloadedFilePath;
     QPointer<QActionGroup> m_menuGroup;
     QPointer<QAction> m_reverseAction;
     QPointer<QComboBox> m_selector;

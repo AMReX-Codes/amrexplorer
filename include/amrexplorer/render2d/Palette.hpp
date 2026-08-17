@@ -34,6 +34,7 @@ public:
         std::uint8_t red = 0;
         std::uint8_t green = 0;
         std::uint8_t blue = 0;
+        friend bool operator==(const Rgb&, const Rgb&) = default;
     };
 
     Palette() = default;
@@ -68,6 +69,9 @@ public:
     // Loads a legacy sequential palette file (768 or 1024 bytes).  Throws
     // std::runtime_error when the file cannot be read or has another size.
     [[nodiscard]] static Palette load(const std::filesystem::path& path);
+
+    // Slot-for-slot equality (the reserved slots included).
+    friend bool operator==(const Palette&, const Palette&) = default;
 
 private:
     std::array<Rgb, slotCount> slots_{};

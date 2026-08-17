@@ -126,6 +126,7 @@ void PaletteController::selectBuiltin(int index)
     state.builtinIndex = index;
     state.fromFile = false;
     state.filePath.clear();
+    m_unloadedFilePath.clear();
     install(builtinPalette(builtinPalettes[static_cast<std::size_t>(index)]),
         std::move(state));
 }
@@ -141,6 +142,7 @@ std::optional<QString> PaletteController::loadFile(const QString& path)
     State state = m_state;
     state.fromFile = true;
     state.filePath = path;
+    m_unloadedFilePath.clear();
     install(std::move(loaded), std::move(state));
     return std::nullopt;
 }
@@ -155,7 +157,7 @@ void PaletteController::setReversed(bool reversed)
     install(m_basePalette, std::move(state));
 }
 
-void PaletteController::apply(const State& requested)
+std::optional<QString> PaletteController::apply(const State& requested)
 {
     State state = requested;
     // An index the builtins do not have (an imported state from a build with
@@ -165,26 +167,33 @@ void PaletteController::apply(const State& requested)
         || state.builtinIndex >= static_cast<int>(builtinPalettes.size())) {
         state.builtinIndex = 0;
     }
+    std::optional<QString> error;
     if (state.fromFile && !state.filePath.isEmpty()) {
         std::optional<Palette> loaded;
         try {
             loaded = Palette::load(state.filePath.toStdString());
-        } catch (const std::exception&) {
+        } catch (const std::exception& failure) {
             // Fall through to the builtin the state carries.
+            error = QString::fromUtf8(failure.what());
         }
         if (loaded) {
+            m_unloadedFilePath.clear();
             install(std::move(*loaded), std::move(state));
-            return;
+            return std::nullopt;
         }
     }
+    // Keep the wanted file (see m_unloadedFilePath) only when there was one
+    // and it failed; a state without a file replaces any earlier one.
+    m_unloadedFilePath = error ? state.filePath : QString();
     state.fromFile = false;
     state.filePath.clear();
     install(builtinPalette(
                 builtinPalettes[static_cast<std::size_t>(state.builtinIndex)]),
         std::move(state));
+    return error;
 }
 
-void PaletteController::restore(const QSettings& settings)
+std::optional<QString> PaletteController::restore(const QSettings& settings)
 {
     State state;
     state.fromFile
@@ -204,13 +213,16 @@ void PaletteController::restore(const QSettings& settings)
     // Restore is not a change: block the signal the widgets and consumers are
     // not yet wired for, and let the host read palette() when it is ready.
     const QSignalBlocker blocker(this);
-    apply(state);
+    return apply(state);
 }
 
 void PaletteController::save(QSettings& settings) const
 {
-    settings.setValue(QStringLiteral("palette/fromFile"), m_state.fromFile);
-    settings.setValue(QStringLiteral("palette/filePath"), m_state.filePath);
+    // A file that failed to load is still the wanted selection on disk.
+    const bool fileWanted = m_state.fromFile || !m_unloadedFilePath.isEmpty();
+    settings.setValue(QStringLiteral("palette/fromFile"), fileWanted);
+    settings.setValue(QStringLiteral("palette/filePath"),
+        m_state.fromFile ? m_state.filePath : m_unloadedFilePath);
     settings.setValue(QStringLiteral("palette/builtin"),
         builtinPaletteKey(static_cast<std::size_t>(m_state.builtinIndex)));
     settings.setValue(QStringLiteral("palette/reversed"), m_state.reversed);
@@ -247,12 +259,23 @@ QStringList PaletteController::selectorLabels() const
 
 void PaletteController::install(Palette basePalette, State state)
 {
+    // The base palette is compared as well as the state: reloading the same
+    // file path picks up an edited file, which the state alone cannot tell.
+    const bool changed = state.builtinIndex != m_state.builtinIndex
+        || state.fromFile != m_state.fromFile
+        || state.filePath != m_state.filePath
+        || state.reversed != m_state.reversed
+        || basePalette != m_basePalette;
     m_basePalette = std::move(basePalette);
     m_state = std::move(state);
     m_palette = m_state.reversed ? m_basePalette.reversed() : m_basePalette;
+    // Always resync: a click on the checked action of the ExclusiveOptional
+    // menu group has just unchecked it, no-op or not.
     syncMenu();
     syncSelector();
-    emit paletteChanged();
+    if (changed) {
+        emit paletteChanged();
+    }
 }
 
 void PaletteController::syncMenu()

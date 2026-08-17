@@ -10,6 +10,8 @@ add_executable(amrexplorer_qt
     DatasetExtract.hpp
     DatasetWindow.cpp
     DatasetWindow.hpp
+    DiagnosticsModel.cpp
+    DiagnosticsModel.hpp
     FabSelectorDock.cpp
     FabSelectorDock.hpp
     ImageView.cpp

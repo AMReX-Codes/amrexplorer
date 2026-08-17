@@ -298,12 +298,18 @@ MainWindow::MainWindow(QWidget* parent)
     addDockWidget(Qt::LeftDockWidgetArea, m_metadataDock);
     m_metadataDock->setVisible(false);
 
-    m_diagnosticsDock = new QDockWidget(tr("Diagnostics"), this);
-    m_diagnostics = new QPlainTextEdit(m_diagnosticsDock);
-    m_diagnostics->setReadOnly(true);
-    m_diagnosticsDock->setWidget(m_diagnostics);
+    // The Diagnostics panel's counters, metrics and histories live in their
+    // model; it renders the dock, and this window supplies the lines only it
+    // knows.
+    m_diagnosticsModel = new DiagnosticsModel(
+        DiagnosticsModel::Hooks{
+            [this] { return m_generation; },
+            [this] { return m_sequenceController->lastFrameSwitchMs(); },
+            [this] { return remoteDiagnosticsLines(); },
+        },
+        this);
+    m_diagnosticsDock = m_diagnosticsModel->createDock(this);
     addDockWidget(Qt::BottomDockWidgetArea, m_diagnosticsDock);
-    m_diagnosticsDock->setVisible(false);
 
     m_colorBarDock = new QDockWidget(tr("Color Scale"), this);
     m_colorBar = new ColorBarWidget(m_colorBarDock);
@@ -373,16 +379,12 @@ MainWindow::MainWindow(QWidget* parent)
         });
     connect(m_sequenceController, &SequenceController::loadActivityChanged,
         this, [this](int delta) {
-            if (delta > 0) {
-                m_activeRequests += static_cast<std::uint64_t>(delta);
-            } else {
-                m_activeRequests -= static_cast<std::uint64_t>(-delta);
-            }
+            m_diagnosticsModel->adjustActivity(delta);
             updateDiagnostics();
         });
     connect(m_sequenceController, &SequenceController::staleResultDropped,
         this, [this] {
-            ++m_staleResults;
+            m_diagnosticsModel->noteStaleResult();
             updateDiagnostics();
         });
     connect(m_sequenceController, &SequenceController::statusMessage,
@@ -415,11 +417,7 @@ MainWindow::MainWindow(QWidget* parent)
         });
     connect(m_particleController, &ParticleController::loadActivityChanged,
         this, [this](int delta) {
-            if (delta > 0) {
-                m_activeRequests += static_cast<std::uint64_t>(delta);
-            } else {
-                m_activeRequests -= static_cast<std::uint64_t>(-delta);
-            }
+            m_diagnosticsModel->adjustActivity(delta);
             updateDiagnostics();
         });
     connect(m_particleController, &ParticleController::statusMessage, this,
@@ -429,7 +427,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_particleController, &ParticleController::loadFailed, this,
         [this](const QString& message) { reportBackgroundError(message); });
     connect(m_particleController, &ParticleController::staleResultDropped,
-        this, [this] { ++m_staleResults; });
+        this, [this] { m_diagnosticsModel->noteStaleResult(); });
     connect(m_particleController, &ParticleController::loadFinished, this,
         [this] { updateDiagnostics(); });
     connect(m_sequenceController, &SequenceController::frameDisplayed,

@@ -48,7 +48,6 @@ class QLabel;
 class QSpinBox;
 class QLineF;
 class QMenu;
-class QPlainTextEdit;
 class QProgressDialog;
 class QPushButton;
 class QStackedWidget;
@@ -77,6 +76,7 @@ class ImageView;
 class IsoWidget;
 class LinePlotWindow;
 class ScientificDoubleSpinBox;
+class DiagnosticsModel;
 class PaletteController;
 class ParticleController;
 class SequenceController;
@@ -248,10 +248,7 @@ public:
     // Saturates: reportBackgroundError keeps only the newest 50, so a test that
     // waits for this to exceed a baseline of 50 would wait forever. Both
     // current callers start from an empty list.
-    [[nodiscard]] int backgroundErrorCountForTest() const
-    {
-        return static_cast<int>(m_backgroundErrors.size());
-    }
+    [[nodiscard]] int backgroundErrorCountForTest() const;
     // Test-only: the direct "open a raw FAB file" entry point, reached in the
     // app through a file dialog. Supplies no rollback of its own, which is what
     // makes it the interesting case when it supersedes a selector click.
@@ -577,7 +574,12 @@ private:
     void showKeyboardMouseReference();
     void showAboutDialog();
     void showMetadata(const PlotfileMetadataResult& result, const std::filesystem::path& path);
+    // Re-renders the Diagnostics panel; the model owns the counters, this
+    // window only supplies the lines it alone knows (see the model's Hooks).
     void updateDiagnostics();
+    [[nodiscard]] QString remoteDiagnosticsLines() const;
+    // Non-modal failure report: status bar plus the model's error history
+    // (which shows the dock); suppressed while closing.
     void reportBackgroundError(const QString& message);
     void updateAnimationDockVisibility();
     void updateWindowTitle();
@@ -720,7 +722,8 @@ private:
     void syncVisibleRanges();
     // Panel slices currently on a worker (summed PlaneViewState::pendingRequests);
     // the visible-range sync defers dispatch until this is zero. Panel work only
-    // -- excludes particle/line-plot/prefetch requests tracked by m_activeRequests.
+    // -- excludes particle/line-plot/prefetch requests, which the
+    // DiagnosticsModel's active count tracks.
     [[nodiscard]] int slicesInFlight() const;
 
     // Slice requests: the debounce timer coalesces into per-view requests.
@@ -901,12 +904,11 @@ private:
 #ifdef AMREXPLORER_QT_TEST_ACCESS
     // Test-only: superseded visible-range sync outcomes dropped by the
     // rerun guard. Sole writer is that drop, so the overlapping-sync test can
-    // assert an exact count. m_staleResults carries the same event for the
-    // user-facing diagnostics panel.
+    // assert an exact count. The DiagnosticsModel's stale count carries the
+    // same event for the user-facing diagnostics panel.
     std::uint64_t m_visibleSyncStaleSkips = 0;
 #endif
     QTreeWidget* m_metadataTree = nullptr;
-    QPlainTextEdit* m_diagnostics = nullptr;
     QDockWidget* m_metadataDock = nullptr;
     QDockWidget* m_diagnosticsDock = nullptr;
     QDockWidget* m_colorBarDock = nullptr;
@@ -1001,8 +1003,6 @@ private:
     // what the renderer, color bar and overlays use.
     PaletteController* m_paletteController = nullptr;
     QString m_numberFormat = defaultNumberFormat();
-    QStringList m_probeLines;
-    QStringList m_backgroundErrors;
     bool m_controlsReady = false;
     std::uint64_t m_generation = 0;
     // Newest-wins among overlapping standalone-FAB header reads. m_generation
@@ -1011,18 +1011,11 @@ private:
     // still match the generation they captured.
     std::uint64_t m_fabOpenGeneration = 0;
     std::optional<PendingFabOpen> m_pendingFabOpen;
-    std::uint64_t m_activeRequests = 0;
     bool m_closing = false;
-    std::uint64_t m_staleResults = 0;
-    std::uint64_t m_lastFilesRead = 0;
-    std::uint64_t m_lastBytesRead = 0;
-    std::uint64_t m_lastBlocksRead = 0;
-    std::uint64_t m_lastCacheHits = 0;
-    std::uint64_t m_lastPayloadBytesRead = 0;
-    std::uint64_t m_cacheBudgetBytes = 0;
-    std::uint64_t m_cacheResidentBytes = 0;
-    std::uint64_t m_cachePinnedBytes = 0;
-    std::uint64_t m_cacheEvictions = 0;
+    // Owns the Diagnostics panel's counters (background requests, stale
+    // results), the last read's metrics, the cache state, the probe history
+    // and the background-error history, and renders the dock.
+    DiagnosticsModel* m_diagnosticsModel = nullptr;
 
     // Animation state. The sequence frames/index/in-flight/prefetch state
     // machine lives in the SequenceController; this window keeps only the

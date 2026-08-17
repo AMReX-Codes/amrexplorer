@@ -515,6 +515,26 @@ if(TARGET amrexplorer_qt)
             "$<TARGET_FILE:test_particle_controller>")
     set_tests_properties(particle_controller PROPERTIES TIMEOUT 60)
 
+    add_executable(test_diagnostics_model
+        unit/test_diagnostics_model.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/DiagnosticsModel.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/DiagnosticsModel.hpp"
+    )
+    set_target_properties(test_diagnostics_model PROPERTIES AUTOMOC ON)
+    target_include_directories(test_diagnostics_model
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_diagnostics_model
+        PRIVATE
+            amrexplorer::cache
+            amrexplorer::warnings
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Widgets
+    )
+    add_test(NAME diagnostics_model
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_diagnostics_model>")
+
     add_executable(test_remote_endpoint unit/test_remote_endpoint.cpp)
     target_include_directories(test_remote_endpoint
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")

@@ -881,4 +881,9 @@ void MainWindow::startAnimationExportForTest(const QString& path,
     beginAnimationExport(path, includeColorBar);
 }
 
+int MainWindow::backgroundErrorCountForTest() const
+{
+    return m_diagnosticsModel->backgroundErrorCount();
+}
+
 } // namespace amrvis::qt

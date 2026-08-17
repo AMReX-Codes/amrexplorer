@@ -163,11 +163,25 @@ SshRemoteSession::SshRemoteSession(QObject* parent)
     : QObject(parent)
     , m_process(new QProcess(this))
     , m_startupTimer(new QTimer(this))
+    , m_terminateTimer(new QTimer(this))
+    , m_streamEndTimer(new QTimer(this))
 {
     m_startupTimer->setSingleShot(true);
     connect(m_startupTimer, &QTimer::timeout, this, [this] {
         drainProcessErrors(true);
         fail(tr("Timed out while starting the remote AMReXplorer session.%1")
+                .arg(errorSuffix()));
+    });
+    m_terminateTimer->setSingleShot(true);
+    connect(m_terminateTimer, &QTimer::timeout, this, [this] {
+        if (m_process->state() != QProcess::NotRunning) {
+            m_process->terminate();
+        }
+    });
+    m_streamEndTimer->setSingleShot(true);
+    connect(m_streamEndTimer, &QTimer::timeout, this, [this] {
+        drainProcessErrors(true);
+        fail(tr("The remote server ended the stream before it was ready.%1")
                 .arg(errorSuffix()));
     });
     connect(m_process, &QProcess::readyReadStandardError, this,
@@ -225,6 +239,8 @@ void SshRemoteSession::start(std::string destination,
     m_errorPending.clear();
     m_connection.reset();
     m_handshakeStop = StopSource{};
+    m_terminateTimer->stop();
+    m_streamEndTimer->stop();
     m_startupTimer->start(startupTimeoutMilliseconds);
 
 #ifdef _WIN32
@@ -307,12 +323,7 @@ void SshRemoteSession::readPreamble()
             // exit report it -- that path has the whole of stderr -- and only
             // fall back to a report of our own if ssh lingers.
             closeWire();
-            QTimer::singleShot(1500, this, [this] {
-                drainProcessErrors(true);
-                fail(tr("The remote server ended the stream before it was "
-                        "ready.%1")
-                        .arg(errorSuffix()));
-            });
+            m_streamEndTimer->start(1500);
             return;
         }
         m_preamble.append(buffer, static_cast<std::size_t>(count));
@@ -396,6 +407,12 @@ void SshRemoteSession::drainProcessErrors(bool flush)
     // stderr in stdio mode.
     m_errorPending
         += QString::fromLocal8Bit(m_process->readAllStandardError());
+    // A newline-free flood must not grow the pending fragment without bound;
+    // like the kept tail, only its last part is worth anything.
+    constexpr qsizetype maximumErrorCharacters = 8192;
+    if (m_errorPending.size() > maximumErrorCharacters) {
+        m_errorPending = m_errorPending.right(maximumErrorCharacters);
+    }
     const auto appendLine = [this](const QString& line) {
         if (!line.trimmed().isEmpty()) {
             m_errors += line.trimmed() + QLatin1Char('\n');
@@ -410,18 +427,17 @@ void SshRemoteSession::drainProcessErrors(bool flush)
         appendLine(m_errorPending);
         m_errorPending.clear();
     }
-    constexpr qsizetype maximumErrorCharacters = 8192;
     if (m_errors.size() > maximumErrorCharacters) {
         m_errors = m_errors.right(maximumErrorCharacters);
-    }
-    if (flush) {
-        m_errors = m_errors.trimmed();
     }
 }
 
 QString SshRemoteSession::errorSuffix() const
 {
-    return m_errors.isEmpty() ? QString() : QStringLiteral("\n") + m_errors;
+    // Trimmed for display only: the stored lines keep their separators, so
+    // a line drained after a flush does not run into the previous one.
+    const auto errors = m_errors.trimmed();
+    return errors.isEmpty() ? QString() : QStringLiteral("\n") + errors;
 }
 
 void SshRemoteSession::closeWire()
@@ -450,12 +466,9 @@ void SshRemoteSession::stop()
         // reads it, and ssh exits when the server does.
         m_connection->close();
     }
+    m_streamEndTimer->stop();
     if (m_process->state() != QProcess::NotRunning) {
-        QTimer::singleShot(2000, m_process, [process = m_process] {
-            if (process->state() != QProcess::NotRunning) {
-                process->terminate();
-            }
-        });
+        m_terminateTimer->start(2000);
     }
 }
 

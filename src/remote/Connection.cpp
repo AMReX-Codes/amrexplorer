@@ -174,7 +174,7 @@ public:
         }
         try {
             auto bytes = codec::encode(
-                requestId, std::move(payload), m_selectedMinorVersion.load());
+                requestId, std::move(payload), m_selectedMinorVersion);
             send(bytes, writeDeadline);
         } catch (...) {
             erasePending(requestId);
@@ -252,7 +252,7 @@ public:
     RemoteDirectoryListing listDirectory(
         const std::string& path, StopToken cancellation)
     {
-        if (m_selectedMinorVersion.load() < 1) {
+        if (m_selectedMinorVersion < 1) {
             throw std::runtime_error(
                 "the remote server predates directory browsing (protocol "
                 "1.1); install a current amrexplorer-server or enter the "
@@ -507,7 +507,7 @@ private:
                     pending = found->second;
                     if (pending->expected != PayloadKind::HelloResponse
                         && info.protocolMinorVersion
-                            != m_selectedMinorVersion.load()) {
+                            != m_selectedMinorVersion) {
                         protocolViolation
                             = "remote server changed protocol minor version";
                     } else if (info.payload != pending->expected
@@ -598,7 +598,7 @@ private:
         request.target_request_id = target;
         try {
             auto bytes = codec::encode(
-                cancelId, std::move(request), m_selectedMinorVersion.load());
+                cancelId, std::move(request), m_selectedMinorVersion);
             send(bytes, deadline);
         } catch (...) {
             erasePending(cancelId);
@@ -659,13 +659,7 @@ private:
 
     std::chrono::steady_clock::time_point m_connectionDeadline;
     std::unique_ptr<Channel> m_channel;
-    // Written by the constructor's handshake after the receiver thread (started
-    // in the initializer list) is already running. The receiver only reads it
-    // for a pending non-hello request, which cannot exist until the
-    // constructor has returned, so the pending-table lock orders every read
-    // after the write today; atomic like m_maximumFrameBytes so that ordering
-    // is not the only thing standing between a receive-loop edit and a race.
-    std::atomic<std::uint16_t> m_selectedMinorVersion{protocolMinorVersion};
+    std::uint16_t m_selectedMinorVersion = protocolMinorVersion;
     std::atomic<std::uint32_t> m_maximumFrameBytes;
     std::chrono::milliseconds m_requestTimeout;
     StopSource m_lifecycleStop;

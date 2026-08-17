@@ -324,13 +324,46 @@ MainWindow::MainWindow(QWidget* parent)
     // until updateAnimationDockVisibility() decides otherwise.
     m_animationDock->setVisible(false);
 
-    m_fabSelectorDock = new FabSelectorDock(this);
+    // FAB/MultiFab navigation lives in its navigator; it opens what it
+    // resolves through this window's openDatasetImpl and folds its header
+    // reads into the diagnostics.
+    m_fabNavigator = new FabNavigator(
+        FabNavigator::Hooks{
+            [this] { return m_generation; },
+            [this] { return m_closing; },
+            // Unguarded on purpose: buildFrameSpec reads the controls, not
+            // the dataset, and the MultiFab-return record must capture them
+            // even when a click lands mid-reload with no dataset installed;
+            // gating here degraded that record to defaults.
+            [this]() -> std::optional<FrameSliceSpec> {
+                return buildFrameSpec();
+            },
+            [this](const std::filesystem::path& path,
+                PlotfileMetadataResult metadata, std::filesystem::path dataRoot,
+                bool preserveSelector, std::optional<FrameSliceSpec> spec) {
+                openDatasetImpl(path, false, std::move(metadata),
+                    std::move(dataRoot), preserveSelector, std::move(spec));
+            },
+        },
+        this);
+    connect(m_fabNavigator, &FabNavigator::loadActivityChanged, this,
+        [this](int delta) {
+            m_diagnosticsModel->adjustActivity(delta);
+            updateDiagnostics();
+        });
+    connect(m_fabNavigator, &FabNavigator::staleResultDropped, this,
+        [this] {
+            m_diagnosticsModel->noteStaleResult();
+            updateDiagnostics();
+        });
+    connect(m_fabNavigator, &FabNavigator::openFailed, this,
+        [this](const QString& title, const QString& message) {
+            reportBackgroundError(tr("%1: %2").arg(title, message));
+        });
+    connect(m_fabNavigator, &FabNavigator::windowTitleChanged, this,
+        [this] { updateWindowTitle(); });
+    m_fabSelectorDock = m_fabNavigator->createDock(this);
     addDockWidget(Qt::LeftDockWidgetArea, m_fabSelectorDock);
-    m_fabSelectorDock->setVisible(false);
-    connect(m_fabSelectorDock, &FabSelectorDock::viewRequested,
-        this, [this](std::size_t entry) { viewFab(entry); });
-    connect(m_fabSelectorDock, &FabSelectorDock::backRequested,
-        this, &MainWindow::backToMultiFab);
 
     // One playback timer drives either animation mode; starting one mode
     // stops the other (see setPlaybackMode).

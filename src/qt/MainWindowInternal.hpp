@@ -9,6 +9,7 @@
 #include "QtErrorText.hpp"
 #include "AnimationExporter.hpp"
 #include "DiagnosticsModel.hpp"
+#include "FabNavigator.hpp"
 #include "PaletteController.hpp"
 #include "ParticleController.hpp"
 #include "SequenceController.hpp"
@@ -29,9 +30,7 @@
 #include "Theme.hpp"
 #include "UserGuideDialog.hpp"
 
-#include <amrexplorer/io/FabCatalog.hpp>
 #include <amrexplorer/io/FitsWriter.hpp>
-#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 #include <amrexplorer/data/DatasetSession.hpp>
 #include <amrexplorer/core/CoordinateSystem.hpp>

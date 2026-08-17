@@ -535,6 +535,31 @@ if(TARGET amrexplorer_qt)
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_diagnostics_model>")
 
+    add_executable(test_fab_navigator
+        unit/test_fab_navigator.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/FabNavigator.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/FabNavigator.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/FabSelectorDock.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/FabSelectorDock.hpp"
+    )
+    set_target_properties(test_fab_navigator PROPERTIES AUTOMOC ON)
+    target_include_directories(test_fab_navigator
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_fab_navigator
+        PRIVATE
+            amrexplorer::io
+            amrexplorer::pipeline
+            amrexplorer::warnings
+            Qt6::Concurrent
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Widgets
+    )
+    add_test(NAME fab_navigator
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_fab_navigator>")
+    set_tests_properties(fab_navigator PROPERTIES TIMEOUT 60)
+
     add_executable(test_remote_endpoint unit/test_remote_endpoint.cpp)
     target_include_directories(test_remote_endpoint
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")

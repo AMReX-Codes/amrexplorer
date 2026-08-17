@@ -100,16 +100,16 @@ module load gcc            # or gcc-native on a Cray system
 module load cmake          # if the system cmake is older than 3.25
 cmake --preset remote --fresh -DCMAKE_CXX_COMPILER=g++
 cmake --build --preset remote --parallel 4
-cmake --install build-remote --prefix ${HOME}
+cmake --install build-remote
 ```
 
-That installs one file, `${HOME}/bin/amrexplorer-server`.
+That installs one file, `~/.local/bin/amrexplorer-server`.
 
 Use `--fresh` whenever you change the compiler; without it the configure fails
 again with the same message and has to be run twice.
 
-If your `${HOME}` is shared between machines, give each its own prefix so one
-build does not overwrite another:
+If your home directory is shared between machines, give each its own prefix so
+one build does not overwrite another:
 
 ```bash
 cmake --install build-remote --prefix ${HOME}/perlmutter

@@ -149,14 +149,17 @@ public:
         int count, bool logarithmic, std::array<double, 3> slicePositions);
 
     // Test-only: drive the visible-range sync staleness guard deterministically.
-    // Set sentinel display ranges, gate a sync mid-flight, re-slice one panel
-    // for real (zoomActiveViewForTest) so it rewrites that panel's plane, then
-    // release workers one at a time: first the now-stale sync, which must drop
-    // the whole outcome (tallied in the test-only m_visibleSyncStaleSkips, read
-    // via visibleSyncStaleSkipsForTest()); while the self-healing rerun is still
-    // gated, the two untouched panels must remain on the sentinel range (the
-    // stale union was not applied to them); then release the rerun. See the
-    // staleness smoke test and syncVisibleRanges.
+    // Gate a sync mid-flight, re-render every panel through the cache path
+    // (a contour-count change: the planes keep their pointers, only the
+    // per-view render generation moves), then release workers one at a time:
+    // first the now-stale sync, which must drop the whole outcome (tallied in
+    // the test-only m_visibleSyncStaleSkips, read via
+    // visibleSyncStaleSkipsForTest()); while the self-healing rerun is still
+    // gated, the panels must still show the refresh's contours (the stale
+    // outcome, extracted at the old count, was not applied); then release the
+    // rerun. adjustActiveRequestsForTest stands in for a non-slice background
+    // request (a particle load), which must not hold the sync's dispatch. See
+    // the staleness smoke test and syncVisibleRanges.
     void requestVisibleSyncForTest();
     void armVisibleSyncGateForTest();
     void releaseVisibleSyncGateForTest();
@@ -165,7 +168,7 @@ public:
     // completion's failure path can be driven: a current failure is reported,
     // a superseded one counted stale.
     void failNextVisibleSyncForTest();
-    void setViewDisplayRangesForTest(double minimum, double maximum);
+    void adjustActiveRequestsForTest(int delta);
     [[nodiscard]] std::uint64_t activeViewRenderGenerationForTest() const;
     [[nodiscard]] bool visibleSyncWorkerWaitingForTest() const;
     [[nodiscard]] std::uint64_t visibleSyncStaleSkipsForTest() const noexcept;

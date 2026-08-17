@@ -63,7 +63,7 @@ brew install ffmpeg       # macOS
 ```bash
 git clone https://github.com/amrex-codes/amrexplorer.git
 cd amrexplorer
-cmake --preset default
+cmake --preset default -DAMREXPLORER_BUILD_TESTS=OFF
 cmake --build --preset default --parallel 4
 ```
 
@@ -98,7 +98,7 @@ Build the server only, with a GNU toolchain:
 ```bash
 module load gcc            # or gcc-native on a Cray system
 module load cmake          # if the system cmake is older than 3.25
-cmake --preset remote --fresh -DCMAKE_CXX_COMPILER=g++
+cmake --preset remote --fresh -DCMAKE_CXX_COMPILER=g++ -DAMREXPLORER_BUILD_TESTS=OFF
 cmake --build --preset remote --parallel 4
 cmake --install build-remote
 ```

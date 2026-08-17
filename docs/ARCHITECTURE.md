@@ -11,7 +11,7 @@ Dependencies point downward. Everything below `src/qt` is free of Qt, so the
 whole compute path can run — and be tested — headless.
 
 ```
-              src/qt          GUI: MainWindow*, ImageView, docks, dialogs, main.cpp
+              src/qt          GUI: MainWindow* + its controllers, ImageView, docks, dialogs, main.cpp
                  |            (orchestrates; owns no data-reading logic)
    +-------------+-------------+
    |             |             |
@@ -31,6 +31,50 @@ turns user actions into requests and marshals results onto the screen; it does n
 file or wire I/O itself. `SlicePipeline` (and the query/render layers under it)
 turns a `SliceRequest` into a displayable `SliceDisplayResult` — raster image,
 contour polylines, vector glyphs, resolved color range — with no Qt dependency.
+
+## The GUI layer
+
+`MainWindow` is the one window; it owns the plane views (`PlaneViewState`
+per 2-D view and 3-D panel), the slice request/arrival paths, the
+visible-range sync that keeps three 3-D panels on one color range, zoom/pan,
+crosshairs and the probe, and the menus and docks. Everything else the window
+does is delegated to an **owned collaborator**, each a `QObject` created by
+the window, wired to it in one of two ways:
+
+- **`Hooks`** — a struct of `std::function`s the window fills in at
+  construction, for what the collaborator must *ask* the window (the open
+  dataset, the current frame spec, whether the window is closing, the
+  settings store). Hooks are how a collaborator stays testable: a unit test
+  supplies fakes. Widget-only collaborators (`PaletteController`,
+  `RangeController`) need none; the window reads their state through
+  accessors instead.
+- **Signals** — for what the collaborator *tells* the window (open this path,
+  redraw the overlays, show this status, this failed). The window connects
+  them once, next to the construction.
+
+| Collaborator | Owns | Test |
+|---|---|---|
+| `SequenceController` | the plotfile sequence: frame list, prefetch, frame switches and their generations | `test_sequence_controller` |
+| `AnimationExporter` | the animation-export state machine (frames → images/MP4) | via the export smoke tests |
+| `PaletteController` | palette choice, reversal, custom `.pal` files, the Palette menu and selector, persistence | `test_palette_controller` |
+| `ParticleController` | particle species/fraction/seed/colours, the sample load, the Particles dialog, action and progress bar | `test_particle_controller` |
+| `DiagnosticsModel` | the Diagnostics dock: request/stale counters, read and cache metrics, probe and error histories | `test_diagnostics_model` |
+| `FabNavigator` | standalone FAB / MultiFab navigation: the selector dock, drill-down and return, the async header reads | `test_fab_navigator` |
+| `RemoteSessionController` | the ssh-launched server session and its connection, the Open Remote dialog (`RemoteOpenDialog`), the remote browser (`RemoteFileDialog`), per-destination settings | `test_remote_session_controller`, `test_remote_open_dialog`, `test_remote_file_dialog` |
+| `RangeController` | the range mode / User min-max / Log widgets and the per-field range memory | `test_range_controller` |
+
+Two rules keep the seams honest. A collaborator exposes only what has a
+production caller — a public method or signal that exists for a test is a
+smell. And anything the window can also toggle (an action's enablement, a
+suspended state) is *derived* inside the collaborator from its inputs, never
+set from two places; the `ParticleController` action (dataset has species ×
+no load running × not suspended by the host) is the reference.
+
+The window's own test surface is the `…ForTest` accessors in
+`MainWindowTestAccess.cpp` (compiled only with `AMREXPLORER_QT_TEST_ACCESS`),
+driven by the offscreen `--*-smoke-test` harnesses in `main.cpp`; they cover
+the integration the collaborators' unit tests cannot -- a slice arriving in a
+view, a sequence frame switching, the sync settling.
 
 ## The dataset session abstraction
 
@@ -87,3 +131,4 @@ either should preserve its invariants.
 | The remote protocol | `src/remote/Codec.hpp`, `Frame.cpp` (Channel/Socket), `Server.cpp`, `Connection.cpp` |
 | Response validation | `src/data/SessionValidation.cpp` |
 | The GUI ↔ worker handoff | `src/qt/MainWindowSlice.cpp` (request/arrival), `SequenceController` |
+| Adding a GUI feature | the collaborator table above; `RangeController` is the smallest widget-only example, `DiagnosticsModel` the smallest with `Hooks`, each with its unit test |

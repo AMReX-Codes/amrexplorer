@@ -150,9 +150,10 @@ struct Observed {
     QStringList statuses;
 };
 
-Observed observe(amrvis::qt::ParticleController& controller)
+// The caller owns `observed`: the lambdas capture it by reference for the
+// controller's lifetime, so it must outlive the connections.
+void observe(amrvis::qt::ParticleController& controller, Observed& observed)
 {
-    Observed observed;
     QObject::connect(&controller,
         &amrvis::qt::ParticleController::overlaysChanged, &controller,
         [&observed] { ++observed.overlays; });
@@ -179,7 +180,6 @@ Observed observe(amrvis::qt::ParticleController& controller)
         [&observed](const QString& message, int) {
             observed.statuses << message;
         });
-    return observed;
 }
 
 // Runs the event loop until `done` or a timeout.
@@ -266,7 +266,8 @@ int main(int argc, char** argv)
     // shape the settings as the dataset transitions need.
     {
         ParticleController controller(hooks());
-        auto observed = observe(controller);
+        Observed observed;
+        observe(controller, observed);
         controller.applySelection({"ions"}, 0.5, 4, 7);
         require(observed.selection == 1 && observed.overlays == 0,
             "the first selection did not ask for a reload");
@@ -339,7 +340,8 @@ int main(int argc, char** argv)
         // status bar does) needs a shown ancestor.
         host.show();
         controller.configureForDataset(false);
-        auto observed = observe(controller);
+        Observed observed;
+        observe(controller, observed);
         controller.restoreSelection({"electrons", "ions"}, 1.0, 0, true);
         controller.reload();
         require(controller.loading() && controller.loadingUiActive()
@@ -373,7 +375,8 @@ int main(int argc, char** argv)
         current = session;
         session->failing = true;
         ParticleController controller(hooks());
-        auto observed = observe(controller);
+        Observed observed;
+        observe(controller, observed);
         controller.restoreSelection({"ions"}, 1.0, 0, true);
         controller.reload();
         waitFor(application, [&] { return observed.finished == 1; },
@@ -393,7 +396,8 @@ int main(int argc, char** argv)
         current = session;
         session->delayMs = 200;
         ParticleController controller(hooks());
-        auto observed = observe(controller);
+        Observed observed;
+        observe(controller, observed);
         controller.restoreSelection({"ions"}, 1.0, 0, true);
         controller.reload();
         controller.cancel();
@@ -431,7 +435,8 @@ int main(int argc, char** argv)
         ParticleController controller(hooks());
         controller.configureForDataset(false);
         controller.restoreSelection({"ions"}, 0.5, 3, true);
-        auto observed = observe(controller);
+        Observed observed;
+        observe(controller, observed);
         QWidget host;
         controller.showDialog(&host);
         auto* dialog = host.findChild<QDialog*>(QStringLiteral("particlesDialog"));

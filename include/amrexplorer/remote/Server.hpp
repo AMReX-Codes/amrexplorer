@@ -29,7 +29,7 @@ struct ServerOptions {
     // therefore also has to fit in
     //   responseWriteStallTimeout + size / responseWriteMinimumBytesPerSecond,
     // so a trickle-reader is retired within a bound the operator can compute.
-    // The default floor, 64 KiB/s, is far below any usable SSH tunnel; lower it
+    // The default floor, 64 KiB/s, is far below any usable SSH link; lower it
     // for a genuinely slow link (1 allows roughly 18 hours for a 64 MiB
     // response). Zero is rejected: it would restore the unbounded case.
     std::uint64_t responseWriteMinimumBytesPerSecond = 64U * 1024U;

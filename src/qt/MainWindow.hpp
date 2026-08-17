@@ -79,6 +79,7 @@ class DiagnosticsModel;
 class FabNavigator;
 class PaletteController;
 class ParticleController;
+class RangeController;
 class RemoteSessionController;
 class SequenceController;
 struct PlaneMapping;
@@ -514,14 +515,11 @@ private:
     // effective palette to the color bar, iso widget, overlays and a
     // re-render.
     void refreshPaletteDisplay();
-    // Per-field user range: each field remembers its own RangeMode and, when
-    // User, its min/max. commitFieldRange snapshots the current widgets for a
-    // field, applyFieldRange loads a field's snapshot (or the Visible default)
-    // back into the widgets, and resetRangeState clears everything for a fresh
-    // dataset.
-    void commitFieldRange(std::uint32_t field);
-    void applyFieldRange(std::uint32_t field);
+    // Range state for a fresh dataset: the controller's widgets and per-field
+    // memory, plus this window's full-domain range cache and pending store.
     void resetRangeState();
+    // Which metadata-backed range modes the current field/level offers,
+    // handed to the RangeController (which falls back to Visible if needed).
     void updateRangeModeAvailability();
     void showContoursDialog();
     // Draws the ParticleController's samples into a view: the projection and
@@ -790,19 +788,9 @@ private:
     UserGuideDialog* m_userGuideDialog = nullptr;
     QComboBox* m_fieldSelector = nullptr;
     QComboBox* m_levelSelector = nullptr;
-    QComboBox* m_rangeMode = nullptr;
-    QCheckBox* m_logarithmic = nullptr;
-    ScientificDoubleSpinBox* m_rangeMinimum = nullptr;
-    ScientificDoubleSpinBox* m_rangeMaximum = nullptr;
-    // Per-field range state for the current dataset. m_trackedField is the
-    // field the range widgets currently represent; the field selector swaps
-    // snapshots through this map when the user changes fields.
-    struct FieldRange {
-        RangeMode mode = RangeMode::File;
-        std::optional<std::pair<double, double>> userRange;
-    };
-    std::unordered_map<std::uint32_t, FieldRange> m_fieldRanges;
-    std::uint32_t m_trackedField = 0;
+    // Owns the range mode, User min/max and Log widgets and the per-field
+    // range memory; selection() feeds every slice request and frame spec.
+    RangeController* m_range = nullptr;
     QWidget* m_slicePositionControls = nullptr;
     QAction* m_positionSeparator = nullptr;
     std::array<QSpinBox*, 3> m_sliceSpinboxes{nullptr, nullptr, nullptr};

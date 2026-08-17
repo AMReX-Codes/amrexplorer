@@ -491,6 +491,33 @@ if(TARGET amrexplorer_qt)
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_palette_controller>")
 
+    add_executable(test_range_controller
+        unit/test_range_controller.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/RangeController.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/RangeController.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ScientificDoubleSpinBox.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ScientificDoubleSpinBox.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.hpp"
+    )
+    set_target_properties(test_range_controller PROPERTIES AUTOMOC ON)
+    target_include_directories(test_range_controller
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_range_controller
+        PRIVATE
+            amrexplorer::pipeline
+            amrexplorer::warnings
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Widgets
+    )
+    # The controller builds real widgets into a toolbar; offscreen keeps it
+    # headless.
+    add_test(NAME range_controller
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_range_controller>")
+    set_tests_properties(range_controller PROPERTIES TIMEOUT 60)
+
     add_executable(test_particle_controller
         unit/test_particle_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/ParticleController.cpp"

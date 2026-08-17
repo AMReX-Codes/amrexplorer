@@ -191,30 +191,11 @@ MainWindow::MainWindow(QWidget* parent)
     auto* rangeToolbar = m_rangeToolbar;
     rangeToolbar->setMovable(false);
     rangeToolbar->addWidget(new QLabel(tr("Range:"), rangeToolbar));
-    m_rangeMode = new QComboBox(rangeToolbar);
-    m_rangeMode->setObjectName(QStringLiteral("rangeModeSelector"));
-    m_rangeMode->addItem(tr("File"), static_cast<int>(RangeMode::File));
-    m_rangeMode->addItem(tr("Level"), static_cast<int>(RangeMode::Level));
-    m_rangeMode->addItem(tr("Visible"), static_cast<int>(RangeMode::Visible));
-    m_rangeMode->addItem(tr("User"), static_cast<int>(RangeMode::User));
-    rangeToolbar->addWidget(m_rangeMode);
-    m_rangeMinimum = new ScientificDoubleSpinBox(rangeToolbar);
-    m_rangeMaximum = new ScientificDoubleSpinBox(rangeToolbar);
-    for (auto* range : {m_rangeMinimum, m_rangeMaximum}) {
-        range->setRange(-std::numeric_limits<double>::max(),
-            std::numeric_limits<double>::max());
-        range->setMinimumWidth(110);
-        range->setEnabled(false);
-        rangeToolbar->addWidget(range);
-    }
-    m_rangeMinimum->setPrefix(tr("min "));
-    m_rangeMaximum->setPrefix(tr("max "));
-    m_rangeMaximum->setValue(1.0);
-    // Separate the Range group (mode + min/max) from Log and Palette, matching
-    // the per-group separators on the Slice Controls toolbar.
-    rangeToolbar->addSeparator();
-    m_logarithmic = new QCheckBox(tr("Log"), rangeToolbar);
-    rangeToolbar->addWidget(m_logarithmic);
+    // The range mode, User min/max and Log, and the per-field memory behind
+    // them; the separator before Log matches the per-group separators on the
+    // Slice Controls toolbar, as does the one before Palette below.
+    m_range = new RangeController(this);
+    m_range->createToolbarWidgets(rangeToolbar);
     rangeToolbar->addSeparator();
     rangeToolbar->addWidget(new QLabel(tr("Palette:"), rangeToolbar));
     rangeToolbar->addWidget(m_paletteController->createSelector(rangeToolbar));
@@ -234,12 +215,7 @@ MainWindow::MainWindow(QWidget* parent)
             // animation blocks signals and preserves the index, so the range
             // stays constant across frames.
             if (m_controlsReady && index >= 0) {
-                const auto newField = m_fieldSelector->itemData(index).toUInt();
-                if (newField != m_trackedField) {
-                    commitFieldRange(m_trackedField);
-                    m_trackedField = newField;
-                    applyFieldRange(newField);
-                }
+                m_range->switchField(m_fieldSelector->itemData(index).toUInt());
             }
             // A deferred full-domain range store (m_pendingRangeStore) is keyed
             // to the field/level/mode in effect when it was queued. Changing any
@@ -257,36 +233,21 @@ MainWindow::MainWindow(QWidget* parent)
             updateRangeModeAvailability();
             scheduleSliceRequest();
         });
-    connect(m_rangeMode, qOverload<int>(&QComboBox::currentIndexChanged),
-        this, [this](int) {
-            m_pendingRangeStore.reset();  // see the field selector above
-            updateRangeModeAvailability();
-            const auto userRange = static_cast<RangeMode>(
-                m_rangeMode->currentData().toInt()) == RangeMode::User;
-            m_rangeMinimum->setEnabled(userRange && m_controlsReady);
-            m_rangeMaximum->setEnabled(userRange && m_controlsReady);
-            scheduleSliceRequest();
+    connect(m_range, &RangeController::modeChanged, this, [this] {
+        m_pendingRangeStore.reset();  // see the field selector above
+        updateRangeModeAvailability();
+        scheduleSliceRequest();
+    });
+    connect(m_range, &RangeController::userRangeChanged, this,
+        [this] { scheduleSliceRequest(); });
+    connect(m_range, &RangeController::logarithmicChanged, this,
+        [this] { scheduleSliceRequest(); });
+    connect(m_range, &RangeController::statusMessage, this,
+        [this](const QString& message, int timeoutMs) {
+            statusBar()->showMessage(message, timeoutMs);
         });
-    connect(m_rangeMinimum, qOverload<double>(&QDoubleSpinBox::valueChanged),
-        this, [this](double) {
-            if (static_cast<RangeMode>(m_rangeMode->currentData().toInt())
-                == RangeMode::User) {
-                scheduleSliceRequest();
-            }
-        });
-    connect(m_rangeMaximum, qOverload<double>(&QDoubleSpinBox::valueChanged),
-        this, [this](double) {
-            if (static_cast<RangeMode>(m_rangeMode->currentData().toInt())
-                == RangeMode::User) {
-                scheduleSliceRequest();
-            }
-        });
-    connect(m_logarithmic, &QCheckBox::toggled,
-        this, [this](bool) { scheduleSliceRequest(); });
     m_fieldSelector->setEnabled(false);
     m_levelSelector->setEnabled(false);
-    m_rangeMode->setEnabled(false);
-    m_logarithmic->setEnabled(false);
 
     m_metadataDock = new QDockWidget(tr("Dataset Metadata"), this);
     m_metadataTree = new QTreeWidget(m_metadataDock);
@@ -607,8 +568,8 @@ MainWindow::MainWindow(QWidget* parent)
         this, [this](int) { syncMenuChecks(); });
     // No saveSettings here: range mode is deliberately not persisted (see
     // saveSettings), so the call only ever rewrote unrelated keys.
-    connect(m_logarithmic, &QCheckBox::toggled,
-        this, [this](bool) { saveSettings(); });
+    connect(m_range, &RangeController::logarithmicChanged, this,
+        [this] { saveSettings(); });
 
     wireView(m_view2d);
     for (auto& state : m_planeViews) {
@@ -779,16 +740,9 @@ void MainWindow::syncActiveViewColorControls(const PlaneViewState& state)
     m_colorBar->setFieldRange(state.displayLogarithmic
         ? state.fieldName + tr(" (log)") : state.fieldName,
         state.displayMinimum, state.displayMaximum);
-    if (m_logarithmic->isChecked() != state.displayLogarithmic) {
-        const QSignalBlocker logarithmicBlocker(m_logarithmic);
-        m_logarithmic->setChecked(state.displayLogarithmic);
-    }
-    if (static_cast<RangeMode>(m_rangeMode->currentData().toInt())
-        != RangeMode::User) {
-        const QSignalBlocker minimumBlocker(m_rangeMinimum);
-        const QSignalBlocker maximumBlocker(m_rangeMaximum);
-        m_rangeMinimum->setValue(state.displayMinimum);
-        m_rangeMaximum->setValue(state.displayMaximum);
+    m_range->showLogarithmic(state.displayLogarithmic);
+    if (m_range->mode() != RangeMode::User) {
+        m_range->showDisplayRange(state.displayMinimum, state.displayMaximum);
     }
 }
 

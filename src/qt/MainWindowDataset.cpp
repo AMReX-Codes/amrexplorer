@@ -59,19 +59,15 @@ void MainWindow::restoreSettings()
     m_paletteController->restore(settings);
     m_colorBar->setPalette(&m_paletteController->palette());
 
-    {
-        const QSignalBlocker logarithmicBlocker(m_logarithmic);
-        m_logarithmic->setChecked(
-            settings.value(QStringLiteral("range/logarithmic"), false).toBool());
-    }
+    m_range->showLogarithmic(
+        settings.value(QStringLiteral("range/logarithmic"), false).toBool());
     {
         // A stored format that no longer validates falls back to the default.
         const auto format = settings.value(QStringLiteral("numberFormat"),
             defaultNumberFormat()).toString();
         m_numberFormat = isValidNumberFormat(format) ? format
             : defaultNumberFormat();
-        m_rangeMinimum->setNumberFormat(m_numberFormat);
-        m_rangeMaximum->setNumberFormat(m_numberFormat);
+        m_range->setNumberFormat(m_numberFormat);
         m_colorBar->setNumberFormat(m_numberFormat);
     }
     m_animationPanel->setSpeedValue(
@@ -126,7 +122,7 @@ void MainWindow::saveSettings()
     // Range mode is deliberately not persisted: the correct default (File)
     // depends on the dataset and restoring a different mode from a previous
     // session would produce unexpected color bars.
-    settings.setValue(QStringLiteral("range/logarithmic"), m_logarithmic->isChecked());
+    settings.setValue(QStringLiteral("range/logarithmic"), m_range->logarithmic());
     m_paletteController->save(settings);
     settings.setValue(QStringLiteral("numberFormat"), m_numberFormat);
     settings.setValue(QStringLiteral("animation/speed"),
@@ -723,12 +719,9 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_diagnosticsModel->resetDatasetMetrics();
     m_fieldSelector->setEnabled(false);
     m_levelSelector->setEnabled(false);
-    m_rangeMode->setEnabled(false);
-    m_logarithmic->setEnabled(false);
+    m_range->setControlsReady(false);
     m_boxesAction->setEnabled(false);
     m_slicePlanesAction->setEnabled(false);
-    m_rangeMinimum->setEnabled(false);
-    m_rangeMaximum->setEnabled(false);
     setSlicePositionControlsVisible(false);
     m_animationPanel->setSweepVisible(false);
     m_levelMenu->setEnabled(false);
@@ -982,8 +975,6 @@ void MainWindow::requestInitialSlice(
                     if (restoredSpec) {
                         const QSignalBlocker fieldBlocker(m_fieldSelector);
                         const QSignalBlocker levelBlocker(m_levelSelector);
-                        const QSignalBlocker rangeBlocker(m_rangeMode);
-                        const QSignalBlocker logBlocker(m_logarithmic);
                         const auto fieldIndex = m_fieldSelector->findData(
                             restoredSpec->field);
                         if (fieldIndex >= 0) {
@@ -994,27 +985,18 @@ void MainWindow::requestInitialSlice(
                         if (levelIndex >= 0) {
                             m_levelSelector->setCurrentIndex(levelIndex);
                         }
-                        m_rangeMode->setCurrentIndex(
-                            m_rangeMode->findData(
-                                static_cast<int>(restoredSpec->rangeMode)));
-                        m_logarithmic->setChecked(restoredSpec->logarithmic);
-                        m_trackedField =
-                            m_fieldSelector->currentData().toUInt();
-                        m_fieldRanges[m_trackedField] = {
-                            restoredSpec->rangeMode, restoredSpec->userRange};
+                        m_range->setSelection({restoredSpec->rangeMode,
+                            restoredSpec->userRange, restoredSpec->logarithmic});
+                        m_range->setTrackedField(
+                            m_fieldSelector->currentData().toUInt());
+                        m_range->commitFieldRange(m_range->trackedField());
+                        // Before the extraction the User bounds were written
+                        // unblocked here, which scheduled a (redundant)
+                        // re-slice; kept so this path renders as it did.
                         if (restoredSpec->userRange) {
-                            m_rangeMinimum->setValue(
-                                restoredSpec->userRange->first);
-                            m_rangeMaximum->setValue(
-                                restoredSpec->userRange->second);
+                            scheduleSliceRequest();
                         }
                         updateRangeModeAvailability();
-                        const auto userRange =
-                            static_cast<RangeMode>(
-                                m_rangeMode->currentData().toInt())
-                            == RangeMode::User;
-                        m_rangeMinimum->setEnabled(userRange);
-                        m_rangeMaximum->setEnabled(userRange);
                         configureSlicePositionControls();
                         syncMenuChecks();
                     }

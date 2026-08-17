@@ -1200,11 +1200,11 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_vectorUField = -1;
     m_vectorVField = -1;
     m_vectorWField = -1;
-    // Runtime particle state goes; the settings stay, because a restore
-    // reinstalls only what its spec carries (the species selection is part of
-    // that, so it is cleared here and comes back from the spec, or is reset
-    // with everything else by configureForDataset when there is none).
-    m_particleController->cancel();
+    // Runtime particle state goes (the load was cancelled above); the
+    // settings stay, because a restore reinstalls only what its spec carries
+    // (the species selection is part of that, so it is cleared here and comes
+    // back from the spec, or is reset with everything else by
+    // configureForDataset when there is none).
     m_particleController->clearSamples();
     m_particleController->clearSelection();
     setWindowTitle(tr("AMReXplorer"));

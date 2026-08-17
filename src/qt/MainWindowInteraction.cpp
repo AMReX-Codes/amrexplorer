@@ -1,12 +1,6 @@
 #include "MainWindowInternal.hpp"
 
-#include <QIcon>
-
 namespace amrvis::qt {
-
-namespace {
-
-} // namespace
 
 void MainWindow::focusActiveViewForPanning()
 {

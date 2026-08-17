@@ -461,10 +461,6 @@ MainWindow::MainWindow(QWidget* parent)
                 reportBackgroundError(
                     tr("Cannot load frame: %1").arg(message));
             }
-            // The switch cancelled any particle load and left the action
-            // for the arriving frame to enable; that frame is not coming,
-            // so restore it for the dataset still on show.
-            m_particleController->configureForDataset(true);
             updateDiagnostics();
         });
 

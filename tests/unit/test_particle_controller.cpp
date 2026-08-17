@@ -232,6 +232,8 @@ int main(int argc, char** argv)
         auto* action = controller.createAction(&application);
         QWidget host;
         auto* progress = controller.createProgress(&host);
+        // Shown, so isVisible() reports the bar itself rather than the host.
+        host.show();
         require(!action->isEnabled() && !progress->isVisible(),
             "the action starts enabled or the progress visible");
         require(controller.settings().fraction == 1.0
@@ -368,6 +370,49 @@ int main(int argc, char** argv)
         require(!controller.loading() && controller.samples().empty()
                 && observed.activityEvents == 2 && observed.overlays == 3,
             "an empty selection ran a worker");
+    }
+
+    // cancel() during a load: the loading UI comes down and the action goes
+    // back to what the dataset warrants, without waiting for the cancelled
+    // load's result -- which, when it lands, is dropped as stale and leaves
+    // the action alone. Installing samples from outside is silent. Without a
+    // dataset, cancel() leaves the action off.
+    {
+        current = session;
+        session->delayMs = 200;
+        Observed observed;
+        ParticleController controller(hooks());
+        auto* action = controller.createAction(&application);
+        QWidget host;
+        auto* progress = controller.createProgress(&host);
+        host.show();
+        controller.configureForDataset(false);
+        observe(controller, observed);
+        controller.restoreSelection({"ions"}, 1.0, 0, true);
+        controller.reload();
+        require(controller.loading() && !action->isEnabled()
+                && progress->isVisible(),
+            "the load did not take the action down");
+        controller.cancel();
+        require(!controller.loading() && !progress->isVisible()
+                && action->isEnabled(),
+            "cancel did not restore the action for the dataset still shown");
+        const auto overlays = observed.overlays;
+        controller.setSamples({});
+        controller.clearSamples();
+        require(observed.overlays == overlays,
+            "installing samples from outside redrew the overlays");
+        waitFor(application, [&] { return observed.finished == 1; },
+            "the cancelled load did not finish");
+        require(observed.stale == 1 && observed.failures.isEmpty()
+                && action->isEnabled() && !controller.loading(),
+            "the cancelled load's result was not dropped, or it touched "
+            "the action");
+        session->delayMs = 0;
+        current.reset();
+        controller.cancel();
+        require(!action->isEnabled(),
+            "cancel enabled the action with no dataset");
     }
 
     // A failing load reports once, through loadFailed, and settles.

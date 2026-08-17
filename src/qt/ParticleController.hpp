@@ -117,8 +117,11 @@ public:
     // indicator up and the action disabled until it lands.
     void reload();
     // Cancels an in-flight load without touching samples or settings: its
-    // result, should it still arrive, is dropped. Frame switches, dataset
-    // teardown and shutdown all go through here.
+    // result, should it still arrive, is dropped. The loading UI comes down
+    // and the action goes back to what the current dataset warrants (a
+    // frame switch whose frame then fails must not leave it stranded); a
+    // host tearing the dataset down disables it again itself. Frame
+    // switches, dataset teardown and shutdown all go through here.
     void cancel();
 
     void showDialog(QWidget* parent);
@@ -149,6 +152,8 @@ signals:
 
 private:
     void setLoadingUi(bool loading);
+    // Enabled iff the current dataset has species and no load is running.
+    void refreshActionEnabled();
 
     Hooks m_hooks;
     Settings m_settings;

@@ -166,7 +166,14 @@ void ParticleController::configureForDataset(bool preserveSelection)
         m_settings.colors.try_emplace(
             species[index].name, defaultParticleColor(index));
     }
-    setActionEnabled(!species.empty() && !m_loading);
+    refreshActionEnabled();
+}
+
+void ParticleController::refreshActionEnabled()
+{
+    const auto dataset = m_hooks.dataset ? m_hooks.dataset() : nullptr;
+    setActionEnabled(
+        dataset && !dataset->particleSpecies().empty() && !m_loading);
 }
 
 void ParticleController::setActionEnabled(bool enabled)
@@ -201,6 +208,11 @@ void ParticleController::cancel()
     m_stopSource.request_stop();
     ++m_generation;
     setLoadingUi(false);
+    // The load took the action down; the cancelled load's result will not
+    // put it back (its generation is stale), so do it here, for whatever
+    // dataset the host still shows. Hosts that are tearing that dataset down
+    // disable the action themselves right after this call.
+    refreshActionEnabled();
 }
 
 void ParticleController::reload()

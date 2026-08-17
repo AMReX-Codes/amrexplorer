@@ -298,6 +298,39 @@ MainWindow::MainWindow(QWidget* parent)
     addDockWidget(Qt::LeftDockWidgetArea, m_metadataDock);
     m_metadataDock->setVisible(false);
 
+    // The remote session: the ssh-launched server, its connection, and the
+    // Open Remote dialogs and browser. It says what to open; this window opens
+    // it over the connection and shows the session's messages.
+    m_remoteSession = new RemoteSessionController(
+        RemoteSessionController::Hooks{
+            [this] { return m_closing; },
+            [this]() -> std::optional<std::string> {
+                if (auto remoteSession = std::dynamic_pointer_cast<
+                        remote::RemoteDatasetSession>(m_dataset)) {
+                    return remoteSession->remotePath();
+                }
+                return std::nullopt;
+            },
+            [] { return makeSettingsPtr(); },
+        },
+        kVersion, this);
+    connect(m_remoteSession, &RemoteSessionController::sessionChanged, this,
+        [this] { updateDiagnostics(); });
+    connect(m_remoteSession, &RemoteSessionController::openRequested, this,
+        [this](const std::vector<std::string>& paths, bool sequence) {
+            if (sequence) {
+                openRemoteSequence(paths);
+            } else {
+                openRemoteDataset(paths.front());
+            }
+        });
+    connect(m_remoteSession, &RemoteSessionController::statusMessage, this,
+        [this](const QString& message, int timeoutMs) {
+            statusBar()->showMessage(message, timeoutMs);
+        });
+    connect(m_remoteSession, &RemoteSessionController::errorReported, this,
+        [this](const QString& message) { reportBackgroundError(message); });
+
     // The Diagnostics panel's counters, metrics and histories live in their
     // model; it renders the dock, and this window supplies the lines only it
     // knows.
@@ -305,7 +338,7 @@ MainWindow::MainWindow(QWidget* parent)
         DiagnosticsModel::Hooks{
             [this] { return m_generation; },
             [this] { return m_sequenceController->lastFrameSwitchMs(); },
-            [this] { return remoteDiagnosticsLines(); },
+            [this] { return m_remoteSession->diagnosticsLines(); },
         },
         this);
     m_diagnosticsDock = m_diagnosticsModel->createDock(this);
@@ -614,144 +647,6 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow() = default;
 
-void MainWindow::promptRemoteOpen(bool sequence)
-{
-    QDialog dialog(this);
-    dialog.setWindowTitle(sequence ? tr("Open Remote Plotfile Sequence")
-                                   : tr("Open Remote Plotfile"));
-    // Wide enough that a typical scratch-filesystem path is visible whole.
-    dialog.setMinimumWidth(560);
-    auto* layout = new QFormLayout(&dialog);
-    auto* explanation = new QLabel(
-        tr("AMReXplorer runs amrexplorer-server on the destination through "
-           "ssh and talks to it over that connection. Any destination that "
-           "works for the ssh command works here, including aliases from "
-           "~/.ssh/config. An unchanged destination keeps the current "
-           "session. Enter the plotfile path, or use Browse... to pick it "
-           "on the remote machine."),
-        &dialog);
-    explanation->setWordWrap(true);
-    layout->addRow(explanation);
-    // Prefill from the live session so opening another path reuses it; a
-    // fresh window falls back to the last destination used anywhere.
-    const auto sessionDestination = m_sshRemoteSession
-        ? QString::fromStdString(m_sshRemoteSession->destination())
-        : QString();
-    auto* destinationEdit = new QLineEdit(
-        sessionDestination.isEmpty()
-            ? makeSettings()
-                  .value(QStringLiteral("remote/sshDestination"))
-                  .toString()
-            : sessionDestination,
-        &dialog);
-    destinationEdit->setPlaceholderText(tr("user@host or ssh alias"));
-    layout->addRow(tr("SSH destination:"), destinationEdit);
-    auto* executableEdit = new QLineEdit(
-        remoteServerExecutableFor(destinationEdit->text().trimmed()),
-        &dialog);
-    executableEdit->setToolTip(
-        tr("Name on the remote PATH, or a path such as "
-           "~/bin/amrexplorer-server. Remembered per destination."));
-    layout->addRow(tr("Remote amrexplorer-server:"), executableEdit);
-    // The executable follows the destination (each remembers its own) until
-    // the user edits it in this dialog; textEdited fires only on user edits.
-    auto executableEdited = std::make_shared<bool>(false);
-    connect(executableEdit, &QLineEdit::textEdited, &dialog,
-        [executableEdited] { *executableEdited = true; });
-    connect(destinationEdit, &QLineEdit::textChanged, &dialog,
-        [executableEdit, executableEdited](const QString& text) {
-            if (!*executableEdited) {
-                executableEdit->setText(
-                    remoteServerExecutableFor(text.trimmed()));
-            }
-        });
-    QLineEdit* pathEdit = nullptr;
-    QPlainTextEdit* pathsEdit = nullptr;
-    if (sequence) {
-        pathsEdit = new QPlainTextEdit(&dialog);
-        pathsEdit->setPlaceholderText(
-            tr("One plotfile path per line, in playback order"));
-        pathsEdit->setTabChangesFocus(true);
-        layout->addRow(tr("Plotfile paths on the remote machine:"), pathsEdit);
-    } else {
-        pathEdit = new QLineEdit(&dialog);
-        pathEdit->setPlaceholderText(tr("/path/to/plt00010 or ~/run/plt00010"));
-        layout->addRow(tr("Plotfile path on the remote machine:"), pathEdit);
-    }
-    auto* buttons = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    buttons->button(QDialogButtonBox::Ok)->setText(tr("Open"));
-    // Browse... needs only the connection fields: it starts (or reuses) the
-    // session and picks the path in the remote browser once it is ready.
-    auto* browseButton = buttons->addButton(
-        tr("Browse..."), QDialogButtonBox::ActionRole);
-    browseButton->setToolTip(
-        tr("Connect and choose the plotfile on the remote machine"));
-    bool browse = false;
-    connect(browseButton, &QPushButton::clicked, &dialog, [&] {
-        browse = true;
-        dialog.accept();
-    });
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    layout->addRow(buttons);
-    if (dialog.exec() != QDialog::Accepted) {
-        return;
-    }
-    const auto destination = destinationEdit->text().trimmed();
-    const auto executable = executableEdit->text().trimmed();
-    const bool sessionMatches = hasRemoteConnection() && m_sshRemoteSession
-        && destination.toStdString() == m_sshRemoteSession->destination()
-        && executable.toStdString() == m_sshRemoteSession->serverExecutable();
-    if (browse) {
-        if (destination.isEmpty() || executable.isEmpty()) {
-            QMessageBox::warning(this, dialog.windowTitle(),
-                tr("The SSH destination and the server executable are "
-                   "required."));
-            return;
-        }
-        if (sessionMatches) {
-            browseRemotePlotfiles(sequence);
-        } else {
-            startSshRemoteSession(destination.toStdString(),
-                executable.toStdString(), {},
-                [this, sequence] { browseRemotePlotfiles(sequence); });
-        }
-        return;
-    }
-    std::vector<std::string> paths;
-    if (sequence) {
-        for (const auto& line : pathsEdit->toPlainText().split(
-                 QLatin1Char('\n'), Qt::SkipEmptyParts)) {
-            const auto path = line.trimmed();
-            if (!path.isEmpty()) {
-                paths.push_back(path.toStdString());
-            }
-        }
-    } else if (!pathEdit->text().trimmed().isEmpty()) {
-        paths.push_back(pathEdit->text().trimmed().toStdString());
-    }
-    if (destination.isEmpty() || executable.isEmpty() || paths.empty()) {
-        QMessageBox::warning(this, dialog.windowTitle(),
-            tr("The SSH destination, the server executable, and at least one "
-               "plotfile path are required."));
-        return;
-    }
-    // An unchanged destination and executable mean the current session is the
-    // one asked for; open over it directly instead of starting ssh again.
-    if (sessionMatches) {
-        if (sequence) {
-            openRemoteSequence(paths);
-        } else {
-            openRemoteDataset(paths.front());
-        }
-        return;
-    }
-    startSshRemoteSession(
-        destination.toStdString(), executable.toStdString(),
-        std::move(paths));
-}
-
 void MainWindow::wireView(PlaneViewState& state)
 {
     auto* view = state.view;
@@ -1050,12 +945,12 @@ void MainWindow::createMenus()
     auto* openRemoteAction = new QAction(
         tr("Open Remote &Plotfile..."), this);
     connect(openRemoteAction, &QAction::triggered, this,
-        [this] { promptRemoteOpen(false); });
+        [this] { m_remoteSession->promptOpen(this, false); });
 
     auto* openRemoteSequenceAction = new QAction(
         tr("Open &Remote Plotfile Sequence..."), this);
     connect(openRemoteSequenceAction, &QAction::triggered, this,
-        [this] { promptRemoteOpen(true); });
+        [this] { m_remoteSession->promptOpen(this, true); });
 
     auto* openFabAction = new QAction(tr("Open &FAB..."), this);
     connect(openFabAction, &QAction::triggered, this,

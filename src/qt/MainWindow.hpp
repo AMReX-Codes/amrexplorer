@@ -29,7 +29,6 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -80,8 +79,8 @@ class DiagnosticsModel;
 class FabNavigator;
 class PaletteController;
 class ParticleController;
+class RemoteSessionController;
 class SequenceController;
-class SshRemoteSession;
 struct PlaneMapping;
 class UserGuideDialog;
 
@@ -101,30 +100,18 @@ public:
     ~MainWindow() override;
 
     void openDataset(const std::filesystem::path& path, bool metadataOnly = false);
-    // Installs the connection every remote open goes through, with its
-    // handshake already complete: the SSH session's once it is ready, or a
-    // loopback one from a test harness. Replaces any previous connection;
-    // datasets open on that one fail on their next request.
+    // The remote session (ssh-launched server, its connection, the Open
+    // Remote dialogs and browser) lives in RemoteSessionController; these two
+    // forward to it for the command line and the test harnesses. See
+    // RemoteSessionController::install and ::start.
     void useRemoteConnection(
         std::shared_ptr<remote::Connection> connection, QString label);
-    // True while an installed remote connection is live.
-    [[nodiscard]] bool hasRemoteConnection() const;
+    void startSshRemoteSession(std::string destination,
+        std::string serverExecutable, std::vector<std::string> remotePaths);
     // Open a server-visible path, or a sequence of them, over the installed
     // remote connection.
     void openRemoteDataset(std::string remotePath);
     void openRemoteSequence(const std::vector<std::string>& remotePaths);
-    // Runs amrexplorer-server on the named OpenSSH destination with the wire
-    // protocol over ssh's stdio, installs the connection once its handshake
-    // completes, and opens the supplied server-visible paths. An empty path
-    // list only establishes the session. `onReady` runs after the connection
-    // is installed and any paths are opened; the browser uses it.
-    void startSshRemoteSession(std::string destination,
-        std::string serverExecutable, std::vector<std::string> remotePaths,
-        std::function<void()> onReady = {});
-    // Browses the live remote session's filesystem and opens the plotfile
-    // (or plotfiles, when `sequence`) picked there. Starts at the directory
-    // last browsed on this destination, else the server's home.
-    void browseRemotePlotfiles(bool sequence);
     // Opens a plotfile sequence (the legacy "-a" file animation): frames are
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.
@@ -503,16 +490,6 @@ private:
         std::filesystem::path dataRoot, bool preserveFabSelector,
         std::optional<FrameSliceSpec> initialSpec,
         std::optional<RemoteOpen> remoteOpen = std::nullopt);
-    // One dialog for the Open Remote actions: SSH destination, server
-    // executable, and the path (or paths, when `sequence`). Reuses the live
-    // session when the connection fields are unchanged; otherwise starts a
-    // new one and opens the paths once it is ready.
-    void promptRemoteOpen(bool sequence);
-    // The server executable to use for a destination: the one last used for
-    // it, else "amrexplorer-server".
-    [[nodiscard]] static QString remoteServerExecutableFor(
-        const QString& destination);
-
     // A fresh independent top-level window (WA_DeleteOnClose) for the
     // "Open New Window" menu action; it shares no view/cache state with this one.
     MainWindow* createNewWindow();
@@ -569,7 +546,6 @@ private:
     // Re-renders the Diagnostics panel; the model owns the counters, this
     // window only supplies the lines it alone knows (see the model's Hooks).
     void updateDiagnostics();
-    [[nodiscard]] QString remoteDiagnosticsLines() const;
     // Non-modal failure report: status bar plus the model's error history
     // (which shows the dock); suppressed while closing.
     void reportBackgroundError(const QString& message);
@@ -935,12 +911,12 @@ private:
     // progress indicator; the host draws its samples into the views.
     ParticleController* m_particleController = nullptr;
     std::filesystem::path m_datasetPath;
-    std::shared_ptr<remote::Connection> m_remoteConnection;
-    QString m_remoteLabel;
-    // Counts installed connections. Server DatasetIds restart at one per
-    // connection, so dataset-scoped caches are keyed by this as well.
-    std::uint64_t m_remoteConnectionGeneration = 0;
-    std::unique_ptr<SshRemoteSession> m_sshRemoteSession;
+    // Owns the ssh session and the connection every remote open goes
+    // through, and the Open Remote dialogs and browser; asks this window to
+    // open what the user picked. Server DatasetIds restart at one per
+    // connection, so dataset-scoped caches are keyed by its
+    // connectionGeneration() as well.
+    RemoteSessionController* m_remoteSession = nullptr;
     bool m_remoteSequence = false;
     std::uint64_t m_remoteSequenceConnectionGeneration = 0;
     // Owns the palette selection, its widgets and persistence; palette() is

@@ -83,6 +83,7 @@ public:
         bool fromFile = false;
         QString filePath;
         bool reversed = false;
+        friend bool operator==(const State&, const State&) = default;
     };
 
     explicit PaletteController(QObject* parent = nullptr);
@@ -146,11 +147,12 @@ signals:
     void loadFileRequested();
 
 private:
-    // Installs a selection and its base palette, syncs the widgets, derives
-    // the effective palette and emits paletteChanged -- unless neither the
-    // selection nor the base palette changed, in which case only the widgets
-    // are resynced.
-    void install(Palette basePalette, State state);
+    // Installs a selection, its base palette and the wanted-but-unloaded file
+    // (empty for none), syncs the widgets, derives the effective palette and
+    // emits paletteChanged -- unless none of the three changed, in which case
+    // only the widgets are resynced. Everything save() persists is one of the
+    // three, so a change in what is persisted always emits.
+    void install(Palette basePalette, State state, QString unloadedFilePath);
     void syncMenu();
     void syncSelector();
 
@@ -161,7 +163,8 @@ private:
     State m_state;
     // The file palette the last apply() asked for and could not load: the
     // selection fell back to a builtin, but save() persists this as the
-    // wanted file until selectBuiltin, loadFile or apply replaces it.
+    // wanted file until selectBuiltin, loadFile or apply replaces it. Set
+    // only by install, which counts its transitions as a change.
     QString m_unloadedFilePath;
     QPointer<QActionGroup> m_menuGroup;
     QPointer<QAction> m_reverseAction;

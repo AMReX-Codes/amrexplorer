@@ -126,9 +126,8 @@ void PaletteController::selectBuiltin(int index)
     state.builtinIndex = index;
     state.fromFile = false;
     state.filePath.clear();
-    m_unloadedFilePath.clear();
     install(builtinPalette(builtinPalettes[static_cast<std::size_t>(index)]),
-        std::move(state));
+        std::move(state), QString());
 }
 
 std::optional<QString> PaletteController::loadFile(const QString& path)
@@ -142,8 +141,7 @@ std::optional<QString> PaletteController::loadFile(const QString& path)
     State state = m_state;
     state.fromFile = true;
     state.filePath = path;
-    m_unloadedFilePath.clear();
-    install(std::move(loaded), std::move(state));
+    install(std::move(loaded), std::move(state), QString());
     return std::nullopt;
 }
 
@@ -154,7 +152,8 @@ void PaletteController::setReversed(bool reversed)
     }
     State state = m_state;
     state.reversed = reversed;
-    install(m_basePalette, std::move(state));
+    // Reversing does not change which file is wanted.
+    install(m_basePalette, std::move(state), m_unloadedFilePath);
 }
 
 std::optional<QString> PaletteController::apply(const State& requested)
@@ -177,19 +176,18 @@ std::optional<QString> PaletteController::apply(const State& requested)
             error = QString::fromUtf8(failure.what());
         }
         if (loaded) {
-            m_unloadedFilePath.clear();
-            install(std::move(*loaded), std::move(state));
+            install(std::move(*loaded), std::move(state), QString());
             return std::nullopt;
         }
     }
     // Keep the wanted file (see m_unloadedFilePath) only when there was one
     // and it failed; a state without a file replaces any earlier one.
-    m_unloadedFilePath = error ? state.filePath : QString();
+    QString unloadedFilePath = error ? state.filePath : QString();
     state.fromFile = false;
     state.filePath.clear();
     install(builtinPalette(
                 builtinPalettes[static_cast<std::size_t>(state.builtinIndex)]),
-        std::move(state));
+        std::move(state), std::move(unloadedFilePath));
     return error;
 }
 
@@ -257,17 +255,19 @@ QStringList PaletteController::selectorLabels() const
     return labels;
 }
 
-void PaletteController::install(Palette basePalette, State state)
+void PaletteController::install(
+    Palette basePalette, State state, QString unloadedFilePath)
 {
     // The base palette is compared as well as the state: reloading the same
     // file path picks up an edited file, which the state alone cannot tell.
-    const bool changed = state.builtinIndex != m_state.builtinIndex
-        || state.fromFile != m_state.fromFile
-        || state.filePath != m_state.filePath
-        || state.reversed != m_state.reversed
-        || basePalette != m_basePalette;
+    // So is the unloaded file: re-selecting the builtin a failed file fell
+    // back to changes nothing visible, but drops the wanted file, which the
+    // host must be told to persist.
+    const bool changed = state != m_state || basePalette != m_basePalette
+        || unloadedFilePath != m_unloadedFilePath;
     m_basePalette = std::move(basePalette);
     m_state = std::move(state);
+    m_unloadedFilePath = std::move(unloadedFilePath);
     m_palette = m_state.reversed ? m_basePalette.reversed() : m_basePalette;
     // Always resync: a click on the checked action of the ExclusiveOptional
     // menu group has just unchecked it, no-op or not.

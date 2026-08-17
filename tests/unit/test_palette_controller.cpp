@@ -324,12 +324,25 @@ int main(int argc, char** argv)
                 "the kept file preference did not load once available");
         }
         {
-            // An explicit selection replaces the wanted file.
+            // An explicit selection replaces the wanted file -- even the
+            // builtin the failed file fell back to, which changes nothing
+            // visible. That still has to emit: the host persists only on
+            // paletteChanged, and what save() writes just changed.
             require(QFile::remove(path), "could not remove the palette fixture");
             QSettings settings(settingsPath, QSettings::IniFormat);
             PaletteController controller;
-            require(controller.restore(settings).has_value(), "fixture restore");
-            controller.selectBuiltin(1);
+            require(controller.restore(settings).has_value()
+                    && controller.state().builtinIndex == 4,
+                "fixture restore");
+            int changes = 0;
+            QObject::connect(&controller, &PaletteController::paletteChanged,
+                [&changes] { ++changes; });
+            controller.selectBuiltin(4);
+            require(changes == 1,
+                "re-selecting the fallback builtin did not emit paletteChanged");
+            controller.selectBuiltin(4);
+            require(changes == 1,
+                "re-selecting the builtin again emitted paletteChanged");
             controller.save(settings);
             require(!settings.value(QStringLiteral("palette/fromFile")).toBool()
                     && settings.value(QStringLiteral("palette/filePath"))

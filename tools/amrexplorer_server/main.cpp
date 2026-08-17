@@ -20,7 +20,7 @@
 #endif
 
 #ifndef AMREXPLORER_VERSION
-#define AMREXPLORER_VERSION "0.2.0-dev"
+#define AMREXPLORER_VERSION "0.3.0-dev"
 #endif
 
 namespace {

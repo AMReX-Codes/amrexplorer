@@ -72,9 +72,10 @@ no load running × not suspended by the host) is the reference.
 
 The window's own test surface is the `…ForTest` accessors in
 `MainWindowTestAccess.cpp` (compiled only with `AMREXPLORER_QT_TEST_ACCESS`),
-driven by the offscreen `--*-smoke-test` harnesses in `main.cpp`; they cover
-the integration the collaborators' unit tests cannot -- a slice arriving in a
-view, a sequence frame switching, the sync settling.
+driven by the offscreen `--*-smoke-test` harnesses in `SmokeHarness*.cpp` (one
+file per theme, dispatched from `main.cpp`); they cover the integration the
+collaborators' unit tests cannot -- a slice arriving in a view, a sequence
+frame switching, the sync settling.
 
 ## The dataset session abstraction
 

@@ -259,7 +259,8 @@ int main(int argc, char** argv)
             int changes = 0;
             QObject::connect(&controller, &PaletteController::paletteChanged,
                 [&changes] { ++changes; });
-            controller.restore(settings);
+            require(!controller.restore(settings).has_value(),
+                "restore of a builtin selection reported an error");
             require(changes == 0, "restore emitted paletteChanged");
             require(controller.state().builtinIndex == 4
                     && controller.state().reversed
@@ -282,20 +283,72 @@ int main(int argc, char** argv)
         {
             QSettings settings(settingsPath, QSettings::IniFormat);
             PaletteController controller;
-            controller.restore(settings);
-            require(controller.state().fromFile
+            require(!controller.restore(settings).has_value()
+                    && controller.state().fromFile
                     && controller.state().filePath == path
                     && controller.palette().slotArgb(200) == 0xFFC80000U,
                 "restore did not reload the file palette");
         }
         require(QFile::remove(path), "could not remove the palette fixture");
         {
+            // A vanished file: the builtin the state carries is shown, the
+            // failure is reported -- and the file stays the wanted selection
+            // on disk through later, unrelated saves, so a transient failure
+            // does not drop the preference.
             QSettings settings(settingsPath, QSettings::IniFormat);
             PaletteController controller;
-            controller.restore(settings);
-            require(!controller.state().fromFile
+            const auto error = controller.restore(settings);
+            require(error.has_value() && !error->isEmpty()
+                    && !controller.state().fromFile
                     && controller.state().builtinIndex == 4,
                 "a vanished file palette did not fall back to the builtin");
+            controller.setReversed(true);
+            controller.save(settings);
+            require(settings.value(QStringLiteral("palette/fromFile")).toBool()
+                    && settings.value(QStringLiteral("palette/filePath"))
+                            .toString()
+                        == path
+                    && settings.value(QStringLiteral("palette/reversed"))
+                           .toBool(),
+                "a failed file load was persisted as a dropped preference");
+        }
+        {
+            // The file is back: the kept preference loads again.
+            require(writePaletteFile(dir, "saved.pal") == path, "fixture path");
+            QSettings settings(settingsPath, QSettings::IniFormat);
+            PaletteController controller;
+            require(!controller.restore(settings).has_value()
+                    && controller.state().fromFile
+                    && controller.state().filePath == path
+                    && controller.state().reversed,
+                "the kept file preference did not load once available");
+        }
+        {
+            // An explicit selection replaces the wanted file -- even the
+            // builtin the failed file fell back to, which changes nothing
+            // visible. That still has to emit: the host persists only on
+            // paletteChanged, and what save() writes just changed.
+            require(QFile::remove(path), "could not remove the palette fixture");
+            QSettings settings(settingsPath, QSettings::IniFormat);
+            PaletteController controller;
+            require(controller.restore(settings).has_value()
+                    && controller.state().builtinIndex == 4,
+                "fixture restore");
+            int changes = 0;
+            QObject::connect(&controller, &PaletteController::paletteChanged,
+                [&changes] { ++changes; });
+            controller.selectBuiltin(4);
+            require(changes == 1,
+                "re-selecting the fallback builtin did not emit paletteChanged");
+            controller.selectBuiltin(4);
+            require(changes == 1,
+                "re-selecting the builtin again emitted paletteChanged");
+            controller.save(settings);
+            require(!settings.value(QStringLiteral("palette/fromFile")).toBool()
+                    && settings.value(QStringLiteral("palette/filePath"))
+                           .toString()
+                           .isEmpty(),
+                "selecting a builtin did not replace the wanted file");
         }
         {
             QSettings settings(settingsPath, QSettings::IniFormat);
@@ -303,8 +356,8 @@ int main(int argc, char** argv)
             settings.setValue(QStringLiteral("palette/builtin"),
                 QStringLiteral("no-such-palette"));
             PaletteController controller;
-            controller.restore(settings);
-            require(controller.state().builtinIndex == 0,
+            require(!controller.restore(settings).has_value()
+                    && controller.state().builtinIndex == 0,
                 "an unknown builtin name did not fall back to the first");
         }
     }
@@ -318,21 +371,89 @@ int main(int argc, char** argv)
         int changes = 0;
         QObject::connect(&controller, &PaletteController::paletteChanged,
             [&changes] { ++changes; });
-        controller.apply(PaletteController::State{6, false, {}, true});
+        require(!controller.apply(PaletteController::State{6, false, {}, true})
+                    .has_value(),
+            "apply of a builtin state reported an error");
         require(changes == 1 && controller.state().builtinIndex == 6
                 && controller.state().reversed,
             "apply did not install the state");
-        controller.apply(PaletteController::State{
-            2, true, QStringLiteral("/nonexistent/palette.pal"), false});
+        require(controller.apply(PaletteController::State{2, true,
+                    QStringLiteral("/nonexistent/palette.pal"), false})
+                    .has_value(),
+            "apply with an unloadable file did not report it");
         require(changes == 2 && !controller.state().fromFile
                 && controller.state().builtinIndex == 2,
             "apply with an unloadable file did not fall back");
-        controller.apply(PaletteController::State{99, false, {}, false});
-        require(changes == 3 && controller.state().builtinIndex == 0,
+        require(!controller.apply(PaletteController::State{99, false, {}, false})
+                    .has_value()
+                && changes == 3 && controller.state().builtinIndex == 0,
             "apply with an unknown builtin index did not fall back");
-        controller.apply(PaletteController::State{-1, false, {}, false});
-        require(changes == 4 && controller.state().builtinIndex == 0,
+        // (Reversed, so the fallback is a change from the one just above.)
+        require(!controller.apply(PaletteController::State{-1, false, {}, true})
+                    .has_value()
+                && changes == 4 && controller.state().builtinIndex == 0
+                && controller.state().reversed,
             "apply with a negative builtin index did not fall back");
+        // A state without a file replaces the wanted file an earlier failed
+        // apply kept (see the settings round trip above for the keeping).
+        QTemporaryDir dir;
+        require(dir.isValid(), "no temporary directory");
+        QSettings settings(dir.filePath("settings.ini"), QSettings::IniFormat);
+        controller.save(settings);
+        require(!settings.value(QStringLiteral("palette/fromFile")).toBool()
+                && settings.value(QStringLiteral("palette/filePath"))
+                       .toString()
+                       .isEmpty(),
+            "a later fileless apply did not replace the wanted file");
+    }
+
+    // Re-selecting what is already selected is not a change: the checked
+    // menu action (which the ExclusiveOptional group has just unchecked) is
+    // re-checked, but nothing is emitted, so the host neither writes settings
+    // nor re-renders. Reloading the same file path is a change only if the
+    // file's contents changed.
+    {
+        QTemporaryDir dir;
+        require(dir.isValid(), "no temporary directory");
+        PaletteController controller;
+        QWidget host;
+        auto* menu = controller.createMenu(&host);
+        auto* selector = controller.createSelector(&host);
+        int changes = 0;
+        QObject::connect(&controller, &PaletteController::paletteChanged,
+            [&changes] { ++changes; });
+        controller.selectBuiltin(3);
+        require(changes == 1, "fixture selection");
+        controller.selectBuiltin(3);
+        require(changes == 1 && checkedMenuIndex(*menu) == 3,
+            "re-selecting the current builtin emitted paletteChanged");
+        auto* checked = menu->findChild<QActionGroup*>()->actions()[3];
+        checked->trigger();
+        require(changes == 1 && checked->isChecked()
+                && checkedMenuIndex(*menu) == 3
+                && selector->currentData().toInt() == 3,
+            "clicking the checked menu action emitted or unchecked it");
+        require(!controller.apply(controller.state()).has_value()
+                && changes == 1,
+            "re-applying the current state emitted paletteChanged");
+        const auto path = writePaletteFile(dir, "same.pal");
+        require(!controller.loadFile(path).has_value() && changes == 2,
+            "loading a file did not emit");
+        require(!controller.loadFile(path).has_value() && changes == 2,
+            "reloading the unchanged file emitted paletteChanged");
+        {
+            // Edit the file in place: the same path now holds a green ramp.
+            QFile file(path);
+            require(file.open(QIODevice::WriteOnly), "could not rewrite");
+            QByteArray bytes(768, '\0');
+            for (int slot = 0; slot < 256; ++slot) {
+                bytes[256 + slot] = static_cast<char>(slot);
+            }
+            require(file.write(bytes) == bytes.size(), "short rewrite");
+        }
+        require(!controller.loadFile(path).has_value() && changes == 3
+                && controller.palette().slotArgb(200) == 0xFF00C800U,
+            "reloading an edited file did not install the new contents");
     }
 
     std::cout << "palette controller tests passed\n";

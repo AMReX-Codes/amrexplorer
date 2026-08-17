@@ -56,7 +56,14 @@ void MainWindow::restoreSettings()
 {
     const auto settings = makeSettings();
 
-    m_paletteController->restore(settings);
+    if (const auto error = m_paletteController->restore(settings)) {
+        // The stored file palette did not load; the controller fell back to
+        // a builtin and keeps the file as the wanted selection, so say so
+        // rather than silently showing a different palette.
+        reportBackgroundError(tr("Cannot load palette file %1: %2")
+            .arg(settings.value(QStringLiteral("palette/filePath")).toString(),
+                *error));
+    }
     m_colorBar->setPalette(&m_paletteController->palette());
 
     m_range->showLogarithmic(

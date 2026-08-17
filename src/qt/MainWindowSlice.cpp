@@ -461,8 +461,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                 // the arrival path above does) rather than fail silently. The
                 // panels keep their per-view ranges until the next arrival
                 // retries.
-                reportBackgroundError(tr("Cannot synchronize views: %1")
-                    .arg(exceptionMessage(error)));
+                reportVisibleSyncFailure(error);
             }
             updateDiagnostics();
             watcher->deleteLater();
@@ -1040,10 +1039,73 @@ void MainWindow::syncVisibleRanges()
                 watcher->deleteLater();
                 return;
             }
-            auto outcome = watcher->future().takeResult();
+            // Whether the panels the worker rendered are still the ones on
+            // screen: every render-generation stamp captured at dispatch must
+            // still match. Shared by the apply below and the failure path.
+            const auto stampsCurrent = [&views, &snapshotGenerations] {
+                for (std::size_t index = 0; index < views.size(); ++index) {
+                    if (views[index]->renderGeneration
+                        != snapshotGenerations[index]) {
+                        return false;
+                    }
+                }
+                return true;
+            };
             const bool current = generation == m_generation
                 && m_viewDimension == 3 && m_dataset
                 && m_range->mode() == RangeMode::Visible;
+            // Everything after the outcome is in hand, on both paths.
+            const auto finish = [this, watcher, generation] {
+                if (generation != m_generation) {
+                    // Superseded by a new dataset (or frame): the deferred store
+                    // key and any armed rerun belong to the old generation.
+                    m_pendingRangeStore.reset();
+                    m_visibleSyncRerun = false;
+                }
+                updateDiagnostics();
+                watcher->deleteLater();
+                if (m_visibleSyncRerun) {
+                    m_visibleSyncRerun = false;
+                    // Re-dispatch inside a slot: guard as at the arrival site
+                    // so a bad_alloc allocating the next worker cannot escape,
+                    // and surface it rather than fail silently.
+                    try {
+                        syncVisibleRanges();
+                    } catch (const std::exception& error) {
+                        reportVisibleSyncFailure(error);
+                    }
+                }
+                if (m_diagnosticsModel->activeRequests() == 0) {
+                    emit interactiveSlicesSettled();
+                }
+            };
+            // Only the extraction is guarded: takeResult rethrows a worker
+            // exception (a failed extrema scan or render), which must not
+            // escape the slot. The apply below is deliberately outside it --
+            // it is the one region that must not land partially, so a throw
+            // there is a crash rather than three panels on mixed state.
+            SyncOutcome outcome;
+            try {
+                outcome = watcher->future().takeResult();
+            } catch (const std::exception& error) {
+                // The panels keep their per-view state until the next arrival
+                // re-syncs (as after a failed dispatch). Surface the failure
+                // only if the sync was still current by the same test the
+                // apply uses -- mode, dimension, dataset and every panel's
+                // stamp; a superseded worker's throw is counted stale, as the
+                // arrival path does, not reported as the user's problem.
+                if (current && stampsCurrent()) {
+                    reportVisibleSyncFailure(error);
+                    // This union will never be stored: drop the deferred key
+                    // so a later sync -- possibly over a zoomed subregion --
+                    // cannot store its own under it as the full-domain range.
+                    m_pendingRangeStore.reset();
+                } else {
+                    m_diagnosticsModel->noteStaleResult();
+                }
+                finish();
+                return;
+            }
             // All-or-nothing, keyed on the render-generation stamp captured per
             // panel at dispatch. The shared range and log flag are joint across
             // all three panels, so they must not land on a subset. If any panel
@@ -1064,16 +1126,7 @@ void MainWindow::syncVisibleRanges()
             // worth that: partial apply could leave the three panels on different
             // ranges/log flags. If sweep coherence ever matters, gate playbackTick
             // on the sync too (it currently waits only on pendingRequests).
-            bool allCurrent = outcome.sync.has_value();
-            if (outcome.sync) {
-                for (std::size_t index = 0; index < views.size(); ++index) {
-                    if (views[index]->renderGeneration
-                        != snapshotGenerations[index]) {
-                        allCurrent = false;
-                        break;
-                    }
-                }
-            }
+            const bool allCurrent = outcome.sync.has_value() && stampsCurrent();
             if (current && outcome.sync && allCurrent) {
                 const auto [globalMin, globalMax] = outcome.sync->range;
                 bool activeApplied = false;
@@ -1162,27 +1215,8 @@ void MainWindow::syncVisibleRanges()
                 // is not touched.
                 ++m_visibleSyncStaleSkips;
 #endif
-            } else if (generation != m_generation) {
-                m_pendingRangeStore.reset();
-                m_visibleSyncRerun = false;
             }
-            updateDiagnostics();
-            watcher->deleteLater();
-            if (m_visibleSyncRerun) {
-                m_visibleSyncRerun = false;
-                // Re-dispatch inside a slot: guard as at the arrival site so a
-                // bad_alloc allocating the next worker cannot escape, and
-                // surface it rather than fail silently.
-                try {
-                    syncVisibleRanges();
-                } catch (const std::exception& error) {
-                    reportBackgroundError(tr("Cannot synchronize views: %1")
-                        .arg(exceptionMessage(error)));
-                }
-            }
-            if (m_diagnosticsModel->activeRequests() == 0) {
-                emit interactiveSlicesSettled();
-            }
+            finish();
         });
     // Commit to "in flight" only now that the throwing allocations above
     // succeeded; the sync joins the interactive batch (adjustActivity(1) on
@@ -1198,8 +1232,11 @@ void MainWindow::syncVisibleRanges()
             contourMode = isContourMode(m_displayMode),
             contourCount = m_contourCount, palette = m_paletteController->palette()] {
 #ifdef AMREXPLORER_QT_TEST_ACCESS
-            // Held only when the staleness test has armed the gate.
-            visible_sync_test::waitAtGate();
+            // Held only when the staleness test has armed the gate; the throw
+            // only when it has asked for one (the failure-path checks).
+            if (visible_sync_test::waitAtGate()) {
+                throw std::runtime_error("injected visible-sync failure");
+            }
 #endif
             std::array<DisplayCoordinator::PanelSyncInput, 3> inputs;
             for (std::size_t index = 0; index < snapshots.size(); ++index) {
@@ -1225,9 +1262,14 @@ void MainWindow::syncVisibleRanges()
         m_visibleSyncInFlight = false;
         m_diagnosticsModel->adjustActivity(-1);
         watcher->deleteLater();
-        reportBackgroundError(tr("Cannot synchronize views: %1")
-            .arg(exceptionMessage(error)));
+        reportVisibleSyncFailure(error);
     }
+}
+
+void MainWindow::reportVisibleSyncFailure(const std::exception& error)
+{
+    reportBackgroundError(
+        tr("Cannot synchronize views: %1").arg(exceptionMessage(error)));
 }
 
 void MainWindow::choosePlotfileSequence()

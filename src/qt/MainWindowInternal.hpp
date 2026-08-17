@@ -273,14 +273,18 @@ inline QPainterPath sphericalSectorPath(const PlaneMapping& mapping,
 namespace visible_sync_test {
 
 inline std::atomic<bool> gateArmed{false};
+inline std::atomic<bool> failNext{false};  // the next worker to pass throws
 inline std::atomic<int> releaseGrants{0};  // # of "proceed" grants issued
 inline std::atomic<int> passed{0};         // # of workers that have proceeded
 inline std::atomic<int> waiting{0};        // # of workers currently parked
 
-inline void waitAtGate()
+// Returns whether this worker is the one asked to throw. The flag is consumed
+// before the worker stops counting as parked, so a test that sees no waiter
+// and then arms failNext cannot have it eaten by a worker already released.
+[[nodiscard]] inline bool waitAtGate()
 {
     if (!gateArmed.load()) {
-        return;
+        return failNext.exchange(false);
     }
     waiting.fetch_add(1);
     // Park until a grant is free (passed < grants) -- or the gate is disarmed,
@@ -295,7 +299,9 @@ inline void waitAtGate()
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     passed.fetch_add(1);
+    const bool fail = failNext.exchange(false);
     waiting.fetch_sub(1);
+    return fail;
 }
 
 } // namespace visible_sync_test

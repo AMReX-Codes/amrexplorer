@@ -121,8 +121,14 @@ int main(int argc, char** argv)
             "a metric, probe line or error is missing from the text");
         model.resetDatasetMetrics();
         text = model.text();
-        require(hasLine(text, QStringLiteral("cache budget bytes: 0"))
-                && hasLine(text, QStringLiteral("blocks read: 0"))
+        // Every per-dataset field, so no single clear can go missing.
+        require(hasLine(text, QStringLiteral("blocks read: 0"))
+                && hasLine(text, QStringLiteral("cache hits: 0"))
+                && hasLine(text, QStringLiteral("payload bytes read: 0"))
+                && hasLine(text, QStringLiteral("cache budget bytes: 0"))
+                && hasLine(text, QStringLiteral("cache resident bytes: 0"))
+                && hasLine(text, QStringLiteral("cache pinned bytes: 0"))
+                && hasLine(text, QStringLiteral("cache evictions: 0"))
                 && !text.contains(QStringLiteral("probe (1, 2)")),
             "the dataset reset left per-dataset state behind");
         require(hasLine(text, QStringLiteral("stale results discarded: 1"))
@@ -158,8 +164,8 @@ int main(int argc, char** argv)
         QWidget host;
         host.show();
         auto* dock = model.createDock(&host);
-        require(dock != nullptr && dock->isHidden(),
-            "the dock did not start hidden");
+        require(dock != nullptr && dock->parent() == &host && dock->isHidden(),
+            "the dock did not start hidden, owned by the host");
         model.refresh();
         auto* view = dock->findChild<QPlainTextEdit*>();
         require(view != nullptr && view->isReadOnly()

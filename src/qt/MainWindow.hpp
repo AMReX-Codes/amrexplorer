@@ -48,7 +48,6 @@ class QLabel;
 class QSpinBox;
 class QLineF;
 class QMenu;
-class QPlainTextEdit;
 class QProgressDialog;
 class QPushButton;
 class QStackedWidget;

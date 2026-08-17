@@ -8,10 +8,10 @@ add_executable(amrexplorer_qt
     ColorBarWidget.hpp
     CurrentRowBulletDelegate.hpp
     DatasetExtract.hpp
-    DiagnosticsModel.cpp
-    DiagnosticsModel.hpp
     DatasetWindow.cpp
     DatasetWindow.hpp
+    DiagnosticsModel.cpp
+    DiagnosticsModel.hpp
     FabSelectorDock.cpp
     FabSelectorDock.hpp
     ImageView.cpp

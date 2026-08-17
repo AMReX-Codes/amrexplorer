@@ -28,6 +28,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -550,6 +551,9 @@ private:
     // Non-modal failure report: status bar plus the model's error history
     // (which shows the dock); suppressed while closing.
     void reportBackgroundError(const QString& message);
+    // The one wording for a shared-range sync that could not be scheduled,
+    // run, or applied.
+    void reportVisibleSyncFailure(const std::exception& error);
     void updateAnimationDockVisibility();
     void updateWindowTitle();
     void restoreSettings();

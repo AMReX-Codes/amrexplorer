@@ -321,10 +321,17 @@ void FabNavigator::viewEntry(std::size_t index)
             throw std::runtime_error(
                 "the source MultiFab is no longer available");
         }
+        // The first drill-down records where Back returns to. The spec is
+        // read now, while the source is still displayed, but the record is
+        // kept only once the FAB has opened: a failed drill-down must not
+        // leave one behind, or a later drill-down (after the user has moved
+        // the slice controls) would find it and skip re-capture, and Back
+        // would land on the spec of the failed attempt.
+        std::optional<MultiFabReturnState> firstReturn;
         if (!m_multifabReturn) {
             auto returnSpec
                 = m_hooks.currentSpec ? m_hooks.currentSpec() : std::nullopt;
-            m_multifabReturn = MultiFabReturnState{m_sourcePath, m_dataRoot,
+            firstReturn = MultiFabReturnState{m_sourcePath, m_dataRoot,
                 *m_sourceMetadata, returnSpec.value_or(FrameSliceSpec{})};
         }
         auto selected = makeSelectedFabMetadata(*m_sourceMetadata->metadata,
@@ -332,10 +339,13 @@ void FabNavigator::viewEntry(std::size_t index)
         syncRollback = SelectorRollback{
             m_fabMode, m_dock->backAvailable(), m_dock->selectedOrdinal()};
         m_fabMode = true;
-        m_dock->setBackAvailable(m_multifabReturn.has_value());
+        m_dock->setBackAvailable(true);  // one of the two is about to hold
         m_dock->selectEntry(entry.ordinal);
         m_hooks.openPrepared(m_sourcePath, std::move(selected), m_dataRoot,
             true, std::move(selectedSpec));
+        if (firstReturn) {
+            m_multifabReturn = std::move(firstReturn);
+        }
     } catch (const std::exception& error) {
         if (syncRollback) {
             applyRollback(*syncRollback);

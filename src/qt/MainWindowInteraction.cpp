@@ -94,8 +94,7 @@ void MainWindow::applyNumberFormat(const QString& format)
         return;
     }
     m_numberFormat = format;
-    m_rangeMinimum->setNumberFormat(format);
-    m_rangeMaximum->setNumberFormat(format);
+    m_range->setNumberFormat(format);
     m_colorBar->setNumberFormat(format);
     // Open child windows repaint against the stored format; a null pointer
     // means the window picks the format up when it is next created.

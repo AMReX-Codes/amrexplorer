@@ -37,6 +37,8 @@ add_executable(amrexplorer_qt
     ParticleController.cpp
     ParticleController.hpp
     QtErrorText.hpp
+    RangeController.cpp
+    RangeController.hpp
     RemoteEndpoint.hpp
     RemoteFileDialog.cpp
     RemoteFileDialog.hpp

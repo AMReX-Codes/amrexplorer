@@ -60,20 +60,9 @@ void MainWindow::configureContourSyncForTest(
         return;
     }
     m_slicePosition3d = slicePositions;
-    // Set range/log through the widgets (requestSlice reads them) but block
-    // their signals so only the single scheduleSliceRequest below re-slices.
-    {
-        const QSignalBlocker rangeBlocker(m_rangeMode);
-        const auto index = m_rangeMode->findData(
-            static_cast<int>(RangeMode::Visible));
-        if (index >= 0) {
-            m_rangeMode->setCurrentIndex(index);
-        }
-    }
-    {
-        const QSignalBlocker logBlocker(m_logarithmic);
-        m_logarithmic->setChecked(logarithmic);
-    }
+    // Set range/log through the controller (requestSlice reads it) without
+    // signals, so only the single scheduleSliceRequest below re-slices.
+    m_range->setSelection({RangeMode::Visible, std::nullopt, logarithmic});
     m_displayMode = DisplayMode::RasterContours;
     m_contourCount = count;
     scheduleSliceRequest(false);
@@ -105,14 +94,8 @@ void MainWindow::enableVisibleRasterForTest()
     if (!m_dataset) {
         return;
     }
-    {
-        const QSignalBlocker rangeBlocker(m_rangeMode);
-        const auto index = m_rangeMode->findData(
-            static_cast<int>(RangeMode::Visible));
-        if (index >= 0) {
-            m_rangeMode->setCurrentIndex(index);
-        }
-    }
+    m_range->setSelection(
+        {RangeMode::Visible, std::nullopt, m_range->logarithmic()});
     m_displayMode = DisplayMode::Raster;
     scheduleSliceRequest(false);
 }

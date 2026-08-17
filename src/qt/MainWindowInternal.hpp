@@ -13,6 +13,7 @@
 #include "FabNavigator.hpp"
 #include "PaletteController.hpp"
 #include "ParticleController.hpp"
+#include "RangeController.hpp"
 #include "SequenceController.hpp"
 #include "AnimationPanel.hpp"
 #include "CacheConfig.hpp"
@@ -49,7 +50,6 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QWheelEvent>
-#include <QCheckBox>
 #include <QCloseEvent>
 #include <QColorDialog>
 #include <QComboBox>
@@ -59,7 +59,6 @@
 #include <QDir>
 #include <QDockWidget>
 #include <QObject>
-#include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontMetrics>
@@ -93,7 +92,6 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
-#include <QStandardItemModel>
 #include <QStatusBar>
 #include <QString>
 #include <QStringList>
@@ -118,7 +116,6 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
-#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>

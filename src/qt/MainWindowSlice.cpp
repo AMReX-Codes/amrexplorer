@@ -32,14 +32,9 @@ void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
     m_controlsReady = true;
     m_fieldSelector->setEnabled(true);
     m_levelSelector->setEnabled(true);
-    m_rangeMode->setEnabled(true);
-    m_logarithmic->setEnabled(true);
+    m_range->setControlsReady(true);
     m_boxesAction->setEnabled(true);
     m_slicePlanesAction->setEnabled(metadata.dimension == 3);
-    const auto userRange = static_cast<RangeMode>(
-        m_rangeMode->currentData().toInt()) == RangeMode::User;
-    m_rangeMinimum->setEnabled(userRange);
-    m_rangeMaximum->setEnabled(userRange);
     rebuildLevelMenu();
     m_levelMenu->setEnabled(true);
     m_contoursAction->setEnabled(true);
@@ -259,15 +254,14 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     request.sphericalSupersample = m_sphericalSupersample;
     request.sphericalDisplay = m_sphericalDisplay;
 
-    const auto requestedRangeMode = static_cast<RangeMode>(
-        m_rangeMode->currentData().toInt());
+    const auto selection = m_range->selection();
     const auto rangeMode = effectiveRangeMode(dataset, request.field,
-        maximumLevel, composition, requestedRangeMode);
+        maximumLevel, composition, selection.mode);
     std::optional<std::pair<double, double>> userRange;
     if (rangeMode == RangeMode::User) {
-        userRange = std::pair{m_rangeMinimum->value(), m_rangeMaximum->value()};
+        userRange = selection.userRange;
     }
-    const auto logarithmic = m_logarithmic->isChecked();
+    const auto logarithmic = selection.logarithmic;
     const auto palette = m_paletteController->palette();
     const auto displayMode = m_displayMode;
     // Each 3-D panel uses a different pair of vector components:
@@ -973,9 +967,7 @@ void MainWindow::syncVisibleRanges()
     if (m_viewDimension != 3 || !m_dataset) {
         return;
     }
-    const auto rangeMode = static_cast<RangeMode>(
-        m_rangeMode->currentData().toInt());
-    if (rangeMode != RangeMode::Visible) {
+    if (m_range->mode() != RangeMode::Visible) {
         return;
     }
     // Single-flight: dispatch one sync only once the panel slice batch has
@@ -1049,11 +1041,9 @@ void MainWindow::syncVisibleRanges()
                 return;
             }
             auto outcome = watcher->future().takeResult();
-            const auto nowMode = static_cast<RangeMode>(
-                m_rangeMode->currentData().toInt());
             const bool current = generation == m_generation
                 && m_viewDimension == 3 && m_dataset
-                && nowMode == RangeMode::Visible;
+                && m_range->mode() == RangeMode::Visible;
             // All-or-nothing, keyed on the render-generation stamp captured per
             // panel at dispatch. The shared range and log flag are joint across
             // all three panels, so they must not land on a subset. If any panel
@@ -1132,10 +1122,7 @@ void MainWindow::syncVisibleRanges()
                     m_colorBar->setLogarithmic(
                         m_activeView->displayLogarithmic);
                     m_colorBar->setFieldRange(label, globalMin, globalMax);
-                    const QSignalBlocker minBlocker(m_rangeMinimum);
-                    const QSignalBlocker maxBlocker(m_rangeMaximum);
-                    m_rangeMinimum->setValue(globalMin);
-                    m_rangeMaximum->setValue(globalMax);
+                    m_range->showDisplayRange(globalMin, globalMax);
                 }
                 // The deferred full-domain range store (see the slice-arrival
                 // completion): the union is only known here. This block runs
@@ -1207,7 +1194,7 @@ void MainWindow::syncVisibleRanges()
     m_diagnosticsModel->adjustActivity(1);
     try {
         watcher->setFuture(QtConcurrent::run([cachedRange, snapshots,
-            logarithmic = m_logarithmic->isChecked(),
+            logarithmic = m_range->logarithmic(),
             contourMode = isContourMode(m_displayMode),
             contourCount = m_contourCount, palette = m_paletteController->palette()] {
 #ifdef AMREXPLORER_QT_TEST_ACCESS
@@ -1591,51 +1578,11 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
     updateRangeModeAvailability();
 }
 
-void MainWindow::commitFieldRange(std::uint32_t field)
-{
-    FieldRange range;
-    range.mode = static_cast<RangeMode>(m_rangeMode->currentData().toInt());
-    if (range.mode == RangeMode::User) {
-        range.userRange = std::pair{m_rangeMinimum->value(), m_rangeMaximum->value()};
-    }
-    m_fieldRanges[field] = std::move(range);
-}
-
-void MainWindow::applyFieldRange(std::uint32_t field)
-{
-    const auto it = m_fieldRanges.find(field);
-    const auto range = (it != m_fieldRanges.end()) ? it->second : FieldRange{};
-    {
-        const QSignalBlocker modeBlocker(m_rangeMode);
-        const QSignalBlocker minBlocker(m_rangeMinimum);
-        const QSignalBlocker maxBlocker(m_rangeMaximum);
-        m_rangeMode->setCurrentIndex(
-            m_rangeMode->findData(static_cast<int>(range.mode)));
-        if (range.userRange.has_value()) {
-            m_rangeMinimum->setValue(range.userRange->first);
-            m_rangeMaximum->setValue(range.userRange->second);
-        }
-    }
-    const auto isUser = range.mode == RangeMode::User;
-    m_rangeMinimum->setEnabled(isUser && m_controlsReady);
-    m_rangeMaximum->setEnabled(isUser && m_controlsReady);
-}
-
 void MainWindow::resetRangeState()
 {
-    m_fieldRanges.clear();
-    m_trackedField = 0;
+    m_range->reset();
     m_displayCoordinator.invalidateRangeCache();
     m_pendingRangeStore.reset();
-    const QSignalBlocker modeBlocker(m_rangeMode);
-    const QSignalBlocker minBlocker(m_rangeMinimum);
-    const QSignalBlocker maxBlocker(m_rangeMaximum);
-    m_rangeMode->setCurrentIndex(
-        m_rangeMode->findData(static_cast<int>(RangeMode::File)));
-    m_rangeMinimum->setValue(0.0);
-    m_rangeMaximum->setValue(1.0);
-    m_rangeMinimum->setEnabled(false);
-    m_rangeMaximum->setEnabled(false);
 }
 
 void MainWindow::updateRangeModeAvailability()
@@ -1644,55 +1591,18 @@ void MainWindow::updateRangeModeAvailability()
         || m_levelSelector->currentIndex() < 0) {
         return;
     }
-
     const auto& metadata = m_dataset->metadata();
     const FieldId field{m_fieldSelector->currentData().toUInt()};
     const auto [composition, maximumLevel] = decodeLevelData(
         m_levelSelector->currentData().toInt(), metadata.finestLevel);
-    const auto fileAvailable = m_dataset->rangeAvailable(
-        RangeRequest{field, maximumLevel, composition, RangeScope::File});
-    const auto levelAvailable = m_dataset->rangeAvailable(
-        RangeRequest{field, maximumLevel, composition, RangeScope::Level});
-
-    auto* model = qobject_cast<QStandardItemModel*>(m_rangeMode->model());
-    if (model == nullptr) {
-        return;
-    }
-    const auto unavailableText = tr(
-        "Unavailable because this data does not provide complete range statistics.");
-    const auto setAvailable = [&](RangeMode mode, bool available) {
-        const auto index = m_rangeMode->findData(static_cast<int>(mode));
-        if (index < 0) {
-            return;
-        }
-        if (auto* item = model->item(index)) {
-            item->setEnabled(available);
-            item->setToolTip(available ? QString() : unavailableText);
-        }
-    };
-    setAvailable(RangeMode::File, fileAvailable);
-    setAvailable(RangeMode::Level, levelAvailable);
-
-    const auto current = static_cast<RangeMode>(
-        m_rangeMode->currentData().toInt());
-    const auto currentAvailable =
-        (current != RangeMode::File || fileAvailable)
-        && (current != RangeMode::Level || levelAvailable);
-    if (currentAvailable) {
-        return;
-    }
-
-    {
-        const QSignalBlocker blocker(m_rangeMode);
-        m_rangeMode->setCurrentIndex(
-            m_rangeMode->findData(static_cast<int>(RangeMode::Visible)));
-    }
-    m_rangeMinimum->setEnabled(false);
-    m_rangeMaximum->setEnabled(false);
-    auto& fieldRange = m_fieldRanges[field.value];
-    fieldRange.mode = RangeMode::Visible;
-    statusBar()->showMessage(
-        tr("Metadata range unavailable; using the visible-data range."));
+    m_range->updateAvailability(
+        RangeController::Availability{
+            .file = m_dataset->rangeAvailable(RangeRequest{
+                field, maximumLevel, composition, RangeScope::File}),
+            .level = m_dataset->rangeAvailable(RangeRequest{
+                field, maximumLevel, composition, RangeScope::Level}),
+        },
+        field.value);
 }
 
 FrameSliceSpec MainWindow::buildFrameSpec()
@@ -1703,11 +1613,11 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     spec.contourCount = m_contourCount;
     spec.sphericalSupersample = m_sphericalSupersample;
     spec.sphericalDisplay = m_sphericalDisplay;
-    spec.logarithmic = m_logarithmic->isChecked();
-    spec.rangeMode = static_cast<RangeMode>(m_rangeMode->currentData().toInt());
-    if (spec.rangeMode == RangeMode::User) {
-        spec.userRange = std::pair{m_rangeMinimum->value(),
-            m_rangeMaximum->value()};
+    {
+        const auto selection = m_range->selection();
+        spec.logarithmic = selection.logarithmic;
+        spec.rangeMode = selection.mode;
+        spec.userRange = selection.userRange;
     }
     spec.field = m_controlsReady && m_fieldSelector->currentIndex() >= 0
         ? m_fieldSelector->currentData().toUInt() : 0U;

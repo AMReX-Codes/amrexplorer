@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -90,6 +91,7 @@ void writeMultiFab(const std::filesystem::path& root)
 // What the host would see: every openPrepared call and every signal.
 struct Opened {
     std::filesystem::path path;
+    std::filesystem::path dataRoot;
     std::string fileVersion;
     std::size_t levelBlocks = 0;
     bool preserveSelector = false;
@@ -107,6 +109,8 @@ struct Host {
     int stale = 0;
     QStringList failures;
     int titleChanges = 0;
+    // When set, openPrepared throws instead of opening (a host-side failure).
+    bool refuseOpens = false;
 
     amrvis::qt::FabNavigator::Hooks hooks()
     {
@@ -125,10 +129,14 @@ struct Host {
             },
             [this](const std::filesystem::path& path,
                 amrvis::PlotfileMetadataResult metadata,
-                std::filesystem::path, bool preserve,
+                std::filesystem::path dataRoot, bool preserve,
                 std::optional<amrvis::FrameSliceSpec> spec) {
+                if (refuseOpens) {
+                    throw std::runtime_error("the host refused the open");
+                }
                 Opened entry;
                 entry.path = path;
+                entry.dataRoot = std::move(dataRoot);
                 entry.fileVersion = metadata.fileVersion;
                 entry.levelBlocks = metadata.metadata->levels.front().blocks.size();
                 entry.preserveSelector = preserve;
@@ -203,6 +211,17 @@ int main(int argc, char** argv)
     writeMultiFab(multifabRoot);
     const auto multifabPath = multifabRoot / "Cell_H";
 
+    // openPrepared is the one hook the navigator cannot do without.
+    {
+        bool refused = false;
+        try {
+            FabNavigator navigator(FabNavigator::Hooks{});
+        } catch (const std::invalid_argument&) {
+            refused = true;
+        }
+        require(refused, "a navigator without openPrepared was constructed");
+    }
+
     // A raw FAB source: the selector lists its records as raw records, the
     // navigator is in FAB mode with no source metadata, and reset() clears it.
     {
@@ -254,7 +273,9 @@ int main(int argc, char** argv)
         navigator.viewEntry(1);
         require(host.opened.size() == 1, "viewing a block did not open it");
         const auto& block = host.opened.back();
-        require(block.path == multifabPath && block.preserveSelector
+        require(block.path == multifabPath
+                && block.dataRoot == multifabPath.parent_path()
+                && block.preserveSelector
                 && block.levelBlocks == 1 && block.hadSpec
                 && block.levelSelection == -1,
             "the drilled-into block was opened wrongly");
@@ -266,7 +287,9 @@ int main(int argc, char** argv)
         navigator.backToMultiFab();
         require(host.opened.size() == 2, "Back did not reopen the source");
         const auto& source = host.opened.back();
-        require(source.path == multifabPath && source.preserveSelector
+        require(source.path == multifabPath
+                && source.dataRoot == multifabPath.parent_path()
+                && source.preserveSelector
                 && source.levelBlocks == 2 && source.hadSpec
                 && source.levelSelection == 2,
             "Back did not restore the source with its display spec");
@@ -274,6 +297,23 @@ int main(int argc, char** argv)
             "Back left FAB mode or the Back button on");
         navigator.backToMultiFab();
         require(host.opened.size() == 2, "a second Back reopened again");
+        // A drill-down whose open fails synchronously (here: the host
+        // refuses) is reported through openFailed, not a modal box, and the
+        // dock goes back to what was displayed -- the source, no Back.
+        const auto displayed = dock->selectedOrdinal();
+        host.refuseOpens = true;
+        navigator.viewEntry(0);
+        require(host.opened.size() == 2 && host.failures.size() == 1
+                && host.failures.front().startsWith(
+                    QStringLiteral("Cannot view FAB: "))
+                && !navigator.fabMode() && !dock->backAvailable()
+                && dock->selectedOrdinal() == displayed,
+            "a synchronously failed drill-down was not reported and rolled back");
+        host.refuseOpens = false;
+        navigator.viewEntry(0);
+        require(host.opened.size() == 3 && navigator.fabMode()
+                && dock->selectedOrdinal() == std::optional<std::size_t>{0},
+            "the navigator did not recover after a refused open");
     }
 
     // The direct "Open FAB...": an asynchronous header read that opens with
@@ -289,6 +329,7 @@ int main(int argc, char** argv)
             "the FAB read did not finish");
         require(host.activity == 0 && host.opened.size() == 1
                 && host.opened.back().fileVersion == "FAB"
+                && host.opened.back().dataRoot == fabPath.parent_path()
                 && !host.opened.back().preserveSelector
                 && !host.opened.back().hadSpec && host.failures.isEmpty(),
             "the raw FAB was not opened as a fresh dataset");

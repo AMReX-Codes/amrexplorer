@@ -60,7 +60,10 @@ public:
         // dataRoot, preserveSelector, initialSpec) -- the host's
         // openDatasetImpl. preserveSelector is false only for a direct
         // "Open FAB..." (the selector is rebuilt for the new file) and true
-        // for every drill-down or return within the current source.
+        // for every drill-down or return within the current source. Required
+        // (the constructor throws without it); the three above may be unset,
+        // in which case the generation is 0, shutdown never begins and no
+        // spec is known.
         std::function<void(const std::filesystem::path&, PlotfileMetadataResult,
             std::filesystem::path, bool, std::optional<FrameSliceSpec>)>
             openPrepared;
@@ -110,8 +113,9 @@ signals:
     // header read starts, -1 when its watcher fires) and its stale count.
     void loadActivityChanged(int delta);
     void staleResultDropped();
-    // A read failed while it was still the current request; the host reports
-    // it non-modally ("<title>: <message>").
+    // A read failed while it was still the current request, or a
+    // drill-down failed before or during its open; the host reports it
+    // non-modally ("<title>: <message>").
     void openFailed(const QString& title, const QString& message);
     // The dock's contents or the mode changed in a way the window title
     // reflects.
@@ -155,7 +159,6 @@ private:
         QString failureTitle, std::optional<SelectorRollback> rollback);
     void applyRollback(const SelectorRollback& rollback);
     [[nodiscard]] std::optional<FrameSliceSpec> selectedEntrySpec() const;
-    [[nodiscard]] QWidget* dialogParent() const;
 
     Hooks m_hooks;
     QPointer<FabSelectorDock> m_dock;

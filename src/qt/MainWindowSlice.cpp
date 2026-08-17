@@ -1040,131 +1040,148 @@ void MainWindow::syncVisibleRanges()
                 watcher->deleteLater();
                 return;
             }
-            auto outcome = watcher->future().takeResult();
-            const bool current = generation == m_generation
-                && m_viewDimension == 3 && m_dataset
-                && m_range->mode() == RangeMode::Visible;
-            // All-or-nothing, keyed on the render-generation stamp captured per
-            // panel at dispatch. The shared range and log flag are joint across
-            // all three panels, so they must not land on a subset. If any panel
-            // was re-sliced while this sync ran (stamp bumped), the sync rendered
-            // it from the previous plane -- and cached-plane reuse means pointer
-            // identity can't tell (the pointer is reused), while the rerun flag
-            // is not always armed (syncVisibleRanges early-returns on a
-            // mode/dimension flip without setting it). Drop the whole outcome and
-            // let the rerun, or the superseding batch's settle, produce a fresh
-            // coherent one. Single-flight makes the common case all-current, so
-            // this drops only on a genuine mid-sync re-slice, not every tweak.
-            //
-            // Chosen tradeoff (vs. the earlier per-panel partial apply): during
-            // sweep playback or animation export, if a sync outlasts the frame
-            // delay every sync is superseded and nothing lands for the sweep's
-            // duration (it self-heals when playback stops), where partial apply
-            // kept the untouched panels coherent. Coherence-by-construction is
-            // worth that: partial apply could leave the three panels on different
-            // ranges/log flags. If sweep coherence ever matters, gate playbackTick
-            // on the sync too (it currently waits only on pendingRequests).
-            bool allCurrent = outcome.sync.has_value();
-            if (outcome.sync) {
-                for (std::size_t index = 0; index < views.size(); ++index) {
-                    if (views[index]->renderGeneration
-                        != snapshotGenerations[index]) {
-                        allCurrent = false;
-                        break;
-                    }
-                }
-            }
-            if (current && outcome.sync && allCurrent) {
-                const auto [globalMin, globalMax] = outcome.sync->range;
-                bool activeApplied = false;
-                for (std::size_t index = 0; index < views.size(); ++index) {
-                    auto* state = views[index];
-                    auto& update = outcome.sync->panels[index];
-                    if (!update.applies) {
-                        continue;
-                    }
-                    state->displayMinimum = globalMin;
-                    state->displayMaximum = globalMax;
-                    // One shared log flag across the panel set (see
-                    // shared-log-range-render-throw-fails-load): keep every
-                    // panel's stored flag, and thus the color bar below, in
-                    // agreement with the raster the sync just rendered.
-                    state->displayLogarithmic = outcome.sync->logarithmic;
-                    if (update.contoursRecomputed) {
-                        state->contourPolylines
-                            = std::move(update.contourPolylines);
-                    }
-                    if (!outcome.images[index].isNull()) {
-                        // Same plane, re-colored: a virtual canvas keeps its
-                        // placement so the scroll position stays put.
-                        std::optional<ImageView::VirtualPlacement> placement;
-                        if (state->view->virtualCanvasActive()
-                            && !displayIsSpherical()) {
-                            placement = virtualPlacementFor(
-                                *state, state->plane->physicalRegion);
+            // Guarded like the slice-arrival handler above: takeResult rethrows
+            // a worker exception, and applying the outcome installs up to
+            // three 16 Mpx images -- a bad_alloc from either must not escape
+            // the slot and take the application down.
+            try {
+                auto outcome = watcher->future().takeResult();
+                const bool current = generation == m_generation
+                    && m_viewDimension == 3 && m_dataset
+                    && m_range->mode() == RangeMode::Visible;
+                // All-or-nothing, keyed on the render-generation stamp captured per
+                // panel at dispatch. The shared range and log flag are joint across
+                // all three panels, so they must not land on a subset. If any panel
+                // was re-sliced while this sync ran (stamp bumped), the sync rendered
+                // it from the previous plane -- and cached-plane reuse means pointer
+                // identity can't tell (the pointer is reused), while the rerun flag
+                // is not always armed (syncVisibleRanges early-returns on a
+                // mode/dimension flip without setting it). Drop the whole outcome and
+                // let the rerun, or the superseding batch's settle, produce a fresh
+                // coherent one. Single-flight makes the common case all-current, so
+                // this drops only on a genuine mid-sync re-slice, not every tweak.
+                //
+                // Chosen tradeoff (vs. the earlier per-panel partial apply): during
+                // sweep playback or animation export, if a sync outlasts the frame
+                // delay every sync is superseded and nothing lands for the sweep's
+                // duration (it self-heals when playback stops), where partial apply
+                // kept the untouched panels coherent. Coherence-by-construction is
+                // worth that: partial apply could leave the three panels on different
+                // ranges/log flags. If sweep coherence ever matters, gate playbackTick
+                // on the sync too (it currently waits only on pendingRequests).
+                bool allCurrent = outcome.sync.has_value();
+                if (outcome.sync) {
+                    for (std::size_t index = 0; index < views.size(); ++index) {
+                        if (views[index]->renderGeneration
+                            != snapshotGenerations[index]) {
+                            allCurrent = false;
+                            break;
                         }
-                        state->view->setImage(outcome.images[index],
-                            ImageTransformPolicy::GeometryAware,
-                            logicalImageSize(*state, *state->plane,
-                                outcome.images[index]),
-                            placement);
-                        // setImage clears the scene overlays; restore them.
-                        updateGridBoxes(*state);
-                        updateOverlay(*state);
-                        updateParticleOverlay(*state);
                     }
-                    activeApplied = activeApplied || state == m_activeView;
                 }
-                if (activeApplied && m_activeView->plane->width > 0) {
-                    const auto fieldName = m_fieldSelector->currentText();
-                    const auto label = m_activeView->displayLogarithmic
-                        ? fieldName + tr(" (log)") : fieldName;
-                    m_colorBar->setLogarithmic(
-                        m_activeView->displayLogarithmic);
-                    m_colorBar->setFieldRange(label, globalMin, globalMax);
-                    m_range->showDisplayRange(globalMin, globalMax);
-                }
-                // The deferred full-domain range store (see the slice-arrival
-                // completion): the union is only known here. This block runs
-                // only for an all-current outcome (every panel's stamp matched),
-                // so the stored union is over the current planes -- a stale
-                // outcome is dropped in the else branch and never stored.
-                if (m_pendingRangeStore) {
-                    // Only store if the pending key still describes the current
-                    // (dataset, field, level, composition): a full-domain
-                    // arrival's key can outlive its own sync (e.g. its
-                    // syncVisibleRanges early-returned because the mode was
-                    // File), and this sync's union is for the *current* field,
-                    // so storing it under the stale key would poison that
-                    // field's cached range (range-cache-staleness-races).
-                    const FieldId liveField{
-                        m_fieldSelector->currentData().toUInt()};
-                    const auto [liveComposition, liveMaximumLevel] =
-                        decodeLevelData(m_levelSelector->currentData().toInt(),
-                            m_dataset->metadata().finestLevel);
-                    const DisplayCoordinator::RangeKey liveKey{
-                        m_dataset->id(), liveField, liveMaximumLevel,
-                        liveComposition};
-                    if (*m_pendingRangeStore == liveKey) {
-                        m_displayCoordinator.storeFullDomainRange(
-                            *m_pendingRangeStore, outcome.sync->range);
+                if (current && outcome.sync && allCurrent) {
+                    const auto [globalMin, globalMax] = outcome.sync->range;
+                    bool activeApplied = false;
+                    for (std::size_t index = 0; index < views.size(); ++index) {
+                        auto* state = views[index];
+                        auto& update = outcome.sync->panels[index];
+                        if (!update.applies) {
+                            continue;
+                        }
+                        state->displayMinimum = globalMin;
+                        state->displayMaximum = globalMax;
+                        // One shared log flag across the panel set (see
+                        // shared-log-range-render-throw-fails-load): keep every
+                        // panel's stored flag, and thus the color bar below, in
+                        // agreement with the raster the sync just rendered.
+                        state->displayLogarithmic = outcome.sync->logarithmic;
+                        if (update.contoursRecomputed) {
+                            state->contourPolylines
+                                = std::move(update.contourPolylines);
+                        }
+                        if (!outcome.images[index].isNull()) {
+                            // Same plane, re-colored: a virtual canvas keeps its
+                            // placement so the scroll position stays put.
+                            std::optional<ImageView::VirtualPlacement> placement;
+                            if (state->view->virtualCanvasActive()
+                                && !displayIsSpherical()) {
+                                placement = virtualPlacementFor(
+                                    *state, state->plane->physicalRegion);
+                            }
+                            state->view->setImage(outcome.images[index],
+                                ImageTransformPolicy::GeometryAware,
+                                logicalImageSize(*state, *state->plane,
+                                    outcome.images[index]),
+                                placement);
+                            // setImage clears the scene overlays; restore them.
+                            updateGridBoxes(*state);
+                            updateOverlay(*state);
+                            updateParticleOverlay(*state);
+                        }
+                        activeApplied = activeApplied || state == m_activeView;
                     }
-                    m_pendingRangeStore.reset();
-                }
-            } else if (current && outcome.sync) {
-                // Dropped as stale (a panel was re-sliced mid-sync): the union
-                // is over at least one now-superseded plane, so it is neither
-                // applied nor stored -- the pending key stays for the rerun,
-                // which recomputes the union over the current planes.
+                    if (activeApplied && m_activeView->plane->width > 0) {
+                        const auto fieldName = m_fieldSelector->currentText();
+                        const auto label = m_activeView->displayLogarithmic
+                            ? fieldName + tr(" (log)") : fieldName;
+                        m_colorBar->setLogarithmic(
+                            m_activeView->displayLogarithmic);
+                        m_colorBar->setFieldRange(label, globalMin, globalMax);
+                        m_range->showDisplayRange(globalMin, globalMax);
+                    }
+                    // The deferred full-domain range store (see the slice-arrival
+                    // completion): the union is only known here. This block runs
+                    // only for an all-current outcome (every panel's stamp matched),
+                    // so the stored union is over the current planes -- a stale
+                    // outcome is dropped in the else branch and never stored.
+                    if (m_pendingRangeStore) {
+                        // Only store if the pending key still describes the current
+                        // (dataset, field, level, composition): a full-domain
+                        // arrival's key can outlive its own sync (e.g. its
+                        // syncVisibleRanges early-returned because the mode was
+                        // File), and this sync's union is for the *current* field,
+                        // so storing it under the stale key would poison that
+                        // field's cached range (range-cache-staleness-races).
+                        const FieldId liveField{
+                            m_fieldSelector->currentData().toUInt()};
+                        const auto [liveComposition, liveMaximumLevel] =
+                            decodeLevelData(m_levelSelector->currentData().toInt(),
+                                m_dataset->metadata().finestLevel);
+                        const DisplayCoordinator::RangeKey liveKey{
+                            m_dataset->id(), liveField, liveMaximumLevel,
+                            liveComposition};
+                        if (*m_pendingRangeStore == liveKey) {
+                            m_displayCoordinator.storeFullDomainRange(
+                                *m_pendingRangeStore, outcome.sync->range);
+                        }
+                        m_pendingRangeStore.reset();
+                    }
+                } else if (current && outcome.sync) {
+                    // Dropped as stale (a panel was re-sliced mid-sync): the union
+                    // is over at least one now-superseded plane, so it is neither
+                    // applied nor stored -- the pending key stays for the rerun,
+                    // which recomputes the union over the current planes.
 #ifdef AMREXPLORER_QT_TEST_ACCESS
-                // Sole writer of this test-only tally; the staleness smoke test
-                // asserts its exact delta. The DiagnosticsModel's stale count
-                // is not touched.
-                ++m_visibleSyncStaleSkips;
+                    // Sole writer of this test-only tally; the staleness smoke test
+                    // asserts its exact delta. The DiagnosticsModel's stale count
+                    // is not touched.
+                    ++m_visibleSyncStaleSkips;
 #endif
-            } else if (generation != m_generation) {
-                m_pendingRangeStore.reset();
-                m_visibleSyncRerun = false;
+                } else if (generation != m_generation) {
+                    m_pendingRangeStore.reset();
+                    m_visibleSyncRerun = false;
+                }
+            } catch (const std::exception& error) {
+                // The panels keep their per-view state until the next arrival
+                // re-syncs (as after a failed dispatch). Surface a current
+                // failure; count a superseded one as stale, as the arrival
+                // path does.
+                if (generation == m_generation) {
+                    reportBackgroundError(tr("Cannot synchronize views: %1")
+                        .arg(exceptionMessage(error)));
+                } else {
+                    m_diagnosticsModel->noteStaleResult();
+                }
             }
             updateDiagnostics();
             watcher->deleteLater();

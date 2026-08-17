@@ -30,9 +30,7 @@
 #include "Theme.hpp"
 #include "UserGuideDialog.hpp"
 
-#include <amrexplorer/io/FabCatalog.hpp>
 #include <amrexplorer/io/FitsWriter.hpp>
-#include <amrexplorer/io/detail/FabHeaderParsing.hpp>
 #include <amrexplorer/io/StandaloneMetadataReader.hpp>
 #include <amrexplorer/data/DatasetSession.hpp>
 #include <amrexplorer/core/CoordinateSystem.hpp>

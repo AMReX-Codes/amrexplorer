@@ -16,6 +16,8 @@ void validateSessionRangeRequest(
 void validateSessionParticleRequest(const DatasetMetadata& metadata,
     const std::vector<ParticleSpeciesMetadata>& species,
     const std::string& name, double fraction);
+void validateSessionVolumeRequest(const DatasetMetadata& metadata,
+    DatasetId dataset, const VolumeRenderRequest& request);
 
 // Results, checked against the catalog they claim to describe. A local session
 // produces its results with our own query code and needs none of this; a remote
@@ -31,5 +33,9 @@ void validateSessionDatasetPageResult(const DatasetMetadata& metadata,
 void validateSessionParticleSampleResult(
     const std::vector<ParticleSpeciesMetadata>& species,
     const std::string& requested, const ParticleSample& sample);
+// A rendered frame: exactly the requested size, a range the request allows,
+// and sampling metrics the dataset and the request's budget could produce.
+void validateSessionVolumeResult(const DatasetMetadata& metadata,
+    const VolumeRenderRequest& request, const VolumeFrame& frame);
 
 } // namespace amrvis

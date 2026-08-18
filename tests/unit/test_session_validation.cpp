@@ -783,5 +783,145 @@ int main()
                 species, "electrons", overfull);
         }, "a sample larger than its species was accepted");
     }
+
+    // Volume requests: the structural validator plus what the catalog knows
+    // (field, level, component, the region inside the domain), and frames:
+    // the requested size, a usable range that honours the request, and
+    // metrics the dataset and budget could have produced.
+    {
+        const auto metadata = dataset(3);
+        const DatasetId id{1};
+        VolumeRenderRequest request;
+        request.dataset = id;
+        request.field = FieldId{0};
+        request.maximumLevel = 1;
+        request.region = RealBox{Real3{{0.0, 0.0, 0.0}}, Real3{{4.0, 4.0, 4.0}}};
+        request.outputSize = {16, 12};
+        request.transfer.colors = {0x0U, 0xFFFFFFU};
+        request.transfer.opacities = {0.0F, 1.0F};
+        requireAccepted([&] {
+            validateSessionVolumeRequest(metadata, id, request);
+        }, "a well-formed volume request was rejected");
+        requireRejectedWith([&] {
+            validateSessionVolumeRequest(metadata, DatasetId{2}, request);
+        }, "wrong dataset", "a volume request for another dataset was accepted");
+        requireRejectedWith([&] {
+            validateSessionVolumeRequest(dataset(2), id, request);
+        }, "3-D", "a volume request over a 2-D dataset was accepted");
+        {
+            auto bad = request;
+            bad.field = FieldId{3};
+            requireRejectedWith([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "field", "an unknown volume field was accepted");
+            bad = request;
+            bad.maximumLevel = 2;
+            requireRejectedWith([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "level", "a volume level past the finest was accepted");
+            bad = request;
+            bad.component = 1;
+            requireRejectedWith([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "component", "a missing volume component was accepted");
+            bad = request;
+            bad.region.upper[2] = 4.5;
+            requireRejectedWith([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "outside", "a volume region past the domain was accepted");
+            bad = request;
+            bad.region.upper[2] = 4.0 + 1.0e-12;   // a rounding hair: fine
+            requireAccepted([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "a region a rounding hair past the domain was rejected");
+            bad = request;
+            bad.outputSize = {0, 12};
+            requireRejected([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "a structurally invalid volume request was accepted");
+        }
+
+        VolumeFrame frame;
+        frame.width = 16;
+        frame.height = 12;
+        frame.pixels.assign(16 * 12, 0U);
+        frame.usedRange = {0.0, 1.0, false};
+        frame.metrics.gridDims = {4, 4, 4};
+        frame.metrics.coveredVoxels = 64;
+        frame.metrics.sampledMaximumLevel = 1;
+        requireAccepted([&] {
+            validateSessionVolumeResult(metadata, request, frame);
+        }, "a well-formed volume frame was rejected");
+        {
+            auto bad = frame;
+            bad.width = 15;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "requested size", "a frame of another size was accepted");
+            bad = frame;
+            bad.pixels.pop_back();
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "storage", "a frame with short pixel storage was accepted");
+            bad = frame;
+            bad.usedRange = {1.0, 1.0, false};
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "unusable range", "a frame with an empty range was accepted");
+            bad = frame;
+            bad.usedRange = {0.0, 1.0, true};
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "unusable range", "a non-positive logarithmic range was accepted");
+            bad = frame;
+            bad.usedRange = {0.5, 2.0, true};
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "not requested", "an unrequested logarithmic range was accepted");
+            auto ranged = request;
+            ranged.range = VolumeRange{0.25, 0.75, false};
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, ranged, frame);
+            }, "requested range", "a frame ignoring the explicit range was accepted");
+            bad = frame;
+            bad.usedRange = *ranged.range;
+            requireAccepted([&] {
+                validateSessionVolumeResult(metadata, ranged, bad);
+            }, "a frame honouring the explicit range was rejected");
+            bad = frame;
+            bad.metrics.gridDims = {0, 4, 4};
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "empty sampled grid", "an empty grid was accepted");
+            auto small = request;
+            small.maximumVoxels = 32;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, small, frame);
+            }, "voxel budget", "a grid over the voxel budget was accepted");
+            bad = frame;
+            bad.metrics.coveredVoxels = 65;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "covered voxels", "an over-covered grid was accepted");
+            bad = frame;
+            bad.metrics.sampledMaximumLevel = 2;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "sampled level", "a sampled level past the request was accepted");
+            bad = frame;
+            bad.cacheFallbackFromLevel = 1;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "half-specified", "a half-specified fallback was accepted");
+            bad.cacheFallbackToLevel = 1;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "impossible cache fallback", "a non-descending fallback was accepted");
+            bad.cacheFallbackToLevel = 0;
+            requireAccepted([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "a fallback from level 1 to 0 was rejected");
+        }
+    }
     return 0;
 }

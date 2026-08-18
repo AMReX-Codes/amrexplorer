@@ -5,6 +5,7 @@
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Statistics.hpp>
 #include <amrexplorer/core/StopToken.hpp>
+#include <amrexplorer/core/Volume.hpp>
 #include <amrexplorer/data/DatasetPage.hpp>
 #include <amrexplorer/data/ViewData.hpp>
 #include <amrexplorer/io/ParticleReader.hpp>
@@ -12,6 +13,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -60,6 +62,27 @@ public:
     [[nodiscard]] virtual ParticleSample requestParticleSample(
         const std::string& species, double fraction, std::uint64_t seed,
         StopToken cancellation = {}) = 0;
+
+    // Direct volume rendering of a 3-D field (core/Volume.hpp): the session
+    // samples the field into a bounded grid, caches it, and ray-casts it to a
+    // viewport-sized frame -- locally, or on the server for a remote session,
+    // which never receives the sampled field. Not every session can: a
+    // standalone FAB, a 2-D dataset, or a peer speaking an older protocol
+    // cannot, and supportsVolumeRendering says so before a request is built.
+    // The defaults keep every other implementation (and every test fake)
+    // untouched.
+    [[nodiscard]] virtual bool supportsVolumeRendering() const noexcept
+    {
+        return false;
+    }
+    [[nodiscard]] virtual VolumeFrame renderVolume(
+        const VolumeRenderRequest& request, StopToken cancellation = {})
+    {
+        static_cast<void>(request);
+        static_cast<void>(cancellation);
+        throw std::runtime_error(
+            "volume rendering is not supported by this session");
+    }
 
     [[nodiscard]] virtual CacheMetrics cacheMetrics() const = 0;
     [[nodiscard]] virtual bool setCacheBudget(std::uint64_t bytes) = 0;

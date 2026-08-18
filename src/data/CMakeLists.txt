@@ -17,6 +17,7 @@ target_link_libraries(amrexplorer_data
         amrexplorer::core
         amrexplorer::io
         amrexplorer::query
+        amrexplorer::render3d
     PRIVATE amrexplorer::warnings
 )
 target_compile_features(amrexplorer_data PUBLIC cxx_std_20)

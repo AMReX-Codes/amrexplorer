@@ -5,9 +5,13 @@
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/query/LineQuery.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
+#include <amrexplorer/query/VolumeQuery.hpp>
+#include <amrexplorer/render3d/VolumeRaycaster.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
@@ -43,7 +47,51 @@ std::optional<ValueRange> compositeMetadataRange(const DatasetMetadata& metadata
     return ValueRange{minimum, maximum};
 }
 
+// The range a volume's colours span when the request leaves it to the
+// renderer (the "Visible" range): the sampled grid's finite extrema, padded
+// if degenerate, logarithmic only when the data allows it, and a neutral
+// range for a grid with no finite values -- resolveRange's rules for a
+// plane, applied to a grid.
+VolumeRange visibleVolumeRange(const VolumeGrid& grid, bool logarithmic)
+{
+    if (logarithmic) {
+        if (const auto extrema = volumeGridRange(grid, true)) {
+            const auto [minimum, maximum]
+                = paddedIfDegenerate(extrema->first, extrema->second, true);
+            if (minimum < maximum && minimum > 0.0) {
+                return {minimum, maximum, true};
+            }
+        } else if (grid.coveredVoxels == 0) {
+            return {1.0, 10.0, true};
+        }
+    }
+    const auto extrema = volumeGridRange(grid, false);
+    if (!extrema) {
+        return {0.0, 1.0, false};
+    }
+    const auto [minimum, maximum]
+        = paddedIfDegenerate(extrema->first, extrema->second, false);
+    return {minimum, maximum, false};
+}
+
 } // namespace
+
+std::size_t VolumeGridKeyHash::operator()(const VolumeGridKey& key) const noexcept
+{
+    std::size_t seed = std::hash<std::uint32_t>{}(key.field.value);
+    const auto combine = [&seed](std::size_t value) {
+        seed ^= value + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
+    };
+    combine(std::hash<int>{}(key.component));
+    combine(std::hash<int>{}(key.maximumLevel));
+    combine(std::hash<int>{}(static_cast<int>(key.composition)));
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        combine(std::hash<double>{}(key.region.lower[axis]));
+        combine(std::hash<double>{}(key.region.upper[axis]));
+        combine(std::hash<int>{}(key.dims[axis]));
+    }
+    return seed;
+}
 
 LocalDatasetSession::LocalDatasetSession(
     std::shared_ptr<PlotfileDataset> dataset)
@@ -227,6 +275,92 @@ ParticleSample LocalDatasetSession::requestParticleSample(
         species, fraction, seed, cancellation, maximumPoints);
 }
 
+bool LocalDatasetSession::supportsVolumeRendering() const noexcept
+{
+    return m_metadata.dimension == 3 && !m_metadata.isFab
+        && m_metadata.hasPhysicalGeometry;
+}
+
+VolumeFrame LocalDatasetSession::renderVolume(
+    const VolumeRenderRequest& request, StopToken cancellation)
+{
+    const auto dataset = requireDataset();
+    validateSessionVolumeRequest(m_metadata, m_id, request);
+    if (!supportsVolumeRendering()) {
+        throw std::invalid_argument(
+            "volume rendering requires a 3-D plotfile with physical geometry");
+    }
+    const auto maximumLevel = std::min(request.maximumLevel, m_metadata.finestLevel);
+    const VolumeGridKey key{request.field, request.component, maximumLevel,
+        request.composition, request.region,
+        volumeGridDims(m_metadata, request.region, maximumLevel,
+            request.maximumVoxels)};
+
+    // The grid: from the cache when the same sample was rendered before
+    // (a camera change re-casts it), else sampled now and cached -- unless
+    // it is larger than the whole grid budget, in which case it is rendered
+    // from the local copy and forgotten.
+    VolumeRenderMetrics metrics;
+    auto handle = m_volumeGrids.findAndPin(key);
+    std::shared_ptr<const VolumeGrid> grid;
+    if (handle) {
+        metrics.gridFromCache = true;
+        grid = handle.value();
+    } else {
+        const auto started = std::chrono::steady_clock::now();
+        VolumeSampleRequest sample;
+        sample.dataset = request.dataset;
+        sample.field = request.field;
+        sample.component = request.component;
+        sample.maximumLevel = maximumLevel;
+        sample.composition = request.composition;
+        sample.region = request.region;
+        sample.maximumVoxels = request.maximumVoxels;
+        auto sampled = VolumeQuery(*dataset).execute(sample, cancellation);
+        metrics.sampleMilliseconds = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started).count());
+        metrics.candidateBlocks = sampled.metrics.candidateBlocks;
+        metrics.blocksRead = sampled.metrics.blocksRead;
+        metrics.cacheHits = sampled.metrics.cacheHits;
+        metrics.payloadBytesRead = sampled.metrics.payloadBytesRead;
+        const auto bytes = static_cast<std::uint64_t>(sampled.grid.values.size())
+            * sizeof(float);
+        auto owned = std::make_shared<const VolumeGrid>(std::move(sampled.grid));
+        try {
+            handle = m_volumeGrids.insertAndPin(key, owned, bytes);
+            grid = handle.value();
+        } catch (const CacheBudgetExceeded&) {
+            // Too big for the grid cache: render it anyway, uncached. (The
+            // block cache's own budget failures come out of the sample above
+            // and propagate, so the caller can fall back to a coarser level.)
+            grid = std::move(owned);
+        }
+    }
+
+    RaycastSettings settings;
+    settings.camera = request.camera;
+    settings.domain = datasetSampleBounds(m_metadata);
+    settings.outputSize = request.outputSize;
+    settings.range = request.range
+        ? *request.range : visibleVolumeRange(*grid, request.logarithmic);
+    settings.transfer = request.transfer;
+    settings.samplesPerVoxel = request.samplesPerVoxel;
+    auto frame = raycastVolume(*grid, settings, cancellation);
+    const auto renderMilliseconds = frame.metrics.renderMilliseconds;
+    frame.metrics = metrics;
+    frame.metrics.renderMilliseconds = renderMilliseconds;
+    frame.metrics.gridDims = grid->dims;
+    frame.metrics.coveredVoxels = grid->coveredVoxels;
+    frame.metrics.sampledMaximumLevel = grid->maximumLevel;
+    return frame;
+}
+
+bool LocalDatasetSession::setVolumeGridCacheBudget(std::uint64_t bytes)
+{
+    return m_volumeGrids.setBudget(bytes);
+}
+
 CacheMetrics LocalDatasetSession::cacheMetrics() const
 {
     return requireDataset()->cacheMetrics();
@@ -240,12 +374,14 @@ bool LocalDatasetSession::setCacheBudget(std::uint64_t bytes)
 void LocalDatasetSession::clearUnpinnedCache()
 {
     requireDataset()->clearUnpinnedCache();
+    m_volumeGrids.clearUnpinned();
 }
 
 void LocalDatasetSession::close() noexcept
 {
     std::scoped_lock lock(m_mutex);
     m_dataset.reset();
+    m_volumeGrids.clearUnpinned();
 }
 
 std::shared_ptr<PlotfileDataset> LocalDatasetSession::requireDataset() const

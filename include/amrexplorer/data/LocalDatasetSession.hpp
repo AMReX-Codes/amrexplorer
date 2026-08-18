@@ -1,9 +1,13 @@
 #pragma once
 
+#include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/data/DatasetSession.hpp>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -12,6 +16,27 @@
 namespace amrvis {
 
 class PlotfileDataset;
+
+// The sampled volume grids a local session keeps between renders (rotating
+// the camera re-casts a cached grid instead of re-reading the plotfile),
+// keyed by everything the sample depends on. The default budget holds four
+// grids of the default voxel budget.
+inline constexpr std::uint64_t defaultVolumeGridCacheBytes
+    = 256ULL * 1024ULL * 1024ULL;
+
+struct VolumeGridKey {
+    FieldId field;
+    int component = 0;
+    int maximumLevel = 0;
+    CompositionPolicy composition = CompositionPolicy::FinestAvailable;
+    RealBox region;
+    std::array<int, 3> dims{0, 0, 0};
+    friend bool operator==(const VolumeGridKey&, const VolumeGridKey&) = default;
+};
+
+struct VolumeGridKeyHash {
+    [[nodiscard]] std::size_t operator()(const VolumeGridKey& key) const noexcept;
+};
 
 class LocalDatasetSession final : public DatasetSession {
 public:
@@ -47,6 +72,14 @@ public:
         const std::string& species, double fraction, std::uint64_t seed,
         std::size_t maximumPoints, StopToken cancellation = {});
 
+    // A 3-D plotfile with physical geometry can be volume-rendered.
+    [[nodiscard]] bool supportsVolumeRendering() const noexcept override;
+    [[nodiscard]] VolumeFrame renderVolume(const VolumeRenderRequest& request,
+        StopToken cancellation = {}) override;
+    // The sampled-grid cache's budget; grids larger than it are rendered
+    // uncached. Returns false for a zero budget.
+    [[nodiscard]] bool setVolumeGridCacheBudget(std::uint64_t bytes);
+
     [[nodiscard]] CacheMetrics cacheMetrics() const override;
     [[nodiscard]] bool setCacheBudget(std::uint64_t bytes) override;
     void clearUnpinnedCache() override;
@@ -68,6 +101,8 @@ private:
     // finite values", which costs the same scan to discover. Cancelled scans
     // record nothing.
     std::map<std::uint32_t, std::optional<ValueRange>> m_fabRanges;
+    ByteLruCache<VolumeGridKey, VolumeGrid, VolumeGridKeyHash> m_volumeGrids{
+        defaultVolumeGridCacheBytes};
 };
 
 } // namespace amrvis

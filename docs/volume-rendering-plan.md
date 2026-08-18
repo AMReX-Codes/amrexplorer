@@ -356,6 +356,32 @@ row, threading note; `docs/building.md` unchanged.
 - Benchmark: `bench_volume_render` numbers in the PR description (Mpx/s at
   512×512 over 256^3, 2 samples/voxel).
 
+## Follow-ups (deliberately out of the first version)
+
+- **Opacity curve editor** — a draggable control-point opacity curve drawn
+  over the palette (Amrvis's palette window), replacing the two-threshold
+  window + maximum as the way to shape the transfer function; the request
+  already carries an explicit lookup, so this is UI only.
+- **Isosurfaces** — extracted and shaded iso-value surfaces alongside the
+  translucent volume; needs a marching-cubes pass over the sampled grid and
+  a depth-composited draw.
+- **Hi-DPI** — render at device resolution (both sides using
+  `viewportFrame(w·dpr, h·dpr, margin·dpr)`); frames are logical-resolution
+  today.
+- **Trilinear sampling** — a request/wire field and the High quality preset;
+  nearest-voxel today.
+- **Box-averaged downsampling** — when the voxel budget forces a coarser
+  pitch than the finest level, average the cells under a voxel instead of
+  taking the one at its centre.
+- **Progressive painting** — paint the grid level by level (or block by
+  block) so a huge plotfile shows something before its finest level is read;
+  today the sample runs to completion before the first frame.
+- **Animation export of the volume view** — the exporter's `FrameRenderer`
+  takes an `ImageView*`; the volume window needs its own "render me a QImage"
+  seam to join a sequence export.
+- **Frame compression on the wire** — RLE or 8-bit indexed pixels for slow
+  links; half-resolution drafts are the mitigation today.
+
 ## Risks
 
 `IsoWidget` refactor (pinned numerically + existing smoke); server CPU/memory

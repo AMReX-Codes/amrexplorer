@@ -24,18 +24,34 @@ VolumeTransferFunction makeVolumeTransferFunction(
     const auto high = std::clamp(ramp.highThreshold, 0.0, 1.0);
     const auto maximum = std::clamp(ramp.maximumOpacity, 0.0, 1.0);
     const bool paletteAlpha = ramp.usePaletteAlpha && palette.hasAlphaRamp();
+    // The window in entries: those whose position entry / (n - 1) lies in
+    // [low, high], ramping over that span so the top entry inside always
+    // reaches the maximum. A window narrower than the entry pitch (the
+    // coupled sliders make low == high reachable) would select nothing and
+    // render a blank volume; it selects the entry nearest its centre
+    // instead, fully opaque -- a thin shell at that value.
+    const auto last = static_cast<double>(entryCount - 1);
+    constexpr double slack = 1.0e-9;
+    int lowEntry = static_cast<int>(std::ceil(low * last - slack));
+    int highEntry = static_cast<int>(std::floor(high * last + slack));
+    if (highEntry < lowEntry) {
+        lowEntry = std::clamp(
+            static_cast<int>(std::lround(0.5 * (low + high) * last)), 0,
+            entryCount - 1);
+        highEntry = lowEntry;
+    }
     for (int entry = 0; entry < entryCount; ++entry) {
         const auto slot = Palette::paletteStart + entry;
         transfer.colors.push_back(palette.slotArgb(slot) & 0x00FFFFFFU);
-        const auto t = static_cast<double>(entry) / static_cast<double>(entryCount - 1);
         double opacity = 0.0;
-        if (t >= low && t <= high) {
+        if (entry >= lowEntry && entry <= highEntry) {
             if (paletteAlpha) {
                 opacity = palette.opacity(slot);
-            } else if (high > low) {
-                opacity = (t - low) / (high - low);
+            } else if (highEntry > lowEntry) {
+                opacity = static_cast<double>(entry - lowEntry)
+                    / static_cast<double>(highEntry - lowEntry);
             } else {
-                opacity = 1.0;   // a zero-width window is a step
+                opacity = 1.0;
             }
         }
         transfer.opacities.push_back(

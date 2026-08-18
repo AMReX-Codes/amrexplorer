@@ -150,6 +150,28 @@ int main()
             "the window's top is not the maximum opacity");
         require(std::abs(window.opacities[126] - 0.25F) <= 2.0e-3F,   // t = 0.5
             "the window's midpoint is not half the maximum opacity");
+        // Equal thresholds (the coupled sliders allow them) and a window
+        // narrower than the entry pitch select the single nearest entry,
+        // opaque, rather than nothing: 0.3 * 252 = 75.6 -> entry 76.
+        for (const amrvis::OpacityRamp narrow :
+            {amrvis::OpacityRamp{0.3, 0.3, 1.0, false},
+                amrvis::OpacityRamp{0.299, 0.301, 1.0, false}}) {
+            const auto shell = amrvis::makeVolumeTransferFunction(palette, narrow);
+            for (int entry = 0; entry < 253; ++entry) {
+                const auto i = static_cast<std::size_t>(entry);
+                require(shell.opacities[i] == (entry == 76 ? 1.0F : 0.0F),
+                    "a sub-pitch window did not select the nearest entry alone");
+            }
+        }
+        // A window holding a few entries ramps over exactly those, the top
+        // one at the maximum: [0.30, 0.31] * 252 = [75.6, 78.12] -> 76..78.
+        const auto few = amrvis::makeVolumeTransferFunction(
+            palette, amrvis::OpacityRamp{0.30, 0.31, 0.8, false});
+        require(few.opacities[75] == 0.0F && few.opacities[76] == 0.0F
+                && std::abs(few.opacities[77] - 0.4F) <= 1.0e-6F
+                && std::abs(few.opacities[78] - 0.8F) <= 1.0e-6F
+                && few.opacities[79] == 0.0F,
+            "a few-entry window did not ramp over its entries to the maximum");
         // The palette's alpha ramp, when asked for and present; the plain
         // ramp when the palette has none.
         amrvis::OpacityRamp fromPalette{0.0, 1.0, 1.0, true};

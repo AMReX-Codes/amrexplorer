@@ -24,7 +24,9 @@ namespace amrvis {
 // [0, 1] of the range) that ramps linearly from transparent at the low
 // threshold to maximumOpacity at the high one -- or, with usePaletteAlpha
 // and a palette that carries an alpha ramp, the palette's own per-slot
-// opacity, windowed and scaled the same way.
+// opacity, windowed and scaled the same way. A window too narrow to hold
+// an entry (the thresholds may be equal) selects the one nearest it, at
+// full opacity.
 struct OpacityRamp {
     double lowThreshold = 0.0;
     double highThreshold = 1.0;

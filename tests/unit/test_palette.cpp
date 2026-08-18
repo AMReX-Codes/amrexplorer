@@ -107,14 +107,17 @@ int main(int argc, char** argv)
 
     // The fourth channel is the legacy alpha ramp, kept for volume rendering
     // with Amrvis's semantics: a percentage per slot (rainbow.pal carries the
-    // legacy 0..100 ramp), clamped to 1. A 768-byte palette has none and
-    // reads back Amrvis's default transfer function, the linear ramp; the
-    // compiled-in builtins are RGB-only and do the same. Reversal leaves the
-    // ramp alone -- opacity follows the value, not the color -- and equality
-    // sees it.
+    // legacy 0..100 ramp), clamped to 1. The builtin rainbow carries the same
+    // ramp, so it equals the file outright. A 768-byte palette has none and
+    // reads back Amrvis's default transfer function, the linear ramp.
+    // Reversal leaves the ramp alone -- opacity follows the value, not the
+    // color -- and equality sees it.
+    require(fileBytes.size() == 1024,
+        "rainbow.pal must carry the legacy alpha ramp for the checks below");
     require(loaded.hasAlphaRamp() && !loaded768.hasAlphaRamp()
-            && !rainbow.hasAlphaRamp(),
-        "the alpha ramp's presence was not read from the file size");
+            && rainbow.hasAlphaRamp() && rainbow == loaded,
+        "the alpha ramp's presence was not read from the file size, or the "
+        "builtin rainbow lacks the file's ramp");
     require(loaded.opacity(0) == 0.0 && loaded.opacity(255) == 1.0,
         "the legacy alpha ramp does not span transparent to opaque");
     // The legacy ramp is hand-made (one dip near slot 92), so pin bounds and
@@ -135,17 +138,35 @@ int main(int argc, char** argv)
         "opacity did not clamp the slot index");
     require(loaded768.opacity(0) == 0.0 && loaded768.opacity(255) == 1.0
             && loaded768.opacity(51) == 51.0 / 255.0
-            && rainbow.opacity(51) == 51.0 / 255.0,
+            && amrvis::Palette(std::array<amrvis::Palette::Rgb,
+                    amrvis::Palette::slotCount>{}).opacity(51) == 51.0 / 255.0,
         "a palette without a ramp did not use the linear default");
+    // Every builtin carries its file's ramp; the generated ones the legacy
+    // default 0..100 ramp.
+    require(amrvis::builtinPalette(amrvis::BuiltinPalette::Viridis).hasAlphaRamp()
+            && amrvis::builtinPalette(amrvis::BuiltinPalette::Viridis).opacity(0) == 0.0
+            && amrvis::builtinPalette(amrvis::BuiltinPalette::Viridis).opacity(255) == 1.0,
+        "a generated builtin does not carry the default alpha ramp");
     {
         auto slots = std::array<amrvis::Palette::Rgb, amrvis::Palette::slotCount>{};
         auto alpha = std::array<std::uint8_t, amrvis::Palette::slotCount>{};
-        alpha.fill(250);   // above 100 percent: clamps to fully opaque
-        const amrvis::Palette overOpaque(slots, alpha);
-        require(overOpaque.hasAlphaRamp() && overOpaque.opacity(7) == 1.0,
-            "an alpha byte above 100 was not clamped to opaque");
-        require(!(overOpaque == amrvis::Palette(slots))
-                && amrvis::Palette(slots, alpha) == overOpaque,
+        // A ramp with a byte above 100 cannot be a legacy percent ramp: it is
+        // read full-scale, so a 0..255 linear ramp reads as one, and the flat
+        // 255 older builds wrote reads as opaque.
+        for (int index = 0; index < amrvis::Palette::slotCount; ++index) {
+            alpha[static_cast<std::size_t>(index)] = static_cast<std::uint8_t>(index);
+        }
+        const amrvis::Palette fullScale(slots, alpha);
+        require(fullScale.hasAlphaRamp() && fullScale.opacity(0) == 0.0
+                && fullScale.opacity(255) == 1.0
+                && fullScale.opacity(51) == 51.0 / 255.0,
+            "a 0..255 ramp was not read full-scale");
+        alpha.fill(255);
+        const amrvis::Palette flat(slots, alpha);
+        require(flat.opacity(7) == 1.0 && flat.opacity(255) == 1.0,
+            "a flat 255 ramp did not read as fully opaque");
+        require(!(flat == amrvis::Palette(slots))
+                && amrvis::Palette(slots, alpha) == flat,
             "Palette equality ignored the alpha ramp");
     }
     require(loaded.reversed().opacity(3) == loaded.opacity(3)

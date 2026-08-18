@@ -49,13 +49,17 @@ public:
     // The slot as an opaque 0xAARRGGBB pixel.
     [[nodiscard]] std::uint32_t slotArgb(int index) const noexcept;
 
-    // Whether the palette carried an alpha ramp (a 1024-byte file did).
+    // Whether the palette carried an alpha ramp (a 1024-byte file did; the
+    // builtins carry their .pal file's).
     [[nodiscard]] bool hasAlphaRamp() const noexcept;
-    // The slot's opacity in [0, 1] for volume rendering, with the legacy
-    // Amrvis semantics: an alpha ramp stores percentages (a byte above 100
-    // clamps to 1); a palette without a ramp uses Amrvis's default transfer
-    // function, the linear ramp index / (slotCount - 1). The index is clamped
-    // into [0, slotCount - 1].
+    // The slot's opacity in [0, 1] for volume rendering. A ramp is read with
+    // the legacy Amrvis semantics -- each byte a percentage -- unless any
+    // byte exceeds 100, which no Amrvis-written ramp does: such a ramp is
+    // read as 0..255 (a full-scale byte ramp, and the flat 255 that older
+    // AMReXplorer builds wrote, which then reads as opaque rather than as
+    // 255 %). A palette without a ramp uses Amrvis's default transfer
+    // function, the linear ramp index / (slotCount - 1). The index is
+    // clamped into [0, slotCount - 1].
     [[nodiscard]] double opacity(int index) const noexcept;
 
     // A copy with the data color range [paletteStart, paletteEnd] reversed,
@@ -93,6 +97,7 @@ private:
     std::array<Rgb, slotCount> slots_{};
     std::array<std::uint8_t, slotCount> alpha_{};
     bool hasAlphaRamp_ = false;
+    double alphaScale_ = 100.0;   // the byte value that means fully opaque
 };
 
 // Count is a sentinel rather than a palette. It exists so a consumer that

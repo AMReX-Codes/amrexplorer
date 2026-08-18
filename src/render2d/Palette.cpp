@@ -12,9 +12,14 @@ namespace amrvis {
 Palette::Palette(const std::array<Rgb, slotCount>& slots,
     std::optional<std::array<std::uint8_t, slotCount>> alpha)
     : slots_(slots)
-    , alpha_(alpha.value_or(std::array<std::uint8_t, slotCount>{}))
     , hasAlphaRamp_(alpha.has_value())
 {
+    if (alpha) {
+        alpha_ = *alpha;
+        // Percent (Amrvis) unless a byte exceeds 100, then full-scale bytes.
+        const auto largest = *std::max_element(alpha_.begin(), alpha_.end());
+        alphaScale_ = largest > 100 ? 255.0 : 100.0;
+    }
 }
 
 bool Palette::hasAlphaRamp() const noexcept
@@ -29,9 +34,11 @@ double Palette::opacity(int index) const noexcept
         // Amrvis's AV_PAL_NON_ALPHA transfer function.
         return static_cast<double>(clamped) / static_cast<double>(slotCount - 1);
     }
-    // Amrvis's AV_PAL_ALPHA transfer function: the byte is a percentage.
+    // Amrvis's AV_PAL_ALPHA transfer function: the byte is a percentage --
+    // or a full-scale byte, when the ramp cannot be a legacy one (see the
+    // header).
     return std::min(1.0,
-        static_cast<double>(alpha_[static_cast<std::size_t>(clamped)]) / 100.0);
+        static_cast<double>(alpha_[static_cast<std::size_t>(clamped)]) / alphaScale_);
 }
 
 const Palette::Rgb& Palette::slot(int index) const noexcept

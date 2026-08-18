@@ -10,9 +10,10 @@ Outputs two artifacts:
     -- so volume rendering with "use palette alpha" starts from a usable
     transfer function. ``Palette::load`` parses this planar layout.
   * ``src/render2d/BuiltinPalettes.cpp`` -- the same tables compiled in as
-    ``std::array<Palette::Rgb, 256>``, plus ``builtinPalette()`` and
-    ``builtinPaletteName()`` (the menu label, returned *without* a ``.pal``
-    extension).
+    ``std::array<Palette::Rgb, 256>`` with their alpha ramps as
+    ``std::array<std::uint8_t, 256>`` (so a builtin equals its ``.pal`` file,
+    ramp included), plus ``builtinPalette()`` and ``builtinPaletteName()``
+    (the menu label, returned *without* a ``.pal`` extension).
 
 The curated set draws on the popular visualization packages' default and
 perceptually-uniform colormaps:
@@ -101,26 +102,34 @@ def sample_colormap(cmap, slots=SLOTS):
 
 
 def read_planar_pal(path):
-    """Read a legacy planar .pal (256R + 256G + 256B [+ 256A]) into a 256x3 array."""
+    """Read a legacy planar .pal (256R + 256G + 256B [+ 256A]).
+
+    Returns (rgb, alpha): a 256x3 array and the 256-byte alpha ramp, or None
+    for a 768-byte file without one.
+    """
     raw = path.read_bytes()
     if len(raw) not in (3 * SLOTS, 4 * SLOTS):
         raise ValueError(f"{path}: unexpected palette size {len(raw)} bytes")
     arr = np.frombuffer(raw[:3 * SLOTS], dtype=np.uint8).reshape(3, SLOTS)
-    return np.ascontiguousarray(arr.T)  # (256, 3): slot-major
+    alpha = (np.frombuffer(raw[3 * SLOTS:], dtype=np.uint8).copy()
+             if len(raw) == 4 * SLOTS else None)
+    return np.ascontiguousarray(arr.T), alpha  # (256, 3): slot-major
 
 
-def write_planar_pal(path, rgb):
-    """Write a 256x3 RGB array as a 1024-byte planar .pal.
-
-    The alpha ramp is the legacy Amrvis default for a palette without one:
+def default_alpha():
+    """The legacy Amrvis default alpha ramp for a palette without one:
     ``100 * j / 255`` truncated to a byte (a percentage, as ``Palette::opacity``
-    reads it), so slot 0 is transparent and slot 255 fully opaque.
-    """
+    reads it), so slot 0 is transparent and slot 255 fully opaque."""
+    return np.array([(100 * j) // (SLOTS - 1) for j in range(SLOTS)],
+                    dtype=np.uint8)
+
+
+def write_planar_pal(path, rgb, alpha):
+    """Write a 256x3 RGB array and a 256-byte alpha ramp as a 1024-byte planar .pal."""
     assert rgb.shape == (SLOTS, 3), rgb.shape
+    assert alpha.shape == (SLOTS,), alpha.shape
     flat = np.ascontiguousarray(rgb.T).reshape(-1)  # R0..R255 G0..G255 B0..B255
-    alpha = np.array([(100 * j) // (SLOTS - 1) for j in range(SLOTS)],
-                     dtype=np.uint8)
-    path.write_bytes(flat.tobytes() + alpha.tobytes())
+    path.write_bytes(flat.tobytes() + alpha.astype(np.uint8).tobytes())
 
 
 def sha256_file(path):
@@ -186,7 +195,7 @@ def _matplotlib_entry(enum_name, cmap_name):
     cmap = colormaps.get(cmap_name)
     if cmap is None:
         raise SystemExit(f"matplotlib has no colormap named {cmap_name!r}")
-    return (enum_name, cmap_name, sample_colormap(cmap),
+    return (enum_name, cmap_name, sample_colormap(cmap), default_alpha(),
             f"matplotlib {matplotlib.__version__} colormap {cmap_name!r}")
 
 
@@ -197,18 +206,22 @@ def build_palettes():
     sequential (viridis, plasma, parula), diverging (coolwarm), thermal
     (blackbody).
     """
-    rainbow = read_planar_pal(PALETTE_DIR / "rainbow.pal")
+    rainbow, rainbow_alpha = read_planar_pal(PALETTE_DIR / "rainbow.pal")
+    if rainbow_alpha is None:
+        rainbow_alpha = default_alpha()
     parula_cmap = LinearSegmentedColormap.from_list("parula", PARULA_CONTROL_POINTS)
+    # (enum, menu, rgb, alpha, source note): rainbow keeps its hand-made
+    # legacy ramp; the generated palettes carry the legacy default ramp.
     return [
-        ("Rainbow", "rainbow", rainbow,
+        ("Rainbow", "rainbow", rainbow, rainbow_alpha,
          "palettes/rainbow.pal (legacy Amrvis default, read back unchanged)"),
         _matplotlib_entry("Turbo", "turbo"),
         _matplotlib_entry("Viridis", "viridis"),
         _matplotlib_entry("Plasma", "plasma"),
-        ("Parula", "parula", sample_colormap(parula_cmap),
+        ("Parula", "parula", sample_colormap(parula_cmap), default_alpha(),
          "parula control points from BIDS/colormap (MATLAB parula)"),
         _matplotlib_entry("Coolwarm", "coolwarm"),
-        ("Blackbody", "blackbody", blackbody_colormap(),
+        ("Blackbody", "blackbody", blackbody_colormap(), default_alpha(),
          "blackbody radiation: Planck-locus chromaticity (Hellard 2012 fit), "
          "log-spaced 1000-6500 K"),
     ]
@@ -232,20 +245,34 @@ def format_array(var_name, rgb, source_note):
     return "\n".join(lines)
 
 
+def format_alpha_array(var_name, alpha):
+    lines = ["const std::array<std::uint8_t, Palette::slotCount> "
+             + var_name + " = {{"]
+    values = [f"{int(a):3d}" for a in alpha]
+    for i in range(0, len(values), 16):
+        chunk = ", ".join(values[i:i + 16])
+        sep = "," if i + 16 < len(values) else ""
+        lines.append("    " + chunk + sep)
+    lines.append("}};")
+    return "\n".join(lines)
+
+
 def write_cpp(entries):
     checksums = "\n".join(
         f"//   {menu}.pal ({note}): {sha256_file(PALETTE_DIR / (menu + '.pal'))}"
-        for _, menu, _, note in entries)
+        for _, menu, _, _, note in entries)
     enum_names = [e[0] for e in entries]
     first_var = entries[0][0][0].lower() + entries[0][0][1:]
     default_menu = entries[0][1]
 
     palette_stats = "\n".join(
         format_array(enum_name[0].lower() + enum_name[1:] + "Slots", rgb, note)
-        for enum_name, _, rgb, note in entries)
+        + "\n"
+        + format_alpha_array(enum_name[0].lower() + enum_name[1:] + "Alpha", alpha)
+        for enum_name, _, rgb, alpha, note in entries)
 
     statics = "\n".join(
-        "    static const Palette {0}({0}Slots);".format(
+        "    static const Palette {0}({0}Slots, {0}Alpha);".format(
             enum[0].lower() + enum[1:])
         for enum in enum_names)
     switch_palette = "\n".join(
@@ -254,7 +281,7 @@ def write_cpp(entries):
         for enum in enum_names)
     switch_name = "\n".join(
         '    case BuiltinPalette::{0}: return "{1}";'.format(enum, menu)
-        for enum, menu, _, _ in entries)
+        for enum, menu, _, _, _ in entries)
 
     # Build the C++ with placeholder tokens + .replace so the many literal
     # braces in C++ never collide with Python format/f-string syntax.
@@ -272,13 +299,17 @@ def write_cpp(entries):
 // Source checksums (sha256):
 @@CHECKSUMS@@
 //
-// Each table holds the 256 RGB slots in planar palette order. Data values map
-// into [Palette::paletteStart, Palette::paletteEnd] = [3, 255]; the first three
-// slots are reserved (never addressed by data), matching the legacy layout.
+// Each table holds the 256 RGB slots in planar palette order, followed by
+// the palette's 256-byte alpha ramp (a percentage per slot, the legacy
+// volume-rendering transfer function): a builtin equals its .pal file. Data
+// values map into [Palette::paletteStart, Palette::paletteEnd] = [3, 255];
+// the first three slots are reserved (never addressed by data), matching the
+// legacy layout.
 
 #include <amrexplorer/render2d/Palette.hpp>
 
 #include <array>
+#include <cstdint>
 
 namespace amrvis {
 namespace {
@@ -324,12 +355,12 @@ def main():
     entries = build_palettes()
     # rainbow.pal is read back unchanged and left byte-exact on disk; write the
     # generated palettes (matplotlib + parula) out as .pal files.
-    for enum_name, menu, rgb, _ in entries:
+    for enum_name, menu, rgb, alpha, _ in entries:
         if menu == "rainbow":
             continue
-        write_planar_pal(PALETTE_DIR / f"{menu}.pal", rgb)
+        write_planar_pal(PALETTE_DIR / f"{menu}.pal", rgb, alpha)
     write_cpp(entries)
-    names = ", ".join(menu for _, menu, _, _ in entries)
+    names = ", ".join(menu for _, menu, _, _, _ in entries)
     print(f"Wrote {len(entries)} palettes ({names}).")
     print(f"  palette files: {PALETTE_DIR}")
     print(f"  builtin C++:   {BUILTIN_CPP.relative_to(REPO_ROOT)}")

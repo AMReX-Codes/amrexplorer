@@ -333,10 +333,12 @@ turns **Log** off; use a positive user minimum when necessary.
 Built-in palettes include rainbow, turbo, viridis, plasma, parula, coolwarm,
 and blackbody. Use **View > Palette > Load Palette File...** to load a custom
 `.pal` file: a legacy Amrvis sequential palette of 256 red, green and blue
-bytes, optionally followed by 256 alpha bytes. The alpha plane is the
-palette's opacity ramp for volume rendering (each byte a percentage, as
-Amrvis wrote it; a plane with bytes above 100 is read as 0-255); 2-D slices
-ignore it. **View > Palette > Reverse Colormap** flips the selected palette's
+bytes, optionally followed by 256 alpha bytes. AMReXplorer keeps the alpha
+plane as the palette's opacity ramp for volume rendering and ignores it for
+2-D slices. Each byte is a percentage, as Amrvis wrote it; if any of the
+253 data slots (the first three slots are reserved) holds a byte above 100
+the plane is read as 0-255 instead, and a plane whose data slots are all
+zero is treated as absent. **View > Palette > Reverse Colormap** flips the selected palette's
 color ramp (the "_r" variant, e.g. plasma_r) and stays applied as you switch
 between palettes.
 

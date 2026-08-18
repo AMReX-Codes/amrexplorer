@@ -17,7 +17,8 @@ Palette::Palette(const std::array<Rgb, slotCount>& slots,
         return;
     }
     // Over the data slots only (see the header): the largest byte decides
-    // percent versus full-scale, and an all-zero plane is no ramp at all.
+    // percent versus full-scale, and a plane whose data slots are all zero
+    // is no ramp at all.
     const auto first = alpha->begin() + paletteStart;
     const auto last = alpha->begin() + paletteEnd + 1;
     const auto largest = *std::max_element(first, last);

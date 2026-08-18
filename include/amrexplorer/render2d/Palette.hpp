@@ -51,23 +51,24 @@ public:
     [[nodiscard]] std::uint32_t slotArgb(int index) const noexcept;
 
     // Whether the palette carried a usable alpha ramp: a 1024-byte file's
-    // fourth plane (the builtins carry their .pal file's), unless it is all
-    // zero -- a plane that would make every value invisible is treated as
-    // absent rather than authored.
+    // fourth plane (the builtins carry their .pal file's), unless its data
+    // slots are all zero -- a plane that would make every value invisible
+    // is treated as absent rather than authored. Only the data slots
+    // [paletteStart, paletteEnd] count, here and below: the reserved slots
+    // are kept as stored and never addressed by data.
     [[nodiscard]] bool hasAlphaRamp() const noexcept;
     // The slot's opacity in [0, 1] for volume rendering. A ramp is read with
-    // the legacy Amrvis semantics -- each byte a percentage -- unless any
-    // data slot's byte exceeds 100, which no Amrvis-written ramp does: such
-    // a ramp is read as 0..255 (a full-scale byte ramp, and the flat 255
-    // that older AMReXplorer builds wrote, which then reads as opaque rather
-    // than as 255 %). The format has no version marker, so this sniff is
-    // the whole rule; its one blind spot is a genuinely faint full-scale
-    // ramp that never exceeds byte 100, which reads as percent and comes out
-    // brighter than authored. Only the data slots [paletteStart, paletteEnd]
-    // are inspected: the reserved slots are kept as stored and never
-    // addressed by data. A palette without a ramp uses Amrvis's default
-    // transfer function, the linear ramp index / (slotCount - 1). The index
-    // is clamped into [0, slotCount - 1].
+    // the legacy Amrvis semantics -- each byte a percentage -- unless a data
+    // slot's byte exceeds 100, which no Amrvis-written ramp does: such a
+    // ramp is read as 0..255, so a full-scale byte ramp reads as the ramp it
+    // is instead of saturating past its 100th slot. (A flat 255 plane, which
+    // older AMReXplorer builds wrote, is opaque under either reading.) The
+    // format has no version marker, so this sniff is the whole rule; its
+    // one blind spot is a genuinely faint full-scale ramp that never exceeds
+    // byte 100, which reads as percent and comes out brighter than
+    // authored. Bytes past the scale clamp to 1. A palette without a ramp
+    // uses Amrvis's default transfer function, the linear ramp
+    // index / (slotCount - 1). The index is clamped into [0, slotCount - 1].
     [[nodiscard]] double opacity(int index) const noexcept;
 
     // A copy with the data color range [paletteStart, paletteEnd] reversed,

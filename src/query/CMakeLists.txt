@@ -1,4 +1,4 @@
-add_library(amrexplorer_query LineQuery.cpp SliceQuery.cpp)
+add_library(amrexplorer_query LineQuery.cpp SliceQuery.cpp VolumeQuery.cpp)
 add_library(amrexplorer::query ALIAS amrexplorer_query)
 
 target_include_directories(amrexplorer_query

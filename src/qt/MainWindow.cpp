@@ -793,9 +793,10 @@ std::array<int, 2> MainWindow::sliceOutputSize(
         outputSize = nativeBoundedViewportOutputSize(
             *m_openMetadata, target, state.normal, viewportPixels);
     } else {
-        // Rubber-band selections intentionally retain their exact physical
-        // aspect. Their fractional edges need not have the rounded native-cell
-        // aspect used to suppress Fit supersampling on a whole-domain view.
+        // Rubber-band selections intentionally retain their exact aspect (in
+        // finest cells, the display's unit). Their fractional edges need not
+        // have the rounded native-cell aspect used to suppress Fit
+        // supersampling on a whole-domain view.
         outputSize = viewportBoundedOutputSize(
             *m_openMetadata, target, state.normal, viewportPixels);
     }

@@ -798,6 +798,22 @@ if(TARGET amrexplorer_qt)
     set_tests_properties(qt_remote_fixed_scale_wide_smoke PROPERTIES
         TIMEOUT 30)
 
+    # Regression for remote-fit-anisotropic-cells: with cells that are not
+    # square, the remote Fit raster and a wheel-zoomed Custom raster must be
+    # sized to the region's aspect in finest cells (the display's unit), not
+    # its physical aspect, which squeezed them to one or two pixels wide.
+    add_test(
+        NAME qt_remote_cell_aspect_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_tall"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_cell_aspect"
+            -DMODE=remote-cell-aspect
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_remote_cell_aspect_smoke PROPERTIES TIMEOUT 30)
+
     add_test(
         NAME qt_remote_rubber_aspect_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen

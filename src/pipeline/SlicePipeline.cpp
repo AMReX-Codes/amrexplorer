@@ -69,19 +69,22 @@ std::array<int, 2> viewportBoundedOutputSize(
     viewportSize[1] = std::clamp(
         viewportSize[1], 1, maxSliceOutputDimension);
     const auto axes = slicePlaneAxes(metadata.dimension, normal);
-    auto extentX = region.upper[static_cast<std::size_t>(axes[0])]
-        - region.lower[static_cast<std::size_t>(axes[0])];
-    auto extentY = region.upper[static_cast<std::size_t>(axes[1])]
-        - region.lower[static_cast<std::size_t>(axes[1])];
-    if (isSpherical2D(metadata)) {
-        // Radius and angle have heterogeneous units. Use their finest-level
-        // sample counts as the normalized display aspect instead of comparing
-        // raw physical extents with unrelated dimensions.
-        const auto& finest = metadata.levels[static_cast<std::size_t>(
-            std::max(0, metadata.finestLevel))];
-        extentX /= finest.cellSize[static_cast<std::size_t>(axes[0])];
-        extentY /= finest.cellSize[static_cast<std::size_t>(axes[1])];
-    }
+    // The aspect is the region's extent in finest cells, not in physical
+    // units: the display draws one square pixel per finest cell (that is
+    // what finestNativeOutputSize and the view's logical size use), so a
+    // raster fitted to the physical aspect would be squeezed whenever the
+    // cells are not square -- to a one-pixel strip on a domain whose dy is
+    // a hundred times its dx -- and, for spherical data, radius and angle
+    // do not even share units. Fractional cell edges are kept: a rubber-band
+    // region's exact aspect survives.
+    const auto& finest = metadata.levels[static_cast<std::size_t>(
+        std::max(0, metadata.finestLevel))];
+    const auto extentX = (region.upper[static_cast<std::size_t>(axes[0])]
+        - region.lower[static_cast<std::size_t>(axes[0])])
+        / finest.cellSize[static_cast<std::size_t>(axes[0])];
+    const auto extentY = (region.upper[static_cast<std::size_t>(axes[1])]
+        - region.lower[static_cast<std::size_t>(axes[1])])
+        / finest.cellSize[static_cast<std::size_t>(axes[1])];
     if (!(extentX > 0.0) || !(extentY > 0.0)) {
         return {1, 1};
     }

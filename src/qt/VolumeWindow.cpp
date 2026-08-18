@@ -2,11 +2,16 @@
 
 #include "IsoWidget.hpp"
 
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDockWidget>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QLabel>
+#include <QMenu>
+#include <QMenuBar>
+#include <QMessageBox>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QHBoxLayout>
@@ -31,6 +36,30 @@ VolumeWindow::VolumeWindow(QWidget* parent)
     connect(m_view, &IsoWidget::viewResized, this,
         [this] { emit viewResized(); });
     buildControls();
+
+    // File > Export Image...: the view as drawn (frame and overlays), as PNG.
+    auto* fileMenu = menuBar()->addMenu(tr("&File"));
+    auto* exportAction = new QAction(tr("&Export Image..."), this);
+    exportAction->setShortcut(QKeySequence::Save);
+    connect(exportAction, &QAction::triggered, this, [this] { exportImage(); });
+    fileMenu->addAction(exportAction);
+    auto* closeAction = new QAction(tr("&Close"), this);
+    closeAction->setShortcut(QKeySequence::Close);
+    connect(closeAction, &QAction::triggered, this, [this] { close(); });
+    fileMenu->addAction(closeAction);
+}
+
+void VolumeWindow::exportImage()
+{
+    const auto path = QFileDialog::getSaveFileName(this, tr("Export Volume Image"),
+        QString(), tr("PNG images (*.png)"));
+    if (path.isEmpty()) {
+        return;
+    }
+    if (!m_view->grab().save(path, "PNG")) {
+        QMessageBox::critical(this, tr("Export Volume Image"),
+            tr("Cannot write %1").arg(path));
+    }
 }
 
 void VolumeWindow::buildControls()

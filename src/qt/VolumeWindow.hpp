@@ -82,6 +82,7 @@ signals:
 
 private:
     void buildControls();
+    void exportImage();
 
     IsoWidget* m_view = nullptr;
     QSlider* m_lowSlider = nullptr;

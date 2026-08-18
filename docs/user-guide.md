@@ -183,7 +183,9 @@ The main controls are:
    3-D panels.
 4. **Range, Log, and Palette** control the mapping from values to colors.
 5. **Slice panels** display the XY, XZ, and YZ planes for a 3-D dataset.
-6. **Isometric view** shows the domain, grid boxes, and current slice planes.
+6. **Isometric view** shows the domain, grid boxes, and current slice planes;
+   **View > Volume Rendering...** opens the same view with the field
+   ray-cast into it.
 7. **Color Scale** reports the active value-to-color mapping.
 8. **Animation** controls a 3-D plane sweep or an open plotfile sequence.
 
@@ -286,6 +288,50 @@ directly comparable.
 The **Plane Sweep** controls in the Animation panel select an axis and step or
 play through its sample indices. The speed slider controls the delay between
 frames.
+
+## Volume rendering
+
+**View > Volume Rendering...** opens a window that ray-casts the whole 3-D
+field: every pixel accumulates the colour and opacity of the cells along its
+line of sight, so translucent structure inside the domain shows through. The
+window uses the same view as the isometric quadrant -- drag to rotate, wheel
+to zoom, and the **XY**, **XZ**, **YZ** buttons for the axis-aligned views --
+with the domain outline, the grid boxes and the slice planes drawn over the
+rendered volume.
+
+The window follows the main window: the field, the AMR level, the range mode
+and its User min/max, the logarithmic mapping and the palette are the ones
+selected there, so the volume's colours agree with the slices and the colour
+bar. Its own controls set the opacity:
+
+- **Opacity from / to** window the colour range: values below *from* are
+  transparent, and the opacity ramps linearly up to *to*. Narrow the window
+  around the values of interest to see them through the rest.
+- **Maximum opacity** scales the whole ramp; lower it to look deeper into a
+  dense field.
+- **Use palette alpha ramp** takes each colour's opacity from the palette's
+  own alpha ramp instead of the linear window. Legacy Amrvis `.pal` files
+  carry such a ramp (the shipped palettes have a plain 0-100 % ramp), and
+  the window still applies the *from* / *to* limits and the maximum to it.
+- **Quality** trades speed for detail: it sets how many samples are taken per
+  cell along each ray and how many cells the field is sampled into (Draft
+  128^3, Normal 256^3, High 384^3). A field finer than that is sampled at the
+  coarser pitch; a level coarser than it is drawn at its own resolution.
+
+While the camera moves the window shows quick half-resolution drafts and
+renders the full frame once it settles. The field is sampled once per field,
+level and quality and kept, so rotating only re-casts. The status line under
+the controls reports the range in use, the sampled grid and the render time.
+
+Volume rendering works for remote plotfiles too (see [Remote
+datasets](#remote-datasets)): the server samples and renders the frame and
+sends back the picture, never the field. It needs an `amrexplorer-server`
+that speaks protocol 1.2; against an older server the menu item stays
+disabled. The server's `--max-volume-voxels` and `--volume-cache-mib` options
+bound the memory a session may use for it.
+
+**File > Export Image...** in the volume window saves the view, overlays
+included, as a PNG.
 
 ## Selecting fields and AMR levels
 

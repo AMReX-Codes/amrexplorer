@@ -22,10 +22,10 @@
 #include <string_view>
 #include <vector>
 
-// Range: the display-state scenarios: range mode and range cache, palette
-// labels, contour sync, visible-range sync staleness, particles. Every
-// branch drives MainWindow through its ForTest accessors and arms
-// connections and timers for main() to run; see SmokeHarness.hpp.
+// Range: the display-state scenarios: range mode and range cache, contour
+// sync, visible-range sync staleness, particles. Every branch drives
+// MainWindow through its ForTest accessors and arms connections and timers
+// for main() to run; see SmokeHarness.hpp.
 
 namespace amrvis::qt::smoke {
 
@@ -135,45 +135,7 @@ Outcome dispatchRange(Context& context)
     const int argc = context.argc;
     char** argv = context.argv;
 
-    if (argc == 2
-        && std::string_view(argv[1]) == "--palette-labels-smoke-test") {
-        // The Palette menu and the palette selector are built in different
-        // translation units from one label helper, and must therefore show the
-        // same names. They did not: the menu used the helper's result raw while
-        // the selector capitalized it by hand, so the menu read "rainbow" where
-        // the selector read "Rainbow". Needs no dataset -- both lists are built
-        // during construction.
-        const auto menu = window.paletteMenuLabelsForTest();
-        auto selector = window.paletteSelectorLabelsForTest();
-        // The reversal suffix is a selector-only presentation rule: with
-        // "Reverse Colormap" on, the selector appends "_r" while the
-        // menu actions keep their original text. That divergence is real and
-        // outside what this case is about, so it is normalized away rather
-        // than asserted on -- the property here is that the two agree on the
-        // *name*. Isolated settings make reversal off anyway; this keeps the
-        // case honest on the platforms where XDG_CONFIG_HOME does not isolate
-        // QSettings, and stops it claiming an invariant the product does not
-        // hold. Unifying the suffix into the shared helper is follow-up work.
-        for (auto& label : selector) {
-            if (label.endsWith(QStringLiteral("_r"))) {
-                label.chop(2);
-            }
-        }
-        if (menu.isEmpty() || menu != selector) {
-            qCritical("palette menu labels %s do not match the selector's %s",
-                qPrintable(menu.join(QStringLiteral(","))),
-                qPrintable(selector.join(QStringLiteral(","))));
-            return {true, 1};
-        }
-        // Pinned as a literal rather than derived from the same helper the
-        // widgets used, which would pass whatever that helper produced.
-        if (menu.front() != QStringLiteral("Rainbow")) {
-            qCritical("the first palette is labelled '%s', not 'Rainbow'",
-                qPrintable(menu.front()));
-            return {true, 1};
-        }
-        return {true, 0};
-    } else if (argc == 3
+    if (argc == 3
         && std::string_view(argv[1]) == "--missing-range-smoke-test") {
         const std::filesystem::path path(argv[2]);
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,

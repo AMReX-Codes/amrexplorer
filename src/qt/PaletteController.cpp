@@ -306,7 +306,11 @@ void PaletteController::syncSelector()
     }
     // Reversal is a global modifier, so every palette name carries the "_r"
     // suffix (the plasma_r convention) while it is on -- including the closed
-    // selector, which shows the active one.
+    // selector, which shows the active one. The suffix is selector-only: the
+    // menu actions keep the bare name (the Reverse Colormap action shows the
+    // state there). Moving it into builtinPaletteLabel so both agree is
+    // follow-up work; test_palette_controller compares the two lists with
+    // reversal off.
     const QString suffix
         = m_state.reversed ? QStringLiteral("_r") : QString();
     for (int item = 0; item < m_selector->count(); ++item) {

@@ -11,12 +11,12 @@
 //
 // Source checksums (sha256):
 //   rainbow.pal (palettes/rainbow.pal (legacy Amrvis default, read back unchanged)): 957068deb823caf2e16314503680fe24fe1e645292d88478de43f3eaf6a72dbc
-//   turbo.pal (matplotlib 3.6.3 colormap 'turbo'): 04548ceb51ee196936c5be5d2d47e5cc0c4a9ed2d7c8a55b79cd827922b75d10
-//   viridis.pal (matplotlib 3.6.3 colormap 'viridis'): 466b061f17b208a9ae1f3b62f88b6ce26852ecf2e20883d8eb11bdb9ed23ca8c
-//   plasma.pal (matplotlib 3.6.3 colormap 'plasma'): 2fe47a22d3c2ab8b7e1fffede2a3d09b00ef455eeb6f9c8fa4ce3910269c24d1
-//   parula.pal (parula control points from BIDS/colormap (MATLAB parula)): a6641b46c6eeca2927f63505adedc048e7017be11a2bf3602f1c3e8c21065102
-//   coolwarm.pal (matplotlib 3.6.3 colormap 'coolwarm'): b7fa790aadbe32f8771bd498029ceb64603d6e884c1e587ebe44520feb52b904
-//   blackbody.pal (blackbody radiation: Planck-locus chromaticity (Hellard 2012 fit), log-spaced 1000-6500 K): 9d9d26f8a053ebf09594fb1d8a66086c026a5fb4efb4c4827c963ebfc16800c8
+//   turbo.pal (matplotlib 3.11.1 colormap 'turbo'): a2dd60ee78060e20950ed2a9c3836da3d559c876f1edbc7b492a2686be724214
+//   viridis.pal (matplotlib 3.11.1 colormap 'viridis'): 36bef3b6f679a25d0c8af8ef06e9669d7ed76cb3e8cb07005a75b5c27d8195a8
+//   plasma.pal (matplotlib 3.11.1 colormap 'plasma'): 258dd156fe7b96af5eae9da495aef402babe658cb7265a60bb91db045a5a2f5f
+//   parula.pal (parula control points from BIDS/colormap (MATLAB parula)): f080c58c2bd1150ae6574b9639675092adc40129945dc3f60ecabead7092d7a4
+//   coolwarm.pal (matplotlib 3.11.1 colormap 'coolwarm'): 31abd414c2d7ed1aa3f045bb20ad1f23a2f6cbe3850deda0abb334f1a957cb1f
+//   blackbody.pal (blackbody radiation: Planck-locus chromaticity (Hellard 2012 fit), log-spaced 1000-6500 K): b88acea5b7847c1908dfef84be14af4eb32432513a4b6a4ccf064fa1a10519b7
 //
 // Each table holds the 256 RGB slots in planar palette order. Data values map
 // into [Palette::paletteStart, Palette::paletteEnd] = [3, 255]; the first three
@@ -84,7 +84,7 @@ const std::array<Palette::Rgb, Palette::slotCount> rainbowSlots = {{
     {149,  0,  0}, {145,  0,  0}, {140,  0,  0}, {136,  0,  0}, {131,  0,  0},
     {127,  0,  0}
 }};
-// matplotlib 3.6.3 colormap 'turbo'
+// matplotlib 3.11.1 colormap 'turbo'
 const std::array<Palette::Rgb, Palette::slotCount> turboSlots = {{
     { 48, 18, 59}, { 50, 21, 67}, { 51, 24, 74}, { 52, 27, 81}, { 53, 30, 88},
     { 54, 33, 95}, { 55, 36,102}, { 56, 39,109}, { 57, 42,115}, { 58, 45,121},
@@ -139,7 +139,7 @@ const std::array<Palette::Rgb, Palette::slotCount> turboSlots = {{
     {139,  9,  2}, {136,  8,  2}, {133,  7,  2}, {129,  6,  2}, {126,  5,  2},
     {122,  4,  3}
 }};
-// matplotlib 3.6.3 colormap 'viridis'
+// matplotlib 3.11.1 colormap 'viridis'
 const std::array<Palette::Rgb, Palette::slotCount> viridisSlots = {{
     { 68,  1, 84}, { 68,  2, 86}, { 69,  4, 87}, { 69,  5, 89}, { 70,  7, 90},
     { 70,  8, 92}, { 70, 10, 93}, { 70, 11, 94}, { 71, 13, 96}, { 71, 14, 97},
@@ -194,7 +194,7 @@ const std::array<Palette::Rgb, Palette::slotCount> viridisSlots = {{
     {241,229, 29}, {244,230, 30}, {246,230, 32}, {248,230, 33}, {251,231, 35},
     {253,231, 37}
 }};
-// matplotlib 3.6.3 colormap 'plasma'
+// matplotlib 3.11.1 colormap 'plasma'
 const std::array<Palette::Rgb, Palette::slotCount> plasmaSlots = {{
     { 13,  8,135}, { 16,  7,136}, { 19,  7,137}, { 22,  7,138}, { 25,  6,140},
     { 27,  6,141}, { 29,  6,142}, { 32,  6,143}, { 34,  6,144}, { 36,  6,145},
@@ -304,7 +304,7 @@ const std::array<Palette::Rgb, Palette::slotCount> parulaSlots = {{
     {246,241, 20}, {246,243, 19}, {247,245, 18}, {248,247, 16}, {248,249, 15},
     {249,251, 14}
 }};
-// matplotlib 3.6.3 colormap 'coolwarm'
+// matplotlib 3.11.1 colormap 'coolwarm'
 const std::array<Palette::Rgb, Palette::slotCount> coolwarmSlots = {{
     { 59, 76,192}, { 60, 78,194}, { 61, 80,195}, { 62, 81,197}, { 63, 83,198},
     { 64, 85,200}, { 66, 87,201}, { 67, 88,203}, { 68, 90,204}, { 69, 92,206},

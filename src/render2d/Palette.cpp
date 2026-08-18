@@ -3,14 +3,35 @@
 #include <algorithm>
 #include <cstddef>
 #include <fstream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
 namespace amrvis {
 
-Palette::Palette(const std::array<Rgb, slotCount>& slots)
+Palette::Palette(const std::array<Rgb, slotCount>& slots,
+    std::optional<std::array<std::uint8_t, slotCount>> alpha)
     : slots_(slots)
+    , alpha_(alpha.value_or(std::array<std::uint8_t, slotCount>{}))
+    , hasAlphaRamp_(alpha.has_value())
 {
+}
+
+bool Palette::hasAlphaRamp() const noexcept
+{
+    return hasAlphaRamp_;
+}
+
+double Palette::opacity(int index) const noexcept
+{
+    const auto clamped = std::clamp(index, 0, slotCount - 1);
+    if (!hasAlphaRamp_) {
+        // Amrvis's AV_PAL_NON_ALPHA transfer function.
+        return static_cast<double>(clamped) / static_cast<double>(slotCount - 1);
+    }
+    // Amrvis's AV_PAL_ALPHA transfer function: the byte is a percentage.
+    return std::min(1.0,
+        static_cast<double>(alpha_[static_cast<std::size_t>(clamped)]) / 100.0);
 }
 
 const Palette::Rgb& Palette::slot(int index) const noexcept
@@ -97,7 +118,14 @@ Palette Palette::load(const std::filesystem::path& path)
         slots[index].green = static_cast<std::uint8_t>(buffer[channelBytes + index]);
         slots[index].blue = static_cast<std::uint8_t>(buffer[2 * channelBytes + index]);
     }
-    return Palette(slots);
+    if (byteCount == 3 * channelBytes) {
+        return Palette(slots);
+    }
+    std::array<std::uint8_t, slotCount> alpha{};
+    for (std::size_t index = 0; index < channelBytes; ++index) {
+        alpha[index] = static_cast<std::uint8_t>(buffer[3 * channelBytes + index]);
+    }
+    return Palette(slots, alpha);
 }
 
 } // namespace amrvis

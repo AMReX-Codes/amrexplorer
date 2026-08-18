@@ -105,6 +105,54 @@ int main(int argc, char** argv)
     require(roundTrip768, "Palette::load did not round-trip a 768-byte palette");
     std::filesystem::remove(palette768Path);
 
+    // The fourth channel is the legacy alpha ramp, kept for volume rendering
+    // with Amrvis's semantics: a percentage per slot (rainbow.pal carries the
+    // legacy 0..100 ramp), clamped to 1. A 768-byte palette has none and
+    // reads back Amrvis's default transfer function, the linear ramp; the
+    // compiled-in builtins are RGB-only and do the same. Reversal leaves the
+    // ramp alone -- opacity follows the value, not the color -- and equality
+    // sees it.
+    require(loaded.hasAlphaRamp() && !loaded768.hasAlphaRamp()
+            && !rainbow.hasAlphaRamp(),
+        "the alpha ramp's presence was not read from the file size");
+    require(loaded.opacity(0) == 0.0 && loaded.opacity(255) == 1.0,
+        "the legacy alpha ramp does not span transparent to opaque");
+    // The legacy ramp is hand-made (one dip near slot 92), so pin bounds and
+    // the percentage reading rather than monotonicity: byte 128 of the file's
+    // ramp is the opacity of slot 128.
+    bool bounded = true;
+    for (int index = 0; index < amrvis::Palette::slotCount; ++index) {
+        bounded = bounded && loaded.opacity(index) >= 0.0
+            && loaded.opacity(index) <= 1.0;
+    }
+    require(bounded, "the legacy alpha ramp left [0, 1]");
+    require(loaded.opacity(128)
+            == static_cast<double>(static_cast<std::uint8_t>(fileBytes[768 + 128]))
+                / 100.0,
+        "the alpha byte was not read as a percentage");
+    require(loaded.opacity(-1) == loaded.opacity(0)
+            && loaded.opacity(1000) == loaded.opacity(255),
+        "opacity did not clamp the slot index");
+    require(loaded768.opacity(0) == 0.0 && loaded768.opacity(255) == 1.0
+            && loaded768.opacity(51) == 51.0 / 255.0
+            && rainbow.opacity(51) == 51.0 / 255.0,
+        "a palette without a ramp did not use the linear default");
+    {
+        auto slots = std::array<amrvis::Palette::Rgb, amrvis::Palette::slotCount>{};
+        auto alpha = std::array<std::uint8_t, amrvis::Palette::slotCount>{};
+        alpha.fill(250);   // above 100 percent: clamps to fully opaque
+        const amrvis::Palette overOpaque(slots, alpha);
+        require(overOpaque.hasAlphaRamp() && overOpaque.opacity(7) == 1.0,
+            "an alpha byte above 100 was not clamped to opaque");
+        require(!(overOpaque == amrvis::Palette(slots))
+                && amrvis::Palette(slots, alpha) == overOpaque,
+            "Palette equality ignored the alpha ramp");
+    }
+    require(loaded.reversed().opacity(3) == loaded.opacity(3)
+            && loaded.reversed().opacity(255) == loaded.opacity(255)
+            && loaded.reversed().hasAlphaRamp(),
+        "reversed() disturbed the alpha ramp");
+
     // load() rejects a file larger than 1024 bytes (the bounded read caps it).
     const auto oversizedPath = std::filesystem::temp_directory_path()
         / "amrexplorer_test_palette_oversized.pal";

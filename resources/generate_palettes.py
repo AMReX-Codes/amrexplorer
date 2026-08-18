@@ -4,8 +4,11 @@
 Outputs two artifacts:
 
   * ``palettes/<name>.pal`` -- legacy sequential palette files (256 red bytes,
-    then 256 green, then 256 blue, then a 256-byte alpha ramp set to 255, so
-    1024 bytes total). The legacy ``Palette::load`` parses this planar layout.
+    then 256 green, then 256 blue, then a 256-byte alpha ramp, so 1024 bytes
+    total). The alpha ramp is the legacy Amrvis default -- a linear 0..100
+    (percent) ramp over the slots, what Amrvis wrote for a palette without one
+    -- so volume rendering with "use palette alpha" starts from a usable
+    transfer function. ``Palette::load`` parses this planar layout.
   * ``src/render2d/BuiltinPalettes.cpp`` -- the same tables compiled in as
     ``std::array<Palette::Rgb, 256>``, plus ``builtinPalette()`` and
     ``builtinPaletteName()`` (the menu label, returned *without* a ``.pal``
@@ -107,10 +110,16 @@ def read_planar_pal(path):
 
 
 def write_planar_pal(path, rgb):
-    """Write a 256x3 RGB array as a 1024-byte planar .pal (with opaque alpha)."""
+    """Write a 256x3 RGB array as a 1024-byte planar .pal.
+
+    The alpha ramp is the legacy Amrvis default for a palette without one:
+    ``100 * j / 255`` truncated to a byte (a percentage, as ``Palette::opacity``
+    reads it), so slot 0 is transparent and slot 255 fully opaque.
+    """
     assert rgb.shape == (SLOTS, 3), rgb.shape
     flat = np.ascontiguousarray(rgb.T).reshape(-1)  # R0..R255 G0..G255 B0..B255
-    alpha = np.full(SLOTS, 255, dtype=np.uint8)
+    alpha = np.array([(100 * j) // (SLOTS - 1) for j in range(SLOTS)],
+                     dtype=np.uint8)
     path.write_bytes(flat.tobytes() + alpha.tobytes())
 
 
@@ -283,6 +292,7 @@ const Palette& builtinPalette(BuiltinPalette palette)
 @@STATICS@@
     switch (palette) {
 @@SWITCH_PALETTE@@
+    case BuiltinPalette::Count: break;  // sentinel, not a palette
     }
     return @@FIRST_VAR@@;
 }
@@ -291,6 +301,7 @@ std::string_view builtinPaletteName(BuiltinPalette palette) noexcept
 {
     switch (palette) {
 @@SWITCH_NAME@@
+    case BuiltinPalette::Count: break;  // sentinel, not a palette
     }
     return "@@DEFAULT_MENU@@";
 }

@@ -3,14 +3,17 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string_view>
 
 namespace amrvis {
 
 // A 256-slot RGB palette compatible with the legacy X11 Amrvis sequential
 // palette files (256 red bytes, then 256 green, then 256 blue, then an
-// optional 256-byte alpha ramp, so 768 or 1024 bytes total; the alpha ramp
-// is parsed but not used for 2-D rendering).
+// optional 256-byte alpha ramp, so 768 or 1024 bytes total). The alpha ramp
+// is the legacy volume-rendering transfer function -- one opacity per slot,
+// stored as a percentage -- and is kept when present (hasAlphaRamp,
+// opacity); 2-D rendering ignores it.
 //
 // Legacy index layout, matching Amrvis on a TrueColor display (Qt always
 // renders as TrueColor): reserveSystemColors = 0, slot 0 is white, 1 is black,
@@ -38,18 +41,30 @@ public:
     };
 
     Palette() = default;
-    explicit Palette(const std::array<Rgb, slotCount>& slots);
+    explicit Palette(const std::array<Rgb, slotCount>& slots,
+        std::optional<std::array<std::uint8_t, slotCount>> alpha = std::nullopt);
 
     // Slot access; the index is clamped into [0, slotCount - 1].
     [[nodiscard]] const Rgb& slot(int index) const noexcept;
     // The slot as an opaque 0xAARRGGBB pixel.
     [[nodiscard]] std::uint32_t slotArgb(int index) const noexcept;
 
+    // Whether the palette carried an alpha ramp (a 1024-byte file did).
+    [[nodiscard]] bool hasAlphaRamp() const noexcept;
+    // The slot's opacity in [0, 1] for volume rendering, with the legacy
+    // Amrvis semantics: an alpha ramp stores percentages (a byte above 100
+    // clamps to 1); a palette without a ramp uses Amrvis's default transfer
+    // function, the linear ramp index / (slotCount - 1). The index is clamped
+    // into [0, slotCount - 1].
+    [[nodiscard]] double opacity(int index) const noexcept;
+
     // A copy with the data color range [paletteStart, paletteEnd] reversed,
     // leaving the reserved slots (white/black/body) untouched. The result maps
     // values to colors in the opposite order -- the "_r" variant of the
     // palette (e.g. plasma_r) -- so argb, the color bar, slotArgb over the data
-    // range, and levelColor all follow the reversed ramp.
+    // range, and levelColor all follow the reversed ramp. The alpha ramp is
+    // left as stored: opacity is a function of the data value, not of the
+    // color drawn for it.
     [[nodiscard]] Palette reversed() const;
 
     // Maps a normalized value onto an opaque 0xAARRGGBB pixel using the
@@ -66,15 +81,18 @@ public:
     // into [paletteStart, paletteEnd].
     [[nodiscard]] std::uint32_t levelColor(int level, int maxLevel) const noexcept;
 
-    // Loads a legacy sequential palette file (768 or 1024 bytes).  Throws
-    // std::runtime_error when the file cannot be read or has another size.
+    // Loads a legacy sequential palette file (768 or 1024 bytes; the latter
+    // carries the alpha ramp).  Throws std::runtime_error when the file cannot
+    // be read or has another size.
     [[nodiscard]] static Palette load(const std::filesystem::path& path);
 
-    // Slot-for-slot equality (the reserved slots included).
+    // Slot-for-slot equality (the reserved slots and the alpha ramp included).
     friend bool operator==(const Palette&, const Palette&) = default;
 
 private:
     std::array<Rgb, slotCount> slots_{};
+    std::array<std::uint8_t, slotCount> alpha_{};
+    bool hasAlphaRamp_ = false;
 };
 
 // Count is a sentinel rather than a palette. It exists so a consumer that

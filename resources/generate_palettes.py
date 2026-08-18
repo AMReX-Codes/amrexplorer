@@ -200,7 +200,7 @@ def _matplotlib_entry(enum_name, cmap_name):
 
 
 def build_palettes():
-    """Return an ordered list of (enum_name, menu_name, rgb256, source_note).
+    """Return an ordered list of (enum_name, menu_name, rgb256, alpha256, source_note).
 
     Grouped for the menu: spectral (rainbow, turbo), perceptually-uniform
     sequential (viridis, plasma, parula), diverging (coolwarm), thermal

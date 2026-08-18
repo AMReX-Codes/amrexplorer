@@ -16,16 +16,17 @@ Palette::Palette(const std::array<Rgb, slotCount>& slots,
     if (!alpha) {
         return;
     }
-    // Over the data slots only (see the header): the largest byte decides
-    // percent versus full-scale, and a plane whose data slots are all zero
-    // is no ramp at all.
+    // The plane is kept as stored whatever it means (equality and a reload's
+    // edit detection see every byte); over the data slots only (see the
+    // header) the largest byte decides percent versus full-scale, and a
+    // plane whose data slots are all zero is no ramp at all.
+    alpha_ = *alpha;
     const auto first = alpha->begin() + paletteStart;
     const auto last = alpha->begin() + paletteEnd + 1;
     const auto largest = *std::max_element(first, last);
     if (largest == 0) {
         return;
     }
-    alpha_ = *alpha;
     hasAlphaRamp_ = true;
     alphaScale_ = largest > 100 ? 255.0 : 100.0;
 }

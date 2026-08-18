@@ -186,40 +186,52 @@ int main(int argc, char** argv)
                 && !(flat == amrvis::Palette(slots)),
             "Palette equality does not follow the slots and the alpha ramp");
         // A reserved slot's byte does not decide the scale: a percent ramp
-        // with an outlier at slot 0 still reads as percent -- and that
-        // outlier, 255 % of opaque, clamps to 1.
+        // (whose largest data byte is exactly 100, so this also pins the
+        // percent side of the threshold) with an outlier at slot 0 still
+        // reads as percent; the outlier is kept as stored -- an unsaturated
+        // 60 reads back as 60 %, so a dropped or clamped byte would show --
+        // and one at 255 clamps to 1.
         auto percent = std::array<std::uint8_t, amrvis::Palette::slotCount>{};
         for (int index = 0; index < amrvis::Palette::slotCount; ++index) {
             percent[static_cast<std::size_t>(index)]
                 = static_cast<std::uint8_t>((100 * index) / 255);
         }
-        percent[0] = 255;
+        percent[0] = 60;
+        percent[1] = 255;
         require(amrvis::Palette(slots, percent).opacity(255) == 1.0
                 && amrvis::Palette(slots, percent).opacity(128)
                     == static_cast<double>((100 * 128) / 255) / 100.0
-                && amrvis::Palette(slots, percent).opacity(0) == 1.0,
-            "a reserved-slot byte changed the ramp's scale, or was not clamped");
-        // The sniff's edges: byte 100 in the last data slot is still percent
-        // (slot 128 reads 50 %), byte 101 there is full-scale (slot 128
-        // reads 50 / 255) -- so the last data slot is inspected, and the
-        // threshold sits exactly at 100.
+                && amrvis::Palette(slots, percent).opacity(0) == 0.6
+                && amrvis::Palette(slots, percent).opacity(1) == 1.0,
+            "a reserved-slot byte changed the ramp's scale, was dropped, or "
+            "was not clamped");
+        // The sniff's edges, pinned apart. The threshold: a single data byte
+        // of 101 (at slot 128, with the last data slot at 100) switches the
+        // whole ramp to full-scale, so slot 255 reads 100 / 255. The range
+        // end: a byte of 200 in the last data slot alone switches it too --
+        // slot 128 reads 50 / 255 -- so the last data slot is inspected.
         auto edge = percent;
         edge[0] = 0;
+        edge[1] = 0;
+        edge[128] = 101;
+        require(amrvis::Palette(slots, edge).opacity(255) == 100.0 / 255.0,
+            "a data byte of 101 did not switch the ramp to full-scale");
         edge[128] = 50;
-        edge[255] = 100;
-        require(amrvis::Palette(slots, edge).opacity(128) == 0.5,
-            "a data byte of 100 did not read as percent");
-        edge[255] = 101;
+        edge[255] = 200;
         require(amrvis::Palette(slots, edge).opacity(128) == 50.0 / 255.0,
-            "a data byte of 101 in the last slot did not switch to full-scale");
+            "the last data slot was not inspected for the scale");
         // A plane whose data slots are all zero is no ramp: the linear
-        // default applies, whatever the reserved slots hold.
+        // default applies, whatever the reserved slots hold -- which are
+        // still kept, so the palette is not equal to one without a plane.
         auto zero = std::array<std::uint8_t, amrvis::Palette::slotCount>{};
         zero[1] = 100;
         const amrvis::Palette zeroed(slots, zero);
         require(!zeroed.hasAlphaRamp() && zeroed.opacity(255) == 1.0
-                && zeroed == amrvis::Palette(slots),
-            "an all-zero data plane was taken as an authored ramp");
+                && zeroed.opacity(1) == 1.0 / 255.0
+                && !(zeroed == amrvis::Palette(slots))
+                && zeroed == amrvis::Palette(slots, zero),
+            "an all-zero data plane was taken as an authored ramp, or its "
+            "reserved bytes were dropped");
     }
     require(loaded.reversed().opacity(3) == loaded.opacity(3)
             && loaded.reversed().opacity(255) == loaded.opacity(255)

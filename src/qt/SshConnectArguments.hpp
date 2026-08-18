@@ -22,9 +22,14 @@ struct SshConnectParseResult {
     std::string error;
 };
 
+// After the destination and the optional --server PATH, every token is a
+// remote path -- except one that starts with '-', which is an option this
+// program does not have (a mistyped --server, say) and is refused rather
+// than sent to the server as a path. A path that really starts with '-'
+// goes after a "--" token.
 inline SshConnectParseResult parseSshConnectArguments(std::span<const std::string_view> arguments) {
     constexpr std::string_view usage = "usage: amrexplorer --ssh SSH_DESTINATION [--server PATH] "
-                                       "[REMOTE_PATH ...]";
+                                       "[--] [REMOTE_PATH ...]";
     if (arguments.empty() || arguments.front().empty()) {
         return {{}, std::string(usage)};
     }
@@ -44,9 +49,17 @@ inline SshConnectParseResult parseSshConnectArguments(std::span<const std::strin
         pathBegin = 3;
     }
     request.paths.reserve(arguments.size() - pathBegin);
+    bool optionsEnded = false;
     for (const auto path : arguments.subspan(pathBegin)) {
         if (path.empty()) {
             return {{}, "remote paths must not be empty"};
+        }
+        if (!optionsEnded && path == "--") {
+            optionsEnded = true;
+            continue;
+        }
+        if (!optionsEnded && path.front() == '-') {
+            return {{}, "unknown option: " + std::string(path) + "\n" + std::string(usage)};
         }
         request.paths.emplace_back(path);
     }

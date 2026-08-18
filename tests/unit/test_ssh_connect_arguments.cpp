@@ -65,6 +65,24 @@ int main()
     constexpr std::array<std::string_view, 2> emptyPath{"frontier", ""};
     require(!amrvis::qt::parseSshConnectArguments(emptyPath).request,
         "empty remote path was accepted");
+    // A mistyped option is refused, not sent to the server as a path; a path
+    // that starts with '-' is spelled after "--".
+    constexpr std::array<std::string_view, 3> mistypedOption{
+        "frontier", "--sever", "/remote/plt00010"};
+    const auto mistyped = amrvis::qt::parseSshConnectArguments(mistypedOption);
+    require(!mistyped.request
+            && mistyped.error.find("unknown option: --sever") == 0,
+        "an option-like remote path was accepted");
+    constexpr std::array<std::string_view, 5> dashPaths{"frontier", "--server",
+        "~/bin/amrexplorer-server", "--", "-plt00010"};
+    const auto dashed = amrvis::qt::parseSshConnectArguments(dashPaths);
+    require(dashed.request && dashed.request->paths.size() == 1
+            && dashed.request->paths.front() == "-plt00010",
+        "a dash-prefixed path after -- was not accepted");
+    constexpr std::array<std::string_view, 3> lateServer{
+        "frontier", "/remote/plt00010", "--server"};
+    require(!amrvis::qt::parseSshConnectArguments(lateServer).request,
+        "--server after a path was accepted as a path");
     require(!amrvis::qt::parseSshConnectArguments({}).request,
         "empty argument list was accepted");
     return 0;

@@ -74,7 +74,10 @@ public:
     SshRemoteSession(const SshRemoteSession&) = delete;
     SshRemoteSession& operator=(const SshRemoteSession&) = delete;
 
-    // options.sessionToken is filled in from the ready line.
+    // options.sessionToken is filled in from the ready line. One session is
+    // one process: start() is called once, and a new destination is a new
+    // object (RemoteSessionController replaces the session, never restarts
+    // it).
     void start(std::string destination, std::string serverExecutable,
         remote::ConnectionOptions options, ReadyHandler ready,
         ErrorHandler error, LostHandler lost);
@@ -102,6 +105,11 @@ private:
 
     QProcess* m_process;
     QTimer* m_startupTimer;
+    // stop()'s grace period before ssh is terminated, and the fallback report
+    // when the stream ends before the ready line; both members so start() and
+    // stop() own them rather than leaving detached single-shots armed.
+    QTimer* m_terminateTimer;
+    QTimer* m_streamEndTimer;
     QSocketNotifier* m_wireNotifier = nullptr;
     // Our end of the socket pair, until the handshake takes it over.
     int m_wire = -1;

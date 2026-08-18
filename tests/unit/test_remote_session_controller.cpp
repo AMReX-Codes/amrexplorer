@@ -393,6 +393,28 @@ int main(int argc, char* argv[])
                 "the sequence dialog did not ask for a sequence");
         }
         {
+            // One path in the sequence dialog is refused up front, for the
+            // live session and a new one alike.
+            bool warned = false;
+            Driver driver([&warned] {
+                if (auto* warning = visibleDialog<QMessageBox>()) {
+                    warned = true;
+                    warning->buttons().first()->click();
+                    return true;
+                }
+                if (auto* dialog = visibleDialog<RemoteOpenDialog>()) {
+                    dialog->findChild<QPlainTextEdit*>()->setPlainText(
+                        QStringLiteral("/a/plt00010\n"));
+                    buttonNamed(*dialog, QStringLiteral("Open"))->click();
+                }
+                return false;
+            });
+            controller.promptOpen(nullptr, true);
+            require(driver.done() && warned && observed.opens.size() == 4
+                    && observed.statuses.size() == statusesBefore,
+                "a one-path sequence was opened, or the warning did not show");
+        }
+        {
             bool warned = false;
             Driver driver([&warned] {
                 if (auto* warning = visibleDialog<QMessageBox>()) {

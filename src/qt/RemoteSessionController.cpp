@@ -198,6 +198,15 @@ void RemoteSessionController::promptOpen(QWidget* parent, bool sequence)
                "plotfile path are required."));
         return;
     }
+    // Checked here for both routes: over a new session the ready handler
+    // would otherwise open a lone path as a single dataset, silently
+    // dropping the sequence the dialog was for.
+    if (sequence && paths.size() < 2) {
+        QMessageBox::warning(parent, dialog.windowTitle(),
+            tr("Enter two or more plotfile paths, one per line, in playback "
+               "order."));
+        return;
+    }
     // An unchanged destination and executable mean the current session is the
     // one asked for; open over it directly instead of starting ssh again.
     if (matches) {

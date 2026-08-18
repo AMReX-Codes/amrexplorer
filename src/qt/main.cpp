@@ -37,7 +37,7 @@ void printUsage(std::FILE* output)
 {
     std::fprintf(output,
         "usage: amrexplorer [PLOTFILE...]\n"
-        "       amrexplorer --ssh SSH_DESTINATION [--server PATH] "
+        "       amrexplorer --ssh SSH_DESTINATION [--server PATH] [--] "
         "[REMOTE_PLOTFILE...]\n\n"
         "Open one plotfile directory, or several to play them as a\n"
         "sequence, or none for an empty window.\n\n"

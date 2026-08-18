@@ -434,8 +434,11 @@ void SshRemoteSession::drainProcessErrors(bool flush)
 
 QString SshRemoteSession::errorSuffix() const
 {
-    // Trimmed for display only: the stored lines keep their separators, so
-    // a line drained after a flush does not run into the previous one.
+    // Trimmed for display only. The stored lines keep their separators, so
+    // if a drain ever followed a flush its line would not run into the
+    // previous one -- today every flush is followed by the failure or exit
+    // that ends the session, so this holds by construction rather than by
+    // need.
     const auto errors = m_errors.trimmed();
     return errors.isEmpty() ? QString() : QStringLiteral("\n") + errors;
 }

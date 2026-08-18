@@ -56,8 +56,8 @@ public:
     // is treated as absent rather than authored. Only the data slots
     // [paletteStart, paletteEnd] decide, here and for the scale below; the
     // reserved slots' bytes are kept as stored (equality sees them, and
-    // opacity() of a reserved index reads them) but never decide the scale,
-    // as data never addresses them.
+    // opacity() of a reserved index reads them when the palette has a ramp)
+    // but never decide the scale, as data never addresses them.
     [[nodiscard]] bool hasAlphaRamp() const noexcept;
     // The slot's opacity in [0, 1] for volume rendering. A ramp is read with
     // the legacy Amrvis semantics -- each byte a percentage -- unless a data

@@ -357,6 +357,10 @@ int main()
         auto bad = settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F));
         bad.range = {1.0, 1.0, false};
         require(rejects(bad), "an empty range was accepted");
+        // An infinite span would map every value to the bottom entry.
+        bad.range = {-std::numeric_limits<double>::max(),
+            std::numeric_limits<double>::max(), false};
+        require(rejects(bad), "a range with an infinite span was accepted");
         bad = settingsFor(amrvis::orthoPresetXY, 0, twoEntries(0xFFU, 1.0F));
         require(rejects(bad), "a zero-size output was accepted");
         bad = settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F));

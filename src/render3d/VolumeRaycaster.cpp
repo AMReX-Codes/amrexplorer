@@ -160,8 +160,9 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     }
     if (!std::isfinite(settings.range.minimum) || !std::isfinite(settings.range.maximum)
         || !(settings.range.minimum < settings.range.maximum)
+        || !std::isfinite(settings.range.maximum - settings.range.minimum)
         || (settings.range.logarithmic && !(settings.range.minimum > 0.0))) {
-        throw std::invalid_argument("volume range must be finite, ordered, and positive when logarithmic");
+        throw std::invalid_argument("volume range must be finite with a finite span, ordered, and positive when logarithmic");
     }
     if (const auto errors = validateVolumeTransferFunction(settings.transfer);
         !errors.empty()) {

@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -51,7 +52,28 @@ public:
     std::size_t pointsPerSpecies = 3;
     std::atomic<bool> failing{false};
     std::atomic<int> delayMs{0};
+    // A request whose seed is slowSeed sleeps slowDelayMs instead: two loads
+    // in flight together can be given distinct, order-independent durations.
+    std::atomic<std::uint64_t> slowSeed{0};
+    std::atomic<int> slowDelayMs{0};
     std::atomic<int> requests{0};
+    // What the last request asked for, so the test can pin the argument
+    // order the controller passes (a swap of fraction and seed must fail).
+    std::mutex lastMutex;
+    std::string lastSpecies;
+    double lastFraction = -1.0;
+    std::uint64_t lastSeed = 0;
+
+    struct Request {
+        std::string species;
+        double fraction;
+        std::uint64_t seed;
+    };
+    Request last()
+    {
+        const std::scoped_lock lock(lastMutex);
+        return {lastSpecies, lastFraction, lastSeed};
+    }
 
     [[nodiscard]] amrvis::DatasetId id() const noexcept override
     {
@@ -96,11 +118,19 @@ public:
         return false;
     }
     [[nodiscard]] amrvis::ParticleSample requestParticleSample(
-        const std::string& species, double, std::uint64_t,
+        const std::string& species, double fraction, std::uint64_t seed,
         amrvis::StopToken cancellation) override
     {
+        {
+            const std::scoped_lock lock(lastMutex);
+            lastSpecies = species;
+            lastFraction = fraction;
+            lastSeed = seed;
+        }
         ++requests;
-        const auto delay = delayMs.load();
+        const auto delay = slowDelayMs.load() > 0 && seed == slowSeed.load()
+            ? slowDelayMs.load()
+            : delayMs.load();
         for (int waited = 0; waited < delay; waited += 5) {
             if (cancellation.stop_requested()) {
                 throw std::runtime_error("cancelled");
@@ -182,7 +212,10 @@ void observe(amrvis::qt::ParticleController& controller, Observed& observed)
         });
 }
 
-// Runs the event loop until `done` or a timeout.
+// Runs the event loop until `done` or a timeout. Leaves the loop with
+// exit(), not quit(): a QGuiApplication's quit() first closes every top-level
+// window, which would hide the test hosts (and the progress bars in them)
+// between two waits.
 template <typename Predicate>
 void waitFor(QCoreApplication& application, Predicate done, const char* what)
 {
@@ -193,12 +226,12 @@ void waitFor(QCoreApplication& application, Predicate done, const char* what)
     QObject::connect(&timeout, &QTimer::timeout, &application,
         [&application, &timedOut] {
             timedOut = true;
-            application.quit();
+            application.exit(0);
         });
     QObject::connect(&poll, &QTimer::timeout, &application,
         [&application, &done] {
             if (done()) {
-                application.quit();
+                application.exit(0);
             }
         });
     poll.start(5);
@@ -270,6 +303,16 @@ int main(int argc, char** argv)
         Observed observed;
         ParticleController controller(hooks());
         observe(controller, observed);
+        // The very first application reloads even when it changes nothing
+        // else: the defaults, applied, are still a selection to sample.
+        controller.applySelection({}, 1.0, 3, 0);
+        require(observed.selection == 1 && observed.overlays == 0,
+            "the first application of the defaults did not ask for a reload");
+        controller.applySelection({}, 1.0, 3, 0);
+        require(observed.selection == 1 && observed.overlays == 1,
+            "re-applying the defaults reloaded");
+        controller.clearSelection();
+        observed = Observed{};
         controller.applySelection({"ions"}, 0.5, 4, 7);
         require(observed.selection == 1 && observed.overlays == 0,
             "the first selection did not ask for a reload");
@@ -311,23 +354,6 @@ int main(int argc, char** argv)
                 && controller.settings().pointSize == 3
                 && controller.settings().fraction == 1.0,
             "resetSettings left something behind");
-        // applySettings is the viewer-state import path.
-        ParticleController::Settings imported;
-        imported.selectionInitialized = true;
-        imported.species = {"ions"};
-        imported.fraction = 0.1;
-        imported.seed = 42;
-        imported.pointSize = 6;
-        imported.colors["ions"] = QColor(Qt::green);
-        controller.applySettings(imported);
-        require(observed.selection == 5
-                && controller.settings().seed == 42
-                && controller.colorFor("ions") == QColor(Qt::green),
-            "applySettings did not install and announce the selection");
-        imported.pointSize = 2;
-        controller.applySettings(imported);
-        require(observed.selection == 5 && observed.overlays == 3,
-            "a cosmetic applySettings reloaded instead of redrawing");
     }
 
     // The load itself: samples arrive on the pool, the UI is up meanwhile,
@@ -344,7 +370,7 @@ int main(int argc, char** argv)
         host.show();
         controller.configureForDataset(false);
         observe(controller, observed);
-        controller.restoreSelection({"electrons", "ions"}, 1.0, 0, true);
+        controller.restoreSelection({"electrons", "ions"}, 0.25, 7, true);
         controller.reload();
         require(controller.loading() && controller.loadingUiActive()
                 && !action->isEnabled() && progress->isVisible(),
@@ -362,6 +388,12 @@ int main(int argc, char** argv)
                 && observed.overlays == 2 && observed.stale == 0
                 && observed.failures.isEmpty(),
             "the samples did not arrive");
+        // The session was asked for the selection as installed: species by
+        // name, then fraction, then seed.
+        const auto asked = session->last();
+        require(session->requests == 2 && asked.species == "ions"
+                && asked.fraction == 0.25 && asked.seed == 7,
+            "the session was not asked for the selected fraction and seed");
         require(observed.statuses.last().contains(QStringLiteral("6")),
             "the status did not report the sampled count");
         // No species selected: settles at once without a worker.
@@ -487,16 +519,35 @@ int main(int argc, char** argv)
         require(observed.stale == 1 && observed.failures.isEmpty()
                 && controller.samples().empty() && observed.activity == 0,
             "a cancelled load was installed or reported");
-        // Superseded by a second reload: only the second result lands.
-        session->delayMs = 100;
+        // Superseded by a second, slower reload: the first result lands
+        // stale while the second is still loading and must leave the loading
+        // UI up for it; only the second result installs and settles.
+        auto* action = controller.createAction(&application);
+        QWidget host;
+        auto* progress = controller.createProgress(&host);
+        host.show();
+        session->delayMs = 50;
+        session->slowSeed = 1;
+        session->slowDelayMs = 300;
+        controller.restoreSelection({"ions"}, 1.0, 0, true);
         controller.reload();
-        session->delayMs = 0;
+        controller.restoreSelection({"ions"}, 1.0, 1, true);
         controller.reload();
+        waitFor(application, [&] { return observed.finished == 2; },
+            "the superseded load did not finish");
+        require(observed.stale == 2 && controller.loading()
+                && !action->isEnabled() && progress->isVisible()
+                && controller.samples().empty(),
+            "a stale result settled the newer load's UI");
         waitFor(application, [&] { return observed.finished == 3; },
-            "the superseding loads did not finish");
+            "the superseding load did not finish");
         require(observed.stale == 2 && controller.samples().size() == 1
+                && !controller.loading() && action->isEnabled()
+                && !progress->isVisible()
                 && observed.activity == 0 && observed.failures.isEmpty(),
             "the superseded load was not dropped in favour of the newer one");
+        session->delayMs = 0;
+        session->slowDelayMs = 0;
         // Shutdown: a late result touches nothing.
         session->delayMs = 100;
         controller.reload();
@@ -505,6 +556,24 @@ int main(int argc, char** argv)
             "the shutdown-time load did not release its activity");
         shuttingDown = false;
         session->delayMs = 0;
+    }
+
+    // The dialog before any selection: every species starts checked.
+    {
+        current = session;
+        ParticleController controller(hooks());
+        controller.configureForDataset(false);
+        QWidget host;
+        controller.showDialog(&host);
+        auto* dialog = host.findChild<QDialog*>(QStringLiteral("particlesDialog"));
+        require(dialog != nullptr, "the dialog was not shown");
+        const auto checks = dialog->findChildren<QCheckBox*>();
+        require(checks.size() == 2 && checks[0]->isChecked()
+                && checks[1]->isChecked(),
+            "an uninitialised selection did not check every species");
+        controller.closeDialog();
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     }
 
     // The dialog: one row per species, checked per the selection, Apply

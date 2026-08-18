@@ -773,7 +773,11 @@ double MainWindow::particleFractionForTest() const noexcept
 
 void MainWindow::setParticlePointSizeForTest(int pointSize)
 {
-    const auto& settings = m_particleController->settings();
+    // A copy, as hardening: the by-value species parameter is copied before
+    // the body moves into m_settings.species, so a reference would be safe
+    // today -- but not if that parameter ever became a const reference,
+    // which would alias the very vector the move overwrites.
+    const auto settings = m_particleController->settings();
     m_particleController->applySelection(
         settings.species, settings.fraction, pointSize, settings.seed);
 }

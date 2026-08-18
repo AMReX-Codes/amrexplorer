@@ -10,16 +10,23 @@
 namespace amrvis {
 
 Palette::Palette(const std::array<Rgb, slotCount>& slots,
-    std::optional<std::array<std::uint8_t, slotCount>> alpha)
+    const std::optional<std::array<std::uint8_t, slotCount>>& alpha)
     : slots_(slots)
-    , hasAlphaRamp_(alpha.has_value())
 {
-    if (alpha) {
-        alpha_ = *alpha;
-        // Percent (Amrvis) unless a byte exceeds 100, then full-scale bytes.
-        const auto largest = *std::max_element(alpha_.begin(), alpha_.end());
-        alphaScale_ = largest > 100 ? 255.0 : 100.0;
+    if (!alpha) {
+        return;
     }
+    // Over the data slots only (see the header): the largest byte decides
+    // percent versus full-scale, and an all-zero plane is no ramp at all.
+    const auto first = alpha->begin() + paletteStart;
+    const auto last = alpha->begin() + paletteEnd + 1;
+    const auto largest = *std::max_element(first, last);
+    if (largest == 0) {
+        return;
+    }
+    alpha_ = *alpha;
+    hasAlphaRamp_ = true;
+    alphaScale_ = largest > 100 ? 255.0 : 100.0;
 }
 
 bool Palette::hasAlphaRamp() const noexcept

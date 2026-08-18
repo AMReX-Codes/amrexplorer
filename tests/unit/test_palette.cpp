@@ -141,12 +141,20 @@ int main(int argc, char** argv)
             && amrvis::Palette(std::array<amrvis::Palette::Rgb,
                     amrvis::Palette::slotCount>{}).opacity(51) == 51.0 / 255.0,
         "a palette without a ramp did not use the linear default");
-    // Every builtin carries its file's ramp; the generated ones the legacy
-    // default 0..100 ramp.
-    require(amrvis::builtinPalette(amrvis::BuiltinPalette::Viridis).hasAlphaRamp()
-            && amrvis::builtinPalette(amrvis::BuiltinPalette::Viridis).opacity(0) == 0.0
-            && amrvis::builtinPalette(amrvis::BuiltinPalette::Viridis).opacity(255) == 1.0,
-        "a generated builtin does not carry the default alpha ramp");
+    // Every builtin equals its shipped .pal file, colours and ramp: the
+    // generated ones carry the legacy default 0..100 ramp.
+    for (int index = 0; index < static_cast<int>(amrvis::BuiltinPalette::Count); ++index) {
+        const auto palette = static_cast<amrvis::BuiltinPalette>(index);
+        const auto& builtin = amrvis::builtinPalette(palette);
+        const auto file = rainbowPath.parent_path()
+            / (std::string(amrvis::builtinPaletteName(palette)) + ".pal");
+        require(std::filesystem::exists(file), "a builtin's .pal file is missing");
+        require(builtin == amrvis::Palette::load(file),
+            "a builtin does not equal its shipped .pal file");
+        require(builtin.hasAlphaRamp() && builtin.opacity(0) == 0.0
+                && builtin.opacity(255) == 1.0,
+            "a builtin's alpha ramp does not span transparent to opaque");
+    }
     {
         auto slots = std::array<amrvis::Palette::Rgb, amrvis::Palette::slotCount>{};
         auto alpha = std::array<std::uint8_t, amrvis::Palette::slotCount>{};
@@ -165,9 +173,36 @@ int main(int argc, char** argv)
         const amrvis::Palette flat(slots, alpha);
         require(flat.opacity(7) == 1.0 && flat.opacity(255) == 1.0,
             "a flat 255 ramp did not read as fully opaque");
-        require(!(flat == amrvis::Palette(slots))
-                && amrvis::Palette(slots, alpha) == flat,
-            "Palette equality ignored the alpha ramp");
+        // Equality sees the ramp's contents: the same colours with one alpha
+        // byte changed differ, and the same alpha with one colour changed
+        // differ; identical inputs are equal.
+        auto alphaVariant = alpha;
+        alphaVariant[100] = 7;
+        auto slotsVariant = slots;
+        slotsVariant[100].green ^= 1U;
+        require(amrvis::Palette(slots, alpha) == flat
+                && !(amrvis::Palette(slots, alphaVariant) == flat)
+                && !(amrvis::Palette(slotsVariant, alpha) == flat)
+                && !(flat == amrvis::Palette(slots)),
+            "Palette equality does not follow the slots and the alpha ramp");
+        // A reserved slot's byte does not decide the scale: a percent ramp
+        // with an outlier at slot 0 still reads as percent.
+        auto percent = std::array<std::uint8_t, amrvis::Palette::slotCount>{};
+        for (int index = 0; index < amrvis::Palette::slotCount; ++index) {
+            percent[static_cast<std::size_t>(index)]
+                = static_cast<std::uint8_t>((100 * index) / 255);
+        }
+        percent[0] = 255;
+        require(amrvis::Palette(slots, percent).opacity(255) == 1.0
+                && amrvis::Palette(slots, percent).opacity(128)
+                    == static_cast<double>((100 * 128) / 255) / 100.0,
+            "a reserved-slot byte changed the ramp's scale");
+        // An all-zero plane is no ramp: the linear default applies.
+        auto zero = std::array<std::uint8_t, amrvis::Palette::slotCount>{};
+        const amrvis::Palette zeroed(slots, zero);
+        require(!zeroed.hasAlphaRamp() && zeroed.opacity(255) == 1.0
+                && zeroed == amrvis::Palette(slots),
+            "an all-zero alpha plane was taken as an authored ramp");
     }
     require(loaded.reversed().opacity(3) == loaded.opacity(3)
             && loaded.reversed().opacity(255) == loaded.opacity(255)

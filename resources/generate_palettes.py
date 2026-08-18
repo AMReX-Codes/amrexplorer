@@ -208,7 +208,10 @@ def build_palettes():
     """
     rainbow, rainbow_alpha = read_planar_pal(PALETTE_DIR / "rainbow.pal")
     if rainbow_alpha is None:
-        rainbow_alpha = default_alpha()
+        # The builtin must equal the file, ramp included; a 768-byte
+        # rainbow.pal would leave the builtin with a ramp the file lacks.
+        raise SystemExit("palettes/rainbow.pal must be the 1024-byte legacy "
+                         "file with its alpha ramp")
     parula_cmap = LinearSegmentedColormap.from_list("parula", PARULA_CONTROL_POINTS)
     # (enum, menu, rgb, alpha, source note): rainbow keeps its hand-made
     # legacy ramp; the generated palettes carry the legacy default ramp.

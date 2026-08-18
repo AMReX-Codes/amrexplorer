@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/core/Metadata.hpp>
+#include <amrexplorer/core/OrthoProjection.hpp>
 
 #include <QColor>
 #include <QPoint>
@@ -25,7 +26,9 @@ namespace amrvis::qt {
 // The bottom-right quadrant of the 3-D layout: an orthographic wireframe
 // of the physical domain and the per-level grid boxes, with the three
 // current slice planes drawn as translucent quads.  Drag to rotate, wheel
-// to zoom, matching the legacy Amrvis iso view interaction.
+// to zoom, matching the legacy Amrvis iso view interaction. The projection
+// is the shared OrthoCamera (core/OrthoProjection.hpp), the one the volume
+// renderer uses, so a rendered volume placed under this wireframe lines up.
 class IsoWidget final : public QWidget {
     Q_OBJECT
 
@@ -37,6 +40,16 @@ public:
     void setSlicePositions(double x, double y, double z);
     void setSlicePlanesVisible(bool visible);
     void setColorPalette(const Palette* palette);
+
+    // The camera the widget draws with; drag, wheel and the preset buttons
+    // change it and emit cameraChanged, a release after a drag emits
+    // interactionEnded.
+    [[nodiscard]] const OrthoCamera& camera() const noexcept { return m_camera; }
+    void setCamera(const OrthoCamera& camera);
+
+signals:
+    void cameraChanged();
+    void interactionEnded();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -54,17 +67,11 @@ private:
         Real3 indexOrigin;
         std::vector<IntBox> boxes;
     };
-    struct Projection {
-        double centerX = 0.0;
-        double centerY = 0.0;
-        double scale = 1.0;
-    };
-
-    [[nodiscard]] QPointF project(const Projection& projection,
+    [[nodiscard]] QPointF project(const ViewportFrame& frame,
         double x, double y, double z) const;
-    void drawBox(QPainter& painter, const Projection& projection,
+    void drawBox(QPainter& painter, const ViewportFrame& frame,
         const RealBox& box, const QPen& pen) const;
-    void drawSlicePlane(QPainter& painter, const Projection& projection,
+    void drawSlicePlane(QPainter& painter, const ViewportFrame& frame,
         int axis) const;
     void drawAxisIndicator(QPainter& painter) const;
     [[nodiscard]] RealBox physicalBox(const LevelBoxes& level,
@@ -81,9 +88,7 @@ private:
     const Palette* m_palette = nullptr;
     bool m_hasGeometry = false;
 
-    double m_azimuth = 0.0;
-    double m_elevation = 0.0;
-    double m_zoom = 1.0;
+    OrthoCamera m_camera;
     QPoint m_lastMousePos;
     bool m_dragging = false;
 

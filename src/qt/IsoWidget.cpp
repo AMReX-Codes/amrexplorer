@@ -33,8 +33,7 @@ constexpr std::array<std::array<int, 2>, 12> boxEdges{{
 
 IsoWidget::IsoWidget(QWidget* parent)
     : QWidget(parent)
-    , m_azimuth(30.0 * pi / 180.0)
-    , m_elevation(30.0 * pi / 180.0)
+    , m_camera{30.0 * pi / 180.0, 30.0 * pi / 180.0, 1.0}
 {
     setMinimumSize(200, 150);
     setMouseTracking(true);
@@ -58,13 +57,13 @@ IsoWidget::IsoWidget(QWidget* parent)
     m_btnYZ = makeBtn(QStringLiteral("YZ"));
 
     connect(m_btnXY, &QPushButton::clicked, this, [this] {
-        setViewAngles(0.0, 0.0);
+        setViewAngles(orthoPresetXY.azimuth, orthoPresetXY.elevation);
     });
     connect(m_btnXZ, &QPushButton::clicked, this, [this] {
-        setViewAngles(0.0, -pi / 2.0);
+        setViewAngles(orthoPresetXZ.azimuth, orthoPresetXZ.elevation);
     });
     connect(m_btnYZ, &QPushButton::clicked, this, [this] {
-        setViewAngles(-pi / 2.0, -pi / 2.0);
+        setViewAngles(orthoPresetYZ.azimuth, orthoPresetYZ.elevation);
     });
 }
 
@@ -119,54 +118,36 @@ void IsoWidget::paintEvent(QPaintEvent* event)
     }
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    Projection projection;
-    constexpr double margin = 12.0;
-    projection.centerX = static_cast<double>(width()) / 2.0;
-    projection.centerY = static_cast<double>(height()) / 2.0;
-    // Normalized coordinates span [-1, 1] after the two rotations.
-    projection.scale = std::max(
-        std::min(projection.centerX, projection.centerY) - margin, 1.0);
-
+    const auto frame = viewportFrame(width(), height());
     for (const auto& level : m_levels) {
         const QPen pen(levelOutlineColor(level.level), 1);
         for (const auto& box : level.boxes) {
-            drawBox(painter, projection, physicalBox(level, box), pen);
+            drawBox(painter, frame, physicalBox(level, box), pen);
         }
     }
-    drawBox(painter, projection, m_domain, QPen(Qt::white, 1));
+    drawBox(painter, frame, m_domain, QPen(Qt::white, 1));
     // Translucent slice planes overlay the wireframe so the user can see where
     // the XY/XZ/YZ slices sit in the domain.
     if (m_slicePlanesVisible) {
         for (int axis = 0; axis < 3; ++axis) {
-            drawSlicePlane(painter, projection, axis);
+            drawSlicePlane(painter, frame, axis);
         }
     }
     drawAxisIndicator(painter);
 }
 
-QPointF IsoWidget::project(const Projection& projection,
+QPointF IsoWidget::project(const ViewportFrame& frame,
     double x, double y, double z) const
 {
-    const auto extent = std::max({m_domain.upper[0] - m_domain.lower[0],
-        m_domain.upper[1] - m_domain.lower[1],
-        m_domain.upper[2] - m_domain.lower[2]});
-    const auto safeExtent = extent > 0.0 ? extent : 1.0;
-    const auto nx = (x - 0.5 * (m_domain.lower[0] + m_domain.upper[0]))
-        / safeExtent;
-    const auto ny = (y - 0.5 * (m_domain.lower[1] + m_domain.upper[1]))
-        / safeExtent;
-    const auto nz = (z - 0.5 * (m_domain.lower[2] + m_domain.upper[2]))
-        / safeExtent;
-    const auto cosAz = std::cos(m_azimuth);
-    const auto sinAz = std::sin(m_azimuth);
-    const auto x1 = nx * cosAz - ny * sinAz;
-    const auto y1 = nx * sinAz + ny * cosAz;
-    const auto y2 = y1 * std::cos(m_elevation) - nz * std::sin(m_elevation);
-    return QPointF(projection.centerX + projection.scale * m_zoom * x1,
-        projection.centerY - projection.scale * m_zoom * y2);
+    Real3 point;
+    point[0] = x;
+    point[1] = y;
+    point[2] = z;
+    const auto projected = projectPoint(m_camera, frame, m_domain, point);
+    return QPointF(projected.x, projected.y);
 }
 
-void IsoWidget::drawBox(QPainter& painter, const Projection& projection,
+void IsoWidget::drawBox(QPainter& painter, const ViewportFrame& frame,
     const RealBox& box, const QPen& pen) const
 {
     std::array<QPointF, 8> corners;
@@ -174,7 +155,7 @@ void IsoWidget::drawBox(QPainter& painter, const Projection& projection,
         const auto x = (corner & 1U) != 0U ? box.upper[0] : box.lower[0];
         const auto y = (corner & 2U) != 0U ? box.upper[1] : box.lower[1];
         const auto z = (corner & 4U) != 0U ? box.upper[2] : box.lower[2];
-        corners[corner] = project(projection, x, y, z);
+        corners[corner] = project(frame, x, y, z);
     }
     painter.setPen(pen);
     painter.setBrush(Qt::NoBrush);
@@ -184,7 +165,7 @@ void IsoWidget::drawBox(QPainter& painter, const Projection& projection,
     }
 }
 
-void IsoWidget::drawSlicePlane(QPainter& painter, const Projection& projection,
+void IsoWidget::drawSlicePlane(QPainter& painter, const ViewportFrame& frame,
     int axis) const
 {
     const auto index = static_cast<std::size_t>(axis);
@@ -200,7 +181,7 @@ void IsoWidget::drawSlicePlane(QPainter& painter, const Projection& projection,
         point[index] = position;
         point[a] = (corner & 1U) != 0U ? m_domain.upper[a] : m_domain.lower[a];
         point[b] = (corner & 2U) != 0U ? m_domain.upper[b] : m_domain.lower[b];
-        polygon << project(projection, point[0], point[1], point[2]);
+        polygon << project(frame, point[0], point[1], point[2]);
     }
     auto fill = slicePlaneColor(axis);
     fill.setAlpha(96);
@@ -267,10 +248,12 @@ void IsoWidget::mouseMoveEvent(QMouseEvent* event)
         const auto delta = event->pos() - m_lastMousePos;
         m_lastMousePos = event->pos();
         constexpr double sensitivity = 0.008;
-        m_azimuth -= static_cast<double>(delta.x()) * sensitivity;
-        m_elevation += static_cast<double>(delta.y()) * sensitivity;
-        m_elevation = std::clamp(m_elevation, -pi / 2.0 + 0.01, pi / 2.0 - 0.01);
+        m_camera.azimuth -= static_cast<double>(delta.x()) * sensitivity;
+        m_camera.elevation += static_cast<double>(delta.y()) * sensitivity;
+        m_camera.elevation = std::clamp(
+            m_camera.elevation, -pi / 2.0 + 0.01, pi / 2.0 - 0.01);
         update();
+        emit cameraChanged();
         event->accept();
         return;
     }
@@ -282,6 +265,7 @@ void IsoWidget::mouseReleaseEvent(QMouseEvent* event)
     if (event->button() == Qt::LeftButton && m_dragging) {
         m_dragging = false;
         setCursor(Qt::ArrowCursor);
+        emit interactionEnded();
         event->accept();
         return;
     }
@@ -301,8 +285,9 @@ void IsoWidget::wheelEvent(QWheelEvent* event)
     }
     constexpr double zoomStep = 1.15;
     const auto factor = vertical > 0 ? zoomStep : 1.0 / zoomStep;
-    m_zoom = std::clamp(m_zoom * factor, 0.1, 10.0);
+    m_camera.zoom = std::clamp(m_camera.zoom * factor, 0.1, 10.0);
     update();
+    emit cameraChanged();
     event->accept();
 }
 
@@ -316,10 +301,10 @@ void IsoWidget::drawAxisIndicator(QPainter& painter) const
     const QPointF origin(static_cast<qreal>(originX),
         static_cast<qreal>(h - originY));
 
-    const auto cosAz = std::cos(m_azimuth);
-    const auto sinAz = std::sin(m_azimuth);
-    const auto cosEl = std::cos(m_elevation);
-    const auto sinEl = std::sin(m_elevation);
+    const auto cosAz = std::cos(m_camera.azimuth);
+    const auto sinAz = std::sin(m_camera.azimuth);
+    const auto cosEl = std::cos(m_camera.elevation);
+    const auto sinEl = std::sin(m_camera.elevation);
 
     auto projectDir = [&](double dx, double dy, double dz) -> QPointF {
         const auto x1 = dx * cosAz - dy * sinAz;
@@ -371,9 +356,20 @@ void IsoWidget::drawAxisIndicator(QPainter& painter) const
 
 void IsoWidget::setViewAngles(double azimuth, double elevation)
 {
-    m_azimuth = azimuth;
-    m_elevation = elevation;
+    m_camera.azimuth = azimuth;
+    m_camera.elevation = elevation;
     update();
+    emit cameraChanged();
+}
+
+void IsoWidget::setCamera(const OrthoCamera& camera)
+{
+    if (camera == m_camera) {
+        return;
+    }
+    m_camera = camera;
+    update();
+    emit cameraChanged();
 }
 
 void IsoWidget::resizeEvent(QResizeEvent* event)

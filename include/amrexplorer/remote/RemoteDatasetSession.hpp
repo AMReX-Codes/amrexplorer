@@ -34,6 +34,11 @@ public:
 
     [[nodiscard]] ViewDataResult requestView(
         const ViewDataRequest& request, StopToken cancellation = {}) override;
+    // True when the server speaks protocol 1.2 and the dataset is a 3-D
+    // plotfile; the frame comes back rendered, validated against the request.
+    [[nodiscard]] bool supportsVolumeRendering() const noexcept override;
+    [[nodiscard]] VolumeFrame renderVolume(const VolumeRenderRequest& request,
+        StopToken cancellation = {}) override;
     [[nodiscard]] DatasetPage requestDatasetPage(
         const DatasetPageRequest& request, StopToken cancellation = {}) override;
     [[nodiscard]] std::optional<ValueRange> requestRange(

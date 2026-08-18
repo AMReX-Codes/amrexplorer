@@ -271,6 +271,27 @@ public:
         return codec::fromWire(*payload);
     }
 
+    VolumeFrame renderVolume(
+        const VolumeRenderRequest& request, StopToken cancellation)
+    {
+        if (m_selectedMinorVersion < 2) {
+            throw std::runtime_error(
+                "the remote server predates volume rendering (protocol "
+                "1.2); install a current amrexplorer-server");
+        }
+        // Indefinite: the first render of a field samples the plotfile,
+        // which can outlast the request timeout; the token still cancels it.
+        const auto response = transact(codec::toWire(request),
+            PayloadKind::RenderedFrameResponse, cancellation,
+            ResponseWait::Indefinite);
+        const auto* payload = response->payload.AsRenderedFrameResponse();
+        if (payload == nullptr) {
+            throw std::runtime_error("server omitted rendered-frame payload");
+        }
+        updateCache(request.dataset, codec::fromWire(payload->cache.get()));
+        return codec::fromWire(*payload);
+    }
+
     void closeDataset(DatasetId dataset, StopToken cancellation)
     {
         codec::fb::CloseDatasetRequestT request;
@@ -722,6 +743,12 @@ RemoteDirectoryListing Connection::listDirectory(
     const std::string& path, StopToken cancellation)
 {
     return m_impl->listDirectory(path, cancellation);
+}
+
+VolumeFrame Connection::renderVolume(
+    const VolumeRenderRequest& request, StopToken cancellation)
+{
+    return m_impl->renderVolume(request, cancellation);
 }
 
 void Connection::closeDataset(DatasetId dataset, StopToken cancellation)

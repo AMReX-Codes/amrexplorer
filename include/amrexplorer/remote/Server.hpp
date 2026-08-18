@@ -1,5 +1,7 @@
 #pragma once
 
+#include <amrexplorer/core/Volume.hpp>
+#include <amrexplorer/data/LocalDatasetSession.hpp>
 #include <amrexplorer/remote/Frame.hpp>
 
 #include <chrono>
@@ -33,6 +35,12 @@ struct ServerOptions {
     // for a genuinely slow link (1 allows roughly 18 hours for a 64 MiB
     // response). Zero is rejected: it would restore the unbounded case.
     std::uint64_t responseWriteMinimumBytesPerSecond = 64U * 1024U;
+    // Volume rendering (protocol 1.2): the most voxels a client may ask the
+    // server to sample per request (its own budget is clamped to this), and
+    // the per-dataset cache of sampled grids a rotating client re-casts
+    // from. Both bound the server's memory: a grid is four bytes per voxel.
+    std::uint64_t maximumVolumeVoxels = defaultVolumeVoxelBudget;
+    std::uint64_t volumeGridCacheBytes = defaultVolumeGridCacheBytes;
     std::string softwareVersion = "unknown";
     // Per-session access token. Clients must present a byte-identical token in
     // their handshake or the connection is refused. Left empty, the server

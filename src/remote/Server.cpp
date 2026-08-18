@@ -575,6 +575,9 @@ private:
             case PayloadKind::ListDirectoryRequest:
                 listDirectory(*envelope, cancellation);
                 break;
+            case PayloadKind::RenderedFrameRequest:
+                renderedFrame(*envelope, cancellation);
+                break;
             default:
                 throw std::invalid_argument(
                     "payload is not a supported client request");
@@ -620,6 +623,8 @@ private:
             dataset = std::make_shared<LocalDatasetSession>(
                 resolveDatasetPath(request->path), id,
                 request->cache_budget_bytes, cancellation);
+            static_cast<void>(dataset->setVolumeGridCacheBudget(
+                m_options.volumeGridCacheBytes));
             OpenedDataset opened;
             opened.id = id;
             opened.catalog = dataset->metadata();
@@ -769,6 +774,37 @@ private:
         }
         send(envelope.request_id,
             codec::toWire(result, dataset->cacheMetrics()));
+    }
+
+    void renderedFrame(
+        const codec::NativeEnvelope& envelope, StopToken cancellation)
+    {
+        const auto* payload = envelope.payload.AsRenderedFrameRequest();
+        if (payload == nullptr) {
+            throw std::invalid_argument("rendered-frame payload is missing");
+        }
+        if (m_selectedMinorVersion < 2) {
+            throw RemoteError(ErrorCode::UnsupportedProtocol,
+                "volume rendering requires protocol 1.2");
+        }
+        auto request = codec::fromWire(*payload);
+        validateVolumeBound(request);
+        // The server's own voxel cap applies on top of the client's budget.
+        request.maximumVoxels = std::min<std::uint64_t>(
+            request.maximumVoxels, m_options.maximumVolumeVoxels);
+        const auto dataset = requireDataset(request.dataset);
+        const auto frame = dataset->renderVolume(request, cancellation);
+        // The bound above sized the pixels; the exact guard covers the
+        // tables around them.
+        const auto encoded = codec::encode(envelope.request_id,
+            codec::toWire(frame, dataset->cacheMetrics()),
+            m_selectedMinorVersion);
+        if (encoded.size() > m_maximumFrameBytes.load()) {
+            throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                "rendered frame cannot fit in one negotiated frame");
+        }
+        send(envelope.request_id,
+            codec::toWire(frame, dataset->cacheMetrics()));
     }
 
     void lineView(
@@ -950,6 +986,23 @@ private:
         }
     }
 
+    void validateVolumeBound(const VolumeRenderRequest& request) const
+    {
+        // Structural validity first (a hostile peer can vary every field),
+        // then the frame's pixels against the negotiated frame; the session
+        // validators check the request against the dataset.
+        if (const auto errors = validateVolumeRenderRequest(request, 3);
+            !errors.empty()) {
+            throw std::invalid_argument(errors.front());
+        }
+        const auto pixels = static_cast<std::uint64_t>(request.outputSize[0])
+            * static_cast<std::uint64_t>(request.outputSize[1]);
+        if (!fitsResponse(pixels * sizeof(std::uint32_t))) {
+            throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                "rendered frame cannot fit in one negotiated frame");
+        }
+    }
+
     [[nodiscard]] std::size_t maximumSliceGridBoxes(
         const SliceRequest& request) const noexcept
     {
@@ -1036,6 +1089,11 @@ private:
         case PayloadKind::SetCacheBudgetRequest: {
             const auto* value
                 = envelope.payload.AsSetCacheBudgetRequest();
+            return DatasetId{value ? value->dataset_id : 0};
+        }
+        case PayloadKind::RenderedFrameRequest: {
+            const auto* value
+                = envelope.payload.AsRenderedFrameRequest();
             return DatasetId{value ? value->dataset_id : 0};
         }
         default:
@@ -1251,10 +1309,14 @@ private:
                 <= std::chrono::milliseconds::zero()
             || options.responseWriteStallTimeout
                 <= std::chrono::milliseconds::zero()
-            || options.responseWriteMinimumBytesPerSecond == 0) {
+            || options.responseWriteMinimumBytesPerSecond == 0
+            || options.maximumVolumeVoxels == 0
+            || options.volumeGridCacheBytes == 0) {
             throw std::invalid_argument(
                 "server resource limits must be greater than zero");
         }
+        options.maximumVolumeVoxels = std::min(
+            options.maximumVolumeVoxels, maxVolumeVoxelBudget);
         options.workerCount = resolveWorkerCount(options.workerCount);
         if (options.sessionToken.empty()) {
             options.sessionToken = generateSessionToken();

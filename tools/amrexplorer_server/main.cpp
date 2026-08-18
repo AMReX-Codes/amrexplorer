@@ -44,6 +44,8 @@ void printUsage(std::ostream& output)
         << "  --threads COUNT      worker threads; 0 selects hardware concurrency\n"
         << "  --max-frame-mib MIB  maximum negotiated frame size\n"
         << "  --max-datasets COUNT maximum open datasets per connection\n"
+        << "  --max-volume-voxels N maximum voxels sampled per volume render\n"
+        << "  --volume-cache-mib MIB per-dataset cache of sampled volume grids\n"
         << "  --write-stall-timeout-seconds SECONDS\n"
         << "                       disconnect after no write progress; also the\n"
         << "                       fixed grace in the whole-response budget\n"
@@ -227,6 +229,23 @@ int main(int argc, char* argv[])
                         "--max-datasets must be greater than zero");
                 }
                 options.maximumDatasets = maximumDatasets;
+            } else if (option == "--max-volume-voxels") {
+                const auto voxels
+                    = parseUnsigned<std::uint64_t>(value, "--max-volume-voxels");
+                if (voxels == 0 || voxels > amrvis::maxVolumeVoxelBudget) {
+                    throw std::invalid_argument(
+                        "--max-volume-voxels is outside its allowed range");
+                }
+                options.maximumVolumeVoxels = voxels;
+            } else if (option == "--volume-cache-mib") {
+                const auto mebibytes
+                    = parseUnsigned<std::uint32_t>(value, "--volume-cache-mib");
+                constexpr std::uint64_t oneMebibyte = 1024U * 1024U;
+                if (mebibytes == 0) {
+                    throw std::invalid_argument(
+                        "--volume-cache-mib must be greater than zero");
+                }
+                options.volumeGridCacheBytes = mebibytes * oneMebibyte;
             } else if (option == "--write-stall-timeout-seconds") {
                 const auto seconds = parseUnsigned<std::uint32_t>(
                     value, "--write-stall-timeout-seconds");

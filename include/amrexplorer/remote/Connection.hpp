@@ -55,6 +55,10 @@ public:
     // protocol 1.0, i.e. predates browsing.
     [[nodiscard]] RemoteDirectoryListing listDirectory(
         const std::string& path, StopToken cancellation = {});
+    // Renders a volume on the server and returns the frame (protocol 1.2).
+    // Throws when the server negotiated an older protocol.
+    [[nodiscard]] VolumeFrame renderVolume(
+        const VolumeRenderRequest& request, StopToken cancellation = {});
     void closeDataset(DatasetId dataset, StopToken cancellation = {});
     void closeDatasetBestEffort(DatasetId dataset) noexcept;
     [[nodiscard]] ViewDataResult requestView(

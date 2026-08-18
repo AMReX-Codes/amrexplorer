@@ -334,6 +334,61 @@ table DirectoryListing {
   truncated:bool (id: 3);
 }
 
+// Protocol 1.2: volume rendering. The server samples the field into a
+// bounded grid, ray-casts it with the requested orthographic camera and
+// transfer function, and returns the viewport-sized frame; volume field
+// data never crosses the wire. `has_range` false leaves the colour range to
+// the server (the sampled grid's extrema, `logarithmic` requested), which
+// reports what it used; with `has_range` the range is `minimum`..`maximum`
+// with `range_logarithmic`. The transfer function is an explicit lookup: one
+// 0x00RRGGBB colour and one [0, 1] opacity per entry, entry 0 the bottom of
+// the range.
+table RenderedFrameRequest {
+  dataset_id:ulong (id: 0);
+  field:uint (id: 1);
+  component:int (id: 2);
+  maximum_level:int (id: 3);
+  composition:CompositionPolicy (id: 4);
+  region:RealBox (id: 5);
+  azimuth:double (id: 6);
+  elevation:double (id: 7);
+  zoom:double (id: 8);
+  width:int (id: 9);
+  height:int (id: 10);
+  has_range:bool (id: 11);
+  minimum:double (id: 12);
+  maximum:double (id: 13);
+  logarithmic:bool (id: 14);
+  transfer_colors:[uint] (id: 15);
+  transfer_opacities:[float] (id: 16);
+  samples_per_voxel:int (id: 17);
+  maximum_voxels:ulong (id: 18);
+  range_logarithmic:bool (id: 19);
+}
+
+// Premultiplied 0xAARRGGBB pixels, row 0 at the top, exactly width x height.
+table RenderedFrameResponse {
+  width:int (id: 0);
+  height:int (id: 1);
+  pixels:[uint] (id: 2);
+  used_minimum:double (id: 3);
+  used_maximum:double (id: 4);
+  used_logarithmic:bool (id: 5);
+  grid_dims:[int] (id: 6);
+  covered_voxels:ulong (id: 7);
+  sampled_maximum_level:int (id: 8);
+  grid_from_cache:bool (id: 9);
+  sample_milliseconds:ulong (id: 10);
+  render_milliseconds:ulong (id: 11);
+  candidate_blocks:ulong (id: 12);
+  blocks_read:ulong (id: 13);
+  cache_hits:ulong (id: 14);
+  payload_bytes_read:ulong (id: 15);
+  cache_fallback_from_level:int (id: 16);
+  cache_fallback_to_level:int (id: 17);
+  cache:CacheState (id: 18);
+}
+
 union Payload {
   HelloRequest = 1,
   HelloResponse = 2,
@@ -360,7 +415,9 @@ union Payload {
   PongResponse = 23,
   ErrorResponse = 24,
   ListDirectoryRequest = 25,
-  DirectoryListing = 26
+  DirectoryListing = 26,
+  RenderedFrameRequest = 27,
+  RenderedFrameResponse = 28
 }
 
 table Envelope {

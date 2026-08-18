@@ -272,6 +272,23 @@ if(TARGET amrexplorer_remote)
         FIXTURES_REQUIRED remote_server_materialized
         TIMEOUT 30)
 
+    add_executable(test_remote_volume
+        integration/test_remote_volume.cpp)
+    target_include_directories(test_remote_volume PRIVATE
+        "${PROJECT_BINARY_DIR}/src/remote/generated")
+    target_link_libraries(test_remote_volume
+        PRIVATE
+            amrexplorer::remote
+            ${AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET}
+            amrexplorer::warnings
+            Threads::Threads
+    )
+    add_test(NAME remote_volume
+        COMMAND test_remote_volume "${remote_server_fixture_3d_dir}")
+    set_tests_properties(remote_volume PROPERTIES
+        FIXTURES_REQUIRED remote_server_3d_materialized
+        TIMEOUT 60)
+
     if(NOT WIN32)
         add_executable(test_remote_stdio
             integration/test_remote_stdio.cpp)

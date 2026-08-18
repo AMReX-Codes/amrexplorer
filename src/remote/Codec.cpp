@@ -48,6 +48,8 @@ AMREXPLORER_ASSERT_PAYLOAD_VALUE(PongResponse, PongResponse);
 AMREXPLORER_ASSERT_PAYLOAD_VALUE(ErrorResponse, ErrorResponse);
 AMREXPLORER_ASSERT_PAYLOAD_VALUE(ListDirectoryRequest, ListDirectoryRequest);
 AMREXPLORER_ASSERT_PAYLOAD_VALUE(DirectoryListing, DirectoryListing);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(RenderedFrameRequest, RenderedFrameRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(RenderedFrameResponse, RenderedFrameResponse);
 
 #undef AMREXPLORER_ASSERT_PAYLOAD_VALUE
 
@@ -193,7 +195,7 @@ ErrorCode fromWireError(fb::ErrorCode value)
 PayloadKind payloadKind(fb::Payload value)
 {
     const auto raw = static_cast<std::uint8_t>(value);
-    if (raw > static_cast<std::uint8_t>(PayloadKind::DirectoryListing)) {
+    if (raw > static_cast<std::uint8_t>(PayloadKind::RenderedFrameResponse)) {
         throw std::invalid_argument("unknown wire payload kind");
     }
     return static_cast<PayloadKind>(raw);
@@ -919,6 +921,132 @@ SliceQueryResult fromWire(const fb::SliceViewResponseT& value)
     }
     result.metrics = {value.candidate_blocks, value.blocks_read,
         value.cache_hits, value.payload_bytes_read};
+    return result;
+}
+
+fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value)
+{
+    fb::RenderedFrameRequestT wire;
+    wire.dataset_id = value.dataset.value;
+    wire.field = value.field.value;
+    wire.component = value.component;
+    wire.maximum_level = value.maximumLevel;
+    wire.composition = toWireComposition(value.composition);
+    wire.region = toWire(value.region);
+    wire.azimuth = value.camera.azimuth;
+    wire.elevation = value.camera.elevation;
+    wire.zoom = value.camera.zoom;
+    wire.width = value.outputSize[0];
+    wire.height = value.outputSize[1];
+    wire.has_range = value.range.has_value();
+    wire.minimum = value.range ? value.range->minimum : 0.0;
+    wire.maximum = value.range ? value.range->maximum : 0.0;
+    wire.range_logarithmic = value.range ? value.range->logarithmic : false;
+    wire.logarithmic = value.logarithmic;
+    wire.transfer_colors = value.transfer.colors;
+    wire.transfer_opacities = value.transfer.opacities;
+    wire.samples_per_voxel = value.samplesPerVoxel;
+    wire.maximum_voxels = value.maximumVoxels;
+    return wire;
+}
+
+VolumeRenderRequest fromWire(const fb::RenderedFrameRequestT& value)
+{
+    requireFinite(value.azimuth, "wire volume camera azimuth is non-finite");
+    requireFinite(value.elevation, "wire volume camera elevation is non-finite");
+    requireFinite(value.zoom, "wire volume camera zoom is non-finite");
+    if (value.has_range) {
+        requireFinite(value.minimum, "wire volume range minimum is non-finite");
+        requireFinite(value.maximum, "wire volume range maximum is non-finite");
+    }
+    if (value.transfer_colors.size() != value.transfer_opacities.size()
+        || value.transfer_colors.size() > maxVolumeTransferEntries) {
+        throw std::invalid_argument("wire volume transfer function is malformed");
+    }
+    requireFiniteValues(value.transfer_opacities,
+        "wire volume transfer opacities are non-finite");
+    const auto region = fromWire(value.region.get());
+    const auto composition = fromWireComposition(value.composition);
+    VolumeRenderRequest result;
+    result.dataset = DatasetId{value.dataset_id};
+    result.field = FieldId{value.field};
+    result.component = value.component;
+    result.maximumLevel = value.maximum_level;
+    result.composition = composition;
+    result.region = region;
+    result.camera = {value.azimuth, value.elevation, value.zoom};
+    result.outputSize = {value.width, value.height};
+    if (value.has_range) {
+        result.range = VolumeRange{
+            value.minimum, value.maximum, value.range_logarithmic};
+    }
+    result.logarithmic = value.logarithmic;
+    result.transfer.colors = value.transfer_colors;
+    result.transfer.opacities = value.transfer_opacities;
+    result.samplesPerVoxel = value.samples_per_voxel;
+    result.maximumVoxels = value.maximum_voxels;
+    return result;
+}
+
+fb::RenderedFrameResponseT toWire(
+    const VolumeFrame& value, const CacheMetrics& cache)
+{
+    fb::RenderedFrameResponseT wire;
+    wire.width = value.width;
+    wire.height = value.height;
+    wire.pixels = value.pixels;
+    wire.used_minimum = value.usedRange.minimum;
+    wire.used_maximum = value.usedRange.maximum;
+    wire.used_logarithmic = value.usedRange.logarithmic;
+    wire.grid_dims.assign(value.metrics.gridDims.begin(), value.metrics.gridDims.end());
+    wire.covered_voxels = value.metrics.coveredVoxels;
+    wire.sampled_maximum_level = value.metrics.sampledMaximumLevel;
+    wire.grid_from_cache = value.metrics.gridFromCache;
+    wire.sample_milliseconds = value.metrics.sampleMilliseconds;
+    wire.render_milliseconds = value.metrics.renderMilliseconds;
+    wire.candidate_blocks = value.metrics.candidateBlocks;
+    wire.blocks_read = value.metrics.blocksRead;
+    wire.cache_hits = value.metrics.cacheHits;
+    wire.payload_bytes_read = value.metrics.payloadBytesRead;
+    wire.cache_fallback_from_level = value.cacheFallbackFromLevel;
+    wire.cache_fallback_to_level = value.cacheFallbackToLevel;
+    wire.cache = toWire(cache);
+    return wire;
+}
+
+VolumeFrame fromWire(const fb::RenderedFrameResponseT& value)
+{
+    if (value.width < 1 || value.height < 1) {
+        throw std::invalid_argument("wire volume frame dimensions are invalid");
+    }
+    const auto expected = checkedProduct(static_cast<std::size_t>(value.width),
+        static_cast<std::size_t>(value.height),
+        "wire volume frame dimensions overflow");
+    if (value.pixels.size() != expected) {
+        throw std::invalid_argument("wire volume frame pixels do not match its size");
+    }
+    requireFinite(value.used_minimum, "wire volume range minimum is non-finite");
+    requireFinite(value.used_maximum, "wire volume range maximum is non-finite");
+    if (value.grid_dims.size() != 3) {
+        throw std::invalid_argument("wire volume grid dimensions are malformed");
+    }
+    VolumeFrame result;
+    result.width = value.width;
+    result.height = value.height;
+    result.pixels = value.pixels;
+    result.usedRange = {value.used_minimum, value.used_maximum, value.used_logarithmic};
+    result.metrics.gridDims = {value.grid_dims[0], value.grid_dims[1], value.grid_dims[2]};
+    result.metrics.coveredVoxels = value.covered_voxels;
+    result.metrics.sampledMaximumLevel = value.sampled_maximum_level;
+    result.metrics.gridFromCache = value.grid_from_cache;
+    result.metrics.sampleMilliseconds = value.sample_milliseconds;
+    result.metrics.renderMilliseconds = value.render_milliseconds;
+    result.metrics.candidateBlocks = value.candidate_blocks;
+    result.metrics.blocksRead = value.blocks_read;
+    result.metrics.cacheHits = value.cache_hits;
+    result.metrics.payloadBytesRead = value.payload_bytes_read;
+    result.cacheFallbackFromLevel = value.cache_fallback_from_level;
+    result.cacheFallbackToLevel = value.cache_fallback_to_level;
     return result;
 }
 

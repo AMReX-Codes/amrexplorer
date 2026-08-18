@@ -128,6 +128,25 @@ ViewDataResult RemoteDatasetSession::requestView(
     });
 }
 
+bool RemoteDatasetSession::supportsVolumeRendering() const noexcept
+{
+    return m_connection->serverInfo().selectedMinorVersion >= 2
+        && m_metadata.dimension == 3 && !m_metadata.isFab
+        && m_metadata.hasPhysicalGeometry;
+}
+
+VolumeFrame RemoteDatasetSession::renderVolume(
+    const VolumeRenderRequest& request, StopToken cancellation)
+{
+    requireOpen();
+    validateSessionVolumeRequest(m_metadata, m_id, request);
+    return refusingInvalidResponses(*m_connection, [&] {
+        auto frame = m_connection->renderVolume(request, cancellation);
+        validateSessionVolumeResult(m_metadata, request, frame);
+        return frame;
+    });
+}
+
 DatasetPage RemoteDatasetSession::requestDatasetPage(
     const DatasetPageRequest& request, StopToken cancellation)
 {

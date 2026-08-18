@@ -154,6 +154,42 @@ void checkConverted(
     }
 }
 
+void checkConverted(const fb::RenderedFrameRequestT& wire,
+    const amrvis::VolumeRenderRequest& result)
+{
+    // fromWire promises finite camera and range values and a consistent,
+    // finite, bounded transfer function; the enum round-trips.
+    if (!finite(result.camera.azimuth) || !finite(result.camera.elevation)
+        || !finite(result.camera.zoom) || !finite(result.region)
+        || result.range.has_value() != wire.has_range
+        || (result.range
+            && (!finite(result.range->minimum) || !finite(result.range->maximum)))
+        || result.transfer.colors.size() != result.transfer.opacities.size()
+        || result.transfer.colors.size() > amrvis::maxVolumeTransferEntries
+        || !std::all_of(result.transfer.opacities.begin(),
+            result.transfer.opacities.end(),
+            [](float opacity) { return std::isfinite(opacity); })
+        || codec::toWire(result).composition != wire.composition
+        || result.outputSize[0] != wire.width || result.outputSize[1] != wire.height) {
+        fail("RenderedFrameRequest converter accepted a bad request");
+    }
+}
+
+void checkConverted(
+    const fb::RenderedFrameResponseT& wire, const amrvis::VolumeFrame& result)
+{
+    if (result.width < 1 || result.height < 1
+        || result.pixels.size() != static_cast<std::size_t>(result.width)
+                * static_cast<std::size_t>(result.height)
+        || result.pixels != wire.pixels
+        || !finite(result.usedRange.minimum) || !finite(result.usedRange.maximum)
+        || wire.grid_dims.size() != 3
+        || result.metrics.gridDims[0] != wire.grid_dims[0]
+        || result.metrics.gridDims[2] != wire.grid_dims[2]) {
+        fail("RenderedFrameResponse converter accepted an inconsistent frame");
+    }
+}
+
 void checkConverted(
     const fb::LineViewRequestT& wire, const amrvis::LineViewRequest& result)
 {
@@ -373,6 +409,12 @@ void exerciseFromWire(const codec::NativeEnvelope& envelope)
         break;
     case fb::Payload::DirectoryListing:
         convert(envelope.payload.AsDirectoryListing());
+        break;
+    case fb::Payload::RenderedFrameRequest:
+        convert(envelope.payload.AsRenderedFrameRequest());
+        break;
+    case fb::Payload::RenderedFrameResponse:
+        convert(envelope.payload.AsRenderedFrameResponse());
         break;
     case fb::Payload::NONE:
     case fb::Payload::ListDirectoryRequest:
@@ -653,6 +695,38 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         directory->path = "/scratch/run/inputs";
         listing.entries.push_back(std::move(directory));
         add(std::move(listing));
+    }
+    {
+        // Protocol 1.2: a volume request with an explicit range and a
+        // four-entry transfer function, and a 2x2 frame.
+        amrvis::VolumeRenderRequest request;
+        request.dataset.value = 3;
+        request.field.value = 1;
+        request.maximumLevel = 1;
+        request.composition = amrvis::CompositionPolicy::ExactLevel;
+        request.region.lower = {{0.0, 0.0, 0.0}};
+        request.region.upper = {{1.0, 2.0, 3.0}};
+        request.camera = {0.5, -0.25, 1.5};
+        request.outputSize = {64, 48};
+        request.range = amrvis::VolumeRange{0.5, 2.0, true};
+        request.transfer.colors = {0x0000FFU, 0x00FF00U, 0xFFFF00U, 0xFF0000U};
+        request.transfer.opacities = {0.0F, 0.25F, 0.5F, 1.0F};
+        request.samplesPerVoxel = 3;
+        request.maximumVoxels = 4096;
+        add(codec::toWire(request));
+        amrvis::VolumeFrame frame;
+        frame.width = 2;
+        frame.height = 2;
+        frame.pixels = {0xFF102030U, 0x80402010U, 0U, 0xFFFFFFFFU};
+        frame.usedRange = {0.5, 2.0, true};
+        frame.metrics.gridDims = {4, 4, 4};
+        frame.metrics.coveredVoxels = 60;
+        frame.metrics.sampledMaximumLevel = 1;
+        frame.metrics.gridFromCache = true;
+        frame.metrics.blocksRead = 2;
+        frame.cacheFallbackFromLevel = 1;
+        frame.cacheFallbackToLevel = 0;
+        add(codec::toWire(frame, amrvis::CacheMetrics{}));
     }
     return seeds;
 }

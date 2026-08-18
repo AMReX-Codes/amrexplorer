@@ -18,7 +18,8 @@
 namespace amrvis::remote {
 
 inline constexpr std::uint16_t protocolMajor = 1;
-inline constexpr std::uint16_t protocolMinorVersion = 1;
+// 1.1 added directory browsing; 1.2 adds volume rendering (RenderedFrame*).
+inline constexpr std::uint16_t protocolMinorVersion = 2;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,
@@ -48,7 +49,11 @@ enum class PayloadKind : std::uint8_t {
     ErrorResponse = 24,
     // Protocol 1.1: directory browsing.
     ListDirectoryRequest = 25,
-    DirectoryListing = 26
+    DirectoryListing = 26,
+    // Protocol 1.2: volume rendering -- the server renders a viewport-sized
+    // frame; volume field data never travels.
+    RenderedFrameRequest = 27,
+    RenderedFrameResponse = 28
 };
 
 enum class ErrorCode : std::uint16_t {

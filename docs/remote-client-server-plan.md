@@ -114,7 +114,7 @@ rasterize the current view.
 - Chunked or streaming query results.
 - 3-D volume field data or arbitrary volume geometry on the wire. The compact
   AMR box hierarchy is an exception: it is catalog metadata used to draw the
-  3-D wireframe. A future volume-rendering protocol will return server-rendered
+  3-D wireframe. Volume rendering (protocol 1.2) returns server-rendered
   frames rather than transferring a volume.
 
 These exclusions keep the first production protocol narrow while retaining
@@ -225,9 +225,10 @@ The following operations will be routed through the session:
 For 1-D and 2-D views, presentation stays local. `ScalarRenderer`, contour
 extraction, vector-glyph generation, range selection, image composition, and
 export consume the bounded returned cells and do not move to the server.
-Future 3-D volume rendering is the deliberate exception: the server will
-render a viewport-sized frame and will never send volume field data or
-arbitrary volume geometry.
+3-D volume rendering (protocol 1.2) is the deliberate exception: the server
+samples the field into a bounded grid, ray-casts it with the client's camera
+and transfer-function lookup, and returns a viewport-sized frame; it never
+sends volume field data or arbitrary volume geometry.
 
 Opening a dataset will be refactored so the metadata and session are created
 once. The current local flow reads metadata, then constructs
@@ -334,6 +335,7 @@ The production schema will cover:
 | `CancelRequest` | `CancelAcknowledged` | Request cancellation by request ID |
 | `PingRequest` | `PongResponse` | Explicit health check |
 | `ListDirectoryRequest` (1.1) | `DirectoryListing` | List a server directory's subdirectories, marking plotfiles |
+| `RenderedFrameRequest` (1.2) | `RenderedFrameResponse` | Render one volume frame on the server: camera, range, transfer lookup and voxel budget in; premultiplied pixels, the range used and sampling metrics out |
 | any request | `ErrorResponse` | Typed terminal failure |
 
 Every ordinary request has exactly one terminal response with the same
@@ -408,10 +410,19 @@ view-result types before releasing the receive buffer. This preserves the
 current lifetime model and keeps FlatBuffers-generated types out of the UI and
 query APIs.
 
-An additive future 3-D volume-rendering capability will use a distinct
-`RenderedFrameRequest`/`RenderedFrameResponse`. Its response will contain a
-viewport-sized image plus presentation metadata; it will never reuse
-`ViewDataResponse` to transfer volume field data or arbitrary geometry.
+3-D volume rendering (protocol 1.2) uses the distinct
+`RenderedFrameRequest`/`RenderedFrameResponse` pair. The request carries the
+orthographic camera, the physical region, the output size, an optional
+explicit range (or the request that the server resolve the "Visible" range
+from the sampled grid), the transfer function as an explicit colour/opacity
+lookup, the samples per voxel and a voxel budget; the response carries the
+viewport-sized premultiplied image, the range used, and the sampling metrics.
+The server bounds every field before allocating -- output size against the
+negotiated frame, the voxel budget against its own `--max-volume-voxels`
+cap -- and the client refuses a frame of another size, an unusable or
+unrequested range, or metrics the request could not have produced. It never
+reuses `ViewDataResponse` to transfer volume field data or arbitrary
+geometry.
 
 ### 5.7 Errors
 
@@ -907,8 +918,8 @@ Please review these choices before implementation:
    than limiting remote support to slices alone.
 8. Protocol 1.0 has no application compression or chunking; its hard payload
    bound comes from viewport/page limits and the negotiated frame limit.
-9. Future 3-D volume rendering returns server-rendered frames and never
-   transfers volume field data or arbitrary volume geometry.
+9. 3-D volume rendering (protocol 1.2) returns server-rendered frames and
+   never transfers volume field data or arbitrary volume geometry.
 
 Implementation should begin only after these decisions and any requested
 scope changes are approved.

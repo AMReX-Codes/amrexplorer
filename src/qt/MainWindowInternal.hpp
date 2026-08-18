@@ -13,6 +13,7 @@
 #include "FabNavigator.hpp"
 #include "PaletteController.hpp"
 #include "ParticleController.hpp"
+#include "VolumeController.hpp"
 #include "RangeController.hpp"
 #include "SequenceController.hpp"
 #include "AnimationPanel.hpp"

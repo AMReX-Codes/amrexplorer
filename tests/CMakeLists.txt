@@ -579,6 +579,33 @@ if(TARGET amrexplorer_qt)
             "$<TARGET_FILE:test_particle_controller>")
     set_tests_properties(particle_controller PROPERTIES TIMEOUT 60)
 
+    add_executable(test_volume_controller
+        unit/test_volume_controller.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/VolumeController.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/VolumeController.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/VolumeWindow.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/VolumeWindow.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/IsoWidget.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/IsoWidget.hpp"
+    )
+    set_target_properties(test_volume_controller PROPERTIES AUTOMOC ON)
+    target_include_directories(test_volume_controller
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_volume_controller
+        PRIVATE
+            amrexplorer::pipeline
+            amrexplorer::render3d
+            amrexplorer::warnings
+            Qt6::Concurrent
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Widgets
+    )
+    add_test(NAME volume_controller
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_volume_controller>")
+    set_tests_properties(volume_controller PROPERTIES TIMEOUT 60)
+
     add_executable(test_diagnostics_model
         unit/test_diagnostics_model.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/DiagnosticsModel.cpp"
@@ -873,6 +900,19 @@ if(TARGET amrexplorer_qt)
         FIXTURES_REQUIRED remote_server_3d_materialized
         TIMEOUT 30)
 
+    # The same volume window over the in-process server (protocol 1.2): the
+    # frame is rendered on the server and displayed here.
+    add_test(
+        NAME qt_remote_volume_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-volume-smoke-test
+            "${remote_server_fixture_3d_dir}"
+    )
+    set_tests_properties(qt_remote_volume_smoke PROPERTIES
+        FIXTURES_REQUIRED remote_server_3d_materialized
+        TIMEOUT 60)
+
     add_test(
         NAME qt_remote_spherical_initial_geometry_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
@@ -1094,6 +1134,20 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_slice_smoke_3d PROPERTIES TIMEOUT 30)
+    # The Volume Rendering window over the 3-D fixture, locally: opened as the
+    # View menu action opens it, its first frame must have lit pixels (the
+    # ray caster ran end to end through the session, pipeline and window).
+    add_test(
+        NAME qt_volume_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_volume_3d"
+            -DMODE=volume
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_volume_smoke_3d PROPERTIES TIMEOUT 60)
     add_test(
         NAME qt_particle_visible_range_smoke_3d
         COMMAND "${CMAKE_COMMAND}"

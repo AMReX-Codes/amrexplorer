@@ -81,6 +81,7 @@ class ParticleController;
 class RangeController;
 class RemoteSessionController;
 class SequenceController;
+class VolumeController;
 struct PlaneMapping;
 class UserGuideDialog;
 
@@ -233,6 +234,12 @@ public:
     // per cell -- rather than in physical units. The two differ only when
     // the cells are not square (see remote-fit-anisotropic-cells).
     [[nodiscard]] bool activeViewRasterHasCellAspectForTest() const;
+    // Test-only: the Volume Rendering window -- open it as the View menu
+    // action does, whether it is open, and what fraction of the last frame's
+    // pixels the ray caster lit (alpha > 0); zero before any frame.
+    void showVolumeWindowForTest();
+    [[nodiscard]] bool volumeWindowOpenForTest() const;
+    [[nodiscard]] double volumeFrameAlphaCoverageForTest() const;
     [[nodiscard]] bool fabStateClearedForTest() const;
     // Test-only: how many failures have been reported non-modally. The FAB
     // rollback smoke tests assert on this so a passing run proves the failure
@@ -398,6 +405,9 @@ signals:
     // smoke test drives frame stepping off it.
     void sequenceFrameDisplayed(int index);
     void sequenceFrameFailed();
+    // Emitted when the Volume Rendering window has drawn a frame; the volume
+    // smoke tests wait on it.
+    void volumeFrameDisplayed();
     // Emitted when the FFmpeg encoding phase begins (frames rendered, encoder
     // workers about to run); the export-quit smoke test quits on it to exercise
     // bounded encoder cancellation.
@@ -904,6 +914,7 @@ private:
     // Owns the particle selection, samples, sample load, dialog, action and
     // progress indicator; the host draws its samples into the views.
     ParticleController* m_particleController = nullptr;
+    VolumeController* m_volumeController = nullptr;
     std::filesystem::path m_datasetPath;
     // Owns the ssh session and the connection every remote open goes
     // through, and the Open Remote dialogs and browser; asks this window to

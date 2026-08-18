@@ -58,6 +58,10 @@ add_executable(amrexplorer_qt
     Theme.hpp
     UserGuideDialog.cpp
     UserGuideDialog.hpp
+    VolumeController.cpp
+    VolumeController.hpp
+    VolumeWindow.cpp
+    VolumeWindow.hpp
     main.cpp
     ${CMAKE_SOURCE_DIR}/resources/amrexplorer.qrc
     ${CMAKE_SOURCE_DIR}/resources/user-guide.qrc
@@ -82,6 +86,7 @@ if(AMREXPLORER_BUILD_TESTS)
         SmokeHarnessRange.cpp
         SmokeHarnessRemote.cpp
         SmokeHarnessSequence.cpp
+        SmokeHarnessVolume.cpp
         SmokeHarnessZoom.cpp)
     target_compile_definitions(amrexplorer_qt PRIVATE AMREXPLORER_QT_TEST_ACCESS)
 endif()
@@ -110,6 +115,7 @@ target_link_libraries(amrexplorer_qt
         amrexplorer::io
         amrexplorer::query
         amrexplorer::render2d
+        amrexplorer::render3d
         amrexplorer::pipeline
         amrexplorer::warnings
         Qt6::Concurrent

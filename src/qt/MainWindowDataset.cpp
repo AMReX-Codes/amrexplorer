@@ -46,6 +46,7 @@ void MainWindow::cancelInFlight()
     m_sequenceController->cancelActiveWork();
     m_linePlotStopSource.request_stop();
     m_particleController->cancel();
+    m_volumeController->cancel();
     m_view2d.stopSource.request_stop();
     for (auto& state : m_planeViews) {
         state.stopSource.request_stop();
@@ -683,6 +684,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_initialStopSource.request_stop();
     m_linePlotStopSource.request_stop();
     m_particleController->cancel();
+    m_volumeController->cancel();
     m_pendingAllViews = false;
     m_pendingViews.clear();
     m_sliceDebounce->stop();
@@ -710,6 +712,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     }
     // The dataset window shows this dataset's raw values; drop it too.
     closeDatasetWindow();
+    // And the volume window, which rendered this dataset's field.
+    m_volumeController->reset();
     if (m_contoursDialog != nullptr) {
         auto* dialog = m_contoursDialog;
         m_contoursDialog = nullptr;
@@ -908,6 +912,7 @@ void MainWindow::requestInitialSlice(
     m_initialStopSource.request_stop();
     m_linePlotStopSource.request_stop();
     m_particleController->cancel();
+    m_volumeController->cancel();
     m_initialStopSource = StopSource{};
     const auto cancellation = m_initialStopSource.get_token();
     // The initial open uses default slice state: field 0, finest available,
@@ -978,6 +983,7 @@ void MainWindow::requestInitialSlice(
                     }
                     m_particleController->configureForDataset(
                         restoredSpec.has_value());
+                    m_volumeController->configureForDataset();
                     configureSliceControls();
                     if (restoredSpec) {
                         const QSignalBlocker fieldBlocker(m_fieldSelector);

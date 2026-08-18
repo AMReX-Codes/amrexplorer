@@ -157,6 +157,7 @@ void MainWindow::setSlicePosition(int axis, double value)
     }
     m_isoWidget->setSlicePositions(m_slicePosition3d[0], m_slicePosition3d[1],
         m_slicePosition3d[2]);
+    m_volumeController->slicePositionsChanged();
     // The cached full-domain Visible range is now stale — and so is any
     // pending deferred store, whose union was computed from pre-move planes.
     m_displayCoordinator.invalidateRangeCache();
@@ -1511,6 +1512,7 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     m_dataset = result.dataset;
     m_particleController->setSamples(std::move(result.particles));
     m_particleController->configureForDataset(true);
+    m_volumeController->configureForDataset();
     const auto& metadata = m_dataset->metadata();
     m_viewDimension = metadata.dimension;
 

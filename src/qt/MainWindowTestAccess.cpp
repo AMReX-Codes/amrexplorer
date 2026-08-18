@@ -294,6 +294,29 @@ bool MainWindow::activeViewRasterHasCellAspectForTest() const
     return std::abs(actual - expected) <= 0.02 * expected;
 }
 
+void MainWindow::showVolumeWindowForTest()
+{
+    m_volumeController->showWindow(this);
+}
+
+bool MainWindow::volumeWindowOpenForTest() const
+{
+    return m_volumeController->windowOpen();
+}
+
+double MainWindow::volumeFrameAlphaCoverageForTest() const
+{
+    const auto& frame = m_volumeController->lastFrame();
+    if (frame.pixels.empty()) {
+        return 0.0;
+    }
+    std::size_t lit = 0;
+    for (const auto pixel : frame.pixels) {
+        lit += (pixel >> 24U) != 0U;
+    }
+    return static_cast<double>(lit) / static_cast<double>(frame.pixels.size());
+}
+
 bool MainWindow::fabStateClearedForTest() const
 {
     return m_fabNavigator->cleared()

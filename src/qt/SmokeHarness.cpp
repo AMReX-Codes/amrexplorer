@@ -25,7 +25,8 @@ Outcome dispatch(Context& context)
              &dispatchRange,
              &dispatchZoom,
              &dispatchFab,
-             &dispatchSequence
+             &dispatchSequence,
+             &dispatchVolume
          }) {
         if (auto outcome = themed(context); outcome.handled) {
             return outcome;

@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <utility>
 
 namespace amrvis::qt {
 namespace {
@@ -116,13 +117,28 @@ void IsoWidget::paintEvent(QPaintEvent* event)
     painter.setRenderHint(QPainter::Antialiasing, true);
 
     const auto frame = viewportFrame(width(), height());
-    for (const auto& level : m_levels) {
-        const QPen pen(levelOutlineColor(level.level), 1);
-        for (const auto& box : level.boxes) {
-            drawBox(painter, frame, physicalBox(level, box), pen);
+    if (!m_backdrop.isNull()) {
+        // The frame's own projection frame, so its centre lands on ours and
+        // its pixels are scaled by the ratio of the projection scales.
+        const auto rendered = viewportFrame(m_backdrop.width(), m_backdrop.height());
+        const auto ratio = frame.scale / rendered.scale;
+        const QRectF target(frame.centerX - 0.5 * ratio * m_backdrop.width(),
+            frame.centerY - 0.5 * ratio * m_backdrop.height(),
+            ratio * m_backdrop.width(), ratio * m_backdrop.height());
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter.drawImage(target, m_backdrop);
+    }
+    if (m_levelBoxesVisible) {
+        for (const auto& level : m_levels) {
+            const QPen pen(levelOutlineColor(level.level), 1);
+            for (const auto& box : level.boxes) {
+                drawBox(painter, frame, physicalBox(level, box), pen);
+            }
         }
     }
-    drawBox(painter, frame, m_domain, QPen(Qt::white, 1));
+    if (m_domainOutlineVisible) {
+        drawBox(painter, frame, m_domain, QPen(Qt::white, 1));
+    }
     // Translucent slice planes overlay the wireframe so the user can see where
     // the XY/XZ/YZ slices sit in the domain.
     if (m_slicePlanesVisible) {
@@ -357,6 +373,24 @@ void IsoWidget::setViewAngles(double azimuth, double elevation)
     m_camera.elevation = elevation;
     update();
     emit cameraChanged();
+}
+
+void IsoWidget::setBackdropImage(QImage image)
+{
+    m_backdrop = std::move(image);
+    update();
+}
+
+void IsoWidget::setLevelBoxesVisible(bool visible)
+{
+    m_levelBoxesVisible = visible;
+    update();
+}
+
+void IsoWidget::setDomainOutlineVisible(bool visible)
+{
+    m_domainOutlineVisible = visible;
+    update();
 }
 
 void IsoWidget::setCamera(const OrthoCamera& camera)

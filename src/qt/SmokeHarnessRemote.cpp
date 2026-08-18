@@ -441,6 +441,75 @@ Outcome dispatchRemote(Context& context)
             });
     } else if (argc == 3
         && std::string_view(argv[1])
+            == "--remote-cell-aspect-smoke-test") {
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        // Regression for remote-fit-anisotropic-cells. The fixture's cells
+        // are 64 times taller than wide (a 64x1024-cell domain that is 1x1024
+        // in physical units); the display draws one square pixel per cell,
+        // as the local path does, so a remote raster must be sized to the
+        // region's aspect in cells. Sized to the physical aspect instead, Fit
+        // fetched a one-pixel-wide strip, and a wheel zoom from 1x -- Custom
+        // mode over the fetched window -- a two-column raster stretched
+        // across the view. Both are checked: Fit first, then 1x wheeled in
+        // until the window is a sub-window of the domain.
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, phase](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                if (!window.activeViewRasterHasCellAspectForTest()) {
+                    qCritical("the Fit raster is not at the cell aspect");
+                    application.exit(1);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application, phase] {
+                        if (*phase == 0) {
+                            *phase = 1;
+                            if (!window.activeViewRasterHasCellAspectForTest()) {
+                                qCritical("the 1x raster is not at the cell "
+                                          "aspect");
+                                application.exit(1);
+                                return;
+                            }
+                            // Enough notches that the domain outgrows the
+                            // viewport on the long axis, so the demand fetch
+                            // is a sub-window and Custom mode sizes it.
+                            for (int notch = 0; notch < 4; ++notch) {
+                                window.wheelActiveViewForTest(1);
+                            }
+                            return;
+                        }
+                        if (*phase != 1) {
+                            return;
+                        }
+                        *phase = 2;
+                        if (!window.activeViewIsZoomedForTest()) {
+                            qCritical("the wheel zoom fetched no sub-window");
+                            application.exit(1);
+                            return;
+                        }
+                        application.exit(
+                            window.activeViewRasterHasCellAspectForTest()
+                                ? 0 : 1);
+                    });
+                window.selectFixedScaleForTest(1);
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(path);
+            });
+    } else if (argc == 3
+        && std::string_view(argv[1])
             == "--remote-canvas-wheel-smoke-test") {
         smokeServer = std::make_shared<amrvis::remote::Server>();
         smokeServerThread.emplace(

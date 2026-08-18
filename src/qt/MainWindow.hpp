@@ -228,6 +228,11 @@ public:
     [[nodiscard]] bool activeViewScrollBarsVisibleForTest() const;
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
+    // Test-only: the active view's raster has the aspect of the region it
+    // covers measured in finest cells -- the display's unit, one square pixel
+    // per cell -- rather than in physical units. The two differ only when
+    // the cells are not square (see remote-fit-anisotropic-cells).
+    [[nodiscard]] bool activeViewRasterHasCellAspectForTest() const;
     [[nodiscard]] bool fabStateClearedForTest() const;
     // Test-only: how many failures have been reported non-modally. The FAB
     // rollback smoke tests assert on this so a passing run proves the failure

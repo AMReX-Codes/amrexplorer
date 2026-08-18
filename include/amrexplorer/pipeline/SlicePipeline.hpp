@@ -186,8 +186,9 @@ inline constexpr int maxSliceOutputDimension = maxViewOutputDimension;
 [[nodiscard]] std::array<int, 2> finestNativeOutputSize(
     const DatasetMetadata& metadata, const RealBox& region, int normal);
 
-// Fits a physical slice region into a pixel bound without distorting its
-// in-plane aspect ratio.
+// Fits a slice region into a pixel bound without distorting its in-plane
+// aspect ratio, measured in finest cells (the display's unit: one square
+// pixel per cell), so cells that are not square do not squeeze the raster.
 [[nodiscard]] std::array<int, 2> viewportBoundedOutputSize(
     const DatasetMetadata& metadata, const RealBox& region, int normal,
     std::array<int, 2> viewportSize);

@@ -274,6 +274,25 @@ bool MainWindow::activeViewHasPhysicalAspectForTest(
         <= 0.02 * expectedAspect;
 }
 
+bool MainWindow::activeViewRasterHasCellAspectForTest() const
+{
+    if (!m_openMetadata || m_openMetadata->levels.empty()
+        || m_activeView == nullptr || m_activeView->plane->width <= 0
+        || m_activeView->plane->height <= 0) {
+        return false;
+    }
+    // The region the raster covers, in whole finest cells; the raster may
+    // sample it more coarsely or finely, but at the same aspect. A raster
+    // fitted to the physical aspect misses this by the cells' own aspect
+    // ratio, far outside the rounding the tolerance allows for.
+    const auto cells = finestNativeOutputSize(*m_openMetadata,
+        m_activeView->plane->physicalRegion, m_activeView->normal);
+    const auto expected = static_cast<double>(cells[0]) / cells[1];
+    const auto actual = static_cast<double>(m_activeView->plane->width)
+        / m_activeView->plane->height;
+    return std::abs(actual - expected) <= 0.02 * expected;
+}
+
 bool MainWindow::fabStateClearedForTest() const
 {
     return m_fabNavigator->cleared()

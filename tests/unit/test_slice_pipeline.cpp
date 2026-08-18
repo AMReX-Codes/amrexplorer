@@ -192,6 +192,28 @@ int main()
             == (std::array<int, 2>{800, 100}),
         "spherical viewport aspect was computed from clamped sample counts");
 
+    // Cells need not be square: a 100x1600-cell domain that is 1x1600 in
+    // physical units displays at the cell aspect (1:16), so the raster
+    // fitted into the viewport is 59x945, not a one-pixel strip (1x945,
+    // the physical aspect). Both the whole domain and a fractional zoomed
+    // window (100x600.5 cells) keep the cell aspect.
+    auto anisotropic = makeMetadata(2, 1.0);
+    anisotropic.levels[0].cellSize = {{0.01, 1.0, 1.0}};
+    const amrvis::RealBox tallDomain{{{0.0, 0.0, 0.0}}, {{1.0, 1600.0, 0.0}}};
+    require(amrvis::viewportBoundedOutputSize(
+                anisotropic, tallDomain, 2, {1137, 945})
+            == (std::array<int, 2>{59, 945}),
+        "anisotropic cells were fitted at the physical aspect");
+    require(amrvis::nativeBoundedViewportOutputSize(
+                anisotropic, tallDomain, 2, {1137, 945})
+            == (std::array<int, 2>{59, 945}),
+        "the native bound squeezed the anisotropic Fit raster");
+    const amrvis::RealBox tallWindow{{{0.0, 0.0, 0.0}}, {{1.0, 600.5, 0.0}}};
+    require(amrvis::viewportBoundedOutputSize(
+                anisotropic, tallWindow, 2, {1137, 945})
+            == (std::array<int, 2>{157, 945}),
+        "a zoomed anisotropic window was fitted at the physical aspect");
+
     // A viewport request may downsample a large native plane, but it must not
     // supersample a small one. Fixed 1x uses the native raster as its logical
     // scale, so enlarging 10x10 to the viewport would make it act like Fit.

@@ -309,6 +309,35 @@ int main()
         "an unterminated over-long line was not rejected",
         "header line exceeds the supported length");
 
+    // A corrupt cell size is named as such. Every grid record is divided by
+    // it, so without the check at the read site a zero was reported as
+    // out-of-range grid bounds; inf and nan are already refused by the
+    // double reader, and stay refused as the cell-size field.
+    const auto withCellSizes = [](const char* level0) {
+        return
+            "HyperCLaw-V1.1\n1\ndensity\n2\n0.0\n1\n0.0\n0.0\n1.0\n1.0\n2\n"
+            "((0,0) (7,7) (0,0))\n((0,0) (15,15) (0,0))\n0\n0\n"
+            + std::string(level0) + "\n0.0625 0.0625\n0\n0\n"
+            "0 1 0.0 0\n0.0 1.0 0.0 1.0\nLevel_0/Cell\n"
+            "1 1 0.0 0\n0.0 1.0 0.0 1.0\nLevel_1/Cell\n";
+    };
+    expectHeaderRejected(scratch / "zero_cell_size",
+        withCellSizes("0.125 0"),
+        "a zero cell size was not rejected",
+        "cell size must be positive");
+    expectHeaderRejected(scratch / "negative_cell_size",
+        withCellSizes("-0.125 0.125"),
+        "a negative cell size was not rejected",
+        "cell size must be positive");
+    expectHeaderRejected(scratch / "infinite_cell_size",
+        withCellSizes("inf 0.125"),
+        "an infinite cell size was not rejected",
+        "while reading level cell size");
+    expectHeaderRejected(scratch / "nan_cell_size",
+        withCellSizes("nan 0.125"),
+        "a NaN cell size was not rejected",
+        "while reading level cell size");
+
     std::error_code removeError;
     std::filesystem::remove_all(scratch, removeError);
 

@@ -548,9 +548,16 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
     }
     for (auto& level : metadata->levels) {
         for (int axis = 0; axis < metadata->dimension; ++axis) {
-            level.cellSize[static_cast<std::size_t>(axis)] =
-                readRequired<double>(input, "level cell size");
             const auto i = static_cast<std::size_t>(axis);
+            level.cellSize[i] = readRequired<double>(input, "level cell size");
+            // Checked here, not left to validateMetadata: the grid records
+            // below divide by it, so a zero would be reported as out-of-range
+            // grid bounds instead of the field that is corrupt. (readRequired
+            // has already refused inf and nan.)
+            if (!(level.cellSize[i] > 0.0)) {
+                throw MetadataReadError(
+                    "plotfile level cell size must be positive");
+            }
             level.indexOrigin[i] = metadata->physicalDomain.lower[i]
                 - static_cast<double>(level.domain.lower[i]) * level.cellSize[i];
         }

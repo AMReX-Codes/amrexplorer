@@ -22,6 +22,14 @@ add_executable(test_core_metadata unit/test_core_metadata.cpp)
 target_link_libraries(test_core_metadata PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME core_metadata COMMAND test_core_metadata)
 
+add_executable(test_ortho_projection unit/test_ortho_projection.cpp)
+target_link_libraries(test_ortho_projection PRIVATE amrexplorer::core amrexplorer::warnings)
+add_test(NAME ortho_projection COMMAND test_ortho_projection)
+
+add_executable(test_volume_types unit/test_volume_types.cpp)
+target_link_libraries(test_volume_types PRIVATE amrexplorer::core amrexplorer::warnings)
+add_test(NAME volume_types COMMAND test_volume_types)
+
 add_executable(test_geometry unit/test_geometry.cpp)
 target_link_libraries(test_geometry PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME geometry COMMAND test_geometry)

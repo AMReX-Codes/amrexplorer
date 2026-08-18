@@ -1,8 +1,10 @@
 add_library(amrexplorer_core
     CoordinateSystem.cpp
     Metadata.cpp
+    OrthoProjection.cpp
     Request.cpp
     Statistics.cpp
+    Volume.cpp
 )
 add_library(amrexplorer::core ALIAS amrexplorer_core)
 

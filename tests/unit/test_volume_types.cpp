@@ -53,6 +53,30 @@ int main()
         request.range = amrvis::VolumeRange{0.5, 2.0, true};
         require(!rejected(request), "a positive logarithmic range was rejected");
     }
+    {
+        // The bounds are inclusive.
+        auto request = validRequest();
+        request.camera.zoom = amrvis::minVolumeZoom;
+        require(!rejected(request), "the minimum zoom was rejected");
+        request.camera.zoom = amrvis::maxVolumeZoom;
+        require(!rejected(request), "the maximum zoom was rejected");
+        request = validRequest();
+        request.outputSize = {1, amrvis::maxVolumeOutputDimension};
+        require(!rejected(request), "the output size limits were rejected");
+        request = validRequest();
+        request.samplesPerVoxel = amrvis::maxVolumeSamplesPerVoxel;
+        require(!rejected(request), "the maximum samples per voxel was rejected");
+        request = validRequest();
+        request.maximumVoxels = amrvis::maxVolumeVoxelBudget;
+        require(!rejected(request), "the maximum voxel budget was rejected");
+        request = validRequest();
+        request.transfer.colors.assign(amrvis::maxVolumeTransferEntries, 0xFFFFFFU);
+        request.transfer.opacities.assign(amrvis::maxVolumeTransferEntries, 1.0F);
+        require(!rejected(request), "a full-size transfer function was rejected");
+        request = validRequest();
+        request.transfer.opacities = {0.0F, 1.0F, 1.0F};
+        require(!rejected(request), "opacities of exactly 0 and 1 were rejected");
+    }
 
     require(rejected(validRequest(), 2), "a 2-D dataset was accepted");
     {
@@ -106,6 +130,10 @@ int main()
         require(rejected(request), "a NaN range was accepted");
         request.range = amrvis::VolumeRange{-1.0, 2.0, true};
         require(rejected(request), "a non-positive logarithmic range was accepted");
+        request.range = amrvis::VolumeRange{
+            -std::numeric_limits<double>::max(),
+            std::numeric_limits<double>::max(), false};
+        require(rejected(request), "a range with an infinite span was accepted");
     }
     {
         auto request = validRequest();
@@ -120,6 +148,9 @@ int main()
         require(rejected(request), "an opacity above one was accepted");
         request.transfer.opacities[1] = std::numeric_limits<float>::quiet_NaN();
         require(rejected(request), "a NaN opacity was accepted");
+        request = validRequest();
+        request.transfer.colors[1] = 0xFF00FF00U;
+        require(rejected(request), "a colour with a non-zero high byte was accepted");
         request = validRequest();
         request.transfer.colors.assign(amrvis::maxVolumeTransferEntries + 1, 0U);
         request.transfer.opacities.assign(

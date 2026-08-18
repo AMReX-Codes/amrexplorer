@@ -20,6 +20,13 @@ std::vector<std::string> validateVolumeTransferFunction(
         || transfer.opacities.size() > maxVolumeTransferEntries) {
         errors.emplace_back("transfer function exceeds the entry limit");
     }
+    for (const auto color : transfer.colors) {
+        if (color > 0x00FFFFFFU) {
+            errors.emplace_back(
+                "transfer function colors must be 0x00RRGGBB");
+            break;
+        }
+    }
     for (const auto opacity : transfer.opacities) {
         if (!(opacity >= 0.0F) || !(opacity <= 1.0F)) {
             errors.emplace_back(
@@ -67,8 +74,10 @@ std::vector<std::string> validateVolumeRenderRequest(
     if (request.range) {
         const auto& range = *request.range;
         if (!std::isfinite(range.minimum) || !std::isfinite(range.maximum)
-            || !(range.minimum < range.maximum)) {
-            errors.emplace_back("range must be finite with minimum < maximum");
+            || !(range.minimum < range.maximum)
+            || !std::isfinite(range.maximum - range.minimum)) {
+            errors.emplace_back(
+                "range must be finite with minimum < maximum and a finite span");
         } else if (range.logarithmic && !(range.minimum > 0.0)) {
             errors.emplace_back("a logarithmic range must be strictly positive");
         }

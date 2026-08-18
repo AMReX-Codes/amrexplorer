@@ -9,7 +9,9 @@ namespace amrvis {
 // extent, rotated by `azimuth` about z and then by `elevation` about the
 // rotated x axis, and projected along the view depth. Both the Qt view that
 // draws the wireframe and the ray caster that draws the volume use these
-// functions, so the two can never disagree about where a point lands.
+// functions, so the two can never disagree about where a point lands --
+// provided both are given the same `domain` box, since the normalisation is
+// about that box's own centre and largest extent.
 struct OrthoCamera {
     double azimuth = 0.0;    // radians, about z
     double elevation = 0.0;  // radians, about the rotated x axis
@@ -56,7 +58,9 @@ struct ProjectedPoint {
 // origin lies outside the domain on the viewer's side, and the unit
 // direction points away from the viewer, so marching t >= 0 from the origin
 // crosses the domain front to back. The inverse of projectPoint: the ray
-// through a projected point's (x, y) passes through the point.
+// through a projected point's (x, y) passes through the point. The viewport
+// position is continuous, with the domain centre at (width / 2, height / 2):
+// a raster caster passes pixel centres, (column + 0.5, row + 0.5).
 struct Ray {
     Real3 origin;
     Real3 direction;

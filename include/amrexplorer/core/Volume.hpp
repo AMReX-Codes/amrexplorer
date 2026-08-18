@@ -63,7 +63,8 @@ struct VolumeRenderRequest {
     // The range the colours span; nullopt asks the renderer to use the
     // sampled grid's finite extrema (the "Visible" range) and report them
     // back, with `logarithmic` as the requested mapping (falling back to
-    // linear when the data is not strictly positive).
+    // linear when the data is not strictly positive). `logarithmic` is
+    // ignored when `range` is set: the range carries its own mapping.
     std::optional<VolumeRange> range;
     bool logarithmic = false;
     VolumeTransferFunction transfer;

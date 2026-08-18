@@ -11,20 +11,24 @@
 //
 // Source checksums (sha256):
 //   rainbow.pal (palettes/rainbow.pal (legacy Amrvis default, read back unchanged)): 957068deb823caf2e16314503680fe24fe1e645292d88478de43f3eaf6a72dbc
-//   turbo.pal (matplotlib 3.6.3 colormap 'turbo'): 04548ceb51ee196936c5be5d2d47e5cc0c4a9ed2d7c8a55b79cd827922b75d10
-//   viridis.pal (matplotlib 3.6.3 colormap 'viridis'): 466b061f17b208a9ae1f3b62f88b6ce26852ecf2e20883d8eb11bdb9ed23ca8c
-//   plasma.pal (matplotlib 3.6.3 colormap 'plasma'): 2fe47a22d3c2ab8b7e1fffede2a3d09b00ef455eeb6f9c8fa4ce3910269c24d1
-//   parula.pal (parula control points from BIDS/colormap (MATLAB parula)): a6641b46c6eeca2927f63505adedc048e7017be11a2bf3602f1c3e8c21065102
-//   coolwarm.pal (matplotlib 3.6.3 colormap 'coolwarm'): b7fa790aadbe32f8771bd498029ceb64603d6e884c1e587ebe44520feb52b904
-//   blackbody.pal (blackbody radiation: Planck-locus chromaticity (Hellard 2012 fit), log-spaced 1000-6500 K): 9d9d26f8a053ebf09594fb1d8a66086c026a5fb4efb4c4827c963ebfc16800c8
+//   turbo.pal (matplotlib 3.11.1 colormap 'turbo'): a2dd60ee78060e20950ed2a9c3836da3d559c876f1edbc7b492a2686be724214
+//   viridis.pal (matplotlib 3.11.1 colormap 'viridis'): 36bef3b6f679a25d0c8af8ef06e9669d7ed76cb3e8cb07005a75b5c27d8195a8
+//   plasma.pal (matplotlib 3.11.1 colormap 'plasma'): 258dd156fe7b96af5eae9da495aef402babe658cb7265a60bb91db045a5a2f5f
+//   parula.pal (parula control points from BIDS/colormap (MATLAB parula)): f080c58c2bd1150ae6574b9639675092adc40129945dc3f60ecabead7092d7a4
+//   coolwarm.pal (matplotlib 3.11.1 colormap 'coolwarm'): 31abd414c2d7ed1aa3f045bb20ad1f23a2f6cbe3850deda0abb334f1a957cb1f
+//   blackbody.pal (blackbody radiation: Planck-locus chromaticity (Hellard 2012 fit), log-spaced 1000-6500 K): b88acea5b7847c1908dfef84be14af4eb32432513a4b6a4ccf064fa1a10519b7
 //
-// Each table holds the 256 RGB slots in planar palette order. Data values map
-// into [Palette::paletteStart, Palette::paletteEnd] = [3, 255]; the first three
-// slots are reserved (never addressed by data), matching the legacy layout.
+// Each table holds the 256 RGB slots in planar palette order, followed by
+// the palette's 256-byte alpha ramp (a percentage per slot, the legacy
+// volume-rendering transfer function): a builtin equals its .pal file. Data
+// values map into [Palette::paletteStart, Palette::paletteEnd] = [3, 255];
+// the first three slots are reserved (never addressed by data), matching the
+// legacy layout.
 
 #include <amrexplorer/render2d/Palette.hpp>
 
 #include <array>
+#include <cstdint>
 
 namespace amrvis {
 namespace {
@@ -84,7 +88,25 @@ const std::array<Palette::Rgb, Palette::slotCount> rainbowSlots = {{
     {149,  0,  0}, {145,  0,  0}, {140,  0,  0}, {136,  0,  0}, {131,  0,  0},
     {127,  0,  0}
 }};
-// matplotlib 3.6.3 colormap 'turbo'
+const std::array<std::uint8_t, Palette::slotCount> rainbowAlpha = {{
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   1,   1,
+      2,   2,   3,   3,   4,   4,   5,   5,   6,   6,   7,   7,   8,   8,   9,   9,
+     10,  10,  11,  11,  12,  12,  13,  13,  14,  14,  15,  15,  16,  16,  17,  17,
+     18,  18,  19,  19,  20,  20,  21,  21,  22,  22,  23,  25,  24,  25,  25,  26,
+     26,  27,  27,  28,  28,  29,  29,  30,  30,  31,  31,  32,  32,  33,  33,  34,
+     34,  35,  35,  36,  36,  37,  37,  38,  38,  39,  39,  40,  40,  41,  41,  42,
+     42,  43,  43,  44,  44,  45,  45,  46,  46,  47,  47,  48,  50,  50,  50,  51,
+     51,  51,  52,  52,  52,  53,  53,  54,  54,  54,  55,  55,  56,  56,  56,  57,
+     57,  57,  58,  58,  59,  59,  59,  60,  60,  60,  61,  61,  62,  62,  62,  63,
+     63,  63,  64,  64,  64,  65,  65,  66,  66,  66,  67,  67,  68,  68,  68,  69,
+     69,  69,  70,  70,  70,  71,  71,  72,  72,  72,  73,  73,  74,  74,  74,  75,
+     75,  75,  76,  76,  76,  77,  77,  78,  78,  78,  79,  79,  80,  80,  81,  81,
+     82,  82,  83,  84,  84,  85,  85,  86,  86,  87,  88,  88,  89,  89,  90,  90,
+     91,  92,  92,  93,  93,  94,  94,  95,  95,  96,  97,  97,  98,  98,  99, 100
+}};
+// matplotlib 3.11.1 colormap 'turbo'
 const std::array<Palette::Rgb, Palette::slotCount> turboSlots = {{
     { 48, 18, 59}, { 50, 21, 67}, { 51, 24, 74}, { 52, 27, 81}, { 53, 30, 88},
     { 54, 33, 95}, { 55, 36,102}, { 56, 39,109}, { 57, 42,115}, { 58, 45,121},
@@ -139,7 +161,25 @@ const std::array<Palette::Rgb, Palette::slotCount> turboSlots = {{
     {139,  9,  2}, {136,  8,  2}, {133,  7,  2}, {129,  6,  2}, {126,  5,  2},
     {122,  4,  3}
 }};
-// matplotlib 3.6.3 colormap 'viridis'
+const std::array<std::uint8_t, Palette::slotCount> turboAlpha = {{
+      0,   0,   0,   1,   1,   1,   2,   2,   3,   3,   3,   4,   4,   5,   5,   5,
+      6,   6,   7,   7,   7,   8,   8,   9,   9,   9,  10,  10,  10,  11,  11,  12,
+     12,  12,  13,  13,  14,  14,  14,  15,  15,  16,  16,  16,  17,  17,  18,  18,
+     18,  19,  19,  20,  20,  20,  21,  21,  21,  22,  22,  23,  23,  23,  24,  24,
+     25,  25,  25,  26,  26,  27,  27,  27,  28,  28,  29,  29,  29,  30,  30,  30,
+     31,  31,  32,  32,  32,  33,  33,  34,  34,  34,  35,  35,  36,  36,  36,  37,
+     37,  38,  38,  38,  39,  39,  40,  40,  40,  41,  41,  41,  42,  42,  43,  43,
+     43,  44,  44,  45,  45,  45,  46,  46,  47,  47,  47,  48,  48,  49,  49,  49,
+     50,  50,  50,  51,  51,  52,  52,  52,  53,  53,  54,  54,  54,  55,  55,  56,
+     56,  56,  57,  57,  58,  58,  58,  59,  59,  60,  60,  60,  61,  61,  61,  62,
+     62,  63,  63,  63,  64,  64,  65,  65,  65,  66,  66,  67,  67,  67,  68,  68,
+     69,  69,  69,  70,  70,  70,  71,  71,  72,  72,  72,  73,  73,  74,  74,  74,
+     75,  75,  76,  76,  76,  77,  77,  78,  78,  78,  79,  79,  80,  80,  80,  81,
+     81,  81,  82,  82,  83,  83,  83,  84,  84,  85,  85,  85,  86,  86,  87,  87,
+     87,  88,  88,  89,  89,  89,  90,  90,  90,  91,  91,  92,  92,  92,  93,  93,
+     94,  94,  94,  95,  95,  96,  96,  96,  97,  97,  98,  98,  98,  99,  99, 100
+}};
+// matplotlib 3.11.1 colormap 'viridis'
 const std::array<Palette::Rgb, Palette::slotCount> viridisSlots = {{
     { 68,  1, 84}, { 68,  2, 86}, { 69,  4, 87}, { 69,  5, 89}, { 70,  7, 90},
     { 70,  8, 92}, { 70, 10, 93}, { 70, 11, 94}, { 71, 13, 96}, { 71, 14, 97},
@@ -194,7 +234,25 @@ const std::array<Palette::Rgb, Palette::slotCount> viridisSlots = {{
     {241,229, 29}, {244,230, 30}, {246,230, 32}, {248,230, 33}, {251,231, 35},
     {253,231, 37}
 }};
-// matplotlib 3.6.3 colormap 'plasma'
+const std::array<std::uint8_t, Palette::slotCount> viridisAlpha = {{
+      0,   0,   0,   1,   1,   1,   2,   2,   3,   3,   3,   4,   4,   5,   5,   5,
+      6,   6,   7,   7,   7,   8,   8,   9,   9,   9,  10,  10,  10,  11,  11,  12,
+     12,  12,  13,  13,  14,  14,  14,  15,  15,  16,  16,  16,  17,  17,  18,  18,
+     18,  19,  19,  20,  20,  20,  21,  21,  21,  22,  22,  23,  23,  23,  24,  24,
+     25,  25,  25,  26,  26,  27,  27,  27,  28,  28,  29,  29,  29,  30,  30,  30,
+     31,  31,  32,  32,  32,  33,  33,  34,  34,  34,  35,  35,  36,  36,  36,  37,
+     37,  38,  38,  38,  39,  39,  40,  40,  40,  41,  41,  41,  42,  42,  43,  43,
+     43,  44,  44,  45,  45,  45,  46,  46,  47,  47,  47,  48,  48,  49,  49,  49,
+     50,  50,  50,  51,  51,  52,  52,  52,  53,  53,  54,  54,  54,  55,  55,  56,
+     56,  56,  57,  57,  58,  58,  58,  59,  59,  60,  60,  60,  61,  61,  61,  62,
+     62,  63,  63,  63,  64,  64,  65,  65,  65,  66,  66,  67,  67,  67,  68,  68,
+     69,  69,  69,  70,  70,  70,  71,  71,  72,  72,  72,  73,  73,  74,  74,  74,
+     75,  75,  76,  76,  76,  77,  77,  78,  78,  78,  79,  79,  80,  80,  80,  81,
+     81,  81,  82,  82,  83,  83,  83,  84,  84,  85,  85,  85,  86,  86,  87,  87,
+     87,  88,  88,  89,  89,  89,  90,  90,  90,  91,  91,  92,  92,  92,  93,  93,
+     94,  94,  94,  95,  95,  96,  96,  96,  97,  97,  98,  98,  98,  99,  99, 100
+}};
+// matplotlib 3.11.1 colormap 'plasma'
 const std::array<Palette::Rgb, Palette::slotCount> plasmaSlots = {{
     { 13,  8,135}, { 16,  7,136}, { 19,  7,137}, { 22,  7,138}, { 25,  6,140},
     { 27,  6,141}, { 29,  6,142}, { 32,  6,143}, { 34,  6,144}, { 36,  6,145},
@@ -248,6 +306,24 @@ const std::array<Palette::Rgb, Palette::slotCount> plasmaSlots = {{
     {246,232, 38}, {245,233, 38}, {245,235, 39}, {244,237, 39}, {243,238, 39},
     {243,240, 39}, {242,242, 39}, {241,244, 38}, {241,245, 37}, {240,247, 36},
     {240,249, 33}
+}};
+const std::array<std::uint8_t, Palette::slotCount> plasmaAlpha = {{
+      0,   0,   0,   1,   1,   1,   2,   2,   3,   3,   3,   4,   4,   5,   5,   5,
+      6,   6,   7,   7,   7,   8,   8,   9,   9,   9,  10,  10,  10,  11,  11,  12,
+     12,  12,  13,  13,  14,  14,  14,  15,  15,  16,  16,  16,  17,  17,  18,  18,
+     18,  19,  19,  20,  20,  20,  21,  21,  21,  22,  22,  23,  23,  23,  24,  24,
+     25,  25,  25,  26,  26,  27,  27,  27,  28,  28,  29,  29,  29,  30,  30,  30,
+     31,  31,  32,  32,  32,  33,  33,  34,  34,  34,  35,  35,  36,  36,  36,  37,
+     37,  38,  38,  38,  39,  39,  40,  40,  40,  41,  41,  41,  42,  42,  43,  43,
+     43,  44,  44,  45,  45,  45,  46,  46,  47,  47,  47,  48,  48,  49,  49,  49,
+     50,  50,  50,  51,  51,  52,  52,  52,  53,  53,  54,  54,  54,  55,  55,  56,
+     56,  56,  57,  57,  58,  58,  58,  59,  59,  60,  60,  60,  61,  61,  61,  62,
+     62,  63,  63,  63,  64,  64,  65,  65,  65,  66,  66,  67,  67,  67,  68,  68,
+     69,  69,  69,  70,  70,  70,  71,  71,  72,  72,  72,  73,  73,  74,  74,  74,
+     75,  75,  76,  76,  76,  77,  77,  78,  78,  78,  79,  79,  80,  80,  80,  81,
+     81,  81,  82,  82,  83,  83,  83,  84,  84,  85,  85,  85,  86,  86,  87,  87,
+     87,  88,  88,  89,  89,  89,  90,  90,  90,  91,  91,  92,  92,  92,  93,  93,
+     94,  94,  94,  95,  95,  96,  96,  96,  97,  97,  98,  98,  98,  99,  99, 100
 }};
 // parula control points from BIDS/colormap (MATLAB parula)
 const std::array<Palette::Rgb, Palette::slotCount> parulaSlots = {{
@@ -304,7 +380,25 @@ const std::array<Palette::Rgb, Palette::slotCount> parulaSlots = {{
     {246,241, 20}, {246,243, 19}, {247,245, 18}, {248,247, 16}, {248,249, 15},
     {249,251, 14}
 }};
-// matplotlib 3.6.3 colormap 'coolwarm'
+const std::array<std::uint8_t, Palette::slotCount> parulaAlpha = {{
+      0,   0,   0,   1,   1,   1,   2,   2,   3,   3,   3,   4,   4,   5,   5,   5,
+      6,   6,   7,   7,   7,   8,   8,   9,   9,   9,  10,  10,  10,  11,  11,  12,
+     12,  12,  13,  13,  14,  14,  14,  15,  15,  16,  16,  16,  17,  17,  18,  18,
+     18,  19,  19,  20,  20,  20,  21,  21,  21,  22,  22,  23,  23,  23,  24,  24,
+     25,  25,  25,  26,  26,  27,  27,  27,  28,  28,  29,  29,  29,  30,  30,  30,
+     31,  31,  32,  32,  32,  33,  33,  34,  34,  34,  35,  35,  36,  36,  36,  37,
+     37,  38,  38,  38,  39,  39,  40,  40,  40,  41,  41,  41,  42,  42,  43,  43,
+     43,  44,  44,  45,  45,  45,  46,  46,  47,  47,  47,  48,  48,  49,  49,  49,
+     50,  50,  50,  51,  51,  52,  52,  52,  53,  53,  54,  54,  54,  55,  55,  56,
+     56,  56,  57,  57,  58,  58,  58,  59,  59,  60,  60,  60,  61,  61,  61,  62,
+     62,  63,  63,  63,  64,  64,  65,  65,  65,  66,  66,  67,  67,  67,  68,  68,
+     69,  69,  69,  70,  70,  70,  71,  71,  72,  72,  72,  73,  73,  74,  74,  74,
+     75,  75,  76,  76,  76,  77,  77,  78,  78,  78,  79,  79,  80,  80,  80,  81,
+     81,  81,  82,  82,  83,  83,  83,  84,  84,  85,  85,  85,  86,  86,  87,  87,
+     87,  88,  88,  89,  89,  89,  90,  90,  90,  91,  91,  92,  92,  92,  93,  93,
+     94,  94,  94,  95,  95,  96,  96,  96,  97,  97,  98,  98,  98,  99,  99, 100
+}};
+// matplotlib 3.11.1 colormap 'coolwarm'
 const std::array<Palette::Rgb, Palette::slotCount> coolwarmSlots = {{
     { 59, 76,192}, { 60, 78,194}, { 61, 80,195}, { 62, 81,197}, { 63, 83,198},
     { 64, 85,200}, { 66, 87,201}, { 67, 88,203}, { 68, 90,204}, { 69, 92,206},
@@ -358,6 +452,24 @@ const std::array<Palette::Rgb, Palette::slotCount> coolwarmSlots = {{
     {195, 46, 49}, {193, 43, 48}, {192, 40, 47}, {190, 36, 46}, {189, 31, 45},
     {187, 27, 44}, {186, 22, 43}, {184, 18, 42}, {183, 13, 40}, {181,  9, 39},
     {180,  4, 38}
+}};
+const std::array<std::uint8_t, Palette::slotCount> coolwarmAlpha = {{
+      0,   0,   0,   1,   1,   1,   2,   2,   3,   3,   3,   4,   4,   5,   5,   5,
+      6,   6,   7,   7,   7,   8,   8,   9,   9,   9,  10,  10,  10,  11,  11,  12,
+     12,  12,  13,  13,  14,  14,  14,  15,  15,  16,  16,  16,  17,  17,  18,  18,
+     18,  19,  19,  20,  20,  20,  21,  21,  21,  22,  22,  23,  23,  23,  24,  24,
+     25,  25,  25,  26,  26,  27,  27,  27,  28,  28,  29,  29,  29,  30,  30,  30,
+     31,  31,  32,  32,  32,  33,  33,  34,  34,  34,  35,  35,  36,  36,  36,  37,
+     37,  38,  38,  38,  39,  39,  40,  40,  40,  41,  41,  41,  42,  42,  43,  43,
+     43,  44,  44,  45,  45,  45,  46,  46,  47,  47,  47,  48,  48,  49,  49,  49,
+     50,  50,  50,  51,  51,  52,  52,  52,  53,  53,  54,  54,  54,  55,  55,  56,
+     56,  56,  57,  57,  58,  58,  58,  59,  59,  60,  60,  60,  61,  61,  61,  62,
+     62,  63,  63,  63,  64,  64,  65,  65,  65,  66,  66,  67,  67,  67,  68,  68,
+     69,  69,  69,  70,  70,  70,  71,  71,  72,  72,  72,  73,  73,  74,  74,  74,
+     75,  75,  76,  76,  76,  77,  77,  78,  78,  78,  79,  79,  80,  80,  80,  81,
+     81,  81,  82,  82,  83,  83,  83,  84,  84,  85,  85,  85,  86,  86,  87,  87,
+     87,  88,  88,  89,  89,  89,  90,  90,  90,  91,  91,  92,  92,  92,  93,  93,
+     94,  94,  94,  95,  95,  96,  96,  96,  97,  97,  98,  98,  98,  99,  99, 100
 }};
 // blackbody radiation: Planck-locus chromaticity (Hellard 2012 fit), log-spaced 1000-6500 K
 const std::array<Palette::Rgb, Palette::slotCount> blackbodySlots = {{
@@ -414,18 +526,36 @@ const std::array<Palette::Rgb, Palette::slotCount> blackbodySlots = {{
     {255,250,244}, {255,251,245}, {255,252,246}, {255,253,248}, {255,253,249},
     {255,254,250}
 }};
+const std::array<std::uint8_t, Palette::slotCount> blackbodyAlpha = {{
+      0,   0,   0,   1,   1,   1,   2,   2,   3,   3,   3,   4,   4,   5,   5,   5,
+      6,   6,   7,   7,   7,   8,   8,   9,   9,   9,  10,  10,  10,  11,  11,  12,
+     12,  12,  13,  13,  14,  14,  14,  15,  15,  16,  16,  16,  17,  17,  18,  18,
+     18,  19,  19,  20,  20,  20,  21,  21,  21,  22,  22,  23,  23,  23,  24,  24,
+     25,  25,  25,  26,  26,  27,  27,  27,  28,  28,  29,  29,  29,  30,  30,  30,
+     31,  31,  32,  32,  32,  33,  33,  34,  34,  34,  35,  35,  36,  36,  36,  37,
+     37,  38,  38,  38,  39,  39,  40,  40,  40,  41,  41,  41,  42,  42,  43,  43,
+     43,  44,  44,  45,  45,  45,  46,  46,  47,  47,  47,  48,  48,  49,  49,  49,
+     50,  50,  50,  51,  51,  52,  52,  52,  53,  53,  54,  54,  54,  55,  55,  56,
+     56,  56,  57,  57,  58,  58,  58,  59,  59,  60,  60,  60,  61,  61,  61,  62,
+     62,  63,  63,  63,  64,  64,  65,  65,  65,  66,  66,  67,  67,  67,  68,  68,
+     69,  69,  69,  70,  70,  70,  71,  71,  72,  72,  72,  73,  73,  74,  74,  74,
+     75,  75,  76,  76,  76,  77,  77,  78,  78,  78,  79,  79,  80,  80,  80,  81,
+     81,  81,  82,  82,  83,  83,  83,  84,  84,  85,  85,  85,  86,  86,  87,  87,
+     87,  88,  88,  89,  89,  89,  90,  90,  90,  91,  91,  92,  92,  92,  93,  93,
+     94,  94,  94,  95,  95,  96,  96,  96,  97,  97,  98,  98,  98,  99,  99, 100
+}};
 
 } // namespace
 
 const Palette& builtinPalette(BuiltinPalette palette)
 {
-    static const Palette rainbow(rainbowSlots);
-    static const Palette turbo(turboSlots);
-    static const Palette viridis(viridisSlots);
-    static const Palette plasma(plasmaSlots);
-    static const Palette parula(parulaSlots);
-    static const Palette coolwarm(coolwarmSlots);
-    static const Palette blackbody(blackbodySlots);
+    static const Palette rainbow(rainbowSlots, rainbowAlpha);
+    static const Palette turbo(turboSlots, turboAlpha);
+    static const Palette viridis(viridisSlots, viridisAlpha);
+    static const Palette plasma(plasmaSlots, plasmaAlpha);
+    static const Palette parula(parulaSlots, parulaAlpha);
+    static const Palette coolwarm(coolwarmSlots, coolwarmAlpha);
+    static const Palette blackbody(blackbodySlots, blackbodyAlpha);
     switch (palette) {
     case BuiltinPalette::Rainbow: return rainbow;
     case BuiltinPalette::Turbo: return turbo;

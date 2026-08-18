@@ -3,14 +3,51 @@
 #include <algorithm>
 #include <cstddef>
 #include <fstream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
 namespace amrvis {
 
-Palette::Palette(const std::array<Rgb, slotCount>& slots)
+Palette::Palette(const std::array<Rgb, slotCount>& slots,
+    const std::optional<std::array<std::uint8_t, slotCount>>& alpha)
     : slots_(slots)
 {
+    if (!alpha) {
+        return;
+    }
+    // The plane is kept as stored whatever it means (equality and a reload's
+    // edit detection see every byte); over the data slots only (see the
+    // header) the largest byte decides percent versus full-scale, and a
+    // plane whose data slots are all zero is no ramp at all.
+    alpha_ = *alpha;
+    const auto first = alpha->begin() + paletteStart;
+    const auto last = alpha->begin() + paletteEnd + 1;
+    const auto largest = *std::max_element(first, last);
+    if (largest == 0) {
+        return;
+    }
+    hasAlphaRamp_ = true;
+    alphaScale_ = largest > 100 ? 255.0 : 100.0;
+}
+
+bool Palette::hasAlphaRamp() const noexcept
+{
+    return hasAlphaRamp_;
+}
+
+double Palette::opacity(int index) const noexcept
+{
+    const auto clamped = std::clamp(index, 0, slotCount - 1);
+    if (!hasAlphaRamp_) {
+        // Amrvis's AV_PAL_NON_ALPHA transfer function.
+        return static_cast<double>(clamped) / static_cast<double>(slotCount - 1);
+    }
+    // Amrvis's AV_PAL_ALPHA transfer function: the byte is a percentage --
+    // or a full-scale byte, when the ramp cannot be a legacy one (see the
+    // header).
+    return std::min(1.0,
+        static_cast<double>(alpha_[static_cast<std::size_t>(clamped)]) / alphaScale_);
 }
 
 const Palette::Rgb& Palette::slot(int index) const noexcept
@@ -97,7 +134,14 @@ Palette Palette::load(const std::filesystem::path& path)
         slots[index].green = static_cast<std::uint8_t>(buffer[channelBytes + index]);
         slots[index].blue = static_cast<std::uint8_t>(buffer[2 * channelBytes + index]);
     }
-    return Palette(slots);
+    if (byteCount == 3 * channelBytes) {
+        return Palette(slots);
+    }
+    std::array<std::uint8_t, slotCount> alpha{};
+    for (std::size_t index = 0; index < channelBytes; ++index) {
+        alpha[index] = static_cast<std::uint8_t>(buffer[3 * channelBytes + index]);
+    }
+    return Palette(slots, alpha);
 }
 
 } // namespace amrvis

@@ -25,12 +25,8 @@ void require(bool condition, const char* message)
 
 bool samePalette(const amrvis::Palette& left, const amrvis::Palette& right)
 {
-    for (int slot = 0; slot < amrvis::Palette::slotCount; ++slot) {
-        if (left.slotArgb(slot) != right.slotArgb(slot)) {
-            return false;
-        }
-    }
-    return true;
+    // Slots and alpha ramp alike: operator== compares both planes.
+    return left == right;
 }
 
 // The checked action of the menu group, or -1 (none checked: a file palette).

@@ -39,8 +39,9 @@ int main(int argc, char** argv)
     const std::filesystem::path rainbowPath(argv[1]);
 
     const auto fileBytes = readBytes(rainbowPath);
-    require(fileBytes.size() == 768 || fileBytes.size() == 1024,
-        "rainbow.pal is not a legacy sequential palette");
+    // The 1024-byte legacy file: the alpha checks below index its ramp.
+    require(fileBytes.size() == 1024,
+        "rainbow.pal is not the 1024-byte legacy sequential palette");
 
     // The builtin rainbow reproduces the legacy palette file bytes exactly.
     const auto& rainbow = amrvis::builtinPalette(amrvis::BuiltinPalette::Rainbow);
@@ -104,6 +105,140 @@ int main(int argc, char** argv)
     }
     require(roundTrip768, "Palette::load did not round-trip a 768-byte palette");
     std::filesystem::remove(palette768Path);
+
+    // The fourth channel is the legacy alpha ramp, kept for volume rendering
+    // with Amrvis's semantics: a percentage per slot (rainbow.pal carries the
+    // legacy 0..100 ramp), clamped to 1. The builtin rainbow carries the same
+    // ramp, so it equals the file outright. A 768-byte palette has none and
+    // reads back Amrvis's default transfer function, the linear ramp.
+    // Reversal leaves the ramp alone -- opacity follows the value, not the
+    // color -- and equality sees it.
+    require(loaded.hasAlphaRamp() && !loaded768.hasAlphaRamp()
+            && rainbow.hasAlphaRamp() && rainbow == loaded,
+        "the alpha ramp's presence was not read from the file size, or the "
+        "builtin rainbow lacks the file's ramp");
+    require(loaded.opacity(0) == 0.0 && loaded.opacity(255) == 1.0,
+        "the legacy alpha ramp does not span transparent to opaque");
+    // The legacy ramp is hand-made (one dip near slot 92), so pin bounds and
+    // the percentage reading rather than monotonicity: byte 128 of the file's
+    // ramp is the opacity of slot 128.
+    bool bounded = true;
+    for (int index = 0; index < amrvis::Palette::slotCount; ++index) {
+        bounded = bounded && loaded.opacity(index) >= 0.0
+            && loaded.opacity(index) <= 1.0;
+    }
+    require(bounded, "the legacy alpha ramp left [0, 1]");
+    require(loaded.opacity(128)
+            == static_cast<double>(static_cast<std::uint8_t>(fileBytes[768 + 128]))
+                / 100.0,
+        "the alpha byte was not read as a percentage");
+    require(loaded.opacity(-1) == loaded.opacity(0)
+            && loaded.opacity(1000) == loaded.opacity(255),
+        "opacity did not clamp the slot index");
+    require(loaded768.opacity(0) == 0.0 && loaded768.opacity(255) == 1.0
+            && loaded768.opacity(51) == 51.0 / 255.0
+            && amrvis::Palette(std::array<amrvis::Palette::Rgb,
+                    amrvis::Palette::slotCount>{}).opacity(51) == 51.0 / 255.0,
+        "a palette without a ramp did not use the linear default");
+    // Every builtin equals its shipped .pal file, colours and ramp: the
+    // generated ones carry the legacy default 0..100 ramp.
+    for (int index = 0; index < static_cast<int>(amrvis::BuiltinPalette::Count); ++index) {
+        const auto palette = static_cast<amrvis::BuiltinPalette>(index);
+        const auto& builtin = amrvis::builtinPalette(palette);
+        const std::string name(amrvis::builtinPaletteName(palette));
+        const auto file = rainbowPath.parent_path() / (name + ".pal");
+        require(std::filesystem::exists(file),
+            ("the shipped .pal file is missing for " + name).c_str());
+        require(builtin == amrvis::Palette::load(file),
+            ("the builtin does not equal its shipped .pal file: " + name).c_str());
+        require(builtin.hasAlphaRamp() && builtin.opacity(0) == 0.0
+                && builtin.opacity(255) == 1.0,
+            ("the alpha ramp does not span transparent to opaque: " + name).c_str());
+    }
+    {
+        auto slots = std::array<amrvis::Palette::Rgb, amrvis::Palette::slotCount>{};
+        auto alpha = std::array<std::uint8_t, amrvis::Palette::slotCount>{};
+        // A ramp with a byte above 100 cannot be a legacy percent ramp: it is
+        // read full-scale, so a 0..255 linear ramp reads as one, and the flat
+        // 255 older builds wrote reads as opaque.
+        for (int index = 0; index < amrvis::Palette::slotCount; ++index) {
+            alpha[static_cast<std::size_t>(index)] = static_cast<std::uint8_t>(index);
+        }
+        const amrvis::Palette fullScale(slots, alpha);
+        require(fullScale.hasAlphaRamp() && fullScale.opacity(0) == 0.0
+                && fullScale.opacity(255) == 1.0
+                && fullScale.opacity(51) == 51.0 / 255.0,
+            "a 0..255 ramp was not read full-scale");
+        alpha.fill(255);
+        const amrvis::Palette flat(slots, alpha);
+        require(flat.opacity(7) == 1.0 && flat.opacity(255) == 1.0,
+            "a flat 255 ramp did not read as fully opaque");
+        // Equality sees the ramp's contents: the same colours with one alpha
+        // byte changed differ, and the same alpha with one colour changed
+        // differ; identical inputs are equal.
+        auto alphaVariant = alpha;
+        alphaVariant[100] = 7;
+        auto slotsVariant = slots;
+        slotsVariant[100].green ^= 1U;
+        require(amrvis::Palette(slots, alpha) == flat
+                && !(amrvis::Palette(slots, alphaVariant) == flat)
+                && !(amrvis::Palette(slotsVariant, alpha) == flat)
+                && !(flat == amrvis::Palette(slots)),
+            "Palette equality does not follow the slots and the alpha ramp");
+        // A reserved slot's byte does not decide the scale: a percent ramp
+        // (whose largest data byte is exactly 100, so this also pins the
+        // percent side of the threshold) with an outlier at slot 0 still
+        // reads as percent; the outlier is kept as stored -- an unsaturated
+        // 60 reads back as 60 %, so a dropped or clamped byte would show --
+        // and one at 255 clamps to 1.
+        auto percent = std::array<std::uint8_t, amrvis::Palette::slotCount>{};
+        for (int index = 0; index < amrvis::Palette::slotCount; ++index) {
+            percent[static_cast<std::size_t>(index)]
+                = static_cast<std::uint8_t>((100 * index) / 255);
+        }
+        percent[0] = 60;
+        percent[1] = 255;
+        require(amrvis::Palette(slots, percent).opacity(255) == 1.0
+                && amrvis::Palette(slots, percent).opacity(128)
+                    == static_cast<double>((100 * 128) / 255) / 100.0
+                && amrvis::Palette(slots, percent).opacity(0) == 0.6
+                && amrvis::Palette(slots, percent).opacity(1) == 1.0,
+            "a reserved-slot byte changed the ramp's scale, was dropped, or "
+            "was not clamped");
+        // The sniff's edges, pinned apart. The threshold: a single data byte
+        // of 101 (at slot 128, with the last data slot at 100) switches the
+        // whole ramp to full-scale, so slot 255 reads 100 / 255. The range
+        // end: a byte of 200 in the last data slot alone switches it too --
+        // slot 128 reads 50 / 255 -- so the last data slot is inspected.
+        auto edge = percent;
+        edge[0] = 0;
+        edge[1] = 0;
+        edge[128] = 101;
+        require(amrvis::Palette(slots, edge).opacity(255) == 100.0 / 255.0,
+            "a data byte of 101 did not switch the ramp to full-scale");
+        edge[128] = 50;
+        edge[255] = 200;
+        require(amrvis::Palette(slots, edge).opacity(128) == 50.0 / 255.0,
+            "the last data slot was not inspected for the scale");
+        // A plane whose data slots are all zero is no ramp: the linear
+        // default applies, whatever the reserved slots hold -- which are
+        // still kept, so the palette is not equal to one without a plane.
+        auto zero = std::array<std::uint8_t, amrvis::Palette::slotCount>{};
+        zero[1] = 100;
+        auto zeroVariant = zero;
+        zeroVariant[2] = 7;
+        const amrvis::Palette zeroed(slots, zero);
+        require(!zeroed.hasAlphaRamp() && zeroed.opacity(255) == 1.0
+                && zeroed.opacity(1) == 1.0 / 255.0
+                && !(zeroed == amrvis::Palette(slots))
+                && !(zeroed == amrvis::Palette(slots, zeroVariant)),
+            "an all-zero data plane was taken as an authored ramp, or its "
+            "reserved bytes were dropped");
+    }
+    require(loaded.reversed().opacity(3) == loaded.opacity(3)
+            && loaded.reversed().opacity(255) == loaded.opacity(255)
+            && loaded.reversed().hasAlphaRamp(),
+        "reversed() disturbed the alpha ramp");
 
     // load() rejects a file larger than 1024 bytes (the bounded read caps it).
     const auto oversizedPath = std::filesystem::temp_directory_path()

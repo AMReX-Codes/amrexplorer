@@ -54,9 +54,10 @@ public:
     // fourth plane (the builtins carry their .pal file's), unless its data
     // slots are all zero -- a plane that would make every value invisible
     // is treated as absent rather than authored. Only the data slots
-    // [paletteStart, paletteEnd] count, here and below; the reserved slots'
-    // bytes are kept as stored (equality sees them) but never decide
-    // anything, as data never addresses them.
+    // [paletteStart, paletteEnd] decide, here and for the scale below; the
+    // reserved slots' bytes are kept as stored (equality sees them, and
+    // opacity() of a reserved index reads them) but never decide the scale,
+    // as data never addresses them.
     [[nodiscard]] bool hasAlphaRamp() const noexcept;
     // The slot's opacity in [0, 1] for volume rendering. A ramp is read with
     // the legacy Amrvis semantics -- each byte a percentage -- unless a data

@@ -225,11 +225,13 @@ int main(int argc, char** argv)
         // still kept, so the palette is not equal to one without a plane.
         auto zero = std::array<std::uint8_t, amrvis::Palette::slotCount>{};
         zero[1] = 100;
+        auto zeroVariant = zero;
+        zeroVariant[2] = 7;
         const amrvis::Palette zeroed(slots, zero);
         require(!zeroed.hasAlphaRamp() && zeroed.opacity(255) == 1.0
                 && zeroed.opacity(1) == 1.0 / 255.0
                 && !(zeroed == amrvis::Palette(slots))
-                && zeroed == amrvis::Palette(slots, zero),
+                && !(zeroed == amrvis::Palette(slots, zeroVariant)),
             "an all-zero data plane was taken as an authored ramp, or its "
             "reserved bytes were dropped");
     }

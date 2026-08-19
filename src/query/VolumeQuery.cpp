@@ -19,14 +19,34 @@ using detail::valueOffset;
 
 constexpr auto quietNaN = std::numeric_limits<float>::quiet_NaN();
 
+// Saturating: a level large enough to overflow the product would otherwise
+// wrap past the budget test in volumeGridDims and pass as if it fitted.
 std::uint64_t product(const std::array<int, 3>& dims)
 {
+    constexpr auto limit = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t result = 1;
     for (const auto extent : dims) {
-        result *= static_cast<std::uint64_t>(extent);
+        const auto value = static_cast<std::uint64_t>(extent);
+        if (value != 0 && result > limit / value) {
+            return limit;
+        }
+        result *= value;
     }
     return result;
 }
+
+// The same product in double: no overflow, so the scaling below shrinks by
+// the true ratio even when the integer product has saturated.
+double realProduct(const std::array<int, 3>& dims)
+{
+    return static_cast<double>(dims[0]) * static_cast<double>(dims[1])
+        * static_cast<double>(dims[2]);
+}
+
+// The cell index a voxel centre falls in, when the centre lands outside the
+// block being painted. Out of band rather than -1: a level's index domain may
+// start below zero, and those cells are as paintable as any other.
+constexpr int noCell = std::numeric_limits<int>::min();
 
 // The index box `region` covers at `level`: the cells whose sample positions
 // fall inside it, the upper edge nudged inward so a region that ends on a
@@ -54,8 +74,9 @@ std::array<int, 3> volumeGridDims(const DatasetMetadata& metadata,
     }
     const auto& level = metadata.levels[static_cast<std::size_t>(
         std::clamp(maximumLevel, 0, metadata.finestLevel))];
-    // Native cell counts, kept far below any product overflow: a single axis
-    // never needs more voxels than the whole budget can hold.
+    // Native cell counts, capped per axis by the whole budget: a thin region
+    // may legitimately spend all of it on one axis. The product of three such
+    // axes can overflow, which is why product() saturates.
     const auto ceiling = static_cast<double>(
         std::max<std::uint64_t>(maximumVoxels, 1));
     std::array<int, 3> dims{};
@@ -68,7 +89,7 @@ std::array<int, 3> volumeGridDims(const DatasetMetadata& metadata,
     const auto budget = std::max<std::uint64_t>(maximumVoxels, 1);
     if (product(dims) > budget) {
         const auto scale = std::cbrt(static_cast<double>(budget)
-            / static_cast<double>(product(dims)));
+            / realProduct(dims));
         for (auto& extent : dims) {
             // The nudge keeps an exact ratio (64 -> 8 is exactly 1/2 per
             // axis) from flooring to the size below when cbrt lands a hair
@@ -182,8 +203,15 @@ VolumeQueryResult VolumeQuery::execute(
 
             // The voxels whose centres fall inside the block's cells: per
             // axis, the index range of centres within the block's physical
-            // bounds, and each centre's cell index (or -1 when the centre
-            // lands in a nodal box's half-cell halo outside the valid box).
+            // bounds, and each centre's cell index (or noCell when the centre
+            // lands outside the valid box).
+            //
+            // The range is inverted from the centre formula in floating point,
+            // so it can land a voxel off either end; it is widened by one per
+            // side and sampleIndex below decides, since that -- not the
+            // interval -- is what the composition is defined by. Too wide only
+            // costs a rejected candidate, while too narrow drops a voxel the
+            // block covers and no other block will paint.
             const auto bounds = sampleBounds(level, block.box, 3);
             std::array<int, 3> first{};
             std::array<int, 3> last{};
@@ -196,10 +224,10 @@ VolumeQueryResult VolumeQuery::execute(
                         -std::numeric_limits<double>::infinity())
                     - request.region.lower[axis]) / pitch[axis] - 0.5;
                 first[axis] = static_cast<int>(
-                    std::clamp(std::ceil(lower), 0.0,
+                    std::clamp(std::ceil(lower) - 1.0, 0.0,
                         static_cast<double>(dims[axis])));
                 last[axis] = static_cast<int>(
-                    std::clamp(std::floor(upper), -1.0,
+                    std::clamp(std::floor(upper) + 1.0, -1.0,
                         static_cast<double>(dims[axis] - 1)));
                 if (last[axis] < first[axis]) {
                     empty = true;
@@ -212,7 +240,7 @@ VolumeQueryResult VolumeQuery::execute(
                         voxelCentre(axis, voxel));
                     indices[static_cast<std::size_t>(voxel - first[axis])]
                         = cell >= block.box.lower[axis] && cell <= block.box.upper[axis]
-                        ? cell : -1;
+                        ? cell : noCell;
                 }
             }
             if (empty) {
@@ -225,19 +253,19 @@ VolumeQueryResult VolumeQuery::execute(
                     throw ReadCancelled();
                 }
                 const auto cellK = cellIndex[2][static_cast<std::size_t>(k - first[2])];
-                if (cellK < 0) {
+                if (cellK == noCell) {
                     continue;
                 }
                 for (int j = first[1]; j <= last[1]; ++j) {
                     const auto cellJ = cellIndex[1][static_cast<std::size_t>(j - first[1])];
-                    if (cellJ < 0) {
+                    if (cellJ == noCell) {
                         continue;
                     }
                     auto* row = grid.values.data() + slabStride * static_cast<std::size_t>(k)
                         + rowStride * static_cast<std::size_t>(j);
                     for (int i = first[0]; i <= last[0]; ++i) {
                         const auto cellI = cellIndex[0][static_cast<std::size_t>(i - first[0])];
-                        if (cellI < 0) {
+                        if (cellI == noCell) {
                             continue;
                         }
                         Int3 cell;
@@ -245,7 +273,12 @@ VolumeQueryResult VolumeQuery::execute(
                         cell[1] = cellJ;
                         cell[2] = cellK;
                         const auto value = fab.values[valueOffset(fab.box, cell, 3)];
+                        // Range-checked before the cast, not after: converting
+                        // a double beyond float's range is undefined, and the
+                        // grid promises NaN for every value it cannot hold.
                         row[static_cast<std::size_t>(i)] = std::isfinite(value)
+                                && std::fabs(value) <= static_cast<double>(
+                                    std::numeric_limits<float>::max())
                             ? static_cast<float>(value) : quietNaN;
                     }
                 }

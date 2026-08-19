@@ -125,6 +125,79 @@ std::filesystem::path writeTwoLevelFixture(const std::filesystem::path& root)
     return root;
 }
 
+// Two blocks over 16 x 1 x 1 cells of dx = 0.1, split at i = 12: block 0
+// (x < 1.2) is 1.0, block 1 is 2.0. The seam is the point of the fixture --
+// 0.1 and 1.2 are not exact in binary, so a voxel centre that lands on the
+// boundary exposes any rounding the block window does.
+std::filesystem::path writeSeamFixture(const std::filesystem::path& root)
+{
+    std::filesystem::create_directories(root / "Level_0");
+    writeText(root / "Header",
+        "HyperCLaw-V1.1\n"
+        "1\nq\n"
+        "3\n0.0\n0\n"
+        "0.0 0.0 0.0\n1.6 0.1 0.1\n\n"
+        "((0,0,0) (15,0,0) (0,0,0))\n"
+        "0\n"
+        "0.1 0.1 0.1\n"
+        "0\n0\n"
+        "0 2 0.0\n0\n"
+        "0.0 1.2\n0.0 0.1\n0.0 0.1\n"
+        "1.2 1.6\n0.0 0.1\n0.0 0.1\n"
+        "Level_0/Cell\n");
+    writeText(root / "Level_0" / "Cell_H",
+        "1\n1\n1\n0\n"
+        "(2 0\n((0,0,0) (11,0,0) (0,0,0))\n((12,0,0) (15,0,0) (0,0,0))\n)\n"
+        "2\nFabOnDisk: Cell_D_00000 0\nFabOnDisk: Cell_D_00001 0\n\n"
+        "2,1\n1.0,\n2.0,\n\n2,1\n1.0,\n2.0,\n\n");
+    const std::vector<double> lower(12, 1.0);
+    const std::vector<double> upper(4, 2.0);
+    writeFab(root / "Level_0" / "Cell_D_00000", "((0,0,0) (11,0,0) (0,0,0))",
+        lower);
+    writeFab(root / "Level_0" / "Cell_D_00001", "((12,0,0) (15,0,0) (0,0,0))",
+        upper);
+    return root;
+}
+
+// 4^3 cells of dx = 0.25 whose index domain starts at -2, over [-0.5,0.5]^3.
+// Cell (i,j,k) holds i + 10*j + 100*k, so a voxel that silently fell back to
+// another cell is visible in the value. One cell carries 1e300, which no
+// float can hold.
+std::filesystem::path writeNegativeIndexFixture(const std::filesystem::path& root)
+{
+    std::filesystem::create_directories(root / "Level_0");
+    writeText(root / "Header",
+        "HyperCLaw-V1.1\n"
+        "1\nq\n"
+        "3\n0.0\n0\n"
+        "-0.5 -0.5 -0.5\n0.5 0.5 0.5\n\n"
+        "((-2,-2,-2) (1,1,1) (0,0,0))\n"
+        "0\n"
+        "0.25 0.25 0.25\n"
+        "0\n0\n"
+        "0 1 0.0\n0\n"
+        "-0.5 0.5\n-0.5 0.5\n-0.5 0.5\n"
+        "Level_0/Cell\n");
+    writeText(root / "Level_0" / "Cell_H",
+        "1\n1\n1\n0\n"
+        "(1 0\n((-2,-2,-2) (1,1,1) (0,0,0))\n)\n"
+        "1\nFabOnDisk: Cell_D_00000 0\n\n"
+        "1,1\n-222.0,\n\n1,1\n1e300,\n\n");
+    std::vector<double> values;
+    for (int k = -2; k <= 1; ++k) {
+        for (int j = -2; j <= 1; ++j) {
+            for (int i = -2; i <= 1; ++i) {
+                values.push_back(i == 1 && j == 1 && k == 1
+                    ? 1.0e300
+                    : static_cast<double>(i + 10 * j + 100 * k));
+            }
+        }
+    }
+    writeFab(root / "Level_0" / "Cell_D_00000", "((-2,-2,-2) (1,1,1) (0,0,0))",
+        values);
+    return root;
+}
+
 std::size_t voxel(const amrvis::VolumeGrid& grid, int i, int j, int k)
 {
     return static_cast<std::size_t>(i)
@@ -369,6 +442,109 @@ int main()
                 }
             }
         }
+    }
+
+    // --- a voxel centre on a block seam ----------------------------------
+    {
+        const auto seamRoot = writeSeamFixture(scratch / "seam");
+        amrvis::PlotfileDataset dataset(
+            seamRoot, amrvis::DatasetId{5}, 1024 * 1024);
+        amrvis::VolumeQuery query(dataset);
+        amrvis::VolumeSampleRequest request;
+        request.dataset.value = 5;
+        request.field.value = 0;
+        request.maximumLevel = 0;
+        request.region = box(0.0, 0.0, 0.0, 1.6, 0.1, 0.1);
+        request.maximumVoxels = 2;
+
+        // Voxel 1's centre is 1.5 * (1.6/2), which rounds to a hair above 1.2
+        // and so belongs to cell 12 -- the upper block's first cell. Inverting
+        // the centre formula puts it a hair outside that block's window, so a
+        // window that trusts its own arithmetic paints neither block here and
+        // leaves a hole in data that has none.
+        const auto grid = query.execute(request).grid;
+        require(grid.dims == (std::array<int, 3>{2, 1, 1}),
+            "the seam grid has the wrong shape");
+        require(grid.coveredVoxels == 2,
+            "a voxel on the block seam was left uncovered");
+        require(grid.values[0] == 1.0F && grid.values[1] == 2.0F,
+            "a seam voxel read the wrong block");
+    }
+
+    // --- a level whose index domain starts below zero ---------------------
+    {
+        const auto negativeRoot = writeNegativeIndexFixture(scratch / "negative");
+        amrvis::PlotfileDataset dataset(
+            negativeRoot, amrvis::DatasetId{6}, 1024 * 1024);
+        amrvis::VolumeQuery query(dataset);
+        amrvis::VolumeSampleRequest request;
+        request.dataset.value = 6;
+        request.field.value = 0;
+        request.maximumLevel = 0;
+        request.region = box(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5);
+        request.maximumVoxels = 64;
+
+        // Negative cell indices are ordinary indices: all 64 voxels are
+        // covered, and each reads the cell its centre falls in rather than
+        // being mistaken for a miss.
+        const auto grid = query.execute(request).grid;
+        require(grid.dims == (std::array<int, 3>{4, 4, 4}),
+            "the negative-index grid has the wrong shape");
+        require(grid.coveredVoxels == 63,
+            "the negative-index grid covered the wrong number of voxels");
+        for (int k = 0; k < 4; ++k) {
+            for (int j = 0; j < 4; ++j) {
+                for (int i = 0; i < 4; ++i) {
+                    if (i == 3 && j == 3 && k == 3) {
+                        continue;
+                    }
+                    const auto expected = static_cast<float>(
+                        (i - 2) + 10 * (j - 2) + 100 * (k - 2));
+                    require(grid.values[voxel(grid, i, j, k)] == expected,
+                        "a voxel over a negative index read the wrong cell");
+                }
+            }
+        }
+
+        // 1e300 is finite as a double but has no float to round to, and the
+        // grid promises NaN for anything it cannot hold.
+        require(std::isnan(grid.values[voxel(grid, 3, 3, 3)]),
+            "a value outside float's range was not reported as uncovered");
+    }
+
+    // --- the budget holds for a level too large to multiply out -----------
+    {
+        // Each axis may spend the whole budget -- a thin region legitimately
+        // does -- so three of them can overflow the product that the budget
+        // test and the buffer size are both taken from.
+        amrvis::DatasetMetadata metadata;
+        metadata.dimension = 3;
+        metadata.finestLevel = 0;
+        metadata.physicalDomain = box(0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
+        amrvis::LevelMetadata level;
+        level.domain.lower = {{0, 0, 0}};
+        level.domain.upper = {{(1 << 27) - 1, (1 << 27) - 1, (1 << 27) - 1}};
+        level.cellSize = {{1.0 / (1 << 27), 1.0 / (1 << 27), 1.0 / (1 << 27)}};
+        metadata.levels.push_back(level);
+
+        const auto budget = static_cast<std::uint64_t>(
+            amrvis::maxVolumeVoxelBudget);
+        const auto dims = amrvis::volumeGridDims(
+            metadata, metadata.physicalDomain, 0, budget);
+        const auto product = static_cast<double>(dims[0])
+            * static_cast<double>(dims[1]) * static_cast<double>(dims[2]);
+        require(product <= static_cast<double>(budget),
+            "an oversized level was returned over the voxel budget");
+        // And it still spends the budget: shrinking by the true ratio keeps
+        // the cube a cube, where shrinking by the saturated one collapses it.
+        require(dims == (std::array<int, 3>{512, 512, 512}),
+            "an oversized level did not scale by its true ratio");
+
+        // A thin region still gets the whole budget on its one long axis.
+        const auto thin = amrvis::volumeGridDims(metadata,
+            box(0.0, 0.0, 0.0, 1.0, 1.0 / (1 << 27), 1.0 / (1 << 27)), 0, 64);
+        require(thin == (std::array<int, 3>{64, 1, 1}),
+            "a thin region did not spend its budget on the long axis");
     }
 
     std::error_code removeError;

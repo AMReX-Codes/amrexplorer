@@ -14,7 +14,6 @@ namespace amrvis {
 namespace {
 
 using detail::floatOverflowThreshold;
-using detail::indexRangeOnAxis;
 using detail::intersects;
 using detail::requireBlockPayload;
 using detail::sampleCentre;
@@ -44,22 +43,6 @@ double realProduct(const std::array<int, 3>& dims)
 {
     return static_cast<double>(dims[0]) * static_cast<double>(dims[1])
         * static_cast<double>(dims[2]);
-}
-
-// The index box `region` covers at `level`, on the same half-open convention
-// the slice and line planners use.
-IntBox regionIndexBox(const RealBox& region, const DatasetMetadata& metadata,
-    const LevelMetadata& level)
-{
-    auto result = level.domain;
-    for (int axis = 0; axis < 3; ++axis) {
-        const auto i = static_cast<std::size_t>(axis);
-        const auto [first, last] = indexRangeOnAxis(
-            region.lower[i], region.upper[i], metadata, level, axis);
-        result.lower[i] = first;
-        result.upper[i] = last;
-    }
-    return result;
 }
 
 } // namespace
@@ -180,7 +163,21 @@ VolumeQueryResult VolumeQuery::execute(
     auto contributingLevel = -1;
     for (int levelIndex = minimumLevel; levelIndex <= maximumLevel; ++levelIndex) {
         const auto& level = metadata.levels[static_cast<std::size_t>(levelIndex)];
-        const auto queryBox = regionIndexBox(request.region, metadata, level);
+        // Which blocks can hold a voxel centre, asked of the centres rather
+        // than of the region. Deriving it from the region means nudging its
+        // upper edge inward by one ulp, which is a fraction of a cell near
+        // the origin but more than a whole cell far from it -- and a block
+        // holding only the last voxel's cell would then never be a
+        // candidate at all, so no window would ever be computed for it.
+        // sampleIndex(voxelCentre(v)) is non-decreasing in v, so the first
+        // and last voxel bound every cell this grid can sample.
+        auto queryBox = level.domain;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            const auto onAxis = static_cast<int>(axis);
+            queryBox.lower[axis] = sampleIndex(level, onAxis, voxelCentre(axis, 0));
+            queryBox.upper[axis] = sampleIndex(
+                level, onAxis, voxelCentre(axis, dims[axis] - 1));
+        }
         auto levelPainted = false;
         for (std::size_t reverse = level.blocks.size(); reverse > 0; --reverse) {
             if (cancellation.stop_requested()) {

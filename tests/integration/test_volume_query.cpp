@@ -300,6 +300,43 @@ std::filesystem::path writeFarFromOriginFixture(const std::filesystem::path& roo
     return root;
 }
 
+// The far-from-origin domain again, at dx = 0.008 and split so the second
+// grid holds only cells 14 and 15. The planner's query box decides whether
+// that grid is ever looked at: nudging the region's upper edge inward by one
+// ulp -- close to two cells wide out here -- ends the box at cell 13 and
+// drops the grid entirely, so the voxels over it come back NaN and it is
+// never read. Two cells is the thinnest such grid that has a representable
+// physical extent at this distance.
+std::filesystem::path writeLastCellFixture(const std::filesystem::path& root)
+{
+    std::filesystem::create_directories(root / "Level_0");
+    writeText(root / "Header",
+        "HyperCLaw-V1.1\n"
+        "1\nq\n"
+        "3\n0.0\n0\n"
+        "1e14 0.0 0.0\n100000000000000.128 0.008 0.008\n\n"
+        "((0,0,0) (15,0,0) (0,0,0))\n"
+        "0\n"
+        "0.008 0.008 0.008\n"
+        "0\n0\n"
+        "0 2 0.0\n0\n"
+        "1e14 100000000000000.112\n0.0 0.008\n0.0 0.008\n"
+        "100000000000000.112 100000000000000.128\n0.0 0.008\n0.0 0.008\n"
+        "Level_0/Cell\n");
+    writeText(root / "Level_0" / "Cell_H",
+        "1\n1\n1\n0\n"
+        "(2 0\n((0,0,0) (13,0,0) (0,0,0))\n((14,0,0) (15,0,0) (0,0,0))\n)\n"
+        "2\nFabOnDisk: Cell_D_00000 0\nFabOnDisk: Cell_D_00001 0\n\n"
+        "2,1\n1.0,\n2.0,\n\n2,1\n1.0,\n2.0,\n\n");
+    const std::vector<double> body(14, 1.0);
+    const std::vector<double> tail(2, 2.0);
+    writeFab(root / "Level_0" / "Cell_D_00000", "((0,0,0) (13,0,0) (0,0,0))",
+        body);
+    writeFab(root / "Level_0" / "Cell_D_00001", "((14,0,0) (15,0,0) (0,0,0))",
+        tail);
+    return root;
+}
+
 // A 2 x 2 2-D plotfile, which the sampler must refuse rather than invent a
 // third axis for.
 std::filesystem::path writeTwoDimensionalFixture(const std::filesystem::path& root)
@@ -897,9 +934,9 @@ int main()
             "the cache-pressure budget was loose enough to pin both blocks");
 
         // A block holding no voxel centre is never read. At one voxel the
-        // only centre is x = 0.4, which is grid 1's first cell, so grid 0 is
-        // a candidate that costs nothing -- the point of settling the range
-        // before the read rather than after it.
+        // only centre is x = 0.4, which is grid 1's first cell; planning
+        // from the centres rather than the region puts grid 0 outside the
+        // query box entirely, so it is not even a candidate.
         amrvis::PlotfileDataset counted(
             pairRoot, amrvis::DatasetId{15}, 1024 * 1024);
         amrvis::VolumeQuery countedQuery(counted);
@@ -909,8 +946,8 @@ int main()
         require(coarse.grid.dims == (std::array<int, 3>{1, 1, 1})
                 && coarse.grid.values[0] == 2.0F,
             "the one-voxel grid read the wrong grid");
-        require(coarse.metrics.candidateBlocks == 2,
-            "both grids should have been candidates");
+        require(coarse.metrics.candidateBlocks == 1,
+            "a grid with no voxel centre in it was still a candidate");
         require(coarse.metrics.blocksRead == 1,
             "a grid with no voxel centre in it was read anyway");
     }
@@ -1109,6 +1146,43 @@ int main()
             require(grid.values[static_cast<std::size_t>(i)]
                     == (cell < 8 ? 1.0F : 2.0F),
                 "a far-from-origin voxel read the wrong grid");
+        }
+    }
+
+    // --- a grid holding only the last sampled cell ------------------------
+    {
+        // The last voxel's centre lands in cell 15, in a grid that starts at
+        // cell 14. Planning from the region instead of from the centres ends
+        // the query box at cell 13 -- the nudge is close to two cells wide
+        // out here -- so that grid is never even a candidate.
+        const auto lastRoot = writeLastCellFixture(scratch / "last-cell");
+        amrvis::PlotfileDataset dataset(
+            lastRoot, amrvis::DatasetId{19}, 1024 * 1024);
+        amrvis::VolumeQuery query(dataset);
+        amrvis::VolumeSampleRequest request;
+        request.dataset.value = 19;
+        request.field.value = 0;
+        request.maximumLevel = 0;
+        request.region = dataset.metadata().physicalDomain;
+        request.maximumVoxels = 16;
+
+        const auto result = query.execute(request);
+        const auto& grid = result.grid;
+        require(grid.dims == (std::array<int, 3>{16, 1, 1}),
+            "the last-cell grid has the wrong shape");
+        require(grid.coveredVoxels == 16,
+            "the voxel over the last cell was left uncovered");
+        require(result.metrics.candidateBlocks == 2,
+            "the grid holding the last cell was never a candidate");
+        const auto& level = dataset.metadata().levels[0];
+        for (int i = 0; i < 16; ++i) {
+            const auto centre = request.region.lower[0]
+                + (static_cast<double>(i) + 0.5)
+                    * (request.region.upper[0] - request.region.lower[0])
+                    / 16.0;
+            require(grid.values[static_cast<std::size_t>(i)]
+                    == (amrvis::sampleIndex(level, 0, centre) < 14 ? 1.0F : 2.0F),
+                "a voxel read the wrong grid near the last cell");
         }
     }
 

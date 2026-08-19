@@ -46,11 +46,6 @@ double realProduct(const std::array<int, 3>& dims)
         * static_cast<double>(dims[2]);
 }
 
-// The cell index a voxel centre falls in, when the centre lands outside the
-// block being painted. Out of band rather than -1: a level's index domain may
-// start below zero, and those cells are as paintable as any other.
-constexpr int noCell = std::numeric_limits<int>::min();
-
 // The index box `region` covers at `level`, on the same half-open convention
 // the slice and line planners use.
 IntBox regionIndexBox(const RealBox& region, const DatasetMetadata& metadata,
@@ -82,10 +77,13 @@ std::array<int, 3> volumeGridDims(const DatasetMetadata& metadata,
     // a grid larger than the sampler would ever allocate.
     const auto budget = std::clamp<std::uint64_t>(
         maximumVoxels, 1, maxVolumeVoxelBudget);
-    // Native cell counts, capped per axis by the whole budget: a thin region
-    // may legitimately spend all of it on one axis. The product of three such
-    // axes can overflow, which is why product() saturates.
-    const auto ceiling = static_cast<double>(budget);
+    // Native cell counts, capped only where int stops holding them. Capping
+    // an axis at the budget first would be wrong: the cbrt below shrinks the
+    // whole grid by one ratio, so an axis already truncated to the budget
+    // gets shrunk a second time and a thin region ends up spending a
+    // fraction of what it was given. The product of three uncapped axes
+    // overflows, which is why product() saturates.
+    constexpr auto ceiling = 1.0e9;
     // Only the axes the dataset has: a 2-D level's third cellSize is the
     // synthetic 1.0, which would invent a third dimension out of it.
     const auto sampled = static_cast<std::size_t>(
@@ -98,8 +96,7 @@ std::array<int, 3> volumeGridDims(const DatasetMetadata& metadata,
         // reject a NaN -- both of its comparisons are false -- so the cast
         // would be undefined. One voxel is the honest answer.
         dims[axis] = std::isfinite(cells)
-            ? static_cast<int>(
-                std::clamp(cells, 1.0, std::min(ceiling, 1.0e9)))
+            ? static_cast<int>(std::clamp(cells, 1.0, ceiling))
             : 1;
     }
     if (product(dims) > budget) {
@@ -167,14 +164,10 @@ VolumeQueryResult VolumeQuery::execute(
     grid.region = request.region;
     grid.values.assign(static_cast<std::size_t>(product(dims)), quietNaN);
 
-    std::array<double, 3> pitch{};
-    for (std::size_t axis = 0; axis < 3; ++axis) {
-        pitch[axis] = (request.region.upper[axis] - request.region.lower[axis])
-            / static_cast<double>(dims[axis]);
-    }
     // The slice resolves its pixels with this too, so a voxel and a pixel
     // over the same region land on the same cell rather than a rounding step
-    // apart. `pitch` only brackets the candidate range below.
+    // apart. It is now the only encoding of the voxel geometry: the block
+    // windows below bisect on it instead of inverting it.
     const auto voxelCentre = [&](std::size_t axis, int index) {
         return sampleCentre(request.region.lower[axis],
             request.region.upper[axis], index, dims[axis]);
@@ -187,10 +180,11 @@ VolumeQueryResult VolumeQuery::execute(
     // Reused by every block: bounded by dims, so after the first block the
     // resize is a no-op rather than three allocations per candidate.
     std::array<std::vector<int>, 3> cellIndex;
-    // The finest level that put a value in the grid, which is what the field
-    // reports -- not the level that was asked for. Nothing painted means no
-    // level was finer than the coarsest that took part.
-    auto contributingLevel = minimumLevel;
+    // The finest level that put a showable value in the grid, which is what
+    // the field reports -- not the level that was asked for. Negative until
+    // one does, since an empty grid has no contributing level to name and
+    // must not claim the finest one merely because it was requested.
+    auto contributingLevel = -1;
     for (int levelIndex = minimumLevel; levelIndex <= maximumLevel; ++levelIndex) {
         const auto& level = metadata.levels[static_cast<std::size_t>(levelIndex)];
         const auto queryBox = regionIndexBox(request.region, metadata, level);
@@ -211,56 +205,55 @@ VolumeQueryResult VolumeQuery::execute(
             // budget-scaled grid most blocks of a fine level hold no voxel
             // centre at all. Reading those would evict blocks that do.
             //
-            // The voxels whose centres fall inside the block's cells: per
-            // axis, the index range of centres within the block's physical
-            // bounds, and each centre's cell index (or noCell when the centre
-            // lands outside the valid box).
-            //
-            // The range is inverted from the centre formula in floating point,
-            // so it can land a voxel off either end; it is widened by one per
-            // side and sampleIndex below decides, since that -- not the
-            // interval -- is what the composition is defined by. Too wide only
-            // costs a rejected candidate, while too narrow drops a voxel the
-            // block covers and no other block will paint.
-            const auto bounds = sampleBounds(level, block.box, 3);
+            // Searched, not inverted. Inverting the centre formula in
+            // floating point costs an error of ulp(coordinate)/pitch voxels:
+            // nothing near the origin, and tens of voxels for a finely
+            // resolved region far from it, which no fixed widening covers.
+            // sampleIndex(voxelCentre(v)) is non-decreasing in v, so the
+            // voxels landing in this block form a contiguous run whose ends
+            // can be bisected with the very predicate the composition is
+            // defined by -- exact at any distance from the origin, and every
+            // voxel in [first, last] is then known to be inside the block.
             std::array<int, 3> first{};
             std::array<int, 3> last{};
             auto empty = false;
             for (std::size_t axis = 0; axis < 3; ++axis) {
-                const auto lower = (bounds.lower[axis] - request.region.lower[axis])
-                    / pitch[axis] - 0.5;
-                const auto upper = (std::nextafter(bounds.upper[axis],
-                        -std::numeric_limits<double>::infinity())
-                    - request.region.lower[axis]) / pitch[axis] - 0.5;
-                first[axis] = static_cast<int>(
-                    std::clamp(std::ceil(lower) - 1.0, 0.0,
-                        static_cast<double>(dims[axis])));
-                last[axis] = static_cast<int>(
-                    std::clamp(std::floor(upper) + 1.0, -1.0,
-                        static_cast<double>(dims[axis] - 1)));
+                const auto cellAt = [&](int voxel) {
+                    return sampleIndex(level, static_cast<int>(axis),
+                        voxelCentre(axis, voxel));
+                };
+                // The first voxel whose cell has reached the block's lower
+                // edge, then the first past its upper edge.
+                auto low = 0;
+                auto high = dims[axis];
+                while (low < high) {
+                    const auto middle = low + (high - low) / 2;
+                    if (cellAt(middle) < block.box.lower[axis]) {
+                        low = middle + 1;
+                    } else {
+                        high = middle;
+                    }
+                }
+                first[axis] = low;
+                high = dims[axis];
+                while (low < high) {
+                    const auto middle = low + (high - low) / 2;
+                    if (cellAt(middle) <= block.box.upper[axis]) {
+                        low = middle + 1;
+                    } else {
+                        high = middle;
+                    }
+                }
+                last[axis] = low - 1;
                 if (last[axis] < first[axis]) {
                     empty = true;
                     break;
                 }
                 auto& indices = cellIndex[axis];
                 indices.resize(static_cast<std::size_t>(last[axis] - first[axis] + 1));
-                auto any = false;
                 for (int voxel = first[axis]; voxel <= last[axis]; ++voxel) {
-                    const auto cell = sampleIndex(level, static_cast<int>(axis),
-                        voxelCentre(axis, voxel));
-                    const auto inside = cell >= block.box.lower[axis]
-                        && cell <= block.box.upper[axis];
                     indices[static_cast<std::size_t>(voxel - first[axis])]
-                        = inside ? cell : noCell;
-                    any = any || inside;
-                }
-                // Widening the range costs a candidate per side, and on a
-                // coarse grid the whole widened range can miss the block. No
-                // index on an axis means no voxel to paint, so the read is
-                // skipped rather than charged and thrown away.
-                if (!any) {
-                    empty = true;
-                    break;
+                        = cellAt(voxel);
                 }
             }
             if (empty) {
@@ -285,25 +278,16 @@ VolumeQueryResult VolumeQuery::execute(
             const auto rowStride = static_cast<std::size_t>(dims[0]);
             const auto slabStride = rowStride * static_cast<std::size_t>(dims[1]);
             for (int k = first[2]; k <= last[2]; ++k) {
-                if ((k - first[2]) % 32 == 31 && cancellation.stop_requested()) {
+                if ((k - first[2]) % 32 == 0 && cancellation.stop_requested()) {
                     throw ReadCancelled();
                 }
                 const auto cellK = cellIndex[2][static_cast<std::size_t>(k - first[2])];
-                if (cellK == noCell) {
-                    continue;
-                }
                 for (int j = first[1]; j <= last[1]; ++j) {
                     const auto cellJ = cellIndex[1][static_cast<std::size_t>(j - first[1])];
-                    if (cellJ == noCell) {
-                        continue;
-                    }
                     auto* row = grid.values.data() + slabStride * static_cast<std::size_t>(k)
                         + rowStride * static_cast<std::size_t>(j);
                     for (int i = first[0]; i <= last[0]; ++i) {
                         const auto cellI = cellIndex[0][static_cast<std::size_t>(i - first[0])];
-                        if (cellI == noCell) {
-                            continue;
-                        }
                         Int3 cell;
                         cell[0] = cellI;
                         cell[1] = cellJ;
@@ -328,7 +312,7 @@ VolumeQueryResult VolumeQuery::execute(
             contributingLevel = levelIndex;
         }
     }
-    grid.maximumLevel = contributingLevel;
+    grid.maximumLevel = std::max(contributingLevel, 0);
 
     grid.coveredVoxels = static_cast<std::uint64_t>(std::count_if(
         grid.values.begin(), grid.values.end(),

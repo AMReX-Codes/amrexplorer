@@ -265,6 +265,41 @@ std::filesystem::path writePairFixture(const std::filesystem::path& root)
     return root;
 }
 
+// 16 x 1 x 1 cells of dx = 0.01 whose domain sits at x = 1e14, split into
+// two grids at cell 8. At that distance ulp is 0.015625 -- more than a cell
+// -- so a block window derived by inverting the voxel-centre formula is off
+// by whole voxels, beyond any fixed widening. The domain still spans ten
+// representable values, so the plotfile itself remains well formed.
+std::filesystem::path writeFarFromOriginFixture(const std::filesystem::path& root)
+{
+    std::filesystem::create_directories(root / "Level_0");
+    writeText(root / "Header",
+        "HyperCLaw-V1.1\n"
+        "1\nq\n"
+        "3\n0.0\n0\n"
+        "1e14 0.0 0.0\n100000000000000.16 0.01 0.01\n\n"
+        "((0,0,0) (15,0,0) (0,0,0))\n"
+        "0\n"
+        "0.01 0.01 0.01\n"
+        "0\n0\n"
+        "0 2 0.0\n0\n"
+        "1e14 100000000000000.08\n0.0 0.01\n0.0 0.01\n"
+        "100000000000000.08 100000000000000.16\n0.0 0.01\n0.0 0.01\n"
+        "Level_0/Cell\n");
+    writeText(root / "Level_0" / "Cell_H",
+        "1\n1\n1\n0\n"
+        "(2 0\n((0,0,0) (7,0,0) (0,0,0))\n((8,0,0) (15,0,0) (0,0,0))\n)\n"
+        "2\nFabOnDisk: Cell_D_00000 0\nFabOnDisk: Cell_D_00001 0\n\n"
+        "2,1\n1.0,\n2.0,\n\n2,1\n1.0,\n2.0,\n\n");
+    const std::vector<double> lower(8, 1.0);
+    const std::vector<double> upper(8, 2.0);
+    writeFab(root / "Level_0" / "Cell_D_00000", "((0,0,0) (7,0,0) (0,0,0))",
+        lower);
+    writeFab(root / "Level_0" / "Cell_D_00001", "((8,0,0) (15,0,0) (0,0,0))",
+        upper);
+    return root;
+}
+
 // A 2 x 2 2-D plotfile, which the sampler must refuse rather than invent a
 // third axis for.
 std::filesystem::path writeTwoDimensionalFixture(const std::filesystem::path& root)
@@ -915,6 +950,18 @@ int main()
         request.region = box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75);
         require(query.execute(request).grid.maximumLevel == 1,
             "maximumLevel missed the level that contributed");
+
+        // ExactLevel over a corner level 1 does not cover: level 1 is the
+        // only participating level and it paints nothing, so the grid is
+        // empty and names no level. Reporting the requested level here would
+        // claim fine data for a grid that has none at all.
+        request.composition = amrvis::CompositionPolicy::ExactLevel;
+        request.region = box(0.0, 0.0, 0.0, 0.25, 0.25, 0.25);
+        const auto exactCorner = query.execute(request).grid;
+        require(exactCorner.coveredVoxels == 0,
+            "the corner is not covered at level 1");
+        require(exactCorner.maximumLevel == 0,
+            "an empty grid named a level that contributed nothing");
     }
 
     // --- a voxel and a slice pixel agree on the same point ----------------
@@ -1008,6 +1055,77 @@ int main()
         }
         require(grid.maximumLevel == 0,
             "a level that wrote only NaN was reported as contributing");
+    }
+
+    // --- a domain far from the coordinate origin ---------------------------
+    {
+        // ulp(1e14) is 0.015625, more than a whole cell of 0.01, so a
+        // window derived by inverting the centre formula lands voxels wrong
+        // and leaves holes in data that has none. Bisecting on sampleIndex
+        // is exact however far out the domain sits.
+        const auto farRoot = writeFarFromOriginFixture(scratch / "far");
+        amrvis::PlotfileDataset dataset(
+            farRoot, amrvis::DatasetId{18}, 1024 * 1024);
+        amrvis::VolumeQuery query(dataset);
+        amrvis::VolumeSampleRequest request;
+        request.dataset.value = 18;
+        request.field.value = 0;
+        request.maximumLevel = 0;
+        request.region = dataset.metadata().physicalDomain;
+        request.maximumVoxels = 16;
+
+        const auto grid = query.execute(request).grid;
+        require(grid.dims == (std::array<int, 3>{16, 1, 1}),
+            "the far-from-origin grid has the wrong shape");
+        // The point of the case: no voxel is dropped. At this distance
+        // several voxel centres quantise onto the same coordinate, so the
+        // voxel-to-cell map is not the identity -- which is exactly why the
+        // expected value is taken from sampleIndex rather than from i.
+        require(grid.coveredVoxels == 16,
+            "voxels were lost in a domain far from the origin");
+        const auto& level = dataset.metadata().levels[0];
+        for (int i = 0; i < 16; ++i) {
+            const auto centre = request.region.lower[0]
+                + (static_cast<double>(i) + 0.5)
+                    * (request.region.upper[0] - request.region.lower[0])
+                    / 16.0;
+            const auto cell = amrvis::sampleIndex(level, 0, centre);
+            require(cell >= 0 && cell <= 15,
+                "a far-from-origin voxel centre left the domain");
+            require(grid.values[static_cast<std::size_t>(i)]
+                    == (cell < 8 ? 1.0F : 2.0F),
+                "a far-from-origin voxel read the wrong grid");
+        }
+    }
+
+    // --- a thin region spends the budget it was given ---------------------
+    {
+        // Capping each axis at the budget before the cbrt shrinks an already
+        // truncated axis a second time, so a pencil-thin region ends up with
+        // a fraction of what it was allowed. The documented formula is the
+        // native counts scaled by cbrt(budget / product) and trimmed.
+        amrvis::DatasetMetadata metadata;
+        metadata.dimension = 3;
+        metadata.finestLevel = 0;
+        metadata.physicalDomain = box(0.0, 0.0, 0.0, 200.0, 3.0, 3.0);
+        amrvis::LevelMetadata level;
+        level.domain.lower = {{0, 0, 0}};
+        level.domain.upper = {{199, 2, 2}};
+        level.cellSize = {{1.0, 1.0, 1.0}};
+        metadata.levels.push_back(level);
+
+        // 200 x 3 x 3 native at budget 64: cbrt(64/1800) = 0.329 gives
+        // 65 x 1 x 1, which the trim lands at 64 x 1 x 1 -- the whole budget
+        // on the axis that has the cells for it.
+        require(amrvis::volumeGridDims(metadata, metadata.physicalDomain, 0, 64)
+                == (std::array<int, 3>{64, 1, 1}),
+            "a thin region did not spend its voxel budget");
+
+        metadata.physicalDomain = box(0.0, 0.0, 0.0, 10000.0, 2.0, 2.0);
+        metadata.levels[0].domain.upper = {{9999, 1, 1}};
+        require(amrvis::volumeGridDims(metadata, metadata.physicalDomain, 0, 512)
+                == (std::array<int, 3>{512, 1, 1}),
+            "a long thin region did not spend its voxel budget");
     }
 
     std::error_code removeError;

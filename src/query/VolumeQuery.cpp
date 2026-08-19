@@ -13,6 +13,7 @@
 namespace amrvis {
 namespace {
 
+using detail::floatOverflowThreshold;
 using detail::indexRangeOnAxis;
 using detail::intersects;
 using detail::requireBlockPayload;
@@ -309,13 +310,16 @@ VolumeQueryResult VolumeQuery::execute(
                         cell[2] = cellK;
                         const auto value = fab.values[valueOffset(fab.box, cell, 3)];
                         // Range-checked before the cast, not after: converting
-                        // a double beyond float's range is undefined, and the
-                        // grid promises NaN for every value it cannot hold.
-                        row[static_cast<std::size_t>(i)] = std::isfinite(value)
-                                && std::fabs(value) <= static_cast<double>(
-                                    std::numeric_limits<float>::max())
-                            ? static_cast<float>(value) : quietNaN;
-                        levelPainted = true;
+                        // a double past the overflow threshold is undefined,
+                        // and the grid promises NaN for what it cannot hold.
+                        const auto storable = std::isfinite(value)
+                            && std::fabs(value) < floatOverflowThreshold;
+                        row[static_cast<std::size_t>(i)]
+                            = storable ? static_cast<float>(value) : quietNaN;
+                        // A NaN is indistinguishable from an uncovered voxel,
+                        // so a level that wrote only those contributed
+                        // nothing the grid can show.
+                        levelPainted = levelPainted || storable;
                     }
                 }
             }

@@ -88,20 +88,24 @@ struct LoadedBlock {
             metadata, level, axis)};
 }
 
-// A sampled value narrowed to the grid's float storage. Converting a double
-// outside float's range is undefined, so the overflow is mapped explicitly
-// to the infinity every target we build for produces anyway.
+// The magnitude at which a double stops converting to a finite float: the
+// midpoint between float's largest finite value and 2^128. Not that largest
+// value itself -- a double above it but below this midpoint still rounds
+// down to it, and converting one is perfectly well defined. Only from the
+// midpoint up does the conversion overflow, and only there is it undefined.
+inline constexpr double floatOverflowThreshold = 0x1.ffffffp127;
+
+// A sampled value narrowed to the grid's float storage, mapping the overflow
+// that would otherwise be undefined to the infinity the hardware produces.
 [[nodiscard]] inline float narrowToFloat(double value)
 {
-    constexpr auto largest = static_cast<double>(
-        std::numeric_limits<float>::max());
     if (std::isnan(value)) {
         return std::numeric_limits<float>::quiet_NaN();
     }
-    if (value > largest) {
+    if (value >= floatOverflowThreshold) {
         return std::numeric_limits<float>::infinity();
     }
-    if (value < -largest) {
+    if (value <= -floatOverflowThreshold) {
         return -std::numeric_limits<float>::infinity();
     }
     return static_cast<float>(value);

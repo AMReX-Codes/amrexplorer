@@ -304,6 +304,23 @@ bool rejects(amrvis::VolumeQuery& query,
     return false;
 }
 
+// The two-level fixture with the fine level holding 1e300, which no float
+// can store: level 1 covers those voxels but puts nothing showable in them.
+std::filesystem::path writeNanFineFixture(const std::filesystem::path& root)
+{
+    writeTwoLevelFixture(root);
+    writeText(root / "Level_1" / "Cell_H",
+        "1\n1\n1\n0\n"
+        "(1 0\n((2,2,2) (5,5,5) (0,0,0))\n)\n"
+        "1\nFabOnDisk: Cell_D_00000 0\n\n"
+        "1,1\n1e300,\n\n1,1\n1e300,\n\n");
+    std::array<double, 64> fine{};
+    fine.fill(1.0e300);
+    writeFab(root / "Level_1" / "Cell_D_00000", "((2,2,2) (5,5,5) (0,0,0))",
+        fine);
+    return root;
+}
+
 std::size_t voxel(const amrvis::VolumeGrid& grid, int i, int j, int k)
 {
     return static_cast<std::size_t>(i)
@@ -641,10 +658,9 @@ int main()
             * static_cast<double>(dims[1]) * static_cast<double>(dims[2]);
         require(product <= static_cast<double>(budget),
             "an oversized level was returned over the voxel budget");
-        // And it still spends the budget: shrinking by the true ratio keeps
-        // the cube a cube, where shrinking by the saturated one collapses it.
+        // And it still spends the budget.
         require(dims == (std::array<int, 3>{512, 512, 512}),
-            "an oversized level did not scale by its true ratio");
+            "an oversized level did not spend its budget");
 
         // A budget past the cap buys no more than the cap: a server sizes an
         // inbound request with this before it has validated the budget, so
@@ -654,6 +670,21 @@ int main()
                     std::numeric_limits<std::uint64_t>::max())
                 == (std::array<int, 3>{512, 512, 512}),
             "an unchecked budget was not clamped to the cap");
+
+        // A cube cannot tell the two ratios apart -- the trim loop drives
+        // any overshoot back to equal axes -- so the aspect is what shows
+        // that the scale came from the true product and not the saturated
+        // one. 2^27 x 2^26 x 2^25 keeps its 4:2:1 at cbrt(2^-51) = 2^-17;
+        // scaling by the saturated ratio instead overshoots to
+        // 26010 x 13005 x 6502 and the trim loop equalises it to a cube.
+        amrvis::DatasetMetadata skewed = metadata;
+        skewed.levels[0].domain.upper
+            = {{(1 << 27) - 1, (1 << 26) - 1, (1 << 25) - 1}};
+        skewed.levels[0].cellSize = {{1.0 / (1 << 27), 1.0 / (1 << 26),
+            1.0 / (1 << 25)}};
+        require(amrvis::volumeGridDims(skewed, skewed.physicalDomain, 0, budget)
+                == (std::array<int, 3>{1024, 512, 256}),
+            "an oversized level did not scale by its true ratio");
 
         // A thin region still gets the whole budget on its one long axis.
         const auto thin = amrvis::volumeGridDims(metadata,
@@ -741,18 +772,20 @@ int main()
                 "a malformed region produced a grid over budget");
         }
 
-        // A non-cubic region over budget: the cbrt scale alone leaves the
-        // product over, so the trim loop is what lands it. 4 x 4 x 4 native,
-        // budget 10 -> cbrt(10/64) = 0.54 -> 2 x 2 x 2 = 8.
+        // The cbrt scale alone is usually enough -- 4 x 4 x 4 at budget 10
+        // scales by 0.539 straight to 2 x 2 x 2 = 8, no trimming.
         require(amrvis::volumeGridDims(metadata, whole, 0, 10)
                 == (std::array<int, 3>{2, 2, 2}),
-            "an over-budget region was not trimmed to fit");
-        const auto slab = amrvis::volumeGridDims(
-            metadata, box(0.0, 0.0, 0.0, 1.0, 0.25, 0.25), 0, 3);
-        require(static_cast<std::uint64_t>(slab[0]) * static_cast<std::uint64_t>(slab[1])
-                    * static_cast<std::uint64_t>(slab[2])
-                <= 3,
-            "a non-cubic over-budget region was not trimmed to fit");
+            "an over-budget region was not scaled to fit");
+
+        // This is the case where it is not: 4 x 4 x 1 native at budget 7
+        // scales by cbrt(7/16) = 0.759 to 3 x 3 x 1, whose product is 9 --
+        // still over. Only the trim loop lands it, and it takes the first
+        // largest axis, so the answer is 2 x 3 x 1 rather than 3 x 2 x 1.
+        require(amrvis::volumeGridDims(
+                    metadata, box(0.0, 0.0, 0.0, 1.0, 1.0, 0.25), 0, 7)
+                == (std::array<int, 3>{2, 3, 1}),
+            "the trim loop did not land an over-budget grid");
     }
 
     // --- one block pinned at a time --------------------------------------
@@ -937,6 +970,44 @@ int main()
                 }
             }
         }
+    }
+
+    // --- a level that writes only NaN contributed nothing ------------------
+    {
+        // Level 1 holds 1e300 throughout, so every voxel it covers lands in
+        // the grid as NaN -- indistinguishable from a voxel no level
+        // covered. It overwrote level 0 without putting anything showable
+        // in its place, so the finest level that contributed is 0.
+        const auto lostRoot = writeNanFineFixture(scratch / "nan-fine");
+        amrvis::PlotfileDataset dataset(
+            lostRoot, amrvis::DatasetId{17}, 1024 * 1024);
+        amrvis::VolumeQuery query(dataset);
+        amrvis::VolumeSampleRequest request;
+        request.dataset.value = 17;
+        request.field.value = 0;
+        request.maximumLevel = 1;
+        request.region = box(0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
+        request.maximumVoxels = 64;
+        const auto grid = query.execute(request).grid;
+        require(grid.dims == (std::array<int, 3>{4, 4, 4}),
+            "the NaN-fine grid has the wrong shape");
+        // Voxel centres are 0.125, 0.375, 0.625, 0.875; the fine level spans
+        // [0.25, 0.75], so the middle two on each axis fall inside it.
+        require(grid.coveredVoxels == 64 - 8,
+            "the fine level's 1e300 cells were not reported as uncovered");
+        for (int k = 0; k < 4; ++k) {
+            for (int j = 0; j < 4; ++j) {
+                for (int i = 0; i < 4; ++i) {
+                    const auto inner = i >= 1 && i <= 2 && j >= 1 && j <= 2
+                        && k >= 1 && k <= 2;
+                    const auto value = grid.values[voxel(grid, i, j, k)];
+                    require(inner ? std::isnan(value) : value == 1.0F,
+                        "a voxel under the NaN-only fine level is wrong");
+                }
+            }
+        }
+        require(grid.maximumLevel == 0,
+            "a level that wrote only NaN was reported as contributing");
     }
 
     std::error_code removeError;

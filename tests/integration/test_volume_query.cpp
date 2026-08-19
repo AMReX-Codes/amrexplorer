@@ -477,17 +477,31 @@ int main()
                     == (std::array<int, 3>{2, 2, 2}),
             "volumeGridDims disagrees with the sampled grid");
 
-        // Refusals: a region outside the domain, a bad field, a foreign
-        // dataset id, and a cancelled token.
-        bool threw = false;
-        try {
-            request.region = box(0.5, 0.0, 0.0, 1.5, 1.0, 1.0);
-            (void)query.execute(request);
-        } catch (const std::invalid_argument&) {
-            threw = true;
+        // A region reaching past the domain is sampled, not refused: the
+        // half that has data is painted and the half that does not comes
+        // back NaN, which is what a slice over the same region does. Region
+        // x spans [0.5, 1.5] at pitch 0.25, so the centres are 0.625, 0.875,
+        // 1.125 and 1.375 -- the first two in cells 2 and 3, the last two
+        // past the domain's cell 3.
+        request.region = box(0.5, 0.0, 0.0, 1.5, 1.0, 1.0);
+        request.maximumVoxels = 64;
+        const auto overhang = query.execute(request).grid;
+        require(overhang.dims == (std::array<int, 3>{4, 4, 4}),
+            "the overhanging grid has the wrong shape");
+        require(overhang.coveredVoxels == 32,
+            "an overhanging region did not cover exactly its inside half");
+        for (int k = 0; k < 4; ++k) {
+            for (int j = 0; j < 4; ++j) {
+                for (int i = 0; i < 4; ++i) {
+                    const auto value = overhang.values[voxel(overhang, i, j, k)];
+                    require(i < 2 ? !std::isnan(value) : std::isnan(value),
+                        "an overhanging voxel is on the wrong side of the edge");
+                }
+            }
         }
-        require(threw, "a region outside the domain was accepted");
-        threw = false;
+
+        // Refusals: a bad field, a foreign dataset id, and a cancelled token.
+        bool threw = false;
         try {
             request.region = box(0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
             request.field.value = 5;

@@ -140,18 +140,11 @@ VolumeQueryResult VolumeQuery::execute(
     if (request.component != 0) {
         throw std::invalid_argument("the initial plotfile fields are scalar");
     }
-    // The region must lie within the domain (a hair of tolerance for a
-    // region computed from the domain itself).
-    const auto domain = datasetSampleBounds(metadata);
-    for (std::size_t axis = 0; axis < 3; ++axis) {
-        const auto tolerance = 1.0e-9
-            * (domain.upper[axis] - domain.lower[axis]);
-        if (request.region.lower[axis] < domain.lower[axis] - tolerance
-            || request.region.upper[axis] > domain.upper[axis] + tolerance) {
-            throw std::invalid_argument("volume region lies outside the dataset");
-        }
-    }
-
+    // A region reaching past the domain is not refused. The grid already
+    // says "no data here" with NaN, and a slice over the same region simply
+    // leaves those pixels uncovered, so refusing would fail a rubber-band
+    // selection the slice renders. The voxel budget bounds the grid whatever
+    // the region's size, so there is nothing to protect against here.
     const auto maximumLevel = std::min(request.maximumLevel, metadata.finestLevel);
     const auto minimumLevel = request.composition == CompositionPolicy::ExactLevel
         ? maximumLevel : 0;

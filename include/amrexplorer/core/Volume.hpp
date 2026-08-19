@@ -93,14 +93,23 @@ struct VolumeRenderRequest {
 
 // The field sampled onto a uniform grid over `region`: voxel (i, j, k) is
 // centred at lower + (i + 0.5) * pitch per axis, x fastest; NaN marks a voxel
-// no level covers (or a non-finite value), which the renderer treats as
-// transparent.
+// no level covers (or a value no float can hold), which the renderer treats
+// as transparent. A region reaching past the domain is allowed and comes
+// back NaN there, as the same region does on a slice.
 struct VolumeGrid {
     std::array<int, 3> dims{0, 0, 0};
     RealBox region;
     std::vector<float> values;
+    // Voxels holding a value the renderer can show, which is not quite the
+    // same as voxels a level covered: a covered voxel whose source data is
+    // itself NaN counts here as uncovered, because nothing downstream can
+    // tell the two apart from the grid alone. Separating them would cost a
+    // parallel coverage mask over the whole grid, and no reader branches on
+    // the difference.
     std::uint64_t coveredVoxels = 0;
-    int maximumLevel = 0;   // the finest level that contributed
+    // The finest level that put a showable value in the grid, or 0 when
+    // none did.
+    int maximumLevel = 0;
 };
 
 struct VolumeRenderMetrics {

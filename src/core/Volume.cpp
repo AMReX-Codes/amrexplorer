@@ -37,8 +37,21 @@ std::vector<std::string> validateVolumeTransferFunction(
     return errors;
 }
 
-std::vector<std::string> validateVolumeRenderRequest(
-    const VolumeRenderRequest& request, int datasetDimension)
+VolumeSampleRequest volumeSampleRequestOf(const VolumeRenderRequest& request)
+{
+    VolumeSampleRequest sample;
+    sample.dataset = request.dataset;
+    sample.field = request.field;
+    sample.component = request.component;
+    sample.maximumLevel = request.maximumLevel;
+    sample.composition = request.composition;
+    sample.region = request.region;
+    sample.maximumVoxels = request.maximumVoxels;
+    return sample;
+}
+
+std::vector<std::string> validateVolumeSampleRequest(
+    const VolumeSampleRequest& request, int datasetDimension)
 {
     std::vector<std::string> errors;
     if (request.dataset.value == 0) {
@@ -56,6 +69,18 @@ std::vector<std::string> validateVolumeRenderRequest(
     if (!request.region.valid(3)) {
         errors.emplace_back("region must have finite positive extent");
     }
+    if (request.maximumVoxels < 1
+        || request.maximumVoxels > maxVolumeVoxelBudget) {
+        errors.emplace_back("voxel budget is outside the supported range");
+    }
+    return errors;
+}
+
+std::vector<std::string> validateVolumeRenderRequest(
+    const VolumeRenderRequest& request, int datasetDimension)
+{
+    auto errors = validateVolumeSampleRequest(
+        volumeSampleRequestOf(request), datasetDimension);
     if (!std::isfinite(request.camera.azimuth)
         || !std::isfinite(request.camera.elevation)) {
         errors.emplace_back("camera angles must be finite");
@@ -88,10 +113,6 @@ std::vector<std::string> validateVolumeRenderRequest(
     if (request.samplesPerVoxel < 1
         || request.samplesPerVoxel > maxVolumeSamplesPerVoxel) {
         errors.emplace_back("samples per voxel must be within [1, 8]");
-    }
-    if (request.maximumVoxels < 1
-        || request.maximumVoxels > maxVolumeVoxelBudget) {
-        errors.emplace_back("voxel budget is outside the supported range");
     }
     return errors;
 }

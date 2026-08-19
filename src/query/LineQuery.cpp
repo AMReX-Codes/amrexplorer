@@ -18,6 +18,7 @@ using detail::IndexedBlocks;
 using detail::LoadedBlock;
 using detail::intersects;
 using detail::lookupBlockValue;
+using detail::narrowToFloat;
 using detail::physicalToIndex;
 
 // A covering cell hit during the line walk: which level won, the cell index,
@@ -169,7 +170,7 @@ LineQueryResult LineQuery::execute(
                     point)) {
                 cover.level = levelIndex;
                 cover.point = point;
-                cover.value = static_cast<float>(*value);
+                cover.value = narrowToFloat(*value);
                 return true;
             }
         }

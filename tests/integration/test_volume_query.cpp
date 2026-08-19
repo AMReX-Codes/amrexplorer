@@ -198,6 +198,112 @@ std::filesystem::path writeNegativeIndexFixture(const std::filesystem::path& roo
     return root;
 }
 
+// One level of 4 x 1 x 1 cells over [0,1] whose two grids overlap on cells
+// 1 and 2 -- malformed, but the composition has to resolve it the way the
+// slice's first match does, so the lowest grid index wins.
+std::filesystem::path writeOverlapFixture(const std::filesystem::path& root)
+{
+    std::filesystem::create_directories(root / "Level_0");
+    writeText(root / "Header",
+        "HyperCLaw-V1.1\n"
+        "1\nq\n"
+        "3\n0.0\n0\n"
+        "0.0 0.0 0.0\n1.0 0.25 0.25\n\n"
+        "((0,0,0) (3,0,0) (0,0,0))\n"
+        "0\n"
+        "0.25 0.25 0.25\n"
+        "0\n0\n"
+        "0 2 0.0\n0\n"
+        "0.0 0.75\n0.0 0.25\n0.0 0.25\n"
+        "0.25 1.0\n0.0 0.25\n0.0 0.25\n"
+        "Level_0/Cell\n");
+    writeText(root / "Level_0" / "Cell_H",
+        "1\n1\n1\n0\n"
+        "(2 0\n((0,0,0) (2,0,0) (0,0,0))\n((1,0,0) (3,0,0) (0,0,0))\n)\n"
+        "2\nFabOnDisk: Cell_D_00000 0\nFabOnDisk: Cell_D_00001 0\n\n"
+        "2,1\n1.0,\n2.0,\n\n2,1\n1.0,\n2.0,\n\n");
+    const std::vector<double> first(3, 1.0);
+    const std::vector<double> second(3, 2.0);
+    writeFab(root / "Level_0" / "Cell_D_00000", "((0,0,0) (2,0,0) (0,0,0))",
+        first);
+    writeFab(root / "Level_0" / "Cell_D_00001", "((1,0,0) (3,0,0) (0,0,0))",
+        second);
+    return root;
+}
+
+// 8 x 1 x 1 cells of dx = 0.1 split into two equal 4-cell grids, 1.0 then
+// 2.0. Equal on purpose: the cache charges a block its vector's capacity, so
+// only equal blocks let a test say "fits one of these but not both" without
+// knowing what that capacity came out as.
+std::filesystem::path writePairFixture(const std::filesystem::path& root)
+{
+    std::filesystem::create_directories(root / "Level_0");
+    writeText(root / "Header",
+        "HyperCLaw-V1.1\n"
+        "1\nq\n"
+        "3\n0.0\n0\n"
+        "0.0 0.0 0.0\n0.8 0.1 0.1\n\n"
+        "((0,0,0) (7,0,0) (0,0,0))\n"
+        "0\n"
+        "0.1 0.1 0.1\n"
+        "0\n0\n"
+        "0 2 0.0\n0\n"
+        "0.0 0.4\n0.0 0.1\n0.0 0.1\n"
+        "0.4 0.8\n0.0 0.1\n0.0 0.1\n"
+        "Level_0/Cell\n");
+    writeText(root / "Level_0" / "Cell_H",
+        "1\n1\n1\n0\n"
+        "(2 0\n((0,0,0) (3,0,0) (0,0,0))\n((4,0,0) (7,0,0) (0,0,0))\n)\n"
+        "2\nFabOnDisk: Cell_D_00000 0\nFabOnDisk: Cell_D_00001 0\n\n"
+        "2,1\n1.0,\n2.0,\n\n2,1\n1.0,\n2.0,\n\n");
+    const std::vector<double> first(4, 1.0);
+    const std::vector<double> second(4, 2.0);
+    writeFab(root / "Level_0" / "Cell_D_00000", "((0,0,0) (3,0,0) (0,0,0))",
+        first);
+    writeFab(root / "Level_0" / "Cell_D_00001", "((4,0,0) (7,0,0) (0,0,0))",
+        second);
+    return root;
+}
+
+// A 2 x 2 2-D plotfile, which the sampler must refuse rather than invent a
+// third axis for.
+std::filesystem::path writeTwoDimensionalFixture(const std::filesystem::path& root)
+{
+    std::filesystem::create_directories(root / "Level_0");
+    writeText(root / "Header",
+        "HyperCLaw-V1.1\n"
+        "1\nq\n"
+        "2\n0.0\n0\n"
+        "0.0 0.0\n1.0 1.0\n\n"
+        "((0,0) (1,1) (0,0))\n"
+        "0\n"
+        "0.5 0.5\n"
+        "0\n0\n"
+        "0 1 0.0\n0\n"
+        "0.0 1.0\n0.0 1.0\n"
+        "Level_0/Cell\n");
+    writeText(root / "Level_0" / "Cell_H",
+        "1\n1\n1\n0\n"
+        "(1 0\n((0,0) (1,1) (0,0))\n)\n"
+        "1\nFabOnDisk: Cell_D_00000 0\n\n"
+        "1,1\n0.0,\n\n1,1\n3.0,\n\n");
+    const std::vector<double> values{0.0, 1.0, 2.0, 3.0};
+    writeFab(root / "Level_0" / "Cell_D_00000", "((0,0) (1,1) (0,0))", values);
+    return root;
+}
+
+// True when execute refuses `request` outright.
+bool rejects(amrvis::VolumeQuery& query,
+    const amrvis::VolumeSampleRequest& request)
+{
+    try {
+        (void)query.execute(request);
+    } catch (const std::invalid_argument&) {
+        return true;
+    }
+    return false;
+}
+
 std::size_t voxel(const amrvis::VolumeGrid& grid, int i, int j, int k)
 {
     return static_cast<std::size_t>(i)
@@ -540,11 +646,297 @@ int main()
         require(dims == (std::array<int, 3>{512, 512, 512}),
             "an oversized level did not scale by its true ratio");
 
+        // A budget past the cap buys no more than the cap: a server sizes an
+        // inbound request with this before it has validated the budget, so
+        // an unchecked one must not be able to ask for a bigger grid than
+        // the sampler would ever allocate.
+        require(amrvis::volumeGridDims(metadata, metadata.physicalDomain, 0,
+                    std::numeric_limits<std::uint64_t>::max())
+                == (std::array<int, 3>{512, 512, 512}),
+            "an unchecked budget was not clamped to the cap");
+
         // A thin region still gets the whole budget on its one long axis.
         const auto thin = amrvis::volumeGridDims(metadata,
             box(0.0, 0.0, 0.0, 1.0, 1.0 / (1 << 27), 1.0 / (1 << 27)), 0, 64);
         require(thin == (std::array<int, 3>{64, 1, 1}),
             "a thin region did not spend its budget on the long axis");
+    }
+
+    // --- every refusal ----------------------------------------------------
+    {
+        amrvis::PlotfileDataset dataset(
+            analyticRoot, amrvis::DatasetId{7}, 1024 * 1024);
+        amrvis::VolumeQuery query(dataset);
+        amrvis::VolumeSampleRequest good;
+        good.dataset.value = 7;
+        good.field.value = 0;
+        good.maximumLevel = 0;
+        good.region = box(0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
+        good.maximumVoxels = 64;
+        require(!rejects(query, good), "a valid request was refused");
+
+        auto request = good;
+        request.maximumVoxels = 0;
+        require(rejects(query, request), "a zero voxel budget was accepted");
+        request.maximumVoxels = amrvis::maxVolumeVoxelBudget + 1;
+        require(rejects(query, request),
+            "a voxel budget past the cap was accepted");
+
+        request = good;
+        request.maximumLevel = -1;
+        require(rejects(query, request), "a negative maximum level was accepted");
+
+        request = good;
+        request.component = 1;
+        require(rejects(query, request), "a vector component was accepted");
+
+        request = good;
+        request.region = box(1.0, 0.0, 0.0, 0.0, 1.0, 1.0);
+        require(rejects(query, request), "an inverted region was accepted");
+
+        // A 2-D dataset has no volume to sample.
+        const auto flatRoot = writeTwoDimensionalFixture(scratch / "flat");
+        amrvis::PlotfileDataset flat(flatRoot, amrvis::DatasetId{8}, 1024 * 1024);
+        amrvis::VolumeQuery flatQuery(flat);
+        auto flatRequest = good;
+        flatRequest.dataset.value = 8;
+        require(rejects(flatQuery, flatRequest), "a 2-D dataset was accepted");
+
+        // And the pure sizer gives the third axis one voxel rather than
+        // measuring the region against the synthetic unit cell size a 2-D
+        // level carries: 4 / 1.0 would otherwise read as four voxels deep.
+        require(amrvis::volumeGridDims(flat.metadata(),
+                    box(0.0, 0.0, 0.0, 1.0, 1.0, 4.0), 0, 64)
+                == (std::array<int, 3>{2, 2, 1}),
+            "the pure sizer invented a third dimension for a 2-D dataset");
+    }
+
+    // --- volumeGridDims is total -----------------------------------------
+    {
+        amrvis::PlotfileDataset dataset(
+            analyticRoot, amrvis::DatasetId{9}, 1024 * 1024);
+        const auto& metadata = dataset.metadata();
+        const auto whole = box(0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
+
+        // A NaN axis has no cell count to round to, and clamp cannot reject
+        // it -- both of its comparisons are false -- so the conversion would
+        // be undefined. It costs that axis one voxel and leaves the others
+        // alone; converting the NaN instead poisons the whole product.
+        const auto nan = std::numeric_limits<double>::quiet_NaN();
+        require(amrvis::volumeGridDims(metadata,
+                    box(0.0, 0.0, 0.0, nan, 1.0, 1.0), 0, 64)
+                == (std::array<int, 3>{1, 4, 4}),
+            "a NaN on one axis was not confined to that axis");
+
+        for (const auto& bad : {box(0.0, 0.0, 0.0, nan, 1.0, 1.0),
+                 box(nan, nan, nan, nan, nan, nan),
+                 box(1.0, 1.0, 1.0, 0.0, 0.0, 0.0),
+                 box(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)}) {
+            const auto dims = amrvis::volumeGridDims(metadata, bad, 0, 64);
+            require(dims[0] >= 1 && dims[1] >= 1 && dims[2] >= 1,
+                "a malformed region produced a degenerate grid");
+            require(static_cast<double>(dims[0]) * static_cast<double>(dims[1])
+                        * static_cast<double>(dims[2])
+                    <= 64.0,
+                "a malformed region produced a grid over budget");
+        }
+
+        // A non-cubic region over budget: the cbrt scale alone leaves the
+        // product over, so the trim loop is what lands it. 4 x 4 x 4 native,
+        // budget 10 -> cbrt(10/64) = 0.54 -> 2 x 2 x 2 = 8.
+        require(amrvis::volumeGridDims(metadata, whole, 0, 10)
+                == (std::array<int, 3>{2, 2, 2}),
+            "an over-budget region was not trimmed to fit");
+        const auto slab = amrvis::volumeGridDims(
+            metadata, box(0.0, 0.0, 0.0, 1.0, 0.25, 0.25), 0, 3);
+        require(static_cast<std::uint64_t>(slab[0]) * static_cast<std::uint64_t>(slab[1])
+                    * static_cast<std::uint64_t>(slab[2])
+                <= 3,
+            "a non-cubic over-budget region was not trimmed to fit");
+    }
+
+    // --- one block pinned at a time --------------------------------------
+    {
+        const auto pairRoot = writePairFixture(scratch / "pair");
+        amrvis::VolumeSampleRequest request;
+        request.field.value = 0;
+        request.maximumLevel = 0;
+        request.region = box(0.0, 0.0, 0.0, 0.8, 0.1, 0.1);
+        request.maximumVoxels = 8;
+
+        // What both blocks cost the cache, measured rather than assumed.
+        std::uint64_t bothBytes = 0;
+        {
+            amrvis::PlotfileDataset roomy(
+                pairRoot, amrvis::DatasetId{10}, 1024 * 1024);
+            amrvis::VolumeQuery query(roomy);
+            request.dataset.value = 10;
+            (void)query.execute(request);
+            bothBytes = roomy.cacheMetrics().residentBytes;
+        }
+        require(bothBytes > 0, "the pair fixture left nothing in the cache");
+
+        // Three quarters of that holds either block on its own but never
+        // both, so a query that pinned the level instead of one block at a
+        // time would throw CacheBudgetExceeded here. Painting block by block
+        // is what the design exists for; this is the test of it.
+        amrvis::PlotfileDataset tight(
+            pairRoot, amrvis::DatasetId{11}, bothBytes * 3 / 4);
+        amrvis::VolumeQuery query(tight);
+        request.dataset.value = 11;
+        const auto grid = query.execute(request).grid;
+        require(grid.dims == (std::array<int, 3>{8, 1, 1}),
+            "the cache-pressure grid has the wrong shape");
+        require(grid.coveredVoxels == 8,
+            "a block was lost under cache pressure");
+        for (std::size_t i = 0; i < 8; ++i) {
+            require(grid.values[i] == (i < 4 ? 1.0F : 2.0F),
+                "a voxel read the wrong block under cache pressure");
+        }
+
+        // And the budget really was too tight for two: holding both pins at
+        // once throws, so the query above passed by not doing that.
+        auto blockRequest = [&](int gridIndex) {
+            amrvis::BlockRequest block;
+            block.dataset = request.dataset;
+            block.level = 0;
+            block.gridIndex = gridIndex;
+            block.field = request.field;
+            return block;
+        };
+        auto threwOnPin = false;
+        try {
+            const auto pinned = tight.requestBlock(blockRequest(0));
+            const auto second = tight.requestBlock(blockRequest(1));
+        } catch (const amrvis::CacheBudgetExceeded&) {
+            threwOnPin = true;
+        }
+        require(threwOnPin,
+            "the cache-pressure budget was loose enough to pin both blocks");
+
+        // A block holding no voxel centre is never read. At one voxel the
+        // only centre is x = 0.4, which is grid 1's first cell, so grid 0 is
+        // a candidate that costs nothing -- the point of settling the range
+        // before the read rather than after it.
+        amrvis::PlotfileDataset counted(
+            pairRoot, amrvis::DatasetId{15}, 1024 * 1024);
+        amrvis::VolumeQuery countedQuery(counted);
+        request.dataset.value = 15;
+        request.maximumVoxels = 1;
+        const auto coarse = countedQuery.execute(request);
+        require(coarse.grid.dims == (std::array<int, 3>{1, 1, 1})
+                && coarse.grid.values[0] == 2.0F,
+            "the one-voxel grid read the wrong grid");
+        require(coarse.metrics.candidateBlocks == 2,
+            "both grids should have been candidates");
+        require(coarse.metrics.blocksRead == 1,
+            "a grid with no voxel centre in it was read anyway");
+    }
+
+    // --- overlapping grids resolve to the lowest index --------------------
+    {
+        const auto overlapRoot = writeOverlapFixture(scratch / "overlap");
+        amrvis::PlotfileDataset dataset(
+            overlapRoot, amrvis::DatasetId{12}, 1024 * 1024);
+        amrvis::VolumeQuery query(dataset);
+        amrvis::VolumeSampleRequest request;
+        request.dataset.value = 12;
+        request.field.value = 0;
+        request.maximumLevel = 0;
+        request.region = box(0.0, 0.0, 0.0, 1.0, 0.25, 0.25);
+        request.maximumVoxels = 4;
+
+        const auto grid = query.execute(request).grid;
+        require(grid.dims == (std::array<int, 3>{4, 1, 1}),
+            "the overlap grid has the wrong shape");
+        // Cells 1 and 2 are in both grids; grid 0 wins, as the slice's first
+        // match does. Cell 3 is only in grid 1.
+        const std::array<float, 4> expected{1.0F, 1.0F, 1.0F, 2.0F};
+        for (std::size_t i = 0; i < 4; ++i) {
+            require(grid.values[i] == expected[i],
+                "an overlapped voxel did not resolve to the lowest grid index");
+        }
+    }
+
+    // --- maximumLevel reports what contributed ----------------------------
+    {
+        amrvis::PlotfileDataset dataset(
+            twoLevelRoot, amrvis::DatasetId{13}, 1024 * 1024);
+        amrvis::VolumeQuery query(dataset);
+        amrvis::VolumeSampleRequest request;
+        request.dataset.value = 13;
+        request.field.value = 0;
+        request.maximumLevel = 1;
+        request.maximumVoxels = 64;
+
+        // Level 1 covers only the central [0.25,0.75]^3, so a corner region
+        // is level-0 data however fine a level was asked for.
+        request.region = box(0.0, 0.0, 0.0, 0.25, 0.25, 0.25);
+        const auto corner = query.execute(request).grid;
+        require(corner.coveredVoxels == corner.values.size(),
+            "the corner region was not fully covered");
+        require(corner.maximumLevel == 0,
+            "maximumLevel reported a level that did not contribute");
+
+        // The centre does reach level 1.
+        request.region = box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75);
+        require(query.execute(request).grid.maximumLevel == 1,
+            "maximumLevel missed the level that contributed");
+    }
+
+    // --- a voxel and a slice pixel agree on the same point ----------------
+    {
+        // Both resolve a sample position over the same region, so a budgeted
+        // voxel centre must land in the cell the slice reads at that point --
+        // the composition the header promises is "the same as a slice".
+        //
+        // The seam fixture at 14 voxels is the case that tells the two
+        // formulas apart: voxel 10's centre is 1.1999999999999999556 when the
+        // extent is divided last and 1.2000000000000001776 when it is
+        // pre-divided into a step, which is cell 11 in grid 0 against cell 12
+        // in grid 1 -- a different value, not just a different index.
+        const auto agreementRoot = writeSeamFixture(scratch / "agreement");
+        amrvis::PlotfileDataset dataset(
+            agreementRoot, amrvis::DatasetId{16}, 1024 * 1024);
+        amrvis::VolumeQuery query(dataset);
+        amrvis::VolumeSampleRequest request;
+        request.dataset.value = 16;
+        request.field.value = 0;
+        request.maximumLevel = 0;
+        request.region = box(0.0, 0.0, 0.0, 1.6, 0.1, 0.1);
+        request.maximumVoxels = 14;
+        const auto grid = query.execute(request).grid;
+        require(grid.dims == (std::array<int, 3>{14, 1, 1}),
+            "the agreement grid has the wrong shape");
+
+        amrvis::SliceQuery slice(dataset);
+        amrvis::SliceRequest sliceRequest;
+        sliceRequest.dataset.value = 16;
+        sliceRequest.field.value = 0;
+        sliceRequest.maximumLevel = 0;
+        sliceRequest.normalDirection = 2;
+        sliceRequest.sampling = amrvis::SamplingPolicy::PiecewiseConstant;
+        sliceRequest.outputSize = {grid.dims[0], grid.dims[1]};
+        sliceRequest.visibleRegion = request.region;
+        sliceRequest.maximumLevel = 0;
+        for (int k = 0; k < grid.dims[2]; ++k) {
+            sliceRequest.physicalPosition = request.region.lower[2]
+                + (static_cast<double>(k) + 0.5)
+                    * (request.region.upper[2] - request.region.lower[2])
+                    / static_cast<double>(grid.dims[2]);
+            const auto plane = slice.execute(sliceRequest).plane;
+            for (int j = 0; j < grid.dims[1]; ++j) {
+                for (int i = 0; i < grid.dims[0]; ++i) {
+                    const auto pixel = static_cast<std::size_t>(i)
+                        + static_cast<std::size_t>(grid.dims[0])
+                            * static_cast<std::size_t>(j);
+                    require(plane.valid[pixel] != 0,
+                        "the slice left a pixel the volume covered");
+                    require(plane.values[pixel] == grid.values[voxel(grid, i, j, k)],
+                        "a voxel and the slice pixel over it disagree");
+                }
+            }
+        }
     }
 
     std::error_code removeError;

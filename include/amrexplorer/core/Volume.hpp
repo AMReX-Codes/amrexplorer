@@ -49,6 +49,21 @@ inline constexpr std::uint64_t defaultVolumeVoxelBudget
     = 256ULL * 256ULL * 256ULL;
 inline constexpr std::uint64_t maxVolumeVoxelBudget = 512ULL * 512ULL * 512ULL;
 
+// What the sampler needs: the sub-box to sample, the levels to compose, and
+// the budget bounding the grid. A field-for-field subset of the render
+// request below, so both validate against the same rules.
+struct VolumeSampleRequest {
+    DatasetId dataset;
+    FieldId field;
+    int component = 0;
+    int maximumLevel = 0;
+    CompositionPolicy composition = CompositionPolicy::FinestAvailable;
+    RealBox region;
+    std::uint64_t maximumVoxels = defaultVolumeVoxelBudget;
+    friend bool operator==(const VolumeSampleRequest&,
+        const VolumeSampleRequest&) = default;
+};
+
 struct VolumeRenderRequest {
     DatasetId dataset;
     FieldId field;
@@ -122,7 +137,14 @@ struct VolumeFrame {
 // dataset: every field bounded and finite. Empty when valid.
 [[nodiscard]] std::vector<std::string> validateVolumeTransferFunction(
     const VolumeTransferFunction& transfer);
+[[nodiscard]] std::vector<std::string> validateVolumeSampleRequest(
+    const VolumeSampleRequest& request, int datasetDimension);
 [[nodiscard]] std::vector<std::string> validateVolumeRenderRequest(
     const VolumeRenderRequest& request, int datasetDimension);
+
+// The sampling fields of a render request, so the one validator above and the
+// sampler itself see the same values.
+[[nodiscard]] VolumeSampleRequest volumeSampleRequestOf(
+    const VolumeRenderRequest& request);
 
 } // namespace amrvis

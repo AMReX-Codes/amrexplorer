@@ -319,7 +319,7 @@ void VolumeController::startRender()
             }
         });
     watcher->setFuture(QtConcurrent::run(
-        [dataset, request, rangeSelection, level, cancellation]() mutable {
+        [dataset, request, rangeSelection, cancellation]() mutable {
             request.range = resolveVolumeRange(dataset, request.field,
                 request.maximumLevel, request.composition, rangeSelection.mode,
                 rangeSelection.userRange, rangeSelection.logarithmic, cancellation);

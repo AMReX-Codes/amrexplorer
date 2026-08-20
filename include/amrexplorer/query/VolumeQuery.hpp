@@ -48,8 +48,9 @@ public:
     // Reads every block that holds a voxel centre at each participating
     // level -- coarse to fine, each pinned only while it is painted -- and
     // writes each block's cells into the voxels whose centres they contain,
-    // so a finer level overwrites a coarser one. Voxels no level covers, and
-    // values no float can hold, are NaN.
+    // so a finer level overwrites a coarser one. A voxel is NaN when no level
+    // covers it, and when the value there is not a finite float -- non-finite
+    // in the data, or past the range float can represent.
     //
     // Throws std::invalid_argument for a request this dataset cannot serve
     // and ReadCancelled when the token stops. Propagates what reading the

@@ -321,8 +321,12 @@ VolumeQueryResult VolumeQuery::execute(
                         cell[2] = cellK;
                         const auto value = fab.values[valueOffset(fab.box, cell, 3)];
                         // Range-checked before the cast, not after: converting
-                        // a double past the overflow threshold is undefined,
-                        // and the grid promises NaN for what it cannot hold.
+                        // a double past the overflow threshold is undefined.
+                        // The grid promises NaN for anything that is not a
+                        // finite float, which is both the non-finite values
+                        // and the ones past float's range -- an infinity
+                        // would survive the cast, but it is no more showable
+                        // than a voxel nothing covered.
                         const auto storable = std::isfinite(value)
                             && std::fabs(value) < floatOverflowThreshold;
                         row[static_cast<std::size_t>(i)]

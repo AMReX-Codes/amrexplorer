@@ -757,12 +757,12 @@ int main()
                 == (std::array<int, 3>{512, 512, 512}),
             "an unchecked budget was not clamped to the cap");
 
-        // A cube cannot tell the two ratios apart -- the trim loop drives
+        // A cube cannot tell the two ratios apart -- the fitting step drives
         // any overshoot back to equal axes -- so the aspect is what shows
         // that the scale came from the true product and not the saturated
         // one. 2^27 x 2^26 x 2^25 keeps its 4:2:1 at cbrt(2^-51) = 2^-17;
         // scaling by the saturated ratio instead overshoots to
-        // 26010 x 13005 x 6502 and the trim loop equalises it to a cube.
+        // 26010 x 13005 x 6502 and the fitting step equalises it to a cube.
         amrvis::DatasetMetadata skewed = metadata;
         skewed.levels[0].domain.upper
             = {{(1 << 27) - 1, (1 << 26) - 1, (1 << 25) - 1}};
@@ -1204,7 +1204,7 @@ int main()
         metadata.levels.push_back(level);
 
         // 200 x 3 x 3 native at budget 64: cbrt(64/1800) = 0.329 gives
-        // 65 x 1 x 1, which the trim lands at 64 x 1 x 1 -- the whole budget
+        // 65 x 1 x 1, which the fitting step lands at 64 x 1 x 1 -- the budget
         // on the axis that has the cells for it.
         require(amrvis::volumeGridDims(metadata, metadata.physicalDomain, 0, 64)
                 == (std::array<int, 3>{64, 1, 1}),
@@ -1220,21 +1220,62 @@ int main()
         // arrives at the fitting step hundreds of millions of voxels over,
         // because the scaling floors its two short axes to one; taking that
         // off a voxel at a time cost the better part of a second in a call
-        // a server makes before it has validated anything. The budget here
-        // is the cap, so a per-voxel walk would be ~4e8 iterations.
+        // a server makes before it has validated anything.
+        //
+        // Timed over a thousand calls rather than one. A single call is well
+        // under a microsecond and the walk it guards against is ~440 ms, so
+        // the bound has a factor of a million of room on both sides and no
+        // one scheduler stall on a shared runner can trip it.
         metadata.physicalDomain = box(0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
         metadata.levels[0].domain.upper = {{999, 999, 999}};
         metadata.levels[0].cellSize = {{1.0e-3, 1.0e-3, 1.0e-3}};
+        const auto farRegion = box(0.0, 0.0, 0.0, 1.0e6, 1.0e-3, 1.0e-3);
+        auto far = std::array<int, 3>{0, 0, 0};
         const auto started = std::chrono::steady_clock::now();
-        const auto far = amrvis::volumeGridDims(metadata,
-            box(0.0, 0.0, 0.0, 1.0e6, 1.0e-3, 1.0e-3), 0,
-            amrvis::maxVolumeVoxelBudget);
+        for (int repeat = 0; repeat < 1000; ++repeat) {
+            far = amrvis::volumeGridDims(
+                metadata, farRegion, 0, amrvis::maxVolumeVoxelBudget);
+        }
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - started).count();
         require(far == (std::array<int, 3>{134217728, 1, 1}),
             "the far thin region did not fill its budget on the long axis");
-        require(elapsed < 100,
+        require(elapsed < 1000,
             "sizing a far thin region took long enough to be a CPU sink");
+
+        // The invariants over the whole fitting block, including the shapes
+        // where two axes each take a voxel back rather than one.
+        for (const auto& shape : {std::array<int, 3>{5, 5, 5},
+                 std::array<int, 3>{7, 5, 3}, std::array<int, 3>{9, 9, 2},
+                 std::array<int, 3>{31, 4, 4}, std::array<int, 3>{6, 6, 1},
+                 std::array<int, 3>{2, 2, 2}, std::array<int, 3>{17, 1, 1}}) {
+            amrvis::DatasetMetadata shaped;
+            shaped.dimension = 3;
+            shaped.finestLevel = 0;
+            shaped.physicalDomain = box(0.0, 0.0, 0.0,
+                static_cast<double>(shape[0]), static_cast<double>(shape[1]),
+                static_cast<double>(shape[2]));
+            amrvis::LevelMetadata shapedLevel;
+            shapedLevel.domain.lower = {{0, 0, 0}};
+            shapedLevel.domain.upper = {{shape[0] - 1, shape[1] - 1, shape[2] - 1}};
+            shapedLevel.cellSize = {{1.0, 1.0, 1.0}};
+            shaped.levels.push_back(shapedLevel);
+            for (std::uint64_t allowed = 1; allowed <= 200; ++allowed) {
+                const auto fitted = amrvis::volumeGridDims(
+                    shaped, shaped.physicalDomain, 0, allowed);
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    require(fitted[axis] >= 1,
+                        "the fitting step produced an empty axis");
+                    require(fitted[axis] <= shape[axis],
+                        "the fitting step gave an axis more voxels than cells");
+                }
+                require(static_cast<std::uint64_t>(fitted[0])
+                            * static_cast<std::uint64_t>(fitted[1])
+                            * static_cast<std::uint64_t>(fitted[2])
+                        <= allowed,
+                    "the fitting step returned a grid over its budget");
+            }
+        }
     }
 
     std::error_code removeError;

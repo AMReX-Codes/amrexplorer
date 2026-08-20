@@ -93,7 +93,8 @@ struct VolumeRenderRequest {
 
 // The field sampled onto a uniform grid over `region`: voxel (i, j, k) is
 // centred at lower + (i + 0.5) * pitch per axis, x fastest; NaN marks a voxel
-// no level covers (or a value no float can hold), which the renderer treats
+// no level covers, and one whose value is not a finite float -- non-finite in
+// the data, or past the range float can represent -- which the renderer treats
 // as transparent. A region reaching past the domain is allowed and comes
 // back NaN there, as the same region does on a slice.
 struct VolumeGrid {

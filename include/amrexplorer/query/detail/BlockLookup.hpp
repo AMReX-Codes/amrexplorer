@@ -97,6 +97,12 @@ inline constexpr double floatOverflowThreshold = 0x1.ffffffp127;
 
 // A sampled value narrowed to the grid's float storage, mapping the overflow
 // that would otherwise be undefined to the infinity the hardware produces.
+//
+// The slice and line use this; the volume deliberately does not. They carry a
+// separate valid mask, so an infinity is still a sample they marked valid,
+// whereas the volume grid has only NaN to say "nothing here" and spends it on
+// values no float can hold. Do not unify the two without giving the grid a
+// coverage mask first.
 [[nodiscard]] inline float narrowToFloat(double value)
 {
     if (std::isnan(value)) {

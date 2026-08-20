@@ -29,6 +29,8 @@ std::uint64_t product(const std::array<int, 3>& dims)
     std::uint64_t result = 1;
     for (const auto extent : dims) {
         const auto value = static_cast<std::uint64_t>(extent);
+        // Callers only ever pass positive dims, but the zero test guards the
+        // division below rather than the overflow, so it stays.
         if (value != 0 && result > limit / value) {
             return limit;
         }

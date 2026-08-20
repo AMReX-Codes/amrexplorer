@@ -58,7 +58,9 @@ std::vector<std::string> validateVolumeSampleRequest(
         errors.emplace_back("dataset id must be nonzero");
     }
     if (datasetDimension != 3) {
-        errors.emplace_back("volume rendering requires a 3-D dataset");
+        // Both the sampler and the renderer validate through here, so the
+        // message names neither.
+        errors.emplace_back("volume operations require a 3-D dataset");
     }
     if (request.component < 0) {
         errors.emplace_back("component must be non-negative");

@@ -30,9 +30,11 @@ struct VolumeQueryResult {
 //
 // Pure and total, so a server can bound a request before validating it: the
 // budget is clamped to [1, maxVolumeVoxelBudget], the level is clamped to
-// the finest, and a region that is empty, inverted or non-finite yields one
-// voxel on the offending axis rather than a garbage count. Every result
-// satisfies dims >= 1 and product(dims) <= maxVolumeVoxelBudget.
+// the finest, a single axis is capped at 1e9 native cells (what the int
+// conversion holds, and the only cap applied before the scaling), and a
+// region that is empty, inverted or non-finite yields one voxel on the
+// offending axis rather than a garbage count. Every result satisfies
+// dims >= 1 and product(dims) <= maxVolumeVoxelBudget.
 [[nodiscard]] std::array<int, 3> volumeGridDims(const DatasetMetadata& metadata,
     const RealBox& region, int maximumLevel, std::uint64_t maximumVoxels);
 

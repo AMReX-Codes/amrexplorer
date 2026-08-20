@@ -57,6 +57,14 @@ public:
     // (the pipeline's cache-pressure fallback keys on the latter),
     // std::out_of_range from an index outside the level, and
     // std::runtime_error or std::overflow_error from a malformed FAB.
+    //
+    // The out_of_range is the one a caller can provoke with a bad request:
+    // a region is allowed past the domain, but only until a voxel centre
+    // lands more than INT_MAX cells from the level's index origin, and past
+    // that the throw comes out of sampleIndex rather than as an
+    // invalid_argument. Refusing it up front would mean restoring the
+    // containment test this deliberately dropped, so a caller that must
+    // distinguish a bad request from an internal fault has to catch both.
     [[nodiscard]] VolumeQueryResult execute(
         const VolumeSampleRequest& request, StopToken cancellation = {});
 

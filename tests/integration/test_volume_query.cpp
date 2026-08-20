@@ -866,12 +866,13 @@ int main()
 
         // This is the case where it is not: 4 x 4 x 1 native at budget 7
         // scales by cbrt(7/16) = 0.759 to 3 x 3 x 1, whose product is 9 --
-        // still over. Only the trim loop lands it, and it takes the first
-        // largest axis, so the answer is 2 x 3 x 1 rather than 3 x 2 x 1.
+        // still over. Only the water-fill lands it: a cap of 2 gives 4, and
+        // the voxel it then gives back goes to the first axis the cap
+        // shortened, so the answer is 3 x 2 x 1 and spends 6 of the 7.
         require(amrvis::volumeGridDims(
                     metadata, box(0.0, 0.0, 0.0, 1.0, 1.0, 0.25), 0, 7)
-                == (std::array<int, 3>{2, 3, 1}),
-            "the trim loop did not land an over-budget grid");
+                == (std::array<int, 3>{3, 2, 1}),
+            "the water-fill did not land an over-budget grid");
     }
 
     // --- one block pinned at a time --------------------------------------
@@ -1214,6 +1215,26 @@ int main()
         require(amrvis::volumeGridDims(metadata, metadata.physicalDomain, 0, 512)
                 == (std::array<int, 3>{512, 1, 1}),
             "a long thin region did not spend its voxel budget");
+
+        // And it does not walk there. A region reaching far past the domain
+        // arrives at the fitting step hundreds of millions of voxels over,
+        // because the scaling floors its two short axes to one; taking that
+        // off a voxel at a time cost the better part of a second in a call
+        // a server makes before it has validated anything. The budget here
+        // is the cap, so a per-voxel walk would be ~4e8 iterations.
+        metadata.physicalDomain = box(0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
+        metadata.levels[0].domain.upper = {{999, 999, 999}};
+        metadata.levels[0].cellSize = {{1.0e-3, 1.0e-3, 1.0e-3}};
+        const auto started = std::chrono::steady_clock::now();
+        const auto far = amrvis::volumeGridDims(metadata,
+            box(0.0, 0.0, 0.0, 1.0e6, 1.0e-3, 1.0e-3), 0,
+            amrvis::maxVolumeVoxelBudget);
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        require(far == (std::array<int, 3>{134217728, 1, 1}),
+            "the far thin region did not fill its budget on the long axis");
+        require(elapsed < 100,
+            "sizing a far thin region took long enough to be a CPU sink");
     }
 
     std::error_code removeError;

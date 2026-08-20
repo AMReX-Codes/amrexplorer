@@ -96,13 +96,48 @@ std::array<int, 3> volumeGridDims(const DatasetMetadata& metadata,
             extent = std::max(1, static_cast<int>(
                 std::floor(static_cast<double>(extent) * scale + 1.0e-9)));
         }
-        // Rounding can leave the product a hair over: trim the largest axis.
-        while (product(dims) > budget) {
-            auto& largest = *std::max_element(dims.begin(), dims.end());
-            if (largest <= 1) {
-                break;
+        // Whatever the scaling leaves over, taken off the tallest axes by
+        // water-filling: the highest cap the budget allows, then a voxel
+        // given back to each still-capped axis while it still fits.
+        //
+        // Lowering the tallest axis one voxel at a time lands in the same
+        // place, but a thin region arrives here hundreds of millions of
+        // voxels over -- the scaling floors its two short axes to one, so
+        // the product only falls to N^(2/3) * budget^(1/3) -- and walking
+        // that took the better part of a second inside a call a server makes
+        // before it has validated anything. The search is bounded by the
+        // bit width instead.
+        if (product(dims) > budget) {
+            const auto native = dims;
+            const auto cappedAt = [&native](int cap) {
+                std::array<int, 3> trial{};
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    trial[axis] = std::min(native[axis], cap);
+                }
+                return trial;
+            };
+            auto low = 1;
+            auto high = *std::max_element(native.begin(), native.end());
+            while (low < high) {
+                const auto middle = low + (high - low + 1) / 2;
+                if (product(cappedAt(middle)) <= budget) {
+                    low = middle;
+                } else {
+                    high = middle - 1;
+                }
             }
-            --largest;
+            dims = cappedAt(low);
+            // The cap is uniform, so the budget usually has room left for a
+            // voxel or two above it. Only an axis the cap actually shortened
+            // may take one: the others are already at their native count.
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                if (native[axis] > low) {
+                    ++dims[axis];
+                    if (product(dims) > budget) {
+                        --dims[axis];
+                    }
+                }
+            }
         }
     }
     return dims;

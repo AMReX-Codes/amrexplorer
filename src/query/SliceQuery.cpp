@@ -17,9 +17,12 @@ namespace {
 
 using detail::IndexedBlocks;
 using detail::LoadedBlock;
+using detail::indexRangeOnAxis;
 using detail::intersects;
 using detail::lookupBlockValue;
+using detail::narrowToFloat;
 using detail::physicalToIndex;
+using detail::sampleCentre;
 
 // The blocks of one level that intersect the planning region, with the point->
 // block index over them. Levels are processed finest first so the composed
@@ -39,12 +42,10 @@ IntBox requestIndexBox(const RealBox& region, const SliceRequest& request,
     auto result = level.domain;
     for (const auto axis : axes) {
         const auto i = static_cast<std::size_t>(axis);
-        result.lower[i] = physicalToIndex(
-            region.lower[i], metadata, level, axis);
-        result.upper[i] = physicalToIndex(
-            std::nextafter(region.upper[i],
-                -std::numeric_limits<double>::infinity()),
-            metadata, level, axis);
+        const auto [first, last] = indexRangeOnAxis(
+            region.lower[i], region.upper[i], metadata, level, axis);
+        result.lower[i] = first;
+        result.upper[i] = last;
     }
     if (metadata.dimension == 3) {
         const auto normal = static_cast<std::size_t>(request.normalDirection);
@@ -302,16 +303,12 @@ SliceQueryResult SliceQuery::execute(
                     * static_cast<std::size_t>(outputY);
 
             Real3 position;
-            position[xAxis] = request.visibleRegion.lower[xAxis]
-                + (static_cast<double>(outputX) + 0.5)
-                    * (request.visibleRegion.upper[xAxis]
-                        - request.visibleRegion.lower[xAxis])
-                    / static_cast<double>(request.outputSize[0]);
-            position[yAxis] = request.visibleRegion.lower[yAxis]
-                + (static_cast<double>(outputY) + 0.5)
-                    * (request.visibleRegion.upper[yAxis]
-                        - request.visibleRegion.lower[yAxis])
-                    / static_cast<double>(request.outputSize[1]);
+            position[xAxis] = sampleCentre(request.visibleRegion.lower[xAxis],
+                request.visibleRegion.upper[xAxis], outputX,
+                request.outputSize[0]);
+            position[yAxis] = sampleCentre(request.visibleRegion.lower[yAxis],
+                request.visibleRegion.upper[yAxis], outputY,
+                request.outputSize[1]);
             if (metadata.dimension == 3) {
                 position[static_cast<std::size_t>(request.normalDirection)] =
                     request.physicalPosition;
@@ -321,7 +318,7 @@ SliceQueryResult SliceQuery::execute(
             if (!sample) {
                 continue;
             }
-            result.plane.values[output] = static_cast<float>(sample->first);
+            result.plane.values[output] = narrowToFloat(sample->first);
             result.plane.valid[output] = 1;
             result.plane.sourceLevel[output] =
                 static_cast<std::int16_t>(sample->second);

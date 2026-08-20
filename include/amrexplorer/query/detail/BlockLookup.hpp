@@ -1,8 +1,9 @@
 #pragma once
 
 // Shared per-point block-lookup helpers for the query layer: the one
-// overflow-checked valueOffset, and the point->block grid the slice and line
-// queries both index their loaded blocks with.
+// overflow-checked valueOffset, the sample-position and index-range
+// conventions every query resolves points with, and the point->block grid
+// the slice and line queries both index their loaded blocks with.
 
 #include <amrexplorer/core/Geometry.hpp>
 #include <amrexplorer/core/Metadata.hpp>
@@ -10,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -58,6 +60,61 @@ struct LoadedBlock {
 {
     (void) metadata;
     return sampleIndex(level, axis, position);
+}
+
+// The physical position of sample `index` of `count` evenly dividing
+// [lower, upper). The extent is divided last, so a slice pixel and a volume
+// voxel over the same region agree to the bit: pre-dividing into a step
+// rounds it down, which can put the two on opposite sides of a cell edge.
+[[nodiscard]] inline double sampleCentre(
+    double lower, double upper, int index, int count)
+{
+    return lower + (static_cast<double>(index) + 0.5) * (upper - lower)
+        / static_cast<double>(count);
+}
+
+// The inclusive index range on `axis` that the physical interval
+// [lower, upper) covers at `level`: the samples whose positions fall inside
+// it, the upper edge nudged inward so an interval ending on a cell boundary
+// does not claim the next cell. Every query plans its blocks with this, so
+// the half-open convention lives in one place.
+[[nodiscard]] inline std::pair<int, int> indexRangeOnAxis(double lower,
+    double upper, const DatasetMetadata& metadata, const LevelMetadata& level,
+    int axis)
+{
+    return {physicalToIndex(lower, metadata, level, axis),
+        physicalToIndex(
+            std::nextafter(upper, -std::numeric_limits<double>::infinity()),
+            metadata, level, axis)};
+}
+
+// The magnitude at which a double stops converting to a finite float: the
+// midpoint between float's largest finite value and 2^128. Not that largest
+// value itself -- a double above it but below this midpoint still rounds
+// down to it, and converting one is perfectly well defined. Only from the
+// midpoint up does the conversion overflow, and only there is it undefined.
+inline constexpr double floatOverflowThreshold = 0x1.ffffffp127;
+
+// A sampled value narrowed to the grid's float storage, mapping the overflow
+// that would otherwise be undefined to the infinity the hardware produces.
+//
+// The slice and line use this; the volume deliberately does not. They carry a
+// separate valid mask, so an infinity is still a sample they marked valid,
+// whereas the volume grid has only NaN to say "nothing here" and spends it on
+// values no float can hold. Do not unify the two without giving the grid a
+// coverage mask first.
+[[nodiscard]] inline float narrowToFloat(double value)
+{
+    if (std::isnan(value)) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+    if (value >= floatOverflowThreshold) {
+        return std::numeric_limits<float>::infinity();
+    }
+    if (value <= -floatOverflowThreshold) {
+        return -std::numeric_limits<float>::infinity();
+    }
+    return static_cast<float>(value);
 }
 
 // Offset of `point` into a FAB's component-major values (first axis

@@ -49,6 +49,21 @@ inline constexpr std::uint64_t defaultVolumeVoxelBudget
     = 256ULL * 256ULL * 256ULL;
 inline constexpr std::uint64_t maxVolumeVoxelBudget = 512ULL * 512ULL * 512ULL;
 
+// What the sampler needs: the sub-box to sample, the levels to compose, and
+// the budget bounding the grid. A field-for-field subset of the render
+// request below, so both validate against the same rules.
+struct VolumeSampleRequest {
+    DatasetId dataset;
+    FieldId field;
+    int component = 0;
+    int maximumLevel = 0;
+    CompositionPolicy composition = CompositionPolicy::FinestAvailable;
+    RealBox region;
+    std::uint64_t maximumVoxels = defaultVolumeVoxelBudget;
+    friend bool operator==(const VolumeSampleRequest&,
+        const VolumeSampleRequest&) = default;
+};
+
 struct VolumeRenderRequest {
     DatasetId dataset;
     FieldId field;
@@ -78,14 +93,24 @@ struct VolumeRenderRequest {
 
 // The field sampled onto a uniform grid over `region`: voxel (i, j, k) is
 // centred at lower + (i + 0.5) * pitch per axis, x fastest; NaN marks a voxel
-// no level covers (or a non-finite value), which the renderer treats as
-// transparent.
+// no level covers, and one whose value is not a finite float -- non-finite in
+// the data, or past the range float can represent -- which the renderer treats
+// as transparent. A region reaching past the domain is allowed and comes
+// back NaN there, as the same region does on a slice.
 struct VolumeGrid {
     std::array<int, 3> dims{0, 0, 0};
     RealBox region;
     std::vector<float> values;
+    // Voxels holding a value the renderer can show, which is not quite the
+    // same as voxels a level covered: a covered voxel whose source data is
+    // itself NaN counts here as uncovered, because nothing downstream can
+    // tell the two apart from the grid alone. Separating them would cost a
+    // parallel coverage mask over the whole grid, and no reader branches on
+    // the difference.
     std::uint64_t coveredVoxels = 0;
-    int maximumLevel = 0;   // the finest level that contributed
+    // The finest level that put a showable value in the grid, or 0 when
+    // none did.
+    int maximumLevel = 0;
 };
 
 struct VolumeRenderMetrics {
@@ -122,7 +147,14 @@ struct VolumeFrame {
 // dataset: every field bounded and finite. Empty when valid.
 [[nodiscard]] std::vector<std::string> validateVolumeTransferFunction(
     const VolumeTransferFunction& transfer);
+[[nodiscard]] std::vector<std::string> validateVolumeSampleRequest(
+    const VolumeSampleRequest& request, int datasetDimension);
 [[nodiscard]] std::vector<std::string> validateVolumeRenderRequest(
     const VolumeRenderRequest& request, int datasetDimension);
+
+// The sampling fields of a render request, so the one validator above and the
+// sampler itself see the same values.
+[[nodiscard]] VolumeSampleRequest volumeSampleRequestOf(
+    const VolumeRenderRequest& request);
 
 } // namespace amrvis

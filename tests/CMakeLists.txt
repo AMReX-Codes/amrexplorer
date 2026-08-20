@@ -394,6 +394,10 @@ add_executable(test_slice_query integration/test_slice_query.cpp)
 target_link_libraries(test_slice_query PRIVATE amrexplorer::query amrexplorer::warnings)
 add_test(NAME slice_query COMMAND test_slice_query)
 
+add_executable(test_volume_query integration/test_volume_query.cpp)
+target_link_libraries(test_volume_query PRIVATE amrexplorer::query amrexplorer::warnings)
+add_test(NAME volume_query COMMAND test_volume_query)
+
 add_executable(test_spherical_display integration/test_spherical_display.cpp)
 target_link_libraries(
     test_spherical_display

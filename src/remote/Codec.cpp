@@ -1002,8 +1002,8 @@ fb::RenderedFrameResponseT toWire(
     wire.covered_voxels = value.metrics.coveredVoxels;
     wire.sampled_maximum_level = value.metrics.sampledMaximumLevel;
     wire.grid_from_cache = value.metrics.gridFromCache;
-    wire.sample_milliseconds = value.metrics.sampleMilliseconds;
-    wire.render_milliseconds = value.metrics.renderMilliseconds;
+    wire.sample_microseconds = value.metrics.sampleMicroseconds;
+    wire.render_microseconds = value.metrics.renderMicroseconds;
     wire.candidate_blocks = value.metrics.candidateBlocks;
     wire.blocks_read = value.metrics.blocksRead;
     wire.cache_hits = value.metrics.cacheHits;
@@ -1039,8 +1039,8 @@ VolumeFrame fromWire(const fb::RenderedFrameResponseT& value)
     result.metrics.coveredVoxels = value.covered_voxels;
     result.metrics.sampledMaximumLevel = value.sampled_maximum_level;
     result.metrics.gridFromCache = value.grid_from_cache;
-    result.metrics.sampleMilliseconds = value.sample_milliseconds;
-    result.metrics.renderMilliseconds = value.render_milliseconds;
+    result.metrics.sampleMicroseconds = value.sample_microseconds;
+    result.metrics.renderMicroseconds = value.render_microseconds;
     result.metrics.candidateBlocks = value.candidate_blocks;
     result.metrics.blocksRead = value.blocks_read;
     result.metrics.cacheHits = value.cache_hits;

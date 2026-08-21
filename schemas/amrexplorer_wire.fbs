@@ -378,8 +378,8 @@ table RenderedFrameResponse {
   covered_voxels:ulong (id: 7);
   sampled_maximum_level:int (id: 8);
   grid_from_cache:bool (id: 9);
-  sample_milliseconds:ulong (id: 10);
-  render_milliseconds:ulong (id: 11);
+  sample_microseconds:ulong (id: 10);
+  render_microseconds:ulong (id: 11);
   candidate_blocks:ulong (id: 12);
   blocks_read:ulong (id: 13);
   cache_hits:ulong (id: 14);

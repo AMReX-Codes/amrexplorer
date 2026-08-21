@@ -21,6 +21,14 @@ class PlotfileDataset;
 // the camera re-casts a cached grid instead of re-reading the plotfile),
 // keyed by everything the sample depends on.
 
+// A sensible grid-cache budget for a caller that has to name one -- the
+// server's --volume-cache-mib default, say. It holds four grids of the
+// default voxel budget. A session does not use it as its own default: it
+// takes the budget the dataset was opened with, and setCacheBudget keeps the
+// two in step. This is for whoever is choosing that number.
+inline constexpr std::uint64_t defaultVolumeGridCacheBytes
+    = 256ULL * 1024ULL * 1024ULL;
+
 struct VolumeGridKey {
     FieldId field;
     int component = 0;

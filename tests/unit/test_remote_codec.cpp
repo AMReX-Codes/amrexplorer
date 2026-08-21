@@ -532,8 +532,8 @@ int main()
     frame.metrics.coveredVoxels = 60;
     frame.metrics.sampledMaximumLevel = 1;
     frame.metrics.gridFromCache = true;
-    frame.metrics.sampleMilliseconds = 12;
-    frame.metrics.renderMilliseconds = 3;
+    frame.metrics.sampleMicroseconds = 12;
+    frame.metrics.renderMicroseconds = 3;
     frame.metrics.candidateBlocks = 5;
     frame.metrics.blocksRead = 4;
     frame.metrics.cacheHits = 1;

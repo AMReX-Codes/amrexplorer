@@ -74,7 +74,17 @@ inline constexpr std::uint64_t volumeResponseOverheadBytes = 4096;
     std::optional<std::uint32_t> maximumResponseBytes);
 
 struct VolumeDisplayResult {
-    VolumeRenderRequest request;   // as rendered, after any fallback
+    // As rendered, after any fallback -- its maximumLevel is the level the
+    // pixels came from, not the one asked for.
+    //
+    // Which means it is NOT the request to hand validateSessionVolumeResult.
+    // That validator checks a peer's frame against the request that was sent
+    // it, and derives the finest allowed level from request.maximumLevel; a
+    // frame reporting a fallback from 2 to 0 paired with this request (level
+    // 0) fails its `from > highest` test, because from is 2. The two carry
+    // the same name and mean different things: the validator wants the
+    // original, this is the outcome.
+    VolumeRenderRequest request;
     VolumeFrame frame;
 };
 

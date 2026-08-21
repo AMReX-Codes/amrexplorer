@@ -371,14 +371,30 @@ VolumeFrame LocalDatasetSession::renderVolume(
         // Memoized against the grid's own cache key: the answer depends only
         // on the grid and the requested mapping, both of which the key and
         // the flag already pin.
-        const std::scoped_lock lock(m_mutex);
+        //
+        // The scan itself runs outside the lock. m_mutex is the session's
+        // general one -- requireDataset takes it, so every other entry point
+        // does -- and holding it across a walk of up to 134 million voxels
+        // would stall a slice request, a cacheMetrics poll, or close() for
+        // the whole scan. Two threads racing here both compute the same
+        // answer from the same grid, so publishing last-writer-wins costs
+        // nothing but a duplicated scan in a case that needs two misses on
+        // one key at once.
         const auto want = std::pair{key, request.logarithmic};
-        if (m_visibleRangeFor != want) {
-            m_visibleRange
-                = visibleVolumeRange(*grid, request.logarithmic, cancellation);
+        std::optional<VolumeRange> memo;
+        {
+            const std::scoped_lock lock(m_mutex);
+            if (m_visibleRangeFor == want) {
+                memo = m_visibleRange;
+            }
+        }
+        if (!memo) {
+            memo = visibleVolumeRange(*grid, request.logarithmic, cancellation);
+            const std::scoped_lock lock(m_mutex);
+            m_visibleRange = *memo;
             m_visibleRangeFor = want;
         }
-        settings.range = m_visibleRange;
+        settings.range = *memo;
     }
     settings.transfer = request.transfer;
     settings.samplesPerVoxel = request.samplesPerVoxel;

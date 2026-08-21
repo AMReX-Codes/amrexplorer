@@ -2,6 +2,7 @@
 
 #include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/core/Statistics.hpp>
+#include <amrexplorer/core/ValueMapping.hpp>
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 
 #include <algorithm>
@@ -131,15 +132,27 @@ std::optional<VolumeRange> resolveVolumeRange(
         throw std::runtime_error(
             std::string(source) + " scalar range must be finite with a finite span");
     }
+    VolumeRange resolved{minimum, maximum, false};
     if (logarithmic && minimum > 0.0) {
-        return VolumeRange{minimum, maximum, true};
-    }
-    if (logarithmic) {
+        resolved = VolumeRange{minimum, maximum, true};
+    } else if (logarithmic) {
         // Not viable in log: linear, re-padded without the log rule.
-        std::tie(minimum, maximum)
+        std::tie(resolved.minimum, resolved.maximum)
             = paddedIfDegenerate(selected->first, selected->second, false);
     }
-    return VolumeRange{minimum, maximum, false};
+    // The last thing the renderers do with a range is resolveValueRange, so
+    // one it cannot resolve is this function's error to report. Ordering and
+    // finiteness are already checked above; what is left is a logarithmic
+    // range whose two bounds share a logarithm -- adjacent doubles up at
+    // 1e300 do -- which has no span to spread the entries over and which
+    // validateVolumeRenderRequest would otherwise refuse from inside the
+    // render, as an invalid_argument rather than a named range error.
+    if (!resolveValueRange(
+            resolved.minimum, resolved.maximum, resolved.logarithmic)) {
+        throw std::runtime_error(std::string(source)
+            + " scalar range is too narrow to map: its bounds share a logarithm");
+    }
+    return resolved;
 }
 
 std::uint64_t volumeResponseBytes(std::array<int, 2> outputSize)
@@ -158,12 +171,20 @@ std::array<int, 2> frameBudgetBoundedVolumeSize(
     }
     const auto budget = static_cast<std::uint64_t>(*maximumResponseBytes);
     // Refused, not silently bounded to {1, 1}: a budget that cannot hold one
-    // pixel would produce a request the far side rejects anyway, and saying
-    // so here names the real problem instead of failing later as an
-    // oversized frame.
+    // pixel would produce a request the far side rejects anyway. The slice
+    // path returns {1, 1} for its own hopeless budget and gets away with it
+    // because its overhead is 512 bytes, so a one-pixel slice still fits
+    // inside a small budget; a one-pixel volume frame costs 4100 and does
+    // not. A runtime_error with the numbers in it, because this is the same
+    // kind of "your configuration cannot do this" message the cache-pressure
+    // refusals below carry, and it reaches the user the same way.
     if (budget < volumeResponseBytes({1, 1})) {
-        throw std::invalid_argument(
-            "the negotiated response budget cannot hold a single volume pixel");
+        throw std::runtime_error("The negotiated response budget of "
+            + std::to_string(budget) + " bytes cannot hold a single volume "
+            "pixel; volume rendering needs at least "
+            + std::to_string(volumeResponseBytes({1, 1}))
+            + " bytes per frame. Raise the frame-bytes limit or render "
+              "slices instead.");
     }
     const auto maximumPixels = (budget - volumeResponseOverheadBytes)
         / sizeof(std::uint32_t);

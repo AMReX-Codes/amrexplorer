@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -307,14 +308,19 @@ int main()
         // {1, 1}: volumeResponseBytes({1, 1}) exceeds it, so the request that
         // came back would be rejected on arrival anyway, and the refusal here
         // names the budget instead of failing later as an oversized frame.
-        bool refused = false;
+        std::string refusal;
         try {
             static_cast<void>(
                 amrvis::frameBudgetBoundedVolumeSize({800, 600}, 100U));
-        } catch (const std::invalid_argument&) {
-            refused = true;
+        } catch (const std::runtime_error& error) {
+            refusal = error.what();
         }
-        require(refused, "a hopeless budget did not refuse");
+        // Actionable, and carrying both numbers: this escapes to the user the
+        // way the cache-pressure refusals do, and a bare "invalid argument"
+        // would tell them nothing about a budget they can raise.
+        require(refusal.find("100") != std::string::npos
+                && refusal.find("4100") != std::string::npos,
+            "a hopeless budget did not refuse with the numbers");
         // An inverted window is refused rather than silently collapsing to a
         // shell at the midpoint, which is what the sub-pitch branch would do
         // with it and is indistinguishable from a deliberate thin shell.
@@ -380,6 +386,23 @@ int main()
             std::pair{2.0, 2.0}, false);
         require(degenerate && degenerate->minimum < 2.0 && degenerate->maximum > 2.0,
             "a degenerate User range was not padded");
+        {
+            const auto huge = 1.0e300;
+            std::string narrow;
+            try {
+                static_cast<void>(amrvis::resolveVolumeRange(dataset, field, 1,
+                    amrvis::CompositionPolicy::FinestAvailable,
+                    amrvis::RangeMode::User,
+                    std::pair{huge, std::nextafter(huge,
+                        std::numeric_limits<double>::infinity())},
+                    true));
+            } catch (const std::runtime_error& error) {
+                narrow = error.what();
+            }
+            require(narrow.find("user") != std::string::npos
+                    && narrow.find("logarithm") != std::string::npos,
+                "a logarithmic range too narrow to map was handed to the renderer");
+        }
         require(!amrvis::resolveVolumeRange(dataset, field, 1,
                     amrvis::CompositionPolicy::FinestAvailable,
                     amrvis::RangeMode::Visible, std::nullopt, false)

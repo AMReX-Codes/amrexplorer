@@ -19,10 +19,7 @@ class PlotfileDataset;
 
 // The sampled volume grids a local session keeps between renders (rotating
 // the camera re-casts a cached grid instead of re-reading the plotfile),
-// keyed by everything the sample depends on. The default budget holds four
-// grids of the default voxel budget.
-inline constexpr std::uint64_t defaultVolumeGridCacheBytes
-    = 256ULL * 1024ULL * 1024ULL;
+// keyed by everything the sample depends on.
 
 struct VolumeGridKey {
     FieldId field;
@@ -119,8 +116,12 @@ private:
     // finite values", which costs the same scan to discover. Cancelled scans
     // record nothing.
     std::map<std::uint32_t, std::optional<ValueRange>> m_fabRanges;
-    ByteLruCache<VolumeGridKey, VolumeGrid, VolumeGridKeyHash> m_volumeGrids{
-        defaultVolumeGridCacheBytes};
+    // Seeded by the constructor from the budget the dataset was opened with,
+    // and kept in step by setCacheBudget. It starts empty rather than on a
+    // default of its own: a constant here would be overwritten before the
+    // cache was ever used, and would only mislead a reader about the budget
+    // that actually applies.
+    ByteLruCache<VolumeGridKey, VolumeGrid, VolumeGridKeyHash> m_volumeGrids{0};
     // The last Visible range and what it was resolved from. Resolving it
     // walks every voxel, so a camera rotation -- which reuses the cached grid
     // and asks the same question of it -- would otherwise rescan the whole

@@ -17,7 +17,12 @@ namespace amrvis {
 // are composited until the ray leaves the grid or turns opaque. Qt-free and
 // deterministic: a pixel's result depends only on the inputs, never on how
 // the rows are split across threads, so a local and a server render of the
-// same request agree pixel for pixel.
+// same request agree pixel for pixel -- for the same build. The compositing
+// runs through std::pow and std::log, which no standard requires to be
+// correctly rounded, so two libm implementations (or two versions of one)
+// can differ by an ulp, and an ulp in a step opacity can compound over a few
+// hundred composites into one 8-bit level. Pixel equality across a
+// heterogeneous deployment is not a promise this can keep.
 struct RaycastSettings {
     OrthoCamera camera;
     // The box the camera is normalised to (the dataset's sample bounds), so
@@ -64,10 +69,16 @@ struct RaycastSettings {
 // its own timings names the count the render actually used.
 [[nodiscard]] int raycastThreadCount(unsigned requested, int height) noexcept;
 
-// The transfer-function entry a value maps to under a range: entry 0 at or
-// below the minimum, the last at or above the maximum, truncation between
-// (the mapping renderScalarPlane uses for its palette slots, so volume
-// colours agree with the slices'); nullopt for a value the range cannot map
+// The transfer-function entry a value maps to under a range, for callers
+// mapping a single value -- a colour bar, a readout, a test. The march does
+// not use it: it resolves the range once and calls valueSlot per sample,
+// which is what this wraps (core/ValueMapping.hpp owns the mapping, so the
+// volume and the slice cannot disagree). Resolving the range takes the
+// logarithm of both bounds, so this is the slow form: hold a
+// ResolvedValueRange yourself if you are mapping more than a few values.
+//
+// Entry 0 at or below the minimum, the last at or above the maximum,
+// truncation between; nullopt for a value the range cannot map
 // (non-finite, or non-positive under a logarithmic range) and for a range
 // that can map nothing (a non-finite bound, an empty or infinite span, or a
 // logarithmic range reaching to zero).

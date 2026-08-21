@@ -187,15 +187,25 @@ New lib `src/render3d/CMakeLists.txt` (mirror `src/render2d/CMakeLists.txt`,
 struct RaycastSettings { OrthoCamera camera; RealBox domain /*normalisation box*/; std::array<int,2> outputSize;
     VolumeRange range; VolumeTransferFunction transfer; int samplesPerVoxel = 2; unsigned threadCount = 0; };
 VolumeFrame raycastVolume(const VolumeGrid&, const RaycastSettings&, StopToken = {});
-std::optional<std::pair<double,double>> volumeGridRange(const VolumeGrid&, bool logarithmic);
+std::optional<std::pair<double,double>> volumeGridRange(const VolumeGrid&, bool logarithmic, StopToken = {});
+int raycastThreadCount(unsigned requested, int height);
 ```
-Per pixel: `pixelRay(px+0.5, py+0.5)`, slab-intersect `grid.region`, `step =
-minPitch/samplesPerVoxel`, nearest-voxel sample, NaN skipped, value → slot via the
-ScalarRenderer mapping (log: `v<=0` skipped), opacity corrected per step
-`1-(1-a)^(1/samplesPerVoxel)`, front-to-back premultiplied compositing, early
-exit at `A ≥ 0.99`. Threads: rows in contiguous bands (`std::thread`,
-`hardware_concurrency` when 0), token polled every 16 rows via an atomic flag,
-join then throw `ReadCancelled`. Bit-identical for any thread count.
+Per pixel: the frame's `rayField` stepped per column and row (the camera's
+rotation and normalisation are resolved once, not per pixel), slab-intersect
+`grid.region` (a negative entry parameter is kept — the region need not be the
+domain), `step = referenceLength/samplesPerVoxel` where `referenceLength` is
+the reciprocal of `hypot(direction/pitch)`, so the step follows the distance a
+ray travels through one voxel's worth of material rather than the smallest
+pitch or the voxels it enters; the march is an integer sample count in voxel
+coordinates, not an accumulation. Nearest-voxel sample, NaN skipped, value →
+slot via `core/ValueMapping.hpp`, which `renderScalarPlane` shares (log: `v<=0`
+skipped), opacity corrected per step `1-(1-a)^(1/samplesPerVoxel)`,
+front-to-back premultiplied compositing, early exit at `A ≥ 0.999`. Threads:
+rows in contiguous bands (`std::thread`, bounded by `raycastThreadCount`),
+token polled every 64 columns *and* every 4096 samples via an atomic flag —
+per-row polling leaves a single row, and per-pixel polling a single ray,
+uninterruptible — join then throw `ReadCancelled`. Bit-identical for any
+thread count, within one build.
 Tests (`tests/unit/test_volume_raycaster.cpp`): single opaque voxel lands in its
 projected footprint (`projectPoint` on the 8 corners), nothing else lit; uniform
 slab alpha `1-(1-a)^N` independent of samplesPerVoxel; preset gradients along

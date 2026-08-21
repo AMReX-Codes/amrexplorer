@@ -73,8 +73,13 @@ ImageBuffer renderScalarPlane(
     const auto range = resolveValueRange(
         settings.minimum, settings.maximum, settings.logarithmic);
     if (!range) {
+        // Everything the checks above cover has already thrown, so the only
+        // way to arrive here is a logarithmic range so narrow that both
+        // bounds share a logarithm -- [1e300, nextafter(1e300)] differ by a
+        // relative 1e-16, far under an ulp of log(1e300). The span the slots
+        // would be spread over is zero, so there is no mapping to make.
         throw std::invalid_argument(
-            "scalar render range must be finite with a finite span");
+            "logarithmic scalar range is too narrow: its bounds have the same logarithm");
     }
 
     ImageBuffer image;

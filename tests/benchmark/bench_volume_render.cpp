@@ -16,12 +16,14 @@
 #include <amrexplorer/render3d/VolumeRaycaster.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
 namespace {
 
@@ -33,9 +35,21 @@ void require(bool condition, const char* message)
     }
 }
 
+// std::strtol, not std::atoi: atoi's behaviour is undefined when the text
+// does not fit in an int, which is exactly what an argv parser must survive.
 int argument(int argc, char** argv, int index, int fallback)
 {
-    return argc > index ? std::atoi(argv[index]) : fallback;
+    if (argc <= index) {
+        return fallback;
+    }
+    char* end = nullptr;
+    errno = 0;
+    const auto value = std::strtol(argv[index], &end, 10);
+    require(end != argv[index] && *end == '\0' && errno != ERANGE
+            && value >= std::numeric_limits<int>::min()
+            && value <= std::numeric_limits<int>::max(),
+        "an argument is not a representable integer");
+    return static_cast<int>(value);
 }
 
 } // namespace
@@ -54,6 +68,12 @@ int main(int argc, char** argv)
         "arguments must be positive");
     require(outputDim <= amrvis::maxVolumeOutputDimension,
         "the output dimension exceeds the renderer's limit");
+    // A floor as well as a cap: viewportFrame keeps a 12-pixel margin and
+    // clamps the scale at 1, so below about 42 pixels the whole domain
+    // projects onto a pixel or two and the centre-pixel check below fails on
+    // a perfectly good render. 64 leaves clear air above that.
+    require(outputDim >= 64,
+        "the output dimension is too small for the check below to mean anything");
     require(samplesPerVoxel <= amrvis::maxVolumeSamplesPerVoxel,
         "samples per voxel exceeds the renderer's limit");
     require(amrvis::volumeVoxelCount({gridDim, gridDim, gridDim})

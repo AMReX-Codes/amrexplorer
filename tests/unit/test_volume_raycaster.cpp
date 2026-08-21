@@ -8,12 +8,15 @@
 #include <amrexplorer/render3d/VolumeRaycaster.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -39,8 +42,12 @@ amrvis::VolumeGrid uniformGrid(int n, float value)
     amrvis::VolumeGrid grid;
     grid.dims = {n, n, n};
     grid.region = unitBox();
-    grid.values.assign(static_cast<std::size_t>(n * n * n), value);
-    grid.coveredVoxels = static_cast<std::uint64_t>(n * n * n);
+    // In size_t, not int: n * n * n overflows a signed int past n = 1290,
+    // and this is the helper a larger-grid test would reach for.
+    const auto count = static_cast<std::size_t>(n)
+        * static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
+    grid.values.assign(count, value);
+    grid.coveredVoxels = count;
     return grid;
 }
 
@@ -438,6 +445,18 @@ int main()
             threw = true;
         }
         require(threw, "a cancelled grid scan did not throw ReadCancelled");
+        // Including when there is nothing to scan: the loop body is where the
+        // poll lives, and an empty grid never enters it.
+        amrvis::VolumeGrid empty;
+        empty.dims = {1, 1, 1};
+        empty.region = unitBox();
+        threw = false;
+        try {
+            (void)amrvis::volumeGridRange(empty, false, stop.get_token());
+        } catch (const amrvis::ReadCancelled&) {
+            threw = true;
+        }
+        require(threw, "a cancelled scan of an empty grid did not throw");
     }
 
     // --- refusals and cancellation ----------------------------------------
@@ -582,6 +601,86 @@ int main()
         require(frame.width == 64 && frame.height == 1
                 && frame.pixels.size() == 64,
             "a single-row frame is not the requested size");
+    }
+
+    // --- a stop is answered part-way through one long ray -----------------
+    // An elongated grid within the voxel budget puts millions of samples on a
+    // single ray, so one pixel is a long stretch of work. Polling between
+    // pixels does not reach into it: the stop has to be seen by the sample
+    // loop itself.
+    {
+        amrvis::VolumeGrid grid;
+        grid.dims = {1, 1, 2000000};
+        grid.region = unitBox();
+        grid.values.assign(2000000, 1.0F);
+        grid.coveredVoxels = grid.values.size();
+        auto settings = settingsFor(
+            amrvis::orthoPresetXY, 1, twoEntries(0x0000FFU, 1.0e-7F), 8);
+        const auto run = [&grid, &settings](amrvis::StopToken token) {
+            const auto started = std::chrono::steady_clock::now();
+            bool cancelled = false;
+            try {
+                (void)amrvis::raycastVolume(grid, settings, token);
+            } catch (const amrvis::ReadCancelled&) {
+                cancelled = true;
+            }
+            return std::pair{cancelled,
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - started).count()};
+        };
+        const auto baseline = run({});
+        require(!baseline.first, "an uncancelled render reported cancellation");
+        // Only assert when the ray is long enough for "part-way through" to
+        // mean something; the margin below is then twenty-fold.
+        if (baseline.second > 30.0) {
+            amrvis::StopSource stop;
+            const auto delay = std::chrono::microseconds(
+                static_cast<long>(baseline.second * 100.0));   // a tenth of it
+            std::thread asker([&stop, delay] {
+                std::this_thread::sleep_for(delay);
+                stop.request_stop();
+            });
+            const auto cancelled = run(stop.get_token());
+            asker.join();
+            require(cancelled.first,
+                "a stop raised during one long ray was not answered");
+            require(cancelled.second < 0.5 * baseline.second,
+                "the stop was only noticed once the ray had finished");
+        }
+    }
+
+    // --- a domain near the top of the double range -------------------------
+    // Its bounds are finite and its span is ordinary, but the midpoint of the
+    // two overflows, so a centre taken as half their sum is infinite and
+    // every ray origin follows.
+    {
+        const auto low = 1.0e308;
+        const auto span = 1.0e307;
+        amrvis::VolumeGrid grid;
+        grid.dims = {4, 4, 4};
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            grid.region.lower[axis] = low;
+            grid.region.upper[axis] = low + span;
+        }
+        grid.values.assign(64, 1.0F);
+        grid.coveredVoxels = 64;
+        auto settings = settingsFor(
+            amrvis::orthoPresetXY, 33, twoEntries(0x00FF00U, 1.0F));
+        settings.domain = grid.region;
+        const auto frame = amrvis::raycastVolume(grid, settings);
+        require(alphaOf(pixelAt(frame, 16, 16)) == 255
+                && greenOf(pixelAt(frame, 16, 16)) == 255,
+            "a domain near the top of the range rendered its centre empty");
+        // The smallest zoom scales the same origins past what a double holds;
+        // that is refused rather than rendered from infinities.
+        settings.camera.zoom = amrvis::minVolumeZoom;
+        bool threw = false;
+        try {
+            (void)amrvis::raycastVolume(grid, settings);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        require(threw, "a ray field of infinities was accepted");
     }
 
     return 0;

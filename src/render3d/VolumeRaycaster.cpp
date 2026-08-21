@@ -134,8 +134,15 @@ std::optional<std::pair<double, double>> volumeGridRange(
     // that size with no way out is a frozen window locally and a server
     // ignoring a client's cancel remotely, so it is polled like the march.
     constexpr std::size_t cancellationStride = 1U << 16U;
+    // Before the loop, so an empty grid answers the token too: the contract
+    // is "throws ReadCancelled like the render", and the render polls whether
+    // or not it has a pixel to draw.
+    if (cancellation.stop_requested()) {
+        throw ReadCancelled();
+    }
     for (std::size_t index = 0; index < grid.values.size(); ++index) {
-        if (index % cancellationStride == 0 && cancellation.stop_requested()) {
+        if (index % cancellationStride == 0 && index != 0
+            && cancellation.stop_requested()) {
             throw ReadCancelled();
         }
         const auto value = grid.values[index];
@@ -162,9 +169,11 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     }
     // The budget first, because it is the cheaper refusal: a caller whose
     // dims are out of range should not have to have allocated the matching
-    // storage to be told so. It is the cap the sampler already guarantees --
-    // without it a grid of, say, {1, 1, 1000000000} is structurally valid and
-    // marches billions of samples down a single ray.
+    // storage to be told so. Note it bounds the grid's *total* voxels, not
+    // the samples on any one ray: an elongated grid within the budget, say
+    // {1, 1, 16777216}, still puts tens of millions of samples on a single
+    // ray. What keeps that answerable is the poll inside the sample loop,
+    // not this check.
     const auto voxelCount = volumeVoxelCount(grid.dims);
     if (voxelCount > maxVolumeVoxelBudget) {
         throw std::invalid_argument("volume grid exceeds the voxel budget");
@@ -255,6 +264,19 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     }
     const auto viewport = viewportFrame(width, height);
     const auto rays = rayField(settings.camera, viewport, settings.domain);
+    // The span and centre checks above are necessary but not sufficient: a
+    // domain near the top of the range combined with the smallest zoom still
+    // scales a ray origin past what a double holds. Checking the field the
+    // march actually uses covers every route to that, and does it once per
+    // frame rather than per pixel.
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(rays.origin[axis]) || !std::isfinite(rays.direction[axis])
+            || !std::isfinite(rays.perPixelX[axis])
+            || !std::isfinite(rays.perPixelY[axis])) {
+            throw std::invalid_argument(
+                "the camera and domain do not give a usable ray for every pixel");
+        }
+    }
     // The distance a ray travels to cross one voxel's worth of material: the
     // length of the direction measured in voxels, inverted. samplesPerVoxel
     // divides it, and the opacity correction in resolveEntries assumes it.
@@ -274,13 +296,17 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     // authored at 0.1 composites to 0.97 on a 32:1 grid) and, for a region
     // far thinner than it is wide, steps the whole way across at the thin
     // axis's scale.
-    double voxelsPerLengthSquared = 0.0;
-    for (std::size_t axis = 0; axis < 3; ++axis) {
-        const auto perAxis = rays.direction[axis] * inversePitch[axis];
-        voxelsPerLengthSquared += perAxis * perAxis;
-    }
-    const auto step = 1.0 / (std::sqrt(voxelsPerLengthSquared)
-        * static_cast<double>(settings.samplesPerVoxel));
+    // std::hypot rather than a hand-rolled sum of squares: the per-axis term
+    // is a direction over a pitch, and squaring it underflows to zero for a
+    // region whose pitch is enormous (a 1e307-wide box over four voxels) and
+    // overflows for one whose pitch is tiny. hypot is exact where both are
+    // representable and survives where the squares are not.
+    const auto voxelsPerLength = std::hypot(
+        rays.direction[0] * inversePitch[0],
+        rays.direction[1] * inversePitch[1],
+        rays.direction[2] * inversePitch[2]);
+    const auto step = 1.0
+        / (voxelsPerLength * static_cast<double>(settings.samplesPerVoxel));
     if (!(step > 0.0) || !std::isfinite(step)) {
         throw std::invalid_argument("the grid pitch does not give a usable sample step");
     }
@@ -303,17 +329,20 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     const auto slabStride = gridRowStride * static_cast<std::size_t>(grid.dims[1]);
 
     std::atomic<bool> cancelled{false};
-    // Cancellation is polled inside the pixel loop, not only between rows: a
-    // single-row render polls once before starting otherwise, and one row of
-    // a large frame is long enough that a client's cancel would be answered
-    // by a finished frame. The stride keeps the atomic load off the per-pixel
-    // path while bounding the delay to a few hundred rays.
-    constexpr int cancellationStride = 64;
+    // Cancellation is polled inside the pixel loop *and* inside the sample
+    // loop. Neither on its own is enough: polling only between rows leaves a
+    // single-row render uninterruptible, and polling only between pixels
+    // leaves a single ray uninterruptible -- a budget-legal grid of
+    // {1, 1, 16777216} puts tens of millions of samples on one ray, which is
+    // half a second of unpollable work for one pixel. Both strides keep the
+    // atomic load off the per-item path while bounding the delay.
+    constexpr int pixelCancellationStride = 64;
+    constexpr std::int64_t sampleCancellationStride = 4096;
     const auto renderRow = [&](int row) {
         auto* pixels = frame.pixels.data() + rowStride * static_cast<std::size_t>(row);
         const auto pixelY = static_cast<double>(row) + 0.5;
         for (int column = 0; column < width; ++column) {
-            if (column % cancellationStride == 0
+            if (column % pixelCancellationStride == 0
                 && (cancelled.load(std::memory_order_relaxed)
                     || cancellation.stop_requested())) {
                 cancelled.store(true, std::memory_order_relaxed);
@@ -336,17 +365,34 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
             }
             const auto sampleCount = static_cast<std::int64_t>(
                 std::min(std::floor(ratio + 0.5), sampleCeiling));
+            // The march runs in voxel coordinates rather than world ones:
+            // converting the ray once per pixel leaves one multiply and one
+            // add per axis per sample instead of the two multiplies, subtract
+            // and add that going through world space costs. The sample index
+            // still drives it, so the no-accumulation argument above holds.
+            std::array<double, 3> voxelStart{};
+            std::array<double, 3> voxelStep{};
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                voxelStart[axis] = (ray.origin[axis] + tEnter * ray.direction[axis]
+                    - lower[axis]) * inversePitch[axis];
+                voxelStep[axis] = ray.direction[axis] * step * inversePitch[axis];
+            }
             double alpha = 0.0;
             double red = 0.0;
             double green = 0.0;
             double blue = 0.0;
             for (std::int64_t sample = 0; sample < sampleCount; ++sample) {
-                const auto t = tEnter + (static_cast<double>(sample) + 0.5) * step;
+                if (sample % sampleCancellationStride == 0 && sample != 0
+                    && (cancelled.load(std::memory_order_relaxed)
+                        || cancellation.stop_requested())) {
+                    cancelled.store(true, std::memory_order_relaxed);
+                    return;
+                }
+                const auto offsetInSamples = static_cast<double>(sample) + 0.5;
                 std::array<std::size_t, 3> index{};
                 for (std::size_t axis = 0; axis < 3; ++axis) {
-                    const auto position = ray.origin[axis] + t * ray.direction[axis];
                     const auto voxel = std::floor(
-                        (position - lower[axis]) * inversePitch[axis]);
+                        voxelStart[axis] + offsetInSamples * voxelStep[axis]);
                     // Clamped as a double, before the cast: casting a value
                     // past the int range is undefined, and std::clamp passes
                     // a NaN straight through to it. Both are reachable from a

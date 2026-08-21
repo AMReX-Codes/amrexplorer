@@ -219,6 +219,11 @@ VolumeDisplayResult renderWithFallback(
         request.outputSize, dataset->maximumResponseBytes());
     int fallbackFrom = -1;
     int fallbackTo = -1;
+    // Whether the range moves with the level. Visible does not need a repeat
+    // (the renderer resolves it from the grid it sampled, so it already
+    // follows), and neither does User; File and Level are read per level.
+    const bool levelDependentRange = choice
+        && (choice->mode == RangeMode::File || choice->mode == RangeMode::Level);
     for (;;) {
         try {
             if (choice) {
@@ -230,27 +235,35 @@ VolumeDisplayResult renderWithFallback(
                     choice->userRange, choice->logarithmic, cancellation);
             }
             auto frame = dataset->renderVolume(request, cancellation);
-            if (fallbackFrom >= 0) {
-                // Only when this loop drove one. The frame arrives carrying
-                // whatever fallback the session itself made -- a remote
-                // server under its own cache pressure reports one -- and
-                // stamping -1 over it would hide from the user that their
-                // volume was rendered coarser than they asked. When both
-                // happened, the span runs from where this loop started to
-                // the coarsest level actually used.
-                const auto sessionTo = frame.cacheFallbackToLevel;
-                frame.cacheFallbackFromLevel = fallbackFrom;
-                frame.cacheFallbackToLevel = sessionTo >= 0
-                    ? std::min(sessionTo, fallbackTo) : fallbackTo;
+            // A fallback the session made inside this attempt counts the same
+            // as one this loop drove. A remote server under its own cache
+            // pressure renders coarser and says so, and the range that was
+            // resolved a few lines above belongs to the level we asked for,
+            // not the one it used -- level 1's statistics are not level 0's.
+            // So the level is taken from the frame and, when the range
+            // depends on it, the render is repeated for the level that
+            // actually happened. Each repeat is strictly coarser, so this
+            // walks down to level 0 at worst.
+            const auto sessionTo = frame.cacheFallbackToLevel;
+            if (sessionTo >= 0 && sessionTo < request.maximumLevel) {
+                if (fallbackFrom < 0) {
+                    fallbackFrom = frame.cacheFallbackFromLevel >= 0
+                        ? frame.cacheFallbackFromLevel : request.maximumLevel;
+                }
+                fallbackTo = sessionTo;
+                request.maximumLevel = sessionTo;
+                if (levelDependentRange) {
+                    continue;
+                }
             }
-            // VolumeDisplayResult::request is documented as the request "as
-            // rendered, after any fallback", and the session may have fallen
-            // back inside an attempt this loop never retried -- a remote
-            // server under its own cache pressure does exactly that. Without
-            // this the caller's own state stays at the level it asked for
-            // while the pixels came from a coarser one.
-            if (frame.cacheFallbackToLevel >= 0) {
-                request.maximumLevel = frame.cacheFallbackToLevel;
+            if (fallbackFrom >= 0) {
+                // The span runs from where the first fallback started to the
+                // coarsest level anything actually rendered at.
+                frame.cacheFallbackFromLevel = fallbackFrom;
+                frame.cacheFallbackToLevel = fallbackTo;
+                // VolumeDisplayResult::request is documented as the request
+                // "as rendered, after any fallback".
+                request.maximumLevel = fallbackTo;
             }
             return {request, std::move(frame)};
         } catch (const CacheBudgetExceeded&) {

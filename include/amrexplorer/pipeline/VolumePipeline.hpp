@@ -58,6 +58,12 @@ struct OpacityRamp {
 // would be coloured, and its colour bar labelled, by a range no part of the
 // volume it drew came from. The slice path avoids this by resolving inside
 // its own retry loop.
+//
+// It follows a fallback the *session* made too, not only one the loop drove:
+// a remote server that renders coarser under its own cache pressure reports
+// the level it used, and the render is then repeated for that level so the
+// range belongs to the pixels. That costs an extra render on a path that
+// only runs under cache pressure.
 struct VolumeRangeChoice {
     RangeMode mode = RangeMode::Visible;
     std::optional<std::pair<double, double>> userRange;

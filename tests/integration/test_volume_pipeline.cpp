@@ -578,6 +578,21 @@ int main()
                 "the session's own fallback was not reported");
             require(served.request.maximumLevel == 0,
                 "the result's request did not follow the session's fallback");
+            // And a Level range follows it too: level 1's statistics span
+            // [1, 2], level 0's are the coarse 1.0 alone. Resolving once
+            // before the call would map level-0 pixels with level-1's range.
+            auto tracked = asked;
+            tracked.range.reset();
+            const auto followed = amrvis::executeVolumeRenderWithFallback(
+                wrapped, tracked,
+                amrvis::VolumeRangeChoice{amrvis::RangeMode::Level,
+                    std::nullopt, false});
+            require(followed.request.maximumLevel == 0
+                    && followed.frame.cacheFallbackFromLevel == 1
+                    && followed.frame.cacheFallbackToLevel == 0,
+                "the session's fallback was not reported after the repeat");
+            require(followed.frame.usedRange.maximum < 1.5,
+                "a Level range did not follow the session's own fallback");
         }
         auto exact = request;
         exact.composition = amrvis::CompositionPolicy::ExactLevel;

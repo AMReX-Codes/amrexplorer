@@ -219,6 +219,24 @@ int main()
             refused = true;
         }
         require(refused, "a hopeless budget did not refuse");
+        // An inverted window is refused rather than silently collapsing to a
+        // shell at the midpoint, which is what the sub-pitch branch would do
+        // with it and is indistinguishable from a deliberate thin shell.
+        const auto ramps = syntheticPalette(false);
+        const auto refusesRamp = [&ramps](const amrvis::OpacityRamp& ramp) {
+            try {
+                static_cast<void>(
+                    amrvis::makeVolumeTransferFunction(ramps, ramp));
+            } catch (const std::invalid_argument&) {
+                return true;
+            }
+            return false;
+        };
+        require(refusesRamp({0.8, 0.2, 1.0, false}),
+            "an inverted opacity window was accepted");
+        require(refusesRamp({std::nan(""), 1.0, 1.0, false})
+                && refusesRamp({0.0, 1.0, std::nan(""), false}),
+            "a non-finite opacity control was accepted");
         // The smallest budget that does fit one pixel still yields one pixel.
         const auto minimum = static_cast<std::uint32_t>(
             amrvis::volumeResponseBytes({1, 1}));
@@ -341,6 +359,19 @@ int main()
                 && coarseResolved.frame.metrics.sampledMaximumLevel == 0
                 && !coarseResolved.frame.metrics.gridFromCache,
             "a coarser level did not resolve its own Visible range");
+        // The budget a session was constructed with bounds the grid pool
+        // too, not just the block pool. Nothing on the normal open paths
+        // calls setCacheBudget, so a session built with a small budget would
+        // otherwise keep the 256 MiB grid default.
+        {
+            auto small = std::make_shared<amrvis::LocalDatasetSession>(
+                root, amrvis::DatasetId{9}, 4096);
+            require(small->volumeGridCacheMetrics().budgetBytes == 4096,
+                "the constructed budget did not reach the grid cache");
+            require(small->setCacheBudget(8192)
+                    && small->volumeGridCacheMetrics().budgetBytes == 8192,
+                "setCacheBudget did not keep the grid cache in step");
+        }
         // A grid larger than the grid cache still renders, uncached.
         require(session->setVolumeGridCacheBudget(1024),
             "the grid cache budget could not be lowered");
@@ -392,6 +423,26 @@ int main()
                 && fallen.frame.metrics.gridDims == (std::array<int, 3>{4, 4, 4})
                 && litPixels(fallen.frame) > 0,
             "the render did not fall back to the level that fits");
+        // The range follows the fallback when it is resolved per attempt:
+        // level 1's statistics span [1, 2], level 0's are the coarse 1.0
+        // alone, so a Level range resolved once up front would colour a
+        // level-0 render with level-1's numbers.
+        {
+            const auto levelWide = amrvis::resolveVolumeRange(dataset,
+                request.field, 1, request.composition, amrvis::RangeMode::Level,
+                std::nullopt, false);
+            require(levelWide && levelWide->maximum > 1.5,
+                "the level-1 range is not the wider one");
+            auto tracking = request;
+            tracking.range.reset();
+            const auto followed = amrvis::executeVolumeRenderWithFallback(
+                dataset, tracking,
+                amrvis::VolumeRangeChoice{amrvis::RangeMode::Level,
+                    std::nullopt, false});
+            require(followed.request.maximumLevel == 0
+                    && followed.frame.usedRange.maximum < 1.5,
+                "the range did not follow the fallback to level 0");
+        }
         auto exact = request;
         exact.composition = amrvis::CompositionPolicy::ExactLevel;
         bool threw = false;

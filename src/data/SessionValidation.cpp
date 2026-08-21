@@ -292,7 +292,14 @@ void validateSessionVolumeResult(const DatasetMetadata& metadata,
         throw std::invalid_argument(
             "volume frame reports a half-specified cache fallback");
     }
-    if (from >= 0 && (from > highest || to < 0 || to >= from)) {
+    // No `to < 0` here: the half-specified test above already threw for
+    // exactly that pair, so from >= 0 implies to >= 0 by this point.
+    if (from >= 0
+        && (from > highest || to >= from || metrics.sampledMaximumLevel > to)) {
+        // The last clause: a frame that says it fell back to `to` was
+        // rendered with maximumLevel == to, so nothing finer than `to` can
+        // have put a value in its grid. A peer claiming otherwise is
+        // describing a render that cannot have happened.
         throw std::invalid_argument(
             "volume frame reports an impossible cache fallback");
     }

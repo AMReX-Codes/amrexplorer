@@ -110,6 +110,13 @@ LocalDatasetSession::LocalDatasetSession(
     if (!m_dataset) {
         throw std::invalid_argument("local dataset session requires a dataset");
     }
+    // The grid cache starts on the same budget the dataset was opened with,
+    // not on its own default. setCacheBudget keeps the two in step afterwards,
+    // but the normal local and server open paths only construct a session --
+    // they never call it -- so without this a session opened with a small
+    // AMREXPLORER_CACHE_SIZE_MB still held up to the 256 MiB grid default.
+    static_cast<void>(
+        m_volumeGrids.setBudget(m_dataset->cacheMetrics().budgetBytes));
 }
 
 LocalDatasetSession::LocalDatasetSession(const std::filesystem::path& path,
@@ -296,7 +303,11 @@ VolumeFrame LocalDatasetSession::renderVolume(
             "volume rendering requires a 3-D plotfile with physical geometry");
     }
     validateSessionVolumeRequest(m_metadata, m_id, request);
-    const auto maximumLevel = std::min(request.maximumLevel, m_metadata.finestLevel);
+    // No clamp against finestLevel: validateSessionVolumeRequest above
+    // refuses a level past it, so a clamp here could only ever be a no-op --
+    // and reading like one that might fire invites the assumption that the
+    // key and the sampler can see a different level than the validator did.
+    const auto maximumLevel = request.maximumLevel;
     const VolumeGridKey key{request.field, request.component, maximumLevel,
         request.composition, request.region,
         volumeGridDims(m_metadata, request.region, maximumLevel,
@@ -314,15 +325,11 @@ VolumeFrame LocalDatasetSession::renderVolume(
         grid = handle.value();
     } else {
         const auto started = std::chrono::steady_clock::now();
-        VolumeSampleRequest sample;
-        sample.dataset = request.dataset;
-        sample.field = request.field;
-        sample.component = request.component;
-        sample.maximumLevel = maximumLevel;
-        sample.composition = request.composition;
-        sample.region = request.region;
-        sample.maximumVoxels = request.maximumVoxels;
-        auto sampled = VolumeQuery(*dataset).execute(sample, cancellation);
+        // Through the shared helper, so the fields the validator checked are
+        // the fields the sampler gets. Hand-copying them means a field added
+        // to VolumeSampleRequest is validated and then silently dropped here.
+        auto sampled = VolumeQuery(*dataset).execute(
+            volumeSampleRequestOf(request), cancellation);
         metrics.sampleMicroseconds = static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - started).count());
@@ -336,6 +343,14 @@ VolumeFrame LocalDatasetSession::renderVolume(
         try {
             handle = m_volumeGrids.insertAndPin(key, owned, bytes);
             grid = handle.value();
+            // A racing thread may have inserted this key first, in which case
+            // insertAndPin returns its grid and ours is discarded. The frame
+            // then describes a sample whose result nothing used, so it is
+            // reported as the cache hit it actually was.
+            if (grid != owned) {
+                metrics = VolumeRenderMetrics{};
+                metrics.gridFromCache = true;
+            }
         } catch (const CacheBudgetExceeded&) {
             // Too big for the grid cache: render it anyway, uncached. (The
             // block cache's own budget failures come out of the sample above
@@ -348,9 +363,21 @@ VolumeFrame LocalDatasetSession::renderVolume(
     settings.camera = request.camera;
     settings.domain = datasetSampleBounds(m_metadata);
     settings.outputSize = request.outputSize;
-    settings.range = request.range
-        ? *request.range
-        : visibleVolumeRange(*grid, request.logarithmic, cancellation);
+    if (request.range) {
+        settings.range = *request.range;
+    } else {
+        // Memoized against the grid's own cache key: the answer depends only
+        // on the grid and the requested mapping, both of which the key and
+        // the flag already pin.
+        const std::scoped_lock lock(m_mutex);
+        const auto want = std::pair{key, request.logarithmic};
+        if (m_visibleRangeFor != want) {
+            m_visibleRange
+                = visibleVolumeRange(*grid, request.logarithmic, cancellation);
+            m_visibleRangeFor = want;
+        }
+        settings.range = m_visibleRange;
+    }
     settings.transfer = request.transfer;
     settings.samplesPerVoxel = request.samplesPerVoxel;
     auto frame = raycastVolume(*grid, settings, cancellation);
@@ -366,6 +393,11 @@ VolumeFrame LocalDatasetSession::renderVolume(
 bool LocalDatasetSession::setVolumeGridCacheBudget(std::uint64_t bytes)
 {
     return m_volumeGrids.setBudget(bytes);
+}
+
+CacheMetrics LocalDatasetSession::volumeGridCacheMetrics() const
+{
+    return m_volumeGrids.metrics();
 }
 
 CacheMetrics LocalDatasetSession::cacheMetrics() const

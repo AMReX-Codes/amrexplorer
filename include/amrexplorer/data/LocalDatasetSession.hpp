@@ -93,6 +93,11 @@ public:
     // it is false only while a pinned grid still exceeds it.
     [[nodiscard]] bool setVolumeGridCacheBudget(std::uint64_t bytes);
 
+    // The sampled-grid pool on its own. cacheMetrics() reports the block
+    // pool, because CacheMetrics carries one budget and one hit rate and the
+    // remote snapshot asserts that budget is the one setCacheBudget was
+    // given; until it can carry both, this is how the grid pool is observed.
+    [[nodiscard]] CacheMetrics volumeGridCacheMetrics() const;
     [[nodiscard]] CacheMetrics cacheMetrics() const override;
     [[nodiscard]] bool setCacheBudget(std::uint64_t bytes) override;
     void clearUnpinnedCache() override;
@@ -116,6 +121,13 @@ private:
     std::map<std::uint32_t, std::optional<ValueRange>> m_fabRanges;
     ByteLruCache<VolumeGridKey, VolumeGrid, VolumeGridKeyHash> m_volumeGrids{
         defaultVolumeGridCacheBytes};
+    // The last Visible range and what it was resolved from. Resolving it
+    // walks every voxel, so a camera rotation -- which reuses the cached grid
+    // and asks the same question of it -- would otherwise rescan the whole
+    // grid before each cast. One entry is enough: the interactive case is the
+    // same key and mapping frame after frame.
+    std::optional<std::pair<VolumeGridKey, bool>> m_visibleRangeFor;
+    VolumeRange m_visibleRange;
 };
 
 } // namespace amrvis

@@ -923,7 +923,15 @@ int main()
             requireRejectedWith([&] {
                 validateSessionVolumeResult(metadata, request, bad);
             }, "impossible cache fallback", "a non-descending fallback was accepted");
+            // A frame that fell back to level 0 cannot also report having
+            // sampled level 1: it was rendered with maximumLevel == 0, so
+            // nothing finer can have put a value in its grid.
             bad.cacheFallbackToLevel = 0;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "impossible cache fallback",
+                "a sampled level finer than the fallback was accepted");
+            bad.metrics.sampledMaximumLevel = 0;
             requireAccepted([&] {
                 validateSessionVolumeResult(metadata, request, bad);
             }, "a fallback from level 1 to 0 was rejected");

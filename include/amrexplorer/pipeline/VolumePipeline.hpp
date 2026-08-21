@@ -51,6 +51,19 @@ struct OpacityRamp {
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, StopToken cancellation = {});
 
+// How the range is resolved, for the fallback path below. Passing this
+// rather than a pre-resolved request.range is what keeps a File or Level
+// range following the level a cache-pressure fallback actually rendered:
+// level 2's statistics are not level 0's, and a frame resolved once up front
+// would be coloured, and its colour bar labelled, by a range no part of the
+// volume it drew came from. The slice path avoids this by resolving inside
+// its own retry loop.
+struct VolumeRangeChoice {
+    RangeMode mode = RangeMode::Visible;
+    std::optional<std::pair<double, double>> userRange;
+    bool logarithmic = false;
+};
+
 // The bytes a rendered frame of this size costs on the wire, and the size
 // shrunk (uniformly, aspect kept) until that fits the session's response
 // budget; unchanged for a local session.
@@ -69,6 +82,15 @@ struct VolumeDisplayResult {
 // CacheBudgetExceeded from the block cache lowers the composite level and
 // retries (finest-available only), reporting the fallback in the frame; an
 // exact level or level 0 that cannot fit throws an actionable message.
+//
+// The second form re-resolves the range for every attempt and is the one to
+// use for a File or Level range; the first takes request.range as final and
+// is only correct for a range that does not depend on the level (a User
+// range, or none -- Visible is resolved by the renderer from the grid it
+// actually sampled, so it follows a fallback on its own).
+[[nodiscard]] VolumeDisplayResult executeVolumeRenderWithFallback(
+    const std::shared_ptr<DatasetSession>& dataset, VolumeRenderRequest request,
+    const VolumeRangeChoice& range, StopToken cancellation = {});
 [[nodiscard]] VolumeDisplayResult executeVolumeRenderWithFallback(
     const std::shared_ptr<DatasetSession>& dataset, VolumeRenderRequest request,
     StopToken cancellation = {});

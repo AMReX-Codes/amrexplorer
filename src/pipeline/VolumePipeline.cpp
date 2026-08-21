@@ -29,6 +29,16 @@ VolumeTransferFunction makeVolumeTransferFunction(
         throw std::invalid_argument(
             "opacity ramp thresholds and maximum must be finite");
     }
+    // An inverted window is refused rather than treated as the sub-pitch
+    // case. The two are indistinguishable once the entries are computed --
+    // both land in the highEntry < lowEntry branch -- so a caller that wired
+    // its two sliders the wrong way round would get one opaque shell at the
+    // midpoint and a picture that looks deliberate, with 60% of the range
+    // silently discarded and nothing to tell them.
+    if (ramp.lowThreshold > ramp.highThreshold) {
+        throw std::invalid_argument(
+            "the opacity ramp's low threshold is above its high threshold");
+    }
     const auto low = std::clamp(ramp.lowThreshold, 0.0, 1.0);
     const auto high = std::clamp(ramp.highThreshold, 0.0, 1.0);
     const auto maximum = std::clamp(ramp.maximumOpacity, 0.0, 1.0);
@@ -87,25 +97,39 @@ std::optional<VolumeRange> resolveVolumeRange(
         // No fabDataRange fallback here, unlike the slice path: a FAB has no
         // volume to render (supportsVolumeRendering requires !isFab), so the
         // call would return nullopt for every dataset that can reach this.
-        {
-            const auto statistics = dataset->requestRange(RangeRequest{
-                .field = field,
+        const auto statistics = dataset->requestRange(
+            RangeRequest{.field = field,
                 .maximumLevel = maximumLevel,
                 .composition = composition,
-                .scope = rangeMode == RangeMode::File
-                    ? RangeScope::File : RangeScope::Level}, cancellation);
-            if (statistics) {
-                selected = std::pair{statistics->minimum, statistics->maximum};
-            }
+                .scope = rangeMode == RangeMode::File ? RangeScope::File
+                                                      : RangeScope::Level},
+            cancellation);
+        if (statistics) {
+            selected = std::pair{statistics->minimum, statistics->maximum};
         }
     }
     if (!selected) {
         return std::nullopt;   // Visible, or statistics unavailable: the renderer decides
     }
+    // Named for where it came from: saying "user" for a range read out of
+    // level statistics sends the reader to a control that is not the cause.
+    const auto* source = rangeMode == RangeMode::User ? "user"
+        : rangeMode == RangeMode::File ? "file" : "level";
     auto [minimum, maximum]
         = paddedIfDegenerate(selected->first, selected->second, logarithmic);
     if (!(minimum < maximum)) {
-        throw std::runtime_error("user scalar range must have positive extent");
+        throw std::runtime_error(
+            std::string(source) + " scalar range must have positive extent");
+    }
+    // Checked here rather than left to the renderer: this function decides
+    // the range, so a range the renderer must refuse -- a span so wide it is
+    // infinite, which validateVolumeRenderRequest rejects -- is this
+    // function's error to report, not an invalid_argument out of the middle
+    // of a render.
+    if (!std::isfinite(minimum) || !std::isfinite(maximum)
+        || !std::isfinite(maximum - minimum)) {
+        throw std::runtime_error(
+            std::string(source) + " scalar range must be finite with a finite span");
     }
     if (logarithmic && minimum > 0.0) {
         return VolumeRange{minimum, maximum, true};
@@ -164,9 +188,11 @@ std::array<int, 2> frameBudgetBoundedVolumeSize(
     return bounded;
 }
 
-VolumeDisplayResult executeVolumeRenderWithFallback(
+namespace {
+
+VolumeDisplayResult renderWithFallback(
     const std::shared_ptr<DatasetSession>& dataset, VolumeRenderRequest request,
-    StopToken cancellation)
+    const std::optional<VolumeRangeChoice>& choice, StopToken cancellation)
 {
     request.outputSize = frameBudgetBoundedVolumeSize(
         request.outputSize, dataset->maximumResponseBytes());
@@ -174,6 +200,14 @@ VolumeDisplayResult executeVolumeRenderWithFallback(
     int fallbackTo = -1;
     for (;;) {
         try {
+            if (choice) {
+                // Per attempt, not once: request.maximumLevel is what the
+                // loop lowers, and a File or Level range is a property of it.
+                request.logarithmic = choice->logarithmic;
+                request.range = resolveVolumeRange(dataset, request.field,
+                    request.maximumLevel, request.composition, choice->mode,
+                    choice->userRange, choice->logarithmic, cancellation);
+            }
             auto frame = dataset->renderVolume(request, cancellation);
             if (fallbackFrom >= 0) {
                 // Only when this loop drove one. The frame arrives carrying
@@ -211,6 +245,23 @@ VolumeDisplayResult executeVolumeRenderWithFallback(
             fallbackTo = --request.maximumLevel;
         }
     }
+}
+
+} // namespace
+
+VolumeDisplayResult executeVolumeRenderWithFallback(
+    const std::shared_ptr<DatasetSession>& dataset, VolumeRenderRequest request,
+    const VolumeRangeChoice& range, StopToken cancellation)
+{
+    return renderWithFallback(dataset, std::move(request), range, cancellation);
+}
+
+VolumeDisplayResult executeVolumeRenderWithFallback(
+    const std::shared_ptr<DatasetSession>& dataset, VolumeRenderRequest request,
+    StopToken cancellation)
+{
+    return renderWithFallback(
+        dataset, std::move(request), std::nullopt, cancellation);
 }
 
 } // namespace amrvis

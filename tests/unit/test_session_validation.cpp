@@ -1,4 +1,5 @@
 #include <amrexplorer/core/Metadata.hpp>
+#include <amrexplorer/data/LocalDatasetSession.hpp>
 #include <amrexplorer/data/SessionValidation.hpp>
 
 #include <cmath>
@@ -824,11 +825,16 @@ int main()
             requireRejectedWith([&] {
                 validateSessionVolumeRequest(metadata, id, bad);
             }, "component", "a missing volume component was accepted");
+            // A volume region may reach past the domain, exactly as a view
+            // region may (see the walk above): VolumeQuery fills the part
+            // with no data with NaN and the renderer treats it as
+            // transparent, so refusing here would throw away a rubber-band
+            // selection that renders perfectly well as a slice.
             bad = request;
             bad.region.upper[2] = 4.5;
-            requireRejectedWith([&] {
+            requireAccepted([&] {
                 validateSessionVolumeRequest(metadata, id, bad);
-            }, "outside", "a volume region past the domain was accepted");
+            }, "a volume region past the domain was rejected");
             bad = request;
             bad.region.upper[2] = 4.0 + 1.0e-12;   // a rounding hair: fine
             requireAccepted([&] {
@@ -921,7 +927,72 @@ int main()
             requireAccepted([&] {
                 validateSessionVolumeResult(metadata, request, bad);
             }, "a fallback from level 1 to 0 was rejected");
+
+            // Dims whose product wraps 64 bits: unsaturated it comes out as
+            // zero, which is under every budget and holds every coverage
+            // count. This validates a peer's numbers, so it is the one place
+            // the wrap is reachable from outside.
+            bad = frame;
+            bad.metrics.gridDims = {4194304, 2097152, 2097152};
+            bad.metrics.coveredVoxels = 0;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "voxel budget", "grid dims whose product wraps were accepted");
         }
+    }
+
+    // --- the Visible range rule, which the slice path has to agree with ---
+    {
+        const auto gridOf = [](std::vector<float> values) {
+            amrvis::VolumeGrid grid;
+            grid.dims = {static_cast<int>(values.size()), 1, 1};
+            grid.region.lower = {{0.0, 0.0, 0.0}};
+            grid.region.upper = {{1.0, 1.0, 1.0}};
+            grid.coveredVoxels = values.size();
+            grid.values = std::move(values);
+            return grid;
+        };
+        // Mixed signs with a logarithmic request: the negatives are part of
+        // the field, so the range spans them and the mapping falls back to
+        // linear -- what resolveRange does for the same data on a plane.
+        // Deciding from the positive values alone would answer "logarithmic
+        // over [2, 2]" and make every negative voxel vanish.
+        const auto mixed = amrvis::visibleVolumeRange(gridOf({-1.0F, 2.0F}), true);
+        require(!mixed.logarithmic && mixed.minimum <= -1.0
+                && mixed.maximum >= 2.0,
+            "a mixed-sign Visible range went logarithmic");
+        // Strictly positive: logarithmic is viable and is used.
+        const auto positive
+            = amrvis::visibleVolumeRange(gridOf({1.0F, 100.0F}), true);
+        require(positive.logarithmic && positive.minimum > 0.0
+                && positive.maximum >= 100.0,
+            "a positive Visible range did not go logarithmic");
+        // The same grid without the logarithmic request stays linear.
+        require(!amrvis::visibleVolumeRange(gridOf({1.0F, 100.0F}), false)
+                     .logarithmic,
+            "a linear Visible request came back logarithmic");
+        // Degenerate: padded either side rather than left empty.
+        const auto degenerate
+            = amrvis::visibleVolumeRange(gridOf({2.0F, 2.0F}), false);
+        require(degenerate.minimum < 2.0 && degenerate.maximum > 2.0,
+            "a degenerate Visible range was not padded");
+        // Nothing finite: a neutral range that keeps the requested mapping.
+        const auto quietNaN = std::numeric_limits<float>::quiet_NaN();
+        require(amrvis::visibleVolumeRange(gridOf({quietNaN}), true).logarithmic
+                && !amrvis::visibleVolumeRange(gridOf({quietNaN}), false)
+                        .logarithmic,
+            "an all-NaN grid did not fall back to a neutral range");
+        // The scan honours the token: it walks the whole grid otherwise.
+        amrvis::StopSource stop;
+        stop.request_stop();
+        bool cancelled = false;
+        try {
+            static_cast<void>(amrvis::visibleVolumeRange(
+                gridOf({1.0F, 2.0F}), false, stop.get_token()));
+        } catch (const amrvis::ReadCancelled&) {
+            cancelled = true;
+        }
+        require(cancelled, "a cancelled Visible range scan did not throw");
     }
     return 0;
 }

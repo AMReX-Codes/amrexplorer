@@ -20,6 +20,15 @@ VolumeTransferFunction makeVolumeTransferFunction(
     constexpr int entryCount = Palette::colorSlots;
     transfer.colors.reserve(static_cast<std::size_t>(entryCount));
     transfer.opacities.reserve(static_cast<std::size_t>(entryCount));
+    // Refused rather than clamped: std::clamp returns a NaN unchanged (it
+    // compares, and every comparison against a NaN is false), and the casts
+    // to int below are undefined for one. A control that is not a number is
+    // a caller error, not a value to guess at.
+    if (!std::isfinite(ramp.lowThreshold) || !std::isfinite(ramp.highThreshold)
+        || !std::isfinite(ramp.maximumOpacity)) {
+        throw std::invalid_argument(
+            "opacity ramp thresholds and maximum must be finite");
+    }
     const auto low = std::clamp(ramp.lowThreshold, 0.0, 1.0);
     const auto high = std::clamp(ramp.highThreshold, 0.0, 1.0);
     const auto maximum = std::clamp(ramp.maximumOpacity, 0.0, 1.0);
@@ -45,13 +54,18 @@ VolumeTransferFunction makeVolumeTransferFunction(
         transfer.colors.push_back(palette.slotArgb(slot) & 0x00FFFFFFU);
         double opacity = 0.0;
         if (entry >= lowEntry && entry <= highEntry) {
-            if (paletteAlpha) {
+            if (highEntry == lowEntry) {
+                // The sub-pitch window, whatever the alpha source. Taking the
+                // palette's stored alpha here would make the single selected
+                // entry as faint as that slot happens to be -- 5% on a typical
+                // ramp -- so the "thin shell at that value" the header
+                // promises would be the only visible entry and invisible.
+                opacity = 1.0;
+            } else if (paletteAlpha) {
                 opacity = palette.opacity(slot);
-            } else if (highEntry > lowEntry) {
+            } else {
                 opacity = static_cast<double>(entry - lowEntry)
                     / static_cast<double>(highEntry - lowEntry);
-            } else {
-                opacity = 1.0;
             }
         }
         transfer.opacities.push_back(
@@ -70,10 +84,10 @@ std::optional<VolumeRange> resolveVolumeRange(
     if (rangeMode == RangeMode::User) {
         selected = userRange;
     } else if (rangeMode == RangeMode::File || rangeMode == RangeMode::Level) {
-        if (rangeMode == RangeMode::File) {
-            selected = fabDataRange(dataset, field, cancellation);
-        }
-        if (!selected) {
+        // No fabDataRange fallback here, unlike the slice path: a FAB has no
+        // volume to render (supportsVolumeRendering requires !isFab), so the
+        // call would return nullopt for every dataset that can reach this.
+        {
             const auto statistics = dataset->requestRange(RangeRequest{
                 .field = field,
                 .maximumLevel = maximumLevel,
@@ -119,8 +133,13 @@ std::array<int, 2> frameBudgetBoundedVolumeSize(
         return outputSize;
     }
     const auto budget = static_cast<std::uint64_t>(*maximumResponseBytes);
-    if (budget <= volumeResponseOverheadBytes + sizeof(std::uint32_t)) {
-        return {1, 1};
+    // Refused, not silently bounded to {1, 1}: a budget that cannot hold one
+    // pixel would produce a request the far side rejects anyway, and saying
+    // so here names the real problem instead of failing later as an
+    // oversized frame.
+    if (budget < volumeResponseBytes({1, 1})) {
+        throw std::invalid_argument(
+            "the negotiated response budget cannot hold a single volume pixel");
     }
     const auto maximumPixels = (budget - volumeResponseOverheadBytes)
         / sizeof(std::uint32_t);
@@ -156,8 +175,19 @@ VolumeDisplayResult executeVolumeRenderWithFallback(
     for (;;) {
         try {
             auto frame = dataset->renderVolume(request, cancellation);
-            frame.cacheFallbackFromLevel = fallbackFrom;
-            frame.cacheFallbackToLevel = fallbackTo;
+            if (fallbackFrom >= 0) {
+                // Only when this loop drove one. The frame arrives carrying
+                // whatever fallback the session itself made -- a remote
+                // server under its own cache pressure reports one -- and
+                // stamping -1 over it would hide from the user that their
+                // volume was rendered coarser than they asked. When both
+                // happened, the span runs from where this loop started to
+                // the coarsest level actually used.
+                const auto sessionTo = frame.cacheFallbackToLevel;
+                frame.cacheFallbackFromLevel = fallbackFrom;
+                frame.cacheFallbackToLevel = sessionTo >= 0
+                    ? std::min(sessionTo, fallbackTo) : fallbackTo;
+            }
             return {request, std::move(frame)};
         } catch (const CacheBudgetExceeded&) {
             const auto budget = cacheBudgetDescription(

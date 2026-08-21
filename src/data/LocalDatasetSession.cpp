@@ -47,34 +47,36 @@ std::optional<ValueRange> compositeMetadataRange(const DatasetMetadata& metadata
     return ValueRange{minimum, maximum};
 }
 
-// The range a volume's colours span when the request leaves it to the
-// renderer (the "Visible" range): the sampled grid's finite extrema, padded
-// if degenerate, logarithmic only when the data allows it, and a neutral
-// range for a grid with no finite values -- resolveRange's rules for a
-// plane, applied to a grid.
-VolumeRange visibleVolumeRange(const VolumeGrid& grid, bool logarithmic)
+} // namespace
+
+VolumeRange visibleVolumeRange(const VolumeGrid& grid, bool logarithmic,
+    StopToken cancellation)
 {
-    if (logarithmic) {
-        if (const auto extrema = volumeGridRange(grid, true)) {
-            const auto [minimum, maximum]
-                = paddedIfDegenerate(extrema->first, extrema->second, true);
-            if (minimum < maximum && minimum > 0.0) {
-                return {minimum, maximum, true};
-            }
-        } else if (grid.coveredVoxels == 0) {
-            return {1.0, 10.0, true};
-        }
-    }
-    const auto extrema = volumeGridRange(grid, false);
+    // One scan, and over every finite value rather than the positive ones.
+    // Asking volumeGridRange for the positive extrema first would answer
+    // "logarithmic is fine" for any field that merely *contains* positive
+    // values, and every negative voxel would then map to nothing and vanish.
+    // The slice path decides it the other way round -- finiteRange keeps
+    // every finite value and a non-positive minimum makes resolveRange fall
+    // back to linear -- and the two views of one field have to agree.
+    const auto extrema = volumeGridRange(grid, false, cancellation);
     if (!extrema) {
-        return {0.0, 1.0, false};
+        // Nothing finite to show. A logarithmic request still wants a
+        // logarithmic axis, so the neutral range keeps the mapping.
+        return logarithmic ? VolumeRange{1.0, 10.0, true}
+                           : VolumeRange{0.0, 1.0, false};
+    }
+    if (logarithmic && extrema->first > 0.0) {
+        const auto [minimum, maximum]
+            = paddedIfDegenerate(extrema->first, extrema->second, true);
+        if (minimum > 0.0 && minimum < maximum) {
+            return {minimum, maximum, true};
+        }
     }
     const auto [minimum, maximum]
         = paddedIfDegenerate(extrema->first, extrema->second, false);
     return {minimum, maximum, false};
 }
-
-} // namespace
 
 std::size_t VolumeGridKeyHash::operator()(const VolumeGridKey& key) const noexcept
 {
@@ -285,11 +287,15 @@ VolumeFrame LocalDatasetSession::renderVolume(
     const VolumeRenderRequest& request, StopToken cancellation)
 {
     const auto dataset = requireDataset();
-    validateSessionVolumeRequest(m_metadata, m_id, request);
+    // Before the request is measured against the catalog: a dataset without
+    // physical geometry has index-space sample bounds, so a request checked
+    // first would fail on some incidental mismatch instead of saying that
+    // this dataset cannot be volume-rendered at all.
     if (!supportsVolumeRendering()) {
         throw std::invalid_argument(
             "volume rendering requires a 3-D plotfile with physical geometry");
     }
+    validateSessionVolumeRequest(m_metadata, m_id, request);
     const auto maximumLevel = std::min(request.maximumLevel, m_metadata.finestLevel);
     const VolumeGridKey key{request.field, request.component, maximumLevel,
         request.composition, request.region,
@@ -343,7 +349,8 @@ VolumeFrame LocalDatasetSession::renderVolume(
     settings.domain = datasetSampleBounds(m_metadata);
     settings.outputSize = request.outputSize;
     settings.range = request.range
-        ? *request.range : visibleVolumeRange(*grid, request.logarithmic);
+        ? *request.range
+        : visibleVolumeRange(*grid, request.logarithmic, cancellation);
     settings.transfer = request.transfer;
     settings.samplesPerVoxel = request.samplesPerVoxel;
     auto frame = raycastVolume(*grid, settings, cancellation);
@@ -363,12 +370,28 @@ bool LocalDatasetSession::setVolumeGridCacheBudget(std::uint64_t bytes)
 
 CacheMetrics LocalDatasetSession::cacheMetrics() const
 {
+    // The block cache only. The sampled-grid cache is a second pool with its
+    // own hit rate and its own budget, and CacheMetrics has one of each --
+    // summing them would report a budget nobody set (the remote snapshot
+    // asserts the number it was given) and a hit rate over two caches that
+    // measure different things. What setCacheBudget below does guarantee is
+    // that neither pool exceeds the configured budget; reporting both needs
+    // a metrics shape that can hold two, which is a change of its own.
     return requireDataset()->cacheMetrics();
 }
 
 bool LocalDatasetSession::setCacheBudget(std::uint64_t bytes)
 {
-    return requireDataset()->setCacheBudget(bytes);
+    // Both caches, each bounded by `bytes`: they hold different things (read
+    // blocks and sampled grids) and neither should starve for the other, so
+    // this is one budget applied twice rather than one budget split. Without
+    // it AMREXPLORER_CACHE_SIZE_MB bounded only the block cache and a session
+    // could hold the whole grid budget on top of it, unaccounted. It also
+    // overrides an earlier setVolumeGridCacheBudget, which is the point: the
+    // global setting is the one a user reaches for.
+    const auto blocks = requireDataset()->setCacheBudget(bytes);
+    const auto grids = m_volumeGrids.setBudget(bytes);
+    return blocks && grids;
 }
 
 void LocalDatasetSession::clearUnpinnedCache()
@@ -381,7 +404,15 @@ void LocalDatasetSession::close() noexcept
 {
     std::scoped_lock lock(m_mutex);
     m_dataset.reset();
-    m_volumeGrids.clearUnpinned();
+    // clearUnpinned collects the doomed entries in a vector, so it allocates
+    // -- and the memory pressure that would make that throw is exactly when
+    // a cache gets cleared. Letting it escape a noexcept close would
+    // terminate the process during shutdown; dropping the grids is
+    // best-effort, and the cache dies with the session either way.
+    try {
+        m_volumeGrids.clearUnpinned();
+    } catch (...) {
+    }
 }
 
 std::shared_ptr<PlotfileDataset> LocalDatasetSession::requireDataset() const

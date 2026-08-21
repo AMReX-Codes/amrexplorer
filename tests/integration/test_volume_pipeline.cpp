@@ -19,6 +19,7 @@
 #include <iostream>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -206,9 +207,24 @@ int main()
                 && shrunk[1] >= 298
                 && amrvis::volumeResponseBytes(shrunk) <= quarter,
             "an oversized frame was not shrunk to fit, aspect kept");
-        require(amrvis::frameBudgetBoundedVolumeSize({800, 600}, 100U)
+        // A budget too small for one pixel is refused rather than bounded to
+        // {1, 1}: volumeResponseBytes({1, 1}) exceeds it, so the request that
+        // came back would be rejected on arrival anyway, and the refusal here
+        // names the budget instead of failing later as an oversized frame.
+        bool refused = false;
+        try {
+            static_cast<void>(
+                amrvis::frameBudgetBoundedVolumeSize({800, 600}, 100U));
+        } catch (const std::invalid_argument&) {
+            refused = true;
+        }
+        require(refused, "a hopeless budget did not refuse");
+        // The smallest budget that does fit one pixel still yields one pixel.
+        const auto minimum = static_cast<std::uint32_t>(
+            amrvis::volumeResponseBytes({1, 1}));
+        require(amrvis::frameBudgetBoundedVolumeSize({800, 600}, minimum)
                 == (std::array<int, 2>{1, 1}),
-            "a hopeless budget did not collapse to one pixel");
+            "the smallest workable budget did not collapse to one pixel");
     }
 
     const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();

@@ -38,6 +38,17 @@ struct VolumeGridKeyHash {
     [[nodiscard]] std::size_t operator()(const VolumeGridKey& key) const noexcept;
 };
 
+// The range a volume's colours span when a request leaves it to the renderer
+// (the "Visible" range), resolved from the sampled grid: its finite extrema,
+// padded if degenerate, logarithmic only when every finite value allows it,
+// and a neutral range when the grid holds none. Declared here rather than
+// kept file-local because the remote session has to answer it the same way,
+// and because the rule -- which has to agree with the slice path's
+// resolveRange -- is worth pinning on its own. Scans the grid, so it throws
+// ReadCancelled when the token stops.
+[[nodiscard]] VolumeRange visibleVolumeRange(
+    const VolumeGrid& grid, bool logarithmic, StopToken cancellation = {});
+
 class LocalDatasetSession final : public DatasetSession {
 public:
     // The file version comes from the dataset's own metadata read; nothing
@@ -77,7 +88,9 @@ public:
     [[nodiscard]] VolumeFrame renderVolume(const VolumeRenderRequest& request,
         StopToken cancellation = {}) override;
     // The sampled-grid cache's budget; grids larger than it are rendered
-    // uncached. Returns false for a zero budget.
+    // uncached. Returns whether the cache fits the new budget, which a zero
+    // budget does (every unpinned grid is evicted and nothing is resident);
+    // it is false only while a pinned grid still exceeds it.
     [[nodiscard]] bool setVolumeGridCacheBudget(std::uint64_t bytes);
 
     [[nodiscard]] CacheMetrics cacheMetrics() const override;

@@ -224,16 +224,14 @@ void validateSessionVolumeRequest(const DatasetMetadata& metadata,
     if (!errors.empty()) {
         throw std::invalid_argument(errors.front());
     }
-    // The region must lie within the domain, with a hair of tolerance for a
-    // region computed from the domain itself.
-    const auto domain = datasetSampleBounds(metadata);
-    for (std::size_t axis = 0; axis < 3; ++axis) {
-        const auto tolerance = 1.0e-9 * (domain.upper[axis] - domain.lower[axis]);
-        if (request.region.lower[axis] < domain.lower[axis] - tolerance
-            || request.region.upper[axis] > domain.upper[axis] + tolerance) {
-            throw std::invalid_argument("volume region lies outside the dataset");
-        }
-    }
+    // No containment test. VolumeQuery states that "a region reaching past
+    // the domain is not refused. The grid already says 'no data here' with
+    // NaN", and validateSessionViewRequest does not refuse one either -- so
+    // refusing here would throw away a rubber-band selection that renders
+    // perfectly well as a slice, and the relative tolerance it needed
+    // collapsed to zero on an axis whose domain extent is degenerate.
+    // validateVolumeRenderRequest above already bounds the region's own
+    // shape, and volumeGridDims bounds the grid it turns into.
 }
 
 void validateSessionVolumeResult(const DatasetMetadata& metadata,
@@ -264,14 +262,16 @@ void validateSessionVolumeResult(const DatasetMetadata& metadata,
             "volume frame used a logarithmic range that was not requested");
     }
     const auto& metrics = frame.metrics;
-    std::uint64_t voxels = 1;
     for (const auto extent : metrics.gridDims) {
         if (extent < 1) {
             throw std::invalid_argument(
                 "volume frame reports an empty sampled grid");
         }
-        voxels *= static_cast<std::uint64_t>(extent);
     }
+    // Saturating, not a plain product: this validates a peer's numbers, and
+    // dims whose product wraps 64 bits (say {2^22, 2^21, 2^21}) would come
+    // out as zero and pass both the budget and the coverage test below.
+    const auto voxels = volumeVoxelCount(metrics.gridDims);
     if (voxels > request.maximumVoxels) {
         throw std::invalid_argument(
             "volume frame reports a grid over the requested voxel budget");

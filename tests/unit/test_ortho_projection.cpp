@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <limits>
 #include <iostream>
 
 namespace {
@@ -149,6 +150,32 @@ int main()
             require(outside, "the ray origin starts inside the domain");
         }
     }
+    // Domains at the extremes of the double range. The centre of a box is
+    // taken as half of each bound rather than half of their sum or the lower
+    // bound plus half the span: the first overflows for a box spanning most
+    // of the range, the second for a box whose own span overflows, and either
+    // way the projection comes back NaN and reaches QPainter.
+    {
+        constexpr auto huge = std::numeric_limits<double>::max();
+        const amrvis::RealBox spanning{point(-huge, -1.0, -1.0),
+            point(huge, 1.0, 1.0)};
+        const amrvis::RealBox offset{point(1.0e308, 0.0, 0.0),
+            point(1.1e308, 1.0, 1.0)};
+        for (const auto& box : {spanning, offset}) {
+            require(box.valid(3), "the extreme domain is not a valid box");
+            const auto boxCentre = box.center();
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                require(std::isfinite(boxCentre[axis]),
+                    "the centre of an extreme box is not finite");
+            }
+            const auto p = amrvis::projectPoint(
+                oblique, frame, box, point(0.0, 0.0, 0.0));
+            require(std::isfinite(p.x) && std::isfinite(p.y)
+                    && std::isfinite(p.depth),
+                "an extreme domain projected to a non-finite point");
+        }
+    }
+
     // The preset rays are axis-aligned with the expected sign.
     {
         const auto xy = amrvis::pixelRay(

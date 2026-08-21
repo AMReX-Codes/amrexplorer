@@ -81,10 +81,7 @@ void IsoWidget::setGeometry(const DatasetMetadata& metadata)
         // Default to the domain center so a caller that sets geometry but
         // forgets setSlicePositions draws the planes mid-domain instead of
         // clamped to the lower face by the {0,0,0} default.
-        for (std::size_t axis = 0; axis < 3; ++axis) {
-            m_slicePositions[axis] = 0.5
-                * (m_domain.lower[axis] + m_domain.upper[axis]);
-        }
+        m_slicePositions = m_domain.center().values;
     }
     update();
 }

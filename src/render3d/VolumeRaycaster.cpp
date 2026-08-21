@@ -69,22 +69,42 @@ std::uint32_t packPremultiplied(double alpha, double red, double green,
 // projection has no near plane -- t is a position along the view line, not a
 // distance from an eye -- so marching from a negative tEnter is still front
 // to back, and clipping it away would drop the front of such a grid.
-bool clipToBox(const Ray& ray, const RealBox& box, double& tEnter,
-    double& tExit) noexcept
+// The frame-invariant half of clipToBox. An orthographic projection gives
+// every pixel the same direction, so which axes the ray runs parallel to, and
+// the reciprocal the slab test divides by, are properties of the frame -- the
+// compiler cannot hoist the division itself, since x / y is not x * (1 / y)
+// without -ffast-math.
+struct SlabAxes {
+    std::array<double, 3> inverseDirection{};
+    std::array<bool, 3> parallel{};
+};
+
+SlabAxes slabAxesFor(const Real3& direction) noexcept
+{
+    SlabAxes axes;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        axes.parallel[axis] = std::abs(direction[axis]) < 1.0e-12;
+        axes.inverseDirection[axis] = axes.parallel[axis]
+            ? 0.0 : 1.0 / direction[axis];
+    }
+    return axes;
+}
+
+bool clipToBox(const Ray& ray, const SlabAxes& axes, const RealBox& box,
+    double& tEnter, double& tExit) noexcept
 {
     tEnter = -std::numeric_limits<double>::infinity();
     tExit = std::numeric_limits<double>::infinity();
     for (std::size_t axis = 0; axis < 3; ++axis) {
-        const auto direction = ray.direction[axis];
         const auto origin = ray.origin[axis];
-        if (std::abs(direction) < 1.0e-12) {
+        if (axes.parallel[axis]) {
             if (origin < box.lower[axis] || origin > box.upper[axis]) {
                 return false;
             }
             continue;
         }
-        auto t0 = (box.lower[axis] - origin) / direction;
-        auto t1 = (box.upper[axis] - origin) / direction;
+        auto t0 = (box.lower[axis] - origin) * axes.inverseDirection[axis];
+        auto t1 = (box.upper[axis] - origin) * axes.inverseDirection[axis];
         if (t0 > t1) {
             std::swap(t0, t1);
         }
@@ -224,23 +244,7 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
 
     const auto width = settings.outputSize[0];
     const auto height = settings.outputSize[1];
-    VolumeFrame frame;
-    frame.width = width;
-    frame.height = height;
-    frame.pixels.assign(
-        static_cast<std::size_t>(width) * static_cast<std::size_t>(height), 0U);
-    frame.usedRange = settings.range;
-    frame.metrics.gridDims = grid.dims;
-    frame.metrics.coveredVoxels = grid.coveredVoxels;
-    frame.metrics.sampledMaximumLevel = grid.maximumLevel;
-
-    const auto entries = resolveEntries(settings.transfer, settings.samplesPerVoxel);
-    // At least two, by the transfer-function validator above: the march
-    // indexes with valueSlot's result and does not re-check it.
-    const auto entryCount = static_cast<int>(entries.size());
-    const auto mappedRange = *mapping;
     const auto& lower = grid.region.lower;
-    std::array<double, 3> pitch{};
     // The reciprocal, because the march divides by the pitch three times per
     // sample and the pitch is fixed for the frame. Unlike the range mapping,
     // where the reciprocal costs the exact palette-slot ties, this quotient
@@ -248,7 +252,7 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     // exactly on a voxel plane, an arbitrary tie either way.
     std::array<double, 3> inversePitch{};
     for (std::size_t axis = 0; axis < 3; ++axis) {
-        pitch[axis] = (grid.region.upper[axis] - grid.region.lower[axis])
+        const auto pitch = (grid.region.upper[axis] - grid.region.lower[axis])
             / static_cast<double>(grid.dims[axis]);
         // RealBox::valid rejects a degenerate or infinite box, so this is not
         // about an empty region. It catches the two ways a *valid* box still
@@ -256,11 +260,11 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
         // underflows to exactly zero (a step that never advances), and a span
         // between two finite bounds near the top of the range overflows to
         // infinity.
-        if (!(pitch[axis] > 0.0) || !std::isfinite(pitch[axis])) {
+        if (!(pitch > 0.0) || !std::isfinite(pitch)) {
             throw std::invalid_argument(
                 "volume grid region must have finite positive extent");
         }
-        inversePitch[axis] = 1.0 / pitch[axis];
+        inversePitch[axis] = 1.0 / pitch;
     }
     const auto viewport = viewportFrame(width, height);
     const auto rays = rayField(settings.camera, viewport, settings.domain);
@@ -313,13 +317,35 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     // A ray inside the box travels at most extent / |direction| along each
     // axis, and the norm above is at most the sum of the per-axis rates, so
     // the count below is at most samplesPerVoxel * sum(dims): the
-    // ceiling is a backstop, not a working limit, and only a region orders of
-    // magnitude thinner than the domain can reach it (there it renders
-    // approximately rather than marching for hours).
+    // ceiling is a backstop against rounding in that bound, not a working
+    // limit. Reaching it needs an axis under the parallel threshold whose
+    // pitch still dominates the norm; the march then stops early and the far
+    // side of the volume is dropped -- not rendered coarsely. That is
+    // acceptable only because the geometry that reaches it is already
+    // degenerate; it is a guard against a march that will not end, not a
+    // level-of-detail scheme.
     const auto sampleCeiling = static_cast<double>(settings.samplesPerVoxel)
         * (static_cast<double>(grid.dims[0]) + static_cast<double>(grid.dims[1])
             + static_cast<double>(grid.dims[2]))
         + 2.0;
+
+    // Allocated only now: every refusal above is a property of the settings
+    // and the grid, and the pixel buffer is 67 MB at the 4096x4096 cap. The
+    // same cheapest-refusal-first argument the voxel budget makes.
+    VolumeFrame frame;
+    frame.width = width;
+    frame.height = height;
+    frame.pixels.assign(
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height), 0U);
+    frame.usedRange = settings.range;
+    frame.metrics.gridDims = grid.dims;
+    frame.metrics.coveredVoxels = grid.coveredVoxels;
+    frame.metrics.sampledMaximumLevel = grid.maximumLevel;
+    const auto entries = resolveEntries(settings.transfer, settings.samplesPerVoxel);
+    // At least two, by the transfer-function validator above: the march
+    // indexes with valueSlot's result and does not re-check it.
+    const auto entryCount = static_cast<int>(entries.size());
+    const auto mappedRange = *mapping;
     // Front-to-back compositing stops once the ray is this opaque: whatever
     // lies behind can add at most 0.001 to any channel, a quarter of one
     // 8-bit level, so the pixel is what a full march would round to.
@@ -338,6 +364,13 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     // atomic load off the per-item path while bounding the delay.
     constexpr int pixelCancellationStride = 64;
     constexpr std::int64_t sampleCancellationStride = 4096;
+    const auto slabAxes = slabAxesFor(rays.direction);
+    // One direction for the whole frame means one voxel-space step for the
+    // whole frame; only where a ray enters the grid varies per pixel.
+    std::array<double, 3> voxelStep{};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        voxelStep[axis] = rays.direction[axis] * step * inversePitch[axis];
+    }
     const auto renderRow = [&](int row) {
         auto* pixels = frame.pixels.data() + rowStride * static_cast<std::size_t>(row);
         const auto pixelY = static_cast<double>(row) + 0.5;
@@ -351,7 +384,7 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
             const auto ray = rayAt(rays, static_cast<double>(column) + 0.5, pixelY);
             double tEnter = 0.0;
             double tExit = 0.0;
-            if (!clipToBox(ray, grid.region, tEnter, tExit)) {
+            if (!clipToBox(ray, slabAxes, grid.region, tEnter, tExit)) {
                 continue;
             }
             // A count, not an accumulation: `t += step` stops advancing once
@@ -371,11 +404,9 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
             // and add that going through world space costs. The sample index
             // still drives it, so the no-accumulation argument above holds.
             std::array<double, 3> voxelStart{};
-            std::array<double, 3> voxelStep{};
             for (std::size_t axis = 0; axis < 3; ++axis) {
                 voxelStart[axis] = (ray.origin[axis] + tEnter * ray.direction[axis]
                     - lower[axis]) * inversePitch[axis];
-                voxelStep[axis] = ray.direction[axis] * step * inversePitch[axis];
             }
             double alpha = 0.0;
             double red = 0.0;

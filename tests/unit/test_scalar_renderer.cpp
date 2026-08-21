@@ -192,6 +192,18 @@ int main()
         badSettings.minimum = -1.0;
         expectRejected(good, badSettings, "logarithmic scalar range must be positive",
             "a negative logarithmic minimum was not rejected");
+        // A logarithmic range can also be too narrow to map even though every
+        // check above passes: adjacent doubles at 1e300 are ordered, finite
+        // and positive, and their span is finite, but their logarithms are
+        // the same double, so there is no span to spread the slots over.
+        // Before the shared mapping this rendered a step function; it is a
+        // refusal now, and validateVolumeRenderRequest refuses it too, so the
+        // two never disagree about what a legal range is.
+        badSettings.minimum = 1.0e300;
+        badSettings.maximum = std::nextafter(1.0e300, 
+            std::numeric_limits<double>::infinity());
+        expectRejected(good, badSettings, "same logarithm",
+            "a logarithmic range narrower than one logarithm was not rejected");
     }
 
     // Check order: an earlier fault must win. Dimensions are validated before

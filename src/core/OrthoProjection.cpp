@@ -17,15 +17,10 @@ struct Normalisation {
 Normalisation normalisation(const RealBox& domain) noexcept
 {
     Normalisation result;
+    result.center = domain.center();
     double extent = 0.0;
     for (std::size_t axis = 0; axis < 3; ++axis) {
-        // lower + half the span, not half the sum: the sum of two finite
-        // bounds near the top of the range overflows to infinity, and the
-        // centre would come back infinite for a box whose span is perfectly
-        // ordinary (a domain of [1e308, 1.1e308] spans only 1e307).
-        const auto span = domain.upper[axis] - domain.lower[axis];
-        result.center[axis] = domain.lower[axis] + 0.5 * span;
-        extent = std::max(extent, span);
+        extent = std::max(extent, domain.upper[axis] - domain.lower[axis]);
     }
     result.extent = extent > 0.0 ? extent : 1.0;
     return result;

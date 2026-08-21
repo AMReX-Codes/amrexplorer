@@ -34,8 +34,13 @@ struct ResolvedValueRange {
 [[nodiscard]] inline std::optional<ResolvedValueRange> resolveValueRange(
     double minimum, double maximum, bool logarithmic) noexcept
 {
+    // Both bounds are tested for positivity, not just the minimum: this is
+    // noexcept and public, so an unordered logarithmic range reaches it, and
+    // std::log of a negative maximum raises FE_INVALID and sets errno. The
+    // span test below would reject the range anyway -- but not before a build
+    // running with feenableexcept(FE_INVALID) had taken SIGFPE.
     if (!std::isfinite(minimum) || !std::isfinite(maximum)
-        || (logarithmic && !(minimum > 0.0))) {
+        || (logarithmic && !(minimum > 0.0 && maximum > 0.0))) {
         return std::nullopt;
     }
     ResolvedValueRange resolved;

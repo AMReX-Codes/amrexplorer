@@ -31,7 +31,7 @@ target_link_libraries(test_volume_types PRIVATE amrexplorer::core amrexplorer::w
 add_test(NAME volume_types COMMAND test_volume_types)
 
 add_executable(test_volume_raycaster unit/test_volume_raycaster.cpp)
-target_link_libraries(test_volume_raycaster PRIVATE amrexplorer::render3d amrexplorer::warnings)
+target_link_libraries(test_volume_raycaster PRIVATE amrexplorer::render3d amrexplorer::warnings Threads::Threads)
 add_test(NAME volume_raycaster COMMAND test_volume_raycaster)
 
 add_executable(test_geometry unit/test_geometry.cpp)

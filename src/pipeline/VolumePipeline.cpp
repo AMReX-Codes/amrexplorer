@@ -222,6 +222,15 @@ VolumeDisplayResult renderWithFallback(
                 frame.cacheFallbackToLevel = sessionTo >= 0
                     ? std::min(sessionTo, fallbackTo) : fallbackTo;
             }
+            // VolumeDisplayResult::request is documented as the request "as
+            // rendered, after any fallback", and the session may have fallen
+            // back inside an attempt this loop never retried -- a remote
+            // server under its own cache pressure does exactly that. Without
+            // this the caller's own state stays at the level it asked for
+            // while the pixels came from a coarser one.
+            if (frame.cacheFallbackToLevel >= 0) {
+                request.maximumLevel = frame.cacheFallbackToLevel;
+            }
             return {request, std::move(frame)};
         } catch (const CacheBudgetExceeded&) {
             const auto budget = cacheBudgetDescription(

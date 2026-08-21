@@ -120,6 +120,102 @@ std::size_t litPixels(const amrvis::VolumeFrame& frame)
     return lit;
 }
 
+// A session that renders locally but reports a fallback of its own, the way
+// a remote server under its own cache pressure does. Everything but
+// renderVolume delegates; LocalDatasetSession is final, so this wraps rather
+// than derives.
+class FallbackReportingSession final : public amrvis::DatasetSession {
+public:
+    explicit FallbackReportingSession(
+        std::shared_ptr<amrvis::LocalDatasetSession> inner)
+        : m_inner(std::move(inner))
+    {
+    }
+
+    [[nodiscard]] amrvis::DatasetId id() const noexcept override
+    {
+        return m_inner->id();
+    }
+    [[nodiscard]] const amrvis::DatasetMetadata& metadata() const noexcept override
+    {
+        return m_inner->metadata();
+    }
+    [[nodiscard]] const amrvis::MetadataReadMetrics&
+    metadataReadMetrics() const noexcept override
+    {
+        return m_inner->metadataReadMetrics();
+    }
+    [[nodiscard]] const std::string& fileVersion() const noexcept override
+    {
+        return m_inner->fileVersion();
+    }
+    [[nodiscard]] const std::vector<amrvis::ParticleSpeciesMetadata>&
+    particleSpecies() const noexcept override
+    {
+        return m_inner->particleSpecies();
+    }
+    [[nodiscard]] amrvis::ViewDataResult requestView(
+        const amrvis::ViewDataRequest& request,
+        amrvis::StopToken cancellation = {}) override
+    {
+        return m_inner->requestView(request, cancellation);
+    }
+    [[nodiscard]] amrvis::DatasetPage requestDatasetPage(
+        const amrvis::DatasetPageRequest& request,
+        amrvis::StopToken cancellation = {}) override
+    {
+        return m_inner->requestDatasetPage(request, cancellation);
+    }
+    [[nodiscard]] std::optional<amrvis::ValueRange> requestRange(
+        const amrvis::RangeRequest& request,
+        amrvis::StopToken cancellation = {}) override
+    {
+        return m_inner->requestRange(request, cancellation);
+    }
+    [[nodiscard]] bool rangeAvailable(
+        const amrvis::RangeRequest& request) const noexcept override
+    {
+        return m_inner->rangeAvailable(request);
+    }
+    [[nodiscard]] amrvis::ParticleSample requestParticleSample(
+        const std::string& species, double fraction, std::uint64_t seed,
+        amrvis::StopToken cancellation = {}) override
+    {
+        return m_inner->requestParticleSample(
+            species, fraction, seed, cancellation);
+    }
+    [[nodiscard]] bool supportsVolumeRendering() const noexcept override
+    {
+        return m_inner->supportsVolumeRendering();
+    }
+    // The one that matters: render at one level coarser than asked and say
+    // so, without ever throwing CacheBudgetExceeded at the pipeline.
+    [[nodiscard]] amrvis::VolumeFrame renderVolume(
+        const amrvis::VolumeRenderRequest& request,
+        amrvis::StopToken cancellation = {}) override
+    {
+        auto coarser = request;
+        coarser.maximumLevel = std::max(0, request.maximumLevel - 1);
+        auto frame = m_inner->renderVolume(coarser, cancellation);
+        frame.cacheFallbackFromLevel = request.maximumLevel;
+        frame.cacheFallbackToLevel = coarser.maximumLevel;
+        return frame;
+    }
+    [[nodiscard]] amrvis::CacheMetrics cacheMetrics() const override
+    {
+        return m_inner->cacheMetrics();
+    }
+    [[nodiscard]] bool setCacheBudget(std::uint64_t bytes) override
+    {
+        return m_inner->setCacheBudget(bytes);
+    }
+    void clearUnpinnedCache() override { m_inner->clearUnpinnedCache(); }
+    void close() noexcept override { m_inner->close(); }
+
+private:
+    std::shared_ptr<amrvis::LocalDatasetSession> m_inner;
+};
+
 } // namespace
 
 int main()
@@ -442,6 +538,23 @@ int main()
             require(followed.request.maximumLevel == 0
                     && followed.frame.usedRange.maximum < 1.5,
                 "the range did not follow the fallback to level 0");
+        }
+        // A session that falls back inside an attempt the client never
+        // retried: the result's request must describe what was rendered, not
+        // what was asked for, or the caller's state stays finer than the
+        // pixels it got.
+        {
+            auto reporting = std::make_shared<FallbackReportingSession>(session);
+            std::shared_ptr<amrvis::DatasetSession> wrapped = reporting;
+            auto asked = request;
+            asked.maximumLevel = 1;
+            const auto served
+                = amrvis::executeVolumeRenderWithFallback(wrapped, asked);
+            require(served.frame.cacheFallbackFromLevel == 1
+                    && served.frame.cacheFallbackToLevel == 0,
+                "the session's own fallback was not reported");
+            require(served.request.maximumLevel == 0,
+                "the result's request did not follow the session's fallback");
         }
         auto exact = request;
         exact.composition = amrvis::CompositionPolicy::ExactLevel;

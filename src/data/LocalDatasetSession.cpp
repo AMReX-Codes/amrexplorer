@@ -343,12 +343,14 @@ VolumeFrame LocalDatasetSession::renderVolume(
         try {
             handle = m_volumeGrids.insertAndPin(key, owned, bytes);
             grid = handle.value();
-            // A racing thread may have inserted this key first, in which case
-            // insertAndPin returns its grid and ours is discarded. The frame
-            // then describes a sample whose result nothing used, so it is
-            // reported as the cache hit it actually was.
+            // A racing thread may have inserted this key first, in which
+            // case insertAndPin returns its grid and ours is discarded. The
+            // grid rendered did come from the cache, so say so -- but the
+            // sampling and the payload reads above genuinely happened and
+            // cost what they cost, so those stay. Zeroing them would make the
+            // diagnostics understate the work the process actually did, which
+            // is the opposite error.
             if (grid != owned) {
-                metrics = VolumeRenderMetrics{};
                 metrics.gridFromCache = true;
             }
         } catch (const CacheBudgetExceeded&) {

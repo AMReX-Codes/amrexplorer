@@ -317,8 +317,8 @@ VolumeFrame LocalDatasetSession::renderVolume(
         sample.region = request.region;
         sample.maximumVoxels = request.maximumVoxels;
         auto sampled = VolumeQuery(*dataset).execute(sample, cancellation);
-        metrics.sampleMilliseconds = static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
+        metrics.sampleMicroseconds = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - started).count());
         metrics.candidateBlocks = sampled.metrics.candidateBlocks;
         metrics.blocksRead = sampled.metrics.blocksRead;
@@ -347,9 +347,9 @@ VolumeFrame LocalDatasetSession::renderVolume(
     settings.transfer = request.transfer;
     settings.samplesPerVoxel = request.samplesPerVoxel;
     auto frame = raycastVolume(*grid, settings, cancellation);
-    const auto renderMilliseconds = frame.metrics.renderMilliseconds;
+    const auto renderMicroseconds = frame.metrics.renderMicroseconds;
     frame.metrics = metrics;
-    frame.metrics.renderMilliseconds = renderMilliseconds;
+    frame.metrics.renderMicroseconds = renderMicroseconds;
     frame.metrics.gridDims = grid->dims;
     frame.metrics.coveredVoxels = grid->coveredVoxels;
     frame.metrics.sampledMaximumLevel = grid->maximumLevel;

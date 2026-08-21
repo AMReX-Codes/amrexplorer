@@ -1009,8 +1009,8 @@ std::array<double, 2> MainWindow::viewCenterInData(
     const auto& region = plane.physicalRegion;
     if (plane.width <= 0 || plane.height <= 0 || state.view == nullptr
         || state.view->viewport() == nullptr) {
-        return {0.5 * (region.lower[xAxis] + region.upper[xAxis]),
-            0.5 * (region.lower[yAxis] + region.upper[yAxis])};
+        const auto centre = region.center();
+        return {centre[xAxis], centre[yAxis]};
     }
     // The centre of the mapped viewport, not the mapping of the viewport's
     // centre *point*: QRect::center() is integral and rounds down, so on a

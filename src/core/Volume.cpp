@@ -1,9 +1,26 @@
 #include <amrexplorer/core/Volume.hpp>
 
+#include <amrexplorer/core/ValueMapping.hpp>
+
 #include <cmath>
 #include <cstddef>
+#include <limits>
 
 namespace amrvis {
+
+std::uint64_t volumeVoxelCount(const std::array<int, 3>& dims) noexcept
+{
+    constexpr auto limit = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t result = 1;
+    for (const auto extent : dims) {
+        const auto value = static_cast<std::uint64_t>(extent);
+        if (value != 0 && result > limit / value) {
+            return limit;
+        }
+        result *= value;
+    }
+    return result;
+}
 
 std::vector<std::string> validateVolumeTransferFunction(
     const VolumeTransferFunction& transfer)
@@ -107,6 +124,16 @@ std::vector<std::string> validateVolumeRenderRequest(
                 "range must be finite with minimum < maximum and a finite span");
         } else if (range.logarithmic && !(range.minimum > 0.0)) {
             errors.emplace_back("a logarithmic range must be strictly positive");
+        } else if (!resolveValueRange(
+                       range.minimum, range.maximum, range.logarithmic)) {
+            // The renderers map through resolveValueRange, so whatever it
+            // cannot resolve has to be refused here too -- otherwise a
+            // request a session or a server has already declared valid throws
+            // from inside the renderer, as an internal error rather than a
+            // rejected request. The case the tests above miss is a
+            // logarithmic range whose bounds share a logarithm.
+            errors.emplace_back(
+                "a logarithmic range must span more than one representable logarithm");
         }
     }
     for (const auto& error : validateVolumeTransferFunction(request.transfer)) {

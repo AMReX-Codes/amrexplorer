@@ -30,6 +30,10 @@ add_executable(test_volume_types unit/test_volume_types.cpp)
 target_link_libraries(test_volume_types PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME volume_types COMMAND test_volume_types)
 
+add_executable(test_volume_raycaster unit/test_volume_raycaster.cpp)
+target_link_libraries(test_volume_raycaster PRIVATE amrexplorer::render3d amrexplorer::warnings Threads::Threads)
+add_test(NAME volume_raycaster COMMAND test_volume_raycaster)
+
 add_executable(test_geometry unit/test_geometry.cpp)
 target_link_libraries(test_geometry PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME geometry COMMAND test_geometry)
@@ -1624,6 +1628,15 @@ set_tests_properties(slice_query_benchmark_resampled PROPERTIES TIMEOUT 120)
 add_test(NAME slice_query_benchmark_clustered
     COMMAND bench_slice_query 8 8 200 1 24 1)
 set_tests_properties(slice_query_benchmark_clustered PROPERTIES TIMEOUT 120)
+
+# Volume ray-caster benchmark: the same shape as bench_slice_query (a
+# functional guard with a generous timeout, timings printed for reading by
+# hand), over the per-frame cast the interactive volume view repeats.
+add_executable(bench_volume_render benchmark/bench_volume_render.cpp)
+target_link_libraries(
+    bench_volume_render PRIVATE amrexplorer::render3d amrexplorer::warnings)
+add_test(NAME volume_render_benchmark COMMAND bench_volume_render)
+set_tests_properties(volume_render_benchmark PROPERTIES TIMEOUT 120)
 
 # Fuzz/property harness for the crafted-plotfile header parsers. No remote
 # dependency, so it builds and runs (including under the sanitizers preset)

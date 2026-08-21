@@ -84,6 +84,41 @@ struct RealBox {
         return true;
     }
 
+    // Each bound halved before the sum, rather than half of the sum or the
+    // lower bound plus half the span. Both of those overflow for boxes valid()
+    // accepts: lower + upper is infinite for a box spanning most of the range
+    // (its centre is then NaN downstream), and lower + 0.5 * span is infinite
+    // when the span itself overflows. Halving is exact -- the exponent moves,
+    // the mantissa does not -- so this form is no less accurate and stays
+    // finite for both.
+    [[nodiscard]] constexpr Real3 center() const noexcept
+    {
+        Real3 result;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            result[axis] = 0.5 * lower[axis] + 0.5 * upper[axis];
+        }
+        return result;
+    }
+
+    // valid() bounds each axis on its own, which does not stop two finite
+    // bounds from subtracting to infinity -- and every extent, pitch and
+    // normalisation derived from such a box is infinite or NaN. Callers that
+    // divide by a span want this as well as valid().
+    [[nodiscard]] constexpr bool finiteSpan(int dimension) const noexcept
+    {
+        if (dimension < 1 || dimension > 3) {
+            return false;
+        }
+        constexpr auto infinity = std::numeric_limits<double>::infinity();
+        for (int axis = 0; axis < dimension; ++axis) {
+            const auto i = static_cast<std::size_t>(axis);
+            if (!(upper[i] - lower[i] < infinity)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     friend constexpr bool operator==(const RealBox&, const RealBox&) = default;
 };
 

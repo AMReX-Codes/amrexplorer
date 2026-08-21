@@ -108,10 +108,11 @@ void MainWindow::zoomActiveViewForTest()
     }
     const auto bounds = datasetSampleBounds(m_dataset->metadata());
     auto subregion = bounds;
+    const auto centre = bounds.center();
     const auto axes = displayAxes(m_activeView->normal);
     for (std::size_t k = 0; k < 2; ++k) {
         const auto axis = static_cast<std::size_t>(axes[k]);
-        subregion.lower[axis] = 0.5 * (bounds.lower[axis] + bounds.upper[axis]);
+        subregion.lower[axis] = centre[axis];
         subregion.upper[axis] = bounds.upper[axis];
     }
     m_activeView->visibleRegion = subregion;

@@ -83,8 +83,8 @@ struct VolumeRenderRequest {
     std::optional<VolumeRange> range;
     bool logarithmic = false;
     VolumeTransferFunction transfer;
-    // Ray samples per voxel along the ray (the step is the smallest voxel
-    // pitch divided by this).
+    // Ray samples per voxel along the ray (the step is the mean distance a
+    // view ray spends crossing one voxel divided by this).
     int samplesPerVoxel = 2;
     std::uint64_t maximumVoxels = defaultVolumeVoxelBudget;
     friend bool operator==(const VolumeRenderRequest&,
@@ -118,8 +118,11 @@ struct VolumeRenderMetrics {
     std::uint64_t coveredVoxels = 0;
     int sampledMaximumLevel = 0;
     bool gridFromCache = false;
-    std::uint64_t sampleMilliseconds = 0;
-    std::uint64_t renderMilliseconds = 0;
+    // Microseconds, not milliseconds: a small viewport renders in well under
+    // one, and a whole-millisecond metric reports those as 0, which reads as
+    // "not measured" rather than "fast".
+    std::uint64_t sampleMicroseconds = 0;
+    std::uint64_t renderMicroseconds = 0;
     std::uint64_t candidateBlocks = 0;
     std::uint64_t blocksRead = 0;
     std::uint64_t cacheHits = 0;
@@ -142,6 +145,14 @@ struct VolumeFrame {
     int cacheFallbackToLevel = -1;
     friend bool operator==(const VolumeFrame&, const VolumeFrame&) = default;
 };
+
+// The voxels a dims triple describes, saturating at the 64-bit maximum: a
+// product large enough to wrap would otherwise equal the size of a much
+// smaller (or empty) grid and pass a storage or budget check it should fail.
+// Callers pass positive dims; the zero test guards the division, not the
+// overflow.
+[[nodiscard]] std::uint64_t volumeVoxelCount(
+    const std::array<int, 3>& dims) noexcept;
 
 // Structural validity of a request, before a session checks it against its
 // dataset: every field bounded and finite. Empty when valid.

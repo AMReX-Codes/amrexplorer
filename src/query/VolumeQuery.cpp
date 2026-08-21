@@ -21,24 +21,6 @@ using detail::valueOffset;
 
 constexpr auto quietNaN = std::numeric_limits<float>::quiet_NaN();
 
-// Saturating: a level large enough to overflow the product would otherwise
-// wrap past the budget test in volumeGridDims and pass as if it fitted.
-std::uint64_t product(const std::array<int, 3>& dims)
-{
-    constexpr auto limit = std::numeric_limits<std::uint64_t>::max();
-    std::uint64_t result = 1;
-    for (const auto extent : dims) {
-        const auto value = static_cast<std::uint64_t>(extent);
-        // Callers only ever pass positive dims, but the zero test guards the
-        // division below rather than the overflow, so it stays.
-        if (value != 0 && result > limit / value) {
-            return limit;
-        }
-        result *= value;
-    }
-    return result;
-}
-
 // The same product in double: no overflow, so the scaling below shrinks by
 // the true ratio even when the integer product has saturated.
 double realProduct(const std::array<int, 3>& dims)
@@ -67,7 +49,7 @@ std::array<int, 3> volumeGridDims(const DatasetMetadata& metadata,
     // whole grid by one ratio, so an axis already truncated to the budget
     // gets shrunk a second time and a thin region ends up spending a
     // fraction of what it was given. The product of three uncapped axes
-    // overflows, which is why product() saturates.
+    // overflows, which is why volumeVoxelCount() saturates.
     constexpr auto ceiling = 1.0e9;
     // Only the axes the dataset has: a 2-D level's third cellSize is the
     // synthetic 1.0, which would invent a third dimension out of it.
@@ -84,7 +66,7 @@ std::array<int, 3> volumeGridDims(const DatasetMetadata& metadata,
             ? static_cast<int>(std::clamp(cells, 1.0, ceiling))
             : 1;
     }
-    if (product(dims) > budget) {
+    if (volumeVoxelCount(dims) > budget) {
         const auto scale = std::cbrt(static_cast<double>(budget)
             / realProduct(dims));
         for (auto& extent : dims) {
@@ -107,7 +89,7 @@ std::array<int, 3> volumeGridDims(const DatasetMetadata& metadata,
         // that took the better part of a second inside a call a server makes
         // before it has validated anything. The search is bounded by the
         // bit width instead.
-        if (product(dims) > budget) {
+        if (volumeVoxelCount(dims) > budget) {
             const auto native = dims;
             const auto cappedAt = [&native](int cap) {
                 std::array<int, 3> trial{};
@@ -120,7 +102,7 @@ std::array<int, 3> volumeGridDims(const DatasetMetadata& metadata,
             auto high = *std::max_element(native.begin(), native.end());
             while (low < high) {
                 const auto middle = low + (high - low + 1) / 2;
-                if (product(cappedAt(middle)) <= budget) {
+                if (volumeVoxelCount(cappedAt(middle)) <= budget) {
                     low = middle;
                 } else {
                     high = middle - 1;
@@ -133,7 +115,7 @@ std::array<int, 3> volumeGridDims(const DatasetMetadata& metadata,
             for (std::size_t axis = 0; axis < 3; ++axis) {
                 if (native[axis] > low) {
                     ++dims[axis];
-                    if (product(dims) > budget) {
+                    if (volumeVoxelCount(dims) > budget) {
                         --dims[axis];
                     }
                 }
@@ -175,7 +157,7 @@ VolumeQueryResult VolumeQuery::execute(
     auto& grid = result.grid;
     grid.dims = dims;
     grid.region = request.region;
-    grid.values.assign(static_cast<std::size_t>(product(dims)), quietNaN);
+    grid.values.assign(static_cast<std::size_t>(volumeVoxelCount(dims)), quietNaN);
 
     // The slice resolves its pixels with this too, so a voxel and a pixel
     // over the same region land on the same cell rather than a rounding step

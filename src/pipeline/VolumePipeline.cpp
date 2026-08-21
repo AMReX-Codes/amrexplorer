@@ -250,7 +250,10 @@ VolumeDisplayResult renderWithFallback(
         try {
             if (choice) {
                 // Per attempt, not once: request.maximumLevel is what the
-                // loop lowers, and a File or Level range is a property of it.
+                // loop lowers, and a Level range is read per level. The other
+                // modes resolve to the same range every time round, which
+                // costs a statistics lookup and nothing else -- only the
+                // repeat below is worth gating on the mode.
                 request.logarithmic = choice->logarithmic;
                 request.range = resolveVolumeRange(dataset, request.field,
                     request.maximumLevel, request.composition, choice->mode,

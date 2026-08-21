@@ -51,19 +51,26 @@ struct OpacityRamp {
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, StopToken cancellation = {});
 
-// How the range is resolved, for the fallback path below. Passing this
-// rather than a pre-resolved request.range is what keeps a File or Level
-// range following the level a cache-pressure fallback actually rendered:
-// level 2's statistics are not level 0's, and a frame resolved once up front
-// would be coloured, and its colour bar labelled, by a range no part of the
-// volume it drew came from. The slice path avoids this by resolving inside
-// its own retry loop.
+// How the range is resolved, for the fallback path below, which resolves it
+// afresh for whatever level each attempt is about to render.
 //
-// It follows a fallback the *session* made too, not only one the loop drove:
-// a remote server that renders coarser under its own cache pressure reports
-// the level it used, and the render is then repeated for that level so the
-// range belongs to the pixels. That costs an extra render on a path that
-// only runs under cache pressure.
+// This matters for one mode: RangeMode::Level, whose statistics are read per
+// level. Level 2's are not level 0's, so a range resolved once up front
+// would colour a fallen-back frame, and label its colour bar, with numbers no
+// part of the volume it drew came from. The slice path avoids the same trap
+// by resolving inside its own retry loop.
+//
+// The other modes do not move with the level and are never worth a repeat:
+// File asks metadataValueRange for the whole file and ignores the level
+// entirely, User is the caller's own pair, and Visible is resolved by the
+// renderer from the grid it actually sampled, so it follows a fallback on its
+// own.
+//
+// A fallback the *session* made counts as well as one the loop drove: a
+// remote server that renders coarser under its own cache pressure reports the
+// level it used, and that level is always carried into the result. For a
+// Level range the render is then repeated for it, so the range belongs to the
+// pixels -- an extra render, on a path that only runs under cache pressure.
 struct VolumeRangeChoice {
     RangeMode mode = RangeMode::Visible;
     std::optional<std::pair<double, double>> userRange;
@@ -99,11 +106,10 @@ struct VolumeDisplayResult {
 // retries (finest-available only), reporting the fallback in the frame; an
 // exact level or level 0 that cannot fit throws an actionable message.
 //
-// The second form re-resolves the range for every attempt and is the one to
-// use for a File or Level range; the first takes request.range as final and
-// is only correct for a range that does not depend on the level (a User
-// range, or none -- Visible is resolved by the renderer from the grid it
-// actually sampled, so it follows a fallback on its own).
+// The overload taking a VolumeRangeChoice resolves the range for each attempt
+// and is the one to use for a Level range. The overload without one takes
+// request.range as final, which is correct for every other mode -- see
+// VolumeRangeChoice above for why none of them moves with the level.
 [[nodiscard]] VolumeDisplayResult executeVolumeRenderWithFallback(
     const std::shared_ptr<DatasetSession>& dataset, VolumeRenderRequest request,
     const VolumeRangeChoice& range, StopToken cancellation = {});

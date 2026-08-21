@@ -15,8 +15,10 @@
 // The default workload is small so it stays fast in CI.
 #include <amrexplorer/render3d/VolumeRaycaster.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>

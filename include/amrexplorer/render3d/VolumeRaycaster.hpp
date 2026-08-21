@@ -27,30 +27,43 @@ struct RaycastSettings {
     std::array<int, 2> outputSize{0, 0};
     VolumeRange range;
     VolumeTransferFunction transfer;
-    // Ray samples per voxel: the step is the smallest voxel pitch divided by
-    // this, and each sample's opacity is corrected so a voxel contributes its
-    // entry's opacity once whatever the step.
+    // Ray samples per voxel: the step is the mean distance a view ray spends
+    // crossing one voxel divided by this, and each sample's opacity is
+    // corrected so a voxel contributes its entry's opacity once whatever the
+    // step. Measuring the step along the view rather than by the smallest
+    // pitch is what keeps that true of an anisotropic grid, where a coarse
+    // axis would otherwise be sampled many times per voxel and come out far
+    // more opaque than its entry asks for.
     int samplesPerVoxel = 2;
-    unsigned threadCount = 0;   // 0 = std::thread::hardware_concurrency()
+    // 0 = std::thread::hardware_concurrency(); bounded above by the row count
+    // and by a small multiple of the hardware's, so an outsized request costs
+    // no more than a sensible one.
+    unsigned threadCount = 0;
 };
 
 // Renders the grid; the frame's usedRange is settings.range and its metrics
-// carry only the render time. Throws std::invalid_argument for inconsistent
-// settings or a malformed grid, ReadCancelled when the token stops.
+// carry the render time and what the grid reports about itself (its dims,
+// covered voxels and finest sampled level) -- the sampling and cache fields
+// belong to whoever produced the grid. Throws std::invalid_argument for
+// inconsistent settings or a malformed grid, ReadCancelled when the token
+// stops.
 [[nodiscard]] VolumeFrame raycastVolume(const VolumeGrid& grid,
     const RaycastSettings& settings, StopToken cancellation = {});
 
 // The finite extrema of the grid's values (of its positive values when
 // logarithmic), for resolving a "Visible" range; nullopt when there are
-// none. Possibly degenerate (minimum == maximum): the caller pads.
+// none. Possibly degenerate (minimum == maximum): the caller pads. Scans the
+// whole grid, so it takes a token and throws ReadCancelled like the render.
 [[nodiscard]] std::optional<std::pair<double, double>> volumeGridRange(
-    const VolumeGrid& grid, bool logarithmic);
+    const VolumeGrid& grid, bool logarithmic, StopToken cancellation = {});
 
 // The transfer-function entry a value maps to under a range: entry 0 at or
 // below the minimum, the last at or above the maximum, truncation between
 // (the mapping renderScalarPlane uses for its palette slots, so volume
 // colours agree with the slices'); nullopt for a value the range cannot map
-// (non-finite, or non-positive under a logarithmic range).
+// (non-finite, or non-positive under a logarithmic range) and for a range
+// that can map nothing (a non-finite bound, an empty or infinite span, or a
+// logarithmic range reaching to zero).
 [[nodiscard]] std::optional<int> transferEntryFor(double value,
     const VolumeRange& range, int entryCount) noexcept;
 

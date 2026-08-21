@@ -57,6 +57,79 @@ std::uint32_t packPremultiplied(double alpha, double red, double green,
         | (channel(green) << 8U) | channel(blue);
 }
 
+// Saturating, as the sampler's product is: a dims product large enough to
+// wrap would otherwise equal the size of a much smaller (or empty) values
+// vector, pass the storage check below, and let the march index past its end.
+std::uint64_t voxelCountOf(const std::array<int, 3>& dims) noexcept
+{
+    constexpr auto limit = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t result = 1;
+    for (const auto extent : dims) {
+        const auto value = static_cast<std::uint64_t>(extent);
+        if (value != 0 && result > limit / value) {
+            return limit;
+        }
+        result *= value;
+    }
+    return result;
+}
+
+// A range with its logarithms already taken. transferEntryFor is called once
+// per ray sample, and std::log of the two bounds in there is two library
+// calls per sample the compiler cannot hoist for itself (they set errno) --
+// the same reason renderScalarPlane resolves its bounds before its pixel
+// loop.
+struct ResolvedRange {
+    double minimum = 0.0;
+    double span = 1.0;
+    bool logarithmic = false;
+};
+
+// nullopt for a range no value can be mapped through: non-finite bounds, an
+// empty or unordered span, an infinite span (every value would land in the
+// bottom entry), or a logarithmic range reaching to zero.
+std::optional<ResolvedRange> resolveRange(const VolumeRange& range) noexcept
+{
+    if (!std::isfinite(range.minimum) || !std::isfinite(range.maximum)
+        || (range.logarithmic && !(range.minimum > 0.0))) {
+        return std::nullopt;
+    }
+    ResolvedRange resolved;
+    resolved.logarithmic = range.logarithmic;
+    resolved.minimum = range.logarithmic ? std::log(range.minimum) : range.minimum;
+    const auto maximum = range.logarithmic ? std::log(range.maximum) : range.maximum;
+    // Hoisting the subtraction is exact -- same operands, same result -- but
+    // turning the division below into a reciprocal multiply is not, and the
+    // difference is visible in the picture. renderScalarPlane makes the same
+    // trade and explains it at length; the two must agree slot for slot.
+    resolved.span = maximum - resolved.minimum;
+    if (!(resolved.span > 0.0) || !std::isfinite(resolved.span)) {
+        return std::nullopt;
+    }
+    return resolved;
+}
+
+// The entry a mappable value takes: the caller has already rejected values
+// the range cannot map.
+int entryForResolved(double value, const ResolvedRange& range,
+    int entryCount) noexcept
+{
+    const auto mapped = range.logarithmic ? std::log(value) : value;
+    const auto normalized = (mapped - range.minimum) / range.span;
+    if (!(normalized > 0.0)) {
+        return 0;
+    }
+    if (!(normalized < 1.0)) {
+        return entryCount - 1;
+    }
+    return static_cast<int>(normalized * static_cast<double>(entryCount - 1));
+}
+
+bool mappableValue(double value, const ResolvedRange& range) noexcept
+{
+    return std::isfinite(value) && !(range.logarithmic && !(value > 0.0));
+}
+
 struct RayGeometry {
     Real3 lower;
     std::array<double, 3> pitch{};
@@ -64,7 +137,12 @@ struct RayGeometry {
 };
 
 // The parameter span [tEnter, tExit] over which the ray is inside the grid's
-// box; false when it misses.
+// box; false when it misses. tEnter may be negative: the ray's origin sits
+// outside the *domain*, which is not necessarily the grid's region, so a
+// region reaching further toward the viewer starts behind it. An orthographic
+// projection has no near plane -- t is a position along the view line, not a
+// distance from an eye -- so marching from a negative tEnter is still front
+// to back, and clipping it away would drop the front of such a grid.
 bool clipToBox(const Ray& ray, const RealBox& box, double& tEnter,
     double& tExit) noexcept
 {
@@ -87,7 +165,7 @@ bool clipToBox(const Ray& ray, const RealBox& box, double& tEnter,
         tEnter = std::max(tEnter, t0);
         tExit = std::min(tExit, t1);
     }
-    return tExit > tEnter && tExit > 0.0;
+    return tExit > tEnter;
 }
 
 } // namespace
@@ -95,32 +173,27 @@ bool clipToBox(const Ray& ray, const RealBox& box, double& tEnter,
 std::optional<int> transferEntryFor(double value, const VolumeRange& range,
     int entryCount) noexcept
 {
-    if (entryCount < 1 || !std::isfinite(value)
-        || (range.logarithmic && !(value > 0.0))) {
+    const auto resolved = resolveRange(range);
+    if (entryCount < 1 || !resolved || !mappableValue(value, *resolved)) {
         return std::nullopt;
     }
-    const auto mapped = range.logarithmic ? std::log(value) : value;
-    const auto minimum = range.logarithmic ? std::log(range.minimum) : range.minimum;
-    const auto maximum = range.logarithmic ? std::log(range.maximum) : range.maximum;
-    // The division is deliberately not hoisted into a reciprocal multiply:
-    // renderScalarPlane keeps it, and the two must land in the same slot for
-    // a value at the maximum or on a tie (see its comment).
-    const auto normalized = (mapped - minimum) / (maximum - minimum);
-    if (!(normalized > 0.0)) {
-        return 0;
-    }
-    if (!(normalized < 1.0)) {
-        return entryCount - 1;
-    }
-    return static_cast<int>(normalized * static_cast<double>(entryCount - 1));
+    return entryForResolved(value, *resolved, entryCount);
 }
 
 std::optional<std::pair<double, double>> volumeGridRange(
-    const VolumeGrid& grid, bool logarithmic)
+    const VolumeGrid& grid, bool logarithmic, StopToken cancellation)
 {
     auto minimum = std::numeric_limits<double>::infinity();
     auto maximum = -std::numeric_limits<double>::infinity();
-    for (const auto value : grid.values) {
+    // The grid runs to the 512^3 budget, half a gigabyte of floats. A scan
+    // that size with no way out is a frozen window locally and a server
+    // ignoring a client's cancel remotely, so it is polled like the march.
+    constexpr std::size_t cancellationStride = 1U << 16U;
+    for (std::size_t index = 0; index < grid.values.size(); ++index) {
+        if (index % cancellationStride == 0 && cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
+        const auto value = grid.values[index];
         if (!std::isfinite(value) || (logarithmic && !(value > 0.0F))) {
             continue;
         }
@@ -137,14 +210,12 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     const RaycastSettings& settings, StopToken cancellation)
 {
     const auto started = std::chrono::steady_clock::now();
-    std::uint64_t voxelCount = 1;
     for (const auto extent : grid.dims) {
         if (extent < 1) {
             throw std::invalid_argument("volume grid dimensions must be positive");
         }
-        voxelCount *= static_cast<std::uint64_t>(extent);
     }
-    if (grid.values.size() != voxelCount) {
+    if (grid.values.size() != voxelCountOf(grid.dims)) {
         throw std::invalid_argument("volume grid storage does not match its dimensions");
     }
     if (!grid.region.valid(3)) {
@@ -158,10 +229,8 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
             throw std::invalid_argument("output dimensions must be within [1, 4096]");
         }
     }
-    if (!std::isfinite(settings.range.minimum) || !std::isfinite(settings.range.maximum)
-        || !(settings.range.minimum < settings.range.maximum)
-        || !std::isfinite(settings.range.maximum - settings.range.minimum)
-        || (settings.range.logarithmic && !(settings.range.minimum > 0.0))) {
+    const auto mapping = resolveRange(settings.range);
+    if (!mapping) {
         throw std::invalid_argument("volume range must be finite with a finite span, ordered, and positive when logarithmic");
     }
     if (const auto errors = validateVolumeTransferFunction(settings.transfer);
@@ -191,18 +260,53 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     frame.metrics.sampledMaximumLevel = grid.maximumLevel;
 
     const auto entries = resolveEntries(settings.transfer, settings.samplesPerVoxel);
+    // At least two, by the transfer-function validator above: the march
+    // indexes with entryForResolved's result and does not re-check it.
     const auto entryCount = static_cast<int>(entries.size());
+    const auto mappedRange = *mapping;
     RayGeometry geometry;
     geometry.lower = grid.region.lower;
     geometry.dims = grid.dims;
-    double minimumPitch = std::numeric_limits<double>::infinity();
     for (std::size_t axis = 0; axis < 3; ++axis) {
         geometry.pitch[axis] = (grid.region.upper[axis] - grid.region.lower[axis])
             / static_cast<double>(grid.dims[axis]);
-        minimumPitch = std::min(minimumPitch, geometry.pitch[axis]);
+        // RealBox::valid accepts a degenerate box, which would give a zero
+        // pitch and a zero step -- a march that never advances.
+        if (!(geometry.pitch[axis] > 0.0) || !std::isfinite(geometry.pitch[axis])) {
+            throw std::invalid_argument(
+                "volume grid region must have finite positive extent");
+        }
     }
-    const auto step = minimumPitch / static_cast<double>(settings.samplesPerVoxel);
     const auto viewport = viewportFrame(width, height);
+    const auto rays = rayField(settings.camera, viewport, settings.domain);
+    // How many voxels a ray enters per unit length: it crosses a new one
+    // every time it meets one of the three families of voxel planes, and it
+    // meets |direction| / pitch of each family per unit length. The
+    // reciprocal is the mean distance a ray spends in one voxel, which is
+    // what samplesPerVoxel divides and what the opacity correction assumes.
+    // For an axis-aligned view of a cubic grid that is just the pitch; using
+    // the smallest pitch instead would oversample a coarse axis by the ratio
+    // between the two -- an entry authored at opacity 0.1 composites to 0.97
+    // on a 32:1 grid -- and, for a region far thinner than it is wide, would
+    // take samples the whole way across in steps sized for the thin axis.
+    double crossingsPerLength = 0.0;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        crossingsPerLength += std::abs(rays.direction[axis]) / geometry.pitch[axis];
+    }
+    const auto step = 1.0
+        / (crossingsPerLength * static_cast<double>(settings.samplesPerVoxel));
+    if (!(step > 0.0) || !std::isfinite(step)) {
+        throw std::invalid_argument("the grid pitch does not give a usable sample step");
+    }
+    // A ray inside the box travels at most extent / |direction| along each
+    // axis, so the count below is at most samplesPerVoxel * sum(dims): the
+    // ceiling is a backstop, not a working limit, and only a region orders of
+    // magnitude thinner than the domain can reach it (there it renders
+    // approximately rather than marching for hours).
+    const auto sampleCeiling = static_cast<double>(settings.samplesPerVoxel)
+        * (static_cast<double>(grid.dims[0]) + static_cast<double>(grid.dims[1])
+            + static_cast<double>(grid.dims[2]))
+        + 2.0;
     // Front-to-back compositing stops once the ray is this opaque: whatever
     // lies behind can add at most 0.001 to any channel, a quarter of one
     // 8-bit level, so the pixel is what a full march would round to.
@@ -215,35 +319,51 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
         auto* pixels = frame.pixels.data() + rowStride * static_cast<std::size_t>(row);
         const auto pixelY = static_cast<double>(row) + 0.5;
         for (int column = 0; column < width; ++column) {
-            const auto ray = pixelRay(settings.camera, viewport, settings.domain,
-                static_cast<double>(column) + 0.5, pixelY);
+            const auto ray = rayAt(rays, static_cast<double>(column) + 0.5, pixelY);
             double tEnter = 0.0;
             double tExit = 0.0;
             if (!clipToBox(ray, grid.region, tEnter, tExit)) {
                 continue;
             }
-            tEnter = std::max(tEnter, 0.0);
+            // A count, not an accumulation: `t += step` stops advancing once
+            // step falls below an ulp of t, which a grid thin beside its
+            // domain can arrange, and that march would never end. Computing t
+            // from the index also keeps the sample positions free of the
+            // drift a long accumulation collects.
+            const auto ratio = (tExit - tEnter) / step;
+            if (!(ratio > 0.0)) {
+                continue;
+            }
+            const auto sampleCount = static_cast<std::int64_t>(
+                std::min(std::floor(ratio + 0.5), sampleCeiling));
             double alpha = 0.0;
             double red = 0.0;
             double green = 0.0;
             double blue = 0.0;
-            for (double t = tEnter + 0.5 * step; t < tExit; t += step) {
+            for (std::int64_t sample = 0; sample < sampleCount; ++sample) {
+                const auto t = tEnter + (static_cast<double>(sample) + 0.5) * step;
                 std::array<std::size_t, 3> index{};
                 for (std::size_t axis = 0; axis < 3; ++axis) {
                     const auto position = ray.origin[axis] + t * ray.direction[axis];
-                    index[axis] = static_cast<std::size_t>(std::clamp(
-                        static_cast<int>(std::floor(
-                            (position - geometry.lower[axis]) / geometry.pitch[axis])),
-                        0, geometry.dims[axis] - 1));
+                    const auto voxel = std::floor(
+                        (position - geometry.lower[axis]) / geometry.pitch[axis]);
+                    // Clamped as a double, before the cast: casting a value
+                    // past the int range is undefined, and std::clamp passes
+                    // a NaN straight through to it. Both are reachable from a
+                    // ray running nearly parallel to a very thin axis.
+                    const auto limit = static_cast<double>(geometry.dims[axis] - 1);
+                    index[axis] = voxel > 0.0
+                        ? static_cast<std::size_t>(voxel < limit ? voxel : limit)
+                        : 0U;
                 }
                 const auto offset = index[0] + gridRowStride * index[1]
                     + slabStride * index[2];
                 const auto value = static_cast<double>(grid.values[offset]);
-                const auto entryIndex = transferEntryFor(value, settings.range, entryCount);
-                if (!entryIndex) {
+                if (!mappableValue(value, mappedRange)) {
                     continue;
                 }
-                const auto& entry = entries[static_cast<std::size_t>(*entryIndex)];
+                const auto& entry = entries[static_cast<std::size_t>(
+                    entryForResolved(value, mappedRange, entryCount))];
                 if (!(entry.stepOpacity > 0.0)) {
                     continue;
                 }
@@ -263,10 +383,16 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
         }
     };
 
+    // Bounded like every other setting rather than taken as given: one thread
+    // per row already costs more in thread creation than the rows are worth,
+    // and a request for tens of thousands of them is a request to fail.
+    const auto hardware = std::max(1U, std::thread::hardware_concurrency());
+    const auto ceiling = std::min(
+        static_cast<unsigned>(std::max(1, height)), 4U * hardware);
     const auto requested = settings.threadCount != 0
-        ? settings.threadCount : std::thread::hardware_concurrency();
-    const auto threadCount = static_cast<int>(std::clamp<unsigned>(
-        requested, 1U, static_cast<unsigned>(std::max(1, height))));
+        ? settings.threadCount : hardware;
+    const auto threadCount = static_cast<int>(
+        std::clamp(requested, 1U, ceiling));
     const auto rowsPerThread = (height + threadCount - 1) / threadCount;
     std::atomic<bool> cancelled{false};
     std::exception_ptr failure;
@@ -295,13 +421,25 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     } else {
         std::vector<std::thread> threads;
         threads.reserve(static_cast<std::size_t>(threadCount));
-        for (int band = 0; band < threadCount; ++band) {
-            const auto begin = band * rowsPerThread;
-            const auto end = std::min(height, begin + rowsPerThread);
-            if (begin >= end) {
-                break;
+        try {
+            for (int band = 0; band < threadCount; ++band) {
+                const auto begin = band * rowsPerThread;
+                const auto end = std::min(height, begin + rowsPerThread);
+                if (begin >= end) {
+                    break;
+                }
+                threads.emplace_back(renderBand, begin, end);
             }
-            threads.emplace_back(renderBand, begin, end);
+        } catch (...) {
+            // std::thread construction can fail once earlier bands are
+            // already running -- a process thread limit, a loaded machine.
+            // Stopping and joining them here is what keeps ~vector<thread>
+            // from meeting a joinable thread and calling std::terminate.
+            cancelled.store(true, std::memory_order_relaxed);
+            for (auto& thread : threads) {
+                thread.join();
+            }
+            throw;
         }
         for (auto& thread : threads) {
             thread.join();
@@ -313,9 +451,12 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     if (cancelled.load()) {
         throw ReadCancelled();
     }
-    frame.metrics.renderMilliseconds = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - started).count());
+    // Microseconds, not milliseconds: a small viewport renders in well under
+    // one, and a whole-millisecond metric reports those as 0 -- which reads
+    // as "not measured" rather than "fast".
+    frame.metrics.renderMicroseconds = static_cast<std::uint64_t>(
+        std::max<std::int64_t>(0, std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - started).count()));
     return frame;
 }
 

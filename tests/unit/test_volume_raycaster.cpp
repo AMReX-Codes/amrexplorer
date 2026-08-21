@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -186,6 +187,66 @@ int main()
             "an opaque entry did not saturate the pixel");
     }
 
+    // --- an anisotropic grid still spends samplesPerVoxel on a voxel -------
+    // A grid four voxels deep and thirty-two wide: a step sized by the
+    // smallest pitch would take eight times samplesPerVoxel samples in every
+    // z voxel and composite an entry authored at 0.2 to 0.999.
+    {
+        amrvis::VolumeGrid grid;
+        grid.dims = {32, 32, 4};
+        grid.region = unitBox();
+        grid.values.assign(32U * 32U * 4U, 1.0F);
+        grid.coveredVoxels = grid.values.size();
+        const auto frame = amrvis::raycastVolume(grid,
+            settingsFor(amrvis::orthoPresetXY, 64, twoEntries(0x0000FFU, 0.2F)));
+        const auto expected = 1.0 - std::pow(0.8, 4.0);   // 0.5904
+        require(std::abs(static_cast<double>(alphaOf(pixelAt(frame, 32, 32))) / 255.0
+                    - expected) <= 1.5 / 255.0,
+            "a coarse view axis was sampled more than once per voxel");
+    }
+    // The other way round: a grid finely divided along an axis the view never
+    // travels along. The step must follow the axes the ray actually crosses,
+    // or a ray crossing two x voxels takes forty thousand samples and paints
+    // a 0.5 entry opaque.
+    {
+        amrvis::VolumeGrid grid;
+        grid.dims = {2, 2, 20000};
+        grid.region = unitBox();
+        grid.values.assign(2U * 2U * 20000U, 1.0F);
+        grid.coveredVoxels = grid.values.size();
+        const auto frame = amrvis::raycastVolume(grid,
+            settingsFor(amrvis::orthoPresetYZ, 32, twoEntries(0x0000FFU, 0.5F)));
+        const auto expected = 1.0 - std::pow(0.5, 2.0);   // two x voxels
+        require(std::abs(static_cast<double>(alphaOf(pixelAt(frame, 16, 16))) / 255.0
+                    - expected) <= 1.5 / 255.0,
+            "a fine axis the ray does not travel along set the step");
+    }
+
+    // --- a region reaching past the domain is not clipped at the origin ----
+    // The camera is normalised to the domain and its rays start just outside
+    // it, but the grid's region need not be the domain: here it reaches to
+    // z = 10 while the domain is the unit box, so the whole lit slab sits
+    // behind the ray origin at z = 2.5 and only a march that accepts a
+    // negative entry parameter finds it.
+    {
+        amrvis::VolumeGrid grid;
+        grid.dims = {4, 4, 20};
+        grid.region.lower = {{0.0, 0.0, -10.0}};
+        grid.region.upper = {{1.0, 1.0, 10.0}};
+        grid.values.assign(4U * 4U * 20U, 0.0F);
+        for (int j = 0; j < 4; ++j) {
+            for (int i = 0; i < 4; ++i) {
+                grid.values[voxel(grid, i, j, 19)] = 1.0F;   // z in [9, 10]
+            }
+        }
+        grid.coveredVoxels = grid.values.size();
+        const auto frame = amrvis::raycastVolume(grid,
+            settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFF0000U, 1.0F)));
+        require(alphaOf(pixelAt(frame, 16, 16)) == 255
+                && redOf(pixelAt(frame, 16, 16)) == 255,
+            "the part of the region in front of the ray origin was clipped away");
+    }
+
     // --- presets map the axes as labelled --------------------------------
     // A grid whose value increases along +x only: entries 0 (transparent)
     // for x < 0.5 and 1 (opaque red) for x >= 0.5.
@@ -279,6 +340,17 @@ int main()
                 && !amrvis::transferEntryFor(
                     std::numeric_limits<double>::infinity(), linear, 253).has_value(),
             "a non-finite value mapped to an entry");
+        // A range that can map nothing, which the helper is reachable with on
+        // its own: entry 0 would look like an answer.
+        const auto huge = std::numeric_limits<double>::max();
+        require(!amrvis::transferEntryFor(
+                    5.0, amrvis::VolumeRange{-1.0, 10.0, true}, 253).has_value()
+                && !amrvis::transferEntryFor(
+                    5.0, amrvis::VolumeRange{1.0, 1.0, false}, 253).has_value()
+                && !amrvis::transferEntryFor(
+                    5.0, amrvis::VolumeRange{-huge, huge, false}, 253).has_value()
+                && !amrvis::transferEntryFor(5.0, linear, 0).has_value(),
+            "a range that can map nothing returned an entry");
         // The renderer honours a logarithmic range: value 10 in [1, 100]
         // takes the middle entry's colour.
         auto grid = uniformGrid(4, 10.0F);
@@ -322,6 +394,16 @@ int main()
         require(!amrvis::volumeGridRange(grid, true).has_value()
                 && amrvis::volumeGridRange(grid, false)->first == -1.0,
             "a non-positive grid reported a logarithmic range");
+        // The scan runs over the whole grid, so it stops when the token does.
+        amrvis::StopSource stop;
+        stop.request_stop();
+        bool threw = false;
+        try {
+            (void)amrvis::volumeGridRange(grid, false, stop.get_token());
+        } catch (const amrvis::ReadCancelled&) {
+            threw = true;
+        }
+        require(threw, "a cancelled grid scan did not throw ReadCancelled");
     }
 
     // --- refusals and cancellation ----------------------------------------
@@ -379,6 +461,19 @@ int main()
             threwGrid = true;
         }
         require(threwGrid, "a grid whose storage mismatches its dims was accepted");
+        // Dims whose product overflows 64 bits: wrapped it is zero, which
+        // matches an empty values vector and would let every ray index it.
+        amrvis::VolumeGrid overflowing;
+        overflowing.dims = {4194304, 2097152, 2097152};
+        overflowing.region = unitBox();
+        threwGrid = false;
+        try {
+            (void)amrvis::raycastVolume(overflowing,
+                settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F)));
+        } catch (const std::invalid_argument&) {
+            threwGrid = true;
+        }
+        require(threwGrid, "dims whose voxel count overflows were accepted");
     }
     return 0;
 }

@@ -126,7 +126,7 @@ struct VolumeRenderRequest {
     std::uint64_t maximumVoxels = defaultVolumeVoxelBudget;           // 256^3
 };
 struct VolumeGrid { std::array<int,3> dims{}; RealBox region; std::vector<float> values; std::uint64_t coveredVoxels = 0; int maximumLevel = 0; };
-struct VolumeRenderMetrics { gridDims, coveredVoxels, sampledMaximumLevel, gridFromCache, sample/renderMilliseconds, candidateBlocks, blocksRead, cacheHits, payloadBytesRead };
+struct VolumeRenderMetrics { gridDims, coveredVoxels, sampledMaximumLevel, gridFromCache, sample/renderMicroseconds, candidateBlocks, blocksRead, cacheHits, payloadBytesRead };
 struct VolumeFrame { int width = 0, height = 0; std::vector<std::uint32_t> pixels; VolumeRange usedRange; VolumeRenderMetrics metrics; int cacheFallbackFromLevel = -1, cacheFallbackToLevel = -1; };
 constexpr int maxVolumeOutputDimension = 4096; constexpr std::size_t maxVolumeTransferEntries = 1024;
 constexpr int maxVolumeSamplesPerVoxel = 8; constexpr std::uint64_t defaultVolumeVoxelBudget = 256^3, maxVolumeVoxelBudget = 512^3;

@@ -90,25 +90,50 @@ ProjectedPoint projectPoint(const OrthoCamera& camera,
         view.depth};
 }
 
-Ray pixelRay(const OrthoCamera& camera, const ViewportFrame& frame,
-    const RealBox& domain, double pixelX, double pixelY) noexcept
+RayField rayField(const OrthoCamera& camera, const ViewportFrame& frame,
+    const RealBox& domain) noexcept
 {
     const auto norm = normalisation(domain);
     const auto pixels = frame.scale * camera.zoom;
     // The normalised domain lies within [-0.5, 0.5]^3, so a depth of 2 is
-    // outside it in every orientation; the ray starts there and runs toward
+    // outside it in every orientation; the rays start there and run toward
     // negative depth.
     constexpr double startDepth = 2.0;
-    const ViewPoint start{(pixelX - frame.centerX) / pixels,
-        (frame.centerY - pixelY) / pixels, startDepth};
-    const auto origin = toWorld(camera, start);
+    // toWorld is a rotation, linear in its argument, so the origin is affine
+    // in the pixel position: evaluate it at the viewport's (0, 0) and take
+    // the two per-pixel steps from the view-space basis vectors. A pixel's
+    // view x1 is (pixelX - centerX) / pixels and its y2 is (centerY - pixelY)
+    // / pixels, hence the sign on the y step.
+    const auto atZero = toWorld(camera, ViewPoint{-frame.centerX / pixels,
+        frame.centerY / pixels, startDepth});
+    const auto alongX = toWorld(camera, ViewPoint{1.0 / pixels, 0.0, 0.0});
+    const auto alongY = toWorld(camera, ViewPoint{0.0, -1.0 / pixels, 0.0});
     const auto direction = toWorld(camera, ViewPoint{0.0, 0.0, -1.0});
+    RayField field;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        field.origin[axis] = norm.center[axis] + atZero[axis] * norm.extent;
+        field.perPixelX[axis] = alongX[axis] * norm.extent;
+        field.perPixelY[axis] = alongY[axis] * norm.extent;
+        field.direction[axis] = direction[axis];
+    }
+    return field;
+}
+
+Ray rayAt(const RayField& field, double pixelX, double pixelY) noexcept
+{
     Ray ray;
     for (std::size_t axis = 0; axis < 3; ++axis) {
-        ray.origin[axis] = norm.center[axis] + origin[axis] * norm.extent;
-        ray.direction[axis] = direction[axis];
+        ray.origin[axis] = field.origin[axis]
+            + pixelX * field.perPixelX[axis] + pixelY * field.perPixelY[axis];
+        ray.direction[axis] = field.direction[axis];
     }
     return ray;
+}
+
+Ray pixelRay(const OrthoCamera& camera, const ViewportFrame& frame,
+    const RealBox& domain, double pixelX, double pixelY) noexcept
+{
+    return rayAt(rayField(camera, frame, domain), pixelX, pixelY);
 }
 
 } // namespace amrvis

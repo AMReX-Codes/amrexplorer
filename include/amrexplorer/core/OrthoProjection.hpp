@@ -70,4 +70,24 @@ struct Ray {
     const ViewportFrame& frame, const RealBox& domain, double pixelX,
     double pixelY) noexcept;
 
+// The rays of a whole frame, resolved once. Nothing pixelRay computes from
+// the camera and the domain -- the two rotations, the normalisation, and,
+// because the projection is orthographic, the direction itself -- depends on
+// the pixel, and the origin is affine in the pixel position. A raster caster
+// resolves this once per frame and steps the origin per column and per row
+// instead of rebuilding the rotation for every pixel; pixelRay is one call
+// through it, so the two cannot disagree.
+struct RayField {
+    Real3 origin;      // the ray origin at viewport position (0, 0)
+    Real3 perPixelX;   // the origin's change per pixel to the right
+    Real3 perPixelY;   // the origin's change per pixel down
+    Real3 direction;   // unit, away from the viewer, shared by every pixel
+};
+
+[[nodiscard]] RayField rayField(const OrthoCamera& camera,
+    const ViewportFrame& frame, const RealBox& domain) noexcept;
+
+[[nodiscard]] Ray rayAt(const RayField& field, double pixelX,
+    double pixelY) noexcept;
+
 } // namespace amrvis

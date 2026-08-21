@@ -219,11 +219,33 @@ VolumeDisplayResult renderWithFallback(
         request.outputSize, dataset->maximumResponseBytes());
     int fallbackFrom = -1;
     int fallbackTo = -1;
-    // Whether the range moves with the level. Visible does not need a repeat
-    // (the renderer resolves it from the grid it sampled, so it already
-    // follows), and neither does User; File and Level are read per level.
-    const bool levelDependentRange = choice
-        && (choice->mode == RangeMode::File || choice->mode == RangeMode::Level);
+    // Whether the range moves with the level, i.e. whether a fallback makes
+    // the resolved range wrong and the render worth repeating. Only Level
+    // does: Visible is resolved by the renderer from the grid it sampled, so
+    // it follows on its own; User does not depend on the level at all; and
+    // RangeScope::File asks metadataValueRange for the whole file
+    // (LocalDatasetSession.cpp passes std::nullopt for the level), so it
+    // returns the same bounds whatever the fallback did. Repeating for File
+    // would cost a second render, and a second round trip to a server, to
+    // arrive at the range it already had.
+    const bool levelDependentRange = choice && choice->mode == RangeMode::Level;
+
+    // Work done by an attempt whose frame is then discarded. The sampling and
+    // the payload reads happened and cost what they cost; the repeat runs
+    // against the grid the discarded attempt just cached, so it reports none
+    // of it, and the caller would be told a render that read the plotfile
+    // read nothing. Structural fields come from the attempt that produced the
+    // pixels; only the counters and the timers accumulate.
+    VolumeRenderMetrics carried;
+    const auto addWork = [](VolumeRenderMetrics& into,
+                             const VolumeRenderMetrics& from) {
+        into.sampleMicroseconds += from.sampleMicroseconds;
+        into.renderMicroseconds += from.renderMicroseconds;
+        into.candidateBlocks += from.candidateBlocks;
+        into.blocksRead += from.blocksRead;
+        into.cacheHits += from.cacheHits;
+        into.payloadBytesRead += from.payloadBytesRead;
+    };
     for (;;) {
         try {
             if (choice) {
@@ -253,9 +275,11 @@ VolumeDisplayResult renderWithFallback(
                 fallbackTo = sessionTo;
                 request.maximumLevel = sessionTo;
                 if (levelDependentRange) {
+                    addWork(carried, frame.metrics);
                     continue;
                 }
             }
+            addWork(frame.metrics, carried);
             if (fallbackFrom >= 0) {
                 // The span runs from where the first fallback started to the
                 // coarsest level anything actually rendered at.

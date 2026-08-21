@@ -581,6 +581,10 @@ int main()
             // And a Level range follows it too: level 1's statistics span
             // [1, 2], level 0's are the coarse 1.0 alone. Resolving once
             // before the call would map level-0 pixels with level-1's range.
+            // From cold: the render above already cached this grid, so
+            // without clearing, no attempt reads anything and the assertion
+            // below would pass for the wrong reason.
+            session->clearUnpinnedCache();
             auto tracked = asked;
             tracked.range.reset();
             const auto followed = amrvis::executeVolumeRenderWithFallback(
@@ -593,6 +597,24 @@ int main()
                 "the session's fallback was not reported after the repeat");
             require(followed.frame.usedRange.maximum < 1.5,
                 "a Level range did not follow the session's own fallback");
+            // The repeat renders against the grid the discarded attempt
+            // cached, so it reads nothing itself. The work still happened,
+            // and a caller told this render read no blocks would be misled.
+            require(followed.frame.metrics.blocksRead > 0
+                    && followed.frame.metrics.candidateBlocks > 0,
+                "the discarded attempt's work was dropped from the metrics");
+            // A File range asks for the whole file's bounds whatever the
+            // level, so a fallback cannot make it wrong and it is not worth a
+            // second render. One render means the grid was still uncached.
+            session->clearUnpinnedCache();
+            auto byFile = asked;
+            byFile.range.reset();
+            const auto fileRange = amrvis::executeVolumeRenderWithFallback(
+                wrapped, byFile,
+                amrvis::VolumeRangeChoice{amrvis::RangeMode::File,
+                    std::nullopt, false});
+            require(!fileRange.frame.metrics.gridFromCache,
+                "a File range was repeated even though it ignores the level");
         }
         auto exact = request;
         exact.composition = amrvis::CompositionPolicy::ExactLevel;

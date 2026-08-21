@@ -28,3 +28,6 @@ __pycache__/
 # AppImage
 /*.AppImage
 /appdir/
+
+# ctest run artifacts (ctest from the repo root writes here)
+/Testing/

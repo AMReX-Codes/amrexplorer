@@ -146,6 +146,14 @@ struct VolumeFrame {
     friend bool operator==(const VolumeFrame&, const VolumeFrame&) = default;
 };
 
+// The voxels a dims triple describes, saturating at the 64-bit maximum: a
+// product large enough to wrap would otherwise equal the size of a much
+// smaller (or empty) grid and pass a storage or budget check it should fail.
+// Callers pass positive dims; the zero test guards the division, not the
+// overflow.
+[[nodiscard]] std::uint64_t volumeVoxelCount(
+    const std::array<int, 3>& dims) noexcept;
+
 // Structural validity of a request, before a session checks it against its
 // dataset: every field bounded and finite. Empty when valid.
 [[nodiscard]] std::vector<std::string> validateVolumeTransferFunction(

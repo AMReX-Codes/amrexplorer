@@ -2,8 +2,23 @@
 
 #include <cmath>
 #include <cstddef>
+#include <limits>
 
 namespace amrvis {
+
+std::uint64_t volumeVoxelCount(const std::array<int, 3>& dims) noexcept
+{
+    constexpr auto limit = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t result = 1;
+    for (const auto extent : dims) {
+        const auto value = static_cast<std::uint64_t>(extent);
+        if (value != 0 && result > limit / value) {
+            return limit;
+        }
+        result *= value;
+    }
+    return result;
+}
 
 std::vector<std::string> validateVolumeTransferFunction(
     const VolumeTransferFunction& transfer)

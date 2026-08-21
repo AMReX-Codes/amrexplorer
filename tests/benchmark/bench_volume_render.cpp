@@ -22,7 +22,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include <string>
 
 namespace {
 
@@ -48,8 +47,18 @@ int main(int argc, char** argv)
     const int samplesPerVoxel = argument(argc, argv, 3, 2);
     const int iterations = argument(argc, argv, 4, 2);
     const int threads = argument(argc, argv, 5, 0);
+    // Bounded as the renderer bounds them, so an out-of-range argument is
+    // this file's own message rather than an uncaught std::invalid_argument
+    // escaping main and aborting through std::terminate.
     require(gridDim > 0 && outputDim > 0 && samplesPerVoxel > 0 && iterations > 0,
         "arguments must be positive");
+    require(outputDim <= amrvis::maxVolumeOutputDimension,
+        "the output dimension exceeds the renderer's limit");
+    require(samplesPerVoxel <= amrvis::maxVolumeSamplesPerVoxel,
+        "samples per voxel exceeds the renderer's limit");
+    require(amrvis::volumeVoxelCount({gridDim, gridDim, gridDim})
+            <= amrvis::maxVolumeVoxelBudget,
+        "the grid exceeds the renderer's voxel budget");
 
     amrvis::VolumeGrid grid;
     grid.dims = {gridDim, gridDim, gridDim};
@@ -110,7 +119,8 @@ int main(int argc, char** argv)
     const auto perFrame = elapsed / iterations;
     std::cout << "grid " << gridDim << "^3, output " << outputDim << "^2, "
               << samplesPerVoxel << " samples/voxel, "
-              << (threads > 0 ? std::to_string(threads) : std::string("auto"))
+              << amrvis::raycastThreadCount(
+                     settings.threadCount, settings.outputSize[1])
               << " threads: " << perFrame * 1000.0 << " ms/frame, "
               << pixels / elapsed / 1.0e6 << " Mpx/s\n";
     return 0;

@@ -34,31 +34,39 @@ struct ViewPoint {
     double depth = 0.0;
 };
 
-ViewPoint toView(const OrthoCamera& camera, const Real3& normalised) noexcept
+// The camera's two rotations, resolved once. Every conversion below needs
+// all four of these, so a caller applying the rotation more than once -- a
+// ray field resolves four vectors -- takes the trig once, not per vector.
+struct Rotation {
+    double cosAz = 1.0;
+    double sinAz = 0.0;
+    double cosEl = 1.0;
+    double sinEl = 0.0;
+};
+
+Rotation rotationOf(const OrthoCamera& camera) noexcept
 {
-    const auto cosAz = std::cos(camera.azimuth);
-    const auto sinAz = std::sin(camera.azimuth);
-    const auto cosEl = std::cos(camera.elevation);
-    const auto sinEl = std::sin(camera.elevation);
-    const auto x1 = normalised[0] * cosAz - normalised[1] * sinAz;
-    const auto y1 = normalised[0] * sinAz + normalised[1] * cosAz;
-    return {x1, y1 * cosEl - normalised[2] * sinEl,
-        y1 * sinEl + normalised[2] * cosEl};
+    return {std::cos(camera.azimuth), std::sin(camera.azimuth),
+        std::cos(camera.elevation), std::sin(camera.elevation)};
+}
+
+ViewPoint toView(const Rotation& rotation, const Real3& normalised) noexcept
+{
+    const auto x1 = normalised[0] * rotation.cosAz - normalised[1] * rotation.sinAz;
+    const auto y1 = normalised[0] * rotation.sinAz + normalised[1] * rotation.cosAz;
+    return {x1, y1 * rotation.cosEl - normalised[2] * rotation.sinEl,
+        y1 * rotation.sinEl + normalised[2] * rotation.cosEl};
 }
 
 // The inverse rotation: a view-space vector back to normalised space.
-Real3 toWorld(const OrthoCamera& camera, const ViewPoint& view) noexcept
+Real3 toWorld(const Rotation& rotation, const ViewPoint& view) noexcept
 {
-    const auto cosAz = std::cos(camera.azimuth);
-    const auto sinAz = std::sin(camera.azimuth);
-    const auto cosEl = std::cos(camera.elevation);
-    const auto sinEl = std::sin(camera.elevation);
     // Undo the elevation (transpose of the x rotation), then the azimuth.
-    const auto y1 = view.y2 * cosEl + view.depth * sinEl;
-    const auto z = -view.y2 * sinEl + view.depth * cosEl;
+    const auto y1 = view.y2 * rotation.cosEl + view.depth * rotation.sinEl;
+    const auto z = -view.y2 * rotation.sinEl + view.depth * rotation.cosEl;
     Real3 world;
-    world[0] = view.x1 * cosAz + y1 * sinAz;
-    world[1] = -view.x1 * sinAz + y1 * cosAz;
+    world[0] = view.x1 * rotation.cosAz + y1 * rotation.sinAz;
+    world[1] = -view.x1 * rotation.sinAz + y1 * rotation.cosAz;
     world[2] = z;
     return world;
 }
@@ -84,7 +92,7 @@ ProjectedPoint projectPoint(const OrthoCamera& camera,
     for (std::size_t axis = 0; axis < 3; ++axis) {
         normalised[axis] = (point[axis] - norm.center[axis]) / norm.extent;
     }
-    const auto view = toView(camera, normalised);
+    const auto view = toView(rotationOf(camera), normalised);
     const auto pixels = frame.scale * camera.zoom;
     return {frame.centerX + pixels * view.x1, frame.centerY - pixels * view.y2,
         view.depth};
@@ -104,11 +112,12 @@ RayField rayField(const OrthoCamera& camera, const ViewportFrame& frame,
     // the two per-pixel steps from the view-space basis vectors. A pixel's
     // view x1 is (pixelX - centerX) / pixels and its y2 is (centerY - pixelY)
     // / pixels, hence the sign on the y step.
-    const auto atZero = toWorld(camera, ViewPoint{-frame.centerX / pixels,
+    const auto rotation = rotationOf(camera);
+    const auto atZero = toWorld(rotation, ViewPoint{-frame.centerX / pixels,
         frame.centerY / pixels, startDepth});
-    const auto alongX = toWorld(camera, ViewPoint{1.0 / pixels, 0.0, 0.0});
-    const auto alongY = toWorld(camera, ViewPoint{0.0, -1.0 / pixels, 0.0});
-    const auto direction = toWorld(camera, ViewPoint{0.0, 0.0, -1.0});
+    const auto alongX = toWorld(rotation, ViewPoint{1.0 / pixels, 0.0, 0.0});
+    const auto alongY = toWorld(rotation, ViewPoint{0.0, -1.0 / pixels, 0.0});
+    const auto direction = toWorld(rotation, ViewPoint{0.0, 0.0, -1.0});
     RayField field;
     for (std::size_t axis = 0; axis < 3; ++axis) {
         field.origin[axis] = norm.center[axis] + atZero[axis] * norm.extent;

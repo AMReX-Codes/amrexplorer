@@ -1,5 +1,7 @@
 #include <amrexplorer/render3d/VolumeRaycaster.hpp>
 
+#include <amrexplorer/core/ValueMapping.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -39,9 +41,12 @@ std::vector<Entry> resolveEntries(
         // Opacity correction: k samples of stepOpacity compose to the
         // entry's opacity, 1 - (1 - a_step)^k = a, so the picture does not
         // darken as the sampling gets finer.
+        // No special case for a fully opaque entry: the validator bounds
+        // opacities to [0, 1], and std::pow(0.0, 1 / k) is exactly 0 for
+        // every k, so the expression already yields 1.
         const auto opacity = static_cast<double>(transfer.opacities[index]);
-        entry.stepOpacity = opacity >= 1.0 ? 1.0
-            : 1.0 - std::pow(1.0 - opacity, 1.0 / static_cast<double>(samplesPerVoxel));
+        entry.stepOpacity = 1.0
+            - std::pow(1.0 - opacity, 1.0 / static_cast<double>(samplesPerVoxel));
     }
     return entries;
 }
@@ -56,85 +61,6 @@ std::uint32_t packPremultiplied(double alpha, double red, double green,
     return (channel(alpha) << 24U) | (channel(red) << 16U)
         | (channel(green) << 8U) | channel(blue);
 }
-
-// Saturating, as the sampler's product is: a dims product large enough to
-// wrap would otherwise equal the size of a much smaller (or empty) values
-// vector, pass the storage check below, and let the march index past its end.
-std::uint64_t voxelCountOf(const std::array<int, 3>& dims) noexcept
-{
-    constexpr auto limit = std::numeric_limits<std::uint64_t>::max();
-    std::uint64_t result = 1;
-    for (const auto extent : dims) {
-        const auto value = static_cast<std::uint64_t>(extent);
-        if (value != 0 && result > limit / value) {
-            return limit;
-        }
-        result *= value;
-    }
-    return result;
-}
-
-// A range with its logarithms already taken. transferEntryFor is called once
-// per ray sample, and std::log of the two bounds in there is two library
-// calls per sample the compiler cannot hoist for itself (they set errno) --
-// the same reason renderScalarPlane resolves its bounds before its pixel
-// loop.
-struct ResolvedRange {
-    double minimum = 0.0;
-    double span = 1.0;
-    bool logarithmic = false;
-};
-
-// nullopt for a range no value can be mapped through: non-finite bounds, an
-// empty or unordered span, an infinite span (every value would land in the
-// bottom entry), or a logarithmic range reaching to zero.
-std::optional<ResolvedRange> resolveRange(const VolumeRange& range) noexcept
-{
-    if (!std::isfinite(range.minimum) || !std::isfinite(range.maximum)
-        || (range.logarithmic && !(range.minimum > 0.0))) {
-        return std::nullopt;
-    }
-    ResolvedRange resolved;
-    resolved.logarithmic = range.logarithmic;
-    resolved.minimum = range.logarithmic ? std::log(range.minimum) : range.minimum;
-    const auto maximum = range.logarithmic ? std::log(range.maximum) : range.maximum;
-    // Hoisting the subtraction is exact -- same operands, same result -- but
-    // turning the division below into a reciprocal multiply is not, and the
-    // difference is visible in the picture. renderScalarPlane makes the same
-    // trade and explains it at length; the two must agree slot for slot.
-    resolved.span = maximum - resolved.minimum;
-    if (!(resolved.span > 0.0) || !std::isfinite(resolved.span)) {
-        return std::nullopt;
-    }
-    return resolved;
-}
-
-// The entry a mappable value takes: the caller has already rejected values
-// the range cannot map.
-int entryForResolved(double value, const ResolvedRange& range,
-    int entryCount) noexcept
-{
-    const auto mapped = range.logarithmic ? std::log(value) : value;
-    const auto normalized = (mapped - range.minimum) / range.span;
-    if (!(normalized > 0.0)) {
-        return 0;
-    }
-    if (!(normalized < 1.0)) {
-        return entryCount - 1;
-    }
-    return static_cast<int>(normalized * static_cast<double>(entryCount - 1));
-}
-
-bool mappableValue(double value, const ResolvedRange& range) noexcept
-{
-    return std::isfinite(value) && !(range.logarithmic && !(value > 0.0));
-}
-
-struct RayGeometry {
-    Real3 lower;
-    std::array<double, 3> pitch{};
-    std::array<int, 3> dims{};
-};
 
 // The parameter span [tEnter, tExit] over which the ray is inside the grid's
 // box; false when it misses. tEnter may be negative: the ray's origin sits
@@ -165,7 +91,12 @@ bool clipToBox(const Ray& ray, const RealBox& box, double& tEnter,
         tEnter = std::max(tEnter, t0);
         tExit = std::min(tExit, t1);
     }
-    return tExit > tEnter;
+    // Finite, not merely ordered: a NaN origin leaves both bounds untouched
+    // -- std::max(-inf, NaN) is -inf and std::min(inf, NaN) is inf, because
+    // every comparison against a NaN is false -- and the ray would report a
+    // hit spanning the whole line. The parallel-axis test above lets a NaN
+    // through for the same reason, so this is the one place to catch it.
+    return tExit > tEnter && std::isfinite(tEnter) && std::isfinite(tExit);
 }
 
 } // namespace
@@ -173,11 +104,25 @@ bool clipToBox(const Ray& ray, const RealBox& box, double& tEnter,
 std::optional<int> transferEntryFor(double value, const VolumeRange& range,
     int entryCount) noexcept
 {
-    const auto resolved = resolveRange(range);
+    const auto resolved = resolveValueRange(
+        range.minimum, range.maximum, range.logarithmic);
     if (entryCount < 1 || !resolved || !mappableValue(value, *resolved)) {
         return std::nullopt;
     }
-    return entryForResolved(value, *resolved, entryCount);
+    return valueSlot(value, *resolved, entryCount);
+}
+
+int raycastThreadCount(unsigned requested, int height) noexcept
+{
+    // Bounded rather than taken as given: one thread per row already costs
+    // more in thread creation than a row is worth, and a request for tens of
+    // thousands of them is a request to fail. Exposed so a caller reporting
+    // its own timings names the count the render actually used.
+    const auto hardware = std::max(1U, std::thread::hardware_concurrency());
+    const auto ceiling = std::min(
+        static_cast<unsigned>(std::max(1, height)), 4U * hardware);
+    return static_cast<int>(
+        std::clamp(requested != 0 ? requested : hardware, 1U, ceiling));
 }
 
 std::optional<std::pair<double, double>> volumeGridRange(
@@ -215,7 +160,16 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
             throw std::invalid_argument("volume grid dimensions must be positive");
         }
     }
-    if (grid.values.size() != voxelCountOf(grid.dims)) {
+    // The budget first, because it is the cheaper refusal: a caller whose
+    // dims are out of range should not have to have allocated the matching
+    // storage to be told so. It is the cap the sampler already guarantees --
+    // without it a grid of, say, {1, 1, 1000000000} is structurally valid and
+    // marches billions of samples down a single ray.
+    const auto voxelCount = volumeVoxelCount(grid.dims);
+    if (voxelCount > maxVolumeVoxelBudget) {
+        throw std::invalid_argument("volume grid exceeds the voxel budget");
+    }
+    if (grid.values.size() != voxelCount) {
         throw std::invalid_argument("volume grid storage does not match its dimensions");
     }
     if (!grid.region.valid(3)) {
@@ -224,12 +178,24 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     if (!settings.domain.valid(3)) {
         throw std::invalid_argument("camera domain must have finite positive extent");
     }
+    // valid() bounds each axis on its own, which is not enough: two finite
+    // bounds near the top of the range subtract to infinity, and the camera
+    // normalises by the largest extent, so every ray origin comes back NaN
+    // (the rotated basis has exact zeros, and zero times infinity is NaN) and
+    // the whole frame paints from one arbitrary voxel. The region gets the
+    // same guard where its pitch is computed.
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(settings.domain.upper[axis] - settings.domain.lower[axis])) {
+            throw std::invalid_argument("camera domain must have finite positive extent");
+        }
+    }
     for (const auto extent : settings.outputSize) {
         if (extent < 1 || extent > maxVolumeOutputDimension) {
             throw std::invalid_argument("output dimensions must be within [1, 4096]");
         }
     }
-    const auto mapping = resolveRange(settings.range);
+    const auto mapping = resolveValueRange(
+        settings.range.minimum, settings.range.maximum, settings.range.logarithmic);
     if (!mapping) {
         throw std::invalid_argument("volume range must be finite with a finite span, ordered, and positive when logarithmic");
     }
@@ -261,45 +227,66 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
 
     const auto entries = resolveEntries(settings.transfer, settings.samplesPerVoxel);
     // At least two, by the transfer-function validator above: the march
-    // indexes with entryForResolved's result and does not re-check it.
+    // indexes with valueSlot's result and does not re-check it.
     const auto entryCount = static_cast<int>(entries.size());
     const auto mappedRange = *mapping;
-    RayGeometry geometry;
-    geometry.lower = grid.region.lower;
-    geometry.dims = grid.dims;
+    const auto& lower = grid.region.lower;
+    std::array<double, 3> pitch{};
+    // The reciprocal, because the march divides by the pitch three times per
+    // sample and the pitch is fixed for the frame. Unlike the range mapping,
+    // where the reciprocal costs the exact palette-slot ties, this quotient
+    // only feeds std::floor: the sole values it can move are samples landing
+    // exactly on a voxel plane, an arbitrary tie either way.
+    std::array<double, 3> inversePitch{};
     for (std::size_t axis = 0; axis < 3; ++axis) {
-        geometry.pitch[axis] = (grid.region.upper[axis] - grid.region.lower[axis])
+        pitch[axis] = (grid.region.upper[axis] - grid.region.lower[axis])
             / static_cast<double>(grid.dims[axis]);
-        // RealBox::valid accepts a degenerate box, which would give a zero
-        // pitch and a zero step -- a march that never advances.
-        if (!(geometry.pitch[axis] > 0.0) || !std::isfinite(geometry.pitch[axis])) {
+        // RealBox::valid rejects a degenerate or infinite box, so this is not
+        // about an empty region. It catches the two ways a *valid* box still
+        // fails to give a usable pitch: a denormal span divided by large dims
+        // underflows to exactly zero (a step that never advances), and a span
+        // between two finite bounds near the top of the range overflows to
+        // infinity.
+        if (!(pitch[axis] > 0.0) || !std::isfinite(pitch[axis])) {
             throw std::invalid_argument(
                 "volume grid region must have finite positive extent");
         }
+        inversePitch[axis] = 1.0 / pitch[axis];
     }
     const auto viewport = viewportFrame(width, height);
     const auto rays = rayField(settings.camera, viewport, settings.domain);
-    // How many voxels a ray enters per unit length: it crosses a new one
-    // every time it meets one of the three families of voxel planes, and it
-    // meets |direction| / pitch of each family per unit length. The
-    // reciprocal is the mean distance a ray spends in one voxel, which is
-    // what samplesPerVoxel divides and what the opacity correction assumes.
-    // For an axis-aligned view of a cubic grid that is just the pitch; using
-    // the smallest pitch instead would oversample a coarse axis by the ratio
-    // between the two -- an entry authored at opacity 0.1 composites to 0.97
-    // on a 32:1 grid -- and, for a region far thinner than it is wide, would
-    // take samples the whole way across in steps sized for the thin axis.
-    double crossingsPerLength = 0.0;
+    // The distance a ray travels to cross one voxel's worth of material: the
+    // length of the direction measured in voxels, inverted. samplesPerVoxel
+    // divides it, and the opacity correction in resolveEntries assumes it.
+    //
+    // Euclidean, not the sum of the per-axis crossing rates. The sum counts
+    // voxels *entered*, which is a property of the grid's orientation rather
+    // than of the material: a ray down the body diagonal of a cubic grid
+    // enters three voxels per pitch of travel, so a uniform block would come
+    // out as though it held 3x the material a face-on view sees, where the
+    // physical path holds only sqrt(3)x. The norm below gives exactly the
+    // pitch for any direction through a cubic grid, so the block's opacity
+    // follows the distance light travels through it and nothing else.
+    //
+    // For an axis-aligned view the two agree, and both give that axis's own
+    // pitch -- which is the point against using the *smallest* pitch: that
+    // oversamples a coarse axis by the ratio between the two (an entry
+    // authored at 0.1 composites to 0.97 on a 32:1 grid) and, for a region
+    // far thinner than it is wide, steps the whole way across at the thin
+    // axis's scale.
+    double voxelsPerLengthSquared = 0.0;
     for (std::size_t axis = 0; axis < 3; ++axis) {
-        crossingsPerLength += std::abs(rays.direction[axis]) / geometry.pitch[axis];
+        const auto perAxis = rays.direction[axis] * inversePitch[axis];
+        voxelsPerLengthSquared += perAxis * perAxis;
     }
-    const auto step = 1.0
-        / (crossingsPerLength * static_cast<double>(settings.samplesPerVoxel));
+    const auto step = 1.0 / (std::sqrt(voxelsPerLengthSquared)
+        * static_cast<double>(settings.samplesPerVoxel));
     if (!(step > 0.0) || !std::isfinite(step)) {
         throw std::invalid_argument("the grid pitch does not give a usable sample step");
     }
     // A ray inside the box travels at most extent / |direction| along each
-    // axis, so the count below is at most samplesPerVoxel * sum(dims): the
+    // axis, and the norm above is at most the sum of the per-axis rates, so
+    // the count below is at most samplesPerVoxel * sum(dims): the
     // ceiling is a backstop, not a working limit, and only a region orders of
     // magnitude thinner than the domain can reach it (there it renders
     // approximately rather than marching for hours).
@@ -315,10 +302,23 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     const auto gridRowStride = static_cast<std::size_t>(grid.dims[0]);
     const auto slabStride = gridRowStride * static_cast<std::size_t>(grid.dims[1]);
 
+    std::atomic<bool> cancelled{false};
+    // Cancellation is polled inside the pixel loop, not only between rows: a
+    // single-row render polls once before starting otherwise, and one row of
+    // a large frame is long enough that a client's cancel would be answered
+    // by a finished frame. The stride keeps the atomic load off the per-pixel
+    // path while bounding the delay to a few hundred rays.
+    constexpr int cancellationStride = 64;
     const auto renderRow = [&](int row) {
         auto* pixels = frame.pixels.data() + rowStride * static_cast<std::size_t>(row);
         const auto pixelY = static_cast<double>(row) + 0.5;
         for (int column = 0; column < width; ++column) {
+            if (column % cancellationStride == 0
+                && (cancelled.load(std::memory_order_relaxed)
+                    || cancellation.stop_requested())) {
+                cancelled.store(true, std::memory_order_relaxed);
+                return;
+            }
             const auto ray = rayAt(rays, static_cast<double>(column) + 0.5, pixelY);
             double tEnter = 0.0;
             double tExit = 0.0;
@@ -346,12 +346,12 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                 for (std::size_t axis = 0; axis < 3; ++axis) {
                     const auto position = ray.origin[axis] + t * ray.direction[axis];
                     const auto voxel = std::floor(
-                        (position - geometry.lower[axis]) / geometry.pitch[axis]);
+                        (position - lower[axis]) * inversePitch[axis]);
                     // Clamped as a double, before the cast: casting a value
                     // past the int range is undefined, and std::clamp passes
                     // a NaN straight through to it. Both are reachable from a
                     // ray running nearly parallel to a very thin axis.
-                    const auto limit = static_cast<double>(geometry.dims[axis] - 1);
+                    const auto limit = static_cast<double>(grid.dims[axis] - 1);
                     index[axis] = voxel > 0.0
                         ? static_cast<std::size_t>(voxel < limit ? voxel : limit)
                         : 0U;
@@ -363,7 +363,7 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                     continue;
                 }
                 const auto& entry = entries[static_cast<std::size_t>(
-                    entryForResolved(value, mappedRange, entryCount))];
+                    valueSlot(value, mappedRange, entryCount))];
                 if (!(entry.stepOpacity > 0.0)) {
                     continue;
                 }
@@ -383,30 +383,19 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
         }
     };
 
-    // Bounded like every other setting rather than taken as given: one thread
-    // per row already costs more in thread creation than the rows are worth,
-    // and a request for tens of thousands of them is a request to fail.
-    const auto hardware = std::max(1U, std::thread::hardware_concurrency());
-    const auto ceiling = std::min(
-        static_cast<unsigned>(std::max(1, height)), 4U * hardware);
-    const auto requested = settings.threadCount != 0
-        ? settings.threadCount : hardware;
-    const auto threadCount = static_cast<int>(
-        std::clamp(requested, 1U, ceiling));
+    const auto threadCount = raycastThreadCount(settings.threadCount, height);
     const auto rowsPerThread = (height + threadCount - 1) / threadCount;
-    std::atomic<bool> cancelled{false};
     std::exception_ptr failure;
     std::mutex failureMutex;
     const auto renderBand = [&](int begin, int end) {
         try {
+            // No separate per-row poll: renderRow checks at column 0 of
+            // every row and every stride within it, which subsumes one.
             for (int row = begin; row < end; ++row) {
-                if ((row - begin) % 16 == 0
-                    && (cancelled.load(std::memory_order_relaxed)
-                        || cancellation.stop_requested())) {
-                    cancelled.store(true, std::memory_order_relaxed);
+                renderRow(row);
+                if (cancelled.load(std::memory_order_relaxed)) {
                     return;
                 }
-                renderRow(row);
             }
         } catch (...) {
             const std::lock_guard<std::mutex> lock(failureMutex);

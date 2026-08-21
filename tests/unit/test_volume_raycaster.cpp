@@ -222,6 +222,40 @@ int main()
             "a fine axis the ray does not travel along set the step");
     }
 
+    // --- an oblique ray composites its physical path, not its voxel count --
+    // A uniform cube seen down its body diagonal: the centre ray runs corner
+    // to corner, a path of sqrt(3) against 1 face-on, so it must composite
+    // sqrt(3) times the material -- not 3 times, which is what counting the
+    // voxels the ray *enters* would give (it meets all three families of
+    // voxel planes at once along that direction). An odd viewport puts a
+    // pixel centre exactly on the domain centre, so the centre ray really is
+    // the corner-to-corner one.
+    {
+        const auto grid = uniformGrid(8, 1.0F);
+        const auto transfer = twoEntries(0x0000FFU, 0.1F);
+        const auto faceOn = amrvis::raycastVolume(grid,
+            settingsFor(amrvis::orthoPresetXY, 65, transfer));
+        // Down the body diagonal: elevation acos(1/sqrt(3)), azimuth 45 deg.
+        const amrvis::OrthoCamera diagonal{
+            0.7853981633974483, 0.9553166181245093, 1.0};
+        const auto oblique = amrvis::raycastVolume(grid,
+            settingsFor(diagonal, 65, transfer));
+        const auto alphaOfCentre = [](const amrvis::VolumeFrame& f) {
+            return static_cast<double>(alphaOf(pixelAt(f, 32, 32))) / 255.0;
+        };
+        require(std::abs(alphaOfCentre(faceOn) - (1.0 - std::pow(0.9, 8.0)))
+                <= 1.5 / 255.0,
+            "the face-on slab is not the analytic composite");
+        // The tolerance is wider than the face-on case because the sample
+        // count is an integer: the diagonal path is 8*sqrt(3) voxels, not a
+        // whole number of them, so the composite is quantised by up to half a
+        // sample. It is still nowhere near the 235 that counting voxel
+        // entries would give.
+        require(std::abs(alphaOfCentre(oblique)
+                    - (1.0 - std::pow(0.9, 8.0 * std::sqrt(3.0)))) <= 3.0 / 255.0,
+            "the oblique slab does not composite its physical path length");
+    }
+
     // --- a region reaching past the domain is not clipped at the origin ----
     // The camera is normalised to the domain and its rays start just outside
     // it, but the grid's region need not be the domain: here it reaches to
@@ -474,6 +508,81 @@ int main()
             threwGrid = true;
         }
         require(threwGrid, "dims whose voxel count overflows were accepted");
+        // Over the sampler's budget: refused before the storage is looked at,
+        // so a caller does not have to have allocated it to be told.
+        amrvis::VolumeGrid oversized;
+        oversized.dims = {512, 512, 513};
+        oversized.region = unitBox();
+        threwGrid = false;
+        try {
+            (void)amrvis::raycastVolume(oversized,
+                settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F)));
+        } catch (const std::invalid_argument&) {
+            threwGrid = true;
+        }
+        require(threwGrid, "a grid over the voxel budget was accepted");
+
+        // The guards the settings carry, each on its own.
+        const auto huge = std::numeric_limits<double>::max();
+        bad = settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F));
+        bad.domain.lower[0] = -huge;
+        bad.domain.upper[0] = huge;
+        require(rejects(bad),
+            "a domain whose span overflows to infinity was accepted");
+        bad = settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F));
+        bad.camera.azimuth = std::numeric_limits<double>::quiet_NaN();
+        require(rejects(bad), "a non-finite camera angle was accepted");
+        bad = settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F));
+        bad.camera.zoom = 0.5 * amrvis::minVolumeZoom;
+        require(rejects(bad), "a zoom below the minimum was accepted");
+        bad = settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F));
+        bad.outputSize = {amrvis::maxVolumeOutputDimension + 1, 32};
+        require(rejects(bad), "an output dimension past the cap was accepted");
+
+        // The pitch guard, for the two ways a box RealBox::valid accepts
+        // still fails to give a usable pitch.
+        const auto rejectsGrid = [](const amrvis::VolumeGrid& g) {
+            try {
+                (void)amrvis::raycastVolume(g,
+                    settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F)));
+            } catch (const std::invalid_argument&) {
+                return true;
+            }
+            return false;
+        };
+        auto thin = uniformGrid(8, 1.0F);
+        // A denormal span over eight voxels divides to exactly zero.
+        thin.region.upper[2] = 4.0 * std::numeric_limits<double>::denorm_min();
+        require(rejectsGrid(thin), "a region whose pitch underflows was accepted");
+        auto wide = uniformGrid(8, 1.0F);
+        wide.region.lower[2] = -huge;
+        wide.region.upper[2] = huge;
+        require(rejectsGrid(wide), "a region whose span is infinite was accepted");
     }
+
+    // --- a single-row frame still honours the token ------------------------
+    // The row loop is where cancellation used to be polled, so a frame with
+    // one row is the shape that could bypass it entirely.
+    {
+        const auto grid = uniformGrid(16, 1.0F);
+        auto settings = settingsFor(
+            amrvis::orthoPresetXY, 64, twoEntries(0x0000FFU, 0.5F));
+        settings.outputSize = {64, 1};
+        amrvis::StopSource stop;
+        stop.request_stop();
+        bool threw = false;
+        try {
+            (void)amrvis::raycastVolume(grid, settings, stop.get_token());
+        } catch (const amrvis::ReadCancelled&) {
+            threw = true;
+        }
+        require(threw, "a cancelled single-row render did not throw ReadCancelled");
+        // Uncancelled, the same frame renders: the poll is not swallowing it.
+        const auto frame = amrvis::raycastVolume(grid, settings);
+        require(frame.width == 64 && frame.height == 1
+                && frame.pixels.size() == 64,
+            "a single-row frame is not the requested size");
+    }
+
     return 0;
 }

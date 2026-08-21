@@ -57,6 +57,13 @@ struct RaycastSettings {
 [[nodiscard]] std::optional<std::pair<double, double>> volumeGridRange(
     const VolumeGrid& grid, bool logarithmic, StopToken cancellation = {});
 
+// The threads raycastVolume splits the rows across for a frame of this
+// height, given settings.threadCount (0 = hardware_concurrency): bounded by
+// the row count and by a small multiple of the hardware's, so an outsized
+// request costs no more than a sensible one. Exposed so a caller reporting
+// its own timings names the count the render actually used.
+[[nodiscard]] int raycastThreadCount(unsigned requested, int height) noexcept;
+
 // The transfer-function entry a value maps to under a range: entry 0 at or
 // below the minimum, the last at or above the maximum, truncation between
 // (the mapping renderScalarPlane uses for its palette slots, so volume

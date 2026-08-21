@@ -3,6 +3,7 @@
 #include <amrexplorer/core/ValueMapping.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -13,6 +14,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace amrvis {
@@ -98,7 +100,13 @@ bool clipToBox(const Ray& ray, const SlabAxes& axes, const RealBox& box,
     for (std::size_t axis = 0; axis < 3; ++axis) {
         const auto origin = ray.origin[axis];
         if (axes.parallel[axis]) {
-            if (origin < box.lower[axis] || origin > box.upper[axis]) {
+            // isfinite first: a NaN origin fails both comparisons below, so
+            // an axis the ray runs perpendicular to would accept it and the
+            // finite tEnter/tExit from the other axes would report a hit.
+            // The march then floors a NaN, clamps it to voxel zero, and
+            // paints the pixel from an arbitrary slab.
+            if (!std::isfinite(origin) || origin < box.lower[axis]
+                || origin > box.upper[axis]) {
                 return false;
             }
             continue;
@@ -114,8 +122,8 @@ bool clipToBox(const Ray& ray, const SlabAxes& axes, const RealBox& box,
     // Finite, not merely ordered: a NaN origin leaves both bounds untouched
     // -- std::max(-inf, NaN) is -inf and std::min(inf, NaN) is inf, because
     // every comparison against a NaN is false -- and the ray would report a
-    // hit spanning the whole line. The parallel-axis test above lets a NaN
-    // through for the same reason, so this is the one place to catch it.
+    // hit spanning the whole line. The parallel branch above rejects its own
+    // NaN separately, because an axis that never divides never reaches here.
     return tExit > tEnter && std::isfinite(tEnter) && std::isfinite(tExit);
 }
 
@@ -139,8 +147,13 @@ int raycastThreadCount(unsigned requested, int height) noexcept
     // thousands of them is a request to fail. Exposed so a caller reporting
     // its own timings names the count the render actually used.
     const auto hardware = std::max(1U, std::thread::hardware_concurrency());
+    // Saturating, because std::clamp is undefined when lo exceeds hi: a
+    // hardware_concurrency at or above 2^30 (a spoofed or virtualised value)
+    // wraps 4 * hardware, and a ceiling of 0 would give clamp(x, 1, 0).
+    constexpr auto unsignedMax = std::numeric_limits<unsigned>::max();
+    const auto scaled = hardware <= unsignedMax / 4U ? 4U * hardware : unsignedMax;
     const auto ceiling = std::min(
-        static_cast<unsigned>(std::max(1, height)), 4U * hardware);
+        static_cast<unsigned>(std::max(1, height)), scaled);
     return static_cast<int>(
         std::clamp(requested != 0 ? requested : hardware, 1U, ceiling));
 }
@@ -181,7 +194,6 @@ std::optional<std::pair<double, double>> volumeGridRange(
 VolumeFrame raycastVolume(const VolumeGrid& grid,
     const RaycastSettings& settings, StopToken cancellation)
 {
-    const auto started = std::chrono::steady_clock::now();
     for (const auto extent : grid.dims) {
         if (extent < 1) {
             throw std::invalid_argument("volume grid dimensions must be positive");
@@ -207,16 +219,12 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     if (!settings.domain.valid(3)) {
         throw std::invalid_argument("camera domain must have finite positive extent");
     }
-    // valid() bounds each axis on its own, which is not enough: two finite
-    // bounds near the top of the range subtract to infinity, and the camera
-    // normalises by the largest extent, so every ray origin comes back NaN
-    // (the rotated basis has exact zeros, and zero times infinity is NaN) and
-    // the whole frame paints from one arbitrary voxel. The region gets the
-    // same guard where its pitch is computed.
-    for (std::size_t axis = 0; axis < 3; ++axis) {
-        if (!std::isfinite(settings.domain.upper[axis] - settings.domain.lower[axis])) {
-            throw std::invalid_argument("camera domain must have finite positive extent");
-        }
+    // The camera normalises by the largest extent, so an infinite span makes
+    // every ray origin NaN (the rotated basis has exact zeros, and zero times
+    // infinity is NaN). The region gets the same guard where its pitch is
+    // computed.
+    if (!settings.domain.finiteSpan(3)) {
+        throw std::invalid_argument("camera domain must have finite positive extent");
     }
     for (const auto extent : settings.outputSize) {
         if (extent < 1 || extent > maxVolumeOutputDimension) {
@@ -281,6 +289,36 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                 "the camera and domain do not give a usable ray for every pixel");
         }
     }
+    // A position along a ray is only defined to about an ulp of its own
+    // magnitude. The origins sit a couple of domain extents out, so a region
+    // very much smaller than that has an entry and an exit parameter that
+    // round to the same double: the slab test reports a miss and the frame
+    // comes back empty, with no error and nothing to diagnose. The ratio has
+    // to approach 1e16 before this bites -- a domain 1e16 wide holding a
+    // unit-sized region -- which is a zoom no double-precision camera
+    // normalised to that domain can express; ordinary zooms are many orders
+    // short of it. Refusing says so; rendering nothing does not.
+    double originMagnitude = 0.0;
+    for (const double cornerX : {0.0, static_cast<double>(width)}) {
+        for (const double cornerY : {0.0, static_cast<double>(height)}) {
+            const auto corner = rayAt(rays, cornerX, cornerY);
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                originMagnitude = std::max(
+                    originMagnitude, std::abs(corner.origin[axis]));
+            }
+        }
+    }
+    // Scaled down before up: 8 * originMagnitude overflows to infinity for a
+    // domain near the top of the range, and every region would then be
+    // refused.
+    const auto resolution = originMagnitude
+        * std::numeric_limits<double>::epsilon() * 8.0;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (!(grid.region.upper[axis] - grid.region.lower[axis] > resolution)) {
+            throw std::invalid_argument(
+                "the camera domain is too large beside the sampled region for the ray to resolve it");
+        }
+    }
     // The distance a ray travels to cross one voxel's worth of material: the
     // length of the direction measured in voxels, inverted. samplesPerVoxel
     // divides it, and the opacity correction in resolveEntries assumes it.
@@ -341,6 +379,11 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     frame.metrics.gridDims = grid.dims;
     frame.metrics.coveredVoxels = grid.coveredVoxels;
     frame.metrics.sampledMaximumLevel = grid.maximumLevel;
+    // Started here, not at entry: the validation above and the assign() just
+    // made -- 67 MB of zeroed pixels at the output cap, a page-faulting
+    // memset on a cold allocator -- are not ray marching, and a caller
+    // comparing this against a server's would be comparing allocators.
+    const auto started = std::chrono::steady_clock::now();
     const auto entries = resolveEntries(settings.transfer, settings.samplesPerVoxel);
     // At least two, by the transfer-function validator above: the march
     // indexes with valueSlot's result and does not re-check it.
@@ -374,6 +417,13 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     const auto renderRow = [&](int row) {
         auto* pixels = frame.pixels.data() + rowStride * static_cast<std::size_t>(row);
         const auto pixelY = static_cast<double>(row) + 0.5;
+        // The row's share of the origin, which the column loop would
+        // otherwise rebuild per pixel. Still index-driven, so a row's pixels
+        // do not depend on which thread renders them.
+        Real3 rowOrigin;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            rowOrigin[axis] = rays.origin[axis] + pixelY * rays.perPixelY[axis];
+        }
         for (int column = 0; column < width; ++column) {
             if (column % pixelCancellationStride == 0
                 && (cancelled.load(std::memory_order_relaxed)
@@ -381,7 +431,12 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                 cancelled.store(true, std::memory_order_relaxed);
                 return;
             }
-            const auto ray = rayAt(rays, static_cast<double>(column) + 0.5, pixelY);
+            Ray ray;
+            ray.direction = rays.direction;
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                ray.origin[axis] = rowOrigin[axis]
+                    + (static_cast<double>(column) + 0.5) * rays.perPixelX[axis];
+            }
             double tEnter = 0.0;
             double tExit = 0.0;
             if (!clipToBox(ray, slabAxes, grid.region, tEnter, tExit)) {

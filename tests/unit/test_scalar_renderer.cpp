@@ -1,5 +1,6 @@
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -200,8 +201,8 @@ int main()
         // refusal now, and validateVolumeRenderRequest refuses it too, so the
         // two never disagree about what a legal range is.
         badSettings.minimum = 1.0e300;
-        badSettings.maximum = std::nextafter(1.0e300, 
-            std::numeric_limits<double>::infinity());
+        badSettings.maximum = std::nextafter(
+            1.0e300, std::numeric_limits<double>::infinity());
         expectRejected(good, badSettings, "same logarithm",
             "a logarithmic range narrower than one logarithm was not rejected");
     }

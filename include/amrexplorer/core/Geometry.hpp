@@ -100,6 +100,25 @@ struct RealBox {
         return result;
     }
 
+    // valid() bounds each axis on its own, which does not stop two finite
+    // bounds from subtracting to infinity -- and every extent, pitch and
+    // normalisation derived from such a box is infinite or NaN. Callers that
+    // divide by a span want this as well as valid().
+    [[nodiscard]] constexpr bool finiteSpan(int dimension) const noexcept
+    {
+        if (dimension < 1 || dimension > 3) {
+            return false;
+        }
+        constexpr auto infinity = std::numeric_limits<double>::infinity();
+        for (int axis = 0; axis < dimension; ++axis) {
+            const auto i = static_cast<std::size_t>(axis);
+            if (!(upper[i] - lower[i] < infinity)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     friend constexpr bool operator==(const RealBox&, const RealBox&) = default;
 };
 

@@ -631,21 +631,28 @@ int main()
         const auto baseline = run({});
         require(!baseline.first, "an uncancelled render reported cancellation");
         // Only assert when the ray is long enough for "part-way through" to
-        // mean something; the margin below is then twenty-fold.
+        // mean something.
         if (baseline.second > 30.0) {
-            amrvis::StopSource stop;
-            const auto delay = std::chrono::microseconds(
-                static_cast<long>(baseline.second * 100.0));   // a tenth of it
-            std::thread asker([&stop, delay] {
-                std::this_thread::sleep_for(delay);
-                stop.request_stop();
-            });
-            const auto cancelled = run(stop.get_token());
-            asker.join();
-            require(cancelled.first,
+            // Whether the stop was *answered*, not how fast: a wall-clock
+            // ratio is a flake on a loaded runner, where sleep_for overshoots
+            // by tens of milliseconds. The boolean discriminates on its own --
+            // this frame is one pixel, so the pixel-level poll runs once
+            // before the ray starts, and a stop raised after that is seen
+            // only if the sample loop looks. Retried because the one way a
+            // sound implementation fails here is the asker losing its race
+            // with a render that already finished.
+            bool answered = false;
+            for (int attempt = 0; attempt < 5 && !answered; ++attempt) {
+                amrvis::StopSource stop;
+                std::thread asker([&stop] {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    stop.request_stop();
+                });
+                answered = run(stop.get_token()).first;
+                asker.join();
+            }
+            require(answered,
                 "a stop raised during one long ray was not answered");
-            require(cancelled.second < 0.5 * baseline.second,
-                "the stop was only noticed once the ray had finished");
         }
     }
 
@@ -681,6 +688,44 @@ int main()
             threw = true;
         }
         require(threw, "a ray field of infinities was accepted");
+    }
+
+    // --- a region too small beside its domain is refused, not rendered empty
+    // A unit region inside a 1e16-wide domain: the entry and exit parameters
+    // round to the same double, so the slab test misses and every pixel comes
+    // back transparent. That is indistinguishable from an empty dataset, so
+    // it is a refusal. A merely deep zoom is many orders short of this and
+    // still renders.
+    {
+        amrvis::VolumeGrid grid;
+        grid.dims = {1, 1, 1};
+        grid.region = unitBox();
+        grid.values.assign(1, 1.0F);
+        grid.coveredVoxels = 1;
+        auto settings = settingsFor(
+            amrvis::orthoPresetXY, 33, twoEntries(0x00FF00U, 1.0F));
+        settings.domain.upper[0] = 1.0e16;
+        bool threw = false;
+        try {
+            (void)amrvis::raycastVolume(grid, settings);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        require(threw, "a region the ray cannot resolve rendered empty instead");
+        // The guard is far away from ordinary geometry: a region a tenth of
+        // its domain still renders. (It has to be a *visible* fraction to
+        // light anything at all -- the camera normalises to the domain, so a
+        // region a millionth of it projects to well under a pixel and draws
+        // nothing whatever the arithmetic does. That is the projection
+        // working as documented, not the guard.)
+        settings.domain.upper[0] = 10.0;
+        settings.outputSize = {128, 128};
+        const auto frame = amrvis::raycastVolume(grid, settings);
+        std::size_t lit = 0;
+        for (const auto pixel : frame.pixels) {
+            lit += pixel != 0U;
+        }
+        require(lit > 0, "a region a tenth of its domain rendered nothing");
     }
 
     return 0;

@@ -3,6 +3,7 @@ add_library(amrexplorer_pipeline
     ParticleProjection.cpp
     SlicePipeline.cpp
     SliceRangeResolver.cpp
+    VolumePipeline.cpp
 )
 add_library(amrexplorer::pipeline ALIAS amrexplorer_pipeline)
 

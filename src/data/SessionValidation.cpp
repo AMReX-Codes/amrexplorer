@@ -212,6 +212,99 @@ void validateSessionParticleRequest(const DatasetMetadata& metadata,
     }
 }
 
+void validateSessionVolumeRequest(const DatasetMetadata& metadata,
+    DatasetId dataset, const VolumeRenderRequest& request)
+{
+    if (request.dataset != dataset) {
+        throw std::invalid_argument("volume request uses the wrong dataset");
+    }
+    requireFieldAndLevel(metadata, request.field, request.maximumLevel, "volume");
+    requireComponent(metadata, request.field, request.component, "volume");
+    const auto errors = validateVolumeRenderRequest(request, metadata.dimension);
+    if (!errors.empty()) {
+        throw std::invalid_argument(errors.front());
+    }
+    // No containment test. VolumeQuery states that "a region reaching past
+    // the domain is not refused. The grid already says 'no data here' with
+    // NaN", and validateSessionViewRequest does not refuse one either -- so
+    // refusing here would throw away a rubber-band selection that renders
+    // perfectly well as a slice, and the relative tolerance it needed
+    // collapsed to zero on an axis whose domain extent is degenerate.
+    // validateVolumeRenderRequest above already bounds the region's own
+    // shape, and volumeGridDims bounds the grid it turns into.
+}
+
+void validateSessionVolumeResult(const DatasetMetadata& metadata,
+    const VolumeRenderRequest& request, const VolumeFrame& frame)
+{
+    if (frame.width != request.outputSize[0]
+        || frame.height != request.outputSize[1]) {
+        throw std::invalid_argument(
+            "volume frame is not the requested size");
+    }
+    if (frame.pixels.size() != static_cast<std::size_t>(frame.width)
+            * static_cast<std::size_t>(frame.height)) {
+        throw std::invalid_argument(
+            "volume frame pixel storage does not match its size");
+    }
+    const auto& used = frame.usedRange;
+    if (!std::isfinite(used.minimum) || !std::isfinite(used.maximum)
+        || !(used.minimum < used.maximum)
+        || (used.logarithmic && !(used.minimum > 0.0))) {
+        throw std::invalid_argument("volume frame reports an unusable range");
+    }
+    if (request.range && !(used == *request.range)) {
+        throw std::invalid_argument(
+            "volume frame did not use the requested range");
+    }
+    if (!request.range && used.logarithmic && !request.logarithmic) {
+        throw std::invalid_argument(
+            "volume frame used a logarithmic range that was not requested");
+    }
+    const auto& metrics = frame.metrics;
+    for (const auto extent : metrics.gridDims) {
+        if (extent < 1) {
+            throw std::invalid_argument(
+                "volume frame reports an empty sampled grid");
+        }
+    }
+    // Saturating, not a plain product: this validates a peer's numbers, and
+    // dims whose product wraps 64 bits (say {2^22, 2^21, 2^21}) would come
+    // out as zero and pass both the budget and the coverage test below.
+    const auto voxels = volumeVoxelCount(metrics.gridDims);
+    if (voxels > request.maximumVoxels) {
+        throw std::invalid_argument(
+            "volume frame reports a grid over the requested voxel budget");
+    }
+    if (metrics.coveredVoxels > voxels) {
+        throw std::invalid_argument(
+            "volume frame reports more covered voxels than the grid holds");
+    }
+    const auto highest = std::min(request.maximumLevel, metadata.finestLevel);
+    if (metrics.sampledMaximumLevel < 0
+        || metrics.sampledMaximumLevel > highest) {
+        throw std::invalid_argument(
+            "volume frame reports a sampled level the request did not allow");
+    }
+    const auto from = frame.cacheFallbackFromLevel;
+    const auto to = frame.cacheFallbackToLevel;
+    if ((from < 0) != (to < 0)) {
+        throw std::invalid_argument(
+            "volume frame reports a half-specified cache fallback");
+    }
+    // No `to < 0` here: the half-specified test above already threw for
+    // exactly that pair, so from >= 0 implies to >= 0 by this point.
+    if (from >= 0
+        && (from > highest || to >= from || metrics.sampledMaximumLevel > to)) {
+        // The last clause: a frame that says it fell back to `to` was
+        // rendered with maximumLevel == to, so nothing finer than `to` can
+        // have put a value in its grid. A peer claiming otherwise is
+        // describing a render that cannot have happened.
+        throw std::invalid_argument(
+            "volume frame reports an impossible cache fallback");
+    }
+}
+
 void validateSessionViewResult(const DatasetMetadata& metadata,
     const ViewDataRequest& request, const ViewDataResult& result)
 {

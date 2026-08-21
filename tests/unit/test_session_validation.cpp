@@ -1,4 +1,5 @@
 #include <amrexplorer/core/Metadata.hpp>
+#include <amrexplorer/data/LocalDatasetSession.hpp>
 #include <amrexplorer/data/SessionValidation.hpp>
 
 #include <cmath>
@@ -782,6 +783,224 @@ int main()
             validateSessionParticleSampleResult(
                 species, "electrons", overfull);
         }, "a sample larger than its species was accepted");
+    }
+
+    // Volume requests: the structural validator plus what the catalog knows
+    // (field, level, component, the region inside the domain), and frames:
+    // the requested size, a usable range that honours the request, and
+    // metrics the dataset and budget could have produced.
+    {
+        const auto metadata = dataset(3);
+        const DatasetId id{1};
+        VolumeRenderRequest request;
+        request.dataset = id;
+        request.field = FieldId{0};
+        request.maximumLevel = 1;
+        request.region = RealBox{Real3{{0.0, 0.0, 0.0}}, Real3{{4.0, 4.0, 4.0}}};
+        request.outputSize = {16, 12};
+        request.transfer.colors = {0x0U, 0xFFFFFFU};
+        request.transfer.opacities = {0.0F, 1.0F};
+        requireAccepted([&] {
+            validateSessionVolumeRequest(metadata, id, request);
+        }, "a well-formed volume request was rejected");
+        requireRejectedWith([&] {
+            validateSessionVolumeRequest(metadata, DatasetId{2}, request);
+        }, "wrong dataset", "a volume request for another dataset was accepted");
+        requireRejectedWith([&] {
+            validateSessionVolumeRequest(dataset(2), id, request);
+        }, "3-D", "a volume request over a 2-D dataset was accepted");
+        {
+            auto bad = request;
+            bad.field = FieldId{3};
+            requireRejectedWith([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "field", "an unknown volume field was accepted");
+            bad = request;
+            bad.maximumLevel = 2;
+            requireRejectedWith([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "level", "a volume level past the finest was accepted");
+            bad = request;
+            bad.component = 1;
+            requireRejectedWith([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "component", "a missing volume component was accepted");
+            // A volume region may reach past the domain, exactly as a view
+            // region may (see the walk above): VolumeQuery fills the part
+            // with no data with NaN and the renderer treats it as
+            // transparent, so refusing here would throw away a rubber-band
+            // selection that renders perfectly well as a slice.
+            bad = request;
+            bad.region.upper[2] = 4.5;
+            requireAccepted([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "a volume region past the domain was rejected");
+            bad = request;
+            bad.region.upper[2] = 4.0 + 1.0e-12;   // a rounding hair: fine
+            requireAccepted([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "a region a rounding hair past the domain was rejected");
+            bad = request;
+            bad.outputSize = {0, 12};
+            requireRejected([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "a structurally invalid volume request was accepted");
+        }
+
+        VolumeFrame frame;
+        frame.width = 16;
+        frame.height = 12;
+        frame.pixels.assign(16 * 12, 0U);
+        frame.usedRange = {0.0, 1.0, false};
+        frame.metrics.gridDims = {4, 4, 4};
+        frame.metrics.coveredVoxels = 64;
+        frame.metrics.sampledMaximumLevel = 1;
+        requireAccepted([&] {
+            validateSessionVolumeResult(metadata, request, frame);
+        }, "a well-formed volume frame was rejected");
+        {
+            auto bad = frame;
+            bad.width = 15;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "requested size", "a frame of another size was accepted");
+            bad = frame;
+            bad.pixels.pop_back();
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "storage", "a frame with short pixel storage was accepted");
+            bad = frame;
+            bad.usedRange = {1.0, 1.0, false};
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "unusable range", "a frame with an empty range was accepted");
+            bad = frame;
+            bad.usedRange = {0.0, 1.0, true};
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "unusable range", "a non-positive logarithmic range was accepted");
+            bad = frame;
+            bad.usedRange = {0.5, 2.0, true};
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "not requested", "an unrequested logarithmic range was accepted");
+            auto ranged = request;
+            ranged.range = VolumeRange{0.25, 0.75, false};
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, ranged, frame);
+            }, "requested range", "a frame ignoring the explicit range was accepted");
+            bad = frame;
+            bad.usedRange = *ranged.range;
+            requireAccepted([&] {
+                validateSessionVolumeResult(metadata, ranged, bad);
+            }, "a frame honouring the explicit range was rejected");
+            bad = frame;
+            bad.metrics.gridDims = {0, 4, 4};
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "empty sampled grid", "an empty grid was accepted");
+            auto small = request;
+            small.maximumVoxels = 32;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, small, frame);
+            }, "voxel budget", "a grid over the voxel budget was accepted");
+            bad = frame;
+            bad.metrics.coveredVoxels = 65;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "covered voxels", "an over-covered grid was accepted");
+            bad = frame;
+            bad.metrics.sampledMaximumLevel = 2;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "sampled level", "a sampled level past the request was accepted");
+            bad = frame;
+            bad.cacheFallbackFromLevel = 1;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "half-specified", "a half-specified fallback was accepted");
+            bad.cacheFallbackToLevel = 1;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "impossible cache fallback", "a non-descending fallback was accepted");
+            // A frame that fell back to level 0 cannot also report having
+            // sampled level 1: it was rendered with maximumLevel == 0, so
+            // nothing finer can have put a value in its grid.
+            bad.cacheFallbackToLevel = 0;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "impossible cache fallback",
+                "a sampled level finer than the fallback was accepted");
+            bad.metrics.sampledMaximumLevel = 0;
+            requireAccepted([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "a fallback from level 1 to 0 was rejected");
+
+            // Dims whose product wraps 64 bits: unsaturated it comes out as
+            // zero, which is under every budget and holds every coverage
+            // count. This validates a peer's numbers, so it is the one place
+            // the wrap is reachable from outside.
+            bad = frame;
+            bad.metrics.gridDims = {4194304, 2097152, 2097152};
+            bad.metrics.coveredVoxels = 0;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, request, bad);
+            }, "voxel budget", "grid dims whose product wraps were accepted");
+        }
+    }
+
+    // --- the Visible range rule, which the slice path has to agree with ---
+    {
+        const auto gridOf = [](std::vector<float> values) {
+            amrvis::VolumeGrid grid;
+            grid.dims = {static_cast<int>(values.size()), 1, 1};
+            grid.region.lower = {{0.0, 0.0, 0.0}};
+            grid.region.upper = {{1.0, 1.0, 1.0}};
+            grid.coveredVoxels = values.size();
+            grid.values = std::move(values);
+            return grid;
+        };
+        // Mixed signs with a logarithmic request: the negatives are part of
+        // the field, so the range spans them and the mapping falls back to
+        // linear -- what resolveRange does for the same data on a plane.
+        // Deciding from the positive values alone would answer "logarithmic
+        // over [2, 2]" and make every negative voxel vanish.
+        const auto mixed = amrvis::visibleVolumeRange(gridOf({-1.0F, 2.0F}), true);
+        require(!mixed.logarithmic && mixed.minimum <= -1.0
+                && mixed.maximum >= 2.0,
+            "a mixed-sign Visible range went logarithmic");
+        // Strictly positive: logarithmic is viable and is used.
+        const auto positive
+            = amrvis::visibleVolumeRange(gridOf({1.0F, 100.0F}), true);
+        require(positive.logarithmic && positive.minimum > 0.0
+                && positive.maximum >= 100.0,
+            "a positive Visible range did not go logarithmic");
+        // The same grid without the logarithmic request stays linear.
+        require(!amrvis::visibleVolumeRange(gridOf({1.0F, 100.0F}), false)
+                     .logarithmic,
+            "a linear Visible request came back logarithmic");
+        // Degenerate: padded either side rather than left empty.
+        const auto degenerate
+            = amrvis::visibleVolumeRange(gridOf({2.0F, 2.0F}), false);
+        require(degenerate.minimum < 2.0 && degenerate.maximum > 2.0,
+            "a degenerate Visible range was not padded");
+        // Nothing finite: a neutral range that keeps the requested mapping.
+        const auto quietNaN = std::numeric_limits<float>::quiet_NaN();
+        require(amrvis::visibleVolumeRange(gridOf({quietNaN}), true).logarithmic
+                && !amrvis::visibleVolumeRange(gridOf({quietNaN}), false)
+                        .logarithmic,
+            "an all-NaN grid did not fall back to a neutral range");
+        // The scan honours the token: it walks the whole grid otherwise.
+        amrvis::StopSource stop;
+        stop.request_stop();
+        bool cancelled = false;
+        try {
+            static_cast<void>(amrvis::visibleVolumeRange(
+                gridOf({1.0F, 2.0F}), false, stop.get_token()));
+        } catch (const amrvis::ReadCancelled&) {
+            cancelled = true;
+        }
+        require(cancelled, "a cancelled Visible range scan did not throw");
     }
     return 0;
 }

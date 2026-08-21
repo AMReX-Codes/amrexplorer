@@ -1,9 +1,13 @@
 #pragma once
 
+#include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/data/DatasetSession.hpp>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -12,6 +16,35 @@
 namespace amrvis {
 
 class PlotfileDataset;
+
+// The sampled volume grids a local session keeps between renders (rotating
+// the camera re-casts a cached grid instead of re-reading the plotfile),
+// keyed by everything the sample depends on.
+
+struct VolumeGridKey {
+    FieldId field;
+    int component = 0;
+    int maximumLevel = 0;
+    CompositionPolicy composition = CompositionPolicy::FinestAvailable;
+    RealBox region;
+    std::array<int, 3> dims{0, 0, 0};
+    friend bool operator==(const VolumeGridKey&, const VolumeGridKey&) = default;
+};
+
+struct VolumeGridKeyHash {
+    [[nodiscard]] std::size_t operator()(const VolumeGridKey& key) const noexcept;
+};
+
+// The range a volume's colours span when a request leaves it to the renderer
+// (the "Visible" range), resolved from the sampled grid: its finite extrema,
+// padded if degenerate, logarithmic only when every finite value allows it,
+// and a neutral range when the grid holds none. Declared here rather than
+// kept file-local because the remote session has to answer it the same way,
+// and because the rule -- which has to agree with the slice path's
+// resolveRange -- is worth pinning on its own. Scans the grid, so it throws
+// ReadCancelled when the token stops.
+[[nodiscard]] VolumeRange visibleVolumeRange(
+    const VolumeGrid& grid, bool logarithmic, StopToken cancellation = {});
 
 class LocalDatasetSession final : public DatasetSession {
 public:
@@ -47,6 +80,21 @@ public:
         const std::string& species, double fraction, std::uint64_t seed,
         std::size_t maximumPoints, StopToken cancellation = {});
 
+    // A 3-D plotfile with physical geometry can be volume-rendered.
+    [[nodiscard]] bool supportsVolumeRendering() const noexcept override;
+    [[nodiscard]] VolumeFrame renderVolume(const VolumeRenderRequest& request,
+        StopToken cancellation = {}) override;
+    // The sampled-grid cache's budget; grids larger than it are rendered
+    // uncached. Returns whether the cache fits the new budget, which a zero
+    // budget does (every unpinned grid is evicted and nothing is resident);
+    // it is false only while a pinned grid still exceeds it.
+    [[nodiscard]] bool setVolumeGridCacheBudget(std::uint64_t bytes);
+
+    // The sampled-grid pool on its own. cacheMetrics() reports the block
+    // pool, because CacheMetrics carries one budget and one hit rate and the
+    // remote snapshot asserts that budget is the one setCacheBudget was
+    // given; until it can carry both, this is how the grid pool is observed.
+    [[nodiscard]] CacheMetrics volumeGridCacheMetrics() const;
     [[nodiscard]] CacheMetrics cacheMetrics() const override;
     [[nodiscard]] bool setCacheBudget(std::uint64_t bytes) override;
     void clearUnpinnedCache() override;
@@ -68,6 +116,19 @@ private:
     // finite values", which costs the same scan to discover. Cancelled scans
     // record nothing.
     std::map<std::uint32_t, std::optional<ValueRange>> m_fabRanges;
+    // Seeded by the constructor from the budget the dataset was opened with,
+    // and kept in step by setCacheBudget. It starts empty rather than on a
+    // default of its own: a constant here would be overwritten before the
+    // cache was ever used, and would only mislead a reader about the budget
+    // that actually applies.
+    ByteLruCache<VolumeGridKey, VolumeGrid, VolumeGridKeyHash> m_volumeGrids{0};
+    // The last Visible range and what it was resolved from. Resolving it
+    // walks every voxel, so a camera rotation -- which reuses the cached grid
+    // and asks the same question of it -- would otherwise rescan the whole
+    // grid before each cast. One entry is enough: the interactive case is the
+    // same key and mapping frame after frame.
+    std::optional<std::pair<VolumeGridKey, bool>> m_visibleRangeFor;
+    VolumeRange m_visibleRange;
 };
 
 } // namespace amrvis

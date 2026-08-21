@@ -38,7 +38,13 @@ struct ServerOptions {
     // Volume rendering (protocol 1.2): the most voxels a client may ask the
     // server to sample per request (its own budget is clamped to this), and
     // the per-dataset cache of sampled grids a rotating client re-casts
-    // from. Both bound the server's memory: a grid is four bytes per voxel.
+    // from. A grid is four bytes per voxel.
+    //
+    // Each bounds one thing -- one grid, and one dataset's cache -- not the
+    // server's memory in total. The aggregate is these multiplied by
+    // maximumDatasets and maximumConnections, plus one transient grid per
+    // request in flight, so an operator sizing a host has to do that
+    // arithmetic rather than read either number as a ceiling.
     std::uint64_t maximumVolumeVoxels = defaultVolumeVoxelBudget;
     std::uint64_t volumeGridCacheBytes = defaultVolumeGridCacheBytes;
     std::string softwareVersion = "unknown";

@@ -185,6 +185,7 @@ void checkConverted(
         || !finite(result.usedRange.minimum) || !finite(result.usedRange.maximum)
         || wire.grid_dims.size() != 3
         || result.metrics.gridDims[0] != wire.grid_dims[0]
+        || result.metrics.gridDims[1] != wire.grid_dims[1]
         || result.metrics.gridDims[2] != wire.grid_dims[2]) {
         fail("RenderedFrameResponse converter accepted an inconsistent frame");
     }

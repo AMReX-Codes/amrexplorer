@@ -271,10 +271,21 @@ public:
         return codec::fromWire(*payload);
     }
 
+    // Whether the negotiated protocol carries RenderedFrameRequest at all.
+    // Asked before the call rather than thrown from inside it, so a caller
+    // can refuse the capability without tearing down the connection.
+    [[nodiscard]] bool supportsVolumeRendering() const noexcept
+    {
+        return m_selectedMinorVersion >= 2;
+    }
+
     VolumeFrame renderVolume(
         const VolumeRenderRequest& request, StopToken cancellation)
     {
-        if (m_selectedMinorVersion < 2) {
+        // Still refused here for a caller that did not ask first -- but the
+        // wrapper that closes the connection on an unexpected exception has
+        // supportsVolumeRendering() to test, so it never has to reach this.
+        if (!supportsVolumeRendering()) {
             throw std::runtime_error(
                 "the remote server predates volume rendering (protocol "
                 "1.2); install a current amrexplorer-server");
@@ -288,8 +299,14 @@ public:
         if (payload == nullptr) {
             throw std::runtime_error("server omitted rendered-frame payload");
         }
+        // Decode the frame first, then commit the snapshot. A server can
+        // return a well-formed CacheState beside a malformed frame, and
+        // storing metrics from a response that is about to be rejected
+        // leaves a live connection describing a render that never happened.
+        // cacheRequest below establishes the same order.
+        auto frame = codec::fromWire(*payload);
         updateCache(request.dataset, codec::fromWire(payload->cache.get()));
-        return codec::fromWire(*payload);
+        return frame;
     }
 
     void closeDataset(DatasetId dataset, StopToken cancellation)
@@ -743,6 +760,11 @@ RemoteDirectoryListing Connection::listDirectory(
     const std::string& path, StopToken cancellation)
 {
     return m_impl->listDirectory(path, cancellation);
+}
+
+bool Connection::supportsVolumeRendering() const noexcept
+{
+    return m_impl->supportsVolumeRendering();
 }
 
 VolumeFrame Connection::renderVolume(

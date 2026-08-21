@@ -338,9 +338,12 @@ table DirectoryListing {
 // bounded grid, ray-casts it with the requested orthographic camera and
 // transfer function, and returns the viewport-sized frame; volume field
 // data never crosses the wire. `has_range` false leaves the colour range to
-// the server (the sampled grid's extrema, `logarithmic` requested), which
-// reports what it used; with `has_range` the range is `minimum`..`maximum`
-// with `range_logarithmic`. The transfer function is an explicit lookup: one
+// the server (the sampled grid's extrema, mapped as `visible_logarithmic`
+// asks), which reports what it used; with `has_range` the range is
+// `minimum`..`maximum` with `range_logarithmic`. The two flags are named for
+// which case each belongs to, because they are both bools and swapping them
+// encodes, decodes and round-trips cleanly -- it shows up only as a linear
+// picture where a logarithmic one was asked for. The transfer function is an explicit lookup: one
 // 0x00RRGGBB colour and one [0, 1] opacity per entry, entry 0 the bottom of
 // the range.
 table RenderedFrameRequest {
@@ -358,7 +361,7 @@ table RenderedFrameRequest {
   has_range:bool (id: 11);
   minimum:double (id: 12);
   maximum:double (id: 13);
-  logarithmic:bool (id: 14);
+  visible_logarithmic:bool (id: 14);
   transfer_colors:[uint] (id: 15);
   transfer_opacities:[float] (id: 16);
   samples_per_voxel:int (id: 17);

@@ -56,7 +56,12 @@ public:
     [[nodiscard]] RemoteDirectoryListing listDirectory(
         const std::string& path, StopToken cancellation = {});
     // Renders a volume on the server and returns the frame (protocol 1.2).
-    // Throws when the server negotiated an older protocol.
+    // Ask supportsVolumeRendering() first: this throws when the server
+    // negotiated an older protocol.
+    // Whether the negotiated protocol carries volume rendering (1.2), asked
+    // before the call so a caller can refuse the capability without the
+    // failure looking like a misbehaving peer.
+    [[nodiscard]] bool supportsVolumeRendering() const noexcept;
     [[nodiscard]] VolumeFrame renderVolume(
         const VolumeRenderRequest& request, StopToken cancellation = {});
     void closeDataset(DatasetId dataset, StopToken cancellation = {});

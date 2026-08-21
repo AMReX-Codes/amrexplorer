@@ -21,14 +21,6 @@ class PlotfileDataset;
 // the camera re-casts a cached grid instead of re-reading the plotfile),
 // keyed by everything the sample depends on.
 
-// A sensible grid-cache budget for a caller that has to name one -- the
-// server's --volume-cache-mib default, say. It holds four grids of the
-// default voxel budget. A session does not use it as its own default: it
-// takes the budget the dataset was opened with, and setCacheBudget keeps the
-// two in step. This is for whoever is choosing that number.
-inline constexpr std::uint64_t defaultVolumeGridCacheBytes
-    = 256ULL * 1024ULL * 1024ULL;
-
 struct VolumeGridKey {
     FieldId field;
     int component = 0;
@@ -102,6 +94,11 @@ public:
     // pool, because CacheMetrics carries one budget and one hit rate and the
     // remote snapshot asserts that budget is the one setCacheBudget was
     // given; until it can carry both, this is how the grid pool is observed.
+    // The block pool alone. setCacheBudget deliberately moves both pools,
+    // which is what a user setting one number wants -- but a server applying
+    // a *client's* requested budget must not let it raise the sampled-grid
+    // cache past the limit the operator set with --volume-cache-mib.
+    [[nodiscard]] bool setBlockCacheBudget(std::uint64_t bytes);
     [[nodiscard]] CacheMetrics volumeGridCacheMetrics() const;
     [[nodiscard]] CacheMetrics cacheMetrics() const override;
     [[nodiscard]] bool setCacheBudget(std::uint64_t bytes) override;

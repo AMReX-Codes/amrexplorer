@@ -413,6 +413,11 @@ bool LocalDatasetSession::setVolumeGridCacheBudget(std::uint64_t bytes)
     return m_volumeGrids.setBudget(bytes);
 }
 
+bool LocalDatasetSession::setBlockCacheBudget(std::uint64_t bytes)
+{
+    return requireDataset()->setCacheBudget(bytes);
+}
+
 CacheMetrics LocalDatasetSession::volumeGridCacheMetrics() const
 {
     return m_volumeGrids.metrics();

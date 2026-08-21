@@ -132,6 +132,8 @@ int main()
         PayloadKind::ErrorResponse,
         PayloadKind::ListDirectoryRequest,
         PayloadKind::DirectoryListing,
+        PayloadKind::RenderedFrameRequest,
+        PayloadKind::RenderedFrameResponse,
     };
     for (const auto kind : payloadKinds) {
         codec::NativeEnvelope native;

@@ -139,6 +139,21 @@ VolumeFrame RemoteDatasetSession::renderVolume(
     const VolumeRenderRequest& request, StopToken cancellation)
 {
     requireOpen();
+    // Both refusals happen outside refusingInvalidResponses, whose catch(...)
+    // closes the connection: neither says the peer misbehaved. A server that
+    // predates 1.2, or a dataset that cannot be volume-rendered at all, is a
+    // capability the caller asked for and did not get -- losing the session
+    // and every other open dataset over it is not the answer. The local
+    // session refuses the second case the same way.
+    if (!supportsVolumeRendering()) {
+        throw std::invalid_argument(
+            "volume rendering requires a 3-D plotfile with physical geometry");
+    }
+    if (!m_connection->supportsVolumeRendering()) {
+        throw std::runtime_error(
+            "the remote server predates volume rendering (protocol 1.2); "
+            "install a current amrexplorer-server");
+    }
     validateSessionVolumeRequest(m_metadata, m_id, request);
     return refusingInvalidResponses(*m_connection, [&] {
         auto frame = m_connection->renderVolume(request, cancellation);

@@ -241,11 +241,18 @@ int main(int argc, char* argv[])
                 const auto mebibytes
                     = parseUnsigned<std::uint32_t>(value, "--volume-cache-mib");
                 constexpr std::uint64_t oneMebibyte = 1024U * 1024U;
-                if (mebibytes == 0) {
+                // Bounded above as well as below, like every other size flag.
+                // A budget the cache can never reach means it never evicts,
+                // so the server grows until the OOM killer takes it with
+                // nothing pointing at the flag that asked for it. The cap is
+                // generous: 64 GiB is 256 grids at the largest voxel budget.
+                constexpr std::uint32_t maximumMebibytes = 64U * 1024U;
+                if (mebibytes == 0 || mebibytes > maximumMebibytes) {
                     throw std::invalid_argument(
-                        "--volume-cache-mib must be greater than zero");
+                        "--volume-cache-mib is outside its allowed range");
                 }
-                options.volumeGridCacheBytes = mebibytes * oneMebibyte;
+                options.volumeGridCacheBytes
+                    = static_cast<std::uint64_t>(mebibytes) * oneMebibyte;
             } else if (option == "--write-stall-timeout-seconds") {
                 const auto seconds = parseUnsigned<std::uint32_t>(
                     value, "--write-stall-timeout-seconds");

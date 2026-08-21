@@ -942,7 +942,7 @@ fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value)
     wire.minimum = value.range ? value.range->minimum : 0.0;
     wire.maximum = value.range ? value.range->maximum : 0.0;
     wire.range_logarithmic = value.range ? value.range->logarithmic : false;
-    wire.logarithmic = value.logarithmic;
+    wire.visible_logarithmic = value.logarithmic;
     wire.transfer_colors = value.transfer.colors;
     wire.transfer_opacities = value.transfer.opacities;
     wire.samples_per_voxel = value.samplesPerVoxel;
@@ -980,7 +980,7 @@ VolumeRenderRequest fromWire(const fb::RenderedFrameRequestT& value)
         result.range = VolumeRange{
             value.minimum, value.maximum, value.range_logarithmic};
     }
-    result.logarithmic = value.logarithmic;
+    result.logarithmic = value.visible_logarithmic;
     result.transfer.colors = value.transfer_colors;
     result.transfer.opacities = value.transfer_opacities;
     result.samplesPerVoxel = value.samples_per_voxel;

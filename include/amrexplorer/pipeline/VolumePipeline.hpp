@@ -80,7 +80,6 @@ struct VolumeRangeChoice {
 // The bytes a rendered frame of this size costs on the wire, and the size
 // shrunk (uniformly, aspect kept) until that fits the session's response
 // budget; unchanged for a local session.
-inline constexpr std::uint64_t volumeResponseOverheadBytes = 4096;
 [[nodiscard]] std::uint64_t volumeResponseBytes(std::array<int, 2> outputSize);
 [[nodiscard]] std::array<int, 2> frameBudgetBoundedVolumeSize(
     std::array<int, 2> outputSize,

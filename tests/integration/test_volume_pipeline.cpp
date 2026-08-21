@@ -490,6 +490,15 @@ int main()
             require(small->setCacheBudget(8192)
                     && small->volumeGridCacheMetrics().budgetBytes == 8192,
                 "setCacheBudget did not keep the grid cache in step");
+            // setBlockCacheBudget leaves the grid pool where it is. The
+            // server applies a client's requested budget through this one,
+            // so a peer cannot raise the sampled-grid cache past the limit
+            // --volume-cache-mib set for it.
+            require(small->setVolumeGridCacheBudget(4096),
+                "the grid cache budget could not be pinned");
+            require(small->setBlockCacheBudget(64ULL * 1024ULL * 1024ULL)
+                    && small->volumeGridCacheMetrics().budgetBytes == 4096,
+                "a block-only budget moved the grid cache");
         }
         // A grid larger than the grid cache still renders, uncached.
         require(session->setVolumeGridCacheBudget(1024),

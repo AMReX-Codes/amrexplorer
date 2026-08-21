@@ -794,15 +794,12 @@ private:
             request.maximumVoxels, m_options.maximumVolumeVoxels);
         const auto dataset = requireDataset(request.dataset);
         const auto frame = dataset->renderVolume(request, cancellation);
-        // The bound above sized the pixels; the exact guard covers the
-        // tables around them.
-        const auto encoded = codec::encode(envelope.request_id,
-            codec::toWire(frame, dataset->cacheMetrics()),
-            m_selectedMinorVersion);
-        if (encoded.size() > m_maximumFrameBytes.load()) {
-            throw RemoteError(ErrorCode::ResourceLimitExceeded,
-                "rendered frame cannot fit in one negotiated frame");
-        }
+        // One encode. send() makes the exact size check itself before
+        // touching the socket, and answers an oversized response with the
+        // same ResourceLimitExceeded -- so encoding a 64 MiB buffer here just
+        // to measure it, then throwing it away and building it again, cost
+        // four times the peak memory and twice the work for nothing. Unlike
+        // sliceView there is nothing to shed on the second pass.
         send(envelope.request_id,
             codec::toWire(frame, dataset->cacheMetrics()));
     }
@@ -957,7 +954,12 @@ private:
             throw std::invalid_argument("cache-budget payload is missing");
         }
         const auto dataset = requireDataset(DatasetId{request->dataset_id});
-        static_cast<void>(dataset->setCacheBudget(request->budget_bytes));
+        // The block pool only. setCacheBudget moves both pools, which is what
+        // a local user setting one number wants -- but here the number comes
+        // from the peer, and letting it raise the sampled-grid cache would
+        // put the memory bound the operator set with --volume-cache-mib in
+        // the client's hands.
+        static_cast<void>(dataset->setBlockCacheBudget(request->budget_bytes));
         sendCache(envelope.request_id, *dataset);
     }
 
@@ -997,7 +999,13 @@ private:
         }
         const auto pixels = static_cast<std::uint64_t>(request.outputSize[0])
             * static_cast<std::uint64_t>(request.outputSize[1]);
-        if (!fitsResponse(pixels * sizeof(std::uint32_t))) {
+        // Reserving the volume response's own overhead, not the slice's: the
+        // point of checking before rendering is that a frame which cannot fit
+        // is refused without doing the work, and reserving 512 bytes for
+        // tables that cost 4096 lets an oversized one through to be rendered
+        // in full and then rejected by send().
+        if (!fitsResponse(pixels * sizeof(std::uint32_t),
+                volumeResponseOverheadBytes)) {
             throw RemoteError(ErrorCode::ResourceLimitExceeded,
                 "rendered frame cannot fit in one negotiated frame");
         }
@@ -1030,15 +1038,18 @@ private:
             (available - rasterBytes) / bytesPerGridBox);
     }
 
-    [[nodiscard]] bool fitsResponse(std::uint64_t vectorBytes) const noexcept
+    // overheadBytes defaults to the slice reserve, which is what every
+    // response but a volume frame is measured against.
+    [[nodiscard]] bool fitsResponse(std::uint64_t vectorBytes,
+        std::uint64_t overheadBytes = responseOverheadReserveBytes) const noexcept
     {
         // Reserve room for the envelope, tables, vector offsets, metrics, and
         // FlatBuffers alignment. send() performs the final exact encoded-size
         // check before touching the socket.
         const auto frameBytes
             = static_cast<std::uint64_t>(m_maximumFrameBytes.load());
-        return frameBytes >= responseOverheadReserveBytes
-            && vectorBytes <= frameBytes - responseOverheadReserveBytes;
+        return frameBytes >= overheadBytes
+            && vectorBytes <= frameBytes - overheadBytes;
     }
 
     std::shared_ptr<LocalDatasetSession> requireDataset(DatasetId id)

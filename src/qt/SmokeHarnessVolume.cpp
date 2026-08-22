@@ -112,7 +112,7 @@ private:
         if (auto* save = qobject_cast<QFileDialog*>(modal)) {
             ++m_fileDialogs;
             save->selectFile(m_typed);
-            // Through the meta-object: QFileDialog re-declares accept() as
+            // Through the meta-object: QFileDialog redeclares accept() as
             // protected, and this runs the dialog's real accept path (the one
             // a user's click runs) rather than done() closing it behind that
             // path's back.

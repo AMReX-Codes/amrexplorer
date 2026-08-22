@@ -54,25 +54,28 @@ VolumeWindow::VolumeWindow(QWidget* parent)
 
 void VolumeWindow::exportImage()
 {
-    auto path = QFileDialog::getSaveFileName(this, tr("Export Volume Image"),
-        QString(), tr("PNG images (*.png)"));
-    if (path.isEmpty()) {
+    const auto chosen = QFileDialog::getSaveFileName(this,
+        tr("Export Volume Image"), QString(), tr("PNG images (*.png)"));
+    if (chosen.isEmpty()) {
         return;
     }
     // save() forces PNG whatever the name, so the name is normalised to match
     // it -- a typed "shot" or "shot.jpg" would otherwise hold PNG bytes under
     // a name nothing opens. The main window's export applies the same rule.
+    auto path = chosen;
     if (path.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive)) {
         path.chop(4);
     }
     path += QStringLiteral(".png");
-    // The dialog asked about the name as typed, so it did not ask about this
-    // one: a typed "shot" beside an existing shot.png passes its own existence
-    // check and would then be overwritten without a word. Asked here, after
-    // the name is final. (setDefaultSuffix is not the fix -- it only fills an
-    // empty suffix, so it would leave "shot.jpg" alone, and Qt applies it in
-    // selectedFiles(), after a native dialog has already prompted.)
-    if (QFileInfo::exists(path)
+    // Only when normalising changed the name. The dialog has already confirmed
+    // overwriting the name it returned, so asking again about that same name
+    // would be a second prompt for one save; but it never asked about a name
+    // appended to after it returned -- a typed "shot" beside an existing
+    // shot.png passes its existence check and would be overwritten silently.
+    // (setDefaultSuffix is not the fix: it only fills an empty suffix, so it
+    // would leave "shot.jpg" alone, and Qt applies it in selectedFiles(),
+    // after a native dialog has already prompted.)
+    if (path != chosen && QFileInfo::exists(path)
         && QMessageBox::question(this, tr("Export Volume Image"),
                tr("%1 already exists. Overwrite it?").arg(path))
             != QMessageBox::Yes) {

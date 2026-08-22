@@ -55,13 +55,14 @@ public:
     HostWidget()
     {
         resize(120, 80);
-        m_button = new QPushButton(QStringLiteral("XY"), this);
+        // Owned by `this` either way, so it needs no member to hold it.
+        auto* button = new QPushButton(QStringLiteral("XY"), this);
         // Flat solid red: a styled button paints its own frame and hover, and
         // the count below wants one unambiguous colour to look for.
-        m_button->setStyleSheet(
+        button->setStyleSheet(
             QStringLiteral("QPushButton { background: rgb(255,0,0);"
                            " border: none; color: rgb(255,0,0); }"));
-        m_button->setGeometry(40, 50, 30, 20);
+        button->setGeometry(40, 50, 30, 20);
     }
 
 protected:
@@ -70,9 +71,6 @@ protected:
         QPainter painter(this);
         painter.fillRect(rect(), background());
     }
-
-private:
-    QPushButton* m_button = nullptr;
 };
 
 // Pixels within a small distance of `wanted`. Exact equality would be brittle

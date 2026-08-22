@@ -32,14 +32,15 @@ namespace {
 // Save, so a reflexive Return -- the key that dismissed the save dialog a
 // moment earlier -- would confirm the overwrite the prompt is warning about.
 //
-// Unparented, like the save dialog: see exportImage. Titled through
-// VolumeWindow::tr so it shares a translation context with the strings passed
-// into it, rather than sitting in QObject's.
+// Owned by whatever the caller passes -- see exportImage on why that is not
+// the volume window. Titled through VolumeWindow::tr so it shares a
+// translation context with the strings passed into it, not QObject's.
 int showExportPrompt(QMessageBox::Icon icon, const QString& text,
-    QMessageBox::StandardButtons buttons, QMessageBox::StandardButton fallback)
+    QMessageBox::StandardButtons buttons, QMessageBox::StandardButton fallback,
+    QWidget* owner = nullptr)
 {
     QMessageBox box(icon, VolumeWindow::tr("Export Volume Image"), text,
-        buttons, nullptr);
+        buttons, owner);
     box.setDefaultButton(fallback);
     return box.exec();
 }
@@ -75,23 +76,32 @@ VolumeWindow::VolumeWindow(QWidget* parent)
     fileMenu->addAction(closeAction);
 }
 
-
 void VolumeWindow::exportImage()
 {
-    // No wait-for-a-frame guard. The case one would have caught -- IsoWidget's
-    // "3-D overview" placeholder reaching a file -- cannot happen here: the
-    // controller pushes geometry before it shows this window, so the widget
-    // always has some. What a guard did catch was the legitimate export of the
-    // wireframe and overlays alone, including after a failed render, which
-    // leaves no frame and so refused forever with advice to wait for one.
-    //
-    // Nothing below is parented to this window, and every exec() is guarded.
-    // The window carries WA_DeleteOnClose, and an async dataset switch or
-    // sequence frame can close it while a modal is up: a dialog parented here
-    // would be freed as a child -- at a stack address -- by ~QObject, and
-    // returning into a destroyed window would touch freed members.
+    // The picture first, before any dialog. A nested modal loop delivers
+    // whatever the app has queued -- a finished render, a sequence frame, a
+    // dataset switch that clears the frame outright -- so rendering after the
+    // prompts writes out something the user never saw. Taking it here costs
+    // the buffer for the length of the dialog and saves exactly what was on
+    // screen when they asked.
+    const auto image = renderWidgetWithoutChildren(
+        *m_view, m_view->devicePixelRatioF());
+    if (image.isNull()) {
+        showExportPrompt(QMessageBox::Critical,
+            tr("The picture could not be allocated at this size; "
+               "nothing was written."),
+            QMessageBox::Ok, QMessageBox::Ok);
+        return;
+    }
+    // Parented to the main window, not to this one: this window carries
+    // WA_DeleteOnClose, and an async dataset switch can close it while a modal
+    // is up, which freed a stack-allocated child. The main window outlives it,
+    // so the dialogs keep an owner the platform can be transient for -- a
+    // null parent loses the sheet on macOS and the owner window elsewhere.
+    // `alive` still guards the members below across each nested loop.
     const QPointer<VolumeWindow> alive(this);
-    const auto chosen = QFileDialog::getSaveFileName(nullptr,
+    auto* const owner = parentWidget();
+    const auto chosen = QFileDialog::getSaveFileName(owner,
         tr("Export Volume Image"), QString(), tr("PNG images (*.png)"));
     if (alive.isNull() || chosen.isEmpty()) {
         return;
@@ -108,23 +118,12 @@ void VolumeWindow::exportImage()
             text += QLatin1Char('\n') + tr("That file already exists.");
         }
         if (showExportPrompt(QMessageBox::Question, text,
-                QMessageBox::Save | QMessageBox::Cancel, QMessageBox::Cancel)
+                QMessageBox::Save | QMessageBox::Cancel, QMessageBox::Cancel,
+                owner)
                 != QMessageBox::Save
             || alive.isNull()) {
             return;
         }
-    }
-    // Straight to the shared rule: it is the reusable seam, and a private
-    // one-line wrapper around it only made the failure below ambiguous.
-    const auto image = renderWidgetWithoutChildren(
-        *m_view, m_view->devicePixelRatioF());
-    if (image.isNull()) {
-        // The only way to get here: the buffer would not allocate.
-        showExportPrompt(QMessageBox::Information,
-            tr("The picture could not be allocated at this size; "
-               "nothing was written."),
-            QMessageBox::Ok, QMessageBox::Ok);
-        return;
     }
     if (!image.save(path, "PNG")) {
         showExportPrompt(QMessageBox::Critical,

@@ -5,7 +5,6 @@
 #include <amrexplorer/core/Volume.hpp>
 #include <amrexplorer/pipeline/VolumePipeline.hpp>
 
-#include <QImage>
 #include <QMainWindow>
 #include <QSize>
 #include <QString>

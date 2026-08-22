@@ -60,6 +60,12 @@ namespace amrvis::qt {
     // reach honestly.
     QImage image(widget.size() * devicePixelRatio,
         QImage::Format_ARGB32_Premultiplied);
+    if (image.isNull()) {
+        // Refused allocation. Carrying on would build a QPainter on a null
+        // paint device, which Qt reports with two warnings of its own before
+        // handing back the same empty image.
+        return image;
+    }
     image.setDevicePixelRatio(devicePixelRatio);
     // Transparent first: render() paints the widget's own background over this,
     // but a widget that does not fill its whole rect would otherwise leave

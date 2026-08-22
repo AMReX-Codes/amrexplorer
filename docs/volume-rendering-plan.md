@@ -402,8 +402,9 @@ row, threading note; `docs/building.md` unchanged.
 - **End-to-end coverage of "Export Image..."** — the rules it applies (the
   `.png` name, and rendering the view without the preset buttons parked over
   it) are unit-tested in `test_widget_image_export`, but nothing drives the menu
-  action, so the slot's own wiring — the wait-for-a-frame guard, the name rule,
-  the confirmation, the device pixel ratio — is uncovered. A harness that
+  action, so the slot's own wiring — the name rule, the confirmation, the device pixel
+  ratio, and that the picture is taken before the dialogs rather than after
+  them — is uncovered. A harness that
   triggered the action and answered its modals from a timer was written and
   withdrawn: it failed roughly 3% of `ctest` runs, because
   `application.exit()` called from a handler that a nested modal loop delivered

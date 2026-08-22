@@ -59,15 +59,16 @@ void VolumeWindow::exportImage()
     if (chosen.isEmpty()) {
         return;
     }
-    // save() forces PNG whatever the name, so the name is normalised to match
-    // it -- a typed "shot" or "shot.jpg" would otherwise hold PNG bytes under
-    // a name nothing opens. The main window's export applies the same rule.
+    // save() forces PNG whatever the name, so a name that does not already say
+    // png gets it appended -- a typed "shot" would otherwise hold PNG bytes
+    // under a name nothing opens. A name that does say it is left exactly as
+    // typed, case included: rewriting "shot.PNG" to "shot.png" would write
+    // past the file the user picked on a case-sensitive filesystem.
     auto path = chosen;
-    if (path.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive)) {
-        path.chop(4);
+    if (!path.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive)) {
+        path += QStringLiteral(".png");
     }
-    path += QStringLiteral(".png");
-    // Only when normalising changed the name. The dialog has already confirmed
+    // Only when that appended something. The dialog has already confirmed
     // overwriting the name it returned, so asking again about that same name
     // would be a second prompt for one save; but it never asked about a name
     // appended to after it returned -- a typed "shot" beside an existing

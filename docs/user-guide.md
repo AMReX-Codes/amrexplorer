@@ -292,9 +292,9 @@ frames.
 ## Volume rendering
 
 **View > Volume Rendering...** opens a window that ray-casts the whole 3-D
-field: every pixel accumulates the colour and opacity of the cells along its
+field: every pixel accumulates the color and opacity of the cells along its
 line of sight, so translucent structure inside the domain shows through. The
-window uses the same view as the isometric quadrant -- drag to rotate, wheel
+window has its own copy of the isometric view -- drag to rotate, wheel
 to zoom, and the **XY**, **XZ**, **YZ** buttons for the axis-aligned views --
 with the domain outline, the grid boxes and the slice planes drawn over the
 rendered volume.
@@ -302,13 +302,13 @@ rendered volume.
 The window follows the main window: the field, the AMR level, the range mode
 and its User min/max, the logarithmic mapping and the palette are the ones
 selected there. With a **File**, **Level** or **User** range the volume's
-colours match the slices and the colour bar. **Visible** is the exception: it
+colors match the slices and the **Color Scale**. **Visible** is the exception: it
 scales each view to what that view shows, and the volume shows the whole
-domain while the slices show three planes through it -- so the same colour can
+domain while the slices show three planes through it -- so the same color can
 mean different values in the two. Pick File or Level when you need them to
 match. Its own controls set the opacity:
 
-- **Opacity from / to** window the colour range: the opacity ramps linearly
+- **Opacity from / to** window the color range: the opacity ramps linearly
   from *from* to *to*, and everything outside that window -- below *from* and
   above *to* -- is fully transparent. Narrow the window around the values of
   interest to see them through the rest; note that raising *from* hides the
@@ -316,16 +316,18 @@ match. Its own controls set the opacity:
   single opaque shell at that value.
 - **Maximum opacity** scales the whole ramp; lower it to look deeper into a
   dense field.
-- **Use palette alpha ramp** takes each colour's opacity from the palette's
+- **Use palette alpha ramp** takes each color's opacity from the palette's
   own alpha ramp instead of the linear window. Legacy Amrvis `.pal` files
   carry such a ramp (the shipped palettes have a plain 0-100 % ramp), and
   the window still applies the *from* / *to* limits and the maximum to it.
 - **Quality** trades speed for detail: it sets how many samples are taken per
-  cell along each ray and how many cells the field is sampled into (Draft
-  128^3, Normal 256^3, High 384^3). A field finer than that is sampled at the
-  coarser pitch; a level coarser than it is drawn at its own resolution. On a
-  remote plotfile the server sets its own ceiling on this, so **High** may look
-  no different from **Normal** unless the server allows more (see [Remote
+  cell along each ray and how many cells the field is sampled into altogether
+  -- about 2 million on Draft, 17 million on Normal, 57 million on High, spread
+  across the three axes in the domain's own proportions, so a long thin domain
+  gets a long thin grid rather than a cube. A field finer than that is sampled
+  at the coarser pitch; a level coarser than it is drawn at its own resolution.
+  On a remote plotfile the server sets its own ceiling, so **High** may look no
+  different from **Normal** unless the server allows more (see [Remote
   datasets](#remote-datasets)).
 
 While the camera moves the window shows quick half-resolution drafts and
@@ -340,7 +342,9 @@ datasets](#remote-datasets)): the server samples and renders the frame and
 sends back the picture, never the field. It needs an `amrexplorer-server`
 that speaks protocol 1.2; against an older server the menu item stays
 disabled. The server's `--max-volume-voxels` and `--volume-cache-mib` options
-bound the memory a session may use for it.
+set how large one volume and one dataset's cache may get. They are per volume
+and per dataset, not a total for the server, so sizing a host means multiplying
+them by how many datasets and connections you allow.
 
 **File > Export Image...** in the volume window saves the view, overlays
 included, as a PNG.

@@ -407,12 +407,15 @@ void VolumeController::startRender()
     // overload taking it re-resolves per attempt (VolumePipeline.hpp).
     //
     // The Visible mode is left to the renderer, which resolves it from the
-    // grid it sampled. That is a different span than the slices and the colour
-    // bar show, and the guide says so. Taking the colour bar's range instead
-    // needs the host to publish it beside the mode it belongs to, keyed to the
-    // field and level it was measured for -- fetching it separately means
-    // rebuilding that key by hand and getting it wrong at the edges, which is
-    // why the attempt was withdrawn. See agent-notes/volume-docs-follow-ups.md.
+    // grid it sampled. That is a different span than the slices and the Color
+    // Scale show, and the guide says so. Making them agree wants the resolved
+    // range published on RangeController::Selection, written where the colour
+    // scale itself is written, so it arrives beside the mode it belongs to and
+    // for the selection then in effect. Fetching it through a separate hook
+    // was tried and withdrawn: it needs a staleness key rebuilt by hand here,
+    // and that key cannot be made right -- after a cache fallback the level
+    // combo reads "Level 0 only" while the plane came from a finest-available
+    // request, so it never matches again.
     const VolumeRangeChoice rangeChoice{rangeSelection.mode,
         rangeSelection.userRange, rangeSelection.logarithmic};
     watcher->setFuture(QtConcurrent::run(

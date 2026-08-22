@@ -118,10 +118,12 @@ void IsoWidget::paintEvent(QPaintEvent* event)
 
     const auto frame = viewportFrame(width(), height());
     if (!m_backdrop.isNull()) {
-        // The frame's own projection frame, so its centre lands on ours and
-        // its pixels are scaled by the ratio of the projection scales.
+        // The frame's own projection frame, so its centre lands on ours, and
+        // both magnifications, so a zoom the frame was not rendered at is
+        // corrected instead of sliding the image out of its own box.
         const auto rendered = viewportFrame(m_backdrop.width(), m_backdrop.height());
-        const auto ratio = frame.scale / rendered.scale;
+        const auto ratio = backdropScale(
+            frame, m_camera.zoom, rendered, m_backdropCamera.zoom);
         const QRectF target(frame.centerX - 0.5 * ratio * m_backdrop.width(),
             frame.centerY - 0.5 * ratio * m_backdrop.height(),
             ratio * m_backdrop.width(), ratio * m_backdrop.height());
@@ -380,9 +382,10 @@ void IsoWidget::setViewAngles(double azimuth, double elevation)
     emit interactionEnded();
 }
 
-void IsoWidget::setBackdropImage(QImage image)
+void IsoWidget::setBackdropImage(QImage image, const OrthoCamera& camera)
 {
     m_backdrop = std::move(image);
+    m_backdropCamera = camera;
     update();
 }
 

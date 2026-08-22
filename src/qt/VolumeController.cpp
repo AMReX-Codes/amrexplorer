@@ -161,6 +161,10 @@ void VolumeController::forgetWindow()
     cancel();
     m_frameShown = false;
     m_lastRenderViewSize = QSize{};
+    // The frame belonged to the window that is going away: keeping it holds a
+    // whole pixel buffer for the life of the process and leaves lastFrame()
+    // describing a window that no longer exists.
+    m_lastFrame = VolumeFrame{};
 }
 
 bool VolumeController::windowOpen() const noexcept
@@ -195,6 +199,9 @@ void VolumeController::configureForDataset()
 {
     refreshActionEnabled();
     if (!m_window) {
+        // No window to reconfigure, but the frame still described the dataset
+        // being replaced.
+        m_lastFrame = VolumeFrame{};
         return;
     }
     const auto dataset = m_hooks.dataset ? m_hooks.dataset() : nullptr;
@@ -243,7 +250,8 @@ void VolumeController::slicePlanesVisibilityChanged()
 
 void VolumeController::reset()
 {
-    cancel();
+    // closeWindow cancels and drops the frame through forgetWindow; cancelling
+    // here as well would bump the generation twice for one teardown.
     closeWindow();
     m_lastFrame = VolumeFrame{};
     refreshActionEnabled();
@@ -350,7 +358,8 @@ void VolumeController::startRender()
                 if (current) {
                     auto status = describe(result, fieldName);
                     m_lastFrame = std::move(result.frame);
-                    m_window->showFrame(m_lastFrame, status);
+                    m_window->showFrame(
+                        m_lastFrame, result.request.camera, status);
                     if (m_lastFrame.cacheFallbackFromLevel >= 0) {
                         emit statusMessage(
                             tr("Volume: the finest level exceeded the cache; "
@@ -366,8 +375,14 @@ void VolumeController::startRender()
                 }
             } catch (const std::exception& error) {
                 if (current && !cancellation.stop_requested()) {
-                    emit renderFailed(
-                        tr("Cannot render the volume: %1").arg(exceptionMessage(error)));
+                    const auto message = tr("Cannot render the volume: %1")
+                        .arg(exceptionMessage(error));
+                    // Into the window as well as out to the host: this window
+                    // is raised over the main window, whose status bar and
+                    // Diagnostics dock are where renderFailed lands, so on its
+                    // own the view would simply stop changing.
+                    m_window->showFailure(message);
+                    emit renderFailed(message);
                 } else {
                     emit staleResultDropped();
                 }

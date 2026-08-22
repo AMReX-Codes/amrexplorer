@@ -51,9 +51,13 @@ public:
     // Enables the "use palette alpha" control (the palette carries a ramp).
     void setPaletteHasAlpha(bool hasAlpha);
 
-    // The frame to draw, with a line of status text; and whether a render is
-    // in flight (shown in the status).
-    void showFrame(const VolumeFrame& frame, const QString& status);
+    // The frame to draw, the camera it was rendered with (so a camera moved
+    // since can be corrected for), and a line of status text; and whether a
+    // render is in flight (shown in the status). showFailure replaces the
+    // status with a render's error, leaving the last good frame on screen.
+    void showFrame(const VolumeFrame& frame, const OrthoCamera& camera,
+        const QString& status);
+    void showFailure(const QString& message);
     void clearFrame();
     void showRendering(bool rendering);
 

@@ -7,6 +7,7 @@
 #include <QDockWidget>
 #include <QFormLayout>
 #include <QLabel>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -158,6 +159,15 @@ void VolumeWindow::setColorPalette(const Palette* palette)
 void VolumeWindow::setPaletteHasAlpha(bool hasAlpha)
 {
     m_paletteAlpha->setEnabled(hasAlpha);
+    if (!hasAlpha && m_paletteAlpha->isChecked()) {
+        // ramp() ands in isEnabled(), so the render already ignores a ticked
+        // box on a palette with no ramp -- but the box would sit there ticked,
+        // claiming an opacity source that is not in use, and re-arm itself the
+        // moment any palette with a ramp is selected. Silently: the palette
+        // change that caused this is already scheduling a render.
+        const QSignalBlocker blocker(m_paletteAlpha);
+        m_paletteAlpha->setChecked(false);
+    }
     m_paletteAlpha->setToolTip(hasAlpha
         ? tr("Take each colour's opacity from the palette's alpha ramp "
              "instead of the linear window above.")
@@ -165,20 +175,29 @@ void VolumeWindow::setPaletteHasAlpha(bool hasAlpha)
              "with one to enable this."));
 }
 
-void VolumeWindow::showFrame(const VolumeFrame& frame, const QString& status)
+void VolumeWindow::showFrame(const VolumeFrame& frame,
+    const OrthoCamera& camera, const QString& status)
 {
     // Premultiplied ARGB, row 0 at the top: exactly the frame's layout, so
     // the image wraps the pixels and copies them once.
     const QImage wrapped(reinterpret_cast<const uchar*>(frame.pixels.data()),
         frame.width, frame.height, frame.width * static_cast<int>(sizeof(std::uint32_t)),
         QImage::Format_ARGB32_Premultiplied);
-    m_view->setBackdropImage(wrapped.copy());
+    m_view->setBackdropImage(wrapped.copy(), camera);
     m_status->setText(status);
+}
+
+void VolumeWindow::showFailure(const QString& message)
+{
+    // The frame stays: it is the last thing that did render, and replacing it
+    // with nothing would lose the view. The status says why it is not moving,
+    // which the main window's status bar cannot do from behind this window.
+    m_status->setText(message);
 }
 
 void VolumeWindow::clearFrame()
 {
-    m_view->setBackdropImage(QImage());
+    m_view->setBackdropImage(QImage(), OrthoCamera{});
     m_status->clear();
 }
 

@@ -435,6 +435,10 @@ int main(int argc, char** argv)
         shuttingDown = false;
         controller.closeWindow();
         require(!controller.windowOpen(), "closeWindow left the window open");
+        // The frame described the window that just closed, and holds a whole
+        // pixel buffer: closing drops it, as reset() does.
+        require(controller.lastFrame().pixels.empty(),
+            "closeWindow kept the closed window's frame");
     }
 
     // A camera that never stops moving still gets drafts. The render timer

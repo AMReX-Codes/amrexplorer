@@ -130,7 +130,10 @@ ViewDataResult RemoteDatasetSession::requestView(
 
 bool RemoteDatasetSession::supportsVolumeRendering() const noexcept
 {
-    return m_connection->serverInfo().selectedMinorVersion >= 2
+    // Through the connection rather than re-deriving the version test: two
+    // copies of the 1.2 threshold would drift at the next protocol bump, and
+    // renderVolume tests them in sequence to tell the two causes apart.
+    return m_connection->supportsVolumeRendering()
         && m_metadata.dimension == 3 && !m_metadata.isFab
         && m_metadata.hasPhysicalGeometry;
 }

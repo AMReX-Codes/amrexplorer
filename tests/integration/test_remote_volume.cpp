@@ -188,6 +188,7 @@ int main(int argc, char* argv[])
             }
             require(refused, "an oversized frame was not refused as a resource limit");
             require(small->connected(), "the refusal cost the connection");
+            smallSession->close();
         }
 
         // --- the server's voxel cap clamps the request ------------------
@@ -204,6 +205,7 @@ int main(int argc, char* argv[])
             const auto frame = cappedSession->renderVolume(requestFor(*cappedSession));
             require(frame.metrics.gridDims == (std::array<int, 3>{2, 2, 2}),
                 "the server's voxel cap did not clamp the sampled grid");
+            cappedSession->close();
         }
 
         // --- the operator's grid-cache cap is not the client's to raise ---
@@ -238,6 +240,7 @@ int main(int argc, char* argv[])
                 "a client raised the server's grid-cache bound");
             require(boundedConnection->connected(),
                 "the budget exchange cost the connection");
+            boundedSession->close();
         }
 
         // --- a 1.1 client is told volume rendering needs 1.2 ------------
@@ -267,6 +270,7 @@ int main(int argc, char* argv[])
                 "a 1.1 client's volume request was not refused as unsupported");
         }
         remote->close();
+        local->close();
     } catch (const std::exception& error) {
         std::cerr << "FAILED: " << error.what() << '\n';
         return 1;

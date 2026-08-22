@@ -247,7 +247,7 @@ int main(int argc, char* argv[])
                 // flag, against the same cap the server applies to a
                 // directly-set ServerOptions.
                 constexpr std::uint64_t maximumMebibytes
-                    = amrvis::remote::maximumVolumeGridCacheBytes / oneMebibyte;
+                    = amrvis::maximumVolumeGridCacheBytes / oneMebibyte;
                 if (mebibytes == 0 || mebibytes > maximumMebibytes) {
                     throw std::invalid_argument(
                         "--volume-cache-mib is outside its allowed range");
@@ -285,6 +285,20 @@ int main(int argc, char* argv[])
         if (stdio && portGiven) {
             throw std::invalid_argument(
                 "--stdio and --port are mutually exclusive");
+        }
+
+        // A grid is four bytes a voxel, so a cache smaller than one
+        // maximum-sized grid can never hold anything and every render
+        // re-samples from disk. That is a legitimate choice -- it is how grid
+        // caching is turned off -- but it is also what raising
+        // --max-volume-voxels does by accident, and nothing in a rendered
+        // frame says which of the two happened. Warned about once here, where
+        // the flags that caused it are still in view, rather than refused in
+        // the server, which would take the deliberate case with it.
+        if (options.maximumVolumeVoxels * 4ULL > options.volumeGridCacheBytes) {
+            std::cerr << "warning: --volume-cache-mib cannot hold one grid of "
+                         "--max-volume-voxels voxels, so sampled grids will "
+                         "not be cached\n";
         }
 
         std::signal(SIGINT, handleSignal);

@@ -55,6 +55,14 @@ inline constexpr std::uint64_t maxVolumeVoxelBudget = 512ULL * 512ULL * 512ULL;
 // that number, and it sits here so all three volume budgets read together.
 inline constexpr std::uint64_t defaultVolumeGridCacheBytes
     = 256ULL * 1024ULL * 1024ULL;
+// The most that budget may be raised to. 64 GiB is 128 grids at the largest
+// voxel budget (512^3 voxels, four bytes each); past that a cache would never
+// evict and the holder would grow until it was killed. A ceiling on a budget
+// is a property of the budget, so it reads here beside it rather than in
+// whichever layer happens to expose the knob.
+inline constexpr std::uint64_t maximumVolumeGridCacheBytes
+    = 64ULL * 1024ULL * 1024ULL * 1024ULL;
+static_assert(defaultVolumeGridCacheBytes <= maximumVolumeGridCacheBytes);
 // What a rendered frame costs on the wire beyond its pixels: the response
 // tables, the metrics and the cache snapshot around them. Both ends reserve
 // it -- the client to size the frame it asks for, the server to refuse one

@@ -623,13 +623,29 @@ private:
             dataset = std::make_shared<LocalDatasetSession>(
                 resolveDatasetPath(request->path), id,
                 request->cache_budget_bytes, cancellation);
-            // A ceiling, not a setting: the client's own budget applies when
-            // it is smaller, so a memory-tight peer can still ask for less
-            // than the operator allows. Raising it past the cap is what the
-            // block-only setter below prevents.
+            // The operator's number, on its own. The constructor has just
+            // seeded the grid pool from cache_budget_bytes, which is the
+            // client's *block* cache budget -- a different pool holding
+            // different things, and no kind of ceiling for this one. Taking
+            // the smaller of the two would mean an operator could never set
+            // the grid pool above whatever the client asked for its blocks,
+            // a client with a small AMREXPLORER_CACHE_SIZE_MB would starve
+            // the pool until every render re-sampled from disk, and a peer
+            // that omitted the field (wire default 0) would zero it.
+            //
+            // So a client cannot ask for a smaller grid pool. That is a real
+            // gap, but it needs a wire field of its own rather than the
+            // block budget standing in for one.
             static_cast<void>(dataset->setVolumeGridCacheBudget(
-                std::min<std::uint64_t>(m_options.volumeGridCacheBytes,
-                    request->cache_budget_bytes)));
+                m_options.volumeGridCacheBytes));
+            // The render's own threads, on top of the worker already running
+            // it. Left at the ray caster's default this is hardware
+            // concurrency per request, so the pool and the renders multiply
+            // and --threads bounds nothing; sharing the hardware between them
+            // keeps the two together near it. With the default worker count
+            // that is one thread per render, and with --threads 1 a single
+            // render still gets the machine.
+            dataset->setVolumeRenderThreads(volumeRenderThreads());
             OpenedDataset opened;
             opened.id = id;
             opened.catalog = dataset->metadata();
@@ -959,16 +975,10 @@ private:
             throw std::invalid_argument("cache-budget payload is missing");
         }
         const auto dataset = requireDataset(DatasetId{request->dataset_id});
-        // The block pool takes the client's number as given; the grid pool
-        // takes it only as far down as it goes. setCacheBudget would move
-        // both without a ceiling, putting the bound the operator set with
-        // --volume-cache-mib in the peer's hands -- but refusing to move the
-        // grid pool at all would leave a client unable to ask for less than
-        // the operator allows, which is the one direction it should have.
+        // The block pool only. setCacheBudget moves both, which is what a
+        // local user setting one number wants -- but this number comes from
+        // the peer, and the grid pool answers to --volume-cache-mib alone.
         static_cast<void>(dataset->setBlockCacheBudget(request->budget_bytes));
-        static_cast<void>(dataset->setVolumeGridCacheBudget(
-            std::min<std::uint64_t>(m_options.volumeGridCacheBytes,
-                request->budget_bytes)));
         sendCache(envelope.request_id, *dataset);
     }
 
@@ -1049,6 +1059,16 @@ private:
 
     // overheadBytes defaults to the slice reserve, which is what every
     // response but a volume frame is measured against.
+    // How many threads one volume render may use. The worker running it is
+    // already one unit of the pool's parallelism, so leaving the ray caster
+    // to take hardware concurrency would multiply the two.
+    [[nodiscard]] unsigned int volumeRenderThreads() const noexcept
+    {
+        const auto hardware = std::max(1U, std::thread::hardware_concurrency());
+        const auto workers = std::max(1U, m_options.workerCount);
+        return std::max(1U, hardware / workers);
+    }
+
     [[nodiscard]] bool fitsResponse(std::uint64_t vectorBytes,
         std::uint64_t overheadBytes = responseOverheadReserveBytes) const noexcept
     {

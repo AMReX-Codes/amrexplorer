@@ -500,6 +500,28 @@ int main()
                     && small->volumeGridCacheMetrics().budgetBytes == 4096,
                 "a block-only budget moved the grid cache");
         }
+        // The shape a server opens a session in: the client names a block
+        // budget, the operator names the grid budget, and the operator's is
+        // the one the grid pool gets. Taking the smaller of the two -- the
+        // client's block number is not a ceiling for grids -- would let a
+        // client with a modest AMREXPLORER_CACHE_SIZE_MB starve a pool the
+        // operator sized generously, and a client that named none zero it.
+        {
+            constexpr std::uint64_t clientBlockBudget = 64ULL * 1024ULL;
+            constexpr std::uint64_t operatorGridBudget = 8ULL * 1024ULL * 1024ULL;
+            auto served = std::make_shared<amrvis::LocalDatasetSession>(
+                root, amrvis::DatasetId{11}, clientBlockBudget);
+            require(served->setVolumeGridCacheBudget(operatorGridBudget),
+                "the operator's grid budget was refused");
+            require(served->volumeGridCacheMetrics().budgetBytes
+                    == operatorGridBudget,
+                "the client's block budget capped the operator's grid budget");
+            // And a later client budget change leaves it alone.
+            require(served->setBlockCacheBudget(32ULL * 1024ULL)
+                    && served->volumeGridCacheMetrics().budgetBytes
+                        == operatorGridBudget,
+                "a client budget change moved the operator's grid budget");
+        }
         // A grid larger than the grid cache still renders, uncached.
         require(session->setVolumeGridCacheBudget(1024),
             "the grid cache budget could not be lowered");

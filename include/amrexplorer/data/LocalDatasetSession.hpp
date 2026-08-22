@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <atomic>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -90,6 +91,13 @@ public:
     // it is false only while a pinned grid still exceeds it.
     [[nodiscard]] bool setVolumeGridCacheBudget(std::uint64_t bytes);
 
+    // Threads a single volume render may use, or 0 to leave the choice to
+    // the ray caster (which takes hardware concurrency). A server already
+    // runs each request on a worker of its own pool, so without this the two
+    // multiply: N concurrent renders spawn N x cores raw threads and the
+    // operator's --threads stops bounding anything.
+    void setVolumeRenderThreads(unsigned threads) noexcept;
+
     // The block pool alone. setCacheBudget deliberately moves both pools,
     // which is what a user setting one number wants -- but a server applying
     // a *client's* requested budget must not let it raise the sampled-grid
@@ -134,6 +142,9 @@ private:
     // same key and mapping frame after frame.
     std::optional<std::pair<VolumeGridKey, bool>> m_visibleRangeFor;
     VolumeRange m_visibleRange;
+    // Read on the render path and written once by whoever configures the
+    // session, so it does not travel with m_mutex.
+    std::atomic<unsigned> m_volumeRenderThreads{0};
 };
 
 } // namespace amrvis

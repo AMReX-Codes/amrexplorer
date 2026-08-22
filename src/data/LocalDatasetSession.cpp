@@ -362,6 +362,7 @@ VolumeFrame LocalDatasetSession::renderVolume(
     }
 
     RaycastSettings settings;
+    settings.threadCount = m_volumeRenderThreads.load(std::memory_order_relaxed);
     settings.camera = request.camera;
     settings.domain = datasetSampleBounds(m_metadata);
     settings.outputSize = request.outputSize;
@@ -411,6 +412,11 @@ VolumeFrame LocalDatasetSession::renderVolume(
 bool LocalDatasetSession::setVolumeGridCacheBudget(std::uint64_t bytes)
 {
     return m_volumeGrids.setBudget(bytes);
+}
+
+void LocalDatasetSession::setVolumeRenderThreads(unsigned threads) noexcept
+{
+    m_volumeRenderThreads.store(threads, std::memory_order_relaxed);
 }
 
 bool LocalDatasetSession::setBlockCacheBudget(std::uint64_t bytes)

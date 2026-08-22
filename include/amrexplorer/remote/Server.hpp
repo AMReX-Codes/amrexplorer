@@ -10,13 +10,6 @@
 
 namespace amrvis::remote {
 
-// The most the sampled-grid cache may be given for one dataset. 64 GiB is
-// 128 grids at the largest voxel budget (512^3 voxels, four bytes each);
-// past that the cache would never evict and the server would grow until it
-// was killed, with nothing pointing at the option that asked for it.
-inline constexpr std::uint64_t maximumVolumeGridCacheBytes
-    = 64ULL * 1024ULL * 1024ULL * 1024ULL;
-
 struct ServerOptions {
     std::uint16_t port = 0;
     unsigned int workerCount = 0;

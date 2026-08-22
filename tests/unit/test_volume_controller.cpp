@@ -473,11 +473,18 @@ int main(int argc, char** argv)
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the opening render did not finish");
         require(volumeWindow() != nullptr, "no volume window on screen");
-        // Arms the settle timer, then cancels well inside its interval.
+        // Arms the settle timer and lets the draft finish, so what cancel()
+        // meets is a settle timer left armed by a completed draft. The fake
+        // counts renders for the whole run, so this waits on a delta: an
+        // absolute floor is already true here and would return before the
+        // throttle had fired, cancelling a draft that never ran.
+        const auto beforeDraft = session->requests.load();
         emit volumeWindow()->cameraChanged();
         waitFor(application,
-            [&] { return !controller.renderInFlight() && session->requests >= 2; },
+            [&] { return session->requests == beforeDraft + 1; },
             "the camera move did not render a draft");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the draft did not finish");
         const auto after = session->requests.load();
         controller.cancel();
         // Longer than the settle interval: nothing may start on its own.

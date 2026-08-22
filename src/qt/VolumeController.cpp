@@ -188,6 +188,7 @@ void VolumeController::configureForDataset()
     cancel();
     pushGeometry();
     m_window->clearFrame();
+    m_frameShown = false;
     scheduleRender();
 }
 
@@ -264,6 +265,9 @@ void VolumeController::startRender()
     const auto dataset = m_hooks.dataset ? m_hooks.dataset() : nullptr;
     const auto field = m_hooks.field ? m_hooks.field() : std::nullopt;
     if (!dataset || !dataset->supportsVolumeRendering() || !field) {
+        // Nothing to render after all: the label must not outlive the
+        // intention to render that put it up.
+        m_window->showRendering(false);
         return;
     }
     const auto& metadata = dataset->metadata();
@@ -310,7 +314,7 @@ void VolumeController::startRender()
     const auto fieldName = field->second;
     auto* watcher = new QFutureWatcher<VolumeDisplayResult>(this);
     connect(watcher, &QFutureWatcher<VolumeDisplayResult>::finished, this,
-        [this, watcher, generation, cancellation, dataset, fieldName] {
+        [this, watcher, generation, cancellation, fieldName] {
             emit renderActivityChanged(-1);
             m_inFlight = false;
             if (m_hooks.isShuttingDown && m_hooks.isShuttingDown()) {
@@ -345,17 +349,18 @@ void VolumeController::startRender()
                     emit staleResultDropped();
                 }
             }
-            // Not gated on the generation: a superseded result still means
-            // this render stopped, and if nothing is in flight now the label
-            // has to come down or it stays up forever.
-            if (m_window && !m_inFlight) {
-                m_window->showRendering(false);
-            }
             watcher->deleteLater();
-            // A change that arrived while this ran: render it now.
+            // A change that arrived while this ran is rendered now, and the
+            // label stays up for it -- taking it down here would flicker it
+            // off and on again on every coalesced rerun of a drag. Otherwise
+            // it comes down whatever this result was: a superseded render has
+            // still stopped, and gating that on the generation left the label
+            // up forever after a cancel.
             if (m_rerun && m_window) {
                 m_rerun = false;
                 scheduleRender();
+            } else if (m_window) {
+                m_window->showRendering(false);
             }
         });
     // The choice, not a range resolved once here: under cache pressure the
@@ -365,7 +370,8 @@ void VolumeController::startRender()
     const VolumeRangeChoice rangeChoice{rangeSelection.mode,
         rangeSelection.userRange, rangeSelection.logarithmic};
     watcher->setFuture(QtConcurrent::run(
-        [dataset, request, rangeChoice, cancellation]() mutable {
+        [dataset, request = std::move(request), rangeChoice,
+            cancellation]() mutable {
             return executeVolumeRenderWithFallback(dataset, std::move(request),
                 rangeChoice, cancellation);
         }));

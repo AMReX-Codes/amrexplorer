@@ -48,6 +48,31 @@ inline constexpr double maxVolumeZoom = 100.0;
 inline constexpr std::uint64_t defaultVolumeVoxelBudget
     = 256ULL * 256ULL * 256ULL;
 inline constexpr std::uint64_t maxVolumeVoxelBudget = 512ULL * 512ULL * 512ULL;
+// A sensible sampled-grid cache budget for a caller that has to name one --
+// the server's --volume-cache-mib default, say. It holds four grids of the
+// default voxel budget. A session does not use it as its own default: it
+// takes the budget the dataset was opened with. This is for whoever chooses
+// that number, and it sits here so all three volume budgets read together.
+inline constexpr std::uint64_t defaultVolumeGridCacheBytes
+    = 256ULL * 1024ULL * 1024ULL;
+// The most that budget may be raised to: an operational ceiling, not an
+// eviction threshold. The cache evicts correctly at any budget -- distinct
+// grid keys fill it and the least recently used ones go. What a budget past
+// this buys is the room to fill it: 64 GiB is already 128 grids at the
+// largest voxel budget (512^3 voxels, four bytes each), so a larger number
+// stops describing memory any host will lend and becomes a way to be killed
+// by the allocator instead of bounded by the setting. A ceiling on a budget
+// is a property of the budget, so it reads here beside it rather than in
+// whichever layer happens to expose the knob.
+inline constexpr std::uint64_t maximumVolumeGridCacheBytes
+    = 64ULL * 1024ULL * 1024ULL * 1024ULL;
+static_assert(defaultVolumeGridCacheBytes <= maximumVolumeGridCacheBytes);
+// What a rendered frame costs on the wire beyond its pixels: the response
+// tables, the metrics and the cache snapshot around them. Both ends reserve
+// it -- the client to size the frame it asks for, the server to refuse one
+// that cannot fit before rendering it -- so it lives here rather than beside
+// either of them, as sliceResponseOverheadBytes does for slices.
+inline constexpr std::uint64_t volumeResponseOverheadBytes = 4096;
 
 // What the sampler needs: the sub-box to sample, the levels to compose, and
 // the budget bounding the grid. A field-for-field subset of the render

@@ -324,9 +324,10 @@ ErrorData classifyError(const std::exception& error)
 class Session : public std::enable_shared_from_this<Session> {
 public:
     Session(std::unique_ptr<Channel> channel, ThreadPool& workers,
-        const ServerOptions& options)
+        std::atomic<unsigned int>& rendersInFlight, const ServerOptions& options)
         : m_channel(std::move(channel))
         , m_workers(workers)
+        , m_rendersInFlight(rendersInFlight)
         , m_options(options)
         , m_handshakeDeadline(
               std::chrono::steady_clock::now() + options.handshakeTimeout)
@@ -575,6 +576,9 @@ private:
             case PayloadKind::ListDirectoryRequest:
                 listDirectory(*envelope, cancellation);
                 break;
+            case PayloadKind::RenderedFrameRequest:
+                renderedFrame(*envelope, cancellation);
+                break;
             default:
                 throw std::invalid_argument(
                     "payload is not a supported client request");
@@ -620,6 +624,21 @@ private:
             dataset = std::make_shared<LocalDatasetSession>(
                 resolveDatasetPath(request->path), id,
                 request->cache_budget_bytes, cancellation);
+            // The operator's number, on its own. The constructor has just
+            // seeded the grid pool from cache_budget_bytes, which is the
+            // client's *block* cache budget -- a different pool holding
+            // different things, and no kind of ceiling for this one. Taking
+            // the smaller of the two would mean an operator could never set
+            // the grid pool above whatever the client asked for its blocks,
+            // a client with a small AMREXPLORER_CACHE_SIZE_MB would starve
+            // the pool until every render re-sampled from disk, and a peer
+            // that omitted the field (wire default 0) would zero it.
+            //
+            // So a client cannot ask for a smaller grid pool. That is a real
+            // gap, but it needs a wire field of its own rather than the
+            // block budget standing in for one.
+            static_cast<void>(dataset->setVolumeGridCacheBudget(
+                m_options.volumeGridCacheBytes));
             OpenedDataset opened;
             opened.id = id;
             opened.catalog = dataset->metadata();
@@ -769,6 +788,56 @@ private:
         }
         send(envelope.request_id,
             codec::toWire(result, dataset->cacheMetrics()));
+    }
+
+    void renderedFrame(
+        const codec::NativeEnvelope& envelope, StopToken cancellation)
+    {
+        const auto* payload = envelope.payload.AsRenderedFrameRequest();
+        if (payload == nullptr) {
+            throw std::invalid_argument("rendered-frame payload is missing");
+        }
+        if (m_selectedMinorVersion < 2) {
+            throw RemoteError(ErrorCode::UnsupportedProtocol,
+                "volume rendering requires protocol 1.2");
+        }
+        auto request = codec::fromWire(*payload);
+        validateVolumeBound(request);
+        // The server's own voxel cap applies on top of the client's budget.
+        request.maximumVoxels = std::min<std::uint64_t>(
+            request.maximumVoxels, m_options.maximumVolumeVoxels);
+        const auto dataset = requireDataset(request.dataset);
+        struct RenderCount {
+            std::atomic<unsigned int>& counter;
+            explicit RenderCount(std::atomic<unsigned int>& value) : counter(value)
+            {
+                counter.fetch_add(1, std::memory_order_relaxed);
+            }
+            ~RenderCount() { counter.fetch_sub(1, std::memory_order_relaxed); }
+            RenderCount(const RenderCount&) = delete;
+            RenderCount& operator=(const RenderCount&) = delete;
+        };
+        // Counted around the render and nothing else. Holding it through the
+        // encode and the send would keep a finished render "running" for as
+        // long as its client takes to read -- and the write budget allows a
+        // trickle-reader over seventeen minutes for a 67 MiB response -- so
+        // renders starting on other connections would divide the machine by a
+        // number that had stopped meaning anything.
+        auto frame = [&] {
+            const RenderCount counted(m_rendersInFlight);
+            return dataset->renderVolume(
+                request, cancellation, volumeRenderThreads());
+        }();
+        // One encode, and the pixels moved into it. send() makes the exact
+        // size check itself before touching the socket and answers an
+        // oversized response with the same ResourceLimitExceeded, so encoding
+        // a buffer here just to measure it, discarding it and building it
+        // again was pure waste -- unlike sliceView there is nothing to shed on
+        // a second pass. The frame is not read after this, so its 67 MiB of
+        // pixels move rather than copy; the builder and the encoded buffer
+        // still hold one each, which is as few as this shape allows.
+        send(envelope.request_id,
+            codec::toWire(std::move(frame), dataset->cacheMetrics()));
     }
 
     void lineView(
@@ -921,7 +990,10 @@ private:
             throw std::invalid_argument("cache-budget payload is missing");
         }
         const auto dataset = requireDataset(DatasetId{request->dataset_id});
-        static_cast<void>(dataset->setCacheBudget(request->budget_bytes));
+        // The block pool only. setCacheBudget moves both, which is what a
+        // local user setting one number wants -- but this number comes from
+        // the peer, and the grid pool answers to --volume-cache-mib alone.
+        static_cast<void>(dataset->setBlockCacheBudget(request->budget_bytes));
         sendCache(envelope.request_id, *dataset);
     }
 
@@ -947,6 +1019,29 @@ private:
         if (!fitsResponse(cells * sliceResponseBytesPerCell)) {
             throw RemoteError(ErrorCode::ResourceLimitExceeded,
                 "slice viewport cannot fit in one negotiated frame");
+        }
+    }
+
+    void validateVolumeBound(const VolumeRenderRequest& request) const
+    {
+        // Structural validity first (a hostile peer can vary every field),
+        // then the frame's pixels against the negotiated frame; the session
+        // validators check the request against the dataset.
+        if (const auto errors = validateVolumeRenderRequest(request, 3);
+            !errors.empty()) {
+            throw std::invalid_argument(errors.front());
+        }
+        const auto pixels = static_cast<std::uint64_t>(request.outputSize[0])
+            * static_cast<std::uint64_t>(request.outputSize[1]);
+        // Reserving the volume response's own overhead, not the slice's: the
+        // point of checking before rendering is that a frame which cannot fit
+        // is refused without doing the work, and reserving 512 bytes for
+        // tables that cost 4096 lets an oversized one through to be rendered
+        // in full and then rejected by send().
+        if (!fitsResponse(pixels * sizeof(std::uint32_t),
+                volumeResponseOverheadBytes)) {
+            throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                "rendered frame cannot fit in one negotiated frame");
         }
     }
 
@@ -977,15 +1072,47 @@ private:
             (available - rasterBytes) / bytesPerGridBox);
     }
 
-    [[nodiscard]] bool fitsResponse(std::uint64_t vectorBytes) const noexcept
+    // How many threads one volume render may use: the operator's CPU budget
+    // shared between the renders actually running, counted server-wide.
+    //
+    // The budget is workerCount, not hardware concurrency. --threads is what
+    // an operator sets to bound this server's CPU, and it is the only figure
+    // that knows about a container quota -- hardware_concurrency() reports
+    // the host's cores, so `--threads 1` inside a two-CPU cgroup on a 64-core
+    // machine would otherwise put 64 threads on one ray cast. workerCount
+    // defaults to hardware concurrency, so an unconfigured server still gives
+    // a lone render the machine.
+    //
+    // Dividing by the renders in flight rather than by workerCount is what
+    // keeps that lone render from being pinned to one thread: --stdio serves
+    // one client with one render at a time, which is the case that matters
+    // most and the one a static division gets worst.
+    //
+    // A render keeps the count it started with, so a burst that arrives
+    // together can transiently exceed the budget -- eight simultaneous first
+    // renders read 1, 2, ... 8 and sum to about 2.7 times it. Holding to the
+    // budget exactly needs render threads drawn from a shared pool of tokens
+    // rather than a number computed per render; see the follow-up note.
+    [[nodiscard]] unsigned int volumeRenderThreads() const noexcept
+    {
+        const auto budget = std::max(1U, m_options.workerCount);
+        const auto running = std::max(1U,
+            m_rendersInFlight.load(std::memory_order_relaxed));
+        return std::max(1U, budget / running);
+    }
+
+    // overheadBytes defaults to the slice reserve, which is what every
+    // response but a volume frame is measured against.
+    [[nodiscard]] bool fitsResponse(std::uint64_t vectorBytes,
+        std::uint64_t overheadBytes = responseOverheadReserveBytes) const noexcept
     {
         // Reserve room for the envelope, tables, vector offsets, metrics, and
         // FlatBuffers alignment. send() performs the final exact encoded-size
         // check before touching the socket.
         const auto frameBytes
             = static_cast<std::uint64_t>(m_maximumFrameBytes.load());
-        return frameBytes >= responseOverheadReserveBytes
-            && vectorBytes <= frameBytes - responseOverheadReserveBytes;
+        return frameBytes >= overheadBytes
+            && vectorBytes <= frameBytes - overheadBytes;
     }
 
     std::shared_ptr<LocalDatasetSession> requireDataset(DatasetId id)
@@ -1036,6 +1163,11 @@ private:
         case PayloadKind::SetCacheBudgetRequest: {
             const auto* value
                 = envelope.payload.AsSetCacheBudgetRequest();
+            return DatasetId{value ? value->dataset_id : 0};
+        }
+        case PayloadKind::RenderedFrameRequest: {
+            const auto* value
+                = envelope.payload.AsRenderedFrameRequest();
             return DatasetId{value ? value->dataset_id : 0};
         }
         default:
@@ -1106,6 +1238,7 @@ private:
     static constexpr std::uint64_t responseOverheadReserveBytes
         = sliceResponseOverheadBytes;
     ThreadPool& m_workers;
+    std::atomic<unsigned int>& m_rendersInFlight;
     ServerOptions m_options;
     std::chrono::steady_clock::time_point m_handshakeDeadline;
     std::atomic<std::uint32_t> m_maximumFrameBytes;
@@ -1172,7 +1305,7 @@ public:
                 auto socket = std::make_unique<Socket>(acceptConnection(
                     m_listener->socket, m_acceptStop.get_token()));
                 auto session = std::make_shared<Session>(
-                    std::move(socket), m_workers, m_options);
+                    std::move(socket), m_workers, m_rendersInFlight, m_options);
                 std::scoped_lock lock(m_sessionsMutex);
                 std::erase_if(m_sessions,
                     [](const auto& worker) {
@@ -1251,10 +1384,20 @@ private:
                 <= std::chrono::milliseconds::zero()
             || options.responseWriteStallTimeout
                 <= std::chrono::milliseconds::zero()
-            || options.responseWriteMinimumBytesPerSecond == 0) {
+            || options.responseWriteMinimumBytesPerSecond == 0
+            || options.maximumVolumeVoxels == 0
+            || options.volumeGridCacheBytes == 0) {
             throw std::invalid_argument(
                 "server resource limits must be greater than zero");
         }
+        options.maximumVolumeVoxels = std::min(
+            options.maximumVolumeVoxels, maxVolumeVoxelBudget);
+        // Capped here as well as in the CLI parser, so an embedder that sets
+        // ServerOptions directly gets the bound too -- the cache evicts at any
+        // budget, but one this large stops bounding the process by anything a
+        // host can actually lend it.
+        options.volumeGridCacheBytes = std::min<std::uint64_t>(
+            options.volumeGridCacheBytes, maximumVolumeGridCacheBytes);
         options.workerCount = resolveWorkerCount(options.workerCount);
         if (options.sessionToken.empty()) {
             options.sessionToken = generateSessionToken();
@@ -1282,7 +1425,7 @@ private:
                 return;
             }
             session = std::make_shared<Session>(
-                std::move(m_channel), m_workers, m_options);
+                std::move(m_channel), m_workers, m_rendersInFlight, m_options);
             m_singleSession = session;
         }
         session->run();
@@ -1296,6 +1439,16 @@ private:
     ServerOptions m_options;
     std::unique_ptr<Channel> m_channel;
     std::optional<Listener> m_listener;
+    // Before m_workers, deliberately: members die in reverse declaration
+    // order, and ~ThreadPool only *signals* its workers -- they are joined
+    // when its JoiningThread members die, after the body. A task still
+    // running then holds a Session that holds a reference to this counter, so
+    // a counter declared after the pool would already be gone when its
+    // RenderCount destructor fired.
+    //
+    // Volume renders running right now, across every session: what each one
+    // divides the machine by when it picks its thread count.
+    std::atomic<unsigned int> m_rendersInFlight{0};
     ThreadPool m_workers;
     std::atomic_bool m_stopping{false};
     StopSource m_acceptStop;

@@ -132,6 +132,8 @@ int main()
         PayloadKind::ErrorResponse,
         PayloadKind::ListDirectoryRequest,
         PayloadKind::DirectoryListing,
+        PayloadKind::RenderedFrameRequest,
+        PayloadKind::RenderedFrameResponse,
     };
     for (const auto kind : payloadKinds) {
         codec::NativeEnvelope native;
@@ -475,5 +477,122 @@ int main()
     particleWire.positions[2] = std::numeric_limits<double>::infinity();
     requireRejected([&] { static_cast<void>(codec::fromWire(particleWire)); },
         "an infinite particle position was accepted");
+
+    // Protocol 1.2: a rendered-frame request round-trips with and without
+    // an explicit range, a frame round-trips, and the converters refuse what
+    // a hostile peer can vary: mismatched or oversized transfer vectors,
+    // non-finite camera or range values, a pixel count that disagrees with
+    // the size, and grid dimensions that are not three.
+    VolumeRenderRequest volume;
+    volume.dataset = DatasetId{5};
+    volume.field = FieldId{2};
+    volume.maximumLevel = 1;
+    volume.composition = CompositionPolicy::ExactLevel;
+    volume.region = RealBox{Real3{{0.0, -1.0, 2.0}}, Real3{{1.0, 1.0, 3.0}}};
+    volume.camera = {0.7, -0.2, 2.5};
+    volume.outputSize = {320, 200};
+    volume.range = VolumeRange{0.5, 4.0, true};
+    volume.transfer.colors = {0x0000FFU, 0x00FF00U, 0xFF0000U};
+    volume.transfer.opacities = {0.0F, 0.5F, 1.0F};
+    volume.samplesPerVoxel = 4;
+    volume.maximumVoxels = 1 << 20;
+    require(codec::fromWire(codec::toWire(volume)) == volume,
+        "a volume request with a range did not round-trip");
+    // The two logarithmic flags, against the wire rather than through a
+    // round trip. They are both bools and mean opposite cases -- one is the
+    // explicit range's mapping, the other the mapping asked for when there is
+    // no range -- so a converter that transposed them would round-trip
+    // cleanly and show up only against a third-party or mixed-version peer.
+    {
+        const auto withRange = codec::toWire(volume);
+        require(withRange.has_range && withRange.range_logarithmic
+                && !withRange.visible_logarithmic,
+            "a request's explicit logarithmic range did not set "
+            "range_logarithmic alone");
+        auto visible = volume;
+        visible.range.reset();
+        visible.logarithmic = true;
+        const auto withoutRange = codec::toWire(visible);
+        require(!withoutRange.has_range && withoutRange.visible_logarithmic
+                && !withoutRange.range_logarithmic,
+            "a request's Visible logarithmic mapping did not set "
+            "visible_logarithmic alone");
+    }
+    volume.range.reset();
+    volume.logarithmic = true;
+    require(codec::fromWire(codec::toWire(volume)) == volume,
+        "a volume request without a range did not round-trip");
+    auto volumeWire = codec::toWire(volume);
+    volumeWire.transfer_opacities.pop_back();
+    requireRejected([&] { static_cast<void>(codec::fromWire(volumeWire)); },
+        "mismatched transfer vectors were accepted");
+    volumeWire = codec::toWire(volume);
+    volumeWire.transfer_colors.assign(maxVolumeTransferEntries + 1, 0U);
+    volumeWire.transfer_opacities.assign(maxVolumeTransferEntries + 1, 0.5F);
+    requireRejected([&] { static_cast<void>(codec::fromWire(volumeWire)); },
+        "an oversized transfer function was accepted");
+    volumeWire = codec::toWire(volume);
+    volumeWire.zoom = std::numeric_limits<double>::quiet_NaN();
+    requireRejected([&] { static_cast<void>(codec::fromWire(volumeWire)); },
+        "a NaN zoom was accepted");
+    volumeWire = codec::toWire(volume);
+    volumeWire.transfer_opacities[1] = std::numeric_limits<float>::infinity();
+    requireRejected([&] { static_cast<void>(codec::fromWire(volumeWire)); },
+        "an infinite opacity was accepted");
+    volumeWire = codec::toWire(volume);
+    volumeWire.has_range = true;
+    volumeWire.minimum = std::numeric_limits<double>::infinity();
+    requireRejected([&] { static_cast<void>(codec::fromWire(volumeWire)); },
+        "an infinite range bound was accepted");
+
+    VolumeFrame frame;
+    frame.width = 3;
+    frame.height = 2;
+    frame.pixels = {0xFF000000U, 0x80112233U, 0U, 0xFFFFFFFFU, 0x01020304U, 0x7F7F7F7FU};
+    frame.usedRange = {0.5, 4.0, true};
+    frame.metrics.gridDims = {8, 4, 2};
+    frame.metrics.coveredVoxels = 60;
+    frame.metrics.sampledMaximumLevel = 1;
+    frame.metrics.gridFromCache = true;
+    frame.metrics.sampleMicroseconds = 12;
+    frame.metrics.renderMicroseconds = 3;
+    frame.metrics.candidateBlocks = 5;
+    frame.metrics.blocksRead = 4;
+    frame.metrics.cacheHits = 1;
+    frame.metrics.payloadBytesRead = 4096;
+    frame.cacheFallbackFromLevel = 1;
+    frame.cacheFallbackToLevel = 0;
+    require(codec::fromWire(codec::toWire(frame, CacheMetrics{})) == frame,
+        "a rendered frame did not round-trip");
+    // A response that never set the two fallback levels: they default to the
+    // no-fallback sentinel, so it decodes as "no fallback" rather than as a
+    // fallback from level 0 to level 0 -- which validateSessionVolumeResult
+    // refuses as impossible, and that refusal costs the whole connection.
+    {
+        auto omitted = codec::toWire(frame, CacheMetrics{});
+        const codec::fb::RenderedFrameResponseT fresh;
+        omitted.cache_fallback_from_level = fresh.cache_fallback_from_level;
+        omitted.cache_fallback_to_level = fresh.cache_fallback_to_level;
+        const auto unset = codec::fromWire(omitted);
+        require(unset.cacheFallbackFromLevel == -1
+                && unset.cacheFallbackToLevel == -1,
+            "an omitted cache fallback did not decode as no fallback");
+    }
+    auto frameWire = codec::toWire(frame, CacheMetrics{});
+    frameWire.pixels.pop_back();
+    requireRejected([&] { static_cast<void>(codec::fromWire(frameWire)); },
+        "a frame whose pixels disagree with its size was accepted");
+    frameWire = codec::toWire(frame, CacheMetrics{});
+    frameWire.grid_dims = {8, 4};
+    requireRejected([&] { static_cast<void>(codec::fromWire(frameWire)); },
+        "a frame with two grid dimensions was accepted");
+    frameWire = codec::toWire(frame, CacheMetrics{});
+    frameWire.width = 0;
+    requireRejected([&] { static_cast<void>(codec::fromWire(frameWire)); },
+        "a zero-width frame was accepted");
+    frameWire = codec::toWire(frame, CacheMetrics{});
+    frameWire.used_maximum = std::numeric_limits<double>::quiet_NaN();
+    requireRejected([&] { static_cast<void>(codec::fromWire(frameWire)); },
+        "a NaN used range was accepted");
     return 0;
 }

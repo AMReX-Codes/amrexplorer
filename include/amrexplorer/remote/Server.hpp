@@ -1,5 +1,6 @@
 #pragma once
 
+#include <amrexplorer/core/Volume.hpp>
 #include <amrexplorer/remote/Frame.hpp>
 
 #include <chrono>
@@ -33,6 +34,31 @@ struct ServerOptions {
     // for a genuinely slow link (1 allows roughly 18 hours for a 64 MiB
     // response). Zero is rejected: it would restore the unbounded case.
     std::uint64_t responseWriteMinimumBytesPerSecond = 64U * 1024U;
+    // Volume rendering (protocol 1.2): the most voxels a client may ask the
+    // server to sample per request (its own budget is clamped to this), and
+    // the per-dataset cache of sampled grids a rotating client re-casts
+    // from. A grid is four bytes per voxel.
+    //
+    // Each bounds one thing -- one grid, and one dataset's cache -- not the
+    // server's memory in total. The aggregate is these multiplied by
+    // maximumDatasets and maximumConnections, plus one transient grid per
+    // request in flight, so an operator sizing a host has to do that
+    // arithmetic rather than read either number as a ceiling.
+    //
+    // maximumVolumeVoxels defaults *below* the protocol's own ceiling: a
+    // request may legally ask for maxVolumeVoxelBudget (512^3), which
+    // validateVolumeRenderRequest accepts, and an unconfigured server clamps
+    // it to defaultVolumeVoxelBudget (256^3) -- each axis halved, with no
+    // error, no warning, and nothing in the response that says so
+    // (validateSessionVolumeResult only checks the grid is not *larger* than
+    // asked, so a downgrade validates cleanly). A remote render of such a
+    // request therefore differs from the local one. Nothing raises the budget
+    // above the default today, which is the only reason this is latent;
+    // defaulting to maxVolumeVoxelBudget, and leaving --max-volume-voxels as
+    // the way to opt into something tighter, would make an unconfigured
+    // server transparent.
+    std::uint64_t maximumVolumeVoxels = defaultVolumeVoxelBudget;
+    std::uint64_t volumeGridCacheBytes = defaultVolumeGridCacheBytes;
     std::string softwareVersion = "unknown";
     // Per-session access token. Clients must present a byte-identical token in
     // their handshake or the connection is refused. Left empty, the server

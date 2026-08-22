@@ -29,6 +29,14 @@ struct ConnectionOptions {
     std::string sessionToken;
 };
 
+// Thrown by both layers when the negotiated protocol predates volume
+// rendering; one copy, because two would drift on the first protocol bump or
+// reworded hint and give the same condition different words depending on
+// which layer the caller entered through.
+inline constexpr const char* volumeRenderingUnsupportedMessage
+    = "the remote server predates volume rendering (protocol 1.2); install a "
+      "current amrexplorer-server";
+
 class Connection : public std::enable_shared_from_this<Connection> {
 public:
     // Connects to a loopback listener (tests and tools on one host).
@@ -55,6 +63,15 @@ public:
     // protocol 1.0, i.e. predates browsing.
     [[nodiscard]] RemoteDirectoryListing listDirectory(
         const std::string& path, StopToken cancellation = {});
+    // Whether the negotiated protocol carries volume rendering (1.2), asked
+    // before the call so a caller can refuse the capability without the
+    // failure looking like a misbehaving peer.
+    [[nodiscard]] bool supportsVolumeRendering() const noexcept;
+    // Renders a volume on the server and returns the frame (protocol 1.2).
+    // Ask supportsVolumeRendering() first: this throws when the server
+    // negotiated an older protocol.
+    [[nodiscard]] VolumeFrame renderVolume(
+        const VolumeRenderRequest& request, StopToken cancellation = {});
     void closeDataset(DatasetId dataset, StopToken cancellation = {});
     void closeDatasetBestEffort(DatasetId dataset) noexcept;
     [[nodiscard]] ViewDataResult requestView(

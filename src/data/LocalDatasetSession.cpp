@@ -286,12 +286,17 @@ ParticleSample LocalDatasetSession::requestParticleSample(
 
 bool LocalDatasetSession::supportsVolumeRendering() const noexcept
 {
-    return m_metadata.dimension == 3 && !m_metadata.isFab
-        && m_metadata.hasPhysicalGeometry;
+    return datasetSupportsVolumeRendering(m_metadata);
 }
 
 VolumeFrame LocalDatasetSession::renderVolume(
     const VolumeRenderRequest& request, StopToken cancellation)
+{
+    return renderVolume(request, cancellation, 0);
+}
+
+VolumeFrame LocalDatasetSession::renderVolume(const VolumeRenderRequest& request,
+    StopToken cancellation, unsigned renderThreads)
 {
     const auto dataset = requireDataset();
     // Before the request is measured against the catalog: a dataset without
@@ -362,6 +367,7 @@ VolumeFrame LocalDatasetSession::renderVolume(
     }
 
     RaycastSettings settings;
+    settings.threadCount = renderThreads;
     settings.camera = request.camera;
     settings.domain = datasetSampleBounds(m_metadata);
     settings.outputSize = request.outputSize;
@@ -411,6 +417,11 @@ VolumeFrame LocalDatasetSession::renderVolume(
 bool LocalDatasetSession::setVolumeGridCacheBudget(std::uint64_t bytes)
 {
     return m_volumeGrids.setBudget(bytes);
+}
+
+bool LocalDatasetSession::setBlockCacheBudget(std::uint64_t bytes)
+{
+    return requireDataset()->setCacheBudget(bytes);
 }
 
 CacheMetrics LocalDatasetSession::volumeGridCacheMetrics() const

@@ -2,46 +2,46 @@ if(NOT DEFINED AMREXPLORER_SERVER)
     message(FATAL_ERROR "AMREXPLORER_SERVER was not provided")
 endif()
 
-execute_process(
-    COMMAND "${AMREXPLORER_SERVER}" --max-datasets 0
-    RESULT_VARIABLE result
-    OUTPUT_VARIABLE output
-    ERROR_VARIABLE error
+# Each row is: the flag, its bad value, and the diagnostic the server owes the
+# operator for it. Table-driven because every size flag carries its own
+# hand-written range check, and a check that quietly stops rejecting is
+# indistinguishable from one that never ran.
+set(cases
+    "--max-datasets|0|--max-datasets must be greater than zero"
+    "--write-stall-timeout-seconds|0|--write-stall-timeout-seconds must be greater than zero"
+    "--max-volume-voxels|0|--max-volume-voxels is outside its allowed range"
+    "--max-volume-voxels|999999999999|--max-volume-voxels is outside its allowed range"
+    "--volume-cache-mib|0|--volume-cache-mib is outside its allowed range"
+    "--volume-cache-mib|65537|--volume-cache-mib is outside its allowed range"
 )
 
-if(result EQUAL 0)
-    message(FATAL_ERROR
-        "amrexplorer-server accepted the invalid --max-datasets 0 option")
-endif()
+foreach(case IN LISTS cases)
+    string(REPLACE "|" ";" parts "${case}")
+    list(GET parts 0 flag)
+    list(GET parts 1 value)
+    list(GET parts 2 expected)
 
-set(combined_output "${output}${error}")
-if(NOT combined_output MATCHES "--max-datasets must be greater than zero")
-    message(FATAL_ERROR
-        "amrexplorer-server did not print the expected diagnostic:\n"
-        "${combined_output}")
-endif()
+    execute_process(
+        COMMAND "${AMREXPLORER_SERVER}" "${flag}" "${value}"
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error
+    )
 
-execute_process(
-    COMMAND "${AMREXPLORER_SERVER}" --write-stall-timeout-seconds 0
-    RESULT_VARIABLE stall_timeout_result
-    OUTPUT_VARIABLE stall_timeout_output
-    ERROR_VARIABLE stall_timeout_error
-)
+    if(result EQUAL 0)
+        message(FATAL_ERROR
+            "amrexplorer-server accepted the invalid ${flag} ${value} option")
+    endif()
 
-if(stall_timeout_result EQUAL 0)
-    message(FATAL_ERROR
-        "amrexplorer-server accepted an invalid zero write stall timeout")
-endif()
+    set(combined_output "${output}${error}")
+    if(NOT combined_output MATCHES "${expected}")
+        message(FATAL_ERROR
+            "amrexplorer-server did not print the expected diagnostic for "
+            "${flag} ${value}:\n${combined_output}")
+    endif()
+endforeach()
 
-set(stall_timeout_combined_output
-    "${stall_timeout_output}${stall_timeout_error}")
-if(NOT stall_timeout_combined_output MATCHES
-        "--write-stall-timeout-seconds must be greater than zero")
-    message(FATAL_ERROR
-        "amrexplorer-server did not print the expected stall-timeout "
-        "diagnostic:\n${stall_timeout_combined_output}")
-endif()
-
+# Not a range check: two flags that cannot both be given.
 execute_process(
     COMMAND "${AMREXPLORER_SERVER}" --stdio --port 1
     RESULT_VARIABLE stdio_port_result

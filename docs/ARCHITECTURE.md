@@ -120,7 +120,8 @@ either should preserve its invariants.
    request before allocating and authenticates with a per-session token; and
    `SessionValidation` (`src/data`) is the response-trust boundary — it
    re-derives and cross-checks every server *response* (raster size, region,
-   source levels, grid-box provenance, page/particle shape) against the request
+   source levels, grid-box provenance, page/particle shape, a rendered
+   volume frame's size, range and sampling metrics) against the request
    before the client trusts it.
 
 ## Where to start reading

@@ -271,6 +271,48 @@ public:
         return codec::fromWire(*payload);
     }
 
+    // Whether the negotiated protocol carries RenderedFrameRequest at all.
+    // Asked before the call rather than thrown from inside it, so a caller
+    // can refuse the capability without tearing down the connection.
+    [[nodiscard]] bool supportsVolumeRendering() const noexcept
+    {
+        return m_selectedMinorVersion >= 2;
+    }
+
+    VolumeFrame renderVolume(
+        const VolumeRenderRequest& request, StopToken cancellation)
+    {
+        // Still refused here for a caller that did not ask first -- but the
+        // wrapper that closes the connection on an unexpected exception has
+        // supportsVolumeRendering() to test, so it never has to reach this.
+        if (!supportsVolumeRendering()) {
+            throw std::runtime_error(volumeRenderingUnsupportedMessage);
+        }
+        // Indefinite: the first render of a field samples the plotfile,
+        // which can outlast the request timeout; the token still cancels it.
+        const auto response = transact(codec::toWire(request),
+            PayloadKind::RenderedFrameResponse, cancellation,
+            ResponseWait::Indefinite);
+        const auto* payload = response->payload.AsRenderedFrameResponse();
+        if (payload == nullptr) {
+            throw std::runtime_error("server omitted rendered-frame payload");
+        }
+        // Decode the frame first, then commit the snapshot. A server can
+        // return a well-formed CacheState beside a malformed frame, and
+        // storing metrics from a response that is about to be rejected
+        // leaves a live connection describing a render that never happened.
+        //
+        // Only this path and cacheRequest do it in this order today; the
+        // slice, line, page, range and particle paths all commit first and
+        // have the same hole. Fixing those means changing five pre-existing
+        // call sites that each have their own tests, so it belongs in a
+        // change of its own -- ideally behind one helper that decodes then
+        // commits, rather than five swaps that can drift apart again.
+        auto frame = codec::fromWire(*payload);
+        updateCache(request.dataset, codec::fromWire(payload->cache.get()));
+        return frame;
+    }
+
     void closeDataset(DatasetId dataset, StopToken cancellation)
     {
         codec::fb::CloseDatasetRequestT request;
@@ -722,6 +764,17 @@ RemoteDirectoryListing Connection::listDirectory(
     const std::string& path, StopToken cancellation)
 {
     return m_impl->listDirectory(path, cancellation);
+}
+
+bool Connection::supportsVolumeRendering() const noexcept
+{
+    return m_impl->supportsVolumeRendering();
+}
+
+VolumeFrame Connection::renderVolume(
+    const VolumeRenderRequest& request, StopToken cancellation)
+{
+    return m_impl->renderVolume(request, cancellation);
 }
 
 void Connection::closeDataset(DatasetId dataset, StopToken cancellation)

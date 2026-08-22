@@ -125,4 +125,14 @@ struct ParticleSampleRequestData {
 [[nodiscard]] fb::ErrorResponseT toWire(const ErrorData& value);
 [[nodiscard]] ErrorData fromWire(const fb::ErrorResponseT& value);
 
+// Protocol 1.2: volume rendering. fromWire validates what a hostile peer can
+// vary -- finite camera and range, equal and bounded transfer vectors, a
+// pixel vector that matches the frame's size, three grid dimensions -- and
+// the session validators do the rest.
+[[nodiscard]] fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value);
+[[nodiscard]] VolumeRenderRequest fromWire(const fb::RenderedFrameRequestT& value);
+[[nodiscard]] fb::RenderedFrameResponseT toWire(
+    VolumeFrame value, const CacheMetrics& cache);
+[[nodiscard]] VolumeFrame fromWire(const fb::RenderedFrameResponseT& value);
+
 } // namespace amrvis::remote::codec

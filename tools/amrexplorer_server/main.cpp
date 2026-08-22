@@ -44,6 +44,12 @@ void printUsage(std::ostream& output)
         << "  --threads COUNT      worker threads; 0 selects hardware concurrency\n"
         << "  --max-frame-mib MIB  maximum negotiated frame size\n"
         << "  --max-datasets COUNT maximum open datasets per connection\n"
+        << "  --max-volume-voxels N\n"
+        << "                       maximum voxels sampled per volume render;\n"
+        << "                       default 256^3, ceiling 512^3. A request\n"
+        << "                       asking for more is clamped, not refused\n"
+        << "  --volume-cache-mib MIB\n"
+        << "                       per-dataset cache of sampled volume grids\n"
         << "  --write-stall-timeout-seconds SECONDS\n"
         << "                       disconnect after no write progress; also the\n"
         << "                       fixed grace in the whole-response budget\n"
@@ -227,6 +233,29 @@ int main(int argc, char* argv[])
                         "--max-datasets must be greater than zero");
                 }
                 options.maximumDatasets = maximumDatasets;
+            } else if (option == "--max-volume-voxels") {
+                const auto voxels
+                    = parseUnsigned<std::uint64_t>(value, "--max-volume-voxels");
+                if (voxels == 0 || voxels > amrvis::maxVolumeVoxelBudget) {
+                    throw std::invalid_argument(
+                        "--max-volume-voxels is outside its allowed range");
+                }
+                options.maximumVolumeVoxels = voxels;
+            } else if (option == "--volume-cache-mib") {
+                const auto mebibytes
+                    = parseUnsigned<std::uint32_t>(value, "--volume-cache-mib");
+                constexpr std::uint64_t oneMebibyte = 1024U * 1024U;
+                // Bounded above as well as below, like every other size
+                // flag, against the same cap the server applies to a
+                // directly-set ServerOptions.
+                constexpr std::uint64_t maximumMebibytes
+                    = amrvis::maximumVolumeGridCacheBytes / oneMebibyte;
+                if (mebibytes == 0 || mebibytes > maximumMebibytes) {
+                    throw std::invalid_argument(
+                        "--volume-cache-mib is outside its allowed range");
+                }
+                options.volumeGridCacheBytes
+                    = static_cast<std::uint64_t>(mebibytes) * oneMebibyte;
             } else if (option == "--write-stall-timeout-seconds") {
                 const auto seconds = parseUnsigned<std::uint32_t>(
                     value, "--write-stall-timeout-seconds");
@@ -258,6 +287,22 @@ int main(int argc, char* argv[])
         if (stdio && portGiven) {
             throw std::invalid_argument(
                 "--stdio and --port are mutually exclusive");
+        }
+
+        // A grid is four bytes a voxel, so a cache below four times
+        // --max-volume-voxels cannot hold a request that asks for the full
+        // budget: those render uncached every time, while smaller requests
+        // cache and evict normally. Setting the cache small is a legitimate
+        // way to hold grid caching down, but it is also what raising
+        // --max-volume-voxels does by accident, and nothing in a rendered
+        // frame says which of the two happened. Warned about once here, where
+        // the flags that caused it are still in view, rather than refused in
+        // the server, which would take the deliberate case with it.
+        if (options.maximumVolumeVoxels * 4ULL > options.volumeGridCacheBytes) {
+            std::cerr << "warning: --volume-cache-mib cannot hold one grid of "
+                         "--max-volume-voxels voxels, so a request asking for "
+                         "that many will render uncached every time; smaller "
+                         "requests still cache normally\n";
         }
 
         std::signal(SIGINT, handleSignal);

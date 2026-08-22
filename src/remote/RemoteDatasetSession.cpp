@@ -128,6 +128,39 @@ ViewDataResult RemoteDatasetSession::requestView(
     });
 }
 
+bool RemoteDatasetSession::supportsVolumeRendering() const noexcept
+{
+    // The whole capability: the protocol carries it and the dataset has one
+    // to render. renderVolume tests the two halves separately, so each of its
+    // refusals can name its own cause.
+    return m_connection->supportsVolumeRendering()
+        && datasetSupportsVolumeRendering(m_metadata);
+}
+
+VolumeFrame RemoteDatasetSession::renderVolume(
+    const VolumeRenderRequest& request, StopToken cancellation)
+{
+    requireOpen();
+    // Outside refusingInvalidResponses, whose catch(...) closes the
+    // connection: neither refusal says the peer misbehaved, and losing the
+    // session and every other open dataset over a capability the caller asked
+    // for and did not get is not the answer. One test per cause, so each
+    // names what actually failed.
+    if (!m_connection->supportsVolumeRendering()) {
+        throw std::runtime_error(volumeRenderingUnsupportedMessage);
+    }
+    if (!datasetSupportsVolumeRendering(m_metadata)) {
+        throw std::invalid_argument(
+            "volume rendering requires a 3-D plotfile with physical geometry");
+    }
+    validateSessionVolumeRequest(m_metadata, m_id, request);
+    return refusingInvalidResponses(*m_connection, [&] {
+        auto frame = m_connection->renderVolume(request, cancellation);
+        validateSessionVolumeResult(m_metadata, request, frame);
+        return frame;
+    });
+}
+
 DatasetPage RemoteDatasetSession::requestDatasetPage(
     const DatasetPageRequest& request, StopToken cancellation)
 {

@@ -254,7 +254,7 @@ height, has_range, minimum, maximum, logarithmic, transfer_colors:[uint],
 transfer_opacities:[float], samples_per_voxel, maximum_voxels) and
 `RenderedFrameResponse` (width, height, pixels:[uint], used_minimum/maximum/
 logarithmic, grid_dims:[int], covered_voxels, sampled_maximum_level,
-grid_from_cache, sample/render_milliseconds, candidate_blocks, blocks_read,
+grid_from_cache, sample/render_microseconds, candidate_blocks, blocks_read,
 cache_hits, payload_bytes_read, cache_fallback_from/to_level, cache:CacheState);
 union tags 27/28. Touchpoints (all verified): `Protocol.hpp` (`protocolMinorVersion
 = 2`, `PayloadKind` 27/28); `Codec.cpp:20-51` asserts + `payloadKind()` upper

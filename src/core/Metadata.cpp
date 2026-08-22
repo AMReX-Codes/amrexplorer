@@ -74,6 +74,12 @@ RealBox sampleBounds(
     return result;
 }
 
+bool datasetSupportsVolumeRendering(const DatasetMetadata& metadata) noexcept
+{
+    return metadata.dimension == 3 && !metadata.isFab
+        && metadata.hasPhysicalGeometry;
+}
+
 RealBox datasetSampleBounds(const DatasetMetadata& metadata) noexcept
 {
     if (metadata.levels.empty()) {

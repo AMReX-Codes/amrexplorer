@@ -32,20 +32,6 @@ namespace amrvis::qt::smoke {
 
 namespace {
 
-// The smoke tests speak to an in-process loopback server; the handshake
-// against it takes milliseconds, so it runs right here on the GUI thread.
-void attachSmokeServer(amrvis::qt::MainWindow& window,
-    const std::shared_ptr<amrvis::remote::Server>& server)
-{
-    window.useRemoteConnection(
-        std::make_shared<amrvis::remote::Connection>("127.0.0.1",
-            server->port(),
-            amrvis::remote::ConnectionOptions{
-                .clientName = "AMReXplorer Qt smoke",
-                .sessionToken = server->token()}),
-        QStringLiteral("127.0.0.1:%1").arg(server->port()));
-}
-
 // What one view shows, for a local-versus-remote comparison: the physical
 // window the probe reports, the viewport pixels, and the raster size.
 struct ViewCapture {

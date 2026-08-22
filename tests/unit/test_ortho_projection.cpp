@@ -176,6 +176,41 @@ int main()
         }
     }
 
+    // backdropScale lines a rendered image up with the wireframe drawn over
+    // it, for a frame rendered at another size AND at another zoom. The image
+    // is drawn about the viewport centre, so a point at offset d from the
+    // image's centre lands at centre + scale * d: that has to be where
+    // projectPoint puts it for the current camera.
+    {
+        const auto view = amrvis::viewportFrame(500, 400);
+        // A half-size draft rendered at zoom 1, now displayed at zoom 1.15.
+        const auto drafted = amrvis::viewportFrame(250, 200);
+        for (const double zoom : {1.0, 1.15, 0.7, 4.0}) {
+            amrvis::OrthoCamera rendered{0.4, -0.3, 1.0};
+            auto shown = rendered;
+            shown.zoom = zoom;
+            const auto scale
+                = amrvis::backdropScale(view, shown.zoom, drafted, rendered.zoom);
+            const auto probe = point(1.0, 2.0, 3.0);
+            // Where the probe sits inside the rendered image...
+            const auto inImage
+                = amrvis::projectPoint(rendered, drafted, domain, probe);
+            // ...mapped by the scale, about the two centres...
+            const auto mappedX
+                = view.centerX + scale * (inImage.x - drafted.centerX);
+            const auto mappedY
+                = view.centerY + scale * (inImage.y - drafted.centerY);
+            // ...is where the wireframe draws it now.
+            const auto drawn = amrvis::projectPoint(shown, view, domain, probe);
+            require(near(mappedX, drawn.x) && near(mappedY, drawn.y),
+                "the backdrop scale does not line up with the wireframe");
+        }
+        // A degenerate magnification is reported as 1 rather than dividing.
+        require(near(amrvis::backdropScale(view, 0.0, drafted, 1.0), 1.0)
+                && near(amrvis::backdropScale(view, 1.0, drafted, 0.0), 1.0),
+            "a non-positive magnification did not fall back to 1");
+    }
+
     // The preset rays are axis-aligned with the expected sign.
     {
         const auto xy = amrvis::pixelRay(

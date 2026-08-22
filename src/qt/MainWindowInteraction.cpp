@@ -1533,6 +1533,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
         linePlotWindow->close();
     }
     closeDatasetWindow();
+    m_volumeController->reset();
     if (m_contoursDialog != nullptr) {
         auto* dialog = m_contoursDialog;
         m_contoursDialog = nullptr;

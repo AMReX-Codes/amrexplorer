@@ -41,6 +41,19 @@ inline constexpr double orthoViewportMargin = 12.0;
 [[nodiscard]] ViewportFrame viewportFrame(
     int width, int height, double margin = orthoViewportMargin) noexcept;
 
+// The scale at which an image rendered for `rendered` at `renderedZoom` has to
+// be drawn, about the viewport centre, into `frame` at `zoom` for the two
+// projections to agree.
+//
+// Both project about their own centre at scale * zoom, so the image's pixels
+// already carry the zoom it was rendered at: the ratio of the frame scales
+// alone lines up a frame rendered at another *size* (a half-size draft) but
+// not one rendered at another *magnification*, and a wheel notch would then
+// slide the image out of the wireframe drawn over it. Returns 1 when either
+// magnification is not positive.
+[[nodiscard]] double backdropScale(const ViewportFrame& frame, double zoom,
+    const ViewportFrame& rendered, double renderedZoom) noexcept;
+
 // A point projected into the viewport: pixel x (right), pixel y (down), and
 // its depth along the view axis in normalised units, increasing toward the
 // viewer.

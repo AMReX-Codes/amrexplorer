@@ -8,7 +8,26 @@
 
 #include "SmokeHarness.hpp"
 
+#include <memory>
+
+namespace amrvis::qt {
+class MainWindow;
+}
+
+namespace amrvis::remote {
+class Server;
+}
+
 namespace amrvis::qt::smoke {
+
+// The smoke tests speak to an in-process loopback server; the handshake
+// against it takes milliseconds, so it runs right here on the GUI thread.
+// Shared, so the client name and the options cannot drift between themes --
+// declared here and defined in SmokeHarness.cpp, so the two themes that need
+// a server do not put MainWindow and the transport headers in front of the
+// six that do not.
+void attachSmokeServer(amrvis::qt::MainWindow& window,
+    const std::shared_ptr<amrvis::remote::Server>& server);
 
 // SmokeHarnessRemote.cpp
 Outcome dispatchRemote(Context& context);
@@ -22,5 +41,7 @@ Outcome dispatchZoom(Context& context);
 Outcome dispatchFab(Context& context);
 // SmokeHarnessSequence.cpp
 Outcome dispatchSequence(Context& context);
+// SmokeHarnessVolume.cpp
+Outcome dispatchVolume(Context& context);
 
 } // namespace amrvis::qt::smoke

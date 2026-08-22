@@ -75,10 +75,16 @@ void MainWindow::configureSliceControls()
     configureSlicePositionControls();
     if (isThreeDimensional) {
         m_isoWidget->setGeometry(metadata);
-        m_isoWidget->setSlicePositions(m_slicePosition3d[0], m_slicePosition3d[1],
-            m_slicePosition3d[2]);
+        publishSlicePositions();
     }
     ensureVectorFieldDefaults();
+}
+
+void MainWindow::publishSlicePositions()
+{
+    m_isoWidget->setSlicePositions(m_slicePosition3d[0], m_slicePosition3d[1],
+        m_slicePosition3d[2]);
+    m_volumeController->slicePositionsChanged();
 }
 
 void MainWindow::setSlicePositionControlsVisible(bool visible)
@@ -155,8 +161,7 @@ void MainWindow::setSlicePosition(int axis, double value)
                 m_dataset->metadata(), level, axis, position));
         }
     }
-    m_isoWidget->setSlicePositions(m_slicePosition3d[0], m_slicePosition3d[1],
-        m_slicePosition3d[2]);
+    publishSlicePositions();
     // The cached full-domain Visible range is now stale — and so is any
     // pending deferred store, whose union was computed from pre-move planes.
     m_displayCoordinator.invalidateRangeCache();
@@ -428,6 +433,12 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                             configureSlicePositionControls();
                             updateRangeModeAvailability();
                             syncMenuChecks();
+                            // The combo moved behind a signal blocker, so the
+                            // volume window is not told by the usual
+                            // currentIndexChanged: without this its frame and
+                            // its "level N" label keep the level the slices
+                            // just fell back from.
+                            m_volumeController->refresh();
                         }
                         statusBar()->showMessage(cacheFallbackMessage(
                             *dataset, fallbackFromLevel, fallbackToLevel));
@@ -1511,6 +1522,7 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     m_dataset = result.dataset;
     m_particleController->setSamples(std::move(result.particles));
     m_particleController->configureForDataset(true);
+    m_volumeController->configureForDataset();
     const auto& metadata = m_dataset->metadata();
     m_viewDimension = metadata.dimension;
 
@@ -1594,8 +1606,7 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
                     std::nextafter(domain.upper[axis], domain.lower[axis]));
         }
         m_isoWidget->setGeometry(metadata);
-        m_isoWidget->setSlicePositions(m_slicePosition3d[0], m_slicePosition3d[1],
-            m_slicePosition3d[2]);
+        publishSlicePositions();
     }
     m_stack->setCurrentIndex(isThreeDimensional ? 1 : 0);
     m_animationPanel->setSweepVisible(isThreeDimensional);

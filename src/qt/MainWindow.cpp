@@ -225,6 +225,7 @@ MainWindow::MainWindow(QWidget* parent)
             m_pendingRangeStore.reset();
             updateRangeModeAvailability();
             scheduleSliceRequest();
+            m_volumeController->refresh();
         });
     connect(m_levelSelector, qOverload<int>(&QComboBox::currentIndexChanged),
         this, [this](int) {
@@ -232,16 +233,24 @@ MainWindow::MainWindow(QWidget* parent)
             m_pendingRangeStore.reset();  // see the field selector above
             updateRangeModeAvailability();
             scheduleSliceRequest();
+            m_volumeController->refresh();
         });
     connect(m_range, &RangeController::modeChanged, this, [this] {
         m_pendingRangeStore.reset();  // see the field selector above
         updateRangeModeAvailability();
         scheduleSliceRequest();
+        m_volumeController->refresh();
     });
     connect(m_range, &RangeController::userRangeChanged, this,
-        [this] { scheduleSliceRequest(); });
+        [this] {
+            scheduleSliceRequest();
+            m_volumeController->refresh();
+        });
     connect(m_range, &RangeController::logarithmicChanged, this,
-        [this] { scheduleSliceRequest(); });
+        [this] {
+            scheduleSliceRequest();
+            m_volumeController->refresh();
+        });
     connect(m_range, &RangeController::statusMessage, this,
         [this](const QString& message, int timeoutMs) {
             statusBar()->showMessage(message, timeoutMs);
@@ -388,6 +397,7 @@ MainWindow::MainWindow(QWidget* parent)
             m_initialStopSource.request_stop();
             m_linePlotStopSource.request_stop();
             m_particleController->cancel();
+            m_volumeController->cancel();
             m_pendingAllViews = false;
             m_pendingViews.clear();
             m_sliceDebounce->stop();
@@ -457,6 +467,51 @@ MainWindow::MainWindow(QWidget* parent)
         this, [this] { m_diagnosticsModel->noteStaleResult(); });
     connect(m_particleController, &ParticleController::loadFinished, this,
         [this] { updateDiagnostics(); });
+
+    // The volume view: its window, camera, opacity controls and render
+    // scheduling live in the controller; this window supplies what a render
+    // is built from (the dataset, the field, level, range and palette in
+    // effect, the slice positions) and folds its bookkeeping into the
+    // diagnostics.
+    m_volumeController = new VolumeController(
+        VolumeController::Hooks{
+            [this] { return m_dataset; },
+            [this]() -> std::optional<std::pair<FieldId, QString>> {
+                if (!m_dataset || m_fieldSelector->currentIndex() < 0) {
+                    return std::nullopt;
+                }
+                return std::pair{FieldId{m_fieldSelector->currentData().toUInt()},
+                    m_fieldSelector->currentText()};
+            },
+            [this] {
+                // The live session, as every other decodeLevelData caller
+                // does: m_openMetadata is the open-time snapshot and lags it
+                // for the whole of each sequence frame's install.
+                return decodeLevelData(m_levelSelector->currentData().toInt(),
+                    m_dataset ? m_dataset->metadata().finestLevel : 0);
+            },
+            [this] { return m_range->selection(); },
+            [this]() -> const Palette& { return m_paletteController->palette(); },
+            [this] { return m_slicePosition3d; },
+            [this] { return m_slicePlanesAction->isChecked(); },
+            [this] { return m_closing; },
+        },
+        this);
+    connect(m_volumeController, &VolumeController::renderActivityChanged, this,
+        [this](int delta) {
+            m_diagnosticsModel->adjustActivity(delta);
+            updateDiagnostics();
+        });
+    connect(m_volumeController, &VolumeController::renderFailed, this,
+        [this](const QString& message) { reportBackgroundError(message); });
+    connect(m_volumeController, &VolumeController::statusMessage, this,
+        [this](const QString& message, int timeoutMs) {
+            statusBar()->showMessage(message, timeoutMs);
+        });
+    connect(m_volumeController, &VolumeController::staleResultDropped, this,
+        [this] { m_diagnosticsModel->noteStaleResult(); });
+    connect(m_volumeController, &VolumeController::frameDisplayed, this,
+        [this] { emit volumeFrameDisplayed(); });
     connect(m_sequenceController, &SequenceController::frameDisplayed,
         this, [this](int index) {
             m_animationPanel->setSequenceFrame(index);
@@ -1072,7 +1127,10 @@ void MainWindow::createMenus()
     m_slicePlanesAction->setCheckable(true);
     m_slicePlanesAction->setEnabled(false);
     connect(m_slicePlanesAction, &QAction::toggled, this,
-        [this](bool visible) { m_isoWidget->setSlicePlanesVisible(visible); });
+        [this](bool visible) {
+            m_isoWidget->setSlicePlanesVisible(visible);
+            m_volumeController->slicePlanesVisibilityChanged();
+        });
 
     m_contoursAction = new QAction(tr("&Contours..."), this);
     m_contoursAction->setObjectName(QStringLiteral("contoursAction"));
@@ -1101,6 +1159,7 @@ void MainWindow::createMenus()
     viewMenu->addMenu(m_levelMenu);
     viewMenu->addAction(m_boxesAction);
     viewMenu->addAction(m_slicePlanesAction);
+    viewMenu->addAction(m_volumeController->createAction(this));
     viewMenu->addMenu(paletteMenu);
     viewMenu->addSeparator();
     viewMenu->addMenu(m_sphericalMenu);
@@ -1292,6 +1351,7 @@ void MainWindow::refreshPaletteDisplay()
     updateOverlays();
     updateCrosshairs();
     m_isoWidget->update();
+    m_volumeController->refresh();
 }
 
 void MainWindow::showContoursDialog()

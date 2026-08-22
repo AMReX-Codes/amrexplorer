@@ -1,8 +1,14 @@
 #include "SmokeHarnessInternal.hpp"
 
+#include "MainWindow.hpp"
+
+#include <QString>
+
+#include <amrexplorer/remote/Connection.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
 #include <initializer_list>
+#include <memory>
 #include <optional>
 
 // The offscreen smoke-test harnesses, moved out of main() as they were and
@@ -13,6 +19,18 @@
 // (AMREXPLORER_BUILD_TESTS), and the release binary carries neither.
 
 namespace amrvis::qt::smoke {
+
+void attachSmokeServer(amrvis::qt::MainWindow& window,
+    const std::shared_ptr<amrvis::remote::Server>& server)
+{
+    window.useRemoteConnection(
+        std::make_shared<amrvis::remote::Connection>("127.0.0.1",
+            server->port(),
+            amrvis::remote::ConnectionOptions{
+                .clientName = "AMReXplorer Qt smoke",
+                .sessionToken = server->token()}),
+        QStringLiteral("127.0.0.1:%1").arg(server->port()));
+}
 
 Outcome dispatch(Context& context)
 {
@@ -25,7 +43,8 @@ Outcome dispatch(Context& context)
              &dispatchRange,
              &dispatchZoom,
              &dispatchFab,
-             &dispatchSequence
+             &dispatchSequence,
+             &dispatchVolume
          }) {
         if (auto outcome = themed(context); outcome.handled) {
             return outcome;

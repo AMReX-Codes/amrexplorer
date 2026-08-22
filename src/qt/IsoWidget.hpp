@@ -4,6 +4,7 @@
 #include <amrexplorer/core/OrthoProjection.hpp>
 
 #include <QColor>
+#include <QImage>
 #include <QPoint>
 #include <QWidget>
 
@@ -47,9 +48,26 @@ public:
     [[nodiscard]] const OrthoCamera& camera() const noexcept { return m_camera; }
     void setCamera(const OrthoCamera& camera);
 
+    // A rendered volume frame drawn under the wireframe, with the camera it
+    // was rendered with: a premultiplied image produced at some viewport size
+    // and some zoom. It is drawn about the viewport centre at backdropScale of
+    // the two, so a frame rendered at another size (a half-size draft while
+    // the camera moves) or another zoom (a wheel notch not yet re-rendered)
+    // still lines up with the wireframe drawn over it -- the orientation
+    // cannot be corrected that way, so a rotation still shows a stale frame
+    // until the next one lands. A null image draws nothing -- the main
+    // window's quadrant.
+    void setBackdropImage(QImage image, const OrthoCamera& camera);
+    // Overlay toggles for the volume view; the quadrant keeps both on.
+    void setLevelBoxesVisible(bool visible);
+    void setDomainOutlineVisible(bool visible);
+
 signals:
     void cameraChanged();
     void interactionEnded();
+    // The viewport changed size, so a backdrop rendered for the old one is
+    // now being stretched: whoever renders it wants to render it again.
+    void viewResized();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -85,6 +103,10 @@ private:
     std::vector<LevelBoxes> m_levels;
     std::array<double, 3> m_slicePositions{0.0, 0.0, 0.0};
     bool m_slicePlanesVisible = false;
+    bool m_levelBoxesVisible = true;
+    bool m_domainOutlineVisible = true;
+    QImage m_backdrop;
+    OrthoCamera m_backdropCamera;
     const Palette* m_palette = nullptr;
     bool m_hasGeometry = false;
 

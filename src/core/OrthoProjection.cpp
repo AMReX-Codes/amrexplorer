@@ -83,6 +83,17 @@ ViewportFrame viewportFrame(int width, int height, double margin) noexcept
     return frame;
 }
 
+double backdropScale(const ViewportFrame& frame, double zoom,
+    const ViewportFrame& rendered, double renderedZoom) noexcept
+{
+    const auto pixels = frame.scale * zoom;
+    const auto renderedPixels = rendered.scale * renderedZoom;
+    if (!(pixels > 0.0) || !(renderedPixels > 0.0)) {
+        return 1.0;
+    }
+    return pixels / renderedPixels;
+}
+
 ProjectedPoint projectPoint(const OrthoCamera& camera,
     const ViewportFrame& frame, const RealBox& domain,
     const Real3& point) noexcept

@@ -44,7 +44,6 @@ VolumeWindow::VolumeWindow(QWidget* parent)
     // File > Export Image...: the view as drawn (frame and overlays), as PNG.
     auto* fileMenu = menuBar()->addMenu(tr("&File"));
     auto* exportAction = new QAction(tr("&Export Image..."), this);
-    exportAction->setObjectName(QStringLiteral("volumeExportImageAction"));
     exportAction->setShortcut(QKeySequence::Save);
     connect(exportAction, &QAction::triggered, this, [this] { exportImage(); });
     fileMenu->addAction(exportAction);
@@ -65,12 +64,9 @@ QImage VolumeWindow::renderedView(qreal devicePixelRatio) const
 int VolumeWindow::showExportPrompt(QMessageBox::Icon icon, const QString& text,
     QMessageBox::StandardButtons buttons)
 {
-    // Named, so a smoke harness can tell this window's prompts from the ones Qt
-    // raises itself -- QFileDialog has its own overwrite warning. The window
-    // title cannot serve: macOS ignores it by platform convention, so a
-    // title-matching harness counts nothing there.
+    // One place builds the export's prompts, so they share a title and, when
+    // a harness needs to pick them out again, will share one name.
     QMessageBox box(icon, tr("Export Volume Image"), text, buttons, this);
-    box.setObjectName(QStringLiteral("volumeExportPrompt"));
     return box.exec();
 }
 

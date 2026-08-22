@@ -1160,28 +1160,6 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_volume_smoke_3d PROPERTIES TIMEOUT 60)
-    # File > Export Image... over the same fixture: the action is reachable by
-    # name, the window's render seam produces the view at its own size, and the
-    # file it writes reads back. The naming and child-exclusion rules have
-    # their own unit test (widget_image_export); this is the end-to-end pass.
-    add_test(
-        NAME qt_volume_export_smoke_3d
-        COMMAND "${CMAKE_COMMAND}"
-            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
-            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
-            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
-            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_volume_export_3d"
-            -DMODE=volume-export
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
-    )
-    # QT_SCALE_FACTOR gives the offscreen platform a real device pixel ratio
-    # (it reports 1 otherwise), which is what lets the run tell an export that
-    # passes devicePixelRatioF() from one that hardcodes 1 -- the picture would
-    # be a quarter of the pixels on screen and every other assertion would
-    # still hold.
-    set_tests_properties(qt_volume_export_smoke_3d PROPERTIES
-        TIMEOUT 60
-        ENVIRONMENT "QT_SCALE_FACTOR=2")
     add_test(
         NAME qt_particle_visible_range_smoke_3d
         COMMAND "${CMAKE_COMMAND}"

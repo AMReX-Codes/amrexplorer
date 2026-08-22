@@ -59,11 +59,16 @@ public:
     // window's quadrant.
     void setBackdropImage(QImage image, const OrthoCamera& camera);
     // Whether the widget is currently drawing a volume: a frame under the
-    // wireframe, over geometry. Both halves matter -- paintEvent short-circuits
-    // to the "3-D overview" placeholder whenever there is no geometry, whatever
-    // the backdrop holds, and setGeometry clears the flag for a non-3-D dataset
-    // without dropping the frame. Asking about the backdrop alone would let the
-    // export write that placeholder text out.
+    // wireframe, over geometry.
+    //
+    // The backdrop is the half that fires. The geometry half is defensive: the
+    // volume window's controller closes it before a non-3-D dataset arrives, so
+    // there is no path today that reaches here with a frame and no geometry --
+    // but paintEvent short-circuits to the "3-D overview" placeholder whenever
+    // the flag is clear, whatever the backdrop holds, and setGeometry clears it
+    // for a non-3-D dataset without dropping the frame. Asking about the
+    // backdrop alone would be one controller change away from writing that
+    // placeholder text into a file.
     [[nodiscard]] bool drawsVolume() const noexcept
     {
         return m_hasGeometry && !m_backdrop.isNull();

@@ -94,6 +94,28 @@ int countNear(const QImage& image, const QColor& wanted)
     return found;
 }
 
+// Paints only its left half AND declines a system background, so
+// DrawWindowBackground has nothing to lay down over the rest. That is the only
+// arrangement in which the buffer's initial contents are observable -- and it
+// is the arrangement Qt's own QWidget::grab() fills for, when the widget is not
+// opaque. HostWidget paints every pixel, so it cannot see this.
+class HalfPainter final : public QWidget {
+public:
+    HalfPainter()
+    {
+        resize(60, 40);
+        setAttribute(Qt::WA_NoSystemBackground);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.fillRect(QRect(0, 0, width() / 2, height()),
+            HostWidget::background());
+    }
+};
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -156,13 +178,32 @@ int main(int argc, char** argv)
     require(exported.width() == host.width()
             && qFuzzyCompare(exported.devicePixelRatio(), 1.0),
         "a 1x export was not at logical size");
-    // A nonsense ratio falls back to 1 rather than allocating nothing.
-    const auto degenerate = amrvis::qt::renderWidgetWithoutChildren(host, 0.0);
-    require(degenerate.size() == host.size(),
-        "a non-positive ratio did not fall back to logical size");
     // The child stays out at every ratio.
     require(countNear(retina, HostWidget::child()) == 0,
         "a 2x export contains the child widget's pixels");
+
+    // --- the unpainted part of the buffer -------------------------------
+    // The function clears the buffer before rendering, so a widget with no
+    // system background that paints only half its rect leaves the other half
+    // transparent rather than whatever the allocation held. Without the clear
+    // this reads uninitialised memory, which is the point: nothing else in
+    // this file can see that clear.
+    HalfPainter half;
+    half.show();
+    application.processEvents();
+    const auto partial = amrvis::qt::renderWidgetWithoutChildren(half, 1.0);
+    int transparent = 0;
+    for (int y = 0; y < partial.height(); ++y) {
+        for (int x = partial.width() / 2 + 1; x < partial.width(); ++x) {
+            transparent += partial.pixelColor(x, y).alpha() == 0 ? 1 : 0;
+        }
+    }
+    const auto unpainted = (partial.width() - partial.width() / 2 - 1)
+        * partial.height();
+    require(transparent == unpainted,
+        "the part of the buffer the widget did not paint was not cleared");
+    require(countNear(partial, HostWidget::background()) > 0,
+        "the half the widget did paint is missing");
     // And the widget was painted ACROSS the larger buffer, not into its
     // top-left quarter: without this, scaling the allocation while leaving the
     // painter at 1x passes every assertion above and exports a picture that is

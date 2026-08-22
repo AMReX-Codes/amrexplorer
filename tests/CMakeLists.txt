@@ -582,10 +582,19 @@ if(TARGET amrexplorer_qt)
     # The export rules on their own: a header of free functions, so this needs
     # no window and no amrexplorer library -- just Qt and a synthetic widget.
     add_executable(test_widget_image_export unit/test_widget_image_export.cpp)
+    # AUTOMOC as its siblings have it: the test's widgets omit Q_OBJECT today,
+    # so it links without -- and the first tr() or slot added to them would
+    # fail on missing vtable symbols with nothing to point at the cause.
+    set_target_properties(test_widget_image_export PROPERTIES AUTOMOC ON)
     target_include_directories(test_widget_image_export
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
     target_link_libraries(test_widget_image_export
-        PRIVATE amrexplorer::warnings Qt6::Core Qt6::Gui Qt6::Widgets)
+        PRIVATE
+            amrexplorer::warnings
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Widgets
+    )
     add_test(NAME widget_image_export
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_widget_image_export>")

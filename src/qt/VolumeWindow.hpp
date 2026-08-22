@@ -7,7 +7,6 @@
 
 #include <QImage>
 #include <QMainWindow>
-#include <QMessageBox>
 #include <QSize>
 #include <QString>
 
@@ -90,9 +89,6 @@ private:
     // until something outside the class needs it: a sequence export of the
     // volume view would be that caller, and can make it public then.
     [[nodiscard]] QImage renderedView(qreal devicePixelRatio) const;
-    // The export's own prompts, named so a harness can pick them out.
-    int showExportPrompt(QMessageBox::Icon icon, const QString& text,
-        QMessageBox::StandardButtons buttons);
     void exportImage();
 
     IsoWidget* m_view = nullptr;

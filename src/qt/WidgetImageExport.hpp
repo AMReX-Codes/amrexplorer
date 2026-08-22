@@ -26,6 +26,11 @@ namespace amrvis::qt {
 // One-way only: whether the name changed is the caller's comparison, because
 // that is the same question the overwrite prompt asks (the dialog confirmed the
 // name it returned, so only an appended suffix is worth asking about).
+//
+// Not QFileDialog::setDefaultSuffix: it only fills an *empty* suffix, so it
+// leaves "shot.jpg" alone, and Qt applies it in selectedFiles() -- after a
+// native dialog has already run its own overwrite prompt on the unsuffixed
+// name. Both were tried and both were wrong.
 [[nodiscard]] inline QString pngExportPath(const QString& chosen)
 {
     if (chosen.isEmpty()
@@ -48,9 +53,14 @@ namespace amrvis::qt {
 [[nodiscard]] inline QImage renderWidgetWithoutChildren(
     QWidget& widget, qreal devicePixelRatio)
 {
-    const auto scale = devicePixelRatio > 0.0 ? devicePixelRatio : 1.0;
-    QImage image(widget.size() * scale, QImage::Format_ARGB32_Premultiplied);
-    image.setDevicePixelRatio(scale);
+    // A parameter rather than widget.devicePixelRatioF(): it is what makes the
+    // scaling testable without a scaled platform, and a sequence export would
+    // want one ratio frozen across a whole run. No guard on it -- every caller
+    // passes a real ratio, and a guard here would be a branch no test can
+    // reach honestly.
+    QImage image(widget.size() * devicePixelRatio,
+        QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(devicePixelRatio);
     // Transparent first: render() paints the widget's own background over this,
     // but a widget that does not fill its whole rect would otherwise leave
     // whatever the allocation happened to contain.

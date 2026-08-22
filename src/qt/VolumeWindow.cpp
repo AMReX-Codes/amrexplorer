@@ -24,6 +24,22 @@
 
 namespace amrvis::qt {
 
+namespace {
+
+// One place builds the export's prompts, so they share a title -- and a name,
+// if a harness ever needs to pick them out (it cannot match on the title:
+// macOS ignores QMessageBox titles). File-local, so QMessageBox stays out of
+// the window's header.
+int showExportPrompt(QWidget* parent, QMessageBox::Icon icon,
+    const QString& text, QMessageBox::StandardButtons buttons)
+{
+    QMessageBox box(icon, QObject::tr("Export Volume Image"), text, buttons,
+        parent);
+    return box.exec();
+}
+
+} // namespace
+
 VolumeWindow::VolumeWindow(QWidget* parent)
     : QMainWindow(parent)
 {
@@ -61,15 +77,6 @@ QImage VolumeWindow::renderedView(qreal devicePixelRatio) const
     return renderWidgetWithoutChildren(*m_view, devicePixelRatio);
 }
 
-int VolumeWindow::showExportPrompt(QMessageBox::Icon icon, const QString& text,
-    QMessageBox::StandardButtons buttons)
-{
-    // One place builds the export's prompts, so they share a title and, when
-    // a harness needs to pick them out again, will share one name.
-    QMessageBox box(icon, tr("Export Volume Image"), text, buttons, this);
-    return box.exec();
-}
-
 void VolumeWindow::exportImage()
 {
     // Refused before the dialog, as the main window's export does: with no
@@ -79,7 +86,7 @@ void VolumeWindow::exportImage()
     // so it is the frame on screen when the save is confirmed rather than one
     // held across a nested event loop.
     if (!m_view->drawsVolume()) {
-        showExportPrompt(QMessageBox::Information,
+        showExportPrompt(this, QMessageBox::Information,
             tr("Wait for the volume to render before exporting an image."),
             QMessageBox::Ok);
         return;
@@ -110,25 +117,30 @@ void VolumeWindow::exportImage()
         if (QFileInfo::exists(path)) {
             text += QLatin1Char('\n') + tr("That file already exists.");
         }
-        if (showExportPrompt(QMessageBox::Question, text,
+        if (showExportPrompt(this, QMessageBox::Question, text,
                 QMessageBox::Save | QMessageBox::Cancel)
             != QMessageBox::Save) {
             return;
         }
     }
-    const auto image = renderedView(devicePixelRatioF());
+    const auto image = renderedView(m_view->devicePixelRatioF());
     if (image.isNull()) {
-        // Not a write failure: the frame that passed the guard is gone. A
-        // dataset switch or a sequence frame runs configureForDataset ->
+        // Two causes, and they are worth telling apart. The frame may be gone:
+        // a dataset switch or a sequence frame runs configureForDataset ->
         // clearFrame, and the dialog above spun a nested event loop it could
-        // run in.
-        QMessageBox::information(this, tr("Export Volume Image"),
-            tr("The volume was cleared while the dialog was open; "
-               "nothing was written."));
+        // run in. Or the buffer would not allocate, which points at a size,
+        // not at the volume.
+        showExportPrompt(this, QMessageBox::Information,
+            m_view->drawsVolume()
+                ? tr("The picture could not be allocated at this size; "
+                     "nothing was written.")
+                : tr("The volume was cleared while the dialog was open; "
+                     "nothing was written."),
+            QMessageBox::Ok);
         return;
     }
     if (!image.save(path, "PNG")) {
-        showExportPrompt(QMessageBox::Critical,
+        showExportPrompt(this, QMessageBox::Critical,
             tr("Cannot write %1").arg(path), QMessageBox::Ok);
     }
 }

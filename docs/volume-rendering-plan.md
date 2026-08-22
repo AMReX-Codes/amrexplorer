@@ -392,6 +392,13 @@ row, threading note; `docs/building.md` unchanged.
   seam to join a sequence export.
 - **Frame compression on the wire** — RLE or 8-bit indexed pixels for slow
   links; half-resolution drafts are the mitigation today.
+- **Hi-DPI for the volume *render*.** The export buffer is scaled by the
+  device ratio, so the wireframe, grid boxes and slice planes gain real pixels
+  — but `VolumeController` still sizes the render request from the logical view
+  size, so the volume itself is interpolated up. PR8's item above reads as
+  delivered and only the export half is. Deferred on cost: scaling the render
+  quadruples the ray-cast and pushes on the quality voxel budget and the remote
+  frame budget.
 - **End-to-end coverage of "Export Image..."** — the rules it applies (the
   `.png` name, and rendering the view without the preset buttons parked over
   it) are unit-tested in `test_widget_image_export`, but nothing drives the menu

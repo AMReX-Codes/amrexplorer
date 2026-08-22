@@ -16,6 +16,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPointer>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QHBoxLayout>
@@ -26,15 +27,20 @@ namespace amrvis::qt {
 
 namespace {
 
-// One place builds the export's prompts, so they share a title -- and a name,
-// if a harness ever needs to pick them out (it cannot match on the title:
-// macOS ignores QMessageBox titles). File-local, so QMessageBox stays out of
-// the window's header.
-int showExportPrompt(QWidget* parent, QMessageBox::Icon icon,
-    const QString& text, QMessageBox::StandardButtons buttons)
+// One place builds the export's prompts, so they share a title and a default.
+// The default is passed rather than left to Qt: for Save | Cancel it picks
+// Save, so a reflexive Return -- the key that dismissed the save dialog a
+// moment earlier -- would confirm the overwrite the prompt is warning about.
+//
+// Unparented, like the save dialog: see exportImage. Titled through
+// VolumeWindow::tr so it shares a translation context with the strings passed
+// into it, rather than sitting in QObject's.
+int showExportPrompt(QMessageBox::Icon icon, const QString& text,
+    QMessageBox::StandardButtons buttons, QMessageBox::StandardButton fallback)
 {
-    QMessageBox box(icon, QObject::tr("Export Volume Image"), text, buttons,
-        parent);
+    QMessageBox box(icon, VolumeWindow::tr("Export Volume Image"), text,
+        buttons, nullptr);
+    box.setDefaultButton(fallback);
     return box.exec();
 }
 
@@ -69,79 +75,60 @@ VolumeWindow::VolumeWindow(QWidget* parent)
     fileMenu->addAction(closeAction);
 }
 
-QImage VolumeWindow::renderedView(qreal devicePixelRatio) const
-{
-    if (!m_view->drawsVolume()) {
-        return {};
-    }
-    return renderWidgetWithoutChildren(*m_view, devicePixelRatio);
-}
 
 void VolumeWindow::exportImage()
 {
-    // Refused before the dialog, as the main window's export does: with no
-    // frame the view is the bare wireframe, or the "3-D overview" placeholder
-    // text, and writing either out gives the user a file to puzzle over. The
-    // cheap question here, not the picture -- that is taken after the dialog,
-    // so it is the frame on screen when the save is confirmed rather than one
-    // held across a nested event loop.
-    if (!m_view->drawsVolume()) {
-        showExportPrompt(this, QMessageBox::Information,
-            tr("Wait for the volume to render before exporting an image."),
-            QMessageBox::Ok);
-        return;
-    }
-    const auto chosen = QFileDialog::getSaveFileName(this,
+    // No wait-for-a-frame guard. The case one would have caught -- IsoWidget's
+    // "3-D overview" placeholder reaching a file -- cannot happen here: the
+    // controller pushes geometry before it shows this window, so the widget
+    // always has some. What a guard did catch was the legitimate export of the
+    // wireframe and overlays alone, including after a failed render, which
+    // leaves no frame and so refused forever with advice to wait for one.
+    //
+    // Nothing below is parented to this window, and every exec() is guarded.
+    // The window carries WA_DeleteOnClose, and an async dataset switch or
+    // sequence frame can close it while a modal is up: a dialog parented here
+    // would be freed as a child -- at a stack address -- by ~QObject, and
+    // returning into a destroyed window would touch freed members.
+    const QPointer<VolumeWindow> alive(this);
+    const auto chosen = QFileDialog::getSaveFileName(nullptr,
         tr("Export Volume Image"), QString(), tr("PNG images (*.png)"));
-    if (chosen.isEmpty()) {
+    if (alive.isNull() || chosen.isEmpty()) {
         return;
     }
     const auto path = pngExportPath(chosen);
-    // Only when that appended something. The dialog has already confirmed
-    // overwriting the name it returned, so asking again about that same name
-    // would be a second prompt for one save; but it never asked about a name
-    // appended to after it returned -- a typed "shot" beside an existing
-    // shot.png passes its existence check and would be overwritten silently.
     // Asked before writing, not reported after: someone who typed "shot.jpg"
     // may have meant JPEG, and a notice once the PNG is on disk is too late to
     // act on. Exactly one prompt per save either way -- the dialog already
-    // confirmed the name it returned, so an unchanged name asks nothing. Not
-    // the status label: the controller owns that, rewriting it on every frame,
-    // so a notice there is erased by the next camera move.
+    // confirmed the name it returned, so an unchanged name asks nothing.
     if (path != chosen) {
-        // The rename is the point of the prompt, so it is said in both cases:
-        // someone who typed "shot.jpg" beside an existing "shot.jpg.png" is
-        // exactly who needs to hear that a PNG is what gets written.
         auto text = tr("Saving as %1 instead: the picture is written as PNG.")
                         .arg(path);
         if (QFileInfo::exists(path)) {
             text += QLatin1Char('\n') + tr("That file already exists.");
         }
-        if (showExportPrompt(this, QMessageBox::Question, text,
-                QMessageBox::Save | QMessageBox::Cancel)
-            != QMessageBox::Save) {
+        if (showExportPrompt(QMessageBox::Question, text,
+                QMessageBox::Save | QMessageBox::Cancel, QMessageBox::Cancel)
+                != QMessageBox::Save
+            || alive.isNull()) {
             return;
         }
     }
-    const auto image = renderedView(m_view->devicePixelRatioF());
+    // Straight to the shared rule: it is the reusable seam, and a private
+    // one-line wrapper around it only made the failure below ambiguous.
+    const auto image = renderWidgetWithoutChildren(
+        *m_view, m_view->devicePixelRatioF());
     if (image.isNull()) {
-        // Two causes, and they are worth telling apart. The frame may be gone:
-        // a dataset switch or a sequence frame runs configureForDataset ->
-        // clearFrame, and the dialog above spun a nested event loop it could
-        // run in. Or the buffer would not allocate, which points at a size,
-        // not at the volume.
-        showExportPrompt(this, QMessageBox::Information,
-            m_view->drawsVolume()
-                ? tr("The picture could not be allocated at this size; "
-                     "nothing was written.")
-                : tr("The volume was cleared while the dialog was open; "
-                     "nothing was written."),
-            QMessageBox::Ok);
+        // The only way to get here: the buffer would not allocate.
+        showExportPrompt(QMessageBox::Information,
+            tr("The picture could not be allocated at this size; "
+               "nothing was written."),
+            QMessageBox::Ok, QMessageBox::Ok);
         return;
     }
     if (!image.save(path, "PNG")) {
-        showExportPrompt(this, QMessageBox::Critical,
-            tr("Cannot write %1").arg(path), QMessageBox::Ok);
+        showExportPrompt(QMessageBox::Critical,
+            tr("Cannot write %1").arg(path), QMessageBox::Ok, QMessageBox::Ok);
     }
 }
 

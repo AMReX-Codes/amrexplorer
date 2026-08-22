@@ -73,6 +73,11 @@ void IsoWidget::setGeometry(const DatasetMetadata& metadata)
     m_hasGeometry = metadata.dimension == 3;
     m_domain = datasetSampleBounds(metadata);
     m_levels.clear();
+    // The frame belonged to the previous geometry: kept, it would be drawn
+    // under a wireframe for a domain it was not sampled from, and scaled by a
+    // projection that no longer describes it.
+    m_backdrop = QImage();
+    m_backdropCamera = OrthoCamera{};
     if (m_hasGeometry) {
         m_levels.reserve(metadata.levels.size());
         for (const auto& level : metadata.levels) {

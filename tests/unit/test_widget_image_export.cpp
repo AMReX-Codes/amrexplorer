@@ -207,8 +207,9 @@ int main(int argc, char** argv)
     // And the widget was painted ACROSS the larger buffer, not into its
     // top-left quarter: without this, scaling the allocation while leaving the
     // painter at 1x passes every assertion above and exports a picture that is
-    // three-quarters empty. Four times the area, less the child's excluded
-    // rect and some edge rounding.
+    // three-quarters empty. Four times the area, with slack only for edge
+    // rounding -- omitting the child does not leave a hole, the parent paints
+    // straight through where it would be, so nothing is subtracted here.
     require(countNear(retina, HostWidget::background())
             > 3.5 * countNear(exported, HostWidget::background()),
         "the 2x export did not paint the widget across the larger buffer");

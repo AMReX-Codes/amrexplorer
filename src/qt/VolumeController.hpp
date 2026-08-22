@@ -36,8 +36,9 @@ class VolumeWindow;
 // runs it on a worker through the session (locally or on the server), and
 // pushes the frame back into the window. One render is in flight at a time;
 // a change during one is remembered and rendered after it. While the camera
-// is moving the frames are half-size, one-sample drafts; the settled camera
-// gets a full frame. Late results (a superseded generation, a closed
+// is moving, the view is being resized or an opacity slider is being dragged,
+// the frames are half-size, one-sample drafts; once that settles, a full
+// frame. Late results (a superseded generation, a closed
 // window, a shutting-down host) are dropped, never displayed.
 class VolumeController final : public QObject {
     Q_OBJECT
@@ -67,8 +68,7 @@ public:
 
     // The View menu's action: opens the window; enabled while the dataset
     // can be volume-rendered (a 3-D plotfile, and for a remote one a server
-    // speaking protocol 1.2) and the host has not suspended it. Owned by
-    // `parent`.
+    // speaking protocol 1.2). Owned by `parent`.
     QAction* createAction(QObject* parent);
     // The window (one at a time), parented to `parent` for placement only.
     void showWindow(QWidget* parent);
@@ -106,7 +106,8 @@ private:
     void scheduleRender();
     void startRender();
     void pushGeometry();
-    [[nodiscard]] QString describe(const VolumeDisplayResult& result) const;
+    [[nodiscard]] QString describe(
+        const VolumeDisplayResult& result, const QString& fieldName) const;
 
     Hooks m_hooks;
     QPointer<QAction> m_action;
@@ -118,7 +119,9 @@ private:
     bool m_inFlight = false;
     bool m_rerun = false;
     bool m_interacting = false;
-    bool m_suspended = false;
+    // Whether the open window has shown a frame yet: only then is a resize
+    // stretching something, and only then is it worth a draft.
+    bool m_frameShown = false;
     VolumeFrame m_lastFrame;
 };
 

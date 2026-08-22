@@ -407,6 +407,7 @@ void IsoWidget::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     layoutButtons();
+    emit viewResized();
 }
 
 void IsoWidget::layoutButtons()

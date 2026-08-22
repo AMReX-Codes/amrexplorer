@@ -25,18 +25,6 @@ namespace amrvis::qt::smoke {
 
 namespace {
 
-void attachSmokeServer(amrvis::qt::MainWindow& window,
-    const std::shared_ptr<amrvis::remote::Server>& server)
-{
-    window.useRemoteConnection(
-        std::make_shared<amrvis::remote::Connection>("127.0.0.1",
-            server->port(),
-            amrvis::remote::ConnectionOptions{
-                .clientName = "AMReXplorer Qt smoke",
-                .sessionToken = server->token()}),
-        QStringLiteral("127.0.0.1:%1").arg(server->port()));
-}
-
 // Arms the volume checks on `window`: open the window once the initial
 // slices are in, then exit 0 on the first displayed frame with coverage,
 // 1 on one without, 2 on a failed load, 3 if no frame arrives in time.

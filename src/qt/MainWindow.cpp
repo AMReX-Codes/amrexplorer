@@ -484,8 +484,11 @@ MainWindow::MainWindow(QWidget* parent)
                     m_fieldSelector->currentText()};
             },
             [this] {
+                // The live session, as every other decodeLevelData caller
+                // does: m_openMetadata is the open-time snapshot and lags it
+                // for the whole of each sequence frame's install.
                 return decodeLevelData(m_levelSelector->currentData().toInt(),
-                    m_openMetadata ? m_openMetadata->finestLevel : 0);
+                    m_dataset ? m_dataset->metadata().finestLevel : 0);
             },
             [this] { return m_range->selection(); },
             [this]() -> const Palette& { return m_paletteController->palette(); },

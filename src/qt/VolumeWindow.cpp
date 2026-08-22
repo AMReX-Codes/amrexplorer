@@ -28,6 +28,8 @@ VolumeWindow::VolumeWindow(QWidget* parent)
         [this] { emit cameraChanged(); });
     connect(m_view, &IsoWidget::interactionEnded, this,
         [this] { emit interactionEnded(); });
+    connect(m_view, &IsoWidget::viewResized, this,
+        [this] { emit viewResized(); });
     buildControls();
 }
 
@@ -184,11 +186,6 @@ void VolumeWindow::showRendering(bool rendering)
 {
     m_rendering->setText(rendering ? tr("Rendering…") : QString());
     m_rendering->setVisible(rendering);
-}
-
-void VolumeWindow::showStatus(const QString& status)
-{
-    m_status->setText(status);
 }
 
 const OrthoCamera& VolumeWindow::camera() const noexcept

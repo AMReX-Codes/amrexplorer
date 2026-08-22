@@ -3,7 +3,6 @@
 #include "QtErrorText.hpp"
 #include "VolumeWindow.hpp"
 
-#include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/core/Metadata.hpp>
 
 #include <QAction>
@@ -23,8 +22,10 @@ VolumeController::VolumeController(Hooks hooks, QObject* parent)
 {
     // Several changes in one event-loop turn (a range mode and its user
     // range, a palette and its reversal, sliders dragged) collapse into one
-    // render; a moving camera keeps rearming it, so the draft frames come
-    // at most every debounce interval.
+    // render. A throttle, not a debounce: scheduleRender leaves an already
+    // running timer alone, so a continuous drag -- which emits faster than
+    // this interval -- gets a draft every interval instead of rearming the
+    // timer forever and rendering nothing until the mouse stops.
     m_debounce = new QTimer(this);
     m_debounce->setSingleShot(true);
     m_debounce->setInterval(40);
@@ -65,8 +66,7 @@ void VolumeController::refreshActionEnabled()
 {
     const auto dataset = m_hooks.dataset ? m_hooks.dataset() : nullptr;
     if (m_action) {
-        m_action->setEnabled(
-            dataset && dataset->supportsVolumeRendering() && !m_suspended);
+        m_action->setEnabled(dataset && dataset->supportsVolumeRendering());
     }
 }
 
@@ -87,18 +87,39 @@ void VolumeController::showWindow(QWidget* parent)
     auto* window = new VolumeWindow(parent);
     window->setWindowFlag(Qt::Window, true);
     m_window = window;
-    connect(window, &VolumeWindow::cameraChanged, this, [this] {
+    m_frameShown = false;
+    // A camera move, a resize and a dragged opacity slider all arrive far
+    // faster than a full render finishes, so they share one path: draft
+    // frames while it continues, a full frame once it has been still for the
+    // settle interval. A drag also ends explicitly, on the mouse release.
+    const auto beginInteraction = [this] {
         m_interacting = true;
         m_settle->start();
         scheduleRender();
+    };
+    connect(window, &VolumeWindow::cameraChanged, this, beginInteraction);
+    connect(window, &VolumeWindow::rampChanged, this, beginInteraction);
+    connect(window, &VolumeWindow::viewResized, this, [this, beginInteraction] {
+        // Until the first frame is up nothing is being stretched: these are
+        // the window's own opening layout passes, and drafting them would
+        // open on a half-size frame instead of the view-sized one.
+        if (!m_frameShown) {
+            scheduleRender();
+            return;
+        }
+        beginInteraction();
     });
     connect(window, &VolumeWindow::interactionEnded, this, [this] {
         m_settle->stop();
         m_interacting = false;
         scheduleRender();
     });
-    connect(window, &VolumeWindow::rampChanged, this, [this] { scheduleRender(); });
-    connect(window, &VolumeWindow::qualityChanged, this, [this] { scheduleRender(); });
+    // The quality combo is a single discrete choice: render it in full.
+    connect(window, &VolumeWindow::qualityChanged, this, [this] {
+        m_settle->stop();
+        m_interacting = false;
+        scheduleRender();
+    });
     connect(window, &QObject::destroyed, this, [this] {
         // A close cancels the render in flight; its result would go nowhere.
         ++m_generation;
@@ -108,6 +129,7 @@ void VolumeController::showWindow(QWidget* parent)
         m_debounce->stop();
         m_settle->stop();
         m_interacting = false;
+        m_frameShown = false;
     });
     pushGeometry();
     window->show();
@@ -161,6 +183,9 @@ void VolumeController::configureForDataset()
         closeWindow();
         return;
     }
+    // Before the new geometry goes in: a frame still in flight was rendered
+    // for the outgoing dataset and must not be displayed against this one.
+    cancel();
     pushGeometry();
     m_window->clearFrame();
     scheduleRender();
@@ -209,6 +234,12 @@ void VolumeController::cancel()
     m_stopSource = StopSource{};
     m_rerun = false;
     m_debounce->stop();
+    // The settle timer too, and the interaction it stands for: left armed, it
+    // fires after the cancellation and schedules a render of whatever dataset
+    // is published by then -- the outgoing frame's, under the incoming one's
+    // geometry.
+    m_settle->stop();
+    m_interacting = false;
 }
 
 void VolumeController::scheduleRender()
@@ -220,7 +251,9 @@ void VolumeController::scheduleRender()
         m_rerun = true;
         return;
     }
-    m_debounce->start();
+    if (!m_debounce->isActive()) {
+        m_debounce->start();
+    }
 }
 
 void VolumeController::startRender()
@@ -250,8 +283,9 @@ void VolumeController::startRender()
     request.composition = level.composition;
     request.region = datasetSampleBounds(metadata);
     request.camera = m_window->camera();
-    // A moving camera gets a half-size, single-sample draft; the settled
-    // camera the full frame at the view's size.
+    // Mid-interaction (a moving camera, a resize, a dragged slider) gets a
+    // half-size, single-sample draft; a settled view the full frame at the
+    // view's size.
     const int width = std::max(1, m_interacting ? viewSize.width() / 2 : viewSize.width());
     const int height = std::max(1, m_interacting ? viewSize.height() / 2 : viewSize.height());
     request.outputSize = {std::min(width, maxVolumeOutputDimension),
@@ -271,9 +305,12 @@ void VolumeController::startRender()
     m_window->showRendering(true);
     emit renderActivityChanged(1);
 
+    // The name the request was built from: read again at display time it
+    // would label these pixels with whatever field the combo shows by then.
+    const auto fieldName = field->second;
     auto* watcher = new QFutureWatcher<VolumeDisplayResult>(this);
     connect(watcher, &QFutureWatcher<VolumeDisplayResult>::finished, this,
-        [this, watcher, generation, cancellation, dataset] {
+        [this, watcher, generation, cancellation, dataset, fieldName] {
             emit renderActivityChanged(-1);
             m_inFlight = false;
             if (m_hooks.isShuttingDown && m_hooks.isShuttingDown()) {
@@ -284,22 +321,22 @@ void VolumeController::startRender()
             try {
                 auto result = watcher->future().takeResult();
                 if (current) {
-                    m_lastFrame = result.frame;
-                    m_window->showFrame(m_lastFrame, describe(result));
-                    if (result.frame.cacheFallbackFromLevel >= 0) {
+                    auto status = describe(result, fieldName);
+                    m_lastFrame = std::move(result.frame);
+                    m_window->showFrame(m_lastFrame, status);
+                    if (m_lastFrame.cacheFallbackFromLevel >= 0) {
                         emit statusMessage(
                             tr("Volume: the finest level exceeded the cache; "
                                "showing levels 0 through %1 instead of 0 through %2.")
-                                .arg(result.frame.cacheFallbackToLevel)
-                                .arg(result.frame.cacheFallbackFromLevel),
+                                .arg(m_lastFrame.cacheFallbackToLevel)
+                                .arg(m_lastFrame.cacheFallbackFromLevel),
                             5000);
                     }
+                    m_frameShown = true;
                     emit frameDisplayed();
                 } else {
                     emit staleResultDropped();
                 }
-            } catch (const ReadCancelled&) {
-                emit staleResultDropped();
             } catch (const std::exception& error) {
                 if (current && !cancellation.stop_requested()) {
                     emit renderFailed(
@@ -308,33 +345,39 @@ void VolumeController::startRender()
                     emit staleResultDropped();
                 }
             }
-            if (m_window && generation == m_generation) {
+            // Not gated on the generation: a superseded result still means
+            // this render stopped, and if nothing is in flight now the label
+            // has to come down or it stays up forever.
+            if (m_window && !m_inFlight) {
                 m_window->showRendering(false);
             }
             watcher->deleteLater();
             // A change that arrived while this ran: render it now.
             if (m_rerun && m_window) {
                 m_rerun = false;
-                m_debounce->start();
+                scheduleRender();
             }
         });
+    // The choice, not a range resolved once here: under cache pressure the
+    // pipeline lowers the level, and a Level range read at the level asked
+    // for would colour and label pixels no part of that level produced. The
+    // overload taking it re-resolves per attempt (VolumePipeline.hpp).
+    const VolumeRangeChoice rangeChoice{rangeSelection.mode,
+        rangeSelection.userRange, rangeSelection.logarithmic};
     watcher->setFuture(QtConcurrent::run(
-        [dataset, request, rangeSelection, cancellation]() mutable {
-            request.range = resolveVolumeRange(dataset, request.field,
-                request.maximumLevel, request.composition, rangeSelection.mode,
-                rangeSelection.userRange, rangeSelection.logarithmic, cancellation);
+        [dataset, request, rangeChoice, cancellation]() mutable {
             return executeVolumeRenderWithFallback(dataset, std::move(request),
-                cancellation);
+                rangeChoice, cancellation);
         }));
 }
 
-QString VolumeController::describe(const VolumeDisplayResult& result) const
+QString VolumeController::describe(
+    const VolumeDisplayResult& result, const QString& fieldName) const
 {
-    const auto field = m_hooks.field ? m_hooks.field() : std::nullopt;
     const auto& frame = result.frame;
     const auto& range = frame.usedRange;
     return tr("%1  level %2  range [%3, %4]%5\ngrid %6 x %7 x %8 (%9)  %10 ms")
-        .arg(field ? field->second : QString())
+        .arg(fieldName)
         .arg(result.request.maximumLevel)
         .arg(range.minimum)
         .arg(range.maximum)
@@ -343,7 +386,12 @@ QString VolumeController::describe(const VolumeDisplayResult& result) const
         .arg(frame.metrics.gridDims[1])
         .arg(frame.metrics.gridDims[2])
         .arg(frame.metrics.gridFromCache ? tr("cached") : tr("sampled"))
-        .arg(frame.metrics.renderMilliseconds + frame.metrics.sampleMilliseconds);
+        // The metrics are microseconds (Volume.hpp says why); one decimal
+        // place so a sub-millisecond render reads as fast rather than as 0.
+        .arg(static_cast<double>(frame.metrics.renderMicroseconds
+                 + frame.metrics.sampleMicroseconds)
+                / 1000.0,
+            0, 'f', 1);
 }
 
 } // namespace amrvis::qt

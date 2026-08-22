@@ -75,10 +75,16 @@ void MainWindow::configureSliceControls()
     configureSlicePositionControls();
     if (isThreeDimensional) {
         m_isoWidget->setGeometry(metadata);
-        m_isoWidget->setSlicePositions(m_slicePosition3d[0], m_slicePosition3d[1],
-            m_slicePosition3d[2]);
+        publishSlicePositions();
     }
     ensureVectorFieldDefaults();
+}
+
+void MainWindow::publishSlicePositions()
+{
+    m_isoWidget->setSlicePositions(m_slicePosition3d[0], m_slicePosition3d[1],
+        m_slicePosition3d[2]);
+    m_volumeController->slicePositionsChanged();
 }
 
 void MainWindow::setSlicePositionControlsVisible(bool visible)
@@ -155,9 +161,7 @@ void MainWindow::setSlicePosition(int axis, double value)
                 m_dataset->metadata(), level, axis, position));
         }
     }
-    m_isoWidget->setSlicePositions(m_slicePosition3d[0], m_slicePosition3d[1],
-        m_slicePosition3d[2]);
-    m_volumeController->slicePositionsChanged();
+    publishSlicePositions();
     // The cached full-domain Visible range is now stale — and so is any
     // pending deferred store, whose union was computed from pre-move planes.
     m_displayCoordinator.invalidateRangeCache();
@@ -1596,8 +1600,7 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
                     std::nextafter(domain.upper[axis], domain.lower[axis]));
         }
         m_isoWidget->setGeometry(metadata);
-        m_isoWidget->setSlicePositions(m_slicePosition3d[0], m_slicePosition3d[1],
-            m_slicePosition3d[2]);
+        publishSlicePositions();
     }
     m_stack->setCurrentIndex(isThreeDimensional ? 1 : 0);
     m_animationPanel->setSweepVisible(isThreeDimensional);

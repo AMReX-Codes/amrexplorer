@@ -56,21 +56,21 @@ public:
     void showFrame(const VolumeFrame& frame, const QString& status);
     void clearFrame();
     void showRendering(bool rendering);
-    void showStatus(const QString& status);
 
     [[nodiscard]] const OrthoCamera& camera() const noexcept;
     [[nodiscard]] QSize viewSize() const;
     [[nodiscard]] OpacityRamp ramp() const;
     [[nodiscard]] Quality quality() const;
-    [[nodiscard]] IsoWidget& view() noexcept { return *m_view; }
 
 signals:
     // The user moved the camera (drag or wheel) / finished a drag; changed
-    // the opacity controls; changed the quality.
+    // the opacity controls; changed the quality. viewResized: the viewport
+    // changed size, so the frame drawn in it is being stretched.
     void cameraChanged();
     void interactionEnded();
     void rampChanged();
     void qualityChanged();
+    void viewResized();
 
 private:
     void buildControls();

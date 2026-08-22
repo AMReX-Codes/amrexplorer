@@ -690,6 +690,10 @@ private:
     // separator, so the separator never dangles when no dataset is loaded.
     void setSlicePositionControlsVisible(bool visible);
     void setSlicePosition(int axis, double value);
+    // Pushes m_slicePosition3d to everything that draws the planes: the iso
+    // quadrant and, when it is open, the volume window. Every writer of
+    // m_slicePosition3d goes through here, so the two cannot drift.
+    void publishSlicePositions();
     [[nodiscard]] int sliceIndexLevel() const;
     // Visible-range mode in 3-D: recompute the min/max from all three panels'
     // planes so the single color bar maps them consistently. The heavy part

@@ -55,7 +55,6 @@ public:
     // draft while the camera moves) still lines up with the wireframe drawn
     // over it. A null image draws nothing -- the main window's quadrant.
     void setBackdropImage(QImage image);
-    [[nodiscard]] bool hasBackdropImage() const noexcept { return !m_backdrop.isNull(); }
     // Overlay toggles for the volume view; the quadrant keeps both on.
     void setLevelBoxesVisible(bool visible);
     void setDomainOutlineVisible(bool visible);
@@ -63,6 +62,9 @@ public:
 signals:
     void cameraChanged();
     void interactionEnded();
+    // The viewport changed size, so a backdrop rendered for the old one is
+    // now being stretched: whoever renders it wants to render it again.
+    void viewResized();
 
 protected:
     void paintEvent(QPaintEvent* event) override;

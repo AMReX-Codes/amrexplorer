@@ -65,6 +65,9 @@ public:
     }
 
     std::atomic<bool> failing{false};
+    // Renders one level coarser than asked and says so in the frame, the way
+    // a server under its own cache pressure does.
+    std::atomic<bool> sessionFallback{false};
     std::atomic<int> delayMs{0};
     std::atomic<int> requests{0};
     std::mutex requestsMutex;
@@ -109,9 +112,13 @@ public:
         throw std::logic_error("not used");
     }
     [[nodiscard]] std::optional<amrvis::ValueRange> requestRange(
-        const amrvis::RangeRequest&, amrvis::StopToken) override
+        const amrvis::RangeRequest& request, amrvis::StopToken) override
     {
-        return amrvis::ValueRange{0.0, 10.0};
+        // Level-dependent on purpose: level 0 spans to 10, level 1 to 20, so
+        // a range resolved for the level that was asked for instead of the
+        // one that rendered shows up as the wrong maximum.
+        return amrvis::ValueRange{
+            0.0, 10.0 * static_cast<double>(request.maximumLevel + 1)};
     }
     [[nodiscard]] bool rangeAvailable(
         const amrvis::RangeRequest&) const noexcept override
@@ -153,6 +160,10 @@ public:
         frame.usedRange = request.range.value_or(amrvis::VolumeRange{0.0, 1.0, false});
         frame.metrics.gridDims = {2, 2, 2};
         frame.metrics.coveredVoxels = 8;
+        if (sessionFallback && request.maximumLevel > 0) {
+            frame.cacheFallbackFromLevel = request.maximumLevel;
+            frame.cacheFallbackToLevel = 0;
+        }
         return frame;
     }
     [[nodiscard]] amrvis::CacheMetrics cacheMetrics() const override
@@ -414,6 +425,102 @@ int main(int argc, char** argv)
         shuttingDown = false;
         controller.closeWindow();
         require(!controller.windowOpen(), "closeWindow left the window open");
+    }
+
+    // A camera that never stops moving still gets drafts. The render timer
+    // is a throttle, not a debounce: events arriving faster than its interval
+    // must not keep rearming it, or a drag renders nothing at all until the
+    // mouse is released and the stale backdrop sits under a moving wireframe.
+    {
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the first frame was not displayed");
+        const auto before = session->requests.load();
+        require(volumeWindow() != nullptr, "no volume window on screen");
+        // Faster than the throttle, and never ended: exactly a drag in
+        // progress. interactionEnded is deliberately not emitted.
+        QTimer moving;
+        QObject::connect(&moving, &QTimer::timeout, &application, [] {
+            if (auto* window = volumeWindow()) {
+                emit window->cameraChanged();
+            }
+        });
+        moving.start(10);
+        waitFor(application, [&] { return session->requests >= before + 2; },
+            "a continuously moving camera rendered no drafts");
+        moving.stop();
+        require(session->requestsSoFar().back().samplesPerVoxel == 1,
+            "the frames rendered while the camera moved were not drafts");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the drafts did not finish");
+        controller.closeWindow();
+    }
+
+    // cancel() disarms the settle timer. Left armed it fires after the
+    // cancellation and schedules a render of whatever dataset is published by
+    // then -- the outgoing sequence frame's, under the incoming one's
+    // geometry.
+    {
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the first frame was not displayed");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the opening render did not finish");
+        require(volumeWindow() != nullptr, "no volume window on screen");
+        // Arms the settle timer, then cancels well inside its interval.
+        emit volumeWindow()->cameraChanged();
+        waitFor(application,
+            [&] { return !controller.renderInFlight() && session->requests >= 2; },
+            "the camera move did not render a draft");
+        const auto after = session->requests.load();
+        controller.cancel();
+        // Longer than the settle interval: nothing may start on its own.
+        settle(application, 400);
+        require(session->requests == after,
+            "the settle timer started a render after cancel()");
+        controller.closeWindow();
+    }
+
+    // A Level range with a fallback: the session renders coarser than it was
+    // asked to, so the range has to be re-read for the level that actually
+    // rendered. Colouring level 0's pixels with level 1's statistics is the
+    // defect this guards -- the frame would claim a maximum of 20 when
+    // nothing it drew came from a level that reaches past 10.
+    {
+        session->sessionFallback = true;
+        rangeSelection.mode = amrvis::RangeMode::Level;
+        rangeSelection.userRange.reset();
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        // The fake records every render of the whole run, so the count this
+        // block cares about is the delta, not the size.
+        const auto rendersBefore = session->requests.load();
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the frame after the fallback was not displayed");
+        require(session->requests == rendersBefore + 2,
+            "the one displayed frame did not cost exactly two renders: the "
+            "level asked for, then the level the fallback landed on");
+        const auto rendered = session->requestsSoFar();
+        const auto& last = rendered.back();
+        require(last.maximumLevel == 0 && last.range.has_value()
+                && last.range->maximum < 15.0,
+            "the repeated render did not re-resolve the range at level 0");
+        require(controller.lastFrame().usedRange.maximum < 15.0,
+            "the displayed frame kept the finer level's range");
+        rangeSelection.mode = amrvis::RangeMode::User;
+        rangeSelection.userRange = std::pair{0.0, 4.0};
+        session->sessionFallback = false;
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the fallback render did not finish");
+        controller.closeWindow();
     }
     return 0;
 }

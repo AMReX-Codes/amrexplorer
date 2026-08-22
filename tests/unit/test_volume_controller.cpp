@@ -323,7 +323,8 @@ int main(int argc, char** argv)
                 && requests.front().range->minimum == 0.0
                 && requests.front().range->maximum == 4.0
                 && requests.front().samplesPerVoxel == 2
-                && requests.front().transfer.colors.size() == 253
+                && requests.front().transfer.colors.size()
+                    == static_cast<std::size_t>(amrvis::Palette::colorSlots)
                 && requests.front().maximumLevel == 1,
             "the opening request was not built from the view and the controls");
         require(controller.lastFrame().width == requests.front().outputSize[0]
@@ -371,6 +372,7 @@ int main(int argc, char** argv)
         // result is dropped as stale, never displayed.
         session->delayMs = 150;
         const auto framesBefore = observed.frames;
+        const auto staleBefore = observed.stale;
         controller.refresh();
         waitFor(application, [&] { return controller.renderInFlight(); },
             "the render before reset did not start");
@@ -378,7 +380,8 @@ int main(int argc, char** argv)
         require(!controller.windowOpen(), "reset did not close the window");
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the render did not end after reset");
-        require(observed.frames == framesBefore && observed.stale >= 1,
+        require(observed.frames == framesBefore
+                && observed.stale == staleBefore + 1,
             "a late result was displayed after reset");
         require(controller.lastFrame().pixels.empty(),
             "reset did not drop the last frame");
@@ -404,6 +407,7 @@ int main(int argc, char** argv)
         waitFor(application, [&] { return observed.frames == 1; },
             "the window did not recover after a failed render");
         session->delayMs = 150;
+        const auto staleBeforeCancel = observed.stale;
         controller.refresh();
         waitFor(application, [&] { return controller.renderInFlight(); },
             "the render before cancel did not start");
@@ -411,17 +415,23 @@ int main(int argc, char** argv)
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the cancelled render did not end");
         require(observed.failures.size() == 1 && observed.frames == 1
-                && observed.stale >= 1 && controller.windowOpen(),
+                && observed.stale == staleBeforeCancel + 1
+                && controller.windowOpen(),
             "a cancelled render was reported or displayed");
-        session->delayMs = 0;
         // Shutdown: a result arriving after the host began closing is dropped
-        // without touching the window.
+        // without touching the window. The render has to be in flight before
+        // shuttingDown is set -- refresh() only arms the throttle, so waiting
+        // on "no render running" would be satisfied before one ever started
+        // and the drop path would never be taken.
         controller.refresh();
+        waitFor(application, [&] { return controller.renderInFlight(); },
+            "the render before shutdown did not start");
         shuttingDown = true;
         waitFor(application, [&] { return observed.activity == 0
                                        && !controller.renderInFlight(); },
             "the render during shutdown did not end");
         require(observed.frames == 1, "a frame was displayed during shutdown");
+        session->delayMs = 0;
         shuttingDown = false;
         controller.closeWindow();
         require(!controller.windowOpen(), "closeWindow left the window open");
@@ -527,6 +537,43 @@ int main(int argc, char** argv)
         session->sessionFallback = false;
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the fallback render did not finish");
+        controller.closeWindow();
+    }
+
+    // A discrete change renders in full, and a resize that does not change
+    // the size renders not at all.
+    {
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the first frame was not displayed");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the opening render did not finish");
+        require(volumeWindow() != nullptr, "no volume window on screen");
+        const auto full = session->requestsSoFar().back().outputSize;
+
+        // The alpha checkbox is one completed choice, not a drag: it must not
+        // come back as a half-size single-sample draft.
+        auto before = session->requests.load();
+        emit volumeWindow()->paletteAlphaChanged();
+        waitFor(application, [&] { return session->requests == before + 1; },
+            "the alpha toggle did not render");
+        const auto toggled = session->requestsSoFar().back();
+        require(toggled.samplesPerVoxel == 2 && toggled.outputSize == full,
+            "a discrete alpha toggle was rendered as an interaction draft");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the alpha toggle render did not finish");
+
+        // A resize signal that leaves the view the same size is the dock
+        // relaying itself out -- showFrame writes a label in it -- and must
+        // not schedule anything, or displaying a frame feeds the next render.
+        before = session->requests.load();
+        emit volumeWindow()->viewResized();
+        settle(application, 400);
+        require(session->requests == before,
+            "a resize to the same size scheduled a render");
         controller.closeWindow();
     }
 

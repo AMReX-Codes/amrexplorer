@@ -68,7 +68,11 @@ signals:
     // changed size, so the frame drawn in it is being stretched.
     void cameraChanged();
     void interactionEnded();
+    // rampChanged is the sliders, which arrive continuously while dragged;
+    // paletteAlphaChanged is the checkbox, one discrete choice like the
+    // quality combo.
     void rampChanged();
+    void paletteAlphaChanged();
     void qualityChanged();
     void viewResized();
 

@@ -4,7 +4,6 @@
 
 #include <QTimer>
 
-#include <amrexplorer/remote/Connection.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
 #include <filesystem>

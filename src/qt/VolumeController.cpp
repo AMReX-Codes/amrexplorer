@@ -85,7 +85,6 @@ void VolumeController::showWindow(QWidget* parent)
     // the main window without being modal). Deleted on close; the pointer
     // is a QPointer so a close from the title bar clears it.
     auto* window = new VolumeWindow(parent);
-    window->setWindowFlag(Qt::Window, true);
     m_window = window;
     m_frameShown = false;
     // A camera move, a resize and a dragged opacity slider all arrive far
@@ -100,6 +99,16 @@ void VolumeController::showWindow(QWidget* parent)
     connect(window, &VolumeWindow::cameraChanged, this, beginInteraction);
     connect(window, &VolumeWindow::rampChanged, this, beginInteraction);
     connect(window, &VolumeWindow::viewResized, this, [this, beginInteraction] {
+        if (!m_window) {
+            return;
+        }
+        // Same size: this is the dock relaying itself out, which showFrame and
+        // the "Rendering..." label can both cause, not the user resizing. The
+        // frame in the view still matches the view, so rendering again would
+        // be a loop fed by its own output.
+        if (m_window->viewSize() == m_lastRenderViewSize) {
+            return;
+        }
         // Until the first frame is up nothing is being stretched: these are
         // the window's own opening layout passes, and drafting them would
         // open on a half-size frame instead of the view-sized one.
@@ -109,28 +118,21 @@ void VolumeController::showWindow(QWidget* parent)
         }
         beginInteraction();
     });
-    connect(window, &VolumeWindow::interactionEnded, this, [this] {
+    // The counterpart: a change that is already complete -- a drag's release,
+    // the quality combo, the alpha checkbox -- renders in full at once.
+    const auto endInteraction = [this] {
         m_settle->stop();
         m_interacting = false;
         scheduleRender();
-    });
-    // The quality combo is a single discrete choice: render it in full.
-    connect(window, &VolumeWindow::qualityChanged, this, [this] {
-        m_settle->stop();
-        m_interacting = false;
-        scheduleRender();
-    });
-    connect(window, &QObject::destroyed, this, [this] {
-        // A close cancels the render in flight; its result would go nowhere.
-        ++m_generation;
-        m_stopSource.request_stop();
-        m_stopSource = StopSource{};
-        m_rerun = false;
-        m_debounce->stop();
-        m_settle->stop();
-        m_interacting = false;
-        m_frameShown = false;
-    });
+    };
+    connect(window, &VolumeWindow::interactionEnded, this, endInteraction);
+    connect(window, &VolumeWindow::qualityChanged, this, endInteraction);
+    connect(window, &VolumeWindow::paletteAlphaChanged, this, endInteraction);
+    // A close from the title bar: closeWindow drops this connection before
+    // closing, so reaching here means the user closed the window and nothing
+    // else has handled it.
+    m_windowDestroyed = connect(window, &QObject::destroyed, this,
+        [this] { forgetWindow(); });
     pushGeometry();
     window->show();
     window->raise();
@@ -143,8 +145,22 @@ void VolumeController::closeWindow()
     if (m_window) {
         auto* window = m_window.data();
         m_window = nullptr;
+        // Here, not in the window's destroyed handler: WA_DeleteOnClose only
+        // defers the delete, so that handler runs a turn later. Until it does,
+        // the render in flight still matches m_generation -- and a window
+        // opened in between would be handed the closed window's frame, then
+        // have its own scheduled render disarmed by the late handler.
+        QObject::disconnect(m_windowDestroyed);
+        forgetWindow();
         window->close();
     }
+}
+
+void VolumeController::forgetWindow()
+{
+    cancel();
+    m_frameShown = false;
+    m_lastRenderViewSize = QSize{};
 }
 
 bool VolumeController::windowOpen() const noexcept
@@ -161,13 +177,18 @@ void VolumeController::pushGeometry()
     if (dataset) {
         m_window->setDatasetGeometry(dataset->metadata());
     }
-    if (m_hooks.palette) {
+    pushPalette();
+    slicePositionsChanged();
+    slicePlanesVisibilityChanged();
+}
+
+void VolumeController::pushPalette()
+{
+    if (m_window && m_hooks.palette) {
         const auto& palette = m_hooks.palette();
         m_window->setColorPalette(&palette);
         m_window->setPaletteHasAlpha(palette.hasAlphaRamp());
     }
-    slicePositionsChanged();
-    slicePlanesVisibilityChanged();
 }
 
 void VolumeController::configureForDataset()
@@ -188,7 +209,11 @@ void VolumeController::configureForDataset()
     cancel();
     pushGeometry();
     m_window->clearFrame();
+    // The frame just cleared belonged to the outgoing dataset; lastFrame()
+    // would otherwise keep reporting it as this one's.
+    m_lastFrame = VolumeFrame{};
     m_frameShown = false;
+    m_lastRenderViewSize = QSize{};
     scheduleRender();
 }
 
@@ -197,11 +222,7 @@ void VolumeController::refresh()
     if (!m_window) {
         return;
     }
-    if (m_hooks.palette) {
-        const auto& palette = m_hooks.palette();
-        m_window->setColorPalette(&palette);
-        m_window->setPaletteHasAlpha(palette.hasAlphaRamp());
-    }
+    pushPalette();
     scheduleRender();
 }
 
@@ -277,6 +298,7 @@ void VolumeController::startRender()
         ? m_hooks.rangeSelection() : RangeController::Selection{};
     const auto quality = m_window->quality();
     const auto viewSize = m_window->viewSize();
+    m_lastRenderViewSize = viewSize;
 
     // The request, less its range: that is resolved on the worker, since
     // File/Level statistics may be a round trip away on a remote session.

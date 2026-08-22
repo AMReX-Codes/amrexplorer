@@ -372,7 +372,12 @@ void IsoWidget::setViewAngles(double azimuth, double elevation)
     m_camera.azimuth = azimuth;
     m_camera.elevation = elevation;
     update();
+    // Both, in this order: the camera moved, and the move is already over. A
+    // preset has no mouse release to end it, so without the second signal a
+    // consumer that drafts during interaction would draft this and only reach
+    // full quality when its own settle timer fired.
     emit cameraChanged();
+    emit interactionEnded();
 }
 
 void IsoWidget::setBackdropImage(QImage image)

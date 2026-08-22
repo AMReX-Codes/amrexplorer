@@ -9,8 +9,10 @@
 #include <amrexplorer/pipeline/VolumePipeline.hpp>
 #include <amrexplorer/render2d/Palette.hpp>
 
+#include <QMetaObject>
 #include <QObject>
 #include <QPointer>
+#include <QSize>
 #include <QString>
 
 #include <array>
@@ -106,6 +108,10 @@ private:
     void scheduleRender();
     void startRender();
     void pushGeometry();
+    void pushPalette();
+    // The window is going away, closed here or by the user: abandon the render
+    // in flight and forget that a frame was ever shown in it.
+    void forgetWindow();
     [[nodiscard]] QString describe(
         const VolumeDisplayResult& result, const QString& fieldName) const;
 
@@ -114,6 +120,13 @@ private:
     QPointer<VolumeWindow> m_window;
     QTimer* m_debounce = nullptr;
     QTimer* m_settle = nullptr;
+    // Kept so closeWindow can drop the window's destroyed handler: that runs a
+    // turn later, when m_window may already be a newly opened window.
+    QMetaObject::Connection m_windowDestroyed;
+    // The view size the last render was built for. A resize to the same size
+    // is layout churn, not a resize, and rendering for it would be a loop fed
+    // by its own output (showFrame writes a label in the same dock).
+    QSize m_lastRenderViewSize;
     StopSource m_stopSource;
     std::uint64_t m_generation = 0;
     bool m_inFlight = false;

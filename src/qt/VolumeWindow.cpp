@@ -8,10 +8,9 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QSlider>
+#include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QWidget>
-
-#include <algorithm>
 
 namespace amrvis::qt {
 
@@ -126,7 +125,8 @@ void VolumeWindow::buildControls()
         updateLabels();
         emit rampChanged();
     });
-    connect(m_paletteAlpha, &QCheckBox::toggled, this, [this] { emit rampChanged(); });
+    connect(m_paletteAlpha, &QCheckBox::toggled, this,
+        [this] { emit paletteAlphaChanged(); });
     connect(m_qualityCombo, qOverload<int>(&QComboBox::currentIndexChanged), this,
         [this](int) { emit qualityChanged(); });
     connect(m_boxesCheck, &QCheckBox::toggled, this,
@@ -200,6 +200,12 @@ QSize VolumeWindow::viewSize() const
 
 OpacityRamp VolumeWindow::ramp() const
 {
+    // Every field comes from a slider in [0, 100], and buildControls keeps
+    // low <= high by pushing the other along. makeVolumeTransferFunction
+    // throws on a non-finite or inverted window, so anything that lets these
+    // controls produce one -- a text entry, a restored setting -- has to
+    // resolve it here rather than hand it to the render.
+
     OpacityRamp ramp;
     ramp.lowThreshold = m_lowSlider->value() / 100.0;
     ramp.highThreshold = m_highSlider->value() / 100.0;

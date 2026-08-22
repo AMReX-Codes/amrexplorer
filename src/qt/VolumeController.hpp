@@ -63,6 +63,12 @@ public:
         // True once application shutdown began: late results are dropped
         // without touching the GUI.
         std::function<bool()> isShuttingDown;
+        // The range the colour bar is showing, or nullopt before any slice
+        // has one. Pairs with rangeSelection: in the Visible mode the range
+        // is whatever the slices turned out to span, which only the host
+        // knows -- resolving the volume's own would colour the two views of
+        // one field by different scales.
+        std::function<std::optional<std::pair<double, double>>()> displayRange;
     };
 
     VolumeController(Hooks hooks, QObject* parent = nullptr);

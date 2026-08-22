@@ -495,6 +495,18 @@ MainWindow::MainWindow(QWidget* parent)
             [this] { return m_slicePosition3d; },
             [this] { return m_slicePlanesAction->isChecked(); },
             [this] { return m_closing; },
+            [this]() -> std::optional<std::pair<double, double>> {
+                // The active view's display range is what
+                // syncActiveViewColorControls feeds the colour bar, and in 3-D
+                // the shared-range sync has already written the union across
+                // the panels into every one of them.
+                if (!m_activeView || !m_activeView->plane
+                    || m_activeView->plane->width <= 0) {
+                    return std::nullopt;
+                }
+                return std::pair{m_activeView->displayMinimum,
+                    m_activeView->displayMaximum};
+            },
         },
         this);
     connect(m_volumeController, &VolumeController::renderActivityChanged, this,

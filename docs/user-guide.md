@@ -301,11 +301,8 @@ rendered volume.
 
 The window follows the main window: the field, the AMR level, the range mode
 and its User min/max, the logarithmic mapping and the palette are the ones
-selected there. With a File, Level or User range the volume's colours agree
-with the slices and the colour bar. In the **Visible** mode they do not: the
-volume takes its range from the whole sampled grid while the slices and the
-colour bar take theirs from the visible slice, so the same colour can stand
-for different values in the two views. Its own controls set the opacity:
+selected there, so the volume's colours agree with the slices and the colour
+bar. Its own controls set the opacity:
 
 - **Opacity from / to** window the colour range: the opacity ramps linearly
   from *from* to *to*, and everything outside that window -- below *from* and
@@ -323,16 +320,15 @@ for different values in the two views. Its own controls set the opacity:
   cell along each ray and how many cells the field is sampled into (Draft
   128^3, Normal 256^3, High 384^3). A field finer than that is sampled at the
   coarser pitch; a level coarser than it is drawn at its own resolution. On a
-  remote plotfile the grid is also capped by the server's
-  `--max-volume-voxels`, which defaults to 256^3 -- so **High** gives the
-  Normal grid unless the server was started with a higher cap.
+  remote plotfile the server sets its own ceiling on this, so **High** may look
+  no different from **Normal** unless the server allows more (see [Remote
+  datasets](#remote-datasets)).
 
 While the camera moves the window shows quick half-resolution drafts and
-renders the full frame once it settles. The field is sampled once per field,
-level and quality and kept when it fits the volume cache, so rotating only
-re-casts; a grid too big for that cache (`--volume-cache-mib` on a server,
-`AMREXPLORER_CACHE_SIZE_MB` locally) is rendered and discarded, and rotating
-resamples it. The status line under the controls reports the range in use, the
+renders the full frame once it settles. Rotating and zooming reuse the field
+already read, so they are much faster than the first frame; a field too large
+to keep is re-read each time, which you notice as every view taking as long as
+the first. The status line under the controls reports the range in use, the
 sampled grid and the render time.
 
 Volume rendering works for remote plotfiles too (see [Remote

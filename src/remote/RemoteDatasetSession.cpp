@@ -145,14 +145,19 @@ VolumeFrame RemoteDatasetSession::renderVolume(
     // capability the caller asked for and did not get -- losing the session
     // and every other open dataset over it is not the answer. The local
     // session refuses the second case the same way.
-    if (!supportsVolumeRendering()) {
-        throw std::invalid_argument(
-            "volume rendering requires a 3-D plotfile with physical geometry");
-    }
+    //
+    // The server first, because supportsVolumeRendering() below is the *whole*
+    // capability and folds the protocol version in: asking it first would
+    // answer a 1.1 server with the dataset's message and send the user to
+    // look at their plotfile.
     if (!m_connection->supportsVolumeRendering()) {
         throw std::runtime_error(
             "the remote server predates volume rendering (protocol 1.2); "
             "install a current amrexplorer-server");
+    }
+    if (!supportsVolumeRendering()) {
+        throw std::invalid_argument(
+            "volume rendering requires a 3-D plotfile with physical geometry");
     }
     validateSessionVolumeRequest(m_metadata, m_id, request);
     return refusingInvalidResponses(*m_connection, [&] {

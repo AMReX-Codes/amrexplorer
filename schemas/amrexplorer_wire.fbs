@@ -387,8 +387,12 @@ table RenderedFrameResponse {
   blocks_read:ulong (id: 13);
   cache_hits:ulong (id: 14);
   payload_bytes_read:ulong (id: 15);
-  cache_fallback_from_level:int (id: 16);
-  cache_fallback_to_level:int (id: 17);
+  // Defaulted to the "no fallback" sentinel, not to 0: a response that
+  // leaves them unset would otherwise decode as a fallback from level 0 to
+  // level 0, which the client's own validator refuses as impossible -- and
+  // that refusal costs the whole connection.
+  cache_fallback_from_level:int = -1 (id: 16);
+  cache_fallback_to_level:int = -1 (id: 17);
   cache:CacheState (id: 18);
 }
 

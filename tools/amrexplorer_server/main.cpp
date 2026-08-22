@@ -44,8 +44,10 @@ void printUsage(std::ostream& output)
         << "  --threads COUNT      worker threads; 0 selects hardware concurrency\n"
         << "  --max-frame-mib MIB  maximum negotiated frame size\n"
         << "  --max-datasets COUNT maximum open datasets per connection\n"
-        << "  --max-volume-voxels N maximum voxels sampled per volume render\n"
-        << "  --volume-cache-mib MIB per-dataset cache of sampled volume grids\n"
+        << "  --max-volume-voxels N\n"
+        << "                       maximum voxels sampled per volume render\n"
+        << "  --volume-cache-mib MIB\n"
+        << "                       per-dataset cache of sampled volume grids\n"
         << "  --write-stall-timeout-seconds SECONDS\n"
         << "                       disconnect after no write progress; also the\n"
         << "                       fixed grace in the whole-response budget\n"
@@ -241,12 +243,11 @@ int main(int argc, char* argv[])
                 const auto mebibytes
                     = parseUnsigned<std::uint32_t>(value, "--volume-cache-mib");
                 constexpr std::uint64_t oneMebibyte = 1024U * 1024U;
-                // Bounded above as well as below, like every other size flag.
-                // A budget the cache can never reach means it never evicts,
-                // so the server grows until the OOM killer takes it with
-                // nothing pointing at the flag that asked for it. The cap is
-                // generous: 64 GiB is 256 grids at the largest voxel budget.
-                constexpr std::uint32_t maximumMebibytes = 64U * 1024U;
+                // Bounded above as well as below, like every other size
+                // flag, against the same cap the server applies to a
+                // directly-set ServerOptions.
+                constexpr std::uint64_t maximumMebibytes
+                    = amrvis::remote::maximumVolumeGridCacheBytes / oneMebibyte;
                 if (mebibytes == 0 || mebibytes > maximumMebibytes) {
                     throw std::invalid_argument(
                         "--volume-cache-mib is outside its allowed range");

@@ -206,6 +206,40 @@ int main(int argc, char* argv[])
                 "the server's voxel cap did not clamp the sampled grid");
         }
 
+        // --- the operator's grid-cache cap is not the client's to raise ---
+        // The server bounds the sampled-grid pool with --volume-cache-mib. A
+        // client's own budget applies when it is smaller, but a
+        // SetCacheBudgetRequest asking for more must not move it: that would
+        // put the server's memory bound in the peer's hands.
+        {
+            ServerOptions bounded;
+            bounded.workerCount = 1;
+            bounded.volumeGridCacheBytes = 64;   // below any grid here
+            Server boundedServer(bounded);
+            ServerThread boundedRunning(boundedServer);
+            auto boundedConnection = std::make_shared<Connection>("127.0.0.1",
+                boundedServer.port(),
+                ConnectionOptions{.sessionToken = boundedServer.token()});
+            auto boundedSession = RemoteDatasetSession::open(
+                boundedConnection, path, 16ULL << 20);
+            const auto request = requestFor(*boundedSession);
+            // The grid outsizes the pool, so it is never served from cache
+            // however many times it is asked for.
+            static_cast<void>(boundedSession->renderVolume(request));
+            const auto again = boundedSession->renderVolume(request);
+            require(!again.metrics.gridFromCache,
+                "a grid over the server's cap was cached anyway");
+            // Asking for a gigabyte does not change that.
+            require(boundedSession->setCacheBudget(1ULL << 30),
+                "the remote cache budget update was refused");
+            static_cast<void>(boundedSession->renderVolume(request));
+            const auto afterRaise = boundedSession->renderVolume(request);
+            require(!afterRaise.metrics.gridFromCache,
+                "a client raised the server's grid-cache bound");
+            require(boundedConnection->connected(),
+                "the budget exchange cost the connection");
+        }
+
         // --- a 1.1 client is told volume rendering needs 1.2 ------------
         {
             auto socket = connectTo("127.0.0.1", server.port());

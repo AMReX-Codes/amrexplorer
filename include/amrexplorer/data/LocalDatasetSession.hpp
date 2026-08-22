@@ -90,15 +90,15 @@ public:
     // it is false only while a pinned grid still exceeds it.
     [[nodiscard]] bool setVolumeGridCacheBudget(std::uint64_t bytes);
 
-    // The sampled-grid pool on its own. cacheMetrics() reports the block
-    // pool, because CacheMetrics carries one budget and one hit rate and the
-    // remote snapshot asserts that budget is the one setCacheBudget was
-    // given; until it can carry both, this is how the grid pool is observed.
     // The block pool alone. setCacheBudget deliberately moves both pools,
     // which is what a user setting one number wants -- but a server applying
     // a *client's* requested budget must not let it raise the sampled-grid
     // cache past the limit the operator set with --volume-cache-mib.
     [[nodiscard]] bool setBlockCacheBudget(std::uint64_t bytes);
+    // The sampled-grid pool on its own. cacheMetrics() reports the block
+    // pool, because CacheMetrics carries one budget and one hit rate and the
+    // remote snapshot asserts that budget is the one setCacheBudget was
+    // given; until it can carry both, this is how the grid pool is observed.
     [[nodiscard]] CacheMetrics volumeGridCacheMetrics() const;
     [[nodiscard]] CacheMetrics cacheMetrics() const override;
     [[nodiscard]] bool setCacheBudget(std::uint64_t bytes) override;

@@ -623,8 +623,13 @@ private:
             dataset = std::make_shared<LocalDatasetSession>(
                 resolveDatasetPath(request->path), id,
                 request->cache_budget_bytes, cancellation);
+            // A ceiling, not a setting: the client's own budget applies when
+            // it is smaller, so a memory-tight peer can still ask for less
+            // than the operator allows. Raising it past the cap is what the
+            // block-only setter below prevents.
             static_cast<void>(dataset->setVolumeGridCacheBudget(
-                m_options.volumeGridCacheBytes));
+                std::min<std::uint64_t>(m_options.volumeGridCacheBytes,
+                    request->cache_budget_bytes)));
             OpenedDataset opened;
             opened.id = id;
             opened.catalog = dataset->metadata();
@@ -954,12 +959,16 @@ private:
             throw std::invalid_argument("cache-budget payload is missing");
         }
         const auto dataset = requireDataset(DatasetId{request->dataset_id});
-        // The block pool only. setCacheBudget moves both pools, which is what
-        // a local user setting one number wants -- but here the number comes
-        // from the peer, and letting it raise the sampled-grid cache would
-        // put the memory bound the operator set with --volume-cache-mib in
-        // the client's hands.
+        // The block pool takes the client's number as given; the grid pool
+        // takes it only as far down as it goes. setCacheBudget would move
+        // both without a ceiling, putting the bound the operator set with
+        // --volume-cache-mib in the peer's hands -- but refusing to move the
+        // grid pool at all would leave a client unable to ask for less than
+        // the operator allows, which is the one direction it should have.
         static_cast<void>(dataset->setBlockCacheBudget(request->budget_bytes));
+        static_cast<void>(dataset->setVolumeGridCacheBudget(
+            std::min<std::uint64_t>(m_options.volumeGridCacheBytes,
+                request->budget_bytes)));
         sendCache(envelope.request_id, *dataset);
     }
 
@@ -1328,6 +1337,11 @@ private:
         }
         options.maximumVolumeVoxels = std::min(
             options.maximumVolumeVoxels, maxVolumeVoxelBudget);
+        // Capped here as well as in the CLI parser, so an embedder that sets
+        // ServerOptions directly gets the bound too. A budget the cache can
+        // never fill never evicts, and the server grows until it is killed.
+        options.volumeGridCacheBytes = std::min<std::uint64_t>(
+            options.volumeGridCacheBytes, maximumVolumeGridCacheBytes);
         options.workerCount = resolveWorkerCount(options.workerCount);
         if (options.sessionToken.empty()) {
             options.sessionToken = generateSessionToken();

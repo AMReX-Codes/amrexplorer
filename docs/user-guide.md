@@ -301,8 +301,12 @@ rendered volume.
 
 The window follows the main window: the field, the AMR level, the range mode
 and its User min/max, the logarithmic mapping and the palette are the ones
-selected there, so the volume's colours agree with the slices and the colour
-bar. Its own controls set the opacity:
+selected there. With a **File**, **Level** or **User** range the volume's
+colours match the slices and the colour bar. **Visible** is the exception: it
+scales each view to what that view shows, and the volume shows the whole
+domain while the slices show three planes through it -- so the same colour can
+mean different values in the two. Pick File or Level when you need them to
+match. Its own controls set the opacity:
 
 - **Opacity from / to** window the colour range: the opacity ramps linearly
   from *from* to *to*, and everything outside that window -- below *from* and

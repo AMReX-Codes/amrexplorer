@@ -11,7 +11,6 @@
 #include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
-#include <cmath>
 #include <exception>
 #include <utility>
 
@@ -402,30 +401,20 @@ void VolumeController::startRender()
                 m_window->showRendering(false);
             }
         });
-    // The Visible mode resolves to what the data in view spans, and for the
-    // slices that is the slice planes -- so the volume resolving its own from
-    // the whole sampled grid would colour the same field by a different scale
-    // than the colour bar beside it describes. The range the colour bar shows
-    // is passed instead, as the plain pair it already is.
-    auto choiceMode = rangeSelection.mode;
-    auto choiceRange = rangeSelection.userRange;
-    if (choiceMode == RangeMode::Visible && m_hooks.displayRange) {
-        const auto shown = m_hooks.displayRange();
-        // Only a usable pair: resolveVolumeRange refuses one without positive
-        // extent, and falling back to the volume's own range shows something
-        // rather than failing the render.
-        if (shown && std::isfinite(shown->first) && std::isfinite(shown->second)
-            && shown->first < shown->second) {
-            choiceMode = RangeMode::User;
-            choiceRange = shown;
-        }
-    }
     // The choice, not a range resolved once here: under cache pressure the
     // pipeline lowers the level, and a Level range read at the level asked
     // for would colour and label pixels no part of that level produced. The
     // overload taking it re-resolves per attempt (VolumePipeline.hpp).
-    const VolumeRangeChoice rangeChoice{
-        choiceMode, choiceRange, rangeSelection.logarithmic};
+    //
+    // The Visible mode is left to the renderer, which resolves it from the
+    // grid it sampled. That is a different span than the slices and the colour
+    // bar show, and the guide says so. Taking the colour bar's range instead
+    // needs the host to publish it beside the mode it belongs to, keyed to the
+    // field and level it was measured for -- fetching it separately means
+    // rebuilding that key by hand and getting it wrong at the edges, which is
+    // why the attempt was withdrawn. See agent-notes/volume-docs-follow-ups.md.
+    const VolumeRangeChoice rangeChoice{rangeSelection.mode,
+        rangeSelection.userRange, rangeSelection.logarithmic};
     watcher->setFuture(QtConcurrent::run(
         [dataset, request = std::move(request), rangeChoice,
             cancellation]() mutable {

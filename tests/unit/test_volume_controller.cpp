@@ -267,7 +267,6 @@ int main(int argc, char** argv)
     auto session = std::make_shared<FakeSession>();
     std::shared_ptr<amrvis::DatasetSession> dataset = session;
     bool shuttingDown = false;
-    std::optional<std::pair<double, double>> displayRange;
     amrvis::qt::RangeController::Selection rangeSelection;
     rangeSelection.mode = amrvis::RangeMode::User;
     rangeSelection.userRange = std::pair{0.0, 4.0};
@@ -283,7 +282,6 @@ int main(int argc, char** argv)
             [] { return std::array<double, 3>{0.5, 1.0, 1.5}; },
             [] { return true; },
             [&shuttingDown] { return shuttingDown; },
-            [&displayRange] { return displayRange; },
         };
     };
 
@@ -580,42 +578,6 @@ int main(int argc, char** argv)
         settle(application, 400);
         require(session->requests == before,
             "a resize to the same size scheduled a render");
-        controller.closeWindow();
-    }
-
-    // A Visible range comes from the host, not from the volume's own grid: the
-    // slices and the colour bar span the slice planes, so resolving the whole
-    // sampled grid here would colour one field by two different scales.
-    {
-        rangeSelection.mode = amrvis::RangeMode::Visible;
-        rangeSelection.userRange.reset();
-        displayRange = std::pair{2.0, 7.0};
-        VolumeController controller(hooks());
-        Observed observed;
-        observe(controller, observed);
-        const auto before = session->requests.load();
-        controller.showWindow(nullptr);
-        waitFor(application, [&] { return session->requests == before + 1; },
-            "the Visible render did not run");
-        const auto shown = session->requestsSoFar().back();
-        require(shown.range.has_value() && shown.range->minimum == 2.0
-                && shown.range->maximum == 7.0,
-            "a Visible render did not take the range the colour bar shows");
-
-        // With no range to take -- no slice rendered yet -- the renderer is
-        // left to resolve its own rather than the render failing.
-        displayRange.reset();
-        const auto beforeFallback = session->requests.load();
-        controller.refresh();
-        waitFor(application,
-            [&] { return session->requests == beforeFallback + 1; },
-            "the fallback render did not run");
-        require(!session->requestsSoFar().back().range.has_value(),
-            "a Visible render without a shown range did not defer to the renderer");
-        waitFor(application, [&] { return !controller.renderInFlight(); },
-            "the Visible render did not finish");
-        rangeSelection.mode = amrvis::RangeMode::User;
-        rangeSelection.userRange = std::pair{0.0, 4.0};
         controller.closeWindow();
     }
 

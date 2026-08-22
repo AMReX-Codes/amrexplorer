@@ -7,6 +7,7 @@
 #include <QComboBox>
 #include <QDockWidget>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QImage>
 #include <QKeySequence>
@@ -65,6 +66,18 @@ void VolumeWindow::exportImage()
         path.chop(4);
     }
     path += QStringLiteral(".png");
+    // The dialog asked about the name as typed, so it did not ask about this
+    // one: a typed "shot" beside an existing shot.png passes its own existence
+    // check and would then be overwritten without a word. Asked here, after
+    // the name is final. (setDefaultSuffix is not the fix -- it only fills an
+    // empty suffix, so it would leave "shot.jpg" alone, and Qt applies it in
+    // selectedFiles(), after a native dialog has already prompted.)
+    if (QFileInfo::exists(path)
+        && QMessageBox::question(this, tr("Export Volume Image"),
+               tr("%1 already exists. Overwrite it?").arg(path))
+            != QMessageBox::Yes) {
+        return;
+    }
     // Not grab(): that draws the widget's children, and the XY/XZ/YZ preset
     // buttons are children parked over the render, so they would be baked
     // into the picture. This renders the frame and the overlays only.

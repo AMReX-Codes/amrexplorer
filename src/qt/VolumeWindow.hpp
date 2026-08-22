@@ -62,13 +62,6 @@ public:
     void clearFrame();
     void showRendering(bool rendering);
 
-    // The view as drawn -- the frame and the overlays, without the preset
-    // buttons parked over them -- at `devicePixelRatio`. Empty when there is no
-    // frame to draw, which the caller should refuse rather than write out.
-    // Used by File > Export Image..., and the seam a sequence export would
-    // render each frame through.
-    [[nodiscard]] QImage renderedView(qreal devicePixelRatio) const;
-
     [[nodiscard]] const OrthoCamera& camera() const noexcept;
     [[nodiscard]] QSize viewSize() const;
     [[nodiscard]] OpacityRamp ramp() const;
@@ -90,6 +83,12 @@ signals:
 
 private:
     void buildControls();
+    // The view as drawn -- the frame and the overlays, without the preset
+    // buttons parked over them -- at `devicePixelRatio`. Empty when there is no
+    // frame to draw, which the caller refuses rather than writing out. Private
+    // until something outside the class needs it: a sequence export of the
+    // volume view would be that caller, and can make it public then.
+    [[nodiscard]] QImage renderedView(qreal devicePixelRatio) const;
     void exportImage();
 
     IsoWidget* m_view = nullptr;

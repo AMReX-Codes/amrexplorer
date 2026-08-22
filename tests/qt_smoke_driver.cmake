@@ -62,12 +62,23 @@ elseif(MODE STREQUAL "volume")
     run_or_die("${AMREXPLORER_QT}" --volume-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "volume-export")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
-    # No suffix on the name handed in: the app's own rule appends .png, so the
-    # file the check reads back proves the rule ran on the real path.
+    # Cleared first: the run asserts that the refused export before the first
+    # frame wrote nothing, which a file left by the previous run would fail.
+    file(REMOVE "${WORK}/exported.png" "${WORK}/exported-renamed.png"
+        "${WORK}/exported-renamed")
+    # A stem, not a file name: the app drives its own File > Export Image...
+    # twice off it, once with "<stem>.png" typed and once with a bare
+    # "<stem>-renamed", so the suffix rule is proven from outside the process.
     run_or_die("${AMREXPLORER_QT}" --volume-export-smoke-test "${WORK}/plt"
         "${WORK}/exported")
     if(NOT EXISTS "${WORK}/exported.png")
         message(FATAL_ERROR "the volume export wrote no exported.png")
+    endif()
+    if(NOT EXISTS "${WORK}/exported-renamed.png")
+        message(FATAL_ERROR "the export did not append .png to a bare name")
+    endif()
+    if(EXISTS "${WORK}/exported-renamed")
+        message(FATAL_ERROR "the export wrote the bare name it was given")
     endif()
 elseif(MODE STREQUAL "sequence")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")

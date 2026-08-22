@@ -2,11 +2,15 @@
 
 #include "MainWindow.hpp"
 #include "VolumeWindow.hpp"
-#include "WidgetImageExport.hpp"
 
 #include <QAction>
 #include <QApplication>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QImage>
+#include <QMessageBox>
+#include <QAbstractButton>
+#include <QSet>
 #include <QString>
 #include <QTimer>
 
@@ -61,59 +65,220 @@ void armVolumeChecks(amrvis::qt::MainWindow& window, QApplication& application)
     QTimer::singleShot(30000, &application, [&application] { application.exit(3); });
 }
 
-// The one Volume window on screen. The controller parents it for placement
-// only, so it is a top-level widget rather than a child of the main window.
-amrvis::qt::VolumeWindow* volumeWindow()
+// The one Volume window: a QObject child of the main window, which parents it
+// for placement.
+amrvis::qt::VolumeWindow* volumeWindow(amrvis::qt::MainWindow& window)
 {
-    for (auto* widget : QApplication::topLevelWidgets()) {
-        if (auto* window = qobject_cast<amrvis::qt::VolumeWindow*>(widget)) {
-            return window;
-        }
-    }
-    return nullptr;
+    return window.findChild<amrvis::qt::VolumeWindow*>();
 }
 
-// Arms the export checks: once a frame is on screen, take the picture the
-// File > Export Image... action would take and write it, then read it back.
-// Exercised end to end against a real rendered frame -- the name rule and the
-// child-exclusion rule have their own unit test; what this adds is that the
-// action is reachable and the seam produces a file on a real widget.
-void armExportChecks(amrvis::qt::MainWindow& window, QApplication& application,
-    const QString& outputPath)
+// Answers the modals an export raises, so the action can be triggered for real
+// instead of the harness re-doing what the slot does. A poll rather than a
+// single shot: one export can raise two in a row (the save dialog, then the
+// changed-name question), each in its own nested event loop.
+//
+// The dialog is driven, not bypassed, because the bugs this covers were in the
+// *use* of the name rule -- a harness that calls pngExportPath itself and
+// asserts its own output proves nothing about the slot.
+class ModalDriver {
+public:
+    explicit ModalDriver(QString typed)
+        : m_typed(std::move(typed))
+    {
+        m_timer.setInterval(5);
+        QObject::connect(&m_timer, &QTimer::timeout, [this] { pump(); });
+        m_timer.start();
+    }
+
+    void expect(const QString& typed) { m_typed = typed; }
+    [[nodiscard]] int fileDialogs() const noexcept { return m_fileDialogs; }
+    [[nodiscard]] int messageBoxes() const noexcept { return m_messageBoxes; }
+    void resetCounts()
+    {
+        m_fileDialogs = 0;
+        m_messageBoxes = 0;
+    }
+
+private:
+    void pump()
+    {
+        auto* modal = QApplication::activeModalWidget();
+        if (modal == nullptr) {
+            return;
+        }
+        if (auto* save = qobject_cast<QFileDialog*>(modal)) {
+            ++m_fileDialogs;
+            save->selectFile(m_typed);
+            // Through the meta-object: QFileDialog re-declares accept() as
+            // protected, and this runs the dialog's real accept path (the one
+            // a user's click runs) rather than done() closing it behind that
+            // path's back.
+            QMetaObject::invokeMethod(save, "accept");
+            return;
+        }
+        if (auto* box = qobject_cast<QMessageBox*>(modal)) {
+            ++m_messageBoxes;
+            // A specific button, not accept(): accept() leaves clickedButton()
+            // null, which QMessageBox::question reads as the negative answer.
+            if (auto* yes = box->button(QMessageBox::Yes)) {
+                yes->click();
+            } else if (auto* save = box->button(QMessageBox::Save)) {
+                save->click();
+            } else if (auto* ok = box->button(QMessageBox::Ok)) {
+                ok->click();
+            } else {
+                box->accept();
+            }
+            return;
+        }
+        // Something unexpected: closing it beats hanging until the ctest
+        // timeout with no message.
+        qCritical("an unexpected modal was open during the export");
+        modal->close();
+    }
+
+    QTimer m_timer;
+    QString m_typed;
+    int m_fileDialogs = 0;
+    int m_messageBoxes = 0;
+};
+
+// Triggers File > Export Image... by name and returns once the whole export
+// has run: getSaveFileName exec()s inside trigger(), so the driver's timers
+// fire in that nested loop and trigger() returns after it closes.
+bool triggerExport(amrvis::qt::VolumeWindow& volume)
 {
-    QObject::connect(&window, &amrvis::qt::MainWindow::volumeFrameDisplayed,
-        &application, [&application, outputPath] {
-            auto* volume = volumeWindow();
+    auto* action = volume.findChild<QAction*>(
+        QStringLiteral("volumeExportImageAction"));
+    if (action == nullptr) {
+        qCritical("the export action is not reachable by name");
+        return false;
+    }
+    action->trigger();
+    return true;
+}
+
+// How many distinct pixel values a picture holds, up to `cap`. A bare
+// background, or a background plus a white wireframe, holds a handful; a
+// rendered volume holds many. Cheap proof that the frame reached the file
+// without re-deriving what the frame should look like.
+int distinctColours(const QImage& image, int cap)
+{
+    QSet<QRgb> seen;
+    for (int y = 0; y < image.height() && seen.size() < cap; ++y) {
+        for (int x = 0; x < image.width() && seen.size() < cap; ++x) {
+            seen.insert(image.pixel(x, y));
+        }
+    }
+    return static_cast<int>(seen.size());
+}
+
+// Drives File > Export Image... through the real action, three times: before
+// any frame (the refusal), with a name that already says png (one dialog, no
+// question), and with a bare name (the rule appends .png, which the slot must
+// notice and report). What the unit test cannot cover is that the slot wires
+// those rules together at all; what this must not do is re-derive the rules.
+void armExportChecks(amrvis::qt::MainWindow& window, QApplication& application,
+    const QString& stem)
+{
+    const auto driver = std::make_shared<ModalDriver>(
+        stem + QStringLiteral(".png"));
+
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [&window, &application, driver, stem](bool success) {
+            if (!success) {
+                application.exit(2);
+                return;
+            }
+            window.showVolumeWindowForTest();
+            if (!window.volumeWindowOpenForTest()) {
+                qCritical("the volume window did not open");
+                application.exit(1);
+                return;
+            }
+            auto* volume = volumeWindow(window);
             if (volume == nullptr) {
                 qCritical("no volume window on screen");
                 application.exit(1);
                 return;
             }
-            // Named, so a harness can find it: an anonymous action is one no
-            // test can reach, which is how three bugs shipped in the slot
-            // behind this one.
-            if (volume->findChild<QAction*>(
-                    QStringLiteral("volumeExportImageAction"))
-                == nullptr) {
-                qCritical("the export action is not reachable by name");
+            // No frame yet, so the export must refuse before reaching a
+            // dialog. This is the only coverage the guard can get.
+            driver->resetCounts();
+            if (!triggerExport(*volume)) {
                 application.exit(1);
                 return;
             }
-            const auto image = volume->renderedView(1.0);
-            if (image.isNull() || image.size() != volume->viewSize()) {
-                qCritical("the exported view is empty or not the view's size");
+            if (driver->messageBoxes() != 1 || driver->fileDialogs() != 0) {
+                qCritical("the export before the first frame did not refuse");
                 application.exit(1);
                 return;
             }
-            const auto path = amrvis::qt::pngExportPath(outputPath);
-            if (!image.save(path, "PNG")) {
-                qCritical("the exported image did not save");
+            if (QFileInfo::exists(stem + QStringLiteral(".png"))) {
+                qCritical("the refused export wrote a file anyway");
+                application.exit(1);
+            }
+        });
+
+    QObject::connect(&window, &amrvis::qt::MainWindow::volumeFrameDisplayed,
+        &application, [&window, &application, driver, stem] {
+            auto* volume = volumeWindow(window);
+            if (volume == nullptr) {
+                qCritical("no volume window on screen");
                 application.exit(1);
                 return;
             }
-            QImage reloaded;
-            if (!reloaded.load(path) || reloaded.size() != image.size()) {
-                qCritical("the written file did not read back at its own size");
+            const auto expected
+                = volume->viewSize() * volume->devicePixelRatioF();
+
+            // A name that already says png: one dialog, and no question,
+            // because the rule leaves such a name alone.
+            driver->resetCounts();
+            driver->expect(stem + QStringLiteral(".png"));
+            if (!triggerExport(*volume)) {
+                application.exit(1);
+                return;
+            }
+            if (driver->fileDialogs() != 1 || driver->messageBoxes() != 0) {
+                qCritical("exporting an unchanged name did not take one dialog");
+                application.exit(1);
+                return;
+            }
+            QImage written;
+            if (!written.load(stem + QStringLiteral(".png"))
+                || written.size() != expected) {
+                qCritical("the export wrote no file, or not at the view's size");
+                application.exit(1);
+                return;
+            }
+            if (distinctColours(written, 9) < 9) {
+                qCritical("the exported picture holds too few colours to be a "
+                          "rendered volume");
+                application.exit(1);
+                return;
+            }
+
+            // A bare name: the rule appends .png, which the slot must notice
+            // and report -- one dialog and one question.
+            driver->resetCounts();
+            driver->expect(stem + QStringLiteral("-renamed"));
+            if (!triggerExport(*volume)) {
+                application.exit(1);
+                return;
+            }
+            if (driver->fileDialogs() != 1 || driver->messageBoxes() != 1) {
+                qCritical("exporting a bare name did not report the new name");
+                application.exit(1);
+                return;
+            }
+            if (!QFileInfo::exists(stem + QStringLiteral("-renamed.png"))
+                || QFileInfo::exists(stem + QStringLiteral("-renamed"))) {
+                qCritical("the appended suffix did not reach the written file");
+                application.exit(1);
+                return;
+            }
+            if (QApplication::activeModalWidget() != nullptr) {
+                qCritical("a modal was left open by the export");
                 application.exit(1);
                 return;
             }

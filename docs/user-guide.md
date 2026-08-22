@@ -347,8 +347,8 @@ and per dataset, not a total for the server, so sizing a host means multiplying
 them by how many datasets and connections you allow.
 
 **File > Export Image...** in the volume window saves the view, overlays
-included, as a PNG at your display's full resolution. Wait for the volume to
-render first -- there is nothing to save until a frame is on screen.
+included, as a PNG. Wait for the volume to render first -- there is nothing to
+save until a frame is on screen.
 
 ## Selecting fields and AMR levels
 

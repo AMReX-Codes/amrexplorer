@@ -324,7 +324,8 @@ concrete 1.2; `ARCHITECTURE.md` trust boundaries).
   fixture `remote_server_3d_materialized`).
 
 ### PR8 — Polish and docs (S/M)
-Volume window "Export Image..." (`grab()` → PNG); hi-DPI (device-resolution
+Volume window "Export Image..." (PNG; `grab()` would bake the preset buttons
+in, so the view is rendered without its children); hi-DPI (device-resolution
 render, `viewportFrame(w·dpr, h·dpr, margin·dpr)` both sides); trilinear option
 (request field + wire field, quality High); `docs/user-guide.md` new "Volume
 rendering" section after "Working with 3-D data" (:269); `docs/ARCHITECTURE.md`

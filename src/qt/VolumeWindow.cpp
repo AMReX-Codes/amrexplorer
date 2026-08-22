@@ -87,24 +87,38 @@ void VolumeWindow::exportImage()
     // would be a second prompt for one save; but it never asked about a name
     // appended to after it returned -- a typed "shot" beside an existing
     // shot.png passes its existence check and would be overwritten silently.
-    const bool renamed = path != chosen;
-    if (renamed && QFileInfo::exists(path)
-        && QMessageBox::question(this, tr("Export Volume Image"),
-               tr("%1 already exists. Overwrite it?").arg(path))
-            != QMessageBox::Yes) {
-        return;
+    // Asked before writing, not reported after: someone who typed "shot.jpg"
+    // may have meant JPEG, and a notice once the PNG is on disk is too late to
+    // act on. Exactly one prompt per save either way -- the dialog already
+    // confirmed the name it returned, so an unchanged name asks nothing. Not
+    // the status label: the controller owns that, rewriting it on every frame,
+    // so a notice there is erased by the next camera move.
+    if (path != chosen) {
+        const auto answer = QFileInfo::exists(path)
+            ? QMessageBox::question(this, tr("Export Volume Image"),
+                  tr("%1 already exists. Overwrite it?").arg(path))
+            : QMessageBox::question(this, tr("Export Volume Image"),
+                  tr("Saving as %1 instead: the picture is written as PNG.")
+                      .arg(path),
+                  QMessageBox::Save | QMessageBox::Cancel);
+        if (answer != QMessageBox::Yes && answer != QMessageBox::Save) {
+            return;
+        }
     }
     const auto image = renderedView(devicePixelRatioF());
-    if (image.isNull() || !image.save(path, "PNG")) {
-        QMessageBox::critical(this, tr("Export Volume Image"),
-            tr("Cannot write %1").arg(path));
+    if (image.isNull()) {
+        // Not a write failure: the frame that passed the guard is gone. A
+        // dataset switch or a sequence frame runs configureForDataset ->
+        // clearFrame, and the dialog above spun a nested event loop it could
+        // run in.
+        QMessageBox::information(this, tr("Export Volume Image"),
+            tr("The volume was cleared while the dialog was open; "
+               "nothing was written."));
         return;
     }
-    // The name is not the one that was typed, so say where the file went
-    // rather than leaving the user to find it. In the status line, not a box:
-    // the save worked, and this does not need dismissing.
-    if (renamed) {
-        m_status->setText(tr("Exported to %1").arg(path));
+    if (!image.save(path, "PNG")) {
+        QMessageBox::critical(this, tr("Export Volume Image"),
+            tr("Cannot write %1").arg(path));
     }
 }
 

@@ -118,6 +118,11 @@ int main(int argc, char** argv)
     requirePath("/tmp/v1.2/shot", "/tmp/v1.2/shot.png");
     // Empty comes back empty; the caller returns early on it.
     requirePath("", "");
+    // A dotfile that is only the suffix already says png.
+    requirePath(".png", ".png");
+    // A trailing dot is not a suffix, so it gains one -- pinned so the
+    // behaviour is chosen rather than accidental.
+    requirePath("shot.", "shot..png");
 
     // --- painting the widget without its children ------------------------
     HostWidget host;
@@ -158,5 +163,13 @@ int main(int argc, char** argv)
     // The child stays out at every ratio.
     require(countNear(retina, HostWidget::child()) == 0,
         "a 2x export contains the child widget's pixels");
+    // And the widget was painted ACROSS the larger buffer, not into its
+    // top-left quarter: without this, scaling the allocation while leaving the
+    // painter at 1x passes every assertion above and exports a picture that is
+    // three-quarters empty. Four times the area, less the child's excluded
+    // rect and some edge rounding.
+    require(countNear(retina, HostWidget::background())
+            > 3.5 * countNear(exported, HostWidget::background()),
+        "the 2x export did not paint the widget across the larger buffer");
     return 0;
 }

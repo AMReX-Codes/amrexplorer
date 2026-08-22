@@ -1174,7 +1174,14 @@ if(TARGET amrexplorer_qt)
             -DMODE=volume-export
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
-    set_tests_properties(qt_volume_export_smoke_3d PROPERTIES TIMEOUT 60)
+    # QT_SCALE_FACTOR gives the offscreen platform a real device pixel ratio
+    # (it reports 1 otherwise), which is what lets the run tell an export that
+    # passes devicePixelRatioF() from one that hardcodes 1 -- the picture would
+    # be a quarter of the pixels on screen and every other assertion would
+    # still hold.
+    set_tests_properties(qt_volume_export_smoke_3d PROPERTIES
+        TIMEOUT 60
+        ENVIRONMENT "QT_SCALE_FACTOR=2")
     add_test(
         NAME qt_particle_visible_range_smoke_3d
         COMMAND "${CMAKE_COMMAND}"

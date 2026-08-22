@@ -208,11 +208,12 @@ int main(int argc, char* argv[])
             cappedSession->close();
         }
 
-        // --- the operator's grid-cache cap is not the client's to raise ---
-        // The server bounds the sampled-grid pool with --volume-cache-mib. A
-        // client's own budget applies when it is smaller, but a
-        // SetCacheBudgetRequest asking for more must not move it: that would
-        // put the server's memory bound in the peer's hands.
+        // --- the grid pool answers to the operator, not to the peer -------
+        // --volume-cache-mib sets the sampled-grid pool, and a client's
+        // SetCacheBudgetRequest reaches only the block pool. The client's
+        // number does not lower the grid pool either: it is a budget for a
+        // different pool holding different things, and letting it stand in
+        // for one would let a peer starve or zero a pool the operator sized.
         {
             ServerOptions bounded;
             bounded.workerCount = 1;

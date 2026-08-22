@@ -816,9 +816,18 @@ private:
             ~RenderCount() { counter.fetch_sub(1, std::memory_order_relaxed); }
             RenderCount(const RenderCount&) = delete;
             RenderCount& operator=(const RenderCount&) = delete;
-        } counted(m_rendersInFlight);
-        dataset->setVolumeRenderThreads(volumeRenderThreads());
-        auto frame = dataset->renderVolume(request, cancellation);
+        };
+        // Counted around the render and nothing else. Holding it through the
+        // encode and the send would keep a finished render "running" for as
+        // long as its client takes to read -- and the write budget allows a
+        // trickle-reader over seventeen minutes for a 67 MiB response -- so
+        // renders starting on other connections would divide the machine by a
+        // number that had stopped meaning anything.
+        auto frame = [&] {
+            const RenderCount counted(m_rendersInFlight);
+            dataset->setVolumeRenderThreads(volumeRenderThreads());
+            return dataset->renderVolume(request, cancellation);
+        }();
         // One encode, and the pixels moved into it. send() makes the exact
         // size check itself before touching the socket and answers an
         // oversized response with the same ResourceLimitExceeded, so encoding
@@ -1420,10 +1429,17 @@ private:
     ServerOptions m_options;
     std::unique_ptr<Channel> m_channel;
     std::optional<Listener> m_listener;
-    ThreadPool m_workers;
+    // Before m_workers, deliberately: members die in reverse declaration
+    // order, and ~ThreadPool only *signals* its workers -- they are joined
+    // when its JoiningThread members die, after the body. A task still
+    // running then holds a Session that holds a reference to this counter, so
+    // a counter declared after the pool would already be gone when its
+    // RenderCount destructor fired.
+    //
     // Volume renders running right now, across every session: what each one
     // divides the machine by when it picks its thread count.
     std::atomic<unsigned int> m_rendersInFlight{0};
+    ThreadPool m_workers;
     std::atomic_bool m_stopping{false};
     StopSource m_acceptStop;
     std::mutex m_sessionsMutex;

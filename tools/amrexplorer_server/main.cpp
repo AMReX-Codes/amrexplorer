@@ -287,10 +287,11 @@ int main(int argc, char* argv[])
                 "--stdio and --port are mutually exclusive");
         }
 
-        // A grid is four bytes a voxel, so a cache smaller than one
-        // maximum-sized grid can never hold anything and every render
-        // re-samples from disk. That is a legitimate choice -- it is how grid
-        // caching is turned off -- but it is also what raising
+        // A grid is four bytes a voxel, so a cache below four times
+        // --max-volume-voxels cannot hold a request that asks for the full
+        // budget: those render uncached every time, while smaller requests
+        // cache and evict normally. Setting the cache small is a legitimate
+        // way to hold grid caching down, but it is also what raising
         // --max-volume-voxels does by accident, and nothing in a rendered
         // frame says which of the two happened. Warned about once here, where
         // the flags that caused it are still in view, rather than refused in

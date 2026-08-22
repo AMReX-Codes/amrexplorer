@@ -301,12 +301,18 @@ rendered volume.
 
 The window follows the main window: the field, the AMR level, the range mode
 and its User min/max, the logarithmic mapping and the palette are the ones
-selected there, so the volume's colours agree with the slices and the colour
-bar. Its own controls set the opacity:
+selected there. With a File, Level or User range the volume's colours agree
+with the slices and the colour bar. In the **Visible** mode they do not: the
+volume takes its range from the whole sampled grid while the slices and the
+colour bar take theirs from the visible slice, so the same colour can stand
+for different values in the two views. Its own controls set the opacity:
 
-- **Opacity from / to** window the colour range: values below *from* are
-  transparent, and the opacity ramps linearly up to *to*. Narrow the window
-  around the values of interest to see them through the rest.
+- **Opacity from / to** window the colour range: the opacity ramps linearly
+  from *from* to *to*, and everything outside that window -- below *from* and
+  above *to* -- is fully transparent. Narrow the window around the values of
+  interest to see them through the rest; note that raising *from* hides the
+  cold end and lowering *to* hides the hot end. Setting the two equal leaves a
+  single opaque shell at that value.
 - **Maximum opacity** scales the whole ramp; lower it to look deeper into a
   dense field.
 - **Use palette alpha ramp** takes each colour's opacity from the palette's
@@ -316,7 +322,10 @@ bar. Its own controls set the opacity:
 - **Quality** trades speed for detail: it sets how many samples are taken per
   cell along each ray and how many cells the field is sampled into (Draft
   128^3, Normal 256^3, High 384^3). A field finer than that is sampled at the
-  coarser pitch; a level coarser than it is drawn at its own resolution.
+  coarser pitch; a level coarser than it is drawn at its own resolution. On a
+  remote plotfile the grid is also capped by the server's
+  `--max-volume-voxels`, which defaults to 256^3 -- so **High** gives the
+  Normal grid unless the server was started with a higher cap.
 
 While the camera moves the window shows quick half-resolution drafts and
 renders the full frame once it settles. The field is sampled once per field,

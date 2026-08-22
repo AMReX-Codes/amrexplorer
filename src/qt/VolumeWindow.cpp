@@ -8,6 +8,8 @@
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QFormLayout>
+#include <QImage>
+#include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
@@ -51,12 +53,24 @@ VolumeWindow::VolumeWindow(QWidget* parent)
 
 void VolumeWindow::exportImage()
 {
-    const auto path = QFileDialog::getSaveFileName(this, tr("Export Volume Image"),
+    auto path = QFileDialog::getSaveFileName(this, tr("Export Volume Image"),
         QString(), tr("PNG images (*.png)"));
     if (path.isEmpty()) {
         return;
     }
-    if (!m_view->grab().save(path, "PNG")) {
+    // save() forces PNG whatever the name, so the name is normalised to match
+    // it -- a typed "shot" or "shot.jpg" would otherwise hold PNG bytes under
+    // a name nothing opens. The main window's export applies the same rule.
+    if (path.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive)) {
+        path.chop(4);
+    }
+    path += QStringLiteral(".png");
+    // Not grab(): that draws the widget's children, and the XY/XZ/YZ preset
+    // buttons are children parked over the render, so they would be baked
+    // into the picture. This renders the frame and the overlays only.
+    QImage image(m_view->size(), QImage::Format_ARGB32_Premultiplied);
+    m_view->render(&image, QPoint(), QRegion(), QWidget::DrawWindowBackground);
+    if (!image.save(path, "PNG")) {
         QMessageBox::critical(this, tr("Export Volume Image"),
             tr("Cannot write %1").arg(path));
     }

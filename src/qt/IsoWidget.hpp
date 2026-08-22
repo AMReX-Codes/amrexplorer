@@ -58,6 +58,13 @@ public:
     // until the next one lands. A null image draws nothing -- the main
     // window's quadrant.
     void setBackdropImage(QImage image, const OrthoCamera& camera);
+    // Whether a frame is drawn under the wireframe. With none, the widget is
+    // the wireframe alone -- or, before any geometry, the "3-D overview"
+    // placeholder text, which is not something to write into a file.
+    [[nodiscard]] bool hasBackdropImage() const noexcept
+    {
+        return !m_backdrop.isNull();
+    }
     // Overlay toggles for the volume view; the quadrant keeps both on.
     void setLevelBoxesVisible(bool visible);
     void setDomainOutlineVisible(bool visible);

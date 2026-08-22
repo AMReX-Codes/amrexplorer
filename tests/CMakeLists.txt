@@ -579,6 +579,18 @@ if(TARGET amrexplorer_qt)
             "$<TARGET_FILE:test_particle_controller>")
     set_tests_properties(particle_controller PROPERTIES TIMEOUT 60)
 
+    # The export rules on their own: a header of free functions, so this needs
+    # no window and no amrexplorer library -- just Qt and a synthetic widget.
+    add_executable(test_widget_image_export unit/test_widget_image_export.cpp)
+    target_include_directories(test_widget_image_export
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_widget_image_export
+        PRIVATE amrexplorer::warnings Qt6::Core Qt6::Gui Qt6::Widgets)
+    add_test(NAME widget_image_export
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_widget_image_export>")
+    set_tests_properties(widget_image_export PROPERTIES TIMEOUT 60)
+
     add_executable(test_volume_controller
         unit/test_volume_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/VolumeController.cpp"
@@ -1148,6 +1160,21 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_volume_smoke_3d PROPERTIES TIMEOUT 60)
+    # File > Export Image... over the same fixture: the action is reachable by
+    # name, the window's render seam produces the view at its own size, and the
+    # file it writes reads back. The naming and child-exclusion rules have
+    # their own unit test (widget_image_export); this is the end-to-end pass.
+    add_test(
+        NAME qt_volume_export_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_volume_export_3d"
+            -DMODE=volume-export
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_volume_export_smoke_3d PROPERTIES TIMEOUT 60)
     add_test(
         NAME qt_particle_visible_range_smoke_3d
         COMMAND "${CMAKE_COMMAND}"

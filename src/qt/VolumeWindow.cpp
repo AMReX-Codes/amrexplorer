@@ -1,6 +1,7 @@
 #include "VolumeWindow.hpp"
 
 #include "IsoWidget.hpp"
+#include "WidgetImageExport.hpp"
 
 #include <QAction>
 #include <QCheckBox>
@@ -43,53 +44,67 @@ VolumeWindow::VolumeWindow(QWidget* parent)
     // File > Export Image...: the view as drawn (frame and overlays), as PNG.
     auto* fileMenu = menuBar()->addMenu(tr("&File"));
     auto* exportAction = new QAction(tr("&Export Image..."), this);
+    exportAction->setObjectName(QStringLiteral("volumeExportImageAction"));
     exportAction->setShortcut(QKeySequence::Save);
     connect(exportAction, &QAction::triggered, this, [this] { exportImage(); });
     fileMenu->addAction(exportAction);
     auto* closeAction = new QAction(tr("&Close"), this);
+    closeAction->setObjectName(QStringLiteral("volumeCloseAction"));
     closeAction->setShortcut(QKeySequence::Close);
     connect(closeAction, &QAction::triggered, this, [this] { close(); });
     fileMenu->addAction(closeAction);
 }
 
+QImage VolumeWindow::renderedView(qreal devicePixelRatio) const
+{
+    if (!m_view->hasBackdropImage()) {
+        return {};
+    }
+    return renderWidgetWithoutChildren(*m_view, devicePixelRatio);
+}
+
 void VolumeWindow::exportImage()
 {
+    // Refused before the dialog, as the main window's export does: with no
+    // frame the view is the bare wireframe, or the "3-D overview" placeholder
+    // text, and writing either out gives the user a file to puzzle over. The
+    // cheap question here, not the picture -- that is taken after the dialog,
+    // so it is the frame on screen when the save is confirmed rather than one
+    // held across a nested event loop.
+    if (!m_view->hasBackdropImage()) {
+        QMessageBox::information(this, tr("Export Volume Image"),
+            tr("Wait for the volume to render before exporting an image."));
+        return;
+    }
     const auto chosen = QFileDialog::getSaveFileName(this,
         tr("Export Volume Image"), QString(), tr("PNG images (*.png)"));
     if (chosen.isEmpty()) {
         return;
     }
-    // save() forces PNG whatever the name, so a name that does not already say
-    // png gets it appended -- a typed "shot" would otherwise hold PNG bytes
-    // under a name nothing opens. A name that does say it is left exactly as
-    // typed, case included: rewriting "shot.PNG" to "shot.png" would write
-    // past the file the user picked on a case-sensitive filesystem.
-    auto path = chosen;
-    if (!path.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive)) {
-        path += QStringLiteral(".png");
-    }
+    const auto path = pngExportPath(chosen);
     // Only when that appended something. The dialog has already confirmed
     // overwriting the name it returned, so asking again about that same name
     // would be a second prompt for one save; but it never asked about a name
     // appended to after it returned -- a typed "shot" beside an existing
     // shot.png passes its existence check and would be overwritten silently.
-    // (setDefaultSuffix is not the fix: it only fills an empty suffix, so it
-    // would leave "shot.jpg" alone, and Qt applies it in selectedFiles(),
-    // after a native dialog has already prompted.)
-    if (path != chosen && QFileInfo::exists(path)
+    const bool renamed = path != chosen;
+    if (renamed && QFileInfo::exists(path)
         && QMessageBox::question(this, tr("Export Volume Image"),
                tr("%1 already exists. Overwrite it?").arg(path))
             != QMessageBox::Yes) {
         return;
     }
-    // Not grab(): that draws the widget's children, and the XY/XZ/YZ preset
-    // buttons are children parked over the render, so they would be baked
-    // into the picture. This renders the frame and the overlays only.
-    QImage image(m_view->size(), QImage::Format_ARGB32_Premultiplied);
-    m_view->render(&image, QPoint(), QRegion(), QWidget::DrawWindowBackground);
-    if (!image.save(path, "PNG")) {
+    const auto image = renderedView(devicePixelRatioF());
+    if (image.isNull() || !image.save(path, "PNG")) {
         QMessageBox::critical(this, tr("Export Volume Image"),
             tr("Cannot write %1").arg(path));
+        return;
+    }
+    // The name is not the one that was typed, so say where the file went
+    // rather than leaving the user to find it. In the status line, not a box:
+    // the save worked, and this does not need dismissing.
+    if (renamed) {
+        m_status->setText(tr("Exported to %1").arg(path));
     }
 }
 

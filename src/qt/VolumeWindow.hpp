@@ -5,6 +5,7 @@
 #include <amrexplorer/core/Volume.hpp>
 #include <amrexplorer/pipeline/VolumePipeline.hpp>
 
+#include <QImage>
 #include <QMainWindow>
 #include <QSize>
 #include <QString>
@@ -60,6 +61,13 @@ public:
     void showFailure(const QString& message);
     void clearFrame();
     void showRendering(bool rendering);
+
+    // The view as drawn -- the frame and the overlays, without the preset
+    // buttons parked over them -- at `devicePixelRatio`. Empty when there is no
+    // frame to draw, which the caller should refuse rather than write out.
+    // Used by File > Export Image..., and the seam a sequence export would
+    // render each frame through.
+    [[nodiscard]] QImage renderedView(qreal devicePixelRatio) const;
 
     [[nodiscard]] const OrthoCamera& camera() const noexcept;
     [[nodiscard]] QSize viewSize() const;

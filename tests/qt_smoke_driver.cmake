@@ -60,6 +60,15 @@ if(MODE STREQUAL "slice")
 elseif(MODE STREQUAL "volume")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --volume-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "volume-export")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    # No suffix on the name handed in: the app's own rule appends .png, so the
+    # file the check reads back proves the rule ran on the real path.
+    run_or_die("${AMREXPLORER_QT}" --volume-export-smoke-test "${WORK}/plt"
+        "${WORK}/exported")
+    if(NOT EXISTS "${WORK}/exported.png")
+        message(FATAL_ERROR "the volume export wrote no exported.png")
+    endif()
 elseif(MODE STREQUAL "sequence")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")

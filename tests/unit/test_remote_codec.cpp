@@ -544,6 +544,20 @@ int main()
     frame.cacheFallbackToLevel = 0;
     require(codec::fromWire(codec::toWire(frame, CacheMetrics{})) == frame,
         "a rendered frame did not round-trip");
+    // A response that never set the two fallback levels: they default to the
+    // no-fallback sentinel, so it decodes as "no fallback" rather than as a
+    // fallback from level 0 to level 0 -- which validateSessionVolumeResult
+    // refuses as impossible, and that refusal costs the whole connection.
+    {
+        auto omitted = codec::toWire(frame, CacheMetrics{});
+        const codec::fb::RenderedFrameResponseT fresh;
+        omitted.cache_fallback_from_level = fresh.cache_fallback_from_level;
+        omitted.cache_fallback_to_level = fresh.cache_fallback_to_level;
+        const auto unset = codec::fromWire(omitted);
+        require(unset.cacheFallbackFromLevel == -1
+                && unset.cacheFallbackToLevel == -1,
+            "an omitted cache fallback did not decode as no fallback");
+    }
     auto frameWire = codec::toWire(frame, CacheMetrics{});
     frameWire.pixels.pop_back();
     requireRejected([&] { static_cast<void>(codec::fromWire(frameWire)); },

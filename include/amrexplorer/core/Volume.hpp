@@ -55,9 +55,13 @@ inline constexpr std::uint64_t maxVolumeVoxelBudget = 512ULL * 512ULL * 512ULL;
 // that number, and it sits here so all three volume budgets read together.
 inline constexpr std::uint64_t defaultVolumeGridCacheBytes
     = 256ULL * 1024ULL * 1024ULL;
-// The most that budget may be raised to. 64 GiB is 128 grids at the largest
-// voxel budget (512^3 voxels, four bytes each); past that a cache would never
-// evict and the holder would grow until it was killed. A ceiling on a budget
+// The most that budget may be raised to: an operational ceiling, not an
+// eviction threshold. The cache evicts correctly at any budget -- distinct
+// grid keys fill it and the least recently used ones go. What a budget past
+// this buys is the room to fill it: 64 GiB is already 128 grids at the
+// largest voxel budget (512^3 voxels, four bytes each), so a larger number
+// stops describing memory any host will lend and becomes a way to be killed
+// by the allocator instead of bounded by the setting. A ceiling on a budget
 // is a property of the budget, so it reads here beside it rather than in
 // whichever layer happens to expose the knob.
 inline constexpr std::uint64_t maximumVolumeGridCacheBytes

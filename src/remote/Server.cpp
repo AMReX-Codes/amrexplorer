@@ -1393,8 +1393,9 @@ private:
         options.maximumVolumeVoxels = std::min(
             options.maximumVolumeVoxels, maxVolumeVoxelBudget);
         // Capped here as well as in the CLI parser, so an embedder that sets
-        // ServerOptions directly gets the bound too. A budget the cache can
-        // never fill never evicts, and the server grows until it is killed.
+        // ServerOptions directly gets the bound too -- the cache evicts at any
+        // budget, but one this large stops bounding the process by anything a
+        // host can actually lend it.
         options.volumeGridCacheBytes = std::min<std::uint64_t>(
             options.volumeGridCacheBytes, maximumVolumeGridCacheBytes);
         options.workerCount = resolveWorkerCount(options.workerCount);

@@ -44,6 +44,19 @@ struct ServerOptions {
     // maximumDatasets and maximumConnections, plus one transient grid per
     // request in flight, so an operator sizing a host has to do that
     // arithmetic rather than read either number as a ceiling.
+    //
+    // maximumVolumeVoxels defaults *below* the protocol's own ceiling: a
+    // request may legally ask for maxVolumeVoxelBudget (512^3), which
+    // validateVolumeRenderRequest accepts, and an unconfigured server clamps
+    // it to defaultVolumeVoxelBudget (256^3) -- each axis halved, with no
+    // error, no warning, and nothing in the response that says so
+    // (validateSessionVolumeResult only checks the grid is not *larger* than
+    // asked, so a downgrade validates cleanly). A remote render of such a
+    // request therefore differs from the local one. Nothing raises the budget
+    // above the default today, which is the only reason this is latent;
+    // defaulting to maxVolumeVoxelBudget, and leaving --max-volume-voxels as
+    // the way to opt into something tighter, would make an unconfigured
+    // server transparent.
     std::uint64_t maximumVolumeVoxels = defaultVolumeVoxelBudget;
     std::uint64_t volumeGridCacheBytes = defaultVolumeGridCacheBytes;
     std::string softwareVersion = "unknown";

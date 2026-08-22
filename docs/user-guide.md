@@ -329,8 +329,11 @@ for different values in the two views. Its own controls set the opacity:
 
 While the camera moves the window shows quick half-resolution drafts and
 renders the full frame once it settles. The field is sampled once per field,
-level and quality and kept, so rotating only re-casts. The status line under
-the controls reports the range in use, the sampled grid and the render time.
+level and quality and kept when it fits the volume cache, so rotating only
+re-casts; a grid too big for that cache (`--volume-cache-mib` on a server,
+`AMREXPLORER_CACHE_SIZE_MB` locally) is rendered and discarded, and rotating
+resamples it. The status line under the controls reports the range in use, the
+sampled grid and the render time.
 
 Volume rendering works for remote plotfiles too (see [Remote
 datasets](#remote-datasets)): the server samples and renders the frame and

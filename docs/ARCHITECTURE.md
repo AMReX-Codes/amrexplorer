@@ -111,7 +111,9 @@ The GUI opens one or the other and is otherwise agnostic to where the data lives
   pool worker in the server) inside which the ray caster splits the rows
   across its own short-lived `std::thread`s and joins them before returning;
   the picture does not depend on the split. The sampled grid is cached in the
-  session, so a camera change re-casts without re-reading the plotfile.
+  session when it fits that cache's budget, so a camera change re-casts
+  without re-reading the plotfile; one that does not fit is rendered from the
+  local copy and forgotten, and the next camera change resamples it.
 
 ## Trust boundaries
 

@@ -22,6 +22,7 @@
 #                 sequence-equal-size-transform-preserve |
 #                 sequence-geometry-refit | sequence-noop | sequence-failure |
 #                 remote-canvas-wheel | remote-cell-aspect | volume |
+#                 volume-export |
 #                 scale-state | effective-scale |
 #                 arrow-key-routing | animation-dock-role | open-failure |
 #                 idle-ui-state | sequence-scale-report |

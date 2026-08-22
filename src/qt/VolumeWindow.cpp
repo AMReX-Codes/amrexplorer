@@ -49,7 +49,6 @@ VolumeWindow::VolumeWindow(QWidget* parent)
     connect(exportAction, &QAction::triggered, this, [this] { exportImage(); });
     fileMenu->addAction(exportAction);
     auto* closeAction = new QAction(tr("&Close"), this);
-    closeAction->setObjectName(QStringLiteral("volumeCloseAction"));
     closeAction->setShortcut(QKeySequence::Close);
     connect(closeAction, &QAction::triggered, this, [this] { close(); });
     fileMenu->addAction(closeAction);
@@ -57,7 +56,7 @@ VolumeWindow::VolumeWindow(QWidget* parent)
 
 QImage VolumeWindow::renderedView(qreal devicePixelRatio) const
 {
-    if (!m_view->hasBackdropImage()) {
+    if (!m_view->drawsVolume()) {
         return {};
     }
     return renderWidgetWithoutChildren(*m_view, devicePixelRatio);
@@ -71,7 +70,7 @@ void VolumeWindow::exportImage()
     // cheap question here, not the picture -- that is taken after the dialog,
     // so it is the frame on screen when the save is confirmed rather than one
     // held across a nested event loop.
-    if (!m_view->hasBackdropImage()) {
+    if (!m_view->drawsVolume()) {
         QMessageBox::information(this, tr("Export Volume Image"),
             tr("Wait for the volume to render before exporting an image."));
         return;
@@ -94,14 +93,17 @@ void VolumeWindow::exportImage()
     // the status label: the controller owns that, rewriting it on every frame,
     // so a notice there is erased by the next camera move.
     if (path != chosen) {
-        const auto answer = QFileInfo::exists(path)
-            ? QMessageBox::question(this, tr("Export Volume Image"),
-                  tr("%1 already exists. Overwrite it?").arg(path))
-            : QMessageBox::question(this, tr("Export Volume Image"),
-                  tr("Saving as %1 instead: the picture is written as PNG.")
-                      .arg(path),
-                  QMessageBox::Save | QMessageBox::Cancel);
-        if (answer != QMessageBox::Yes && answer != QMessageBox::Save) {
+        // The rename is the point of the prompt, so it is said in both cases:
+        // someone who typed "shot.jpg" beside an existing "shot.jpg.png" is
+        // exactly who needs to hear that a PNG is what gets written.
+        auto text = tr("Saving as %1 instead: the picture is written as PNG.")
+                        .arg(path);
+        if (QFileInfo::exists(path)) {
+            text += QLatin1Char('\n') + tr("That file already exists.");
+        }
+        if (QMessageBox::question(this, tr("Export Volume Image"), text,
+                QMessageBox::Save | QMessageBox::Cancel)
+            != QMessageBox::Save) {
             return;
         }
     }

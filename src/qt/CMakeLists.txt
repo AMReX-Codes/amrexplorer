@@ -37,7 +37,6 @@ add_executable(amrexplorer_qt
     ParticleController.cpp
     ParticleController.hpp
     QtErrorText.hpp
-    WidgetImageExport.hpp
     RangeController.cpp
     RangeController.hpp
     RemoteEndpoint.hpp
@@ -63,6 +62,7 @@ add_executable(amrexplorer_qt
     VolumeController.hpp
     VolumeWindow.cpp
     VolumeWindow.hpp
+    WidgetImageExport.hpp
     main.cpp
     ${CMAKE_SOURCE_DIR}/resources/amrexplorer.qrc
     ${CMAKE_SOURCE_DIR}/resources/user-guide.qrc

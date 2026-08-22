@@ -93,6 +93,9 @@ public:
     void expect(const QString& typed) { m_typed = typed; }
     [[nodiscard]] int fileDialogs() const noexcept { return m_fileDialogs; }
     [[nodiscard]] int messageBoxes() const noexcept { return m_messageBoxes; }
+    // Something the driver could not drive; the run must fail rather than
+    // report on counters taken in that state.
+    [[nodiscard]] bool stuck() const noexcept { return m_stuck; }
     void resetCounts()
     {
         m_fileDialogs = 0;
@@ -113,11 +116,23 @@ private:
             // protected, and this runs the dialog's real accept path (the one
             // a user's click runs) rather than done() closing it behind that
             // path's back.
-            QMetaObject::invokeMethod(save, "accept");
+            if (!QMetaObject::invokeMethod(save, "accept")) {
+                // Otherwise pump() re-selects every 5 ms until the watchdog
+                // fires, with nothing in the log to say why.
+                qCritical("could not accept the save dialog");
+                m_stuck = true;
+                save->reject();
+            }
             return;
         }
         if (auto* box = qobject_cast<QMessageBox*>(modal)) {
-            ++m_messageBoxes;
+            // Only the window's own prompts are counted. QFileDialog raises its
+            // own "already exists / replace?" warning, which this answers the
+            // same way -- counting both would let Qt's box stand in for a
+            // prompt the slot stopped making.
+            if (box->windowTitle() == QStringLiteral("Export Volume Image")) {
+                ++m_messageBoxes;
+            }
             // A specific button, not accept(): accept() leaves clickedButton()
             // null, which QMessageBox::question reads as the negative answer.
             if (auto* yes = box->button(QMessageBox::Yes)) {
@@ -131,9 +146,10 @@ private:
             }
             return;
         }
-        // Something unexpected: closing it beats hanging until the ctest
-        // timeout with no message.
+        // A wrong state, not a nuisance: dismissing it quietly would let the
+        // run finish green on a dialog nobody expected.
         qCritical("an unexpected modal was open during the export");
+        m_stuck = true;
         modal->close();
     }
 
@@ -141,6 +157,7 @@ private:
     QString m_typed;
     int m_fileDialogs = 0;
     int m_messageBoxes = 0;
+    bool m_stuck = false;
 };
 
 // Triggers File > Export Image... by name and returns once the whole export
@@ -158,10 +175,14 @@ bool triggerExport(amrvis::qt::VolumeWindow& volume)
     return true;
 }
 
-// How many distinct pixel values a picture holds, up to `cap`. A bare
-// background, or a background plus a white wireframe, holds a handful; a
-// rendered volume holds many. Cheap proof that the frame reached the file
-// without re-deriving what the frame should look like.
+// A rendered volume spans many pixel values; a bare background, or a
+// background plus a white wireframe, spans a handful. Cheap proof that the
+// frame reached the file without re-deriving what the frame should look like.
+// The scan stops well above the threshold so the two are independent -- a cap
+// equal to the threshold would only ever assert "the scan reached its cap".
+constexpr int volumeColourThreshold = 9;
+constexpr int colourScanCap = 64;
+
 int distinctColours(const QImage& image, int cap)
 {
     QSet<QRgb> seen;
@@ -183,9 +204,20 @@ void armExportChecks(amrvis::qt::MainWindow& window, QApplication& application,
 {
     const auto driver = std::make_shared<ModalDriver>(
         stem + QStringLiteral(".png"));
+    // Each export spins a nested event loop, which can deliver the next
+    // render's frameDisplayed and re-enter these handlers -- clobbering the
+    // counters the outer run is about to read. One pass each, as
+    // SmokeHarnessSequence guards its own re-slices.
+    const auto opened = std::make_shared<bool>(false);
+    const auto exported = std::make_shared<bool>(false);
 
     QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-        &application, [&window, &application, driver, stem](bool success) {
+        &application, [&window, &application, driver, stem, opened](
+                          bool success) {
+            if (*opened) {
+                return;
+            }
+            *opened = true;
             if (!success) {
                 application.exit(2);
                 return;
@@ -217,20 +249,25 @@ void armExportChecks(amrvis::qt::MainWindow& window, QApplication& application,
             if (QFileInfo::exists(stem + QStringLiteral(".png"))) {
                 qCritical("the refused export wrote a file anyway");
                 application.exit(1);
+                return;
+            }
+            if (driver->stuck()) {
+                application.exit(1);
             }
         });
 
     QObject::connect(&window, &amrvis::qt::MainWindow::volumeFrameDisplayed,
-        &application, [&window, &application, driver, stem] {
+        &application, [&window, &application, driver, stem, exported] {
+            if (*exported) {
+                return;
+            }
+            *exported = true;
             auto* volume = volumeWindow(window);
             if (volume == nullptr) {
                 qCritical("no volume window on screen");
                 application.exit(1);
                 return;
             }
-            const auto expected
-                = volume->viewSize() * volume->devicePixelRatioF();
-
             // A name that already says png: one dialog, and no question,
             // because the rule leaves such a name alone.
             driver->resetCounts();
@@ -244,6 +281,12 @@ void armExportChecks(amrvis::qt::MainWindow& window, QApplication& application,
                 application.exit(1);
                 return;
             }
+            // Read after the export, not before it: showRendering makes the
+            // "Rendering..." label visible in the same dock as the view, so
+            // the view's size can change inside the dialog's nested loop and a
+            // size sampled earlier would fail a correct export.
+            const auto expected
+                = volume->viewSize() * volume->devicePixelRatioF();
             QImage written;
             if (!written.load(stem + QStringLiteral(".png"))
                 || written.size() != expected) {
@@ -251,7 +294,8 @@ void armExportChecks(amrvis::qt::MainWindow& window, QApplication& application,
                 application.exit(1);
                 return;
             }
-            if (distinctColours(written, 9) < 9) {
+            if (distinctColours(written, colourScanCap)
+                < volumeColourThreshold) {
                 qCritical("the exported picture holds too few colours to be a "
                           "rendered volume");
                 application.exit(1);
@@ -282,6 +326,10 @@ void armExportChecks(amrvis::qt::MainWindow& window, QApplication& application,
                 application.exit(1);
                 return;
             }
+            if (driver->stuck()) {
+                application.exit(1);
+                return;
+            }
             application.exit(0);
         });
 }
@@ -304,17 +352,9 @@ Outcome dispatchVolume(Context& context)
     } else if (argc == 4
         && std::string_view(argv[1]) == "--volume-export-smoke-test") {
         const std::filesystem::path path(argv[2]);
-        // Its own open handler rather than armVolumeChecks: the coverage check
-        // there exits 0 on the first frame, which would end the run before the
-        // export ever happened.
-        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-            &application, [&window, &application](bool success) {
-                if (!success) {
-                    application.exit(2);
-                    return;
-                }
-                window.showVolumeWindowForTest();
-            });
+        // Not armVolumeChecks: its coverage check exits 0 on the first frame,
+        // which would end the run before an export happened. armExportChecks
+        // opens the window itself, so there is one handler for that here.
         armExportChecks(window, application, QString::fromUtf8(argv[3]));
         QTimer::singleShot(30000, &application,
             [&application] { application.exit(3); });

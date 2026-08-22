@@ -6,7 +6,6 @@
 // lived inside a private slot; as free functions they are unit-tested against a
 // synthetic widget in tests/unit/test_widget_image_export.cpp.
 
-#include <QColor>
 #include <QImage>
 #include <QPoint>
 #include <QRegion>

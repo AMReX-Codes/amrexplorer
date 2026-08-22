@@ -498,6 +498,26 @@ int main()
     volume.maximumVoxels = 1 << 20;
     require(codec::fromWire(codec::toWire(volume)) == volume,
         "a volume request with a range did not round-trip");
+    // The two logarithmic flags, against the wire rather than through a
+    // round trip. They are both bools and mean opposite cases -- one is the
+    // explicit range's mapping, the other the mapping asked for when there is
+    // no range -- so a converter that transposed them would round-trip
+    // cleanly and show up only against a third-party or mixed-version peer.
+    {
+        const auto withRange = codec::toWire(volume);
+        require(withRange.has_range && withRange.range_logarithmic
+                && !withRange.visible_logarithmic,
+            "a request's explicit logarithmic range did not set "
+            "range_logarithmic alone");
+        auto visible = volume;
+        visible.range.reset();
+        visible.logarithmic = true;
+        const auto withoutRange = codec::toWire(visible);
+        require(!withoutRange.has_range && withoutRange.visible_logarithmic
+                && !withoutRange.range_logarithmic,
+            "a request's Visible logarithmic mapping did not set "
+            "visible_logarithmic alone");
+    }
     volume.range.reset();
     volume.logarithmic = true;
     require(codec::fromWire(codec::toWire(volume)) == volume,

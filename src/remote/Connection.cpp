@@ -304,9 +304,10 @@ public:
         //
         // Only this path and cacheRequest do it in this order today; the
         // slice, line, page, range and particle paths all commit first and
-        // have the same hole. Fixing those is a change to five pre-existing
-        // call sites and belongs on its own -- see
-        // agent-notes/volume-remote-follow-ups.md.
+        // have the same hole. Fixing those means changing five pre-existing
+        // call sites that each have their own tests, so it belongs in a
+        // change of its own -- ideally behind one helper that decodes then
+        // commits, rather than five swaps that can drift apart again.
         auto frame = codec::fromWire(*payload);
         updateCache(request.dataset, codec::fromWire(payload->cache.get()));
         return frame;

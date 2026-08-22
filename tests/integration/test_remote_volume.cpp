@@ -151,13 +151,18 @@ int main(int argc, char* argv[])
             "the server did not report the range it resolved");
         visible.logarithmic = true;
         const auto resolvedLog = remote->renderVolume(visible);
-        // The field has zeros, so a logarithmic range is not viable: the
-        // server falls back to linear over the positive extrema... which is
-        // still what it reports; either way it must be usable and honest.
-        require(resolvedLog.usedRange.minimum < resolvedLog.usedRange.maximum
-                && (!resolvedLog.usedRange.logarithmic
-                    || resolvedLog.usedRange.minimum > 0.0),
-            "the server reported an unusable logarithmic range");
+        // The field runs down to zero, so a logarithmic range is not viable
+        // and the server falls back to linear over every finite value --
+        // visibleVolumeRange's rule, answered the same way it would be
+        // locally. Asserting the fallback itself, because the "usable and
+        // honest" form of this was a tautology: validateSessionVolumeResult
+        // has already thrown on every frame that fails it, so it could not
+        // fire.
+        require(!resolvedLog.usedRange.logarithmic
+                && resolvedLog.usedRange.minimum == resolved.usedRange.minimum
+                && resolvedLog.usedRange.maximum == resolved.usedRange.maximum,
+            "asking for a logarithmic Visible range on non-positive data did "
+            "not fall back to the linear one");
 
         // --- cancellation ------------------------------------------------
         {

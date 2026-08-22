@@ -4,7 +4,6 @@
 #include <amrexplorer/data/DatasetSession.hpp>
 
 #include <array>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -85,18 +84,19 @@ public:
     [[nodiscard]] bool supportsVolumeRendering() const noexcept override;
     [[nodiscard]] VolumeFrame renderVolume(const VolumeRenderRequest& request,
         StopToken cancellation = {}) override;
+    // The same render with a bound on the threads it may use, or 0 to leave
+    // the choice to the ray caster (which takes hardware concurrency). A
+    // server already runs each request on a worker of its own pool, so
+    // without a bound the two multiply. Passed per render rather than set on
+    // the session: concurrent renders would clobber shared state, and each
+    // one would then run on whichever count landed last.
+    [[nodiscard]] VolumeFrame renderVolume(const VolumeRenderRequest& request,
+        StopToken cancellation, unsigned renderThreads);
     // The sampled-grid cache's budget; grids larger than it are rendered
     // uncached. Returns whether the cache fits the new budget, which a zero
     // budget does (every unpinned grid is evicted and nothing is resident);
     // it is false only while a pinned grid still exceeds it.
     [[nodiscard]] bool setVolumeGridCacheBudget(std::uint64_t bytes);
-
-    // Threads a single volume render may use, or 0 to leave the choice to
-    // the ray caster (which takes hardware concurrency). A server already
-    // runs each request on a worker of its own pool, so without this the two
-    // multiply: N concurrent renders spawn N x cores raw threads and the
-    // operator's --threads stops bounding anything.
-    void setVolumeRenderThreads(unsigned threads) noexcept;
 
     // The block pool alone. setCacheBudget deliberately moves both pools,
     // which is what a user setting one number wants -- but a server applying
@@ -142,9 +142,6 @@ private:
     // same key and mapping frame after frame.
     std::optional<std::pair<VolumeGridKey, bool>> m_visibleRangeFor;
     VolumeRange m_visibleRange;
-    // Read on the render path and written once by whoever configures the
-    // session, so it does not travel with m_mutex.
-    std::atomic<unsigned> m_volumeRenderThreads{0};
 };
 
 } // namespace amrvis

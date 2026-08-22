@@ -825,8 +825,8 @@ private:
         // number that had stopped meaning anything.
         auto frame = [&] {
             const RenderCount counted(m_rendersInFlight);
-            dataset->setVolumeRenderThreads(volumeRenderThreads());
-            return dataset->renderVolume(request, cancellation);
+            return dataset->renderVolume(
+                request, cancellation, volumeRenderThreads());
         }();
         // One encode, and the pixels moved into it. send() makes the exact
         // size check itself before touching the socket and answers an
@@ -1072,24 +1072,33 @@ private:
             (available - rasterBytes) / bytesPerGridBox);
     }
 
-    // How many threads one volume render may use: the machine shared between
-    // the renders actually running on it, counted server-wide across every
-    // session. Dividing by the *worker* count instead would pin every render
-    // to one thread in the deployment that matters most -- workerCount
-    // defaults to hardware concurrency, and --stdio serves one client with
-    // one render in flight, so a 32-core server would ray-cast on one thread
-    // while 31 workers idled.
+    // How many threads one volume render may use: the operator's CPU budget
+    // shared between the renders actually running, counted server-wide.
     //
-    // Approximate by construction: the count moves while a render is being
-    // set up, and two renders on one session race to store it. Both are fine
-    // for a thread-count heuristic -- the number only has to be near right,
-    // and the ray caster clamps it either way.
+    // The budget is workerCount, not hardware concurrency. --threads is what
+    // an operator sets to bound this server's CPU, and it is the only figure
+    // that knows about a container quota -- hardware_concurrency() reports
+    // the host's cores, so `--threads 1` inside a two-CPU cgroup on a 64-core
+    // machine would otherwise put 64 threads on one ray cast. workerCount
+    // defaults to hardware concurrency, so an unconfigured server still gives
+    // a lone render the machine.
+    //
+    // Dividing by the renders in flight rather than by workerCount is what
+    // keeps that lone render from being pinned to one thread: --stdio serves
+    // one client with one render at a time, which is the case that matters
+    // most and the one a static division gets worst.
+    //
+    // A render keeps the count it started with, so a burst that arrives
+    // together can transiently exceed the budget -- eight simultaneous first
+    // renders read 1, 2, ... 8 and sum to about 2.7 times it. Holding to the
+    // budget exactly needs render threads drawn from a shared pool of tokens
+    // rather than a number computed per render; see the follow-up note.
     [[nodiscard]] unsigned int volumeRenderThreads() const noexcept
     {
-        const auto hardware = std::max(1U, std::thread::hardware_concurrency());
+        const auto budget = std::max(1U, m_options.workerCount);
         const auto running = std::max(1U,
             m_rendersInFlight.load(std::memory_order_relaxed));
-        return std::max(1U, hardware / running);
+        return std::max(1U, budget / running);
     }
 
     // overheadBytes defaults to the slice reserve, which is what every

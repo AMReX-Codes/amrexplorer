@@ -524,6 +524,9 @@ Startup interface:
 ```text
 amrexplorer-server [--stdio | --port PORT] [--threads COUNT]
                [--max-frame-mib SIZE] [--max-datasets COUNT]
+               [--max-volume-voxels N] [--volume-cache-mib MIB]
+               [--write-stall-timeout-seconds SECONDS]
+               [--write-min-kib-per-second KIB]
 ```
 
 In `--stdio` mode (the deployment mode, amended 2026-08-16) the server serves

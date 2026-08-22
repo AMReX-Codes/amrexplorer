@@ -324,7 +324,8 @@ concrete 1.2; `ARCHITECTURE.md` trust boundaries).
   fixture `remote_server_3d_materialized`).
 
 ### PR8 — Polish and docs (S/M)
-Volume window "Export Image..." (`grab()` → PNG); hi-DPI (device-resolution
+Volume window "Export Image..." (PNG; `grab()` would bake the preset buttons
+in, so the view is rendered without its children); hi-DPI (device-resolution
 render, `viewportFrame(w·dpr, h·dpr, margin·dpr)` both sides); trilinear option
 (request field + wire field, quality High); `docs/user-guide.md` new "Volume
 rendering" section after "Working with 3-D data" (:269); `docs/ARCHITECTURE.md`
@@ -391,6 +392,20 @@ row, threading note; `docs/building.md` unchanged.
   seam to join a sequence export.
 - **Frame compression on the wire** — RLE or 8-bit indexed pixels for slow
   links; half-resolution drafts are the mitigation today.
+- **End-to-end coverage of "Export Image..."** — the rules it applies (the
+  `.png` name, and rendering the view without the preset buttons parked over
+  it) are unit-tested in `test_widget_image_export`, but nothing drives the menu
+  action, so the slot's own wiring — the wait-for-a-frame guard, the name rule,
+  the confirmation, the device pixel ratio — is uncovered. A harness that
+  triggered the action and answered its modals from a timer was written and
+  withdrawn: it failed roughly 3% of `ctest` runs, because
+  `application.exit()` called from a handler that a nested modal loop delivered
+  quits that loop rather than the run. Collect a verdict, let the stack unwind,
+  and exit from a zero-timer at the outer level; give the dock's status labels a
+  horizontal size policy of `Ignored` so showing "Rendering…" stops changing the
+  view's size mid-export; and set `QT_SCALE_FACTOR=2` on the test, since the
+  offscreen platform reports a ratio of 1 and an export that hardcodes 1
+  otherwise passes every assertion.
 
 ## Risks
 

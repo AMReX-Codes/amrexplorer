@@ -126,11 +126,12 @@ private:
             return;
         }
         if (auto* box = qobject_cast<QMessageBox*>(modal)) {
-            // Only the window's own prompts are counted. QFileDialog raises its
-            // own "already exists / replace?" warning, which this answers the
-            // same way -- counting both would let Qt's box stand in for a
-            // prompt the slot stopped making.
-            if (box->windowTitle() == QStringLiteral("Export Volume Image")) {
+            // Only the window's own prompts are counted, by the name it sets
+            // on them. QFileDialog raises its own "already exists / replace?"
+            // warning, which this answers the same way -- counting both would
+            // let Qt's box stand in for a prompt the slot stopped making. Not
+            // by window title: macOS ignores it, so that counted nothing there.
+            if (box->objectName() == QStringLiteral("volumeExportPrompt")) {
                 ++m_messageBoxes;
             }
             // A specific button, not accept(): accept() leaves clickedButton()

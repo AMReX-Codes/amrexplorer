@@ -62,6 +62,18 @@ QImage VolumeWindow::renderedView(qreal devicePixelRatio) const
     return renderWidgetWithoutChildren(*m_view, devicePixelRatio);
 }
 
+int VolumeWindow::showExportPrompt(QMessageBox::Icon icon, const QString& text,
+    QMessageBox::StandardButtons buttons)
+{
+    // Named, so a smoke harness can tell this window's prompts from the ones Qt
+    // raises itself -- QFileDialog has its own overwrite warning. The window
+    // title cannot serve: macOS ignores it by platform convention, so a
+    // title-matching harness counts nothing there.
+    QMessageBox box(icon, tr("Export Volume Image"), text, buttons, this);
+    box.setObjectName(QStringLiteral("volumeExportPrompt"));
+    return box.exec();
+}
+
 void VolumeWindow::exportImage()
 {
     // Refused before the dialog, as the main window's export does: with no
@@ -71,8 +83,9 @@ void VolumeWindow::exportImage()
     // so it is the frame on screen when the save is confirmed rather than one
     // held across a nested event loop.
     if (!m_view->drawsVolume()) {
-        QMessageBox::information(this, tr("Export Volume Image"),
-            tr("Wait for the volume to render before exporting an image."));
+        showExportPrompt(QMessageBox::Information,
+            tr("Wait for the volume to render before exporting an image."),
+            QMessageBox::Ok);
         return;
     }
     const auto chosen = QFileDialog::getSaveFileName(this,
@@ -101,7 +114,7 @@ void VolumeWindow::exportImage()
         if (QFileInfo::exists(path)) {
             text += QLatin1Char('\n') + tr("That file already exists.");
         }
-        if (QMessageBox::question(this, tr("Export Volume Image"), text,
+        if (showExportPrompt(QMessageBox::Question, text,
                 QMessageBox::Save | QMessageBox::Cancel)
             != QMessageBox::Save) {
             return;
@@ -119,8 +132,8 @@ void VolumeWindow::exportImage()
         return;
     }
     if (!image.save(path, "PNG")) {
-        QMessageBox::critical(this, tr("Export Volume Image"),
-            tr("Cannot write %1").arg(path));
+        showExportPrompt(QMessageBox::Critical,
+            tr("Cannot write %1").arg(path), QMessageBox::Ok);
     }
 }
 

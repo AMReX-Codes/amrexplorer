@@ -294,7 +294,8 @@ void VolumeController::startRender()
     const int height = std::max(1, m_interacting ? viewSize.height() / 2 : viewSize.height());
     request.outputSize = {std::min(width, maxVolumeOutputDimension),
         std::min(height, maxVolumeOutputDimension)};
-    request.logarithmic = rangeSelection.logarithmic;
+    // No request.logarithmic here: the choice built below carries it, and
+    // the pipeline sets it from there before each attempt's range resolve.
     request.transfer = makeVolumeTransferFunction(
         m_hooks.palette ? m_hooks.palette() : builtinPalette(BuiltinPalette::Rainbow),
         m_window->ramp());

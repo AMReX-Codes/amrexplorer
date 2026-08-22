@@ -433,6 +433,12 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                             configureSlicePositionControls();
                             updateRangeModeAvailability();
                             syncMenuChecks();
+                            // The combo moved behind a signal blocker, so the
+                            // volume window is not told by the usual
+                            // currentIndexChanged: without this its frame and
+                            // its "level N" label keep the level the slices
+                            // just fell back from.
+                            m_volumeController->refresh();
                         }
                         statusBar()->showMessage(cacheFallbackMessage(
                             *dataset, fallbackFromLevel, fallbackToLevel));

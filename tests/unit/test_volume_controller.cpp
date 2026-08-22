@@ -529,5 +529,25 @@ int main(int argc, char** argv)
             "the fallback render did not finish");
         controller.closeWindow();
     }
+
+    // The logarithmic flag rides on the VolumeRangeChoice, not on the request
+    // the controller hands over: the pipeline sets it per attempt, so nothing
+    // here writes it and only the arriving request proves it got through.
+    {
+        rangeSelection.logarithmic = true;
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        const auto before = session->requests.load();
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return session->requests == before + 1; },
+            "the logarithmic render did not run");
+        require(session->requestsSoFar().back().logarithmic,
+            "the logarithmic flag did not reach the request");
+        rangeSelection.logarithmic = false;
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the logarithmic render did not finish");
+        controller.closeWindow();
+    }
     return 0;
 }

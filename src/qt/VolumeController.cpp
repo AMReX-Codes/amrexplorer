@@ -405,6 +405,17 @@ void VolumeController::startRender()
     // pipeline lowers the level, and a Level range read at the level asked
     // for would colour and label pixels no part of that level produced. The
     // overload taking it re-resolves per attempt (VolumePipeline.hpp).
+    //
+    // The Visible mode is left to the renderer, which resolves it from the
+    // grid it sampled. That is a different span than the slices and the Color
+    // Scale show, and the guide says so. Making them agree wants the resolved
+    // range published on RangeController::Selection, written where the colour
+    // scale itself is written, so it arrives beside the mode it belongs to and
+    // for the selection then in effect. Fetching it through a separate hook
+    // was tried and withdrawn: it needs a staleness key rebuilt by hand here,
+    // and that key cannot be made right -- after a cache fallback the level
+    // combo reads "Level 0 only" while the plane came from a finest-available
+    // request, so it never matches again.
     const VolumeRangeChoice rangeChoice{rangeSelection.mode,
         rangeSelection.userRange, rangeSelection.logarithmic};
     watcher->setFuture(QtConcurrent::run(

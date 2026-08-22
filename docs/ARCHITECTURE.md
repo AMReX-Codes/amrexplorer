@@ -15,13 +15,16 @@ whole compute path can run — and be tested — headless.
                  |            (orchestrates; owns no data-reading logic)
    +-------------+-------------+
    |             |             |
- pipeline      render2d       data          pipeline: SlicePipeline, DisplayCoordinator,
+ pipeline      render2d       data          pipeline: SlicePipeline, VolumePipeline, DisplayCoordinator,
    |             |             |                       SliceRangeResolver, ParticleProjection
  query           |          (LocalDatasetSession,     render2d: ScalarRenderer, Contours,
    |             |           RemoteDatasetSession,               VectorGlyphs, SphericalWarp, Palette
-  io            core         SessionValidation, ...)   query:   SliceQuery, LineQuery
-   |             |             |             |          io:      plotfile readers, FitsWriter
-  core         cache         core          remote      core:    Geometry, Metadata, Request, Result
+  io            core         SessionValidation, ...)   render3d: VolumeRaycaster (data links it:
+   |             |             |             |                    a session samples and renders)
+  core         cache         core          remote      query:   SliceQuery, LineQuery, VolumeQuery
+                                                        io:      plotfile readers, FitsWriter
+                                                        core:    Geometry, Metadata, Request, Result,
+                                                                 Volume, OrthoProjection
                                                         cache:   ByteLruCache
                                                         remote:  Frame/Channel, Codec, Connection, Server
 ```
@@ -62,6 +65,7 @@ the window, wired to it in one of two ways:
 | `FabNavigator` | standalone FAB / MultiFab navigation: the selector dock, drill-down and return, the async header reads | `test_fab_navigator` |
 | `RemoteSessionController` | the ssh-launched server session and its connection, the Open Remote dialog (`RemoteOpenDialog`), the remote browser (`RemoteFileDialog`), per-destination settings | `test_remote_session_controller`, `test_remote_open_dialog`, `test_remote_file_dialog` |
 | `RangeController` | the range mode / User min-max / Log widgets and the per-field range memory | `test_range_controller` |
+| `VolumeController` | the Volume Rendering window (an `IsoWidget` view with the rendered volume under its wireframe, and the opacity/quality controls), following the field, level, range and palette; render scheduling with drafts while the camera moves | `test_volume_controller` |
 
 Two rules keep the seams honest. A collaborator exposes only what has a
 production caller — a public method or signal that exists for a test is a
@@ -103,6 +107,13 @@ The GUI opens one or the other and is otherwise agnostic to where the data lives
 - The block **cache** (`ByteLruCache`) is byte-budgeted; a query pins every block
   it composites for the duration of the query, and an over-budget composite
   falls back to a coarser level rather than failing.
+- A **volume render** is one worker task (a `QtConcurrent` run in the GUI, a
+  pool worker in the server) inside which the ray caster splits the rows
+  across its own short-lived `std::thread`s and joins them before returning;
+  the picture does not depend on the split. The sampled grid is cached in the
+  session when it fits that cache's budget, so a camera change re-casts
+  without re-reading the plotfile; one that does not fit is rendered from the
+  local copy and forgotten, and the next camera change resamples it.
 
 ## Trust boundaries
 
@@ -129,6 +140,7 @@ either should preserve its invariants.
 | To understand… | Start at |
 |---|---|
 | A slice request end to end | `src/pipeline/SlicePipeline.cpp` → `src/query/SliceQuery.cpp` |
+| A volume frame end to end | `src/pipeline/VolumePipeline.cpp` → `src/data/LocalDatasetSession.cpp` (`renderVolume`) → `src/query/VolumeQuery.cpp` → `src/render3d/VolumeRaycaster.cpp`; the camera math both the view and the caster use is `include/amrexplorer/core/OrthoProjection.hpp` |
 | Plotfile reading / hardening | `src/io/plotfile/`, `include/amrexplorer/io/detail/FabHeaderParsing.hpp` |
 | The remote protocol | `src/remote/Codec.hpp`, `Frame.cpp` (Channel/Socket), `Server.cpp`, `Connection.cpp` |
 | Response validation | `src/data/SessionValidation.cpp` |

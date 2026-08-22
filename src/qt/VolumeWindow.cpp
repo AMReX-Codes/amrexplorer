@@ -2,11 +2,19 @@
 
 #include "IsoWidget.hpp"
 
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDockWidget>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFormLayout>
+#include <QImage>
+#include <QKeySequence>
 #include <QLabel>
+#include <QMenu>
+#include <QMenuBar>
+#include <QMessageBox>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QHBoxLayout>
@@ -31,6 +39,58 @@ VolumeWindow::VolumeWindow(QWidget* parent)
     connect(m_view, &IsoWidget::viewResized, this,
         [this] { emit viewResized(); });
     buildControls();
+
+    // File > Export Image...: the view as drawn (frame and overlays), as PNG.
+    auto* fileMenu = menuBar()->addMenu(tr("&File"));
+    auto* exportAction = new QAction(tr("&Export Image..."), this);
+    exportAction->setShortcut(QKeySequence::Save);
+    connect(exportAction, &QAction::triggered, this, [this] { exportImage(); });
+    fileMenu->addAction(exportAction);
+    auto* closeAction = new QAction(tr("&Close"), this);
+    closeAction->setShortcut(QKeySequence::Close);
+    connect(closeAction, &QAction::triggered, this, [this] { close(); });
+    fileMenu->addAction(closeAction);
+}
+
+void VolumeWindow::exportImage()
+{
+    const auto chosen = QFileDialog::getSaveFileName(this,
+        tr("Export Volume Image"), QString(), tr("PNG images (*.png)"));
+    if (chosen.isEmpty()) {
+        return;
+    }
+    // save() forces PNG whatever the name, so a name that does not already say
+    // png gets it appended -- a typed "shot" would otherwise hold PNG bytes
+    // under a name nothing opens. A name that does say it is left exactly as
+    // typed, case included: rewriting "shot.PNG" to "shot.png" would write
+    // past the file the user picked on a case-sensitive filesystem.
+    auto path = chosen;
+    if (!path.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive)) {
+        path += QStringLiteral(".png");
+    }
+    // Only when that appended something. The dialog has already confirmed
+    // overwriting the name it returned, so asking again about that same name
+    // would be a second prompt for one save; but it never asked about a name
+    // appended to after it returned -- a typed "shot" beside an existing
+    // shot.png passes its existence check and would be overwritten silently.
+    // (setDefaultSuffix is not the fix: it only fills an empty suffix, so it
+    // would leave "shot.jpg" alone, and Qt applies it in selectedFiles(),
+    // after a native dialog has already prompted.)
+    if (path != chosen && QFileInfo::exists(path)
+        && QMessageBox::question(this, tr("Export Volume Image"),
+               tr("%1 already exists. Overwrite it?").arg(path))
+            != QMessageBox::Yes) {
+        return;
+    }
+    // Not grab(): that draws the widget's children, and the XY/XZ/YZ preset
+    // buttons are children parked over the render, so they would be baked
+    // into the picture. This renders the frame and the overlays only.
+    QImage image(m_view->size(), QImage::Format_ARGB32_Premultiplied);
+    m_view->render(&image, QPoint(), QRegion(), QWidget::DrawWindowBackground);
+    if (!image.save(path, "PNG")) {
+        QMessageBox::critical(this, tr("Export Volume Image"),
+            tr("Cannot write %1").arg(path));
+    }
 }
 
 void VolumeWindow::buildControls()

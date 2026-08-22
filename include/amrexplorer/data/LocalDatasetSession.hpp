@@ -103,6 +103,7 @@ public:
     // a *client's* requested budget must not let it raise the sampled-grid
     // cache past the limit the operator set with --volume-cache-mib.
     [[nodiscard]] bool setBlockCacheBudget(std::uint64_t bytes);
+
     // The sampled-grid pool on its own. cacheMetrics() reports the block
     // pool, because CacheMetrics carries one budget and one hit rate and the
     // remote snapshot asserts that budget is the one setCacheBudget was

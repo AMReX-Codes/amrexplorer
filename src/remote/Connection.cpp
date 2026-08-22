@@ -286,9 +286,7 @@ public:
         // wrapper that closes the connection on an unexpected exception has
         // supportsVolumeRendering() to test, so it never has to reach this.
         if (!supportsVolumeRendering()) {
-            throw std::runtime_error(
-                "the remote server predates volume rendering (protocol "
-                "1.2); install a current amrexplorer-server");
+            throw std::runtime_error(volumeRenderingUnsupportedMessage);
         }
         // Indefinite: the first render of a field samples the plotfile,
         // which can outlast the request timeout; the token still cancels it.
@@ -303,7 +301,12 @@ public:
         // return a well-formed CacheState beside a malformed frame, and
         // storing metrics from a response that is about to be rejected
         // leaves a live connection describing a render that never happened.
-        // cacheRequest below establishes the same order.
+        //
+        // Only this path and cacheRequest do it in this order today; the
+        // slice, line, page, range and particle paths all commit first and
+        // have the same hole. Fixing those is a change to five pre-existing
+        // call sites and belongs on its own -- see
+        // agent-notes/volume-remote-follow-ups.md.
         auto frame = codec::fromWire(*payload);
         updateCache(request.dataset, codec::fromWire(payload->cache.get()));
         return frame;

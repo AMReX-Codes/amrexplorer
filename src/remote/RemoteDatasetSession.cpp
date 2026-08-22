@@ -130,35 +130,26 @@ ViewDataResult RemoteDatasetSession::requestView(
 
 bool RemoteDatasetSession::supportsVolumeRendering() const noexcept
 {
-    // Through the connection rather than re-deriving the version test: two
-    // copies of the 1.2 threshold would drift at the next protocol bump, and
-    // renderVolume tests them in sequence to tell the two causes apart.
+    // The whole capability: the protocol carries it and the dataset has one
+    // to render. renderVolume tests the two halves separately, so each of its
+    // refusals can name its own cause.
     return m_connection->supportsVolumeRendering()
-        && m_metadata.dimension == 3 && !m_metadata.isFab
-        && m_metadata.hasPhysicalGeometry;
+        && datasetSupportsVolumeRendering(m_metadata);
 }
 
 VolumeFrame RemoteDatasetSession::renderVolume(
     const VolumeRenderRequest& request, StopToken cancellation)
 {
     requireOpen();
-    // Both refusals happen outside refusingInvalidResponses, whose catch(...)
-    // closes the connection: neither says the peer misbehaved. A server that
-    // predates 1.2, or a dataset that cannot be volume-rendered at all, is a
-    // capability the caller asked for and did not get -- losing the session
-    // and every other open dataset over it is not the answer. The local
-    // session refuses the second case the same way.
-    //
-    // The server first, because supportsVolumeRendering() below is the *whole*
-    // capability and folds the protocol version in: asking it first would
-    // answer a 1.1 server with the dataset's message and send the user to
-    // look at their plotfile.
+    // Outside refusingInvalidResponses, whose catch(...) closes the
+    // connection: neither refusal says the peer misbehaved, and losing the
+    // session and every other open dataset over a capability the caller asked
+    // for and did not get is not the answer. One test per cause, so each
+    // names what actually failed.
     if (!m_connection->supportsVolumeRendering()) {
-        throw std::runtime_error(
-            "the remote server predates volume rendering (protocol 1.2); "
-            "install a current amrexplorer-server");
+        throw std::runtime_error(volumeRenderingUnsupportedMessage);
     }
-    if (!supportsVolumeRendering()) {
+    if (!datasetSupportsVolumeRendering(m_metadata)) {
         throw std::invalid_argument(
             "volume rendering requires a 3-D plotfile with physical geometry");
     }

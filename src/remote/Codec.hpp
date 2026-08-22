@@ -132,7 +132,7 @@ struct ParticleSampleRequestData {
 [[nodiscard]] fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value);
 [[nodiscard]] VolumeRenderRequest fromWire(const fb::RenderedFrameRequestT& value);
 [[nodiscard]] fb::RenderedFrameResponseT toWire(
-    const VolumeFrame& value, const CacheMetrics& cache);
+    VolumeFrame value, const CacheMetrics& cache);
 [[nodiscard]] VolumeFrame fromWire(const fb::RenderedFrameResponseT& value);
 
 } // namespace amrvis::remote::codec

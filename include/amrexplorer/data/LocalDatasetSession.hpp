@@ -4,11 +4,11 @@
 #include <amrexplorer/data/DatasetSession.hpp>
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
-#include <atomic>
 #include <map>
 #include <memory>
 #include <mutex>

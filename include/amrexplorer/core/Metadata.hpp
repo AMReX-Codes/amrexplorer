@@ -100,6 +100,15 @@ struct MetadataIssue {
 [[nodiscard]] RealBox sampleBounds(
     const LevelMetadata& level, const IntBox& box, int dimension) noexcept;
 [[nodiscard]] RealBox datasetSampleBounds(const DatasetMetadata& metadata) noexcept;
+
+// Whether this dataset has a volume to render at all: three dimensions, real
+// blocks rather than a standalone FAB, and physical geometry to place them
+// in. Shared, because the local session, the remote session and anything
+// deciding whether to offer the view must all answer it the same way -- and
+// because the remote session refuses a dataset and an out-of-date server
+// separately, so it needs this half on its own.
+[[nodiscard]] bool datasetSupportsVolumeRendering(
+    const DatasetMetadata& metadata) noexcept;
 [[nodiscard]] int sampleIndex(
     const LevelMetadata& level, int axis, double position);
 

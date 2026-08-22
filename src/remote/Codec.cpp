@@ -989,12 +989,15 @@ VolumeRenderRequest fromWire(const fb::RenderedFrameRequestT& value)
 }
 
 fb::RenderedFrameResponseT toWire(
-    const VolumeFrame& value, const CacheMetrics& cache)
+    VolumeFrame value, const CacheMetrics& cache)
 {
     fb::RenderedFrameResponseT wire;
     wire.width = value.width;
     wire.height = value.height;
-    wire.pixels = value.pixels;
+    // Moved, not copied: a frame at the output cap carries 67 MiB of pixels,
+    // and the builder and the encoded buffer each hold one of their own while
+    // this is alive.
+    wire.pixels = std::move(value.pixels);
     wire.used_minimum = value.usedRange.minimum;
     wire.used_maximum = value.usedRange.maximum;
     wire.used_logarithmic = value.usedRange.logarithmic;

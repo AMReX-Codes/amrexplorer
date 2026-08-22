@@ -286,8 +286,7 @@ ParticleSample LocalDatasetSession::requestParticleSample(
 
 bool LocalDatasetSession::supportsVolumeRendering() const noexcept
 {
-    return m_metadata.dimension == 3 && !m_metadata.isFab
-        && m_metadata.hasPhysicalGeometry;
+    return datasetSupportsVolumeRendering(m_metadata);
 }
 
 VolumeFrame LocalDatasetSession::renderVolume(

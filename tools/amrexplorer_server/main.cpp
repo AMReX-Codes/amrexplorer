@@ -297,8 +297,9 @@ int main(int argc, char* argv[])
         // the server, which would take the deliberate case with it.
         if (options.maximumVolumeVoxels * 4ULL > options.volumeGridCacheBytes) {
             std::cerr << "warning: --volume-cache-mib cannot hold one grid of "
-                         "--max-volume-voxels voxels, so sampled grids will "
-                         "not be cached\n";
+                         "--max-volume-voxels voxels, so a request asking for "
+                         "that many will render uncached every time; smaller "
+                         "requests still cache normally\n";
         }
 
         std::signal(SIGINT, handleSignal);

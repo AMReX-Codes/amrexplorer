@@ -29,6 +29,14 @@ struct ConnectionOptions {
     std::string sessionToken;
 };
 
+// Thrown by both layers when the negotiated protocol predates volume
+// rendering; one copy, because two would drift on the first protocol bump or
+// reworded hint and give the same condition different words depending on
+// which layer the caller entered through.
+inline constexpr const char* volumeRenderingUnsupportedMessage
+    = "the remote server predates volume rendering (protocol 1.2); install a "
+      "current amrexplorer-server";
+
 class Connection : public std::enable_shared_from_this<Connection> {
 public:
     // Connects to a loopback listener (tests and tools on one host).

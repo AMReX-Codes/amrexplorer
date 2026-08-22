@@ -324,9 +324,10 @@ ErrorData classifyError(const std::exception& error)
 class Session : public std::enable_shared_from_this<Session> {
 public:
     Session(std::unique_ptr<Channel> channel, ThreadPool& workers,
-        const ServerOptions& options)
+        std::atomic<unsigned int>& rendersInFlight, const ServerOptions& options)
         : m_channel(std::move(channel))
         , m_workers(workers)
+        , m_rendersInFlight(rendersInFlight)
         , m_options(options)
         , m_handshakeDeadline(
               std::chrono::steady_clock::now() + options.handshakeTimeout)
@@ -638,14 +639,6 @@ private:
             // block budget standing in for one.
             static_cast<void>(dataset->setVolumeGridCacheBudget(
                 m_options.volumeGridCacheBytes));
-            // The render's own threads, on top of the worker already running
-            // it. Left at the ray caster's default this is hardware
-            // concurrency per request, so the pool and the renders multiply
-            // and --threads bounds nothing; sharing the hardware between them
-            // keeps the two together near it. With the default worker count
-            // that is one thread per render, and with --threads 1 a single
-            // render still gets the machine.
-            dataset->setVolumeRenderThreads(volumeRenderThreads());
             OpenedDataset opened;
             opened.id = id;
             opened.catalog = dataset->metadata();
@@ -814,15 +807,28 @@ private:
         request.maximumVoxels = std::min<std::uint64_t>(
             request.maximumVoxels, m_options.maximumVolumeVoxels);
         const auto dataset = requireDataset(request.dataset);
-        const auto frame = dataset->renderVolume(request, cancellation);
-        // One encode. send() makes the exact size check itself before
-        // touching the socket, and answers an oversized response with the
-        // same ResourceLimitExceeded -- so encoding a 64 MiB buffer here just
-        // to measure it, then throwing it away and building it again, cost
-        // four times the peak memory and twice the work for nothing. Unlike
-        // sliceView there is nothing to shed on the second pass.
+        struct RenderCount {
+            std::atomic<unsigned int>& counter;
+            explicit RenderCount(std::atomic<unsigned int>& value) : counter(value)
+            {
+                counter.fetch_add(1, std::memory_order_relaxed);
+            }
+            ~RenderCount() { counter.fetch_sub(1, std::memory_order_relaxed); }
+            RenderCount(const RenderCount&) = delete;
+            RenderCount& operator=(const RenderCount&) = delete;
+        } counted(m_rendersInFlight);
+        dataset->setVolumeRenderThreads(volumeRenderThreads());
+        auto frame = dataset->renderVolume(request, cancellation);
+        // One encode, and the pixels moved into it. send() makes the exact
+        // size check itself before touching the socket and answers an
+        // oversized response with the same ResourceLimitExceeded, so encoding
+        // a buffer here just to measure it, discarding it and building it
+        // again was pure waste -- unlike sliceView there is nothing to shed on
+        // a second pass. The frame is not read after this, so its 67 MiB of
+        // pixels move rather than copy; the builder and the encoded buffer
+        // still hold one each, which is as few as this shape allows.
         send(envelope.request_id,
-            codec::toWire(frame, dataset->cacheMetrics()));
+            codec::toWire(std::move(frame), dataset->cacheMetrics()));
     }
 
     void lineView(
@@ -1057,18 +1063,28 @@ private:
             (available - rasterBytes) / bytesPerGridBox);
     }
 
-    // overheadBytes defaults to the slice reserve, which is what every
-    // response but a volume frame is measured against.
-    // How many threads one volume render may use. The worker running it is
-    // already one unit of the pool's parallelism, so leaving the ray caster
-    // to take hardware concurrency would multiply the two.
+    // How many threads one volume render may use: the machine shared between
+    // the renders actually running on it, counted server-wide across every
+    // session. Dividing by the *worker* count instead would pin every render
+    // to one thread in the deployment that matters most -- workerCount
+    // defaults to hardware concurrency, and --stdio serves one client with
+    // one render in flight, so a 32-core server would ray-cast on one thread
+    // while 31 workers idled.
+    //
+    // Approximate by construction: the count moves while a render is being
+    // set up, and two renders on one session race to store it. Both are fine
+    // for a thread-count heuristic -- the number only has to be near right,
+    // and the ray caster clamps it either way.
     [[nodiscard]] unsigned int volumeRenderThreads() const noexcept
     {
         const auto hardware = std::max(1U, std::thread::hardware_concurrency());
-        const auto workers = std::max(1U, m_options.workerCount);
-        return std::max(1U, hardware / workers);
+        const auto running = std::max(1U,
+            m_rendersInFlight.load(std::memory_order_relaxed));
+        return std::max(1U, hardware / running);
     }
 
+    // overheadBytes defaults to the slice reserve, which is what every
+    // response but a volume frame is measured against.
     [[nodiscard]] bool fitsResponse(std::uint64_t vectorBytes,
         std::uint64_t overheadBytes = responseOverheadReserveBytes) const noexcept
     {
@@ -1204,6 +1220,7 @@ private:
     static constexpr std::uint64_t responseOverheadReserveBytes
         = sliceResponseOverheadBytes;
     ThreadPool& m_workers;
+    std::atomic<unsigned int>& m_rendersInFlight;
     ServerOptions m_options;
     std::chrono::steady_clock::time_point m_handshakeDeadline;
     std::atomic<std::uint32_t> m_maximumFrameBytes;
@@ -1270,7 +1287,7 @@ public:
                 auto socket = std::make_unique<Socket>(acceptConnection(
                     m_listener->socket, m_acceptStop.get_token()));
                 auto session = std::make_shared<Session>(
-                    std::move(socket), m_workers, m_options);
+                    std::move(socket), m_workers, m_rendersInFlight, m_options);
                 std::scoped_lock lock(m_sessionsMutex);
                 std::erase_if(m_sessions,
                     [](const auto& worker) {
@@ -1389,7 +1406,7 @@ private:
                 return;
             }
             session = std::make_shared<Session>(
-                std::move(m_channel), m_workers, m_options);
+                std::move(m_channel), m_workers, m_rendersInFlight, m_options);
             m_singleSession = session;
         }
         session->run();
@@ -1404,6 +1421,9 @@ private:
     std::unique_ptr<Channel> m_channel;
     std::optional<Listener> m_listener;
     ThreadPool m_workers;
+    // Volume renders running right now, across every session: what each one
+    // divides the machine by when it picks its thread count.
+    std::atomic<unsigned int> m_rendersInFlight{0};
     std::atomic_bool m_stopping{false};
     StopSource m_acceptStop;
     std::mutex m_sessionsMutex;

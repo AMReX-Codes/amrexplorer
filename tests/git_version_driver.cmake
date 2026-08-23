@@ -84,9 +84,16 @@ file(MAKE_DIRECTORY "${tagged}")
 # generator having written a thing.
 file(REMOVE "${taggedOutput}")
 
+# Through `cmake -E env`, for the same reason the generator does it: a ctest run
+# started from a hook or `git rebase --exec` inherits GIT_DIR, GIT_WORK_TREE and
+# GIT_INDEX_FILE, and git would then init, commit and tag the developer's own
+# repository instead of the throwaway tree below -- leaving a v9.9.9 tag behind
+# that wins `git describe` for every later build.
 macro(run_git)
     execute_process(
-        COMMAND "${GIT_EXECUTABLE}" -c user.email=test@example.invalid
+        COMMAND "${CMAKE_COMMAND}" -E env
+            --unset=GIT_DIR --unset=GIT_WORK_TREE --unset=GIT_INDEX_FILE
+            "${GIT_EXECUTABLE}" -c user.email=test@example.invalid
             -c user.name=test -c commit.gpgsign=false ${ARGN}
         WORKING_DIRECTORY "${tagged}"
         RESULT_VARIABLE gitStatus
@@ -123,7 +130,9 @@ endif()
 # a signed tag is an annotated tag, and an annotated tag with no message opens
 # an editor, which here would hang rather than fail.
 execute_process(
-    COMMAND "${GIT_EXECUTABLE}" -c user.email=test@example.invalid
+    COMMAND "${CMAKE_COMMAND}" -E env
+        --unset=GIT_DIR --unset=GIT_WORK_TREE --unset=GIT_INDEX_FILE
+        "${GIT_EXECUTABLE}" -c user.email=test@example.invalid
         -c user.name=test -c tag.gpgSign=false tag -f "${tagName}"
     WORKING_DIRECTORY "${tagged}"
     RESULT_VARIABLE gitStatus

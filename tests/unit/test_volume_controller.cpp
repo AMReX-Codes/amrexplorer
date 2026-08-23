@@ -6,6 +6,7 @@
 // the window and drops a late result; a throwing session reports through
 // renderFailed and a cancelled one silently.
 
+#include "PlaneMapping.hpp"
 #include "VolumeController.hpp"
 #include "VolumeWindow.hpp"
 #include "IsoWidget.hpp"
@@ -16,6 +17,7 @@
 #include <QApplication>
 #include <QColor>
 #include <QAction>
+#include <QRectF>
 #include <QCheckBox>
 #include <QEvent>
 #include <QCoreApplication>
@@ -316,6 +318,52 @@ int main(int argc, char** argv)
         require(volumeOutputSize(view, 0.0, false)
                 == std::array<int, 2>{1, 1},
             "a zero ratio was not bounded to a legal size");
+    }
+
+    // --- raster pixels to a physical box --------------------------------
+    // The mapping the region of interest reads the viewport through, and the
+    // one a rubber-band zoom fetches through. Its trap is the vertical flip:
+    // raster rows count down, physical coordinates count up.
+    {
+        using amrvis::qt::physicalRegionForRasterRect;
+        const amrvis::RealBox raster{amrvis::Real3{{0.0, 0.0, 100.0}},
+            amrvis::Real3{{10.0, 20.0, 130.0}}};
+        const std::array<int, 2> axes{0, 1};   // an XY view: x across, y up
+        const auto whole = physicalRegionForRasterRect(
+            raster, 40.0, 30.0, QRectF(0.0, 0.0, 40.0, 30.0), axes);
+        require(whole == raster,
+            "the whole raster did not map back to the whole region");
+
+        // The left half of the raster is the low half of x.
+        const auto left = physicalRegionForRasterRect(
+            raster, 40.0, 30.0, QRectF(0.0, 0.0, 20.0, 30.0), axes);
+        require(left.lower[0] == 0.0 && left.upper[0] == 5.0,
+            "the left half of the raster is not the low half of x");
+        require(left.lower[1] == 0.0 && left.upper[1] == 20.0,
+            "narrowing x moved y as well");
+
+        // The TOP rows of the raster are the HIGH half of y. Getting this
+        // backwards mirrors the region about the middle of the plane, which
+        // on a symmetric domain looks entirely reasonable.
+        const auto top = physicalRegionForRasterRect(
+            raster, 40.0, 30.0, QRectF(0.0, 0.0, 40.0, 15.0), axes);
+        require(top.lower[1] == 10.0 && top.upper[1] == 20.0,
+            "the top of the raster did not map to the high half of y");
+        const auto bottom = physicalRegionForRasterRect(
+            raster, 40.0, 30.0, QRectF(0.0, 15.0, 40.0, 15.0), axes);
+        require(bottom.lower[1] == 0.0 && bottom.upper[1] == 10.0,
+            "the bottom of the raster did not map to the low half of y");
+
+        // The axis the view does not show keeps the plane's own extent, which
+        // is what stops three intersected views from collapsing every axis.
+        require(top.lower[2] == 100.0 && top.upper[2] == 130.0,
+            "the axis the view does not display was narrowed");
+
+        // A raster with no pixels has no mapping to make; the region stands.
+        require(physicalRegionForRasterRect(
+                    raster, 0.0, 30.0, QRectF(0.0, 0.0, 1.0, 1.0), axes)
+                == raster,
+            "an empty raster did not leave the region alone");
     }
 
     // --- the region the views leave visible ------------------------------

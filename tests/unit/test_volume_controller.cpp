@@ -759,11 +759,11 @@ int main(int argc, char** argv)
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         require(volumeWindow() == nullptr,
             "File > Close left the volume window open");
-        // The delete is what tells the controller the user closed its window
-        // (the destroyed -> forgetWindow connection, which closeWindow()
-        // drops); nothing else in this file takes that branch.
-        require(!controller.windowOpen(),
-            "the controller still holds the window the user closed");
+        // The delete is what tells the controller the user closed its window,
+        // through the destroyed -> forgetWindow connection that closeWindow()
+        // drops; nothing else in this file takes that branch. The dropped
+        // frame is what shows the handler ran -- windowOpen() would report
+        // false from its QPointer nulling itself, handler or no handler.
         require(controller.lastFrame().pixels.empty(),
             "the closed window's frame was kept");
     }

@@ -310,19 +310,19 @@ Outcome dispatchLifecycle(Context& context)
                 }
                 QObject::connect(second, &QObject::destroyed, &application,
                     [&window, &application, decided] {
-                        const bool firstSurvived = window.isVisible();
-                        // Read the verdict here, but shut down from a later
-                        // turn of the event loop: quitting from inside the
+                        // The verdict waits a turn: quitting from inside the
                         // second window's destructor races its own teardown
                         // and segfaults or hangs about half the time. Nothing
                         // in the app quits from there -- a user's Quit is
-                        // always a separate event -- so the delay is the
-                        // harness staying on a reachable path, not a
-                        // workaround for the feature.
+                        // always a separate event -- so the delay keeps the
+                        // harness on a reachable path. isVisible() is read in
+                        // that turn rather than snapshotted here, so a close
+                        // that takes the first window down one turn late is
+                        // caught too.
                         QTimer::singleShot(0, &application,
-                            [&window, &application, decided, firstSurvived] {
+                            [&window, &application, decided] {
                                 *decided = true;
-                                if (!firstSurvived) {
+                                if (!window.isVisible()) {
                                     qCritical("Close Window closed the first"
                                         " window as well");
                                     application.exit(1);

@@ -1,4 +1,5 @@
 #include <amrexplorer/core/StopToken.hpp>
+#include <amrexplorer/core/Version.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
 #include <cerrno>
@@ -17,10 +18,6 @@
 #include <memory>
 #include <poll.h>
 #include <unistd.h>
-#endif
-
-#ifndef AMREXPLORER_VERSION
-#define AMREXPLORER_VERSION "0.3.0-dev"
 #endif
 
 namespace {
@@ -61,7 +58,8 @@ void printUsage(std::ostream& output)
         << "                       reading a trickle cannot hold a worker\n"
         << "                       forever. Lower it for a slow link; it cannot\n"
         << "                       be zero\n"
-        << "  --help               show this help\n";
+        << "  -h, --help           show this help\n"
+        << "  -v, --version        show the version\n";
 }
 
 class SignalWatcher {
@@ -190,13 +188,21 @@ int main(int argc, char* argv[])
         amrvis::remote::ServerOptions options;
         // Whether either volume limit was given, for the warning below.
         bool volumeLimitsChosen = false;
-        options.softwareVersion = AMREXPLORER_VERSION;
+        // The same string --version prints, git description and all: it
+        // reaches the client in the handshake, which is the one place where
+        // "which build is running over there" is otherwise unanswerable.
+        options.softwareVersion = amrvis::versionText();
         bool stdio = false;
         bool portGiven = false;
         for (int index = 1; index < argc; ++index) {
             const std::string option(argv[index]);
-            if (option == "--help") {
+            if (option == "--help" || option == "-h") {
                 printUsage(std::cout);
+                return 0;
+            }
+            if (option == "--version" || option == "-v") {
+                std::cout << "amrexplorer-server " << amrvis::versionText()
+                          << '\n';
                 return 0;
             }
             if (option == "--stdio") {

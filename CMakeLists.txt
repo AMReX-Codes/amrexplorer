@@ -1,11 +1,48 @@
 cmake_minimum_required(VERSION 3.25)
 
+# The version is written in one place, include/amrexplorer/core/Version.hpp, so
+# that the string the binaries print and the number CMake knows cannot drift
+# apart. Read the x.y.z out of it here; the -dev suffix, if any, stays a C++
+# concern -- project(VERSION) takes numbers only.
+set(amrexplorer_version_header
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/amrexplorer/core/Version.hpp")
+file(READ "${amrexplorer_version_header}" amrexplorer_version_source)
+if(NOT amrexplorer_version_source MATCHES
+        "kVersion[ \t]*=[ \t]*\"([0-9]+\\.[0-9]+\\.[0-9]+)(-dev)?\"")
+    message(FATAL_ERROR
+        "no kVersion = \"x.y.z\" or \"x.y.z-dev\" line in "
+        "${amrexplorer_version_header}")
+endif()
+set(amrexplorer_version "${CMAKE_MATCH_1}")
+# file(READ) is not a dependency, so without this an edited version would keep
+# the old number in an existing build tree until something else re-ran cmake.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${amrexplorer_version_header}")
+
 project(
     amrexplorer
-    VERSION 0.3.0
+    VERSION ${amrexplorer_version}
     DESCRIPTION "Demand-driven AMR visualization"
     LANGUAGES CXX
 )
+
+# This build's git description, for --version. Written once now so the header
+# exists before anything compiles, and refreshed by amrexplorer_git_describe on
+# every build so a commit does not leave it naming the previous one.
+set(AMREXPLORER_GENERATED_INCLUDE_DIR "${PROJECT_BINARY_DIR}/generated")
+set(amrexplorer_git_describe_header
+    "${AMREXPLORER_GENERATED_INCLUDE_DIR}/amrexplorer/GitDescribe.hpp")
+execute_process(COMMAND "${CMAKE_COMMAND}"
+    "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DOUTPUT=${amrexplorer_git_describe_header}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/GitVersion.cmake")
+add_custom_target(amrexplorer_git_describe ALL
+    BYPRODUCTS "${amrexplorer_git_describe_header}"
+    COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT=${amrexplorer_git_describe_header}"
+        -P "${PROJECT_SOURCE_DIR}/cmake/GitVersion.cmake"
+    COMMENT "Reading the git version information")
 
 option(AMREXPLORER_ENABLE_QT "Build the Qt 6 desktop application" ON)
 option(AMREXPLORER_ENABLE_VTK "Build the optional VTK volume module" OFF)

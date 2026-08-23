@@ -1,4 +1,6 @@
 #include "MainWindow.hpp"
+
+#include <amrexplorer/core/Version.hpp>
 #include "SshConnectArguments.hpp"
 #ifdef AMREXPLORER_QT_TEST_ACCESS
 #include "SmokeHarness.hpp"
@@ -48,7 +50,8 @@ void printUsage(std::FILE* output)
         "  --server PATH          remote amrexplorer-server executable, for\n"
         "                         when it is not on the non-interactive\n"
         "                         remote PATH; remembered per destination\n"
-        "  -h, --help             show this help\n\n"
+        "  -h, --help             show this help\n"
+        "  -v, --version          show the version\n\n"
         "See docs/user-guide.md for details.\n");
 }
 
@@ -344,11 +347,17 @@ int main(int argc, char* argv[])
         QApplication askpassApplication(askpassArgc, argv);
         return runSshAskpass(promptParts.join(QLatin1Char(' ')));
     }
-    // Answered before QApplication exists, so it works without a display.
+    // Answered before QApplication exists, so they work without a display.
     if (argc >= 2
         && (std::string_view(argv[1]) == "--help"
             || std::string_view(argv[1]) == "-h")) {
         printUsage(stdout);
+        return 0;
+    }
+    if (argc >= 2
+        && (std::string_view(argv[1]) == "--version"
+            || std::string_view(argv[1]) == "-v")) {
+        std::printf("amrexplorer %s\n", amrvis::versionText().c_str());
         return 0;
     }
     QApplication application(argc, argv);

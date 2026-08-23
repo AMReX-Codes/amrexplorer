@@ -4,18 +4,14 @@
 #include "CloseWindowAction.hpp"
 #include "CurrentRowBulletDelegate.hpp"
 
+#include <amrexplorer/core/Version.hpp>
+
 #include <QKeySequence>
 #include <QStyle>
 
 namespace amrvis::qt {
 
-extern const char* const kVersion =
-#ifdef AMREXPLORER_VERSION
-    AMREXPLORER_VERSION
-#else
-    "0.3.0-dev"
-#endif
-    ;
+extern const std::string kVersion = amrvis::versionText();
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)

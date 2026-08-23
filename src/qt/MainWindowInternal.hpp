@@ -135,12 +135,10 @@
 
 namespace amrvis::qt {
 
-// Fed from the project version through a CMake compile definition; the
-// fallback covers builds that do not set it (e.g. some IDE integrations).
-// Defined once in MainWindow.cpp rather than inline here: AMREXPLORER_VERSION
-// is PRIVATE to amrexplorer_qt, so an inline variable would acquire a second,
-// conflicting definition in any other target that included this header.
-extern const char* const kVersion;
+// What --version prints, for the About box and the remote handshake: the
+// version from amrvis::kVersion plus this build's git description. Defined once
+// in MainWindow.cpp rather than inline here, so the one composition runs once.
+extern const std::string kVersion;
 
 // The single conversion from a rendered ImageBuffer to the QImage the views
 // display: ARGB32 over the buffer's rgba, mirrored vertically because plane

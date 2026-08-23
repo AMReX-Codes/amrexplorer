@@ -38,6 +38,20 @@ add_executable(test_geometry unit/test_geometry.cpp)
 target_link_libraries(test_geometry PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME geometry COMMAND test_geometry)
 
+add_executable(test_version unit/test_version.cpp)
+target_link_libraries(test_version PRIVATE amrexplorer::core amrexplorer::warnings)
+add_test(NAME version COMMAND test_version)
+
+# The generator behind --version, on a source tree with no git history: the
+# case a release tarball builds in, which no build here can reproduce.
+add_test(
+    NAME git_version_no_git
+    COMMAND "${CMAKE_COMMAND}"
+        "-DGENERATOR=${PROJECT_SOURCE_DIR}/cmake/GitVersion.cmake"
+        "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/git_version_no_git"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/git_version_driver.cmake"
+)
+
 add_executable(test_view_data unit/test_view_data.cpp)
 target_link_libraries(test_view_data PRIVATE amrexplorer::data amrexplorer::warnings)
 add_test(NAME view_data COMMAND test_view_data)
@@ -306,10 +320,27 @@ if(TARGET amrexplorer_remote)
             TIMEOUT 60)
     endif()
 
+    # FAIL_REGULAR_EXPRESSION as well as PASS: an unrecognized option prints
+    # the same usage text (to stderr, after "server error") and a pass
+    # expression makes ctest ignore the exit code, so without this an option
+    # the server does not know would look like one it does.
     add_test(NAME remote_server_help
         COMMAND "$<TARGET_FILE:amrexplorer_server>" --help)
     set_tests_properties(remote_server_help PROPERTIES
-        PASS_REGULAR_EXPRESSION "usage: amrexplorer-server")
+        PASS_REGULAR_EXPRESSION "usage: amrexplorer-server"
+        FAIL_REGULAR_EXPRESSION "server error")
+    add_test(NAME remote_server_help_short
+        COMMAND "$<TARGET_FILE:amrexplorer_server>" -h)
+    set_tests_properties(remote_server_help_short PROPERTIES
+        PASS_REGULAR_EXPRESSION "usage: amrexplorer-server"
+        FAIL_REGULAR_EXPRESSION "server error")
+    # The version CMake read out of Version.hpp and the string the binary
+    # composed from the same line, checked against each other.
+    add_test(NAME remote_server_version
+        COMMAND "$<TARGET_FILE:amrexplorer_server>" --version)
+    set_tests_properties(remote_server_version PROPERTIES
+        PASS_REGULAR_EXPRESSION
+            "^amrexplorer-server ${PROJECT_VERSION}(-dev)?( \\(|\n)")
     add_test(NAME remote_server_rejects_zero_datasets
         COMMAND "${CMAKE_COMMAND}"
             "-DAMREXPLORER_SERVER=$<TARGET_FILE:amrexplorer_server>"
@@ -489,6 +520,17 @@ add_test(NAME tool_line_repro
 set_tests_properties(tool_line_repro PROPERTIES TIMEOUT 60)
 
 if(TARGET amrexplorer_qt)
+    # As above for the client -- and run with a platform plugin that cannot
+    # load, because --version is answered before QApplication exists and has to
+    # keep working on a machine with no display. Were it ever moved after,
+    # Qt would abort here instead of printing.
+    add_test(NAME qt_version
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=amrexplorer-no-plugin
+            "$<TARGET_FILE:amrexplorer_qt>" --version)
+    set_tests_properties(qt_version PROPERTIES
+        PASS_REGULAR_EXPRESSION
+            "^amrexplorer ${PROJECT_VERSION}(-dev)?( \\(|\n)")
+
     add_executable(test_sequence_controller
         unit/test_sequence_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/SequenceController.cpp"

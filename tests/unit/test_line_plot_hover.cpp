@@ -2,6 +2,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QTest>
 #include <QEvent>
 #include <QKeySequence>
 #include <QMouseEvent>
@@ -85,7 +86,12 @@ int main(int argc, char* argv[])
         "the close action is not on the window, so Ctrl+W cannot reach it");
     require(closeAction->shortcut() == QKeySequence(Qt::CTRL | Qt::Key_W),
         "the line plot close shortcut is not Ctrl+W");
-    closeAction->trigger();
+    // Pressed, not triggered: QTest::keyClick goes through the platform's key
+    // path and Qt's shortcut map, which is what a trigger() call skips -- and
+    // skipping it hides a wrong shortcut context or a missing window
+    // association, both of which leave the key dead in the app.
+    window.activateWindow();
+    QTest::keyClick(&window, Qt::Key_W, Qt::ControlModifier);
     require(!window.isVisible(), "Ctrl+W left the line plot window open");
     return 0;
 }

@@ -1044,7 +1044,7 @@ if(TARGET amrexplorer_qt)
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
     )
     target_link_libraries(test_line_plot_hover
-        PRIVATE amrexplorer::core amrexplorer::warnings Qt6::Widgets
+        PRIVATE amrexplorer::core amrexplorer::warnings Qt6::Test Qt6::Widgets
     )
     add_test(
         NAME line_plot_hover

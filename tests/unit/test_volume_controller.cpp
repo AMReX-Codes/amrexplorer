@@ -6,6 +6,7 @@
 // the window and drops a late result; a throwing session reports through
 // renderFailed and a cancelled one silently.
 
+#include "OpacityCurveWidget.hpp"
 #include "PlaneMapping.hpp"
 #include "VolumeController.hpp"
 #include "VolumeWindow.hpp"
@@ -20,6 +21,7 @@
 #include <QRectF>
 #include <QCheckBox>
 #include <QEvent>
+#include <QMouseEvent>
 #include <QCoreApplication>
 #include <QStringList>
 #include <QTimer>
@@ -941,6 +943,80 @@ int main(int argc, char** argv)
             "an unchanged region rendered again anyway");
         controller.closeWindow();
         viewRegions = {};
+    }
+
+    // The opacity curve, driven the way a user drives it. The point of this
+    // test is the chain, not the arithmetic: a press on the widget has to reach
+    // the opacities in the request. The curve's own rules are pinned as pure
+    // functions in test_volume_pipeline; what is checked here is that editing
+    // it renders, and renders the shape that was drawn.
+    {
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the opening frame was not displayed");
+        auto* const window = volumeWindow();
+        require(window != nullptr, "no volume window on screen");
+        auto* const widget
+            = window->findChild<amrvis::qt::OpacityCurveWidget*>(
+                QStringLiteral("volumeOpacityCurve"));
+        require(widget != nullptr, "no opacity curve in the volume window");
+        require(widget->width() > 16 && widget->height() > 16,
+            "the curve widget has no room, so a press cannot land in its plot");
+        require(widget->curve().size() == 2,
+            "the curve did not open as the two-point default");
+
+        // The opening frame used that default, which is the linear ramp the
+        // sliders used to produce.
+        const auto opening = session->requestsSoFar().back().transfer.opacities;
+        require(opening.size() == static_cast<std::size_t>(
+                    amrvis::Palette::colorSlots),
+            "the transfer function is not one entry per slot");
+        require(opening.front() == 0.0F
+                && std::abs(opening.back() - 1.0F) <= 1.0e-6F,
+            "the default curve did not render as a full ramp");
+
+        // A press in the upper middle of the plot: adds a point there and
+        // starts dragging it, which is one gesture in the widget.
+        const auto before = session->requests.load();
+        const QPointF middle(0.5 * widget->width(), 0.25 * widget->height());
+        QMouseEvent press(QEvent::MouseButtonPress, middle,
+            widget->mapToGlobal(middle), Qt::LeftButton, Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, middle,
+            widget->mapToGlobal(middle), Qt::LeftButton, Qt::NoButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &release);
+        require(widget->curve().size() == 3,
+            "pressing the plot did not add a control point");
+
+        // ...which reaches a render, through rampChanged and the same
+        // draft-then-settle path the camera uses. Nothing new was wired for
+        // this, and that is exactly what has to be checked rather than assumed.
+        waitFor(application, [&] { return session->requests > before; },
+            "editing the opacity curve did not render");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the render after the curve edit did not finish");
+        // The settle turns the drag's draft into a full frame.
+        waitFor(application,
+            [&] {
+                return session->requestsSoFar().back().samplesPerVoxel == 2;
+            },
+            "the curve edit never settled into a full frame");
+
+        // And the shape that was drawn is the shape that was rendered: the new
+        // point sits at three quarters opacity in the middle of the range, so
+        // the middle entry is far above the linear ramp's half.
+        const auto shaped = session->requestsSoFar().back().transfer.opacities;
+        const auto midEntry = shaped.size() / 2;
+        require(shaped[midEntry] > opening[midEntry] + 0.1F,
+            "the edited curve did not change the opacities in the request");
+        require(std::abs(static_cast<double>(shaped[midEntry]) - 0.75) <= 0.06,
+            "the middle entry is not the opacity the point was dropped at");
+        controller.closeWindow();
     }
 
     // Sequence playback. Every frame of a sequence lands in

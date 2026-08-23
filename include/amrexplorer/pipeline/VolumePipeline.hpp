@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace amrvis {
 
@@ -20,6 +21,42 @@ namespace amrvis {
 // frame under the negotiated size, and retries a render that overran the
 // block cache at a coarser level. Qt-free.
 
+// One control point of an opacity curve: `opacity` at `position`, both in
+// [0, 1] -- position over the colour range, opacity from transparent to
+// opaque.
+struct OpacityPoint {
+    double position = 0.0;
+    double opacity = 0.0;
+    friend bool operator==(const OpacityPoint&, const OpacityPoint&) = default;
+};
+
+// The two points that reproduce the default window: transparent at the bottom
+// of the range, opaque at the top.
+[[nodiscard]] std::vector<OpacityPoint> defaultOpacityCurve();
+
+// The curve's value at `position`, linearly between the points either side of
+// it and flat outside the outermost ones. An empty curve is transparent
+// everywhere; the points are assumed sorted, which every editing function
+// below maintains.
+[[nodiscard]] double opacityCurveValue(
+    const std::vector<OpacityPoint>& curve, double position);
+
+// Editing, as pure functions on the point list, because this is where the
+// mistakes live: a point dragged past its neighbour, an end point dragged off
+// the range, a curve left unsorted for opacityCurveValue to read.
+//
+// insert: a new point, keeping the list sorted; returns its index.
+// move: point `index` to (position, opacity), clamped into [0, 1] and, for an
+//   interior point, between its neighbours. The two end points keep their
+//   positions -- the curve has to span the range -- and move only in opacity.
+// remove: point `index`, unless it is an end point or the curve would be left
+//   with fewer than two.
+[[nodiscard]] std::size_t insertOpacityPoint(
+    std::vector<OpacityPoint>& curve, double position, double opacity);
+void moveOpacityPoint(std::vector<OpacityPoint>& curve, std::size_t index,
+    double position, double opacity);
+bool removeOpacityPoint(std::vector<OpacityPoint>& curve, std::size_t index);
+
 // The opacity controls: a window over the colour range (in normalised
 // [0, 1] of the range) that ramps linearly from transparent at the low
 // threshold to maximumOpacity at the high one -- or, with usePaletteAlpha
@@ -27,11 +64,19 @@ namespace amrvis {
 // opacity, windowed and scaled the same way. A window too narrow to hold
 // an entry (the thresholds may be equal) selects the one nearest it, at
 // full opacity.
+//
+// A shaped curve replaces the window when one is given: see `curve` below.
 struct OpacityRamp {
     double lowThreshold = 0.0;
     double highThreshold = 1.0;
     double maximumOpacity = 1.0;
     bool usePaletteAlpha = false;
+    // Control points of a piecewise-linear opacity curve over the same
+    // normalised range, in ascending position. Non-empty replaces the window
+    // and the maximum above -- it says the same kind of thing with more than
+    // three numbers -- and empty leaves that path exactly as it was, which is
+    // what keeps a caller that never touches a curve rendering what it did.
+    std::vector<OpacityPoint> curve;
     friend bool operator==(const OpacityRamp&, const OpacityRamp&) = default;
 };
 

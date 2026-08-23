@@ -237,9 +237,103 @@ int main()
             require(std::abs(plain.opacities[i] - expected) <= 1.0e-6F,
                 "the default ramp is not linear over the whole range");
         }
+        // --- the opacity curve ------------------------------------------
+        // The default curve says what the default window says. This is the
+        // whole reason the curve is allowed to replace the window: someone who
+        // never touches it renders exactly what they rendered before.
+        amrvis::OpacityRamp curved;
+        curved.curve = amrvis::defaultOpacityCurve();
+        const auto fromCurve
+            = amrvis::makeVolumeTransferFunction(palette, curved);
+        require(fromCurve.opacities == plain.opacities,
+            "the default curve does not reproduce the default window");
+        require(fromCurve.colors == plain.colors,
+            "the curve path did not lay down the same colours");
+
+        // Evaluation: between the points either side, flat outside the ends.
+        {
+            using amrvis::opacityCurveValue;
+            const std::vector<amrvis::OpacityPoint> curve{
+                {0.0, 0.0}, {0.5, 1.0}, {1.0, 0.25}};
+            require(opacityCurveValue(curve, 0.0) == 0.0
+                    && opacityCurveValue(curve, 0.5) == 1.0
+                    && opacityCurveValue(curve, 1.0) == 0.25,
+                "the curve does not pass through its own control points");
+            require(std::abs(opacityCurveValue(curve, 0.25) - 0.5) <= 1.0e-12,
+                "the curve is not linear between two points");
+            require(std::abs(opacityCurveValue(curve, 0.75) - 0.625) <= 1.0e-12,
+                "the curve is not linear on its falling side");
+            // Outside the outermost points it holds, so nothing has to be
+            // invented past the ends of the range.
+            require(opacityCurveValue(curve, -1.0) == 0.0
+                    && opacityCurveValue(curve, 2.0) == 0.25,
+                "the curve did not hold its end values outside the range");
+            require(opacityCurveValue({}, 0.5) == 0.0,
+                "an empty curve is not transparent");
+            // Two points at one position form a step. Exactly at it, the
+            // side below wins -- the segment ending there is found first --
+            // and just above it the upper value does. Pinned because either
+            // is defensible and the widget lets a drag produce one.
+            const std::vector<amrvis::OpacityPoint> step{
+                {0.0, 0.0}, {0.5, 0.2}, {0.5, 0.9}, {1.0, 1.0}};
+            require(opacityCurveValue(step, 0.5) == 0.2,
+                "a step did not take the value below it at its own position");
+            require(opacityCurveValue(step, 0.5 + 1.0e-9) > 0.85,
+                "just above a step did not take the value above it");
+        }
+
+        // Editing. These are where the mistakes live, so they are pinned
+        // rather than left to the widget to get right.
+        {
+            auto curve = amrvis::defaultOpacityCurve();
+            const auto middle
+                = amrvis::insertOpacityPoint(curve, 0.5, 0.75);
+            require(middle == 1 && curve.size() == 3
+                    && curve[1] == amrvis::OpacityPoint{0.5, 0.75},
+                "an inserted point did not land in order");
+            // Inserted out of order, and clamped.
+            const auto low = amrvis::insertOpacityPoint(curve, 0.25, 4.0);
+            require(low == 1 && curve[1].position == 0.25
+                    && curve[1].opacity == 1.0,
+                "an inserted point was not sorted and clamped");
+
+            // An interior point cannot pass its neighbours.
+            amrvis::moveOpacityPoint(curve, 2, 5.0, 0.5);
+            require(curve[2].position == curve[3].position,
+                "an interior point moved past its neighbour");
+            amrvis::moveOpacityPoint(curve, 2, -5.0, 0.5);
+            require(curve[2].position == curve[1].position,
+                "an interior point moved below its neighbour");
+
+            // The ends keep their positions -- the curve spans the range --
+            // and move only in opacity.
+            amrvis::moveOpacityPoint(curve, 0, 0.9, 0.4);
+            require(curve[0].position == 0.0 && curve[0].opacity == 0.4,
+                "the low end point did not stay at the bottom of the range");
+            const auto lastIndex = curve.size() - 1;
+            amrvis::moveOpacityPoint(curve, lastIndex, 0.1, 0.2);
+            require(curve[lastIndex].position == 1.0
+                    && curve[lastIndex].opacity == 0.2,
+                "the high end point did not stay at the top of the range");
+            amrvis::moveOpacityPoint(curve, 99, 0.5, 0.5);   // no such point
+            require(curve.size() == 4, "moving a point that is not there grew "
+                                      "the curve");
+
+            // Removal takes interior points only, and never the last two.
+            require(!amrvis::removeOpacityPoint(curve, 0)
+                    && !amrvis::removeOpacityPoint(curve, curve.size() - 1),
+                "an end point was removed, leaving the curve short of the "
+                "range");
+            require(amrvis::removeOpacityPoint(curve, 1) && curve.size() == 3,
+                "an interior point was not removed");
+            auto pair = amrvis::defaultOpacityCurve();
+            require(!amrvis::removeOpacityPoint(pair, 1) && pair.size() == 2,
+                "a two-point curve was reduced below two points");
+        }
+
         // A window: transparent outside [0.25, 0.75], ramping inside to the
         // maximum opacity at the top.
-        amrvis::OpacityRamp windowed{0.25, 0.75, 0.5, false};
+        amrvis::OpacityRamp windowed{0.25, 0.75, 0.5, false, {}};
         const auto window = amrvis::makeVolumeTransferFunction(palette, windowed);
         require(window.opacities[0] == 0.0F && window.opacities[252] == 0.0F
                 && window.opacities[50] == 0.0F,
@@ -251,9 +345,9 @@ int main()
         // Equal thresholds (the coupled sliders allow them) and a window
         // narrower than the entry pitch select the single nearest entry,
         // opaque, rather than nothing: 0.3 * 252 = 75.6 -> entry 76.
-        for (const amrvis::OpacityRamp narrow :
-            {amrvis::OpacityRamp{0.3, 0.3, 1.0, false},
-                amrvis::OpacityRamp{0.299, 0.301, 1.0, false}}) {
+        for (const amrvis::OpacityRamp& narrow :
+            {amrvis::OpacityRamp{0.3, 0.3, 1.0, false, {}},
+                amrvis::OpacityRamp{0.299, 0.301, 1.0, false, {}}}) {
             const auto shell = amrvis::makeVolumeTransferFunction(palette, narrow);
             for (int entry = 0; entry < 253; ++entry) {
                 const auto i = static_cast<std::size_t>(entry);
@@ -264,7 +358,7 @@ int main()
         // A window holding a few entries ramps over exactly those, the top
         // one at the maximum: [0.30, 0.31] * 252 = [75.6, 78.12] -> 76..78.
         const auto few = amrvis::makeVolumeTransferFunction(
-            palette, amrvis::OpacityRamp{0.30, 0.31, 0.8, false});
+            palette, amrvis::OpacityRamp{0.30, 0.31, 0.8, false, {}});
         require(few.opacities[75] == 0.0F && few.opacities[76] == 0.0F
                 && std::abs(few.opacities[77] - 0.4F) <= 1.0e-6F
                 && std::abs(few.opacities[78] - 0.8F) <= 1.0e-6F
@@ -272,8 +366,26 @@ int main()
             "a few-entry window did not ramp over its entries to the maximum");
         // The palette's alpha ramp, when asked for and present; the plain
         // ramp when the palette has none.
-        amrvis::OpacityRamp fromPalette{0.0, 1.0, 1.0, true};
+        amrvis::OpacityRamp fromPalette{0.0, 1.0, 1.0, true, {}};
         const auto alphaPalette = syntheticPalette(true);
+        // With a curve, usePaletteAlpha still substitutes the palette's own
+        // alpha; the curve says only where opacity is zero. So a palette ramp
+        // keeps its shape and the curve windows it, rather than the two being
+        // multiplied into a third shape nobody chose.
+        {
+            amrvis::OpacityRamp shaped;
+            shaped.usePaletteAlpha = true;
+            shaped.curve = {{0.0, 0.0}, {0.5, 0.0}, {0.6, 1.0}, {1.0, 1.0}};
+            const auto gated
+                = amrvis::makeVolumeTransferFunction(alphaPalette, shaped);
+            require(gated.opacities[0] == 0.0F && gated.opacities[100] == 0.0F,
+                "the curve did not clear the entries it pulled to nothing");
+            const auto slot = amrvis::Palette::paletteStart + 200;
+            require(std::abs(gated.opacities[200]
+                        - static_cast<float>(alphaPalette.opacity(slot)))
+                    <= 1.0e-6F,
+                "an entry the curve kept did not take the palette's alpha");
+        }
         const auto withAlpha = amrvis::makeVolumeTransferFunction(alphaPalette, fromPalette);
         require(withAlpha.opacities[0] == 1.0F   // slot 3: 3 % 3 == 0 -> 100 %
                 && std::abs(withAlpha.opacities[1] - 0.2F) <= 1.0e-6F,
@@ -334,10 +446,10 @@ int main()
             }
             return false;
         };
-        require(refusesRamp({0.8, 0.2, 1.0, false}),
+        require(refusesRamp({0.8, 0.2, 1.0, false, {}}),
             "an inverted opacity window was accepted");
-        require(refusesRamp({std::nan(""), 1.0, 1.0, false})
-                && refusesRamp({0.0, 1.0, std::nan(""), false}),
+        require(refusesRamp({std::nan(""), 1.0, 1.0, false, {}})
+                && refusesRamp({0.0, 1.0, std::nan(""), false, {}}),
             "a non-finite opacity control was accepted");
         // The smallest budget that does fit one pixel still yields one pixel.
         const auto minimum = static_cast<std::uint32_t>(
@@ -421,7 +533,7 @@ int main()
         request.range = amrvis::VolumeRange{1.0, 2.0, false};
         request.transfer = amrvis::makeVolumeTransferFunction(
             amrvis::builtinPalette(amrvis::BuiltinPalette::Rainbow),
-            amrvis::OpacityRamp{0.5, 1.0, 1.0, false});
+            amrvis::OpacityRamp{0.5, 1.0, 1.0, false, {}});
         request.maximumVoxels = 4096;
         const auto first = amrvis::executeVolumeRenderWithFallback(dataset, request);
         require(first.frame.width == 64 && first.frame.height == 48

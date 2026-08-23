@@ -14,6 +14,86 @@
 
 namespace amrvis {
 
+std::vector<OpacityPoint> defaultOpacityCurve()
+{
+    return {OpacityPoint{0.0, 0.0}, OpacityPoint{1.0, 1.0}};
+}
+
+double opacityCurveValue(
+    const std::vector<OpacityPoint>& curve, double position)
+{
+    if (curve.empty()) {
+        return 0.0;
+    }
+    if (!(position > curve.front().position)) {
+        return curve.front().opacity;
+    }
+    if (!(position < curve.back().position)) {
+        return curve.back().opacity;
+    }
+    for (std::size_t index = 1; index < curve.size(); ++index) {
+        const auto& upper = curve[index];
+        if (position > upper.position) {
+            continue;
+        }
+        const auto& lower = curve[index - 1];
+        const auto span = upper.position - lower.position;
+        if (!(span > 0.0)) {
+            // Guards the division, nothing more. Two points at one position
+            // form a step, and the segment *ending* at that position is found
+            // first, so a query exactly there returns through the branch below
+            // with span > 0 and this is not reached from any curve the editing
+            // functions can build. Left in because the alternative is a
+            // division by zero if those early returns ever change.
+            return upper.opacity;
+        }
+        const auto fraction = (position - lower.position) / span;
+        return lower.opacity + fraction * (upper.opacity - lower.opacity);
+    }
+    return curve.back().opacity;
+}
+
+std::size_t insertOpacityPoint(
+    std::vector<OpacityPoint>& curve, double position, double opacity)
+{
+    const OpacityPoint point{std::clamp(position, 0.0, 1.0),
+        std::clamp(opacity, 0.0, 1.0)};
+    const auto at = std::upper_bound(curve.begin(), curve.end(), point,
+        [](const OpacityPoint& left, const OpacityPoint& right) {
+            return left.position < right.position;
+        });
+    const auto index = static_cast<std::size_t>(at - curve.begin());
+    curve.insert(at, point);
+    return index;
+}
+
+void moveOpacityPoint(std::vector<OpacityPoint>& curve, std::size_t index,
+    double position, double opacity)
+{
+    if (index >= curve.size()) {
+        return;
+    }
+    curve[index].opacity = std::clamp(opacity, 0.0, 1.0);
+    // The end points anchor the curve to the ends of the range, so they give
+    // up their position: a curve that stopped short of either end would have
+    // to invent a value out there, and opacityCurveValue holds the outermost
+    // one flat precisely so it never has to.
+    if (index == 0 || index + 1 == curve.size()) {
+        return;
+    }
+    curve[index].position = std::clamp(position,
+        curve[index - 1].position, curve[index + 1].position);
+}
+
+bool removeOpacityPoint(std::vector<OpacityPoint>& curve, std::size_t index)
+{
+    if (curve.size() <= 2 || index == 0 || index + 1 >= curve.size()) {
+        return false;
+    }
+    curve.erase(curve.begin() + static_cast<std::ptrdiff_t>(index));
+    return true;
+}
+
 VolumeTransferFunction makeVolumeTransferFunction(
     const Palette& palette, const OpacityRamp& ramp)
 {
@@ -21,6 +101,27 @@ VolumeTransferFunction makeVolumeTransferFunction(
     constexpr int entryCount = Palette::colorSlots;
     transfer.colors.reserve(static_cast<std::size_t>(entryCount));
     transfer.opacities.reserve(static_cast<std::size_t>(entryCount));
+    if (!ramp.curve.empty()) {
+        // The curve is the opacity, entry by entry. usePaletteAlpha still
+        // substitutes the palette's own per-slot alpha, as it does for the
+        // window below, and the curve then says only where opacity is zero --
+        // so a palette ramp is shaped by where the curve has been pulled to
+        // nothing, not multiplied into a different ramp.
+        const bool paletteAlpha = ramp.usePaletteAlpha && palette.hasAlphaRamp();
+        const auto last = static_cast<double>(entryCount - 1);
+        for (int entry = 0; entry < entryCount; ++entry) {
+            const auto slot = Palette::paletteStart + entry;
+            transfer.colors.push_back(palette.slotArgb(slot) & 0x00FFFFFFU);
+            const auto shaped = opacityCurveValue(
+                ramp.curve, static_cast<double>(entry) / last);
+            const auto opacity = paletteAlpha
+                ? (shaped > 0.0 ? palette.opacity(slot) : 0.0)
+                : shaped;
+            transfer.opacities.push_back(
+                static_cast<float>(std::clamp(opacity, 0.0, 1.0)));
+        }
+        return transfer;
+    }
     // Refused rather than clamped: std::clamp returns a NaN unchanged (it
     // compares, and every comparison against a NaN is false), and the casts
     // to int below are undefined for one. A control that is not a number is

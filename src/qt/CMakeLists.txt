@@ -20,6 +20,7 @@ add_executable(amrexplorer_qt
     ImageView.cpp
     ImageView.hpp
     IsoWidget.cpp
+    OpacityCurveWidget.cpp
     IsoWidget.hpp
     LinePlotRequest.hpp
     LinePlotWindow.cpp

@@ -155,9 +155,11 @@ void VolumeWindow::buildControls()
     m_curve->setObjectName(QStringLiteral("volumeOpacityCurve"));
     form->addRow(tr("Opacity:"), m_curve);
     m_paletteAlpha = new QCheckBox(tr("Use palette alpha ramp"), panel);
+    m_paletteAlpha->setObjectName(QStringLiteral("volumePaletteAlphaCheck"));
     m_paletteAlpha->setToolTip(tr("Take each colour's opacity from the palette's "
                                   "alpha ramp (legacy .pal files carry one) "
-                                  "instead of the linear window above."));
+                                  "instead of the curve above, which is "
+                                  "disabled while this is on."));
     form->addRow(QString(), m_paletteAlpha);
     m_qualityCombo = new QComboBox(panel);
     m_qualityCombo->addItem(tr("Draft"), 0);
@@ -259,7 +261,7 @@ void VolumeWindow::setPaletteHasAlpha(bool hasAlpha)
     }
     m_paletteAlpha->setToolTip(hasAlpha
         ? tr("Take each colour's opacity from the palette's alpha ramp "
-             "instead of the linear window above.")
+             "instead of the curve above, which is disabled while this is on.")
         : tr("This palette carries no alpha ramp; load a legacy .pal file "
              "with one to enable this."));
 }

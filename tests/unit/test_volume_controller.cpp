@@ -1075,6 +1075,48 @@ int main(int argc, char** argv)
         require(std::abs(static_cast<double>(restored[midEntry]) - 0.5) <= 0.02,
             "removing the point did not put the straight ramp back");
 
+        // The palette's own alpha takes over from the curve, so the curve is
+        // disabled: it has no say while that box is in effect, and a control
+        // that looks editable and does nothing is the defect this replaced.
+        // Driven through setPaletteHasAlpha because the palette here carries
+        // no ramp, which is what leaves the box disabled.
+        auto* const alphaBox = window->findChild<QCheckBox*>(
+            QStringLiteral("volumePaletteAlphaCheck"));
+        require(alphaBox != nullptr, "no palette-alpha box in the volume window");
+        require(widget->isEnabled(),
+            "the curve is not editable with the palette-alpha box clear");
+        window->setPaletteHasAlpha(true);
+        require(alphaBox->isEnabled(),
+            "the box did not enable for a palette with a ramp, so ticking it "
+            "below would not be in effect");
+        alphaBox->setChecked(true);
+        require(!widget->isEnabled(),
+            "the curve stayed editable while the palette's own alpha was the "
+            "opacity source");
+        alphaBox->setChecked(false);
+        require(widget->isEnabled(),
+            "the curve did not become editable again when the palette's alpha "
+            "was switched off");
+
+        // And the other way the box can stop being in effect: a palette with
+        // no ramp arriving while it is ticked. The box unticks itself behind a
+        // signal blocker, so its own toggle cannot re-enable the curve and
+        // setPaletteHasAlpha has to.
+        alphaBox->setChecked(true);
+        require(!widget->isEnabled(), "the curve is editable again already");
+        window->setPaletteHasAlpha(false);
+        require(!alphaBox->isChecked() && !alphaBox->isEnabled(),
+            "the box did not stand down for a palette with no ramp");
+        require(widget->isEnabled(),
+            "the curve stayed disabled after the palette that justified "
+            "disabling it went away");
+        // And quiesced, for the same reason the removal check above is: those
+        // toggles each scheduled a render, and one still in the throttle when
+        // the next check takes its baseline reads as that check's doing.
+        settle(application, 500);
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the renders from toggling palette alpha did not finish");
+
         // The two ends are not removable -- the curve has to span the range --
         // and refusing must not pass for an edit either.
         const auto ends = session->requests.load();

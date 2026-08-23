@@ -887,13 +887,11 @@ void MainWindow::applyRubberBandZoom(
     const auto& region = plane.physicalRegion;
     const auto xExtent = region.upper[xAxis] - region.lower[xAxis];
     const auto yExtent = region.upper[yAxis] - region.lower[yAxis];
-    auto visible = region;
-    visible.lower[xAxis] = region.lower[xAxis] + clamped.left() / width * xExtent;
-    visible.upper[xAxis] = region.lower[xAxis] + clamped.right() / width * xExtent;
-    visible.lower[yAxis] = region.lower[yAxis]
-        + (height - clamped.bottom()) / height * yExtent;
-    visible.upper[yAxis] = region.lower[yAxis]
-        + (height - clamped.top()) / height * yExtent;
+    // Shared with the volume's region of interest, which maps the same way
+    // from the part of the raster on screen. The reverse mapping below, back
+    // to scene pixels, is this function's own.
+    auto visible = physicalRegionForRasterRect(
+        region, width, height, clamped, axes);
     // Local slices use one output pixel per finest cell, so their edges land
     // on cell boundaries. Remote slices are viewport-resampled; retaining the
     // exact selection keeps an arbitrary rubber-band aspect ratio intact.

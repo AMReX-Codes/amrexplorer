@@ -54,6 +54,27 @@ class VolumeWindow;
 [[nodiscard]] std::array<int, 2> volumeOutputSize(
     QSize viewSize, qreal devicePixelRatio, bool draft) noexcept;
 
+// The box to sample when the volume is limited to what the slice views show:
+// `domain` narrowed by each view's visible region.
+//
+// A plane view narrows only the two axes it displays and leaves the third at
+// the domain, so intersecting all three gives, per axis, the narrower of the
+// two views that show it. With nothing zoomed every region is the domain and
+// the answer is the domain, which is what an unlimited render asks for anyway.
+//
+// Two views can disagree past overlapping: zoom the YZ view into the bottom of
+// z and the XZ view into the top and no z is visible in both. Such an axis
+// falls back to the whole domain rather than collapsing the box -- there is no
+// z both views show, so narrowing it would be a guess, and an empty box is not
+// renderable at all.
+//
+// Worth the narrowing because the grid is sized from the region: volumeGridDims
+// counts the region's own cells and only downsamples if they exceed the voxel
+// budget, so a small enough region is sampled at the finest level's pitch
+// instead of a coarsened one.
+[[nodiscard]] RealBox volumeVisibleRegion(const RealBox& domain,
+    const std::array<std::optional<RealBox>, 3>& viewRegions) noexcept;
+
 // The volume view's state machine, extracted from MainWindow the way the
 // other collaborators are: it owns the Volume Rendering... action and the
 // Volume window, decides when a render is due -- a camera move, a changed
@@ -87,6 +108,9 @@ public:
         // True once application shutdown began: late results are dropped
         // without touching the GUI.
         std::function<bool()> isShuttingDown;
+        // What the slice views currently show, as one box: the region a
+        // render is limited to while the window's own toggle asks for it.
+        std::function<RealBox()> visibleRegion;
         // True while plotfile-sequence playback is running. Frames arrive
         // faster than a full ray cast finishes, so they are drafted like a
         // moving camera and the frame already up is left in place until the
@@ -123,6 +147,10 @@ public:
     // renders at all. A single step is not on a clock and takes the cancel()
     // form, which leaves nothing pending against the frame being replaced.
     void frameSwitchStarted();
+    // Something that can move the visible region happened. Cheap and frequent
+    // -- every scheduled slice request calls it -- so it renders only when the
+    // region a frame would use differs from the one on screen.
+    void regionChanged();
     void refresh();
     void slicePositionsChanged();
     void slicePlanesVisibilityChanged();
@@ -172,6 +200,9 @@ private:
     // is layout churn, not a resize, and rendering for it would be a loop fed
     // by its own output (showFrame writes a label in the same dock).
     QSize m_lastRenderViewSize;
+    // The region the frame on screen was sampled from, so regionChanged can
+    // tell a real move from the many calls that are not one.
+    RealBox m_lastRenderRegion{};
     StopSource m_stopSource;
     std::uint64_t m_generation = 0;
     bool m_inFlight = false;

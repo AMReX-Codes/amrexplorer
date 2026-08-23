@@ -6,6 +6,7 @@
 // the window and drops a late result; a throwing session reports through
 // renderFailed and a cancelled one silently.
 
+#include "PlaneMapping.hpp"
 #include "VolumeController.hpp"
 #include "VolumeWindow.hpp"
 #include "IsoWidget.hpp"
@@ -16,6 +17,8 @@
 #include <QApplication>
 #include <QColor>
 #include <QAction>
+#include <QRectF>
+#include <QCheckBox>
 #include <QEvent>
 #include <QCoreApplication>
 #include <QStringList>
@@ -317,6 +320,121 @@ int main(int argc, char** argv)
             "a zero ratio was not bounded to a legal size");
     }
 
+    // --- raster pixels to a physical box --------------------------------
+    // The mapping the region of interest reads the viewport through, and the
+    // one a rubber-band zoom fetches through. Its trap is the vertical flip:
+    // raster rows count down, physical coordinates count up.
+    {
+        using amrvis::qt::physicalRegionForRasterRect;
+        const amrvis::RealBox raster{amrvis::Real3{{0.0, 0.0, 100.0}},
+            amrvis::Real3{{10.0, 20.0, 130.0}}};
+        const std::array<int, 2> axes{0, 1};   // an XY view: x across, y up
+        const auto whole = physicalRegionForRasterRect(
+            raster, 40.0, 30.0, QRectF(0.0, 0.0, 40.0, 30.0), axes);
+        require(whole == raster,
+            "the whole raster did not map back to the whole region");
+
+        // The left half of the raster is the low half of x.
+        const auto left = physicalRegionForRasterRect(
+            raster, 40.0, 30.0, QRectF(0.0, 0.0, 20.0, 30.0), axes);
+        require(left.lower[0] == 0.0 && left.upper[0] == 5.0,
+            "the left half of the raster is not the low half of x");
+        require(left.lower[1] == 0.0 && left.upper[1] == 20.0,
+            "narrowing x moved y as well");
+
+        // The TOP rows of the raster are the HIGH half of y. Getting this
+        // backwards mirrors the region about the middle of the plane, which
+        // on a symmetric domain looks entirely reasonable.
+        const auto top = physicalRegionForRasterRect(
+            raster, 40.0, 30.0, QRectF(0.0, 0.0, 40.0, 15.0), axes);
+        require(top.lower[1] == 10.0 && top.upper[1] == 20.0,
+            "the top of the raster did not map to the high half of y");
+        const auto bottom = physicalRegionForRasterRect(
+            raster, 40.0, 30.0, QRectF(0.0, 15.0, 40.0, 15.0), axes);
+        require(bottom.lower[1] == 0.0 && bottom.upper[1] == 10.0,
+            "the bottom of the raster did not map to the low half of y");
+
+        // The axis the view does not show keeps the plane's own extent, which
+        // is what stops three intersected views from collapsing every axis.
+        require(top.lower[2] == 100.0 && top.upper[2] == 130.0,
+            "the axis the view does not display was narrowed");
+
+        // A raster with no pixels has no mapping to make; the region stands.
+        require(physicalRegionForRasterRect(
+                    raster, 0.0, 30.0, QRectF(0.0, 0.0, 1.0, 1.0), axes)
+                == raster,
+            "an empty raster did not leave the region alone");
+    }
+
+    // --- the region the views leave visible ------------------------------
+    // Each plane view narrows only the two axes it shows, so the answer per
+    // axis is the narrower of the two views that show it.
+    {
+        using amrvis::qt::volumeVisibleRegion;
+        const amrvis::RealBox domain{amrvis::Real3{{0.0, 0.0, 0.0}},
+            amrvis::Real3{{10.0, 20.0, 30.0}}};
+        // Nothing zoomed: the domain, which is what an unlimited render asks
+        // for anyway, so turning the limit on changes nothing until a zoom.
+        require(volumeVisibleRegion(domain, {}) == domain,
+            "with no view zoomed the region is not the whole domain");
+
+        // The XY view (normal 2) zoomed in x and y; z untouched by it.
+        auto xy = domain;
+        xy.lower[0] = 2.0;
+        xy.upper[0] = 6.0;
+        xy.lower[1] = 5.0;
+        xy.upper[1] = 9.0;
+        auto narrowed = volumeVisibleRegion(domain,
+            {std::nullopt, std::nullopt, std::optional{xy}});
+        require(narrowed.lower[0] == 2.0 && narrowed.upper[0] == 6.0
+                && narrowed.lower[1] == 5.0 && narrowed.upper[1] == 9.0
+                && narrowed.lower[2] == 0.0 && narrowed.upper[2] == 30.0,
+            "one zoomed view did not narrow exactly the axes it shows");
+
+        // A second view narrowing a shared axis further: the YZ view (normal
+        // 0) shows y and z, so y is the tighter of the two and z is its own.
+        auto yz = domain;
+        yz.lower[1] = 6.0;
+        yz.upper[1] = 7.0;
+        yz.lower[2] = 3.0;
+        yz.upper[2] = 4.0;
+        narrowed = volumeVisibleRegion(domain,
+            {std::optional{yz}, std::nullopt, std::optional{xy}});
+        require(narrowed.lower[1] == 6.0 && narrowed.upper[1] == 7.0
+                && narrowed.lower[2] == 3.0 && narrowed.upper[2] == 4.0
+                && narrowed.lower[0] == 2.0 && narrowed.upper[0] == 6.0,
+            "two views sharing an axis did not intersect on it");
+
+        // Views that share no part of an axis: zoom YZ into the bottom of z
+        // and XZ into the top. That axis goes back to the domain rather than
+        // collapsing the box, which would not be renderable.
+        auto lowZ = domain;
+        lowZ.lower[2] = 0.0;
+        lowZ.upper[2] = 5.0;
+        auto highZ = domain;
+        highZ.lower[2] = 25.0;
+        highZ.upper[2] = 30.0;
+        const auto disjoint = volumeVisibleRegion(domain,
+            {std::optional{lowZ}, std::optional{highZ}, std::nullopt});
+        require(disjoint.lower[2] == 0.0 && disjoint.upper[2] == 30.0,
+            "an axis the views do not share did not fall back to the domain");
+        require(disjoint.valid(3),
+            "disjoint view zooms produced a box that cannot be rendered");
+        // The axes they *do* agree on are still narrowed -- the fallback is
+        // per axis, not the whole box.
+        auto lowZAlso = lowZ;
+        lowZAlso.lower[0] = 1.0;
+        lowZAlso.upper[0] = 2.0;
+        auto highZAlso = highZ;
+        highZAlso.lower[0] = 1.0;
+        highZAlso.upper[0] = 2.0;
+        const auto mixed = volumeVisibleRegion(domain,
+            {std::optional{lowZAlso}, std::optional{highZAlso}, std::nullopt});
+        require(mixed.lower[0] == 1.0 && mixed.upper[0] == 2.0
+                && mixed.lower[2] == 0.0 && mixed.upper[2] == 30.0,
+            "the domain fallback threw away an axis the views did agree on");
+    }
+
     // New geometry drops the frame that belonged to the old geometry: kept, it
     // would be drawn under a wireframe for a domain it was never sampled from,
     // and scaled by a projection that no longer describes it. Checked through
@@ -376,6 +494,7 @@ int main(int argc, char** argv)
     std::shared_ptr<amrvis::DatasetSession> dataset = session;
     bool shuttingDown = false;
     bool playingSequence = false;
+    std::array<std::optional<amrvis::RealBox>, 3> viewRegions{};
     amrvis::qt::RangeController::Selection rangeSelection;
     rangeSelection.mode = amrvis::RangeMode::User;
     rangeSelection.userRange = std::pair{0.0, 4.0};
@@ -391,6 +510,11 @@ int main(int argc, char** argv)
             [] { return std::array<double, 3>{0.5, 1.0, 1.5}; },
             [] { return true; },
             [&shuttingDown] { return shuttingDown; },
+            [&viewRegions, &session] {
+                return amrvis::qt::volumeVisibleRegion(
+                    amrvis::datasetSampleBounds(session->metadata()),
+                    viewRegions);
+            },
             [&playingSequence] { return playingSequence; },
         };
     };
@@ -750,6 +874,73 @@ int main(int argc, char** argv)
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the logarithmic render did not finish");
         controller.closeWindow();
+    }
+
+    // The region limit: off by default, and what it puts in the request.
+    {
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the opening frame was not displayed");
+        const auto domain
+            = amrvis::datasetSampleBounds(session->metadata());
+        require(session->requestsSoFar().back().region == domain,
+            "the opening render did not cover the whole domain");
+
+        // A zoomed view while the limit is off changes nothing: no render is
+        // due, and the region stays the domain.
+        auto zoomed = domain;
+        zoomed.lower[0] = 0.5 * (domain.lower[0] + domain.upper[0]);
+        viewRegions[2] = zoomed;
+        auto before = session->requests.load();
+        controller.regionChanged();
+        settle(application, 200);
+        require(session->requests == before,
+            "a view zoom rendered with the region limit switched off");
+
+        // Turning it on renders once, at the narrowed region.
+        auto* const window = volumeWindow();
+        require(window != nullptr, "no volume window on screen");
+        QMetaObject::invokeMethod(window, [window] {
+            window->findChild<QCheckBox*>(
+                       QStringLiteral("volumeRegionLimitCheck"))
+                ->setChecked(true);
+        });
+        application.processEvents();
+        waitFor(application, [&] { return session->requests == before + 1; },
+            "turning the region limit on did not render");
+        require(session->requestsSoFar().back().region == zoomed,
+            "the limited render did not cover the region the views show");
+        require(session->requestsSoFar().back().samplesPerVoxel == 2,
+            "the limited render was a draft rather than a full frame");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the limited render did not finish");
+
+        // With it on, a view that moves renders again...
+        before = session->requests.load();
+        zoomed.upper[1] = 0.5 * (domain.lower[1] + domain.upper[1]);
+        viewRegions[2] = zoomed;
+        controller.regionChanged();
+        waitFor(application, [&] { return session->requests == before + 1; },
+            "a moved view did not re-render the limited region");
+        require(session->requestsSoFar().back().region == zoomed,
+            "the re-render did not pick up the moved region");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the re-render did not finish");
+
+        // ...and one that has not moved does not. Every scheduled slice
+        // request calls this, so a region that is where the frame on screen
+        // came from must cost nothing.
+        before = session->requests.load();
+        controller.regionChanged();
+        controller.regionChanged();
+        settle(application, 200);
+        require(session->requests == before,
+            "an unchanged region rendered again anyway");
+        controller.closeWindow();
+        viewRegions = {};
     }
 
     // Sequence playback. Every frame of a sequence lands in

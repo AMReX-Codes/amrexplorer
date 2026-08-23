@@ -495,6 +495,43 @@ MainWindow::MainWindow(QWidget* parent)
             [this] { return m_slicePosition3d; },
             [this] { return m_slicePlanesAction->isChecked(); },
             [this] { return m_closing; },
+            [this] {
+                // What the three plane views actually show, as one box. Each
+                // narrows only the axes it displays, so this is where they are
+                // combined rather than in the controller, which has no view to
+                // ask.
+                //
+                // Derived from the raster the view holds and the part of it on
+                // screen, NOT from state.visibleRegion: that field records the
+                // region a slice was last *fetched* for, and a mouse-wheel
+                // zoom or a scroll moves what you can see without re-fetching
+                // anything. Reading it meant the box stayed at the whole
+                // domain after the most ordinary way of zooming in, so the
+                // check box appeared to do nothing.
+                const auto domain = m_dataset
+                    ? datasetSampleBounds(m_dataset->metadata())
+                    : RealBox{};
+                std::array<std::optional<RealBox>, 3> regions{};
+                for (std::size_t index = 0; index < m_planeViews.size();
+                    ++index) {
+                    const auto& state = m_planeViews[index];
+                    if (state.view == nullptr || !state.view->hasImage()
+                        || state.plane->width <= 0
+                        || state.plane->height <= 0) {
+                        continue;
+                    }
+                    const auto visible = state.view->visibleImageRect();
+                    if (visible.isEmpty()) {
+                        continue;
+                    }
+                    regions[index] = physicalRegionForRasterRect(
+                        state.plane->physicalRegion,
+                        static_cast<double>(state.plane->width),
+                        static_cast<double>(state.plane->height), visible,
+                        displayAxes(state.normal));
+                }
+                return volumeVisibleRegion(domain, regions);
+            },
             [this] { return m_playbackMode == PlaybackMode::Sequence; },
         },
         this);
@@ -701,7 +738,12 @@ void MainWindow::wireView(PlaneViewState& state)
     // every view to find. Guarding on the active view suppressed the Mixed the
     // signal was added to surface.
     connect(view, &ImageView::zoomChanged, this,
-        [this] { refreshScaleReport(); });
+        [this] {
+            refreshScaleReport();
+            // A wheel zoom re-requests nothing, so the slice funnel never sees
+            // it; the volume's region of interest still has to follow.
+            m_volumeController->regionChanged();
+        });
     connect(view, &ImageView::fitRequested, this,
         [this, &state] {
             resetViewZoom(state);
@@ -727,6 +769,11 @@ void MainWindow::wireView(PlaneViewState& state)
         });
     connect(view, &ImageView::canvasScrolled, this,
         [this, &state] { updateRemoteFixedScaleDemand(state); });
+    // Scrolling or resizing moves what is on screen without changing the
+    // raster. canvasScrolled cannot carry this: it fires only over a virtual
+    // canvas, so a local fixed-scale scroll emitted nothing at all.
+    connect(view, &ImageView::viewportMoved, this,
+        [this] { m_volumeController->regionChanged(); });
     connect(view, &ImageView::panStepRequested, this,
         [this, &state](const QPointF& direction) {
             ++m_panStepRequests;

@@ -4,10 +4,44 @@
 #include <amrexplorer/core/Geometry.hpp>
 
 #include <QPointF>
+#include <QRectF>
 
 #include <array>
 
 namespace amrvis::qt {
+
+// The physical box that a rectangle of raster pixels covers, given the box the
+// whole raster covers. Only the two axes the view displays are narrowed;
+// `rasterRegion`'s third stays as it is, which for a slice is the thickness the
+// plane was requested with.
+//
+// Raster rows count down while physical coordinates count up, so the vertical
+// edges swap: the rect's *bottom* gives the lower physical bound. Getting that
+// backwards mirrors the region about the plane's middle, which looks entirely
+// plausible on a symmetric domain -- which is why this is one definition used
+// by both callers rather than the formula written out twice.
+[[nodiscard]] inline RealBox physicalRegionForRasterRect(
+    const RealBox& rasterRegion, double rasterWidth, double rasterHeight,
+    const QRectF& rasterRect, const std::array<int, 2>& axes) noexcept
+{
+    auto region = rasterRegion;
+    if (!(rasterWidth > 0.0) || !(rasterHeight > 0.0)) {
+        return region;
+    }
+    const auto xAxis = static_cast<std::size_t>(axes[0]);
+    const auto yAxis = static_cast<std::size_t>(axes[1]);
+    const auto xExtent = rasterRegion.upper[xAxis] - rasterRegion.lower[xAxis];
+    const auto yExtent = rasterRegion.upper[yAxis] - rasterRegion.lower[yAxis];
+    region.lower[xAxis]
+        = rasterRegion.lower[xAxis] + rasterRect.left() / rasterWidth * xExtent;
+    region.upper[xAxis]
+        = rasterRegion.lower[xAxis] + rasterRect.right() / rasterWidth * xExtent;
+    region.lower[yAxis] = rasterRegion.lower[yAxis]
+        + (rasterHeight - rasterRect.bottom()) / rasterHeight * yExtent;
+    region.upper[yAxis] = rasterRegion.lower[yAxis]
+        + (rasterHeight - rasterRect.top()) / rasterHeight * yExtent;
+    return region;
+}
 
 // Converts between a view's logical in-plane physical coordinates (dataset
 // axes 0 and 1 -- (x, y) for Cartesian, (r, theta) for 2-D spherical) and

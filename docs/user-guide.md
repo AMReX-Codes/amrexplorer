@@ -320,6 +320,13 @@ match. Its own controls set the opacity:
   own alpha ramp instead of the linear window. Legacy Amrvis `.pal` files
   carry such a ramp (the shipped palettes have a plain 0-100 % ramp), and
   the window still applies the *from* / *to* limits and the maximum to it.
+- **Only the visible region** samples just the part of the domain the slice
+  views are zoomed into, instead of all of it. The budget below is then spent
+  on that part alone, so a region small enough to fit is drawn at the finest
+  level's own resolution rather than a coarsened one -- which is the way to
+  see fine detail in a field too large to sample whole. Each slice view
+  narrows the two axes it shows, and the volume follows them as you zoom. Off
+  by default; with nothing zoomed it makes no difference.
 - **Quality** trades speed for detail: it sets how many samples are taken per
   cell along each ray and how many cells the field is sampled into altogether
   -- about 2 million on Draft, 17 million on Normal, 57 million on High, spread

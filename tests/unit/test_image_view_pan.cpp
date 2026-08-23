@@ -37,6 +37,72 @@ QImage solidImage(int width, int height)
 void scrollBarPanFollowsContentDelta()
 {
     amrvis::qt::ImageView view;
+    // A local view reports its own scrolling and resizing. canvasScrolled does
+    // not: it fires only over a virtual canvas, so the volume window's region
+    // of interest -- which is read off visibleImageRect() -- was wired to a
+    // signal that never came for a local fixed-scale view, and stopped
+    // following the viewport the moment you touched a scroll bar.
+    {
+        amrvis::qt::ImageView local;
+        local.resize(200, 150);
+        local.show();
+        QApplication::processEvents();
+        local.setImage(solidImage(800, 600));
+        local.setFixedScale(2);
+        QApplication::processEvents();
+        int moved = 0;
+        int scrolled = 0;
+        QObject::connect(&local, &amrvis::qt::ImageView::viewportMoved,
+            &local, [&moved] { ++moved; });
+        QObject::connect(&local, &amrvis::qt::ImageView::canvasScrolled,
+            &local, [&scrolled] { ++scrolled; });
+        auto* bar = local.horizontalScrollBar();
+        require(bar->maximum() > 0,
+            "the fixed-scale view did not scroll, so this proves nothing");
+        bar->setValue(bar->maximum() / 2);
+        QApplication::processEvents();
+        require(moved > 0, "a local scroll reported no viewport movement");
+        require(scrolled == 0,
+            "canvasScrolled fired without a virtual canvas, so it is not the "
+            "signal this test says it is");
+    }
+
+    // And a resize on its own, in the arrangement that needs it: a scrolled
+    // view sitting at offset zero, grown so that more of the raster shows
+    // without either bar moving. Fit mode cannot exercise this -- it always
+    // shows the whole raster, so its region does not change with the window --
+    // and a view scrolled away from zero reports the resize through its bars
+    // instead, proving nothing about the resize itself.
+    {
+        amrvis::qt::ImageView grown;
+        grown.resize(200, 150);
+        grown.show();
+        QApplication::processEvents();
+        grown.setImage(solidImage(800, 600));
+        grown.setFixedScale(2);
+        QApplication::processEvents();
+        // Put the bars at their minima rather than asserting they are there:
+        // where setFixedScale leaves them is the platform's business, and on
+        // macOS it is not zero, which failed this before it reached the resize
+        // it exists to check. At the minimum, growing the view cannot move a
+        // bar -- a clamp can only hold it where it is.
+        grown.horizontalScrollBar()->setValue(
+            grown.horizontalScrollBar()->minimum());
+        grown.verticalScrollBar()->setValue(
+            grown.verticalScrollBar()->minimum());
+        QApplication::processEvents();
+        const auto before = grown.visibleImageRect();
+        int moved = 0;
+        QObject::connect(&grown, &amrvis::qt::ImageView::viewportMoved,
+            &grown, [&moved] { ++moved; });
+        grown.resize(360, 280);
+        QApplication::processEvents();
+        require(grown.visibleImageRect() != before,
+            "growing the view did not change what is visible, so there is "
+            "nothing here to report");
+        require(moved > 0, "a viewport resize reported no viewport movement");
+    }
+
     view.resize(200, 150);
     view.show();
     QApplication::processEvents();

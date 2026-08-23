@@ -819,6 +819,9 @@ void ImageView::resizeEvent(QResizeEvent* event)
         fitImage();
     }
     emit viewportResized(viewport()->size());
+    // A resize changes how much of the raster is on screen even when nothing
+    // moved, and in Fit mode fitImage above has just changed the transform.
+    emit viewportMoved();
 }
 
 void ImageView::scrollContentsBy(int dx, int dy)
@@ -827,6 +830,10 @@ void ImageView::scrollContentsBy(int dx, int dy)
     if (m_placement.has_value()) {
         emit canvasScrolled();
     }
+    // Unconditionally, unlike canvasScrolled: a local view scrolls its own
+    // raster under the viewport with no placement set, which moves what is
+    // visible just as much.
+    emit viewportMoved();
 }
 
 void ImageView::keyPressEvent(QKeyEvent* event)

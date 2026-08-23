@@ -363,6 +363,9 @@ starts at the largest a client may ask for, so it is there to tighten a server
 rather than to open one up; a request wanting more than it permits is rendered
 at the lower detail rather than refused.
 
+**File > Close** in the volume window (Ctrl+W, Cmd+W on macOS) closes the
+volume window and leaves the viewer running.
+
 **File > Export Image...** in the volume window saves the view, overlays
 included, as a PNG -- what is on screen when you pick it, including the
 wireframe on its own before a volume has rendered. If the name you give does
@@ -566,7 +569,7 @@ Independent windows have independent datasets, caches, and view state.
 | Ctrl+1 through Ctrl+9 | Composite levels 0 through N |
 | Alt+0 through Alt+9 | Show exact level N |
 | Ctrl+D | Open the Dataset window |
-| Ctrl+W | Close the current window |
+| Ctrl+W | Close this window or the Volume window (the last one quits) |
 
 The same interaction summary is always available from **Help > Keyboard &
 Mouse...**.

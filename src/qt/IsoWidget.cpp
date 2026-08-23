@@ -125,13 +125,20 @@ void IsoWidget::setColorPalette(const Palette* palette)
 
 bool IsoWidget::event(QEvent* event)
 {
-    // Qt reports a scale change on its own, and only this way: moving to a
-    // screen with a different scale leaves the logical geometry alone, so no
-    // resize event follows it and nothing else would ask for a frame at the
-    // resolution the view now has.
+    // A scale change leaves the logical geometry alone, so no resize event
+    // follows it and nothing else would ask for a frame at the resolution the
+    // view now has.
+    //
+    // Qt 6.6 added this event; this builds against 6.4, where it does not
+    // exist. There the screenChanged connection in VolumeController is the
+    // only trigger, which covers a window moved between displays -- the case
+    // that prompted this -- but not the scale of one display changing under a
+    // window that stays where it is.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
     if (event->type() == QEvent::DevicePixelRatioChange) {
         emit viewScaleChanged();
     }
+#endif
     return QWidget::event(event);
 }
 

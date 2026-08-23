@@ -705,13 +705,18 @@ int main(int argc, char** argv)
         require(session->requests == before,
             "a resize to the same size scheduled a render");
 
-        // Moving the window to a display with a different scale. Qt reports it
-        // as DevicePixelRatioChange and nothing else: the logical size does
-        // not change, so no resize follows -- which means the guard just
-        // above, the one that dismisses an unchanged size as layout churn,
-        // would swallow it and leave a frame at the old resolution up. It
-        // takes its own path for that reason, and the check above is what
+        // Moving the window to a display with a different scale. The logical
+        // size does not change, so no resize follows -- which means the guard
+        // just above, the one that dismisses an unchanged size as layout
+        // churn, would swallow it and leave a frame at the old resolution up.
+        // It takes its own path for that reason, and the check above is what
         // makes this one worth having.
+        //
+        // Only the event half can be driven from here, and only on the Qt
+        // versions that have it (6.6+). QWindow::screenChanged, the other
+        // trigger and the only one on Qt 6.4, cannot be emitted from outside
+        // the window it belongs to.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
         auto* const scaled = volumeWindow()->findChild<amrvis::qt::IsoWidget*>();
         require(scaled != nullptr, "no view in the volume window");
         before = session->requests.load();
@@ -723,6 +728,7 @@ int main(int argc, char** argv)
             "the frame after a scale change was a draft, not the full frame");
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the render after a scale change did not finish");
+#endif
         controller.closeWindow();
     }
 

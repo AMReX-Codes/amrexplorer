@@ -162,13 +162,13 @@ void VolumeController::showWindow(QWidget* parent)
         [this] { forgetWindow(); });
     pushGeometry();
     window->show();
-    // A second trigger for the same thing. The widget event above is the
-    // mechanism Qt documents for a scale change, but it is delivered by the
-    // platform and cannot be provoked from a test here; this one is certain,
-    // because moving a window to another screen always emits it. It fires for
-    // a same-scale move too, which costs one full frame on a rare,
-    // user-initiated action -- cheaper than a frame left at the wrong
-    // resolution. The handle exists only once the window is shown.
+    // The other trigger for a scale change, and on Qt 6.4 -- the minimum this
+    // builds against -- the only one, since QEvent::DevicePixelRatioChange
+    // arrived in 6.6. Moving a window to another screen always emits this,
+    // which is the case that matters; it fires for a same-scale move too,
+    // costing one full frame on a rare, user-initiated action -- cheaper than
+    // a frame left at the wrong resolution. The handle exists only once the
+    // window is shown.
     if (auto* const handle = window->windowHandle()) {
         connect(handle, &QWindow::screenChanged, this, endInteraction);
     }

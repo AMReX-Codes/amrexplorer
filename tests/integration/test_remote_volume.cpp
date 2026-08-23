@@ -196,7 +196,22 @@ int main(int argc, char* argv[])
             smallSession->close();
         }
 
+        // --- an unconfigured server does not cap below the protocol -----
+        // It used to default to 256^3 while a request may legally ask for
+        // 512^3 and the volume window's High preset asks for 384^3, so every
+        // High render against a default server came back at Normal's detail
+        // with nothing saying so. Asserted on the option rather than on a
+        // rendered grid because the fixtures here are far smaller than any of
+        // these budgets: their grids are bounded by the data, so no frame from
+        // them can tell the two defaults apart.
+        require(ServerOptions{}.maximumVolumeVoxels
+                == amrvis::maxVolumeVoxelBudget,
+            "an unconfigured server caps the sampled grid below the ceiling "
+            "a request may ask for");
+
         // --- the server's voxel cap clamps the request ------------------
+        // And the contrast: a cap the operator chose still clamps, which is
+        // what --max-volume-voxels is now solely for.
         {
             ServerOptions capped;
             capped.workerCount = 1;

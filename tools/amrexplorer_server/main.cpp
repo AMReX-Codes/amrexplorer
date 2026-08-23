@@ -46,8 +46,9 @@ void printUsage(std::ostream& output)
         << "  --max-datasets COUNT maximum open datasets per connection\n"
         << "  --max-volume-voxels N\n"
         << "                       maximum voxels sampled per volume render;\n"
-        << "                       default 256^3, ceiling 512^3. A request\n"
-        << "                       asking for more is clamped, not refused\n"
+        << "                       defaults to the 512^3 ceiling, so this is\n"
+        << "                       only for tightening. A request asking for\n"
+        << "                       more is clamped, not refused\n"
         << "  --volume-cache-mib MIB\n"
         << "                       per-dataset cache of sampled volume grids\n"
         << "  --write-stall-timeout-seconds SECONDS\n"
@@ -187,6 +188,8 @@ int main(int argc, char* argv[])
 {
     try {
         amrvis::remote::ServerOptions options;
+        // Whether either volume limit was given, for the warning below.
+        bool volumeLimitsChosen = false;
         options.softwareVersion = AMREXPLORER_VERSION;
         bool stdio = false;
         bool portGiven = false;
@@ -241,6 +244,7 @@ int main(int argc, char* argv[])
                         "--max-volume-voxels is outside its allowed range");
                 }
                 options.maximumVolumeVoxels = voxels;
+                volumeLimitsChosen = true;
             } else if (option == "--volume-cache-mib") {
                 const auto mebibytes
                     = parseUnsigned<std::uint32_t>(value, "--volume-cache-mib");
@@ -256,6 +260,7 @@ int main(int argc, char* argv[])
                 }
                 options.volumeGridCacheBytes
                     = static_cast<std::uint64_t>(mebibytes) * oneMebibyte;
+                volumeLimitsChosen = true;
             } else if (option == "--write-stall-timeout-seconds") {
                 const auto seconds = parseUnsigned<std::uint32_t>(
                     value, "--write-stall-timeout-seconds");
@@ -298,7 +303,16 @@ int main(int argc, char* argv[])
         // frame says which of the two happened. Warned about once here, where
         // the flags that caused it are still in view, rather than refused in
         // the server, which would take the deliberate case with it.
-        if (options.maximumVolumeVoxels * 4ULL > options.volumeGridCacheBytes) {
+        //
+        // Only when one of the two flags was actually given. The voxel cap now
+        // defaults to the 512^3 ceiling, which is 512 MiB of floats and more
+        // than the default grid cache holds, so the condition is true of every
+        // unconfigured server -- and a warning printed on every start is one
+        // nobody reads. What it is for is a configuration the operator chose;
+        // nothing the GUI asks for reaches 512^3 anyway, its High preset being
+        // 384^3, which the default cache does hold.
+        if (volumeLimitsChosen
+            && options.maximumVolumeVoxels * 4ULL > options.volumeGridCacheBytes) {
             std::cerr << "warning: --volume-cache-mib cannot hold one grid of "
                          "--max-volume-voxels voxels, so a request asking for "
                          "that many will render uncached every time; smaller "

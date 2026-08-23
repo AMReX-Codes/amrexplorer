@@ -45,19 +45,21 @@ struct ServerOptions {
     // request in flight, so an operator sizing a host has to do that
     // arithmetic rather than read either number as a ceiling.
     //
-    // maximumVolumeVoxels defaults *below* the protocol's own ceiling: a
-    // request may legally ask for maxVolumeVoxelBudget (512^3), which
-    // validateVolumeRenderRequest accepts, and an unconfigured server clamps
-    // it to defaultVolumeVoxelBudget (256^3) -- each axis halved, with no
-    // error, no warning, and nothing in the response that says so
-    // (validateSessionVolumeResult only checks the grid is not *larger* than
-    // asked, so a downgrade validates cleanly). A remote render of such a
-    // request therefore differs from the local one. Nothing raises the budget
-    // above the default today, which is the only reason this is latent;
-    // defaulting to maxVolumeVoxelBudget, and leaving --max-volume-voxels as
-    // the way to opt into something tighter, would make an unconfigured
-    // server transparent.
-    std::uint64_t maximumVolumeVoxels = defaultVolumeVoxelBudget;
+    // maximumVolumeVoxels defaults to the protocol's own ceiling, so an
+    // unconfigured server samples whatever a request may legally ask for and
+    // a remote render matches the local one. It used to default to
+    // defaultVolumeVoxelBudget (256^3), below the ceiling
+    // validateVolumeRenderRequest accepts, and the volume window's High preset
+    // asks for 384^3: every High render against an unconfigured server came
+    // back as Normal, with no error, no warning, and nothing in the response
+    // that said so (validateSessionVolumeResult only checks the grid is not
+    // *larger* than asked, so a downgrade validates cleanly).
+    //
+    // --max-volume-voxels is now purely the way to opt into something
+    // tighter. That still clamps silently, which is defensible for a limit an
+    // operator chose -- and the frame does carry the grid it used, which the
+    // window puts in its status line -- but nothing says the cap is why.
+    std::uint64_t maximumVolumeVoxels = maxVolumeVoxelBudget;
     std::uint64_t volumeGridCacheBytes = defaultVolumeGridCacheBytes;
     std::string softwareVersion = "unknown";
     // Per-session access token. Clients must present a byte-identical token in

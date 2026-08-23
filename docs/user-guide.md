@@ -326,9 +326,9 @@ match. Its own controls set the opacity:
   across the three axes in the domain's own proportions, so a long thin domain
   gets a long thin grid rather than a cube. A field finer than that is sampled
   at the coarser pitch; a level coarser than it is drawn at its own resolution.
-  On a remote plotfile the server sets its own ceiling, so **High** may look no
-  different from **Normal** unless the server allows more (see [Remote
-  datasets](#remote-datasets)).
+  A remote plotfile renders the same as a local one, unless the server was
+  started with a tighter ceiling of its own -- in which case **High** may look
+  no different from **Normal** (see [Remote datasets](#remote-datasets)).
 
 While the camera moves the window shows quick half-resolution drafts and
 renders the full frame once it settles. Rotating and zooming reuse the field
@@ -344,7 +344,10 @@ that speaks protocol 1.2; against an older server the menu item stays
 disabled. The server's `--max-volume-voxels` and `--volume-cache-mib` options
 set how large one volume and one dataset's cache may get. They are per volume
 and per dataset, not a total for the server, so sizing a host means multiplying
-them by how many datasets and connections you allow.
+them by how many datasets and connections you allow. `--max-volume-voxels`
+starts at the largest a client may ask for, so it is there to tighten a server
+rather than to open one up; a request wanting more than it permits is rendered
+at the lower detail rather than refused.
 
 **File > Export Image...** in the volume window saves the view, overlays
 included, as a PNG -- what is on screen when you pick it, including the
@@ -524,9 +527,11 @@ The **View** menu controls these optional panels:
 Window geometry, logarithmic mapping, palette, number format, and animation
 speed persist across sessions.
 
-Each open dataset has a 1 GiB data cache by default. Set
-`AMREXPLORER_CACHE_SIZE_MB` to a positive number of MiB before launching to change
-the initial budget:
+Each open dataset has a 1 GiB data cache by default -- and, while the volume
+window is open, a second cache of the same size for the grids it samples the
+field into, so a dataset being volume-rendered can hold up to twice that. Set
+`AMREXPLORER_CACHE_SIZE_MB` to a positive number of MiB before launching to
+change both:
 
 ```text
 AMREXPLORER_CACHE_SIZE_MB=2048 amrexplorer /path/to/plotfile

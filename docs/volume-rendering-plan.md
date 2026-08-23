@@ -83,7 +83,7 @@ Resolved defaults (routine calls, stated so nobody re-asks): alpha byte =
 legacy percent, `opacity = min(1, byte/100)` (Amrvis `Palette.cpp:670`);
 `reversed()` reverses RGB only; voxel budget 256^3 default / 512^3 hard cap;
 grid cache 256 MiB per session, server flags `--max-volume-voxels`,
-`--volume-cache-mb`; point sampling at voxel centres (box averaging later);
+`--volume-cache-mib`; point sampling at voxel centres (box averaging later);
 window mirrors the main window's field/level/range/log/palette (no own range
 controls); drafts at half the logical size, the settled frame at the view's
 device pixels (`volumeOutputSize`).

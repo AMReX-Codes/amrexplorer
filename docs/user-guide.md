@@ -527,9 +527,11 @@ The **View** menu controls these optional panels:
 Window geometry, logarithmic mapping, palette, number format, and animation
 speed persist across sessions.
 
-Each open dataset has a 1 GiB data cache by default -- and, while the volume
-window is open, a second cache of the same size for the grids it samples the
-field into, so a dataset being volume-rendered can hold up to twice that. Set
+Each open dataset has a 1 GiB data cache by default, and volume rendering fills
+a second cache of the same size with the grids it samples the field into, so a
+dataset you have volume-rendered can hold up to twice that. Closing the volume
+window does not give that memory back -- the grids stay cached for as long as
+the dataset is open, so that reopening the window draws immediately. Set
 `AMREXPLORER_CACHE_SIZE_MB` to a positive number of MiB before launching to
 change both:
 

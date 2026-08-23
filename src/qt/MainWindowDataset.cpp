@@ -1,4 +1,5 @@
 #include "MainWindowInternal.hpp"
+#include "WidgetImageExport.hpp"
 
 namespace amrvis::qt {
 
@@ -12,6 +13,53 @@ struct OpenedDataset {
     std::optional<FabSelectorBuild> fabSelector;
     std::shared_ptr<DatasetSession> session;
 };
+
+// Confirms what the save dialog could not: `targets` are the files the export
+// is about to write, `vetted` the one name the dialog returned. Anything else
+// it never saw -- the name after it gained the format's suffix, and the three
+// per-panel names a 3-D export derives from it. Returns false to abandon the
+// export; silent, returning true, when there is nothing the dialog has not
+// already asked.
+//
+// The default button is Cancel only when a file would be replaced. For the
+// ordinary "shot" -> "shot.png" notice there is nothing to lose, and
+// defaulting to Cancel there would throw the export away on the same reflexive
+// Return that dismissed the dialog a moment earlier.
+//
+// Titled through MainWindow::tr so it shares a translation context with the
+// window's other export strings rather than QObject's.
+[[nodiscard]] bool confirmExportTargets(QWidget* owner, const QString& vetted,
+    const QStringList& targets, const QString& format)
+{
+    const auto clobbered = existingExportTargets(vetted, targets);
+    // Only the single-file case reports a rename: a 3-D export always writes
+    // names the dialog did not see, and saying so on every one of them would
+    // be a prompt per export rather than a warning about losing something.
+    const bool renamed = targets.size() == 1 && targets.front() != vetted;
+    if (clobbered.isEmpty() && !renamed) {
+        return true;
+    }
+    QStringList paragraphs;
+    if (renamed) {
+        paragraphs << MainWindow::tr(
+            "Saving as %1 instead: the image is written as %2.")
+                          .arg(targets.front(), format);
+    }
+    if (clobbered.size() == 1) {
+        paragraphs << MainWindow::tr("%1 already exists and will be replaced.")
+                          .arg(clobbered.front());
+    } else if (!clobbered.isEmpty()) {
+        paragraphs << MainWindow::tr(
+            "These files already exist and will be replaced:")
+                + QLatin1Char('\n') + clobbered.join(QLatin1Char('\n'));
+    }
+    QMessageBox box(QMessageBox::Question, MainWindow::tr("Export Image"),
+        paragraphs.join(QStringLiteral("\n\n")),
+        QMessageBox::Save | QMessageBox::Cancel, owner);
+    box.setDefaultButton(
+        clobbered.isEmpty() ? QMessageBox::Save : QMessageBox::Cancel);
+    return box.exec() == QMessageBox::Save;
+}
 
 } // namespace
 
@@ -236,38 +284,49 @@ void MainWindow::exportImage()
     }
 
     QString selectedFilter;
-    auto filename = QFileDialog::getSaveFileName(
+    const auto chosen = QFileDialog::getSaveFileName(
         this, tr("Export scalar image"), QString(),
         tr("PNG image (*.png);;FITS float64 image (*.fits *.fit)"),
         &selectedFilter);
-    if (filename.isEmpty()) {
+    if (chosen.isEmpty()) {
         return;
     }
 
-    const bool hasFitsExtension = filename.endsWith(
-            QStringLiteral(".fits"), Qt::CaseInsensitive)
-        || filename.endsWith(QStringLiteral(".fit"), Qt::CaseInsensitive);
-    const bool hasPngExtension = filename.endsWith(
-        QStringLiteral(".png"), Qt::CaseInsensitive);
-    // An explicitly typed recognized extension wins over the selected filter.
+    // Which format, and the suffixes that already say it. An explicitly typed
+    // recognized extension wins over the selected filter.
+    const QStringList fitsSuffixes{
+        QStringLiteral(".fits"), QStringLiteral(".fit")};
+    const QStringList pngSuffixes{QStringLiteral(".png")};
+    const bool hasFitsExtension
+        = !carriedExportSuffix(chosen, fitsSuffixes).isEmpty();
+    const bool hasPngExtension
+        = !carriedExportSuffix(chosen, pngSuffixes).isEmpty();
     const bool fits = hasFitsExtension
         || (!hasPngExtension
             && selectedFilter.contains(QStringLiteral("*.fits")));
-    const QString extension = filename.endsWith(
-            QStringLiteral(".fit"), Qt::CaseInsensitive)
-        ? QStringLiteral(".fit")
-        : fits ? QStringLiteral(".fits") : QStringLiteral(".png");
 
-    // Normalize the chosen extension and get the base name used for the
-    // per-panel suffixes of a 3-D export.
-    QString base = filename;
-    if (base.endsWith(QStringLiteral(".fits"), Qt::CaseInsensitive)) {
-        base.chop(5);
-    } else if (base.endsWith(QStringLiteral(".fit"), Qt::CaseInsensitive)
-        || base.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive)) {
-        base.chop(4);
-    }
-    filename = base + extension;
+    // The suffix to write under, and the base name the per-panel suffixes of a
+    // 3-D export hang off. A name that already says the format keeps the
+    // spelling it was typed in: chopping the suffix and re-appending a
+    // lowercase one -- what this did -- turned a typed "shot.PNG" into
+    // "shot.png", a different file on a case-sensitive filesystem, replaced
+    // without asking while the file the dialog had vetted was left alone.
+    const auto carried
+        = carriedExportSuffix(chosen, fits ? fitsSuffixes : pngSuffixes);
+    const QString extension = !carried.isEmpty()
+        ? carried
+        : fits ? QStringLiteral(".fits") : QStringLiteral(".png");
+    QString base = chosen;
+    base.chop(carried.size());
+    const QString filename = base + extension;
+    // One expression builds a panel's name, so the confirmation below cannot
+    // name a different set of files than the writes then produce.
+    const auto panelPath = [&base, &extension](std::size_t normal) {
+        constexpr std::array<const char*, 3> suffixes{"_yz", "_xz", "_xy"};
+        return base + QString::fromLatin1(suffixes[normal]) + extension;
+    };
+    const auto formatName
+        = fits ? QStringLiteral("FITS") : QStringLiteral("PNG");
 
     if (fits) {
         const auto writePlane = [this](const QString& outPath,
@@ -284,18 +343,38 @@ void MainWindow::exportImage()
             }
         };
         if (m_viewDimension == 3) {
-            constexpr std::array<const char*, 3> suffixes{"_yz", "_xz", "_xy"};
+            // Which panels, their names, and the data itself, all decided
+            // before anything is written: the confirmation below runs a nested
+            // event loop, so it has to cover every file at risk rather than
+            // the first of three, and what lands in them has to be what was on
+            // screen when the question was asked. The planes are immutable
+            // shared snapshots, so holding one costs a refcount and pins it
+            // against an arrival that installs a fresh pointer mid-prompt.
+            std::vector<std::pair<std::shared_ptr<const ScalarPlane>, QString>>
+                outputs;
             for (std::size_t normal = 0; normal < m_planeViews.size(); ++normal) {
                 const auto& state = m_planeViews[normal];
                 if (state.plane->width <= 0 || state.plane->height <= 0) {
                     continue;
                 }
-                const auto outPath = base
-                    + QString::fromLatin1(suffixes[normal]) + extension;
-                writePlane(outPath, *state.plane);
+                outputs.emplace_back(state.plane, panelPath(normal));
+            }
+            QStringList targets;
+            for (const auto& [plane, outPath] : outputs) {
+                targets << outPath;
+            }
+            if (!confirmExportTargets(this, chosen, targets, formatName)) {
+                return;
+            }
+            for (const auto& [plane, outPath] : outputs) {
+                writePlane(outPath, *plane);
             }
         } else if (m_activeView != nullptr) {
-            writePlane(filename, *m_activeView->plane);
+            const auto plane = m_activeView->plane;
+            if (!confirmExportTargets(this, chosen, {filename}, formatName)) {
+                return;
+            }
+            writePlane(filename, *plane);
         }
         return;
     }
@@ -316,16 +395,29 @@ void MainWindow::exportImage()
     const bool includeColorBar = choice.clickedButton() == withBar;
 
     if (m_viewDimension == 3) {
-        // Export all three panels: foo_xy.png, foo_xz.png, foo_yz.png.
-        constexpr std::array<const char*, 3> suffixes{"_yz", "_xz", "_xy"};
-        for (int normal = 0; normal < 3; ++normal) {
-            const auto idx = static_cast<std::size_t>(normal);
-            auto* panelView = m_planeViews[idx].view;
+        // Export all three panels: foo_xy.png, foo_xz.png, foo_yz.png. Which
+        // ones is settled before any of them is written, so the confirmation
+        // names exactly the files the writes will touch. The pictures are
+        // still composed afterwards, from the views: unlike the FITS path
+        // above there is no cheap snapshot to hold, and the color-bar prompt
+        // has always run an event loop here, so this is no wider a window
+        // than it was. The views themselves live as long as the window.
+        std::vector<std::pair<ImageView*, QString>> outputs;
+        for (std::size_t normal = 0; normal < m_planeViews.size(); ++normal) {
+            auto* panelView = m_planeViews[normal].view;
             if (panelView == nullptr || !panelView->hasImage()) {
                 continue;
             }
-            const auto outPath = base
-                + QString::fromLatin1(suffixes[idx]) + QStringLiteral(".png");
+            outputs.emplace_back(panelView, panelPath(normal));
+        }
+        QStringList targets;
+        for (const auto& [panelView, outPath] : outputs) {
+            targets << outPath;
+        }
+        if (!confirmExportTargets(this, chosen, targets, formatName)) {
+            return;
+        }
+        for (const auto& [panelView, outPath] : outputs) {
             const qreal scale = std::max(1.0,
                 panelView->transform().m11());
             const QImage composite = composeExportFrame(
@@ -336,6 +428,9 @@ void MainWindow::exportImage()
             }
         }
     } else {
+        if (!confirmExportTargets(this, chosen, {filename}, formatName)) {
+            return;
+        }
         const qreal exportScale = std::max(1.0, view->transform().m11());
         const QImage composite = composeExportFrame(
             view, includeColorBar, exportScale);

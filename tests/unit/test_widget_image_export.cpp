@@ -1,12 +1,14 @@
-// The two rules in exporting a widget's picture: the file name PNG bytes are
-// saved under, and painting a widget without the controls parked over it.
+// The rules in exporting a widget's picture: the file name the bytes are saved
+// under, which of the files an export is about to write are already there, and
+// painting a widget without the controls parked over it.
 //
-// Both shipped a bug that only review caught, because both lived inside a
+// Each shipped a bug that only review caught, because each lived inside a
 // private slot nothing could call. The name rule shipped two: a typed "shot"
 // overwriting shot.png unasked, and chop-and-re-append rewriting "shot.PNG" to
-// "shot.png" -- the second introduced while fixing the first. The painting rule
-// shipped one: QWidget::grab() baking the volume view's XY/XZ/YZ preset buttons
-// into every exported frame.
+// "shot.png" -- the second introduced while fixing the first. The main window's
+// copy of it shipped both, plus a third: it writes up to three derived names
+// the save dialog never saw. The painting rule shipped one: QWidget::grab()
+// baking the volume view's XY/XZ/YZ preset buttons into every exported frame.
 //
 // The painting test does not use IsoWidget. It builds its own widget with a
 // child parked over it, so it pins the rule rather than the volume window's
@@ -16,9 +18,12 @@
 
 #include <QApplication>
 #include <QColor>
+#include <QFile>
 #include <QImage>
 #include <QPainter>
 #include <QPushButton>
+#include <QStringList>
+#include <QTemporaryDir>
 #include <QWidget>
 
 #include <cstdlib>
@@ -42,6 +47,34 @@ void requirePath(const char* chosen, const char* expected)
     }
     std::cerr << "FAILED: pngExportPath(\"" << chosen << "\") gave \""
               << actual.toStdString() << "\", expected \"" << expected << "\"\n";
+    std::exit(1);
+}
+
+void requireCarried(const char* chosen, const QStringList& accepted,
+    const char* expected)
+{
+    const auto actual = amrvis::qt::carriedExportSuffix(
+        QString::fromUtf8(chosen), accepted);
+    if (actual == QString::fromUtf8(expected)) {
+        return;
+    }
+    std::cerr << "FAILED: carriedExportSuffix(\"" << chosen << "\") gave \""
+              << actual.toStdString() << "\", expected \"" << expected
+              << "\"\n";
+    std::exit(1);
+}
+
+void requireSuffixed(const char* chosen, const QStringList& accepted,
+    const char* canonical, const char* expected)
+{
+    const auto actual = amrvis::qt::exportPathWithSuffix(
+        QString::fromUtf8(chosen), accepted, QString::fromUtf8(canonical));
+    if (actual == QString::fromUtf8(expected)) {
+        return;
+    }
+    std::cerr << "FAILED: exportPathWithSuffix(\"" << chosen << "\", \""
+              << canonical << "\") gave \"" << actual.toStdString()
+              << "\", expected \"" << expected << "\"\n";
     std::exit(1);
 }
 
@@ -143,6 +176,90 @@ int main(int argc, char** argv)
     // A trailing dot is not a suffix, so it gains one -- pinned so the
     // behaviour is chosen rather than accidental.
     requirePath("shot.", "shot..png");
+
+    // --- the suffix a name already carries -------------------------------
+    // Returned as it was typed, which is the whole reason this hands back the
+    // text and not a bool: the caller writes under the spelling it gets, and
+    // handing back the lowercase spelling is how "shot.PNG" became "shot.png".
+    const QStringList png{QStringLiteral(".png")};
+    const QStringList fits{QStringLiteral(".fits"), QStringLiteral(".fit")};
+    requireCarried("shot.png", png, ".png");
+    requireCarried("shot.PNG", png, ".PNG");
+    requireCarried("shot.PnG", png, ".PnG");
+    requireCarried("shot", png, "");
+    requireCarried("shot.jpg", png, "");
+    requireCarried("", png, "");
+    // Either suffix of a format with two of them, each in its own spelling.
+    requireCarried("shot.fits", fits, ".fits");
+    requireCarried("shot.fit", fits, ".fit");
+    requireCarried("shot.FITS", fits, ".FITS");
+    requireCarried("shot.Fit", fits, ".Fit");
+    requireCarried("shot.png", fits, "");
+    // Longest first, as the contract asks: a compound suffix is matched whole
+    // rather than by its own tail.
+    requireCarried("a.tar.gz",
+        {QStringLiteral(".tar.gz"), QStringLiteral(".gz")}, ".tar.gz");
+
+    // --- the name for a format with more than one suffix -----------------
+    // The main window's export, which is where all three of these shipped.
+    requireSuffixed("shot", fits, ".fits", "shot.fits");
+    // Already says the format: untouched, in the case it was typed. Both of
+    // these were rewritten to a lowercase ".fits" -- a different file on a
+    // case-sensitive filesystem, and for the second one a different format's
+    // suffix as well.
+    requireSuffixed("shot.FITS", fits, ".fits", "shot.FITS");
+    requireSuffixed("shot.fit", fits, ".fits", "shot.fit");
+    requireSuffixed("shot.FIT", fits, ".fits", "shot.FIT");
+    // Says some other format: it gains the one being written, rather than
+    // having its own replaced.
+    requireSuffixed("shot.jpg", fits, ".fits", "shot.jpg.fits");
+    requireSuffixed("", fits, ".fits", "");
+    // And the PNG wrapper is that same rule, so it stays in step with it.
+    requireSuffixed("shot.PNG", png, ".png", "shot.PNG");
+
+    // --- which of the files about to be written are already there --------
+    QTemporaryDir directory;
+    require(directory.isValid(), "could not make a temporary directory");
+    const auto inDirectory = [&directory](const char* name) {
+        return directory.filePath(QString::fromUtf8(name));
+    };
+    const auto touch = [](const QString& path) {
+        QFile file(path);
+        return file.open(QIODevice::WriteOnly) && file.write("x") == 1;
+    };
+    require(touch(inDirectory("shot_xz.png")), "could not make a file");
+    require(touch(inDirectory("typed.png")), "could not make a file");
+
+    // A 3-D export writes three names derived from the one the dialog vetted,
+    // so all three are candidates and the one already there is reported.
+    const QStringList panels{inDirectory("shot_yz.png"),
+        inDirectory("shot_xz.png"), inDirectory("shot_xy.png")};
+    const auto clobbered = amrvis::qt::existingExportTargets(
+        inDirectory("shot.png"), panels);
+    require(clobbered == QStringList{inDirectory("shot_xz.png")},
+        "the existing derived file was not the one and only one reported");
+
+    // The name the dialog returned is excluded even though it exists: that one
+    // it already confirmed, and asking twice is what teaches someone to click
+    // through the prompt that matters.
+    require(amrvis::qt::existingExportTargets(
+                inDirectory("typed.png"), {inDirectory("typed.png")})
+                .isEmpty(),
+        "the name the save dialog vetted was asked about a second time");
+    // ...but the same file under a name the dialog did not return is not.
+    require(amrvis::qt::existingExportTargets(
+                inDirectory("other.png"), {inDirectory("typed.png")})
+            == QStringList{inDirectory("typed.png")},
+        "an existing file the dialog never saw was not reported");
+    // Nothing there, nothing to say.
+    require(amrvis::qt::existingExportTargets(inDirectory("shot.png"),
+                {inDirectory("gone_yz.png"), inDirectory("gone_xy.png")})
+                .isEmpty(),
+        "files that do not exist were reported as existing");
+    require(amrvis::qt::existingExportTargets(
+                inDirectory("shot.png"), QStringList{})
+                .isEmpty(),
+        "an empty target list produced something to confirm");
 
     // --- painting the widget without its children ------------------------
     HostWidget host;

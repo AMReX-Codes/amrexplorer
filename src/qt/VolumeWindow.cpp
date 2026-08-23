@@ -320,11 +320,16 @@ qreal VolumeWindow::viewDevicePixelRatio() const
 
 OpacityRamp VolumeWindow::ramp() const
 {
-    // The curve carries the shape, so the window fields stay at their
-    // defaults and go unread: makeVolumeTransferFunction takes the curve
-    // branch whenever one is set, which this always is. The widget keeps the
-    // points sorted, in range, and at least two -- the invariants that branch
-    // reads them under.
+    // usePaletteAlpha decides which of the two shapes the render reads. With
+    // it off, makeVolumeTransferFunction takes the curve. With it on, the
+    // curve stands aside and that function reads the window fields instead --
+    // which is why they are left at their defaults here rather than set from
+    // anything. At those defaults the window spans the whole range at full
+    // maximum, so it is no window at all and the palette's authored ramp comes
+    // back untouched, which is the reason to tick the box.
+    //
+    // The widget keeps the points sorted, in range, and at least two: the
+    // invariants the curve branch reads them under.
     OpacityRamp ramp;
     ramp.usePaletteAlpha = m_paletteAlpha->isEnabled() && m_paletteAlpha->isChecked();
     ramp.curve = m_curve->curve();

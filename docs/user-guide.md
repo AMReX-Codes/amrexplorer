@@ -347,7 +347,10 @@ and per dataset, not a total for the server, so sizing a host means multiplying
 them by how many datasets and connections you allow.
 
 **File > Export Image...** in the volume window saves the view, overlays
-included, as a PNG.
+included, as a PNG -- what is on screen when you pick it, including the
+wireframe on its own before a volume has rendered. If the name you give does
+not end in `.png` one is added, and you are asked to confirm the name it will
+actually be saved under.
 
 ## Selecting fields and AMR levels
 

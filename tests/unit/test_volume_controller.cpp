@@ -9,6 +9,7 @@
 #include "VolumeController.hpp"
 #include "VolumeWindow.hpp"
 #include "IsoWidget.hpp"
+#include "WidgetImageExport.hpp"
 
 #include <amrexplorer/data/DatasetSession.hpp>
 
@@ -263,6 +264,49 @@ int main(int argc, char** argv)
 {
     QApplication application(argc, argv);
     using amrvis::qt::VolumeController;
+
+    // New geometry drops the frame that belonged to the old geometry: kept, it
+    // would be drawn under a wireframe for a domain it was never sampled from,
+    // and scaled by a projection that no longer describes it. Checked through
+    // what the widget paints, since nothing exposes the backdrop.
+    {
+        FakeSession geometry(3);
+        amrvis::qt::IsoWidget widget;
+        widget.resize(120, 90);
+        widget.setGeometry(geometry.metadata());
+        widget.show();
+        application.processEvents();
+        QImage frame(40, 30, QImage::Format_ARGB32_Premultiplied);
+        frame.fill(QColor(255, 0, 255));   // nothing else in the view is magenta
+        widget.setBackdropImage(frame, amrvis::OrthoCamera{});
+        application.processEvents();
+        const auto withFrame
+            = amrvis::qt::renderWidgetWithoutChildren(widget, 1.0);
+        const auto magenta = [](const QImage& image) {
+            int found = 0;
+            for (int y = 0; y < image.height(); ++y) {
+                for (int x = 0; x < image.width(); ++x) {
+                    const auto pixel = image.pixelColor(x, y);
+                    found += pixel.red() > 200 && pixel.green() < 80
+                            && pixel.blue() > 200
+                        ? 1 : 0;
+                }
+            }
+            return found;
+        };
+        require(magenta(withFrame) > 0,
+            "the backdrop was not drawn, so this cannot see it being dropped");
+        // Different 3-D geometry: the flag stays set, so only the clear can
+        // remove the frame.
+        auto other = geometry.metadata();
+        other.physicalDomain = amrvis::RealBox{
+            amrvis::Real3{{0.0, 0.0, 0.0}}, amrvis::Real3{{2.0, 3.0, 4.0}}};
+        widget.setGeometry(other);
+        application.processEvents();
+        require(magenta(amrvis::qt::renderWidgetWithoutChildren(widget, 1.0))
+                == 0,
+            "new geometry kept the frame sampled from the old one");
+    }
 
     auto session = std::make_shared<FakeSession>();
     std::shared_ptr<amrvis::DatasetSession> dataset = session;

@@ -34,6 +34,9 @@ You can also start without a path and use the File menu:
 - **Open MultiFab...** opens a standalone MultiFab header.
 - **Open New Window** creates an independent viewer for side-by-side
   comparison.
+- **Close Window** (Ctrl+W, Cmd+W on macOS) closes only the current window;
+  the other windows keep running. Closing the last one exits AMReXplorer,
+  which **Quit** does from any window.
 
 Cylindrical RZ and 3-D spherical plotfiles open normally but are displayed on
 their logical grid. **2-D spherical (r, θ)** plotfiles can also be shown in
@@ -265,6 +268,9 @@ Choose **View > Dataset...** or press **Ctrl+D** to inspect raw values for
 the visible physical region. Values are grouped by AMR level. Clicking a
 value highlights the corresponding sample in the main view.
 
+The Dataset and line-plot windows close with their **Close** button or with
+Ctrl+W (Cmd+W on macOS), the same key that closes the main and volume windows.
+
 Choose **View > Number Format...** to set the `printf`-style format used for
 numeric readouts. The default is `%g`.
 
@@ -359,6 +365,9 @@ them by how many datasets and connections you allow. `--max-volume-voxels`
 starts at the largest a client may ask for, so it is there to tighten a server
 rather than to open one up; a request wanting more than it permits is rendered
 at the lower detail rather than refused.
+
+**File > Close** in the volume window (Ctrl+W, Cmd+W on macOS) closes the
+volume window and leaves the viewer running.
 
 **File > Export Image...** in the volume window saves the view, overlays
 included, as a PNG -- what is on screen when you pick it, including the
@@ -563,6 +572,7 @@ Independent windows have independent datasets, caches, and view state.
 | Ctrl+1 through Ctrl+9 | Composite levels 0 through N |
 | Alt+0 through Alt+9 | Show exact level N |
 | Ctrl+D | Open the Dataset window |
+| Ctrl+W | Close the window in front (the last one quits) |
 
 The same interaction summary is always available from **Help > Keyboard &
 Mouse...**.

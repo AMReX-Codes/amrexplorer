@@ -241,7 +241,7 @@ add_subdirectory(src/render2d)
 add_subdirectory(src/pipeline)
 
 if(AMREXPLORER_ENABLE_QT)
-    find_package(Qt6 6.4 REQUIRED COMPONENTS Concurrent Core Gui Widgets)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Concurrent Core Gui Test Widgets)
     add_subdirectory(src/qt)
 endif()
 

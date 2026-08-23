@@ -1,6 +1,7 @@
 #include "DatasetWindow.hpp"
 
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
+#include "CloseWindowAction.hpp"
 #include "NumberFormat.hpp"
 #include "QtErrorText.hpp"
 
@@ -163,6 +164,10 @@ DatasetWindow::DatasetWindow(DatasetRequest request, QWidget* parent)
     connect(refreshButton, &QPushButton::clicked, this,
         [this] { emit refreshRequested(); });
     connect(closeButton, &QPushButton::clicked, this, &QWidget::close);
+    // The same key that closes the other windows. There is no menu bar here to
+    // show it in, so the action lives on the window itself, next to the button.
+    addCloseWindowAction(*this, tr("&Close"))
+        ->setObjectName(QStringLiteral("datasetCloseAction"));
 
     startLoad();
 }

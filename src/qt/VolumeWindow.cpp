@@ -1,5 +1,6 @@
 #include "VolumeWindow.hpp"
 
+#include "CloseWindowAction.hpp"
 #include "IsoWidget.hpp"
 #include "OpacityCurveWidget.hpp"
 #include "WidgetImageExport.hpp"
@@ -73,9 +74,8 @@ VolumeWindow::VolumeWindow(QWidget* parent)
     exportAction->setShortcut(QKeySequence::Save);
     connect(exportAction, &QAction::triggered, this, [this] { exportImage(); });
     fileMenu->addAction(exportAction);
-    auto* closeAction = new QAction(tr("&Close"), this);
-    closeAction->setShortcut(QKeySequence::Close);
-    connect(closeAction, &QAction::triggered, this, [this] { close(); });
+    auto* closeAction = addCloseWindowAction(*this, tr("&Close"));
+    closeAction->setObjectName(QStringLiteral("volumeCloseAction"));
     fileMenu->addAction(closeAction);
 }
 

@@ -1044,7 +1044,7 @@ if(TARGET amrexplorer_qt)
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
     )
     target_link_libraries(test_line_plot_hover
-        PRIVATE amrexplorer::core amrexplorer::warnings Qt6::Widgets
+        PRIVATE amrexplorer::core amrexplorer::warnings Qt6::Test Qt6::Widgets
     )
     add_test(
         NAME line_plot_hover
@@ -1322,6 +1322,17 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_window_close_pool_smoke_3d PROPERTIES TIMEOUT 30)
+    add_test(
+        NAME qt_close_window_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_close_window_3d"
+            -DMODE=close-window
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_close_window_smoke_3d PROPERTIES TIMEOUT 30)
     add_test(
         NAME qt_quit_on_failure_smoke_3d
         COMMAND "${CMAKE_COMMAND}"

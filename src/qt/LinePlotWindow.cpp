@@ -1,4 +1,5 @@
 #include "LinePlotWindow.hpp"
+#include "CloseWindowAction.hpp"
 #include "NumberFormat.hpp"
 #include "Theme.hpp"
 
@@ -527,6 +528,10 @@ LinePlotWindow::LinePlotWindow(const QString& datasetName, QWidget* parent)
     connect(zoomButton, &QPushButton::clicked, m_plot, &LinePlotWidget::resetZoom);
     connect(markersBox, &QCheckBox::toggled, m_plot, &LinePlotWidget::setShowMarkers);
     connect(closeButton, &QPushButton::clicked, this, &QWidget::close);
+    // The same key that closes the other windows. There is no menu bar here to
+    // show it in, so the action lives on the window itself, next to the button.
+    addCloseWindowAction(*this, tr("&Close"))
+        ->setObjectName(QStringLiteral("linePlotCloseAction"));
 }
 
 void LinePlotWindow::setNumberFormat(QString format)

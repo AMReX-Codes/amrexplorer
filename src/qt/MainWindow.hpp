@@ -234,6 +234,10 @@ public:
     // per cell -- rather than in physical units. The two differ only when
     // the cells are not square (see remote-fit-anisotropic-cells).
     [[nodiscard]] bool activeViewRasterHasCellAspectForTest() const;
+    // Test-only: a second independent top-level window, made exactly as the
+    // "Open New Window" menu action makes it, for the close-window test to
+    // close again.
+    MainWindow* createNewWindowForTest() { return createNewWindow(); }
     // Test-only: the Volume Rendering window -- open it as the View menu
     // action does, whether it is open, and what fraction of the last frame's
     // pixels the ray caster lit (alpha > 0); zero before any frame.

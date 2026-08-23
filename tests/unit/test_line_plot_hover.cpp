@@ -1,7 +1,10 @@
 #include "LinePlotWindow.hpp"
 
+#include <QAction>
 #include <QApplication>
+#include <QTest>
 #include <QEvent>
+#include <QKeySequence>
 #include <QMouseEvent>
 #include <QPointF>
 #include <QToolTip>
@@ -71,5 +74,24 @@ int main(int argc, char* argv[])
     application.processEvents();
     // QToolTip fades asynchronously and the offscreen platform keeps reporting
     // it as visible during that fade; sending Leave still exercises cleanup.
+
+    // Ctrl+W closes this window, as it does the main, volume and Dataset ones.
+    // The window carries no menu bar, so the action has to be on the window
+    // itself for the key to reach it; the sequence is spelled out here rather
+    // than read back from the action, so moving the key fails this.
+    auto* const closeAction = window.findChild<QAction*>(
+        QStringLiteral("linePlotCloseAction"));
+    require(closeAction != nullptr, "the line plot has no close action");
+    require(window.actions().contains(closeAction),
+        "the close action is not on the window, so Ctrl+W cannot reach it");
+    require(closeAction->shortcut() == QKeySequence(Qt::CTRL | Qt::Key_W),
+        "the line plot close shortcut is not Ctrl+W");
+    // Pressed, not triggered: QTest::keyClick goes through the platform's key
+    // path and Qt's shortcut map, which is what a trigger() call skips -- and
+    // skipping it hides a wrong shortcut context or a missing window
+    // association, both of which leave the key dead in the app.
+    window.activateWindow();
+    QTest::keyClick(&window, Qt::Key_W, Qt::ControlModifier);
+    require(!window.isVisible(), "Ctrl+W left the line plot window open");
     return 0;
 }

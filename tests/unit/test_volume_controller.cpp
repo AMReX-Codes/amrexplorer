@@ -21,6 +21,7 @@
 #include <QRectF>
 #include <QCheckBox>
 #include <QEvent>
+#include <QKeySequence>
 #include <QMouseEvent>
 #include <QCoreApplication>
 #include <QStringList>
@@ -272,6 +273,12 @@ void settle(QCoreApplication& application, int milliseconds)
 int main(int argc, char** argv)
 {
     QApplication application(argc, argv);
+    // Every wait below is a real application.exec() (see waitFor) and the
+    // volume window is usually the only top-level one, so closing it would let
+    // Qt quit the application out from under the next wait. What that does to
+    // an exec() differs across the Qt versions this builds against (6.4 is the
+    // floor), so take the behaviour out of play rather than depend on it.
+    application.setQuitOnLastWindowClosed(false);
     using amrvis::qt::VolumeController;
 
     // --- the size a frame is ray-cast at -------------------------------
@@ -723,6 +730,42 @@ int main(int argc, char** argv)
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the drafts did not finish");
         controller.closeWindow();
+    }
+
+    // File > Close closes the window on Ctrl+W, the same shortcut the main
+    // window's Close Window carries. The sequence is spelled out here rather
+    // than read back off the action, so changing it in VolumeWindow fails.
+    {
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the first frame was not displayed");
+        auto* const window = volumeWindow();
+        require(window != nullptr, "no volume window on screen");
+        auto* const closeAction = window->findChild<QAction*>(
+            QStringLiteral("volumeCloseAction"));
+        require(closeAction != nullptr, "the volume File > Close item is gone");
+        require(closeAction->shortcut() == QKeySequence(Qt::CTRL | Qt::Key_W),
+            "the volume File > Close shortcut is not Ctrl+W");
+        closeAction->trigger();
+        // close() hides the window at once and leaves WA_DeleteOnClose to
+        // delete it a turn later. Flush that here instead of waiting on the
+        // event loop: when the delete lands depends on the loop level it was
+        // posted from and on the Qt version, and CI's 6.4 does not run it
+        // inside waitFor at all. Deleting it now also keeps a hidden,
+        // pending-delete window out of the next case's volumeWindow().
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        require(volumeWindow() == nullptr,
+            "File > Close left the volume window open");
+        // The delete is what tells the controller the user closed its window,
+        // through the destroyed -> forgetWindow connection that closeWindow()
+        // drops; nothing else in this file takes that branch. The dropped
+        // frame is what shows the handler ran -- windowOpen() would report
+        // false from its QPointer nulling itself, handler or no handler.
+        require(controller.lastFrame().pixels.empty(),
+            "the closed window's frame was kept");
     }
 
     // cancel() disarms the settle timer. Left armed it fires after the

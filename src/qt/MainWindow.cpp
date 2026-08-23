@@ -1,6 +1,7 @@
 #include "MainWindowInternal.hpp"
 #include "SshRemoteSession.hpp"
 
+#include "CloseWindowAction.hpp"
 #include "CurrentRowBulletDelegate.hpp"
 
 #include <QKeySequence>
@@ -1030,6 +1031,11 @@ void MainWindow::createMenus()
     connect(m_exportAnimationAction, &QAction::triggered,
         this, [this] { exportAnimation(); });
 
+    // This window only: the others keep running, and closing the last one is
+    // what quits (Qt's quitOnLastWindowClosed).
+    auto* closeWindowAction = addCloseWindowAction(*this, tr("&Close Window"));
+    closeWindowAction->setObjectName(QStringLiteral("closeWindowAction"));
+
     auto* quitAction = new QAction(tr("&Quit"), this);
     quitAction->setShortcut(QKeySequence::Quit);
     // Application-wide: close every main window (each runs its own close
@@ -1051,6 +1057,7 @@ void MainWindow::createMenus()
     fileMenu->addAction(exportAction);
     fileMenu->addAction(m_exportAnimationAction);
     fileMenu->addSeparator();
+    fileMenu->addAction(closeWindowAction);
     fileMenu->addAction(quitAction);
 
     m_scaleGroup = new QActionGroup(this);

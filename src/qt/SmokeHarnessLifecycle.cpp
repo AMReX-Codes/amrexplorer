@@ -2,7 +2,9 @@
 
 #include "MainWindow.hpp"
 
+#include <QAction>
 #include <QComboBox>
+#include <QKeySequence>
 #include <QRunnable>
 #include <QThreadPool>
 #include <QTimer>
@@ -17,9 +19,9 @@
 
 // Lifecycle: the open / failure / idle-state / shutdown scenarios: plain
 // open, open failure, cache budget, idle UI state, closing with a busy pool,
-// quitting, quitting mid-export. Every branch drives MainWindow through its
-// ForTest accessors and arms connections and timers for main() to run; see
-// SmokeHarness.hpp.
+// closing one window of several, quitting, quitting mid-export. Every branch
+// drives MainWindow through its ForTest accessors and arms connections and
+// timers for main() to run; see SmokeHarness.hpp.
 
 namespace amrvis::qt::smoke {
 
@@ -258,6 +260,87 @@ Outcome dispatchLifecycle(Context& context)
             // Release the gate so the surviving worker (with the fix) can run.
             gate->store(true);
         });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--close-window-smoke-test") {
+        // File > Close Window closes only the window it was chosen from: the
+        // second window goes away (its WA_DeleteOnClose delete is the proof)
+        // and the first one is still up afterwards. quitOnLastWindowClosed is
+        // off so that a regression closing every window cannot exit 0 through
+        // Qt's own quit before the verdict below runs.
+        const std::filesystem::path path(argv[2]);
+        application.setQuitOnLastWindowClosed(false);
+        // Every exit below sets this. An action wired to quit()/exit() instead
+        // of close() unwinds exec() on the spot, so the verdict never runs and
+        // the process would otherwise exit 0 -- passing on the very
+        // regression this scenario exists to catch.
+        auto decided = std::make_shared<bool>(false);
+        QObject::connect(&application, &QCoreApplication::aboutToQuit,
+            &application, [decided] {
+                if (!*decided) {
+                    qFatal("the run ended before the Close Window verdict: "
+                        "the action quit the application instead of closing "
+                        "its own window");
+                }
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, decided](bool success) {
+                if (!success) {
+                    qCritical("the initial slice failed");
+                    *decided = true;
+                    application.exit(1);
+                    return;
+                }
+                auto* second = window.createNewWindowForTest();
+                auto* action = second->findChild<QAction*>(
+                    QStringLiteral("closeWindowAction"));
+                if (action == nullptr || !action->isEnabled()) {
+                    qCritical("the Close Window menu item is missing"
+                        " or disabled");
+                    *decided = true;
+                    application.exit(1);
+                    return;
+                }
+                if (action->shortcut()
+                    != QKeySequence(Qt::CTRL | Qt::Key_W)) {
+                    qCritical("Close Window carries the shortcut '%s'",
+                        qUtf8Printable(action->shortcut().toString()));
+                    *decided = true;
+                    application.exit(1);
+                    return;
+                }
+                QObject::connect(second, &QObject::destroyed, &application,
+                    [&window, &application, decided] {
+                        // The verdict waits a turn: quitting from inside the
+                        // second window's destructor races its own teardown
+                        // and segfaults or hangs about half the time. Nothing
+                        // in the app quits from there -- a user's Quit is
+                        // always a separate event -- so the delay keeps the
+                        // harness on a reachable path. isVisible() is read in
+                        // that turn rather than snapshotted here, so a close
+                        // that takes the first window down one turn late is
+                        // caught too.
+                        QTimer::singleShot(0, &application,
+                            [&window, &application, decided] {
+                                *decided = true;
+                                if (!window.isVisible()) {
+                                    qCritical("Close Window closed the first"
+                                        " window as well");
+                                    application.exit(1);
+                                    return;
+                                }
+                                window.close();
+                                application.exit(0);
+                            });
+                    });
+                action->trigger();
+            });
+        QTimer::singleShot(15000, &application, [&application, decided] {
+            qCritical("the close-window scenario timed out");
+            *decided = true;
+            application.exit(1);
+        });
+        QTimer::singleShot(0, &window,
+            [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--quit-smoke-test") {
         // Open a dataset, then quit through the main window once the initial

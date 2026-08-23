@@ -7,6 +7,7 @@
 
 #include <QAction>
 #include <QFutureWatcher>
+#include <QScreen>
 #include <QTimer>
 #include <QWindow>
 #include <QtConcurrent/QtConcurrent>

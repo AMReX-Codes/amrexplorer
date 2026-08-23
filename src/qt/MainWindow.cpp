@@ -1030,6 +1030,16 @@ void MainWindow::createMenus()
     connect(m_exportAnimationAction, &QAction::triggered,
         this, [this] { exportAnimation(); });
 
+    auto* closeWindowAction = new QAction(tr("&Close Window"), this);
+    closeWindowAction->setObjectName(QStringLiteral("closeWindowAction"));
+    // Spelled out rather than QKeySequence::Close: that standard key's first
+    // binding here is Ctrl+F4, and Ctrl+W is the one this action wants.
+    // Qt::CTRL is Command on macOS, so the same line gives Cmd+W there.
+    closeWindowAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_W));
+    // This window only: the others keep running, and closing the last one is
+    // what quits (Qt's quitOnLastWindowClosed).
+    connect(closeWindowAction, &QAction::triggered, this, [this] { close(); });
+
     auto* quitAction = new QAction(tr("&Quit"), this);
     quitAction->setShortcut(QKeySequence::Quit);
     // Application-wide: close every main window (each runs its own close
@@ -1051,6 +1061,7 @@ void MainWindow::createMenus()
     fileMenu->addAction(exportAction);
     fileMenu->addAction(m_exportAnimationAction);
     fileMenu->addSeparator();
+    fileMenu->addAction(closeWindowAction);
     fileMenu->addAction(quitAction);
 
     m_scaleGroup = new QActionGroup(this);

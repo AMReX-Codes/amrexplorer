@@ -352,6 +352,7 @@ void MainWindow::showKeyboardMouseReference()
     add(tr("Ctrl+1-9"), tr("Composite levels 0 through N (Levs 0-N)"));
     add(tr("Alt+0-9"), tr("Show one exact AMR level"));
     add(tr("Ctrl+D"), tr("Open the Dataset window (raw cell values per level)"));
+    add(tr("Ctrl+W"), tr("Close this window; the other windows stay open"));
 
     QMessageBox box(this);
     box.setWindowTitle(tr("Keyboard & Mouse"));

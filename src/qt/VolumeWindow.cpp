@@ -74,7 +74,11 @@ VolumeWindow::VolumeWindow(QWidget* parent)
     connect(exportAction, &QAction::triggered, this, [this] { exportImage(); });
     fileMenu->addAction(exportAction);
     auto* closeAction = new QAction(tr("&Close"), this);
-    closeAction->setShortcut(QKeySequence::Close);
+    closeAction->setObjectName(QStringLiteral("volumeCloseAction"));
+    // Ctrl+W, matching the main window's File > Close Window. Not
+    // QKeySequence::Close, whose first binding here is Ctrl+F4; Qt::CTRL is
+    // Command on macOS, so this is Cmd+W there.
+    closeAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_W));
     connect(closeAction, &QAction::triggered, this, [this] { close(); });
     fileMenu->addAction(closeAction);
 }

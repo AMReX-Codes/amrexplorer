@@ -9,6 +9,7 @@
 #                 remote-sequence-after-fab | missing-range |
 #                 non-finite | raw-fab |
 #                 multifab-fab | quit | quit-on-failure | window-close-pool |
+#                 close-window |
 #                 export-quit |
 #                 contour-sync | raster-zoom | rubber-zoom-sync |
 #                 particle-visible-range | particle-dialog |
@@ -287,6 +288,9 @@ elseif(MODE STREQUAL "quit")
 elseif(MODE STREQUAL "window-close-pool")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --window-close-pool-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "close-window")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --close-window-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "quit-on-failure")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     # Drop the FAB payloads so the slice read fails while metadata stays valid

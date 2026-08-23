@@ -34,6 +34,9 @@ You can also start without a path and use the File menu:
 - **Open MultiFab...** opens a standalone MultiFab header.
 - **Open New Window** creates an independent viewer for side-by-side
   comparison.
+- **Close Window** (Ctrl+W, Cmd+W on macOS) closes only the current window;
+  the other windows keep running. Closing the last one exits AMReXplorer,
+  which **Quit** does from any window.
 
 Cylindrical RZ and 3-D spherical plotfiles open normally but are displayed on
 their logical grid. **2-D spherical (r, θ)** plotfiles can also be shown in
@@ -563,6 +566,7 @@ Independent windows have independent datasets, caches, and view state.
 | Ctrl+1 through Ctrl+9 | Composite levels 0 through N |
 | Alt+0 through Alt+9 | Show exact level N |
 | Ctrl+D | Open the Dataset window |
+| Ctrl+W | Close the current window |
 
 The same interaction summary is always available from **Help > Keyboard &
 Mouse...**.

@@ -495,6 +495,19 @@ MainWindow::MainWindow(QWidget* parent)
             [this] { return m_slicePosition3d; },
             [this] { return m_slicePlanesAction->isChecked(); },
             [this] { return m_closing; },
+            [this] {
+                // The three plane views' zooms as one box. Each view narrows
+                // only the axes it shows, so this is where they are combined
+                // rather than in the controller, which has no view to ask.
+                const auto domain = m_dataset
+                    ? datasetSampleBounds(m_dataset->metadata())
+                    : RealBox{};
+                std::array<std::optional<RealBox>, 3> regions{};
+                for (std::size_t view = 0; view < m_planeViews.size(); ++view) {
+                    regions[view] = m_planeViews[view].visibleRegion;
+                }
+                return volumeVisibleRegion(domain, regions);
+            },
             [this] { return m_playbackMode == PlaybackMode::Sequence; },
         },
         this);

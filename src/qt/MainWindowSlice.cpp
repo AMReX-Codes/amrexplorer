@@ -188,6 +188,10 @@ void MainWindow::scheduleSliceRequest(bool rasterDirty)
         m_pendingRasterDirty = m_pendingRasterDirty || rasterDirty;
         m_pendingAllViews = true;
         m_sliceDebounce->start();
+        // A zoom or pan lands here, and with the volume window limited to what
+        // the views show it has to follow. Only a region that actually moved
+        // renders; most calls through here have not moved it.
+        m_volumeController->regionChanged();
     }
 }
 
@@ -208,6 +212,7 @@ void MainWindow::scheduleSliceRequest(PlaneViewState& state, bool rasterDirty)
             m_pendingViews.push_back(&state);
         }
         m_sliceDebounce->start();
+        m_volumeController->regionChanged();
     }
 }
 

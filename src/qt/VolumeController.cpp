@@ -37,6 +37,30 @@ std::array<int, 2> volumeOutputSize(
         bound(viewSize.height() * devicePixelRatio)};
 }
 
+RealBox volumeVisibleRegion(const RealBox& domain,
+    const std::array<std::optional<RealBox>, 3>& viewRegions) noexcept
+{
+    auto region = domain;
+    for (const auto& view : viewRegions) {
+        const auto& visible = view ? *view : domain;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            region.lower[axis]
+                = std::max(region.lower[axis], visible.lower[axis]);
+            region.upper[axis]
+                = std::min(region.upper[axis], visible.upper[axis]);
+        }
+    }
+    // See the declaration: an axis the views do not share goes back to the
+    // domain. Written as `!(upper > lower)` so a NaN edge takes this path too.
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (!(region.upper[axis] > region.lower[axis])) {
+            region.lower[axis] = domain.lower[axis];
+            region.upper[axis] = domain.upper[axis];
+        }
+    }
+    return region;
+}
+
 VolumeController::VolumeController(Hooks hooks, QObject* parent)
     : QObject(parent)
     , m_hooks(std::move(hooks))
@@ -155,6 +179,9 @@ void VolumeController::showWindow(QWidget* parent)
     // scale change looks like there.
     connect(window, &VolumeWindow::viewScaleChanged, this, endInteraction);
     connect(window, &VolumeWindow::qualityChanged, this, endInteraction);
+    // Toggling the region limit moves the box in one step, in both
+    // directions, so it renders at once rather than drafting.
+    connect(window, &VolumeWindow::regionLimitChanged, this, endInteraction);
     connect(window, &VolumeWindow::paletteAlphaChanged, this, endInteraction);
     // A close from the title bar: closeWindow drops this connection before
     // closing, so reaching here means the user closed the window and nothing
@@ -199,6 +226,7 @@ void VolumeController::forgetWindow()
     cancel();
     m_frameShown = false;
     m_lastRenderViewSize = QSize{};
+    m_lastRenderRegion = RealBox{};
     // The frame belonged to the window that is going away: keeping it holds a
     // whole pixel buffer for the life of the process and leaves lastFrame()
     // describing a window that no longer exists.
@@ -296,6 +324,28 @@ void VolumeController::frameSwitchStarted()
     } else {
         cancel();
     }
+}
+
+void VolumeController::regionChanged()
+{
+    // Nothing to do unless the window is asking to be limited: with the toggle
+    // off the region is the domain whatever the views do, and this is called
+    // for every scheduled slice request -- a zoom, a pan, a slice move, a
+    // field change all arrive here.
+    if (!m_window || !m_window->limitToVisibleRegion()) {
+        return;
+    }
+    const auto dataset = m_hooks.dataset ? m_hooks.dataset() : nullptr;
+    if (!dataset) {
+        return;
+    }
+    const auto region = m_hooks.visibleRegion
+        ? m_hooks.visibleRegion()
+        : datasetSampleBounds(dataset->metadata());
+    if (region == m_lastRenderRegion) {
+        return;
+    }
+    scheduleRender();
 }
 
 void VolumeController::refresh()
@@ -396,7 +446,12 @@ void VolumeController::startRender()
     request.field = field->first;
     request.maximumLevel = std::clamp(level.maximumLevel, 0, metadata.finestLevel);
     request.composition = level.composition;
-    request.region = datasetSampleBounds(metadata);
+    // The whole domain, or what the slice views show when the window asks to
+    // be limited to it. Remembered so regionChanged can spot the next move.
+    request.region = m_window->limitToVisibleRegion() && m_hooks.visibleRegion
+        ? m_hooks.visibleRegion()
+        : datasetSampleBounds(metadata);
+    m_lastRenderRegion = request.region;
     request.camera = m_window->camera();
     // Mid-interaction (a moving camera, a resize, a dragged slider) gets a
     // half-size, single-sample draft; a settled view the full frame at the

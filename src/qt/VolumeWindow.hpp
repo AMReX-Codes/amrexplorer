@@ -67,6 +67,8 @@ public:
     // multiplied by to cover the pixels the display actually has.
     [[nodiscard]] qreal viewDevicePixelRatio() const;
     [[nodiscard]] OpacityRamp ramp() const;
+    // Whether the render should cover only what the slice views show.
+    [[nodiscard]] bool limitToVisibleRegion() const;
     [[nodiscard]] Quality quality() const;
 
 signals:
@@ -81,6 +83,7 @@ signals:
     void rampChanged();
     void paletteAlphaChanged();
     void qualityChanged();
+    void regionLimitChanged();
     void viewResized();
     void viewScaleChanged();
 
@@ -94,6 +97,7 @@ private:
     QSlider* m_maximumSlider = nullptr;
     QCheckBox* m_paletteAlpha = nullptr;
     QComboBox* m_qualityCombo = nullptr;
+    QCheckBox* m_regionCheck = nullptr;
     QCheckBox* m_boxesCheck = nullptr;
     QCheckBox* m_outlineCheck = nullptr;
     QLabel* m_lowLabel = nullptr;

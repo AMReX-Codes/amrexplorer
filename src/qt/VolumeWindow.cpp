@@ -181,6 +181,17 @@ void VolumeWindow::buildControls()
     m_qualityCombo->addItem(tr("High"), 2);
     m_qualityCombo->setCurrentIndex(1);
     form->addRow(tr("Quality:"), m_qualityCombo);
+    // Off by default: limiting the region is a deliberate act, and a volume
+    // that cropped itself because a slice view happened to be zoomed would be
+    // a surprise on opening the window.
+    m_regionCheck = new QCheckBox(tr("Only the visible region"), panel);
+    // Named so a test can reach this one rather than whichever check box
+    // findChild happens to return first.
+    m_regionCheck->setObjectName(QStringLiteral("volumeRegionLimitCheck"));
+    m_regionCheck->setToolTip(
+        tr("Sample only the part of the domain the slice views are zoomed to, "
+           "which spends the voxel budget on it instead of the whole field"));
+    form->addRow(QString(), m_regionCheck);
     m_boxesCheck = new QCheckBox(tr("Grid boxes"), panel);
     m_boxesCheck->setChecked(true);
     m_outlineCheck = new QCheckBox(tr("Domain outline"), panel);
@@ -230,6 +241,8 @@ void VolumeWindow::buildControls()
         [this] { emit paletteAlphaChanged(); });
     connect(m_qualityCombo, qOverload<int>(&QComboBox::currentIndexChanged), this,
         [this](int) { emit qualityChanged(); });
+    connect(m_regionCheck, &QCheckBox::toggled, this,
+        [this] { emit regionLimitChanged(); });
     connect(m_boxesCheck, &QCheckBox::toggled, this,
         [this](bool checked) { m_view->setLevelBoxesVisible(checked); });
     connect(m_outlineCheck, &QCheckBox::toggled, this,
@@ -315,6 +328,11 @@ const OrthoCamera& VolumeWindow::camera() const noexcept
 QSize VolumeWindow::viewSize() const
 {
     return m_view->size();
+}
+
+bool VolumeWindow::limitToVisibleRegion() const
+{
+    return m_regionCheck->isChecked();
 }
 
 qreal VolumeWindow::viewDevicePixelRatio() const

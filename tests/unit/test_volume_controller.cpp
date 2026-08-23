@@ -1016,6 +1016,78 @@ int main(int argc, char** argv)
             "the edited curve did not change the opacities in the request");
         require(std::abs(static_cast<double>(shaped[midEntry]) - 0.75) <= 0.06,
             "the middle entry is not the opacity the point was dropped at");
+
+        // Dragging a point that is already there -- the gesture the whole
+        // control exists for, and the one a press-to-insert test does not
+        // touch. The point added above sits under `middle`, so a press there
+        // takes it rather than adding another.
+        auto moved = session->requests.load();
+        const QPointF lower(0.5 * widget->width(), 0.75 * widget->height());
+        QMouseEvent grab(QEvent::MouseButtonPress, middle,
+            widget->mapToGlobal(middle), Qt::LeftButton, Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &grab);
+        require(widget->curve().size() == 3,
+            "pressing an existing point added another one instead of taking "
+            "it");
+        QMouseEvent drag(QEvent::MouseMove, lower, widget->mapToGlobal(lower),
+            Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(widget, &drag);
+        QMouseEvent letGo(QEvent::MouseButtonRelease, lower,
+            widget->mapToGlobal(lower), Qt::LeftButton, Qt::NoButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &letGo);
+        require(widget->curve()[1].opacity < 0.4,
+            "dragging the point down did not lower its opacity");
+        waitFor(application, [&] { return session->requests > moved; },
+            "dragging a point did not render");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the render after the drag did not finish");
+        const auto dragged = session->requestsSoFar().back().transfer.opacities;
+        require(std::abs(static_cast<double>(dragged[midEntry]) - 0.25) <= 0.06,
+            "the drag did not reach the opacities in the request");
+
+        // Quiesce before the next check. The drag armed the settle timer, and
+        // its full frame arriving later would stand in for the render the
+        // removal is supposed to cause -- which it did, until this was here.
+        settle(application, 500);
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the drag's renders did not finish");
+        auto removed = session->requests.load();
+        settle(application, 150);
+        require(session->requests == removed,
+            "the volume was still rendering of its own accord, so the next "
+            "check could not be the removal's doing");
+
+        // And right-clicking a point removes it, which also has to render:
+        // the volume is showing a curve that no longer exists.
+        QMouseEvent unwanted(QEvent::MouseButtonPress, lower,
+            widget->mapToGlobal(lower), Qt::RightButton, Qt::RightButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &unwanted);
+        require(widget->curve().size() == 2,
+            "right-clicking a point did not remove it");
+        waitFor(application, [&] { return session->requests > removed; },
+            "removing a point did not render");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the render after the removal did not finish");
+        const auto restored = session->requestsSoFar().back().transfer.opacities;
+        require(std::abs(static_cast<double>(restored[midEntry]) - 0.5) <= 0.02,
+            "removing the point did not put the straight ramp back");
+
+        // The two ends are not removable -- the curve has to span the range --
+        // and refusing must not pass for an edit either.
+        const auto ends = session->requests.load();
+        const QPointF corner(0.0, static_cast<double>(widget->height()));
+        QMouseEvent atEnd(QEvent::MouseButtonPress, corner,
+            widget->mapToGlobal(corner), Qt::RightButton, Qt::RightButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &atEnd);
+        require(widget->curve().size() == 2,
+            "an end point was removed, leaving the curve short of the range");
+        settle(application, 200);
+        require(session->requests == ends,
+            "refusing to remove an end point rendered anyway");
         controller.closeWindow();
     }
 

@@ -114,7 +114,7 @@ run_git(commit -q --allow-empty -m "tag holder")
 # The non-ASCII half rides along off Windows too: a tag name may be Unicode,
 # and the bytes have to reach the header unmangled and still compile. On
 # Windows the quote is what the filesystem refuses, so that variant stays
-# ASCII; MSVC's side of this is the /utf-8 flag on amrexplorer_core.
+# ASCII; MSVC's side of this is the /utf-8 flag on amrexplorer_version.
 if(CMAKE_HOST_WIN32)
     set(tagName "v9.9.9-test;semi")
     set(expected "AMREXPLORER_GIT_DESCRIBE \"v9[.]9[.]9-test;semi\"")

@@ -39,7 +39,7 @@ target_link_libraries(test_geometry PRIVATE amrexplorer::core amrexplorer::warni
 add_test(NAME geometry COMMAND test_geometry)
 
 add_executable(test_version unit/test_version.cpp)
-target_link_libraries(test_version PRIVATE amrexplorer::core amrexplorer::warnings)
+target_link_libraries(test_version PRIVATE amrexplorer::version amrexplorer::warnings)
 add_test(NAME version COMMAND test_version)
 
 # The generator behind --version, against the two source trees no build here

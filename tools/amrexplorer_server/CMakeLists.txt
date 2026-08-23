@@ -2,7 +2,7 @@ add_executable(amrexplorer_server main.cpp)
 set_target_properties(
     amrexplorer_server PROPERTIES OUTPUT_NAME amrexplorer-server)
 target_link_libraries(amrexplorer_server
-    PRIVATE amrexplorer::core amrexplorer::remote amrexplorer::warnings)
+    PRIVATE amrexplorer::remote amrexplorer::version amrexplorer::warnings)
 target_compile_features(amrexplorer_server PRIVATE cxx_std_20)
 
 # The server's whole portability story is that it needs nothing but the C++

@@ -126,6 +126,7 @@ target_link_libraries(amrexplorer_qt
         Qt6::Widgets
 )
 target_link_libraries(amrexplorer_qt PRIVATE amrexplorer::remote)
+target_link_libraries(amrexplorer_qt PRIVATE amrexplorer::version)
 target_compile_features(amrexplorer_qt PRIVATE cxx_std_20)
 
 install(TARGETS amrexplorer_qt

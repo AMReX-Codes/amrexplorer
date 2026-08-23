@@ -1170,6 +1170,83 @@ int main(int argc, char** argv)
                 && widget->curve().back().opacity == untouched.back().opacity,
             "an arrow key moved a point after the selected one was removed");
 
+        // The end points, where the curve's rules bite: an end may change
+        // opacity but never position, so a sideways key on one asks for a move
+        // it cannot have. That must not reach the renderer -- a held key would
+        // otherwise restart the settle timer on every repeat and re-render an
+        // identical volume, so the full frame would never arrive.
+        settle(application, 500);
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the renders from the earlier edits did not finish");
+        auto pinned = session->requests.load();
+        settle(application, 150);
+        require(session->requests == pinned,
+            "the volume was still rendering of its own accord, so the checks "
+            "below could not be the keys' doing");
+
+        // The low end point sits in the bottom-left corner of the plot, which
+        // is inset by a control point's half-width and the border.
+        const QPointF lowEnd(4.0, widget->height() - 4.0);
+        QMouseEvent takeEnd(QEvent::MouseButtonPress, lowEnd,
+            widget->mapToGlobal(lowEnd), Qt::LeftButton, Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &takeEnd);
+        QMouseEvent dropEnd(QEvent::MouseButtonRelease, lowEnd,
+            widget->mapToGlobal(lowEnd), Qt::LeftButton, Qt::NoButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &dropEnd);
+        require(widget->curve().size() == 2,
+            "the press missed the end point and added one instead");
+        sendKey(Qt::Key_Left, Qt::ShiftModifier);
+        sendKey(Qt::Key_Right, Qt::ShiftModifier);
+        require(widget->curve().front().position == 0.0,
+            "an arrow key moved the end point off the end of the range");
+        settle(application, 150);
+        require(session->requests == pinned,
+            "a nudge that moved nothing rendered an identical volume anyway");
+
+        // The same key up the other axis does move it, so the check above is
+        // the rule biting rather than the keys being dead on an end point.
+        sendKey(Qt::Key_Up, Qt::NoModifier);
+        require(widget->curve().front().opacity > 0.0,
+            "Up did not raise the end point, which is the one move it has");
+        waitFor(application, [&] { return session->requests > pinned; },
+            "raising the end point did not render");
+
+        // An arrow carrying any other modifier belongs to whatever else may
+        // want it -- the convention ImageView documents -- while the keypad
+        // modifier macOS stamps on the arrow keys still has to nudge.
+        // Checked one key at a time and both in the same direction: two
+        // opposite nudges would cancel and pass whether they were swallowed
+        // or not, which is how this first went in.
+        const auto held = widget->curve().front().opacity;
+        sendKey(Qt::Key_Up, Qt::ControlModifier);
+        require(widget->curve().front().opacity == held,
+            "Ctrl+arrow was swallowed as a nudge");
+        sendKey(Qt::Key_Up, Qt::AltModifier);
+        require(widget->curve().front().opacity == held,
+            "Alt+arrow was swallowed as a nudge");
+        sendKey(Qt::Key_Up, Qt::KeypadModifier);
+        require(widget->curve().front().opacity > held,
+            "the keypad modifier stopped an arrow key from nudging, which "
+            "would leave this dead on macOS");
+
+        // And not while a drag is in flight: the next mouse move would
+        // overwrite the nudge with the cursor's own position, so the key would
+        // cost a render and leave nothing behind.
+        const auto grabbed = widget->curve().front().opacity;
+        QMouseEvent holdEnd(QEvent::MouseButtonPress, lowEnd,
+            widget->mapToGlobal(lowEnd), Qt::LeftButton, Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &holdEnd);
+        sendKey(Qt::Key_Up, Qt::NoModifier);
+        require(widget->curve().front().opacity == grabbed,
+            "an arrow key moved a point that was being dragged");
+        QMouseEvent letGoEnd(QEvent::MouseButtonRelease, lowEnd,
+            widget->mapToGlobal(lowEnd), Qt::LeftButton, Qt::NoButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &letGoEnd);
+
         // The palette's own alpha takes over from the curve, so the curve is
         // disabled: it has no say while that box is in effect, and a control
         // that looks editable and does nothing is the defect this replaced.

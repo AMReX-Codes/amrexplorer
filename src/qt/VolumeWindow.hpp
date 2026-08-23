@@ -27,11 +27,10 @@ class OpacityCurveWidget;
 
 // The Volume Rendering window: an IsoWidget in the middle -- the same
 // orthographic view as the main window's iso quadrant, drag to rotate, wheel
-// to zoom, XY/XZ/YZ presets, the domain wireframe, the grid boxes and the
-// slice planes -- with the rendered volume drawn under the wireframe, and a
-// dock of controls: the opacity ramp (a window over the colour range and a
-// maximum opacity, or the palette's own alpha ramp), the render quality, and
-// the overlay toggles. The window holds no data logic: VolumeController
+// to zoom, XY/XZ/YZ presets, the domain wireframe and the slice planes, and
+// the grid boxes when they are switched on -- with the rendered volume drawn
+// under the wireframe, and a dock of controls: the opacity curve (or the
+// palette's own alpha ramp), the render quality, and the overlay toggles. The window holds no data logic: VolumeController
 // decides when to render and pushes each frame here.
 class VolumeWindow final : public QMainWindow {
     Q_OBJECT

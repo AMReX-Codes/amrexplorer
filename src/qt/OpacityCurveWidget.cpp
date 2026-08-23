@@ -181,14 +181,25 @@ void OpacityCurveWidget::keyPressEvent(QKeyEvent* event)
 {
     // Arrows move the selected point, which is the last one pressed. With
     // nothing selected they are not ours: the dock's focus chain gets them
-    // rather than a nudge landing on a point the user did not choose.
-    if (m_selected < 0
+    // rather than a nudge landing on a point the user did not choose. Nor
+    // during a drag, where the next mouse move would overwrite the nudge with
+    // the cursor's own position and waste the render it asked for.
+    if (m_dragging >= 0 || m_selected < 0
         || static_cast<std::size_t>(m_selected) >= m_curve.size()) {
         QWidget::keyPressEvent(event);
         return;
     }
-    const auto step
-        = event->modifiers().testFlag(Qt::ShiftModifier) ? coarseStep : 1.0;
+    // Shift is the coarse step, and an arrow carrying anything else belongs to
+    // whatever else may want it rather than being swallowed here. Keypad is
+    // masked out rather than counted as a modifier because macOS stamps it on
+    // the arrow keys -- the same reason, and the same handling, as
+    // ImageView::keyPressEvent, which documents it at length.
+    const auto modifiers = event->modifiers() & ~Qt::KeypadModifier;
+    if (modifiers != Qt::NoModifier && modifiers != Qt::ShiftModifier) {
+        QWidget::keyPressEvent(event);
+        return;
+    }
+    const auto step = modifiers == Qt::ShiftModifier ? coarseStep : 1.0;
     double dx = 0.0;
     double dy = 0.0;
     switch (event->key()) {
@@ -211,11 +222,21 @@ void OpacityCurveWidget::keyPressEvent(QKeyEvent* event)
     // Through moveOpacityPoint like a drag, so a nudge obeys the same rules:
     // the ends keep their positions, an interior point stops at its
     // neighbours, and opacity stays on [0, 1].
-    const auto& point = m_curve[static_cast<std::size_t>(m_selected)];
-    const auto position = point.position + dx;
-    const auto opacity = point.opacity + dy;
-    moveOpacityPoint(
-        m_curve, static_cast<std::size_t>(m_selected), position, opacity);
+    const auto index = static_cast<std::size_t>(m_selected);
+    const auto before = m_curve[index];
+    moveOpacityPoint(m_curve, index, before.position + dx, before.opacity + dy);
+    // Only a real move is worth a signal. Those rules mean a key held against
+    // a limit -- an end asked to change position, a point already up against
+    // its neighbour or the top of the plot -- moves nothing, and every repeat
+    // would otherwise restart the settle timer and re-render an identical
+    // volume, so the full frame would never arrive until the key came up. The
+    // key is still ours: it is accepted either way rather than escaping to pan
+    // a panel while the curve is being edited.
+    if (m_curve[index].position == before.position
+        && m_curve[index].opacity == before.opacity) {
+        event->accept();
+        return;
+    }
     update();
     emit curveChanged();
     event->accept();

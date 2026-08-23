@@ -81,9 +81,16 @@ void scrollBarPanFollowsContentDelta()
         grown.setImage(solidImage(800, 600));
         grown.setFixedScale(2);
         QApplication::processEvents();
-        require(grown.horizontalScrollBar()->value() == 0
-                && grown.verticalScrollBar()->value() == 0,
-            "the view is not at offset zero, so growing it would move a bar");
+        // Put the bars at their minima rather than asserting they are there:
+        // where setFixedScale leaves them is the platform's business, and on
+        // macOS it is not zero, which failed this before it reached the resize
+        // it exists to check. At the minimum, growing the view cannot move a
+        // bar -- a clamp can only hold it where it is.
+        grown.horizontalScrollBar()->setValue(
+            grown.horizontalScrollBar()->minimum());
+        grown.verticalScrollBar()->setValue(
+            grown.verticalScrollBar()->minimum());
+        QApplication::processEvents();
         const auto before = grown.visibleImageRect();
         int moved = 0;
         QObject::connect(&grown, &amrvis::qt::ImageView::viewportMoved,

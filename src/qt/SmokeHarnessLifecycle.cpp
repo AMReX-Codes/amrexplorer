@@ -269,10 +269,24 @@ Outcome dispatchLifecycle(Context& context)
         // Qt's own quit before the verdict below runs.
         const std::filesystem::path path(argv[2]);
         application.setQuitOnLastWindowClosed(false);
+        // Every exit below sets this. An action wired to quit()/exit() instead
+        // of close() unwinds exec() on the spot, so the verdict never runs and
+        // the process would otherwise exit 0 -- passing on the very
+        // regression this scenario exists to catch.
+        auto decided = std::make_shared<bool>(false);
+        QObject::connect(&application, &QCoreApplication::aboutToQuit,
+            &application, [decided] {
+                if (!*decided) {
+                    qFatal("the run ended before the Close Window verdict: "
+                        "the action quit the application instead of closing "
+                        "its own window");
+                }
+            });
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-            &application, [&window, &application](bool success) {
+            &application, [&window, &application, decided](bool success) {
                 if (!success) {
                     qCritical("the initial slice failed");
+                    *decided = true;
                     application.exit(1);
                     return;
                 }
@@ -282,6 +296,7 @@ Outcome dispatchLifecycle(Context& context)
                 if (action == nullptr || !action->isEnabled()) {
                     qCritical("the Close Window menu item is missing"
                         " or disabled");
+                    *decided = true;
                     application.exit(1);
                     return;
                 }
@@ -289,11 +304,12 @@ Outcome dispatchLifecycle(Context& context)
                     != QKeySequence(Qt::CTRL | Qt::Key_W)) {
                     qCritical("Close Window carries the shortcut '%s'",
                         qUtf8Printable(action->shortcut().toString()));
+                    *decided = true;
                     application.exit(1);
                     return;
                 }
                 QObject::connect(second, &QObject::destroyed, &application,
-                    [&window, &application] {
+                    [&window, &application, decided] {
                         const bool firstSurvived = window.isVisible();
                         // Read the verdict here, but shut down from a later
                         // turn of the event loop: quitting from inside the
@@ -304,7 +320,8 @@ Outcome dispatchLifecycle(Context& context)
                         // harness staying on a reachable path, not a
                         // workaround for the feature.
                         QTimer::singleShot(0, &application,
-                            [&window, &application, firstSurvived] {
+                            [&window, &application, decided, firstSurvived] {
+                                *decided = true;
                                 if (!firstSurvived) {
                                     qCritical("Close Window closed the first"
                                         " window as well");
@@ -317,8 +334,11 @@ Outcome dispatchLifecycle(Context& context)
                     });
                 action->trigger();
             });
-        QTimer::singleShot(15000, &application,
-            [&application] { application.exit(1); });
+        QTimer::singleShot(15000, &application, [&application, decided] {
+            qCritical("the close-window scenario timed out");
+            *decided = true;
+            application.exit(1);
+        });
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path); });
     } else if (argc == 3

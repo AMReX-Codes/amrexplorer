@@ -16,6 +16,7 @@
 #include <QApplication>
 #include <QColor>
 #include <QAction>
+#include <QEvent>
 #include <QCoreApplication>
 #include <QStringList>
 #include <QTimer>
@@ -703,6 +704,25 @@ int main(int argc, char** argv)
         settle(application, 400);
         require(session->requests == before,
             "a resize to the same size scheduled a render");
+
+        // Moving the window to a display with a different scale. Qt reports it
+        // as DevicePixelRatioChange and nothing else: the logical size does
+        // not change, so no resize follows -- which means the guard just
+        // above, the one that dismisses an unchanged size as layout churn,
+        // would swallow it and leave a frame at the old resolution up. It
+        // takes its own path for that reason, and the check above is what
+        // makes this one worth having.
+        auto* const scaled = volumeWindow()->findChild<amrvis::qt::IsoWidget*>();
+        require(scaled != nullptr, "no view in the volume window");
+        before = session->requests.load();
+        QEvent scaleChange(QEvent::DevicePixelRatioChange);
+        QApplication::sendEvent(scaled, &scaleChange);
+        waitFor(application, [&] { return session->requests == before + 1; },
+            "a change of display scale did not render a new frame");
+        require(session->requestsSoFar().back().samplesPerVoxel == 2,
+            "the frame after a scale change was a draft, not the full frame");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the render after a scale change did not finish");
         controller.closeWindow();
     }
 
@@ -870,15 +890,24 @@ int main(int argc, char** argv)
             "frames arriving faster than the render throttle rendered nothing");
 
         // At arrivals slower than the throttle, frames do reach the screen.
-        // This is the user-visible half, and it needs a rate at which a render
-        // has room to finish between arrivals.
-        before = session->requests.load();
-        const auto framesBefore = observed.frames;
+        // This is the user-visible half.
+        //
+        // Waited for rather than timed. An earlier version gave each arrival
+        // 150 ms and asserted afterwards, which failed on macOS: how long a
+        // render takes to start and come back is not something this can put a
+        // number on, and a number that holds on one machine is a flake on
+        // another. Waiting for the event says the same thing without the
+        // assumption -- and still fails, on the timeout, if nothing comes.
         for (int arrival = 0; arrival < 3; ++arrival) {
-            arrive(150);
+            const auto renders = session->requests.load();
+            const auto shown = observed.frames;
+            controller.frameSwitchStarted();
+            controller.configureForDataset();
+            waitFor(application, [&] { return session->requests > renders; },
+                "a sequence frame at an ordinary speed did not render");
+            waitFor(application, [&] { return observed.frames > shown; },
+                "a sequence frame at an ordinary speed was never displayed");
         }
-        require(session->requests > before && observed.frames > framesBefore,
-            "playback at an ordinary speed displayed nothing");
         playingSequence = false;
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the last playback render did not finish");

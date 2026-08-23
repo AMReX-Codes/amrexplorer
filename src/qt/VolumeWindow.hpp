@@ -82,6 +82,7 @@ signals:
     void paletteAlphaChanged();
     void qualityChanged();
     void viewResized();
+    void viewScaleChanged();
 
 private:
     void buildControls();

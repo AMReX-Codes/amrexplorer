@@ -8,6 +8,7 @@
 #include <QAction>
 #include <QFutureWatcher>
 #include <QTimer>
+#include <QWindow>
 #include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
@@ -145,6 +146,13 @@ void VolumeController::showWindow(QWidget* parent)
         scheduleRender();
     };
     connect(window, &VolumeWindow::interactionEnded, this, endInteraction);
+    // A scale change is a discrete event, not a drag, so it takes the
+    // immediate full-frame path rather than drafting: there is nothing more
+    // coming that a draft would be a placeholder for. It deliberately does
+    // not go through the viewResized handler, whose first act is to dismiss
+    // an unchanged logical size as layout churn -- which is exactly what a
+    // scale change looks like there.
+    connect(window, &VolumeWindow::viewScaleChanged, this, endInteraction);
     connect(window, &VolumeWindow::qualityChanged, this, endInteraction);
     connect(window, &VolumeWindow::paletteAlphaChanged, this, endInteraction);
     // A close from the title bar: closeWindow drops this connection before
@@ -154,6 +162,16 @@ void VolumeController::showWindow(QWidget* parent)
         [this] { forgetWindow(); });
     pushGeometry();
     window->show();
+    // A second trigger for the same thing. The widget event above is the
+    // mechanism Qt documents for a scale change, but it is delivered by the
+    // platform and cannot be provoked from a test here; this one is certain,
+    // because moving a window to another screen always emits it. It fires for
+    // a same-scale move too, which costs one full frame on a rare,
+    // user-initiated action -- cheaper than a frame left at the wrong
+    // resolution. The handle exists only once the window is shown.
+    if (auto* const handle = window->windowHandle()) {
+        connect(handle, &QWindow::screenChanged, this, endInteraction);
+    }
     window->raise();
     window->activateWindow();
     scheduleRender();

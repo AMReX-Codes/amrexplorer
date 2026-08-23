@@ -62,6 +62,8 @@ VolumeWindow::VolumeWindow(QWidget* parent)
         [this] { emit interactionEnded(); });
     connect(m_view, &IsoWidget::viewResized, this,
         [this] { emit viewResized(); });
+    connect(m_view, &IsoWidget::viewScaleChanged, this,
+        [this] { emit viewScaleChanged(); });
     buildControls();
 
     // File > Export Image...: the view as drawn (frame and overlays), as PNG.

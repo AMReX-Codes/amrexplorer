@@ -4,6 +4,7 @@
 
 #include <amrexplorer/render2d/Palette.hpp>
 
+#include <QEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
@@ -120,6 +121,18 @@ void IsoWidget::setColorPalette(const Palette* palette)
 {
     m_palette = palette;
     update();
+}
+
+bool IsoWidget::event(QEvent* event)
+{
+    // Qt reports a scale change on its own, and only this way: moving to a
+    // screen with a different scale leaves the logical geometry alone, so no
+    // resize event follows it and nothing else would ask for a frame at the
+    // resolution the view now has.
+    if (event->type() == QEvent::DevicePixelRatioChange) {
+        emit viewScaleChanged();
+    }
+    return QWidget::event(event);
 }
 
 void IsoWidget::paintEvent(QPaintEvent* event)

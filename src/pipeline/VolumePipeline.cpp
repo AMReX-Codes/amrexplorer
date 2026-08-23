@@ -101,24 +101,25 @@ VolumeTransferFunction makeVolumeTransferFunction(
     constexpr int entryCount = Palette::colorSlots;
     transfer.colors.reserve(static_cast<std::size_t>(entryCount));
     transfer.opacities.reserve(static_cast<std::size_t>(entryCount));
-    if (!ramp.curve.empty()) {
-        // The curve is the opacity, entry by entry. usePaletteAlpha still
-        // substitutes the palette's own per-slot alpha, as it does for the
-        // window below, and the curve then says only where opacity is zero --
-        // so a palette ramp is shaped by where the curve has been pulled to
-        // nothing, not multiplied into a different ramp.
-        const bool paletteAlpha = ramp.usePaletteAlpha && palette.hasAlphaRamp();
+    // A curve and the palette's own alpha ramp are alternatives, not layers.
+    // The curve had gated the palette's alpha -- zero where the curve was zero
+    // -- which sounded like shaping it and was very nearly inert: the entries
+    // land at k / 252, a curve touching zero at a single point almost never
+    // touches one of them, and so dragging a point anywhere at all left the
+    // table unchanged. Multiplying instead would make the curve bite, but it
+    // would also distort every authored ramp by whatever the curve happens to
+    // be, and the reason to tick that box is to get the ramp as authored. So
+    // with the box in effect the curve stands aside, and the window path below
+    // -- at its defaults, which VolumeWindow leaves untouched -- hands back
+    // that ramp verbatim.
+    if (!ramp.curve.empty() && !(ramp.usePaletteAlpha && palette.hasAlphaRamp())) {
         const auto last = static_cast<double>(entryCount - 1);
         for (int entry = 0; entry < entryCount; ++entry) {
             const auto slot = Palette::paletteStart + entry;
             transfer.colors.push_back(palette.slotArgb(slot) & 0x00FFFFFFU);
-            const auto shaped = opacityCurveValue(
-                ramp.curve, static_cast<double>(entry) / last);
-            const auto opacity = paletteAlpha
-                ? (shaped > 0.0 ? palette.opacity(slot) : 0.0)
-                : shaped;
-            transfer.opacities.push_back(
-                static_cast<float>(std::clamp(opacity, 0.0, 1.0)));
+            transfer.opacities.push_back(static_cast<float>(std::clamp(
+                opacityCurveValue(ramp.curve, static_cast<double>(entry) / last),
+                0.0, 1.0)));
         }
         return transfer;
     }

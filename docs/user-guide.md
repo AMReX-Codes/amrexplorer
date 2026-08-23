@@ -320,10 +320,10 @@ match. Its own controls set the opacity:
   down except one narrow band to leave a shell at those values. A band pulled
   to the bottom is fully transparent.
 - **Use palette alpha ramp** takes each color's opacity from the palette's
-  own alpha ramp instead of the curve. Legacy Amrvis `.pal` files carry such a
-  ramp (the shipped palettes have a plain 0-100 % ramp), and the curve then
-  says only which values are shown at all: anywhere you pull it to the bottom
-  stays transparent.
+  own alpha ramp instead of the curve, exactly as the palette author wrote it.
+  Legacy Amrvis `.pal` files carry such a ramp; the shipped palettes have a
+  plain 0-100 % ramp. The two are alternatives, so the curve is greyed out
+  while this is ticked.
 - **Only the visible region** samples just the part of the domain the slice
   views are zoomed into, instead of all of it. The budget below is then spent
   on that part alone, so a region small enough to fit is drawn at the finest

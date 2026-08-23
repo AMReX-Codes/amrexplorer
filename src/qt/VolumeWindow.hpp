@@ -91,6 +91,9 @@ signals:
 
 private:
     void buildControls();
+    // Follows the palette-alpha box: the curve is editable only when it is the
+    // opacity source.
+    void syncCurveEnabled();
     void exportImage();
 
     IsoWidget* m_view = nullptr;

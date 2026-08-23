@@ -76,6 +76,9 @@ struct OpacityRamp {
     // and the maximum above -- it says the same kind of thing with more than
     // three numbers -- and empty leaves that path exactly as it was, which is
     // what keeps a caller that never touches a curve rendering what it did.
+    //
+    // usePaletteAlpha wins over it: the two are alternative sources rather
+    // than layers, and a palette's authored ramp is handed back as authored.
     std::vector<OpacityPoint> curve;
     friend bool operator==(const OpacityRamp&, const OpacityRamp&) = default;
 };

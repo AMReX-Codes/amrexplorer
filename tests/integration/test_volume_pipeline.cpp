@@ -368,23 +368,54 @@ int main()
         // ramp when the palette has none.
         amrvis::OpacityRamp fromPalette{0.0, 1.0, 1.0, true, {}};
         const auto alphaPalette = syntheticPalette(true);
-        // With a curve, usePaletteAlpha still substitutes the palette's own
-        // alpha; the curve says only where opacity is zero. So a palette ramp
-        // keeps its shape and the curve windows it, rather than the two being
-        // multiplied into a third shape nobody chose.
+        // A curve and the palette's own alpha are alternatives: with the box
+        // in effect the palette's ramp comes back as authored, whatever the
+        // curve says. The curve used to gate it -- zero where the curve was
+        // zero -- which almost never bit, because the entries land at k / 252
+        // and a curve touching zero at one point misses all of them. This
+        // shape is exactly that case: a V with its floor at 0.501.
         {
             amrvis::OpacityRamp shaped;
             shaped.usePaletteAlpha = true;
-            shaped.curve = {{0.0, 0.0}, {0.5, 0.0}, {0.6, 1.0}, {1.0, 1.0}};
-            const auto gated
+            shaped.curve = {{0.0, 1.0}, {0.501, 0.0}, {1.0, 1.0}};
+            const auto authored
                 = amrvis::makeVolumeTransferFunction(alphaPalette, shaped);
-            require(gated.opacities[0] == 0.0F && gated.opacities[100] == 0.0F,
-                "the curve did not clear the entries it pulled to nothing");
+            amrvis::OpacityRamp plainAlpha;
+            plainAlpha.usePaletteAlpha = true;
+            const auto reference
+                = amrvis::makeVolumeTransferFunction(alphaPalette, plainAlpha);
+            require(authored.opacities == reference.opacities,
+                "the curve altered a palette's authored alpha ramp");
+            // And it is that ramp, not a flat or empty one, so the comparison
+            // above is not two identical mistakes.
             const auto slot = amrvis::Palette::paletteStart + 200;
-            require(std::abs(gated.opacities[200]
+            require(std::abs(authored.opacities[200]
                         - static_cast<float>(alphaPalette.opacity(slot)))
                     <= 1.0e-6F,
-                "an entry the curve kept did not take the palette's alpha");
+                "the palette-alpha path did not hand back the palette's own "
+                "opacity");
+            // Entries 0 and 1: the synthetic ramp is 100 % on every third
+            // slot and 20 % elsewhere, and paletteStart is 3, so these two
+            // differ where 10 and 200 happen to collide.
+            require(authored.opacities[0] != authored.opacities[1],
+                "the reference ramp is flat, so matching it proves nothing");
+
+            // And a curve that gating *would* have bitten on: flat at zero
+            // over the bottom half, so entries there landed on it. The V above
+            // cannot tell the old rule from the new one -- gating left it
+            // unchanged too -- so without this case the bug passes.
+            amrvis::OpacityRamp flatBottom;
+            flatBottom.usePaletteAlpha = true;
+            flatBottom.curve = {{0.0, 0.0}, {0.5, 0.0}, {0.6, 1.0}, {1.0, 1.0}};
+            const auto unshaped
+                = amrvis::makeVolumeTransferFunction(alphaPalette, flatBottom);
+            require(unshaped.opacities == reference.opacities,
+                "a curve pulled to nothing still cleared the palette's own "
+                "alpha, so the two are being layered rather than chosen "
+                "between");
+            require(reference.opacities[50] > 0.0F,
+                "the reference ramp is already zero there, so the check above "
+                "proves nothing");
         }
         const auto withAlpha = amrvis::makeVolumeTransferFunction(alphaPalette, fromPalette);
         require(withAlpha.opacities[0] == 1.0F   // slot 3: 3 % 3 == 0 -> 100 %

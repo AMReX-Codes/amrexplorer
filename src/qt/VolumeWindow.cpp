@@ -198,8 +198,12 @@ void VolumeWindow::buildControls()
     // pushes the other along.
     connect(m_curve, &OpacityCurveWidget::curveChanged, this,
         [this] { emit rampChanged(); });
-    connect(m_paletteAlpha, &QCheckBox::toggled, this,
-        [this] { emit paletteAlphaChanged(); });
+    connect(m_paletteAlpha, &QCheckBox::toggled, this, [this] {
+        // The curve has no say while the palette's own ramp is in use, so it
+        // is disabled rather than left looking editable and doing nothing.
+        syncCurveEnabled();
+        emit paletteAlphaChanged();
+    });
     connect(m_qualityCombo, qOverload<int>(&QComboBox::currentIndexChanged), this,
         [this](int) { emit qualityChanged(); });
     connect(m_regionCheck, &QCheckBox::toggled, this,
@@ -231,9 +235,19 @@ void VolumeWindow::setColorPalette(const Palette* palette)
     m_view->setColorPalette(palette);
 }
 
+void VolumeWindow::syncCurveEnabled()
+{
+    // The same condition ramp() reports usePaletteAlpha under, so what the
+    // control offers and what the render does cannot disagree: a ticked box on
+    // a palette with no ramp is not in effect, and the curve stays editable.
+    m_curve->setEnabled(
+        !(m_paletteAlpha->isEnabled() && m_paletteAlpha->isChecked()));
+}
+
 void VolumeWindow::setPaletteHasAlpha(bool hasAlpha)
 {
     m_paletteAlpha->setEnabled(hasAlpha);
+    syncCurveEnabled();
     if (!hasAlpha && m_paletteAlpha->isChecked()) {
         // ramp() ands in isEnabled(), so the render already ignores a ticked
         // box on a palette with no ramp -- but the box would sit there ticked,

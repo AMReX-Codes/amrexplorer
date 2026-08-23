@@ -353,8 +353,8 @@ void MainWindow::showKeyboardMouseReference()
     add(tr("Alt+0-9"), tr("Show one exact AMR level"));
     add(tr("Ctrl+D"), tr("Open the Dataset window (raw cell values per level)"));
     add(tr("Ctrl+W"),
-        tr("Close this window or the Volume window; closing the last "
-           "window quits"));
+        tr("Close the window in front -- this one, Volume, Dataset or Line "
+           "Plot; closing the last window quits"));
 
     QMessageBox box(this);
     box.setWindowTitle(tr("Keyboard & Mouse"));

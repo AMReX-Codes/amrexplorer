@@ -268,6 +268,9 @@ Choose **View > Dataset...** or press **Ctrl+D** to inspect raw values for
 the visible physical region. Values are grouped by AMR level. Clicking a
 value highlights the corresponding sample in the main view.
 
+The Dataset and line-plot windows close with their **Close** button or with
+Ctrl+W (Cmd+W on macOS), the same key that closes the main and volume windows.
+
 Choose **View > Number Format...** to set the `printf`-style format used for
 numeric readouts. The default is `%g`.
 
@@ -569,7 +572,7 @@ Independent windows have independent datasets, caches, and view state.
 | Ctrl+1 through Ctrl+9 | Composite levels 0 through N |
 | Alt+0 through Alt+9 | Show exact level N |
 | Ctrl+D | Open the Dataset window |
-| Ctrl+W | Close this window or the Volume window (the last one quits) |
+| Ctrl+W | Close the window in front (the last one quits) |
 
 The same interaction summary is always available from **Help > Keyboard &
 Mouse...**.

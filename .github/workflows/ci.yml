@@ -164,8 +164,10 @@ jobs:
   # -- or a formatter rejoining the `} else` / `#endif` / `if` splice -- breaks
   # a build nobody runs while CI stays green.
   #
-  # Build only: there are no tests to run in this configuration, which is the
-  # whole point of it.
+  # It covers both shapes that ship: the desktop build and the server-only one
+  # (Qt off, remote on), each installed to a throwaway prefix. There are no
+  # tests to run in either -- that is the whole point of the job -- so what it
+  # can still check past compiling is what the install puts in front of a user.
   release-shape:
     name: Linux / no tests (release shape)
     runs-on: ubuntu-24.04
@@ -179,14 +181,47 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes cmake g++ ninja-build qt6-base-dev
 
-      - name: Configure
+      - name: Configure (default, tests off)
         run: >-
           cmake --preset default
           -DAMREXPLORER_BUILD_TESTS=OFF
           -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
 
-      - name: Build
+      - name: Build (default, tests off)
         run: cmake --build --preset default --parallel 4
+
+      # The shape a user installs, so this is where the install rules are worth
+      # checking: the two executables land in bin, the desktop entry with them,
+      # and amrexplorer-render-equivalence stays out (it is EXCLUDE_FROM_ALL in
+      # the tools component precisely so it does not).
+      - name: Install check
+        run: |
+          cmake --install build --prefix "${RUNNER_TEMP}/install-test"
+          test -x "${RUNNER_TEMP}/install-test/bin/amrexplorer"
+          test -x "${RUNNER_TEMP}/install-test/bin/amrexplorer-server"
+          test -f \
+            "${RUNNER_TEMP}/install-test/share/applications/amrexplorer.desktop"
+          test ! -e \
+            "${RUNNER_TEMP}/install-test/bin/amrexplorer-render-equivalence"
+
+      # The server-only shape: Qt off, remote on. Nothing else builds it with
+      # tests off, and its install must carry the server without the GUI or the
+      # desktop entry that goes with one.
+      - name: Configure (remote, tests off)
+        run: >-
+          cmake --preset remote
+          -DAMREXPLORER_BUILD_TESTS=OFF
+          -DAMREXPLORER_WARNINGS_AS_ERRORS=ON
+
+      - name: Build (remote, tests off)
+        run: cmake --build --preset remote --parallel 4
+
+      - name: Install check (remote, tests off)
+        run: |
+          cmake --install build-remote --prefix "${RUNNER_TEMP}/install-remote"
+          test -x "${RUNNER_TEMP}/install-remote/bin/amrexplorer-server"
+          test ! -e "${RUNNER_TEMP}/install-remote/bin/amrexplorer"
+          test ! -d "${RUNNER_TEMP}/install-remote/share/applications"
 
   sanitizers:
     name: Linux / ASan + UBSan

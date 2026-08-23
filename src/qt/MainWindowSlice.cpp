@@ -961,6 +961,12 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
     m_diagnosticsModel->setSliceMetrics(display.slice.metrics.blocksRead,
         display.slice.metrics.cacheHits, display.slice.metrics.payloadBytesRead);
     statusBar()->clearMessage();
+
+    // The region a limited volume render covers is read off this raster, so it
+    // is only now that a pan or a rubber-band zoom can be measured: the
+    // scheduling call that fetched this plane ran while the previous one was
+    // still displayed, and would have measured that.
+    m_volumeController->regionChanged();
 }
 
 int MainWindow::slicesInFlight() const

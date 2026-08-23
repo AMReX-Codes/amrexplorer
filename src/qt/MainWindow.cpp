@@ -768,12 +768,12 @@ void MainWindow::wireView(PlaneViewState& state)
             }
         });
     connect(view, &ImageView::canvasScrolled, this,
-        [this, &state] {
-            updateRemoteFixedScaleDemand(state);
-            // Scrolling a fixed-scale view moves what is on screen without
-            // changing the raster, so this is the only notice of it.
-            m_volumeController->regionChanged();
-        });
+        [this, &state] { updateRemoteFixedScaleDemand(state); });
+    // Scrolling or resizing moves what is on screen without changing the
+    // raster. canvasScrolled cannot carry this: it fires only over a virtual
+    // canvas, so a local fixed-scale scroll emitted nothing at all.
+    connect(view, &ImageView::viewportMoved, this,
+        [this] { m_volumeController->regionChanged(); });
     connect(view, &ImageView::panStepRequested, this,
         [this, &state](const QPointF& direction) {
             ++m_panStepRequests;

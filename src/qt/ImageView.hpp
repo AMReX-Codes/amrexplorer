@@ -211,6 +211,12 @@ signals:
     // The viewport scrolled over a virtual canvas — the owner should check
     // whether newly visible cells need fetching.
     void canvasScrolled();
+    // What visibleImageRect() returns may have moved: the viewport scrolled or
+    // was resized. Separate from canvasScrolled, which is specific to a
+    // virtual canvas and fires only over one, and from zoomChanged, which
+    // covers a wheel zoom. Between the three, every way the visible part of
+    // the raster can change without the raster itself changing is reported.
+    void viewportMoved();
     void panDragBegan();
     // Total scene-coordinate offset since the drag began, plus the latest
     // viewport-pixel step (for view-only panning).

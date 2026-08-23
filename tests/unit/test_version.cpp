@@ -54,10 +54,17 @@ int main()
     require(versionText("0.4.0", "") == "0.4.0",
         "a release version with no git information was not itself");
 
-    // This build's own string starts with this build's own version.
+    // This build's own string: the version, and then either nothing or a
+    // parenthesised description. Anything else -- an unterminated tail, a
+    // description with no version in front of it -- is malformed however it
+    // got that way.
     const std::string own = versionText();
-    require(own.rfind(amrvis::kVersion, 0) == 0,
-        "versionText() did not start with kVersion");
+    const std::string version(amrvis::kVersion);
+    require(own.rfind(version, 0) == 0,
+        "this build's version text did not start with its version");
+    const std::string tail = own.substr(version.size());
+    require(tail.empty() || (tail.starts_with(" (") && tail.ends_with(")")),
+        "this build's version text has a malformed description");
 
     return 0;
 }

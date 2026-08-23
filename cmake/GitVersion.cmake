@@ -24,8 +24,19 @@ set(describe "")
 if(EXISTS "${SOURCE_DIR}/.git")
     find_package(Git QUIET)
     if(Git_FOUND)
+        # Through `cmake -E env`, to drop the GIT_* variables a build launched
+        # from a hook or `git rebase --exec` inherits: GIT_DIR and
+        # GIT_WORK_TREE override the working directory, and GIT_INDEX_FILE
+        # sends --dirty to an unrelated index, which is exactly the "describes
+        # some other repository" answer the .git check above rules out.
+        # --no-optional-locks so --dirty does not write .git/index.lock: two
+        # builds over one checkout would otherwise race, and the loser drops
+        # the description.
         execute_process(
-            COMMAND "${GIT_EXECUTABLE}" describe --tags --dirty --always
+            COMMAND "${CMAKE_COMMAND}" -E env
+                --unset=GIT_DIR --unset=GIT_WORK_TREE --unset=GIT_INDEX_FILE
+                "${GIT_EXECUTABLE}" --no-optional-locks
+                describe --tags --dirty --always
             WORKING_DIRECTORY "${SOURCE_DIR}"
             OUTPUT_VARIABLE describe
             OUTPUT_STRIP_TRAILING_WHITESPACE

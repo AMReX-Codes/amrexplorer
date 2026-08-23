@@ -108,7 +108,7 @@ cannot be tested. Packagers who want the system runtime should configure with
 The version is written in one place, `include/amrexplorer/core/Version.hpp`:
 
 ```cpp
-inline constexpr const char* kVersion = "0.3.0-dev";
+inline constexpr const char* kVersion = "x.y.z-dev";
 ```
 
 CMake reads the `x.y.z` out of that line for `project(VERSION)`, so the number
@@ -123,9 +123,11 @@ with no git history, such as an unpacked release tarball, reports the version
 alone. Editing the header re-runs CMake in an existing build tree, and the
 description is refreshed on every build, so neither goes stale.
 
-Cutting a release is therefore two edits to that one line: drop the `-dev`,
-build and tag `vx.y.z`, then set it to the next `x.y.z-dev`. Nothing else
-carries a version number.
+Cutting a release is therefore two edits to that one line: drop the `-dev` and
+commit, tag that commit `vx.y.z`, and build from the tag -- in that order, so
+the binaries describe themselves as the tag rather than as the commits since
+the last one. Then set the line to the next `x.y.z-dev`. Nothing else in the
+tree carries a version number.
 
 ## Building an AppImage
 

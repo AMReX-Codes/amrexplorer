@@ -454,7 +454,7 @@ int main(int argc, char* argv[])
                 window.startSshRemoteSession(request.destination,
                     request.serverExecutable, request.paths);
             });
-    } else if (argc >= 2 && !std::string_view(argv[1]).starts_with("--")) {
+    } else if (argc >= 2 && !std::string_view(argv[1]).starts_with("-")) {
         // One or more plotfile paths: a single path opens a dataset, two or
         // more open a plotfile sequence (matching the GUI's Open Plotfile
         // Sequence, which also takes plotfile directories).
@@ -471,10 +471,12 @@ int main(int argc, char* argv[])
             }
         });
     } else if (argc >= 2) {
-        // Anything starting with "--" that reached here matched no option, or
+        // Anything starting with "-" that reached here matched no option, or
         // matched one with the wrong number of arguments. Both used to fall
         // through to an empty window with no diagnostic, which reads as the
-        // option having been accepted and done nothing.
+        // option having been accepted and done nothing. A single dash counts:
+        // now that -h and -v exist, a mistyped one would otherwise be taken
+        // for a plotfile path and reported as an unopenable dataset.
         std::fprintf(
             stderr, "amrexplorer: unrecognized option '%s'\n\n", argv[1]);
         printUsage(stderr);

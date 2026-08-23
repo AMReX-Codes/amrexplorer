@@ -61,9 +61,8 @@ set_tests_properties(git_version_generator PROPERTIES TIMEOUT 60)
 
 # What the two binaries must print. Where this build reports a git description,
 # it has to appear -- that end of the plumbing (generator to header to binary)
-# is otherwise asserted nowhere. A release version never carries one and a
-# tarball has none to carry, so the requirement follows the build rather than
-# the presence of git.
+# is otherwise asserted nowhere. A tarball has none to carry, so the
+# requirement follows the build rather than the presence of git.
 if(AMREXPLORER_REPORTS_GIT_DESCRIBE)
     set(amrexplorer_version_tail " [(]")
 else()
@@ -365,7 +364,7 @@ if(TARGET amrexplorer_remote)
             COMMAND "$<TARGET_FILE:amrexplorer_server>" "${flag}")
         set_tests_properties(remote_server_version_${name} PROPERTIES
             PASS_REGULAR_EXPRESSION
-                "amrexplorer-server ${PROJECT_VERSION}(-dev)?${amrexplorer_version_tail}"
+                "amrexplorer-server ${AMREXPLORER_VERSION_PATTERN}${amrexplorer_version_tail}"
             FAIL_REGULAR_EXPRESSION "server error"
             TIMEOUT 30)
     endforeach()
@@ -560,7 +559,7 @@ if(TARGET amrexplorer_qt)
                 "$<TARGET_FILE:amrexplorer_qt>" "${flag}")
         set_tests_properties(qt_version_${name} PROPERTIES
             PASS_REGULAR_EXPRESSION
-                "amrexplorer ${PROJECT_VERSION}(-dev)?${amrexplorer_version_tail}"
+                "amrexplorer ${AMREXPLORER_VERSION_PATTERN}${amrexplorer_version_tail}"
             FAIL_REGULAR_EXPRESSION "platform plugin"
             TIMEOUT 30)
     endforeach()
@@ -858,6 +857,12 @@ if(TARGET amrexplorer_qt)
     add_test(NAME qt_help
         COMMAND "$<TARGET_FILE:amrexplorer_qt>" --help)
     set_tests_properties(qt_help PROPERTIES
+        PASS_REGULAR_EXPRESSION "usage: amrexplorer"
+        FAIL_REGULAR_EXPRESSION "unrecognized option"
+        TIMEOUT 10)
+    add_test(NAME qt_help_short
+        COMMAND "$<TARGET_FILE:amrexplorer_qt>" -h)
+    set_tests_properties(qt_help_short PROPERTIES
         PASS_REGULAR_EXPRESSION "usage: amrexplorer"
         FAIL_REGULAR_EXPRESSION "unrecognized option"
         TIMEOUT 10)

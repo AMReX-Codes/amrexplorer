@@ -104,12 +104,17 @@ run_git(commit -q --allow-empty -m "tag holder")
 # filename, so git cannot create that tag there at all. The `;` half of the
 # case -- the CMake list separator, and the half that used to fail silently --
 # is legal everywhere, so only the quote is dropped on Windows.
+# The non-ASCII half rides along off Windows too: a tag name may be Unicode,
+# and the bytes have to reach the header unmangled and still compile. On
+# Windows the quote is what the filesystem refuses, so that variant stays
+# ASCII; MSVC's side of this is the /utf-8 flag on amrexplorer_core.
 if(CMAKE_HOST_WIN32)
     set(tagName "v9.9.9-test;semi")
     set(expected "AMREXPLORER_GIT_DESCRIBE \"v9[.]9[.]9-test;semi\"")
 else()
-    set(tagName "v9.9.9-test\"quote;semi")
-    set(expected "AMREXPLORER_GIT_DESCRIBE \"v9[.]9[.]9-test[\\]\"quote;semi\"")
+    set(tagName "v9.9.9-test\"quote;semi-ā")
+    set(expected
+        "AMREXPLORER_GIT_DESCRIBE \"v9[.]9[.]9-test[\\]\"quote;semi-ā\"")
 endif()
 
 # Not through run_git: its ${ARGN} is a list, and the `;` in the tag would split

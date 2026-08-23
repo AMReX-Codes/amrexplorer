@@ -213,8 +213,31 @@ void VolumeController::configureForDataset()
     }
     // Before the new geometry goes in: a frame still in flight was rendered
     // for the outgoing dataset and must not be displayed against this one.
-    cancel();
+    //
+    // Playback abandons it without stopping the render throttle. Stopping it
+    // here and starting it again below pushes the pending render out by a
+    // full interval on every frame, so at frame intervals shorter than the
+    // throttle's own -- the Speed slider goes down to 1 ms -- it never
+    // elapses and nothing renders at all. Left armed it fires on schedule and
+    // renders whichever frame is current by then, which is exactly what it
+    // does for a continuous drag.
+    const bool playing = m_hooks.sequencePlaying && m_hooks.sequencePlaying();
+    if (playing) {
+        abandonInFlight();
+    } else {
+        cancel();
+    }
     pushGeometry();
+    // Sequence playback lands here once per frame. Dropping the frame each
+    // time left the window blank for the whole run -- a full ray cast never
+    // finished before the next frame cancelled it -- so the frame that is up
+    // stays up until the next draft replaces it. Nothing is shown against a
+    // geometry it does not belong to: a push that moved the domain drops the
+    // frame in IsoWidget::setGeometry, whatever this decides.
+    if (playing) {
+        scheduleRender();
+        return;
+    }
     m_window->clearFrame();
     // The frame just cleared belonged to the outgoing dataset; lastFrame()
     // would otherwise keep reporting it as this one's.
@@ -222,6 +245,19 @@ void VolumeController::configureForDataset()
     m_frameShown = false;
     m_lastRenderViewSize = QSize{};
     scheduleRender();
+}
+
+void VolumeController::frameSwitchStarted()
+{
+    // See the declaration: playback must not lose the pending render, because
+    // this runs once per frame and re-arming the throttle on each one means it
+    // never fires. The frame in flight goes either way -- it was built for the
+    // frame being replaced.
+    if (m_hooks.sequencePlaying && m_hooks.sequencePlaying()) {
+        abandonInFlight();
+    } else {
+        cancel();
+    }
 }
 
 void VolumeController::refresh()
@@ -257,12 +293,19 @@ void VolumeController::reset()
     refreshActionEnabled();
 }
 
-void VolumeController::cancel()
+void VolumeController::abandonInFlight()
 {
     ++m_generation;
     m_stopSource.request_stop();
     m_stopSource = StopSource{};
+    // The pending rerun was for the work being abandoned. A caller that still
+    // wants one asks again.
     m_rerun = false;
+}
+
+void VolumeController::cancel()
+{
+    abandonInFlight();
     m_debounce->stop();
     // The settle timer too, and the interaction it stands for: left armed, it
     // fires after the cancellation and schedules a render of whatever dataset
@@ -319,9 +362,13 @@ void VolumeController::startRender()
     request.camera = m_window->camera();
     // Mid-interaction (a moving camera, a resize, a dragged slider) gets a
     // half-size, single-sample draft; a settled view the full frame at the
-    // view's size.
-    const int width = std::max(1, m_interacting ? viewSize.width() / 2 : viewSize.width());
-    const int height = std::max(1, m_interacting ? viewSize.height() / 2 : viewSize.height());
+    // view's size. Sequence playback drafts for the same reason: the next
+    // frame arrives before a full ray cast could finish, so asking for one
+    // means every frame is cancelled unseen.
+    const bool draft = m_interacting
+        || (m_hooks.sequencePlaying && m_hooks.sequencePlaying());
+    const int width = std::max(1, draft ? viewSize.width() / 2 : viewSize.width());
+    const int height = std::max(1, draft ? viewSize.height() / 2 : viewSize.height());
     request.outputSize = {std::min(width, maxVolumeOutputDimension),
         std::min(height, maxVolumeOutputDimension)};
     // No request.logarithmic here: the choice built below carries it, and
@@ -329,7 +376,7 @@ void VolumeController::startRender()
     request.transfer = makeVolumeTransferFunction(
         m_hooks.palette ? m_hooks.palette() : builtinPalette(BuiltinPalette::Rainbow),
         m_window->ramp());
-    request.samplesPerVoxel = m_interacting ? 1 : quality.samplesPerVoxel;
+    request.samplesPerVoxel = draft ? 1 : quality.samplesPerVoxel;
     request.maximumVoxels = quality.maximumVoxels;
 
     const auto generation = ++m_generation;

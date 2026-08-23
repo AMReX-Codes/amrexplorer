@@ -397,7 +397,7 @@ MainWindow::MainWindow(QWidget* parent)
             m_initialStopSource.request_stop();
             m_linePlotStopSource.request_stop();
             m_particleController->cancel();
-            m_volumeController->cancel();
+            m_volumeController->frameSwitchStarted();
             m_pendingAllViews = false;
             m_pendingViews.clear();
             m_sliceDebounce->stop();
@@ -495,6 +495,7 @@ MainWindow::MainWindow(QWidget* parent)
             [this] { return m_slicePosition3d; },
             [this] { return m_slicePlanesAction->isChecked(); },
             [this] { return m_closing; },
+            [this] { return m_playbackMode == PlaybackMode::Sequence; },
         },
         this);
     connect(m_volumeController, &VolumeController::renderActivityChanged, this,

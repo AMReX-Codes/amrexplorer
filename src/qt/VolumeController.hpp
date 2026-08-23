@@ -38,10 +38,10 @@ class VolumeWindow;
 // runs it on a worker through the session (locally or on the server), and
 // pushes the frame back into the window. One render is in flight at a time;
 // a change during one is remembered and rendered after it. While the camera
-// is moving, the view is being resized or an opacity slider is being dragged,
-// the frames are half-size, one-sample drafts; once that settles, a full
-// frame. Late results (a superseded generation, a closed
-// window, a shutting-down host) are dropped, never displayed.
+// is moving, the view is being resized, an opacity slider is being dragged or
+// a plotfile sequence is playing, the frames are half-size, one-sample drafts;
+// once that settles, a full frame. Late results (a superseded generation, a
+// closed window, a shutting-down host) are dropped, never displayed.
 class VolumeController final : public QObject {
     Q_OBJECT
 
@@ -63,6 +63,11 @@ public:
         // True once application shutdown began: late results are dropped
         // without touching the GUI.
         std::function<bool()> isShuttingDown;
+        // True while plotfile-sequence playback is running. Frames arrive
+        // faster than a full ray cast finishes, so they are drafted like a
+        // moving camera and the frame already up is left in place until the
+        // next draft replaces it.
+        std::function<bool()> sequencePlaying;
     };
 
     VolumeController(Hooks hooks, QObject* parent = nullptr);
@@ -83,8 +88,17 @@ public:
     // or palette changed. slicePositionsChanged / slicePlanesVisibilityChanged:
     // overlay-only, no render. reset: the dataset is going away -- cancel,
     // close the window, disable the action. cancel: in-flight work is
-    // abandoned (a frame switch, shutdown); the window stays.
+    // abandoned (shutdown, a dataset going away); the window stays.
     void configureForDataset();
+    // A sequence frame switch has begun, before the frame has loaded: the work
+    // in flight was built for the outgoing frame and is abandoned. While
+    // playback runs the pending render is left alone -- this happens once per
+    // frame, and stopping the throttle here only to re-arm it when the frame
+    // arrives pushes that render out by a full interval every time, so at the
+    // frame intervals the Speed slider allows it never elapses and nothing
+    // renders at all. A single step is not on a clock and takes the cancel()
+    // form, which leaves nothing pending against the frame being replaced.
+    void frameSwitchStarted();
     void refresh();
     void slicePositionsChanged();
     void slicePlanesVisibilityChanged();
@@ -112,6 +126,13 @@ private:
     // The window is going away, closed here or by the user: abandon the render
     // in flight and forget that a frame was ever shown in it.
     void forgetWindow();
+    // Abandons whatever is in flight -- its result is dropped as stale -- and
+    // leaves the render throttle armed. cancel() is this plus stopping the
+    // throttle and the interaction it stands for; sequence playback needs
+    // only this half, because stopping the throttle and starting it again on
+    // every frame means it never elapses at the frame intervals the Speed
+    // slider allows, and nothing renders at all.
+    void abandonInFlight();
     [[nodiscard]] QString describe(
         const VolumeDisplayResult& result, const QString& fieldName) const;
 

@@ -20,8 +20,10 @@
 #include <QStringList>
 #include <QTimer>
 
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
@@ -266,6 +268,54 @@ int main(int argc, char** argv)
     QApplication application(argc, argv);
     using amrvis::qt::VolumeController;
 
+    // --- the size a frame is ray-cast at -------------------------------
+    // A settled frame covers the view's device pixels; a draft is half the
+    // view's logical size whatever the ratio, because it is thrown away.
+    // Tested against ratios no platform here provides -- the whole reason the
+    // ratio is a parameter.
+    {
+        using amrvis::qt::volumeOutputSize;
+        const QSize view(640, 480);
+        require(volumeOutputSize(view, 1.0, false)
+                == std::array<int, 2>{640, 480},
+            "a 1x settled frame is not the view's size");
+        require(volumeOutputSize(view, 2.0, false)
+                == std::array<int, 2>{1280, 960},
+            "a 2x settled frame was not rendered at the display's pixels");
+        require(volumeOutputSize(view, 1.5, false)
+                == std::array<int, 2>{960, 720},
+            "a fractional ratio was not applied");
+        // 1.25 * 641 = 801.25 and 1.25 * 483 = 603.75: rounded, not truncated.
+        require(volumeOutputSize(QSize(641, 483), 1.25, false)
+                == std::array<int, 2>{801, 604},
+            "a fractional ratio was truncated instead of rounded");
+        // Drafts: half the LOGICAL size, and the ratio makes no difference.
+        require(volumeOutputSize(view, 1.0, true)
+                == std::array<int, 2>{320, 240},
+            "a 1x draft is not half the view");
+        require(volumeOutputSize(view, 2.0, true)
+                == std::array<int, 2>{320, 240},
+            "a draft was scaled by the device pixel ratio");
+        require(volumeOutputSize(view, 3.0, true)
+                == std::array<int, 2>{320, 240},
+            "a draft was scaled by the device pixel ratio");
+        // Never zero, whatever it is handed, and never past what the ray
+        // caster accepts -- a 4K view at 3x would ask for 11520.
+        require(volumeOutputSize(QSize(1, 1), 1.0, true)
+                == std::array<int, 2>{1, 1},
+            "halving a one-pixel view produced no pixels");
+        require(volumeOutputSize(QSize(0, 0), 2.0, false)
+                == std::array<int, 2>{1, 1},
+            "an empty view produced no pixels");
+        require(volumeOutputSize(QSize(3840, 2160), 3.0, false)
+                == std::array<int, 2>{amrvis::maxVolumeOutputDimension,
+                    amrvis::maxVolumeOutputDimension},
+            "an oversized request was not bounded to what the caster takes");
+        require(volumeOutputSize(view, 0.0, false)
+                == std::array<int, 2>{1, 1},
+            "a zero ratio was not bounded to a legal size");
+    }
+
     // New geometry drops the frame that belonged to the old geometry: kept, it
     // would be drawn under a wireframe for a domain it was never sampled from,
     // and scaled by a projection that no longer describes it. Checked through
@@ -413,6 +463,7 @@ int main(int argc, char** argv)
         waitFor(application, [&] { return session->requests == before + 1; },
             "the camera move did not render a draft");
         auto latest = session->requestsSoFar().back();
+        const auto drafted = latest;
         require(latest.samplesPerVoxel == 1
                 && latest.outputSize[0] <= requests.front().outputSize[0] / 2 + 1
                 && latest.outputSize[1] <= requests.front().outputSize[1] / 2 + 1,
@@ -424,6 +475,21 @@ int main(int argc, char** argv)
         require(latest.samplesPerVoxel == 2
                 && latest.outputSize == requests.front().outputSize,
             "the settled frame is not full-size");
+        // And that full size is the view in device pixels, not logical ones.
+        // True at any ratio, so it holds in the ordinary run; the
+        // volume_controller_hidpi test runs this whole file at a ratio of 2,
+        // where the two differ. Read here rather than at the opening render
+        // because the view's size is settled by now.
+        const auto ratio = volumeWindow()->viewDevicePixelRatio();
+        const auto logicalView = volumeWindow()->viewSize();
+        require(latest.outputSize[0]
+                    == static_cast<int>(std::lround(logicalView.width() * ratio))
+                && latest.outputSize[1]
+                    == static_cast<int>(std::lround(logicalView.height() * ratio)),
+            "the settled frame was not rendered at the view's device pixels");
+        // The draft above stayed at the logical half size, ratio or not.
+        require(drafted.outputSize[0] == logicalView.width() / 2,
+            "the draft was scaled by the device pixel ratio");
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the settled render did not finish");
 

@@ -626,6 +626,16 @@ if(TARGET amrexplorer_qt)
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_volume_controller>")
     set_tests_properties(volume_controller PROPERTIES TIMEOUT 60)
+    # The same tests again on a scaled display. QT_SCALE_FACTOR makes the
+    # offscreen platform report a device pixel ratio of 2 while leaving logical
+    # sizes alone, which is the only way here to tell a request sized in device
+    # pixels from one sized in logical pixels -- the volume render was sized in
+    # logical ones, so every frame on such a display arrived soft.
+    add_test(NAME volume_controller_hidpi
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            QT_SCALE_FACTOR=2
+            "$<TARGET_FILE:test_volume_controller>")
+    set_tests_properties(volume_controller_hidpi PROPERTIES TIMEOUT 60)
 
     add_executable(test_diagnostics_model
         unit/test_diagnostics_model.cpp

@@ -315,6 +315,11 @@ QSize VolumeWindow::viewSize() const
     return m_view->size();
 }
 
+qreal VolumeWindow::viewDevicePixelRatio() const
+{
+    return m_view->devicePixelRatioF();
+}
+
 OpacityRamp VolumeWindow::ramp() const
 {
     // Every field comes from a slider in [0, 100], and buildControls keeps

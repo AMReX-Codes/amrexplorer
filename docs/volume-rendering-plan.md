@@ -85,7 +85,8 @@ legacy percent, `opacity = min(1, byte/100)` (Amrvis `Palette.cpp:670`);
 grid cache 256 MiB per session, server flags `--max-volume-voxels`,
 `--volume-cache-mb`; point sampling at voxel centres (box averaging later);
 window mirrors the main window's field/level/range/log/palette (no own range
-controls); render at logical resolution (hi-DPI polish in the last PR).
+controls); drafts at half the logical size, the settled frame at the view's
+device pixels (`volumeOutputSize`).
 
 ## Phases (one PR each; sizes S/M/L)
 
@@ -326,7 +327,9 @@ concrete 1.2; `ARCHITECTURE.md` trust boundaries).
 ### PR8 — Polish and docs (S/M)
 Volume window "Export Image..." (PNG; `grab()` would bake the preset buttons
 in, so the view is rendered without its children); hi-DPI (device-resolution
-render, `viewportFrame(w·dpr, h·dpr, margin·dpr)` both sides); trilinear option
+render — `volumeOutputSize` scales the settled frame by the view's ratio, and
+`backdropScale` already divides out both projections' scales, so the margin
+term needed no change and the domain's pixels land 1:1); trilinear option
 (request field + wire field, quality High); `docs/user-guide.md` new "Volume
 rendering" section after "Working with 3-D data" (:269); `docs/ARCHITECTURE.md`
 layering diagram (`render3d`), collaborator table row, "Where to start reading"
@@ -376,9 +379,6 @@ row, threading note; `docs/building.md` unchanged.
 - **Isosurfaces** — extracted and shaded iso-value surfaces alongside the
   translucent volume; needs a marching-cubes pass over the sampled grid and
   a depth-composited draw.
-- **Hi-DPI** — render at device resolution (both sides using
-  `viewportFrame(w·dpr, h·dpr, margin·dpr)`); frames are logical-resolution
-  today.
 - **Trilinear sampling** — a request/wire field and the High quality preset;
   nearest-voxel today.
 - **Box-averaged downsampling** — when the voxel budget forces a coarser
@@ -392,13 +392,6 @@ row, threading note; `docs/building.md` unchanged.
   seam to join a sequence export.
 - **Frame compression on the wire** — RLE or 8-bit indexed pixels for slow
   links; half-resolution drafts are the mitigation today.
-- **Hi-DPI for the volume *render*.** The export buffer is scaled by the
-  device ratio, so the wireframe, grid boxes and slice planes gain real pixels
-  — but `VolumeController` still sizes the render request from the logical view
-  size, so the volume itself is interpolated up. PR8's item above reads as
-  delivered and only the export half is. Deferred on cost: scaling the render
-  quadruples the ray-cast and pushes on the quality voxel budget and the remote
-  frame budget.
 - **End-to-end coverage of "Export Image..."** — the rules it applies (the
   `.png` name, and rendering the view without the preset buttons parked over
   it) are unit-tested in `test_widget_image_export`, but nothing drives the menu

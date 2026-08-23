@@ -11,10 +11,29 @@
 #include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <utility>
 
 namespace amrvis::qt {
+
+std::array<int, 2> volumeOutputSize(
+    QSize viewSize, qreal devicePixelRatio, bool draft) noexcept
+{
+    // The clamp is also what keeps an absurd ratio harmless: it can only ever
+    // produce a size inside the range the ray caster accepts.
+    const auto bound = [](double extent) {
+        return std::clamp(static_cast<int>(std::lround(extent)), 1,
+            maxVolumeOutputDimension);
+    };
+    if (draft) {
+        // Integer halving, as this has always done -- the draft size is not
+        // where the ratio belongs.
+        return {bound(viewSize.width() / 2), bound(viewSize.height() / 2)};
+    }
+    return {bound(viewSize.width() * devicePixelRatio),
+        bound(viewSize.height() * devicePixelRatio)};
+}
 
 VolumeController::VolumeController(Hooks hooks, QObject* parent)
     : QObject(parent)
@@ -367,10 +386,8 @@ void VolumeController::startRender()
     // means every frame is cancelled unseen.
     const bool draft = m_interacting
         || (m_hooks.sequencePlaying && m_hooks.sequencePlaying());
-    const int width = std::max(1, draft ? viewSize.width() / 2 : viewSize.width());
-    const int height = std::max(1, draft ? viewSize.height() / 2 : viewSize.height());
-    request.outputSize = {std::min(width, maxVolumeOutputDimension),
-        std::min(height, maxVolumeOutputDimension)};
+    request.outputSize = volumeOutputSize(
+        viewSize, m_window->viewDevicePixelRatio(), draft);
     // No request.logarithmic here: the choice built below carries it, and
     // the pipeline sets it from there before each attempt's range resolve.
     request.transfer = makeVolumeTransferFunction(

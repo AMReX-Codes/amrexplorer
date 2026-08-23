@@ -48,6 +48,7 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
@@ -67,6 +68,9 @@ private:
     // functions take one, and a drag cannot reorder the list -- moveOpacityPoint
     // clamps an interior point between its neighbours.
     int m_dragging = -1;
+    // The point the arrow keys nudge: the last one pressed, outliving the
+    // drag so a coarse mouse placement can be fine-tuned afterwards.
+    int m_selected = -1;
 };
 
 } // namespace amrvis::qt

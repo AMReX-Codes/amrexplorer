@@ -178,8 +178,11 @@ void VolumeWindow::buildControls()
         tr("Sample only the part of the domain the slice views are zoomed to, "
            "which spends the voxel budget on it instead of the whole field"));
     form->addRow(QString(), m_regionCheck);
+    // Unchecked by default: the boxes read as clutter over a volume. The view
+    // itself defaults to showing them (the grid page wants that), so it is
+    // told here rather than by a toggle that never fires.
     m_boxesCheck = new QCheckBox(tr("Grid boxes"), panel);
-    m_boxesCheck->setChecked(true);
+    m_view->setLevelBoxesVisible(false);
     m_outlineCheck = new QCheckBox(tr("Domain outline"), panel);
     m_outlineCheck->setChecked(true);
     form->addRow(QString(), m_boxesCheck);

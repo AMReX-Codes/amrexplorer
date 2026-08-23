@@ -21,6 +21,7 @@
 #include <QRectF>
 #include <QCheckBox>
 #include <QEvent>
+#include <QKeyEvent>
 #include <QKeySequence>
 #include <QMouseEvent>
 #include <QCoreApplication>
@@ -1090,6 +1091,46 @@ int main(int argc, char** argv)
         require(std::abs(static_cast<double>(dragged[midEntry]) - 0.25) <= 0.06,
             "the drag did not reach the opacities in the request");
 
+        // The arrow keys, which is what the mouse cannot do: the drag above
+        // placed the point to the nearest pixel, and these move it by less
+        // than one. The point the press took is still the selected one, so
+        // the nudge lands on it without another click.
+        auto nudged = session->requests.load();
+        const auto placed = widget->curve()[1];
+        const auto sendKey = [widget](int key, Qt::KeyboardModifiers modifiers) {
+            QKeyEvent pressed(QEvent::KeyPress, key, modifiers);
+            QApplication::sendEvent(widget, &pressed);
+        };
+        for (int tap = 0; tap < 3; ++tap) {
+            sendKey(Qt::Key_Up, Qt::NoModifier);
+        }
+        require(std::abs(widget->curve()[1].opacity - (placed.opacity + 0.03))
+                <= 1.0e-9,
+            "three presses of Up did not raise the point by three percent");
+        // Shift is the same key covering ground, ten steps rather than one.
+        sendKey(Qt::Key_Right, Qt::ShiftModifier);
+        const auto slot = 1.0 / static_cast<double>(amrvis::Palette::colorSlots - 1);
+        require(std::abs(widget->curve()[1].position
+                    - (placed.position + 10.0 * slot)) <= 1.0e-9,
+            "Shift+Right did not move the point ten palette slots");
+        // And a nudge renders, down the same path a drag takes.
+        waitFor(application, [&] { return session->requests > nudged; },
+            "nudging a point with the arrow keys did not render");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the render after the nudge did not finish");
+
+        // Put it back where the drag left it, so the removal below still
+        // finds a point under the cursor -- and so the keys are shown to be
+        // symmetric rather than merely to move something.
+        sendKey(Qt::Key_Left, Qt::ShiftModifier);
+        for (int tap = 0; tap < 3; ++tap) {
+            sendKey(Qt::Key_Down, Qt::NoModifier);
+        }
+        require(std::abs(widget->curve()[1].position - placed.position) <= 1.0e-9
+                && std::abs(widget->curve()[1].opacity - placed.opacity)
+                    <= 1.0e-9,
+            "the opposite arrows did not return the point to where it was");
+
         // Quiesce before the next check. The drag armed the settle timer, and
         // its full frame arriving later would stand in for the render the
         // removal is supposed to cause -- which it did, until this was here.
@@ -1117,6 +1158,17 @@ int main(int argc, char** argv)
         const auto restored = session->requestsSoFar().back().transfer.opacities;
         require(std::abs(static_cast<double>(restored[midEntry]) - 0.5) <= 0.02,
             "removing the point did not put the straight ramp back");
+
+        // The point that was selected is the point that was just removed, so
+        // there is nothing to nudge: the arrows have to do nothing rather than
+        // move whichever point inherited the index. Down, because it would
+        // show on the end point the stale index names, where Up would clamp
+        // against the top and look innocent.
+        const auto untouched = widget->curve();
+        sendKey(Qt::Key_Down, Qt::NoModifier);
+        require(widget->curve().size() == untouched.size()
+                && widget->curve().back().opacity == untouched.back().opacity,
+            "an arrow key moved a point after the selected one was removed");
 
         // The palette's own alpha takes over from the curve, so the curve is
         // disabled: it has no say while that box is in effect, and a control

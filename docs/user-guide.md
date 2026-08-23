@@ -323,6 +323,11 @@ match. Its own controls set the opacity:
   two end points stay at the ends of the range and move only up and down, so
   the curve always covers it.
 
+  The point you last clicked stays selected -- it is the filled one -- and the
+  arrow keys move it: one color slot sideways or one percent up and down,
+  which is finer than the mouse can place it, and ten times that with Shift
+  held. Drop a point roughly where you want it and then tune it with the keys.
+
   It starts as a straight line from transparent at the cold end to opaque at
   the hot end. Pull the low end up to see faint values, pull a stretch down to
   look through a feature that is hiding what is behind it, or pull everything

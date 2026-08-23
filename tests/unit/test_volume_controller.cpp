@@ -774,20 +774,45 @@ int main(int argc, char** argv)
         waitFor(application, [&] { return observed.frames == 1; },
             "the opening frame was not displayed");
         playingSequence = true;
-        const auto before = session->requests.load();
-        const auto framesBefore = observed.frames;
-        // Twelve arrivals 20 ms apart: half the throttle's interval.
-        for (int arrival = 0; arrival < 12; ++arrival) {
+        auto before = session->requests.load();
+        // Both halves of what the host does per frame, in order: the switch
+        // starts before the frame has loaded, then the frame arrives. Driving
+        // only the second half is what let an earlier version of this test
+        // pass while production still starved -- the switch is where the
+        // throttle was being stopped.
+        const auto arrive = [&controller, &application](int gapMs) {
+            controller.frameSwitchStarted();
             controller.configureForDataset();
-            settle(application, 20);
+            settle(application, gapMs);
+        };
+        // Sixteen arrivals 20 ms apart: half the throttle's interval.
+        for (int arrival = 0; arrival < 16; ++arrival) {
+            arrive(20);
         }
-        // The count is not pinned -- it depends on how a 40 ms throttle lines
-        // up with 20 ms arrivals across 240 ms, and a slow machine only gets
-        // more. What matters is that it is not zero.
+        // The count is not pinned -- a 40 ms throttle across 320 ms of
+        // arrivals is around eight, and the bar below is three, because a
+        // throttle that fires while a render is still in flight starts
+        // nothing and waits for the next arrival to re-arm it. What matters is
+        // that it is not zero, which is what stopping the throttle produced.
+        //
+        // Renders started, not frames displayed: at arrivals this fast every
+        // render is superseded by the next arrival before it can finish, so
+        // whether any particular one survives to be shown is a race, and
+        // asserting on it failed on macOS. Nothing can ray-cast faster than
+        // the frames arrive; what this pins is that the attempts keep coming.
         require(session->requests > before + 2,
             "frames arriving faster than the render throttle rendered nothing");
-        require(observed.frames > framesBefore,
-            "nothing was displayed during fast playback");
+
+        // At arrivals slower than the throttle, frames do reach the screen.
+        // This is the user-visible half, and it needs a rate at which a render
+        // has room to finish between arrivals.
+        before = session->requests.load();
+        const auto framesBefore = observed.frames;
+        for (int arrival = 0; arrival < 3; ++arrival) {
+            arrive(150);
+        }
+        require(session->requests > before && observed.frames > framesBefore,
+            "playback at an ordinary speed displayed nothing");
         playingSequence = false;
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the last playback render did not finish");

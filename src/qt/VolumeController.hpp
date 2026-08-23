@@ -88,8 +88,17 @@ public:
     // or palette changed. slicePositionsChanged / slicePlanesVisibilityChanged:
     // overlay-only, no render. reset: the dataset is going away -- cancel,
     // close the window, disable the action. cancel: in-flight work is
-    // abandoned (a frame switch, shutdown); the window stays.
+    // abandoned (shutdown, a dataset going away); the window stays.
     void configureForDataset();
+    // A sequence frame switch has begun, before the frame has loaded: the work
+    // in flight was built for the outgoing frame and is abandoned. While
+    // playback runs the pending render is left alone -- this happens once per
+    // frame, and stopping the throttle here only to re-arm it when the frame
+    // arrives pushes that render out by a full interval every time, so at the
+    // frame intervals the Speed slider allows it never elapses and nothing
+    // renders at all. A single step is not on a clock and takes the cancel()
+    // form, which leaves nothing pending against the frame being replaced.
+    void frameSwitchStarted();
     void refresh();
     void slicePositionsChanged();
     void slicePlanesVisibilityChanged();

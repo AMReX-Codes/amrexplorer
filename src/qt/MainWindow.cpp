@@ -397,7 +397,7 @@ MainWindow::MainWindow(QWidget* parent)
             m_initialStopSource.request_stop();
             m_linePlotStopSource.request_stop();
             m_particleController->cancel();
-            m_volumeController->cancel();
+            m_volumeController->frameSwitchStarted();
             m_pendingAllViews = false;
             m_pendingViews.clear();
             m_sliceDebounce->stop();

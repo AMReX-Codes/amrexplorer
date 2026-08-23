@@ -247,6 +247,19 @@ void VolumeController::configureForDataset()
     scheduleRender();
 }
 
+void VolumeController::frameSwitchStarted()
+{
+    // See the declaration: playback must not lose the pending render, because
+    // this runs once per frame and re-arming the throttle on each one means it
+    // never fires. The frame in flight goes either way -- it was built for the
+    // frame being replaced.
+    if (m_hooks.sequencePlaying && m_hooks.sequencePlaying()) {
+        abandonInFlight();
+    } else {
+        cancel();
+    }
+}
+
 void VolumeController::refresh()
 {
     if (!m_window) {

@@ -758,5 +758,40 @@ int main(int argc, char** argv)
             "the full render did not finish");
         controller.closeWindow();
     }
+
+    // Frames arriving faster than the render throttle's own interval must
+    // still render. Every arrival abandons the render in flight, and doing
+    // that through cancel() -- which stops the throttle -- pushed the pending
+    // render out by another full interval each time, so at the frame
+    // intervals the Speed slider allows (601 - value ms, down to 1) the
+    // throttle never elapsed and nothing was rendered at all. That is the
+    // same blank window this change is about, reached the other way.
+    {
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the opening frame was not displayed");
+        playingSequence = true;
+        const auto before = session->requests.load();
+        const auto framesBefore = observed.frames;
+        // Twelve arrivals 20 ms apart: half the throttle's interval.
+        for (int arrival = 0; arrival < 12; ++arrival) {
+            controller.configureForDataset();
+            settle(application, 20);
+        }
+        // The count is not pinned -- it depends on how a 40 ms throttle lines
+        // up with 20 ms arrivals across 240 ms, and a slow machine only gets
+        // more. What matters is that it is not zero.
+        require(session->requests > before + 2,
+            "frames arriving faster than the render throttle rendered nothing");
+        require(observed.frames > framesBefore,
+            "nothing was displayed during fast playback");
+        playingSequence = false;
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the last playback render did not finish");
+        controller.closeWindow();
+    }
     return 0;
 }

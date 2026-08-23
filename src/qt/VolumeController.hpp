@@ -117,6 +117,13 @@ private:
     // The window is going away, closed here or by the user: abandon the render
     // in flight and forget that a frame was ever shown in it.
     void forgetWindow();
+    // Abandons whatever is in flight -- its result is dropped as stale -- and
+    // leaves the render throttle armed. cancel() is this plus stopping the
+    // throttle and the interaction it stands for; sequence playback needs
+    // only this half, because stopping the throttle and starting it again on
+    // every frame means it never elapses at the frame intervals the Speed
+    // slider allows, and nothing renders at all.
+    void abandonInFlight();
     [[nodiscard]] QString describe(
         const VolumeDisplayResult& result, const QString& fieldName) const;
 

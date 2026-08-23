@@ -42,13 +42,18 @@ add_executable(test_version unit/test_version.cpp)
 target_link_libraries(test_version PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME version COMMAND test_version)
 
-# The generator behind --version, on a source tree with no git history: the
-# case a release tarball builds in, which no build here can reproduce.
+# The generator behind --version, against the two source trees no build here
+# can arrange: one with no git history, as a release tarball is built from, and
+# one whose tag name carries characters a C++ literal and a CMake list mangle.
+find_package(Git QUIET)
 add_test(
-    NAME git_version_no_git
+    NAME git_version_generator
     COMMAND "${CMAKE_COMMAND}"
         "-DGENERATOR=${PROJECT_SOURCE_DIR}/cmake/GitVersion.cmake"
-        "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/git_version_no_git"
+        "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/git_version_generator"
+        "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+        "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DCXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/git_version_driver.cmake"
 )
 

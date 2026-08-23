@@ -105,7 +105,10 @@ macro(run_git)
 endmacro()
 
 run_git(init -q .)
-run_git(commit -q --allow-empty -m "tag holder")
+# --no-verify: whoever runs ctest may have a global core.hooksPath, and a
+# pre-commit hook that rejects would fail this case as if the generator were
+# at fault.
+run_git(commit -q --no-verify --allow-empty -m "tag holder")
 
 # A loose ref is a file, and `"` is not a legal character in a Windows
 # filename, so git cannot create that tag there at all. The `;` half of the

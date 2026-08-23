@@ -63,7 +63,11 @@ int main()
     require(own.rfind(version, 0) == 0,
         "this build's version text did not start with its version");
     const std::string tail = own.substr(version.size());
-    require(tail.empty() || (tail.starts_with(" (") && tail.ends_with(")")),
+    // size() > 3 rules out " ()", which passes both ends of the shape check and
+    // is the one thing the empty-description case must never produce.
+    require(tail.empty()
+            || (tail.size() > 3 && tail.starts_with(" (")
+                && tail.ends_with(")")),
         "this build's version text has a malformed description");
 
     return 0;

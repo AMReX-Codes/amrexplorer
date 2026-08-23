@@ -38,6 +38,38 @@ add_executable(test_geometry unit/test_geometry.cpp)
 target_link_libraries(test_geometry PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME geometry COMMAND test_geometry)
 
+add_executable(test_version unit/test_version.cpp)
+target_link_libraries(test_version PRIVATE amrexplorer::core amrexplorer::warnings)
+add_test(NAME version COMMAND test_version)
+
+# The generator behind --version, against the two source trees no build here
+# can arrange: one with no git history, as a release tarball is built from, and
+# one whose tag name carries characters a C++ literal and a CMake list mangle.
+find_package(Git QUIET)
+add_test(
+    NAME git_version_generator
+    COMMAND "${CMAKE_COMMAND}"
+        "-DGENERATOR=${PROJECT_SOURCE_DIR}/cmake/GitVersion.cmake"
+        "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/git_version_generator"
+        "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+        "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DCXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        "-DCXX_COMPILER_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/git_version_driver.cmake"
+)
+set_tests_properties(git_version_generator PROPERTIES TIMEOUT 60)
+
+# What the two binaries must print. Where this build reports a git description,
+# it has to appear -- that end of the plumbing (generator to header to binary)
+# is otherwise asserted nowhere. A release version never carries one and a
+# tarball has none to carry, so the requirement follows the build rather than
+# the presence of git.
+if(AMREXPLORER_REPORTS_GIT_DESCRIBE)
+    set(amrexplorer_version_tail " [(]")
+else()
+    set(amrexplorer_version_tail "")
+endif()
+
 add_executable(test_view_data unit/test_view_data.cpp)
 target_link_libraries(test_view_data PRIVATE amrexplorer::data amrexplorer::warnings)
 add_test(NAME view_data COMMAND test_view_data)
@@ -306,10 +338,37 @@ if(TARGET amrexplorer_remote)
             TIMEOUT 60)
     endif()
 
+    # FAIL_REGULAR_EXPRESSION as well as PASS: an unrecognized option prints
+    # the same usage text (to stderr, after "server error") and a pass
+    # expression makes ctest ignore the exit code, so without this an option
+    # the server does not know would look like one it does.
     add_test(NAME remote_server_help
         COMMAND "$<TARGET_FILE:amrexplorer_server>" --help)
     set_tests_properties(remote_server_help PROPERTIES
-        PASS_REGULAR_EXPRESSION "usage: amrexplorer-server")
+        PASS_REGULAR_EXPRESSION "usage: amrexplorer-server"
+        FAIL_REGULAR_EXPRESSION "server error"
+        TIMEOUT 30)
+    add_test(NAME remote_server_help_short
+        COMMAND "$<TARGET_FILE:amrexplorer_server>" -h)
+    set_tests_properties(remote_server_help_short PROPERTIES
+        PASS_REGULAR_EXPRESSION "usage: amrexplorer-server"
+        FAIL_REGULAR_EXPRESSION "server error"
+        TIMEOUT 30)
+    # The version CMake read out of Version.hpp and the string the binary
+    # composed from the same line, checked against each other. No ^ anchor: the
+    # expression is matched against everything the run wrote, so a loader or
+    # sanitizer line ahead of the output would otherwise fail it. FAIL as well
+    # as PASS, because a pass expression makes ctest ignore the exit code.
+    foreach(flag --version -v)
+        string(REGEX REPLACE "^-+" "" name "${flag}")
+        add_test(NAME remote_server_version_${name}
+            COMMAND "$<TARGET_FILE:amrexplorer_server>" "${flag}")
+        set_tests_properties(remote_server_version_${name} PROPERTIES
+            PASS_REGULAR_EXPRESSION
+                "amrexplorer-server ${PROJECT_VERSION}(-dev)?${amrexplorer_version_tail}"
+            FAIL_REGULAR_EXPRESSION "server error"
+            TIMEOUT 30)
+    endforeach()
     add_test(NAME remote_server_rejects_zero_datasets
         COMMAND "${CMAKE_COMMAND}"
             "-DAMREXPLORER_SERVER=$<TARGET_FILE:amrexplorer_server>"
@@ -489,6 +548,23 @@ add_test(NAME tool_line_repro
 set_tests_properties(tool_line_repro PROPERTIES TIMEOUT 60)
 
 if(TARGET amrexplorer_qt)
+    # As above for the client -- and run with a platform plugin that cannot
+    # load, because --version is answered before QApplication exists and has to
+    # keep working on a machine with no display. Were it ever moved after,
+    # Qt would abort here instead of printing.
+    foreach(flag --version -v)
+        string(REGEX REPLACE "^-+" "" name "${flag}")
+        add_test(NAME qt_version_${name}
+            COMMAND "${CMAKE_COMMAND}" -E env
+                QT_QPA_PLATFORM=amrexplorer-no-plugin
+                "$<TARGET_FILE:amrexplorer_qt>" "${flag}")
+        set_tests_properties(qt_version_${name} PROPERTIES
+            PASS_REGULAR_EXPRESSION
+                "amrexplorer ${PROJECT_VERSION}(-dev)?${amrexplorer_version_tail}"
+            FAIL_REGULAR_EXPRESSION "platform plugin"
+            TIMEOUT 30)
+    endforeach()
+
     add_executable(test_sequence_controller
         unit/test_sequence_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/SequenceController.cpp"
@@ -783,6 +859,7 @@ if(TARGET amrexplorer_qt)
         COMMAND "$<TARGET_FILE:amrexplorer_qt>" --help)
     set_tests_properties(qt_help PROPERTIES
         PASS_REGULAR_EXPRESSION "usage: amrexplorer"
+        FAIL_REGULAR_EXPRESSION "unrecognized option"
         TIMEOUT 10)
 
     add_test(

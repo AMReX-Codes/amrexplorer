@@ -127,7 +127,6 @@ target_link_libraries(amrexplorer_qt
 )
 target_link_libraries(amrexplorer_qt PRIVATE amrexplorer::remote)
 target_compile_features(amrexplorer_qt PRIVATE cxx_std_20)
-target_compile_definitions(amrexplorer_qt PRIVATE AMREXPLORER_VERSION="${PROJECT_VERSION}")
 
 install(TARGETS amrexplorer_qt
     BUNDLE DESTINATION .

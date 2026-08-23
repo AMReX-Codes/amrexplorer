@@ -4,18 +4,12 @@
 #include "CloseWindowAction.hpp"
 #include "CurrentRowBulletDelegate.hpp"
 
+#include <amrexplorer/core/Version.hpp>
+
 #include <QKeySequence>
 #include <QStyle>
 
 namespace amrvis::qt {
-
-extern const char* const kVersion =
-#ifdef AMREXPLORER_VERSION
-    AMREXPLORER_VERSION
-#else
-    "0.3.0-dev"
-#endif
-    ;
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -284,7 +278,7 @@ MainWindow::MainWindow(QWidget* parent)
             },
             [] { return makeSettingsPtr(); },
         },
-        kVersion, this);
+        amrvis::versionText(), this);
     connect(m_remoteSession, &RemoteSessionController::sessionChanged, this,
         [this] { updateDiagnostics(); });
     connect(m_remoteSession, &RemoteSessionController::openRequested, this,

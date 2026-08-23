@@ -103,6 +103,30 @@ not `EXECUTABLE`, which cross-compiling toolchain files set so that the link
 cannot be tested. Packagers who want the system runtime should configure with
 `-DAMREXPLORER_SERVER_STATIC_CXX_RUNTIME=OFF`.
 
+## Versioning
+
+The version is written in one place, `include/amrexplorer/core/Version.hpp`:
+
+```cpp
+inline constexpr const char* kVersion = "0.3.0-dev";
+```
+
+CMake reads the `x.y.z` out of that line for `project(VERSION)`, so the number
+the build knows and the string the binaries print cannot disagree. The `-dev`
+suffix means "heading for x.y.z, not there yet".
+
+`--version` appends `git describe --tags --dirty --always` in parentheses
+whenever the source tree has git history to read, release build or not: on a
+clean tag that repeats the version, and anywhere else -- commits past the tag,
+a modified tree -- it is the part that says which build this is. A source tree
+with no git history, such as an unpacked release tarball, reports the version
+alone. Editing the header re-runs CMake in an existing build tree, and the
+description is refreshed on every build, so neither goes stale.
+
+Cutting a release is therefore two edits to that one line: drop the `-dev`,
+build and tag `vx.y.z`, then set it to the next `x.y.z-dev`. Nothing else
+carries a version number.
+
 ## Building an AppImage
 
 From the repository root on Linux, build AMReXplorer and install it into an

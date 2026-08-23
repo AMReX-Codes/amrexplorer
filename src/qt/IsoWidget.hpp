@@ -68,8 +68,16 @@ signals:
     // The viewport changed size, so a backdrop rendered for the old one is
     // now being stretched: whoever renders it wants to render it again.
     void viewResized();
+    // The display's scale changed -- the window was moved to a screen with a
+    // different one. Separate from viewResized because no resize follows: the
+    // logical size is unchanged, so a renderer that compares logical sizes to
+    // spot layout churn would dismiss this as churn. Every device pixel the
+    // view is made of has changed size, and a frame rendered for the old ratio
+    // is now the wrong resolution.
+    void viewScaleChanged();
 
 protected:
+    bool event(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;

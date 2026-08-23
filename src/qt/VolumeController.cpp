@@ -7,14 +7,35 @@
 
 #include <QAction>
 #include <QFutureWatcher>
+#include <QScreen>
 #include <QTimer>
+#include <QWindow>
 #include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <utility>
 
 namespace amrvis::qt {
+
+std::array<int, 2> volumeOutputSize(
+    QSize viewSize, qreal devicePixelRatio, bool draft) noexcept
+{
+    // The clamp is also what keeps an absurd ratio harmless: it can only ever
+    // produce a size inside the range the ray caster accepts.
+    const auto bound = [](double extent) {
+        return std::clamp(static_cast<int>(std::lround(extent)), 1,
+            maxVolumeOutputDimension);
+    };
+    if (draft) {
+        // Integer halving, as this has always done -- the draft size is not
+        // where the ratio belongs.
+        return {bound(viewSize.width() / 2), bound(viewSize.height() / 2)};
+    }
+    return {bound(viewSize.width() * devicePixelRatio),
+        bound(viewSize.height() * devicePixelRatio)};
+}
 
 VolumeController::VolumeController(Hooks hooks, QObject* parent)
     : QObject(parent)
@@ -126,6 +147,13 @@ void VolumeController::showWindow(QWidget* parent)
         scheduleRender();
     };
     connect(window, &VolumeWindow::interactionEnded, this, endInteraction);
+    // A scale change is a discrete event, not a drag, so it takes the
+    // immediate full-frame path rather than drafting: there is nothing more
+    // coming that a draft would be a placeholder for. It deliberately does
+    // not go through the viewResized handler, whose first act is to dismiss
+    // an unchanged logical size as layout churn -- which is exactly what a
+    // scale change looks like there.
+    connect(window, &VolumeWindow::viewScaleChanged, this, endInteraction);
     connect(window, &VolumeWindow::qualityChanged, this, endInteraction);
     connect(window, &VolumeWindow::paletteAlphaChanged, this, endInteraction);
     // A close from the title bar: closeWindow drops this connection before
@@ -135,6 +163,16 @@ void VolumeController::showWindow(QWidget* parent)
         [this] { forgetWindow(); });
     pushGeometry();
     window->show();
+    // The other trigger for a scale change, and on Qt 6.4 -- the minimum this
+    // builds against -- the only one, since QEvent::DevicePixelRatioChange
+    // arrived in 6.6. Moving a window to another screen always emits this,
+    // which is the case that matters; it fires for a same-scale move too,
+    // costing one full frame on a rare, user-initiated action -- cheaper than
+    // a frame left at the wrong resolution. The handle exists only once the
+    // window is shown.
+    if (auto* const handle = window->windowHandle()) {
+        connect(handle, &QWindow::screenChanged, this, endInteraction);
+    }
     window->raise();
     window->activateWindow();
     scheduleRender();
@@ -367,10 +405,8 @@ void VolumeController::startRender()
     // means every frame is cancelled unseen.
     const bool draft = m_interacting
         || (m_hooks.sequencePlaying && m_hooks.sequencePlaying());
-    const int width = std::max(1, draft ? viewSize.width() / 2 : viewSize.width());
-    const int height = std::max(1, draft ? viewSize.height() / 2 : viewSize.height());
-    request.outputSize = {std::min(width, maxVolumeOutputDimension),
-        std::min(height, maxVolumeOutputDimension)};
+    request.outputSize = volumeOutputSize(
+        viewSize, m_window->viewDevicePixelRatio(), draft);
     // No request.logarithmic here: the choice built below carries it, and
     // the pipeline sets it from there before each attempt's range resolve.
     request.transfer = makeVolumeTransferFunction(

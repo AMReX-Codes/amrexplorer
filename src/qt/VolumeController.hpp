@@ -30,6 +30,30 @@ namespace amrvis::qt {
 
 class VolumeWindow;
 
+// The pixel size to ray-cast the volume at: the view in *device* pixels for a
+// frame that will stay up, half the view's *logical* size for a draft. Both
+// bounded to at least one pixel and at most maxVolumeOutputDimension.
+//
+// Device pixels for the settled frame because a frame rendered at logical size
+// is stretched into a view whose wireframe and slice planes are drawn at the
+// display's real resolution -- a soft picture under sharp lines, and no
+// Quality setting recovers it, because the pixels were never asked for. The
+// slice path has always sized its requests this way
+// (MainWindow::viewportPixelSize); the volume path had not.
+//
+// Drafts deliberately ignore the ratio. They exist to keep a moving camera and
+// a playing sequence responsive, and scaling them would multiply the cost of
+// exactly the frames that get thrown away: a draft is the same size on a
+// hi-DPI display as anywhere else, and only the frame that stays gets the
+// extra pixels. So the step from draft to settled is larger on such a display
+// than on a 1x one -- which is the point, since that is where the settled
+// frame was worst.
+//
+// The ratio is a parameter rather than read from the widget here, which is
+// what lets the rule be tested without a scaled platform.
+[[nodiscard]] std::array<int, 2> volumeOutputSize(
+    QSize viewSize, qreal devicePixelRatio, bool draft) noexcept;
+
 // The volume view's state machine, extracted from MainWindow the way the
 // other collaborators are: it owns the Volume Rendering... action and the
 // Volume window, decides when a render is due -- a camera move, a changed

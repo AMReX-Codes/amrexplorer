@@ -63,6 +63,9 @@ public:
 
     [[nodiscard]] const OrthoCamera& camera() const noexcept;
     [[nodiscard]] QSize viewSize() const;
+    // The view's device pixel ratio: what its logical size has to be
+    // multiplied by to cover the pixels the display actually has.
+    [[nodiscard]] qreal viewDevicePixelRatio() const;
     [[nodiscard]] OpacityRamp ramp() const;
     [[nodiscard]] Quality quality() const;
 
@@ -79,6 +82,7 @@ signals:
     void paletteAlphaChanged();
     void qualityChanged();
     void viewResized();
+    void viewScaleChanged();
 
 private:
     void buildControls();

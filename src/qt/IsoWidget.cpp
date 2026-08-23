@@ -4,6 +4,7 @@
 
 #include <amrexplorer/render2d/Palette.hpp>
 
+#include <QEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
@@ -120,6 +121,25 @@ void IsoWidget::setColorPalette(const Palette* palette)
 {
     m_palette = palette;
     update();
+}
+
+bool IsoWidget::event(QEvent* event)
+{
+    // A scale change leaves the logical geometry alone, so no resize event
+    // follows it and nothing else would ask for a frame at the resolution the
+    // view now has.
+    //
+    // Qt 6.6 added this event; this builds against 6.4, where it does not
+    // exist. There the screenChanged connection in VolumeController is the
+    // only trigger, which covers a window moved between displays -- the case
+    // that prompted this -- but not the scale of one display changing under a
+    // window that stays where it is.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+    if (event->type() == QEvent::DevicePixelRatioChange) {
+        emit viewScaleChanged();
+    }
+#endif
+    return QWidget::event(event);
 }
 
 void IsoWidget::paintEvent(QPaintEvent* event)

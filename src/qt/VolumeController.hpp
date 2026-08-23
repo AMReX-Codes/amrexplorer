@@ -38,10 +38,10 @@ class VolumeWindow;
 // runs it on a worker through the session (locally or on the server), and
 // pushes the frame back into the window. One render is in flight at a time;
 // a change during one is remembered and rendered after it. While the camera
-// is moving, the view is being resized or an opacity slider is being dragged,
-// the frames are half-size, one-sample drafts; once that settles, a full
-// frame. Late results (a superseded generation, a closed
-// window, a shutting-down host) are dropped, never displayed.
+// is moving, the view is being resized, an opacity slider is being dragged or
+// a plotfile sequence is playing, the frames are half-size, one-sample drafts;
+// once that settles, a full frame. Late results (a superseded generation, a
+// closed window, a shutting-down host) are dropped, never displayed.
 class VolumeController final : public QObject {
     Q_OBJECT
 
@@ -63,6 +63,11 @@ public:
         // True once application shutdown began: late results are dropped
         // without touching the GUI.
         std::function<bool()> isShuttingDown;
+        // True while plotfile-sequence playback is running. Frames arrive
+        // faster than a full ray cast finishes, so they are drafted like a
+        // moving camera and the frame already up is left in place until the
+        // next draft replaces it.
+        std::function<bool()> sequencePlaying;
     };
 
     VolumeController(Hooks hooks, QObject* parent = nullptr);

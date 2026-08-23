@@ -1750,6 +1750,7 @@ void MainWindow::toggleSequencePlayback()
 
 void MainWindow::setPlaybackMode(PlaybackMode mode)
 {
+    const bool wasSequence = m_playbackMode == PlaybackMode::Sequence;
     m_playbackMode = mode;
     m_animationPanel->setSweepPlaying(mode == PlaybackMode::Sweep);
     m_animationPanel->setSequencePlaying(mode == PlaybackMode::Sequence);
@@ -1757,6 +1758,13 @@ void MainWindow::setPlaybackMode(PlaybackMode mode)
         m_playbackTimer->stop();
     } else {
         m_playbackTimer->start(m_animationPanel->frameDelayMs());
+    }
+    // Every frame of a sequence renders the volume as a draft, so what is
+    // standing in the window when playback stops is a half-size one. Ask for
+    // it again now that frames have stopped arriving; with no volume window
+    // open this does nothing.
+    if (wasSequence && mode != PlaybackMode::Sequence) {
+        m_volumeController->refresh();
     }
 }
 

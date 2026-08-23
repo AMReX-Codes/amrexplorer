@@ -14,6 +14,7 @@
 #include <amrexplorer/data/DatasetSession.hpp>
 
 #include <QApplication>
+#include <QColor>
 #include <QAction>
 #include <QCoreApplication>
 #include <QStringList>
@@ -296,11 +297,23 @@ int main(int argc, char** argv)
         };
         require(magenta(withFrame) > 0,
             "the backdrop was not drawn, so this cannot see it being dropped");
-        // Different 3-D geometry: the flag stays set, so only the clear can
-        // remove the frame.
+        // The same geometry pushed again keeps it. Every frame of a plotfile
+        // sequence re-pushes the geometry it already has, and dropping the
+        // frame each time is what left the volume window blank for the whole
+        // of a playback: the projection is in normalised domain coordinates,
+        // so an unmoved domain leaves the frame exactly where it belongs.
+        widget.setGeometry(geometry.metadata());
+        application.processEvents();
+        require(magenta(amrvis::qt::renderWidgetWithoutChildren(widget, 1.0))
+                > 0,
+            "re-pushing the same geometry dropped a frame that still fits it");
+        // Different 3-D geometry: the domain the frame was placed in has
+        // moved, so the frame goes. What places it is datasetSampleBounds --
+        // the finest level's extent -- and not physicalDomain, which that
+        // function ignores whenever there are levels, so moving the extent is
+        // what makes this a different geometry at all.
         auto other = geometry.metadata();
-        other.physicalDomain = amrvis::RealBox{
-            amrvis::Real3{{0.0, 0.0, 0.0}}, amrvis::Real3{{2.0, 3.0, 4.0}}};
+        other.levels.back().cellSize = {{1.0, 2.0, 3.0}};
         widget.setGeometry(other);
         application.processEvents();
         require(magenta(amrvis::qt::renderWidgetWithoutChildren(widget, 1.0))
@@ -311,6 +324,7 @@ int main(int argc, char** argv)
     auto session = std::make_shared<FakeSession>();
     std::shared_ptr<amrvis::DatasetSession> dataset = session;
     bool shuttingDown = false;
+    bool playingSequence = false;
     amrvis::qt::RangeController::Selection rangeSelection;
     rangeSelection.mode = amrvis::RangeMode::User;
     rangeSelection.userRange = std::pair{0.0, 4.0};
@@ -326,6 +340,7 @@ int main(int argc, char** argv)
             [] { return std::array<double, 3>{0.5, 1.0, 1.5}; },
             [] { return true; },
             [&shuttingDown] { return shuttingDown; },
+            [&playingSequence] { return playingSequence; },
         };
     };
 
@@ -642,6 +657,105 @@ int main(int argc, char** argv)
         rangeSelection.logarithmic = false;
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the logarithmic render did not finish");
+        controller.closeWindow();
+    }
+
+    // Sequence playback. Every frame of a sequence lands in
+    // configureForDataset, and a full-quality ray cast does not finish before
+    // the next frame cancels it -- so asking for one meant no frame was ever
+    // displayed and the window stayed blank for the whole run, while each
+    // frame still burned a grid sample and a ray cast. Playback drafts, the
+    // way a moving camera does, and leaves the frame already up in place.
+    {
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the opening frame was not displayed");
+        auto* const view = volumeWindow() != nullptr
+            ? volumeWindow()->findChild<amrvis::qt::IsoWidget*>() : nullptr;
+        require(view != nullptr, "no view in the volume window");
+        application.processEvents();
+        // Pixels of the frame FakeSession renders, as the view draws it:
+        // counting them is how "the window is not blank" gets stated. The
+        // match is exact, not near: the overlays drawn over the grey
+        // background -- slice planes, level outlines -- blend to within a
+        // couple of dozen levels of this colour, and a tolerance wide enough
+        // to allow for them counts about 1400 of them whether a frame is
+        // there or not. The frame is drawn with a smooth transform, so its
+        // edge pixels blend and only its interior is exact; that is still
+        // most of the view.
+        const auto rendered = [view] {
+            const auto image = amrvis::qt::renderWidgetWithoutChildren(*view, 1.0);
+            int found = 0;
+            for (int y = 0; y < image.height(); ++y) {
+                for (int x = 0; x < image.width(); ++x) {
+                    found += image.pixelColor(x, y) == QColor(0x40, 0x80, 0xC0)
+                        ? 1 : 0;
+                }
+            }
+            return found;
+        };
+        require(rendered() > 0,
+            "the opening frame is not on screen, so this cannot see it kept");
+        const auto full = session->requestsSoFar().back().outputSize;
+        require(session->requestsSoFar().back().samplesPerVoxel == 2,
+            "the opening frame was not a full one");
+
+        // A frame arriving while playback runs: drafted, and what is on
+        // screen stays there until the draft replaces it.
+        //
+        // The render is made slow on purpose. What has to hold is that the
+        // view still shows something *while* the next frame renders, so the
+        // check has to happen in that window -- with a fast render the draft
+        // lands first and then the assertions below pass on the new frame
+        // whether the old one was dropped or not.
+        session->delayMs = 400;
+        playingSequence = true;
+        auto before = session->requests.load();
+        auto framesBefore = observed.frames;
+        controller.configureForDataset();
+        waitFor(application, [&] { return session->requests == before + 1; },
+            "a sequence frame did not schedule a render");
+        const auto drafted = session->requestsSoFar().back();
+        require(drafted.samplesPerVoxel == 1
+                && drafted.outputSize[0] <= full[0] / 2 + 1
+                && drafted.outputSize[1] <= full[1] / 2 + 1,
+            "a sequence frame asked for a full ray cast, which the next frame "
+            "cancels before it finishes");
+        // Still mid-render, so anything on screen is the previous frame and
+        // not this one. Without this the two checks below prove nothing.
+        require(controller.renderInFlight() && observed.frames == framesBefore,
+            "the sequence render finished before the view could be checked");
+        require(rendered() > 0,
+            "a sequence frame blanked the view instead of leaving the "
+            "previous frame up while the next one rendered");
+        require(controller.lastFrame().width == full[0],
+            "a sequence frame dropped the frame it was still displaying");
+        session->delayMs = 0;
+        waitFor(application, [&] { return observed.frames == framesBefore + 1; },
+            "the drafted sequence frame was never displayed");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the drafted sequence frame did not finish");
+
+        // And the contrast that keeps those two honest: with playback stopped,
+        // the same call blanks the view and drops the frame, which is what a
+        // dataset switch has to do.
+        playingSequence = false;
+        before = session->requests.load();
+        controller.configureForDataset();
+        require(rendered() == 0,
+            "an ordinary dataset switch left the outgoing frame on screen");
+        require(controller.lastFrame().pixels.empty(),
+            "an ordinary dataset switch kept the outgoing frame");
+        waitFor(application, [&] { return session->requests == before + 1; },
+            "the dataset switch did not render");
+        const auto restored = session->requestsSoFar().back();
+        require(restored.samplesPerVoxel == 2 && restored.outputSize == full,
+            "the render after playback stopped is still a draft");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the full render did not finish");
         controller.closeWindow();
     }
     return 0;

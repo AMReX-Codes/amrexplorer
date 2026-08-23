@@ -70,14 +70,26 @@ IsoWidget::IsoWidget(QWidget* parent)
 
 void IsoWidget::setGeometry(const DatasetMetadata& metadata)
 {
+    const bool hadGeometry = m_hasGeometry;
+    const auto previousDomain = m_domain;
     m_hasGeometry = metadata.dimension == 3;
     m_domain = datasetSampleBounds(metadata);
     m_levels.clear();
-    // The frame belonged to the previous geometry: kept, it would be drawn
-    // under a wireframe for a domain it was not sampled from, and scaled by a
-    // projection that no longer describes it.
-    m_backdrop = QImage();
-    m_backdropCamera = OrthoCamera{};
+    // The frame belonged to the previous geometry: kept across a domain that
+    // moved, it would be drawn under a wireframe for a region it was not
+    // sampled from, and scaled by a projection that no longer describes it.
+    //
+    // A domain that did not move is the sequence case -- every frame of a
+    // plotfile sequence re-pushes the same geometry -- and there the frame is
+    // still in the right place. It is a previous time step's data, which is
+    // what keeps the view showing something while the next one renders
+    // instead of blanking on every frame. The projection is in normalised
+    // domain coordinates, so an unchanged domain leaves it unchanged; the
+    // level boxes are redrawn from the new metadata either way.
+    if (!m_hasGeometry || !hadGeometry || m_domain != previousDomain) {
+        m_backdrop = QImage();
+        m_backdropCamera = OrthoCamera{};
+    }
     if (m_hasGeometry) {
         m_levels.reserve(metadata.levels.size());
         for (const auto& level : metadata.levels) {

@@ -215,6 +215,16 @@ void VolumeController::configureForDataset()
     // for the outgoing dataset and must not be displayed against this one.
     cancel();
     pushGeometry();
+    // Sequence playback lands here once per frame. Dropping the frame each
+    // time left the window blank for the whole run -- a full ray cast never
+    // finished before the next frame cancelled it -- so the frame that is up
+    // stays up until the next draft replaces it. Nothing is shown against a
+    // geometry it does not belong to: a push that moved the domain drops the
+    // frame in IsoWidget::setGeometry, whatever this decides.
+    if (m_hooks.sequencePlaying && m_hooks.sequencePlaying()) {
+        scheduleRender();
+        return;
+    }
     m_window->clearFrame();
     // The frame just cleared belonged to the outgoing dataset; lastFrame()
     // would otherwise keep reporting it as this one's.
@@ -319,9 +329,13 @@ void VolumeController::startRender()
     request.camera = m_window->camera();
     // Mid-interaction (a moving camera, a resize, a dragged slider) gets a
     // half-size, single-sample draft; a settled view the full frame at the
-    // view's size.
-    const int width = std::max(1, m_interacting ? viewSize.width() / 2 : viewSize.width());
-    const int height = std::max(1, m_interacting ? viewSize.height() / 2 : viewSize.height());
+    // view's size. Sequence playback drafts for the same reason: the next
+    // frame arrives before a full ray cast could finish, so asking for one
+    // means every frame is cancelled unseen.
+    const bool draft = m_interacting
+        || (m_hooks.sequencePlaying && m_hooks.sequencePlaying());
+    const int width = std::max(1, draft ? viewSize.width() / 2 : viewSize.width());
+    const int height = std::max(1, draft ? viewSize.height() / 2 : viewSize.height());
     request.outputSize = {std::min(width, maxVolumeOutputDimension),
         std::min(height, maxVolumeOutputDimension)};
     // No request.logarithmic here: the choice built below carries it, and
@@ -329,7 +343,7 @@ void VolumeController::startRender()
     request.transfer = makeVolumeTransferFunction(
         m_hooks.palette ? m_hooks.palette() : builtinPalette(BuiltinPalette::Rainbow),
         m_window->ramp());
-    request.samplesPerVoxel = m_interacting ? 1 : quality.samplesPerVoxel;
+    request.samplesPerVoxel = draft ? 1 : quality.samplesPerVoxel;
     request.maximumVoxels = quality.maximumVoxels;
 
     const auto generation = ++m_generation;

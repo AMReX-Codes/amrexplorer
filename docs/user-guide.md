@@ -22,6 +22,9 @@ Pass two or more plotfile directories to open them as a time sequence:
 amrexplorer plt00000 plt00010 plt00020
 ```
 
+`amrexplorer --version` (or `-v`) prints the version and exits, as does
+`amrexplorer-server --version`. Both also take `-h` for `--help`.
+
 You can also start without a path and use the File menu:
 
 - **Open Plotfile Directory...** opens one AMReX plotfile.

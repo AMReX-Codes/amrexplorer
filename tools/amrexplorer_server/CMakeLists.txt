@@ -2,10 +2,8 @@ add_executable(amrexplorer_server main.cpp)
 set_target_properties(
     amrexplorer_server PROPERTIES OUTPUT_NAME amrexplorer-server)
 target_link_libraries(amrexplorer_server
-    PRIVATE amrexplorer::remote amrexplorer::warnings)
+    PRIVATE amrexplorer::remote amrexplorer::version amrexplorer::warnings)
 target_compile_features(amrexplorer_server PRIVATE cxx_std_20)
-target_compile_definitions(amrexplorer_server
-    PRIVATE AMREXPLORER_VERSION="${PROJECT_VERSION}")
 
 # The server's whole portability story is that it needs nothing but the C++
 # runtime -- four shared libraries against the GUI's forty-three. Linking that

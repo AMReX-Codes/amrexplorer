@@ -1,11 +1,79 @@
 cmake_minimum_required(VERSION 3.25)
 
+# The version is written in one place, include/amrexplorer/core/Version.hpp, so
+# that the string the binaries print and the number CMake knows cannot drift
+# apart. Read the x.y.z out of it here; the -dev suffix, if any, stays a C++
+# concern -- project(VERSION) takes numbers only.
+set(amrexplorer_version_header
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/amrexplorer/core/Version.hpp")
+file(READ "${amrexplorer_version_header}" amrexplorer_version_source)
+# The declaration itself, at the start of a line: a copy of it commented out
+# inside this header must not be picked up instead.
+if(NOT amrexplorer_version_source MATCHES
+        "\n[ \t]*inline[ \t]+constexpr[ \t]+const[ \t]+char[ \t]*\\*[ \t]*kVersion[ \t]*=[ \t]*\"([0-9]+\\.[0-9]+\\.[0-9]+)(-dev)?\"")
+    message(FATAL_ERROR
+        "no `inline constexpr const char* kVersion = \"x.y.z\"` or "
+        "\"x.y.z-dev\" declaration in ${amrexplorer_version_header} -- the "
+        "version, or the spelling of the line it is on, is not what CMake "
+        "reads it from")
+endif()
+set(amrexplorer_version "${CMAKE_MATCH_1}")
+# With the suffix, for the tests: project(VERSION) cannot carry it, and without
+# it they could not tell 0.3.0 from 0.3.0-dev in what the binaries print. Dots
+# quoted, since this lands in a regular expression.
+string(REPLACE "." "[.]" AMREXPLORER_VERSION_PATTERN
+    "${CMAKE_MATCH_1}${CMAKE_MATCH_2}")
+# file(READ) is not a dependency, so without this an edited version would keep
+# the old number in an existing build tree until something else re-ran cmake.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${amrexplorer_version_header}")
+
 project(
     amrexplorer
-    VERSION 0.3.0
+    VERSION ${amrexplorer_version}
     DESCRIPTION "Demand-driven AMR visualization"
     LANGUAGES CXX
 )
+
+# This build's git description, for --version. Written once now so the header
+# exists before anything compiles, and refreshed by amrexplorer_git_describe on
+# every build so a commit does not leave it naming the previous one.
+set(AMREXPLORER_GENERATED_INCLUDE_DIR "${PROJECT_BINARY_DIR}/generated")
+set(amrexplorer_git_describe_header
+    "${AMREXPLORER_GENERATED_INCLUDE_DIR}/amrexplorer/GitDescribe.hpp")
+execute_process(COMMAND "${CMAKE_COMMAND}"
+    "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DOUTPUT=${amrexplorer_git_describe_header}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/GitVersion.cmake"
+    RESULT_VARIABLE amrexplorer_git_describe_status)
+if(NOT amrexplorer_git_describe_status EQUAL 0)
+    # Otherwise the first sign of it is Version.cpp failing to find a header,
+    # which points at the consumer rather than at what did not run.
+    message(FATAL_ERROR
+        "cmake/GitVersion.cmake failed "
+        "(${amrexplorer_git_describe_status})")
+endif()
+add_custom_target(amrexplorer_git_describe ALL
+    BYPRODUCTS "${amrexplorer_git_describe_header}"
+    COMMAND "${CMAKE_COMMAND}"
+        "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+        "-DOUTPUT=${amrexplorer_git_describe_header}"
+        -P "${PROJECT_SOURCE_DIR}/cmake/GitVersion.cmake"
+    COMMENT "Reading the git version information"
+    VERBATIM)
+
+# Whether this build's --version will carry a git description, which the tests
+# have to know and must not guess at. Read from what the generator just wrote,
+# so every reason it declines -- no .git, no git, no commits, a repository it
+# refuses to describe -- is accounted for by construction. That the generator
+# does find a description where there is one to find is pinned separately, by
+# the git_version_generator test.
+file(READ "${amrexplorer_git_describe_header}" amrexplorer_git_describe_source)
+if(amrexplorer_git_describe_source MATCHES "AMREXPLORER_GIT_DESCRIBE \"\"")
+    set(AMREXPLORER_REPORTS_GIT_DESCRIBE FALSE)
+else()
+    set(AMREXPLORER_REPORTS_GIT_DESCRIBE TRUE)
+endif()
 
 option(AMREXPLORER_ENABLE_QT "Build the Qt 6 desktop application" ON)
 option(AMREXPLORER_ENABLE_VTK "Build the optional VTK volume module" OFF)

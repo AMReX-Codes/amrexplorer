@@ -1,5 +1,7 @@
 #include "MainWindow.hpp"
 #include "SshConnectArguments.hpp"
+
+#include <amrexplorer/core/Version.hpp>
 #ifdef AMREXPLORER_QT_TEST_ACCESS
 #include "SmokeHarness.hpp"
 #endif
@@ -48,7 +50,8 @@ void printUsage(std::FILE* output)
         "  --server PATH          remote amrexplorer-server executable, for\n"
         "                         when it is not on the non-interactive\n"
         "                         remote PATH; remembered per destination\n"
-        "  -h, --help             show this help\n\n"
+        "  -h, --help             show this help\n"
+        "  -v, --version          show the version\n\n"
         "See docs/user-guide.md for details.\n");
 }
 
@@ -344,11 +347,17 @@ int main(int argc, char* argv[])
         QApplication askpassApplication(askpassArgc, argv);
         return runSshAskpass(promptParts.join(QLatin1Char(' ')));
     }
-    // Answered before QApplication exists, so it works without a display.
+    // Answered before QApplication exists, so they work without a display.
     if (argc >= 2
         && (std::string_view(argv[1]) == "--help"
             || std::string_view(argv[1]) == "-h")) {
         printUsage(stdout);
+        return 0;
+    }
+    if (argc >= 2
+        && (std::string_view(argv[1]) == "--version"
+            || std::string_view(argv[1]) == "-v")) {
+        std::printf("amrexplorer %s\n", amrvis::versionText().c_str());
         return 0;
     }
     QApplication application(argc, argv);
@@ -445,7 +454,7 @@ int main(int argc, char* argv[])
                 window.startSshRemoteSession(request.destination,
                     request.serverExecutable, request.paths);
             });
-    } else if (argc >= 2 && !std::string_view(argv[1]).starts_with("--")) {
+    } else if (argc >= 2 && !std::string_view(argv[1]).starts_with("-")) {
         // One or more plotfile paths: a single path opens a dataset, two or
         // more open a plotfile sequence (matching the GUI's Open Plotfile
         // Sequence, which also takes plotfile directories).
@@ -462,10 +471,12 @@ int main(int argc, char* argv[])
             }
         });
     } else if (argc >= 2) {
-        // Anything starting with "--" that reached here matched no option, or
+        // Anything starting with "-" that reached here matched no option, or
         // matched one with the wrong number of arguments. Both used to fall
         // through to an empty window with no diagnostic, which reads as the
-        // option having been accepted and done nothing.
+        // option having been accepted and done nothing. A single dash counts:
+        // now that -h and -v exist, a mistyped one would otherwise be taken
+        // for a plotfile path and reported as an unopenable dataset.
         std::fprintf(
             stderr, "amrexplorer: unrecognized option '%s'\n\n", argv[1]);
         printUsage(stderr);

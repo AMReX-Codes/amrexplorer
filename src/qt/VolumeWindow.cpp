@@ -1,6 +1,7 @@
 #include "VolumeWindow.hpp"
 
 #include "IsoWidget.hpp"
+#include "OpacityCurveWidget.hpp"
 #include "WidgetImageExport.hpp"
 
 #include <QAction>
@@ -144,36 +145,21 @@ void VolumeWindow::buildControls()
     auto* form = new QFormLayout;
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
-    // The opacity window over the colour range: transparent below "from",
-    // ramping to the maximum at "to"; the labels read the slider positions.
-    const auto makeSlider = [panel](int initial) {
-        auto* slider = new QSlider(Qt::Horizontal, panel);
-        slider->setRange(0, 100);
-        slider->setValue(initial);
-        return slider;
-    };
-    m_lowSlider = makeSlider(0);
-    m_highSlider = makeSlider(100);
-    m_maximumSlider = makeSlider(100);
-    m_lowLabel = new QLabel(panel);
-    m_highLabel = new QLabel(panel);
-    m_maximumLabel = new QLabel(panel);
-    const auto rampRow = [panel](QSlider* slider, QLabel* label) {
-        auto* row = new QWidget(panel);
-        auto* rowLayout = new QHBoxLayout(row);
-        rowLayout->setContentsMargins(0, 0, 0, 0);
-        rowLayout->addWidget(slider, 1);
-        label->setMinimumWidth(36);
-        rowLayout->addWidget(label);
-        return row;
-    };
-    form->addRow(tr("Opacity from:"), rampRow(m_lowSlider, m_lowLabel));
-    form->addRow(tr("Opacity to:"), rampRow(m_highSlider, m_highLabel));
-    form->addRow(tr("Maximum opacity:"), rampRow(m_maximumSlider, m_maximumLabel));
+    // The opacity over the colour range, as a curve drawn on the palette it
+    // shapes. It replaces the "from" / "to" / maximum sliders: those were
+    // three numbers describing one linear ramp, and a field with something
+    // interesting between two duller features could not be given its own
+    // opacity without also revealing them. The default curve is that linear
+    // ramp, so an untouched window renders what it always did.
+    m_curve = new OpacityCurveWidget(panel);
+    m_curve->setObjectName(QStringLiteral("volumeOpacityCurve"));
+    form->addRow(tr("Opacity:"), m_curve);
     m_paletteAlpha = new QCheckBox(tr("Use palette alpha ramp"), panel);
+    m_paletteAlpha->setObjectName(QStringLiteral("volumePaletteAlphaCheck"));
     m_paletteAlpha->setToolTip(tr("Take each colour's opacity from the palette's "
                                   "alpha ramp (legacy .pal files carry one) "
-                                  "instead of the linear window above."));
+                                  "instead of the curve above, which is "
+                                  "disabled while this is on."));
     form->addRow(QString(), m_paletteAlpha);
     m_qualityCombo = new QComboBox(panel);
     m_qualityCombo->addItem(tr("Draft"), 0);
@@ -210,35 +196,16 @@ void VolumeWindow::buildControls()
     dock->setWidget(panel);
     addDockWidget(Qt::RightDockWidgetArea, dock);
 
-    const auto updateLabels = [this] {
-        m_lowLabel->setText(QStringLiteral("%1%").arg(m_lowSlider->value()));
-        m_highLabel->setText(QStringLiteral("%1%").arg(m_highSlider->value()));
-        m_maximumLabel->setText(
-            QStringLiteral("%1%").arg(m_maximumSlider->value()));
-    };
-    updateLabels();
     // The window is kept ordered: dragging one threshold past the other
     // pushes the other along.
-    connect(m_lowSlider, &QSlider::valueChanged, this, [this, updateLabels](int value) {
-        if (m_highSlider->value() < value) {
-            m_highSlider->setValue(value);
-        }
-        updateLabels();
-        emit rampChanged();
+    connect(m_curve, &OpacityCurveWidget::curveChanged, this,
+        [this] { emit rampChanged(); });
+    connect(m_paletteAlpha, &QCheckBox::toggled, this, [this] {
+        // The curve has no say while the palette's own ramp is in use, so it
+        // is disabled rather than left looking editable and doing nothing.
+        syncCurveEnabled();
+        emit paletteAlphaChanged();
     });
-    connect(m_highSlider, &QSlider::valueChanged, this, [this, updateLabels](int value) {
-        if (m_lowSlider->value() > value) {
-            m_lowSlider->setValue(value);
-        }
-        updateLabels();
-        emit rampChanged();
-    });
-    connect(m_maximumSlider, &QSlider::valueChanged, this, [this, updateLabels] {
-        updateLabels();
-        emit rampChanged();
-    });
-    connect(m_paletteAlpha, &QCheckBox::toggled, this,
-        [this] { emit paletteAlphaChanged(); });
     connect(m_qualityCombo, qOverload<int>(&QComboBox::currentIndexChanged), this,
         [this](int) { emit qualityChanged(); });
     connect(m_regionCheck, &QCheckBox::toggled, this,
@@ -266,12 +233,23 @@ void VolumeWindow::setSlicePlanesVisible(bool visible)
 
 void VolumeWindow::setColorPalette(const Palette* palette)
 {
+    m_curve->setColorPalette(palette);
     m_view->setColorPalette(palette);
+}
+
+void VolumeWindow::syncCurveEnabled()
+{
+    // The same condition ramp() reports usePaletteAlpha under, so what the
+    // control offers and what the render does cannot disagree: a ticked box on
+    // a palette with no ramp is not in effect, and the curve stays editable.
+    m_curve->setEnabled(
+        !(m_paletteAlpha->isEnabled() && m_paletteAlpha->isChecked()));
 }
 
 void VolumeWindow::setPaletteHasAlpha(bool hasAlpha)
 {
     m_paletteAlpha->setEnabled(hasAlpha);
+    syncCurveEnabled();
     if (!hasAlpha && m_paletteAlpha->isChecked()) {
         // ramp() ands in isEnabled(), so the render already ignores a ticked
         // box on a palette with no ramp -- but the box would sit there ticked,
@@ -283,7 +261,7 @@ void VolumeWindow::setPaletteHasAlpha(bool hasAlpha)
     }
     m_paletteAlpha->setToolTip(hasAlpha
         ? tr("Take each colour's opacity from the palette's alpha ramp "
-             "instead of the linear window above.")
+             "instead of the curve above, which is disabled while this is on.")
         : tr("This palette carries no alpha ramp; load a legacy .pal file "
              "with one to enable this."));
 }
@@ -342,17 +320,19 @@ qreal VolumeWindow::viewDevicePixelRatio() const
 
 OpacityRamp VolumeWindow::ramp() const
 {
-    // Every field comes from a slider in [0, 100], and buildControls keeps
-    // low <= high by pushing the other along. makeVolumeTransferFunction
-    // throws on a non-finite or inverted window, so anything that lets these
-    // controls produce one -- a text entry, a restored setting -- has to
-    // resolve it here rather than hand it to the render.
-
+    // usePaletteAlpha decides which of the two shapes the render reads. With
+    // it off, makeVolumeTransferFunction takes the curve. With it on, the
+    // curve stands aside and that function reads the window fields instead --
+    // which is why they are left at their defaults here rather than set from
+    // anything. At those defaults the window spans the whole range at full
+    // maximum, so it is no window at all and the palette's authored ramp comes
+    // back untouched, which is the reason to tick the box.
+    //
+    // The widget keeps the points sorted, in range, and at least two: the
+    // invariants the curve branch reads them under.
     OpacityRamp ramp;
-    ramp.lowThreshold = m_lowSlider->value() / 100.0;
-    ramp.highThreshold = m_highSlider->value() / 100.0;
-    ramp.maximumOpacity = m_maximumSlider->value() / 100.0;
     ramp.usePaletteAlpha = m_paletteAlpha->isEnabled() && m_paletteAlpha->isChecked();
+    ramp.curve = m_curve->curve();
     return ramp;
 }
 

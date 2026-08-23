@@ -607,6 +607,7 @@ if(TARGET amrexplorer_qt)
         "${PROJECT_SOURCE_DIR}/src/qt/VolumeWindow.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/VolumeWindow.hpp"
         "${PROJECT_SOURCE_DIR}/src/qt/IsoWidget.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/OpacityCurveWidget.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/IsoWidget.hpp"
     )
     set_target_properties(test_volume_controller PROPERTIES AUTOMOC ON)

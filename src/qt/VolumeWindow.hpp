@@ -23,6 +23,7 @@ class Palette;
 namespace amrvis::qt {
 
 class IsoWidget;
+class OpacityCurveWidget;
 
 // The Volume Rendering window: an IsoWidget in the middle -- the same
 // orthographic view as the main window's iso quadrant, drag to rotate, wheel
@@ -77,7 +78,8 @@ signals:
     // changed size, so the frame drawn in it is being stretched.
     void cameraChanged();
     void interactionEnded();
-    // rampChanged is the sliders, which arrive continuously while dragged;
+    // rampChanged is the opacity curve, which arrives continuously while
+    // dragged;
     // paletteAlphaChanged is the checkbox, one discrete choice like the
     // quality combo.
     void rampChanged();
@@ -89,20 +91,18 @@ signals:
 
 private:
     void buildControls();
+    // Follows the palette-alpha box: the curve is editable only when it is the
+    // opacity source.
+    void syncCurveEnabled();
     void exportImage();
 
     IsoWidget* m_view = nullptr;
-    QSlider* m_lowSlider = nullptr;
-    QSlider* m_highSlider = nullptr;
-    QSlider* m_maximumSlider = nullptr;
+    OpacityCurveWidget* m_curve = nullptr;
     QCheckBox* m_paletteAlpha = nullptr;
     QComboBox* m_qualityCombo = nullptr;
     QCheckBox* m_regionCheck = nullptr;
     QCheckBox* m_boxesCheck = nullptr;
     QCheckBox* m_outlineCheck = nullptr;
-    QLabel* m_lowLabel = nullptr;
-    QLabel* m_highLabel = nullptr;
-    QLabel* m_maximumLabel = nullptr;
     QLabel* m_status = nullptr;
     QLabel* m_rendering = nullptr;
 };

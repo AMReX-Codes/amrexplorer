@@ -308,18 +308,22 @@ domain while the slices show three planes through it -- so the same color can
 mean different values in the two. Pick File or Level when you need them to
 match. Its own controls set the opacity:
 
-- **Opacity from / to** window the color range: the opacity ramps linearly
-  from *from* to *to*, and everything outside that window -- below *from* and
-  above *to* -- is fully transparent. Narrow the window around the values of
-  interest to see them through the rest; note that raising *from* hides the
-  cold end and lowering *to* hides the hot end. Setting the two equal leaves a
-  single opaque shell at that value.
-- **Maximum opacity** scales the whole ramp; lower it to look deeper into a
-  dense field.
+- **Opacity** is a curve drawn over the palette it shapes: left to right is
+  the color range, bottom to top is transparent to opaque. Drag a point to
+  move it, click the plot to add one, right-click a point to remove it. The
+  two end points stay at the ends of the range and move only up and down, so
+  the curve always covers it.
+
+  It starts as a straight line from transparent at the cold end to opaque at
+  the hot end. Pull the low end up to see faint values, pull a stretch down to
+  look through a feature that is hiding what is behind it, or pull everything
+  down except one narrow band to leave a shell at those values. A band pulled
+  to the bottom is fully transparent.
 - **Use palette alpha ramp** takes each color's opacity from the palette's
-  own alpha ramp instead of the linear window. Legacy Amrvis `.pal` files
-  carry such a ramp (the shipped palettes have a plain 0-100 % ramp), and
-  the window still applies the *from* / *to* limits and the maximum to it.
+  own alpha ramp instead of the curve, exactly as the palette author wrote it.
+  Legacy Amrvis `.pal` files carry such a ramp; the shipped palettes have a
+  plain 0-100 % ramp. The two are alternatives, so the curve is greyed out
+  while this is ticked.
 - **Only the visible region** samples just the part of the domain the slice
   views are zoomed into, instead of all of it. The budget below is then spent
   on that part alone, so a region small enough to fit is drawn at the finest

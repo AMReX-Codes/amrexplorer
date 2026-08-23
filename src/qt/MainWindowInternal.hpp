@@ -135,11 +135,6 @@
 
 namespace amrvis::qt {
 
-// What --version prints, for the About box and the remote handshake: the
-// version from amrvis::kVersion plus this build's git description. Defined once
-// in MainWindow.cpp rather than inline here, so the one composition runs once.
-extern const std::string kVersion;
-
 // The single conversion from a rendered ImageBuffer to the QImage the views
 // display: ARGB32 over the buffer's rgba, mirrored vertically because plane
 // row 0 is the bottom row. Returns a detached copy, so it outlives the buffer.

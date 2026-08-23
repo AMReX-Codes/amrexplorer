@@ -92,12 +92,27 @@ endmacro()
 
 run_git(init -q .)
 run_git(commit -q --allow-empty -m "tag holder")
+
+# A loose ref is a file, and `"` is not a legal character in a Windows
+# filename, so git cannot create that tag there at all. The `;` half of the
+# case -- the CMake list separator, and the half that used to fail silently --
+# is legal everywhere, so only the quote is dropped on Windows.
+if(CMAKE_HOST_WIN32)
+    set(tagName "v9.9.9-test;semi")
+    set(expected "AMREXPLORER_GIT_DESCRIBE \"v9[.]9[.]9-test;semi\"")
+else()
+    set(tagName "v9.9.9-test\"quote;semi")
+    set(expected "AMREXPLORER_GIT_DESCRIBE \"v9[.]9[.]9-test[\\]\"quote;semi\"")
+endif()
+
 # Not through run_git: its ${ARGN} is a list, and the `;` in the tag would split
 # there into two arguments -- the very mangling this case exists to catch, one
-# layer up. Quoted argument, passed straight to git.
+# layer up. Quoted argument, passed straight to git. tag.gpgSign off with it:
+# a signed tag is an annotated tag, and an annotated tag with no message opens
+# an editor, which here would hang rather than fail.
 execute_process(
     COMMAND "${GIT_EXECUTABLE}" -c user.email=test@example.invalid
-        -c user.name=test tag "v9.9.9-test\"quote;semi"
+        -c user.name=test -c tag.gpgSign=false tag "${tagName}"
     WORKING_DIRECTORY "${tagged}"
     RESULT_VARIABLE gitStatus
     OUTPUT_QUIET
@@ -117,19 +132,22 @@ if(NOT status STREQUAL "0")
         "the generator failed on an awkward tag (${status}):\n${out}${err}")
 endif()
 
-# Spelled out rather than derived from the generator's own escaping, which is
-# the thing under test: the quote arrives backslash-escaped, the semicolon
+# Spelled out above rather than derived from the generator's own escaping, which
+# is the thing under test: the quote arrives backslash-escaped, the semicolon
 # arrives as itself.
 file(READ "${taggedOutput}" taggedHeader)
-if(NOT taggedHeader MATCHES
-        "AMREXPLORER_GIT_DESCRIBE \"v9[.]9[.]9-test[\\]\"quote;semi\"")
+if(NOT taggedHeader MATCHES "${expected}")
     message(FATAL_ERROR
-        "the tag did not reach the header intact:\n${taggedHeader}")
+        "the tag did not reach the header intact; expected to match\n"
+        "  ${expected}\nand the header holds\n${taggedHeader}")
 endif()
 
 # And the escaping is only right if what it produces is a header a compiler
 # accepts -- a stray quote closes the literal early and nothing else notices.
-if(CXX_COMPILER AND CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
+# The frontend, not just the id: clang-cl reports itself as Clang and takes
+# MSVC's flags, so it would fail this on the command line rather than the code.
+if(CXX_COMPILER AND CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$"
+        AND NOT CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     set(probe "${WORK}/tagged-probe.cpp")
     file(WRITE "${probe}"
         "#include \"GitDescribeTagged.hpp\"\n"

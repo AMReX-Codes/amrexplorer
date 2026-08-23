@@ -1,5 +1,7 @@
 #include "MainWindowInternal.hpp"
 
+#include <amrexplorer/core/Version.hpp>
+
 namespace amrvis::qt {
 
 void MainWindow::focusActiveViewForPanning()
@@ -384,7 +386,8 @@ void MainWindow::showAboutDialog()
            "<p>Demand-driven AMR visualization.</p>"
            "<p>Version %1</p>"
            "<p>A C++20 / Qt 6 application for inspecting AMReX plotfiles.</p>")
-            .arg(QString::fromStdString(kVersion)));
+            .arg(QString::fromStdString(amrvis::versionText())
+                     .toHtmlEscaped()));
 }
 
 double MainWindow::effectiveFixedScale(int factor) const

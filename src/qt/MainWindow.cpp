@@ -11,8 +11,6 @@
 
 namespace amrvis::qt {
 
-extern const std::string kVersion = amrvis::versionText();
-
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
@@ -280,7 +278,7 @@ MainWindow::MainWindow(QWidget* parent)
             },
             [] { return makeSettingsPtr(); },
         },
-        kVersion, this);
+        amrvis::versionText(), this);
     connect(m_remoteSession, &RemoteSessionController::sessionChanged, this,
         [this] { updateDiagnostics(); });
     connect(m_remoteSession, &RemoteSessionController::openRequested, this,

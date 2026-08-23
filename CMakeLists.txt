@@ -7,11 +7,13 @@ cmake_minimum_required(VERSION 3.25)
 set(amrexplorer_version_header
     "${CMAKE_CURRENT_SOURCE_DIR}/include/amrexplorer/core/Version.hpp")
 file(READ "${amrexplorer_version_header}" amrexplorer_version_source)
+# The declaration itself, at the start of a line: a commented example of one --
+# docs/building.md prints such a line -- must not be picked up instead.
 if(NOT amrexplorer_version_source MATCHES
-        "kVersion[ \t]*=[ \t]*\"([0-9]+\\.[0-9]+\\.[0-9]+)(-dev)?\"")
+        "\n[ \t]*inline constexpr const char\\* kVersion[ \t]*=[ \t]*\"([0-9]+\\.[0-9]+\\.[0-9]+)(-dev)?\"")
     message(FATAL_ERROR
-        "no kVersion = \"x.y.z\" or \"x.y.z-dev\" line in "
-        "${amrexplorer_version_header}")
+        "no `inline constexpr const char* kVersion = \"x.y.z\"` declaration "
+        "in ${amrexplorer_version_header}")
 endif()
 set(amrexplorer_version "${CMAKE_MATCH_1}")
 # file(READ) is not a dependency, so without this an edited version would keep

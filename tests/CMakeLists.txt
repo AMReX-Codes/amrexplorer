@@ -54,8 +54,20 @@ add_test(
         "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
         "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
         "-DCXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        "-DCXX_COMPILER_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/git_version_driver.cmake"
 )
+set_tests_properties(git_version_generator PROPERTIES TIMEOUT 60)
+
+# What the two binaries must print. Where this tree has git history, the
+# development version has to carry the description -- that end of the plumbing
+# (generator to header to binary) is otherwise asserted nowhere. A tarball
+# build has none to carry, so the requirement follows the tree.
+if(GIT_EXECUTABLE AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
+    set(amrexplorer_version_tail " [(]")
+else()
+    set(amrexplorer_version_tail "")
+endif()
 
 add_executable(test_view_data unit/test_view_data.cpp)
 target_link_libraries(test_view_data PRIVATE amrexplorer::data amrexplorer::warnings)
@@ -340,12 +352,19 @@ if(TARGET amrexplorer_remote)
         PASS_REGULAR_EXPRESSION "usage: amrexplorer-server"
         FAIL_REGULAR_EXPRESSION "server error")
     # The version CMake read out of Version.hpp and the string the binary
-    # composed from the same line, checked against each other.
-    add_test(NAME remote_server_version
-        COMMAND "$<TARGET_FILE:amrexplorer_server>" --version)
-    set_tests_properties(remote_server_version PROPERTIES
-        PASS_REGULAR_EXPRESSION
-            "^amrexplorer-server ${PROJECT_VERSION}(-dev)?( \\(|\n)")
+    # composed from the same line, checked against each other. No ^ anchor: the
+    # expression is matched against everything the run wrote, so a loader or
+    # sanitizer line ahead of the output would otherwise fail it. FAIL as well
+    # as PASS, because a pass expression makes ctest ignore the exit code.
+    foreach(flag --version -v)
+        string(REGEX REPLACE "^-+" "" name "${flag}")
+        add_test(NAME remote_server_version_${name}
+            COMMAND "$<TARGET_FILE:amrexplorer_server>" "${flag}")
+        set_tests_properties(remote_server_version_${name} PROPERTIES
+            PASS_REGULAR_EXPRESSION
+                "amrexplorer-server ${PROJECT_VERSION}(-dev)?${amrexplorer_version_tail}"
+            FAIL_REGULAR_EXPRESSION "server error")
+    endforeach()
     add_test(NAME remote_server_rejects_zero_datasets
         COMMAND "${CMAKE_COMMAND}"
             "-DAMREXPLORER_SERVER=$<TARGET_FILE:amrexplorer_server>"
@@ -529,12 +548,17 @@ if(TARGET amrexplorer_qt)
     # load, because --version is answered before QApplication exists and has to
     # keep working on a machine with no display. Were it ever moved after,
     # Qt would abort here instead of printing.
-    add_test(NAME qt_version
-        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=amrexplorer-no-plugin
-            "$<TARGET_FILE:amrexplorer_qt>" --version)
-    set_tests_properties(qt_version PROPERTIES
-        PASS_REGULAR_EXPRESSION
-            "^amrexplorer ${PROJECT_VERSION}(-dev)?( \\(|\n)")
+    foreach(flag --version -v)
+        string(REGEX REPLACE "^-+" "" name "${flag}")
+        add_test(NAME qt_version_${name}
+            COMMAND "${CMAKE_COMMAND}" -E env
+                QT_QPA_PLATFORM=amrexplorer-no-plugin
+                "$<TARGET_FILE:amrexplorer_qt>" "${flag}")
+        set_tests_properties(qt_version_${name} PROPERTIES
+            PASS_REGULAR_EXPRESSION
+                "amrexplorer ${PROJECT_VERSION}(-dev)?${amrexplorer_version_tail}"
+            FAIL_REGULAR_EXPRESSION "platform plugin")
+    endforeach()
 
     add_executable(test_sequence_controller
         unit/test_sequence_controller.cpp

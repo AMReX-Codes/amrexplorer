@@ -1,5 +1,6 @@
 #pragma once
 
+#include <amrexplorer/core/DerivedField.hpp>
 #include <amrexplorer/core/Metadata.hpp>
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Result.hpp>
@@ -154,6 +155,16 @@ struct FrameSliceSpec {
     std::vector<std::string> particleSpecies;
     double particleFraction = 1.0;
     std::uint64_t particleSeed = 0;
+    // Fields to compute rather than read (core/DerivedField.hpp). Installed by
+    // the session executeFrameLoad opens, so they follow the user's field
+    // selection across frames; a definition that does not resolve against a
+    // frame fails that frame's load with a named reason.
+    //
+    // Only executeFrameLoad can honour these -- it is what opens the session.
+    // A spec handed to executeSessionFrameLoad must leave them empty: that
+    // session is already open, and its field list is fixed. Callers gate on
+    // DatasetSession::supportsDerivedFields() rather than guessing.
+    std::vector<DerivedFieldDefinition> derivedFields;
 };
 
 // Combo data sentinel for "Update to Level N" entries, which composite

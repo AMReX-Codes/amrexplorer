@@ -1,5 +1,6 @@
 add_library(amrexplorer_core
     CoordinateSystem.cpp
+    DerivedField.cpp
     Metadata.cpp
     OrthoProjection.cpp
     Request.cpp
@@ -13,7 +14,10 @@ target_include_directories(amrexplorer_core
         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(amrexplorer_core PRIVATE amrexplorer::warnings)
+# expression is PUBLIC: DerivedField.hpp exposes CompiledExpression.
+target_link_libraries(amrexplorer_core
+    PUBLIC amrexplorer::expression
+    PRIVATE amrexplorer::warnings)
 target_compile_features(amrexplorer_core PUBLIC cxx_std_20)
 
 # Version.cpp is deliberately not part of amrexplorer_core. It is the one file

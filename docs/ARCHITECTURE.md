@@ -22,11 +22,13 @@ whole compute path can run — and be tested — headless.
   io            core         SessionValidation, ...)   render3d: VolumeRaycaster (data links it:
    |             |             |             |                    a session samples and renders)
   core         cache         core          remote      query:   SliceQuery, LineQuery, VolumeQuery
-                                                        io:      plotfile readers, FitsWriter
-                                                        core:    Geometry, Metadata, Request, Result,
-                                                                 Volume, OrthoProjection
+   |                          |                         io:      plotfile readers, FitsWriter
+expression               expression                     core:    Geometry, Metadata, Request, Result,
+                                                                 Volume, OrthoProjection, DerivedField
                                                         cache:   ByteLruCache
                                                         remote:  Frame/Channel, Codec, Connection, Server
+                                                        expression: the algebraic expressions behind
+                                                                 derived fields; depends on nothing
 ```
 
 The guiding split: **the GUI orchestrates, the pipeline computes.** `MainWindow`
@@ -142,6 +144,7 @@ either should preserve its invariants.
 | A slice request end to end | `src/pipeline/SlicePipeline.cpp` → `src/query/SliceQuery.cpp` |
 | A volume frame end to end | `src/pipeline/VolumePipeline.cpp` → `src/data/LocalDatasetSession.cpp` (`renderVolume`) → `src/query/VolumeQuery.cpp` → `src/render3d/VolumeRaycaster.cpp`; the camera math both the view and the caster use is `include/amrexplorer/core/OrthoProjection.hpp` |
 | Plotfile reading / hardening | `src/io/plotfile/`, `include/amrexplorer/io/detail/FabHeaderParsing.hpp` |
+| A derived field end to end | `include/amrexplorer/core/DerivedField.hpp` (resolve a definition against a dataset) → `src/io/plotfile/PlotfileDataset.cpp` (`readDerivedBlock`) → `src/expression/Expression.cpp`. Installed when the dataset is opened, so above `PlotfileDataset` a derived field is an ordinary `FieldId` |
 | The remote protocol | `src/remote/Codec.hpp`, `Frame.cpp` (Channel/Socket), `Server.cpp`, `Connection.cpp` |
 | Response validation | `src/data/SessionValidation.cpp` |
 | The GUI ↔ worker handoff | `src/qt/MainWindowSlice.cpp` (request/arrival), `SequenceController` |

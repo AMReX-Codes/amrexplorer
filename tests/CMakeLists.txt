@@ -25,6 +25,11 @@ target_link_libraries(
 )
 add_test(NAME expression COMMAND test_expression)
 
+add_executable(test_derived_field unit/test_derived_field.cpp)
+target_link_libraries(
+    test_derived_field PRIVATE amrexplorer::core amrexplorer::warnings)
+add_test(NAME derived_field COMMAND test_derived_field)
+
 add_executable(test_core_metadata unit/test_core_metadata.cpp)
 target_link_libraries(test_core_metadata PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME core_metadata COMMAND test_core_metadata)
@@ -475,6 +480,12 @@ target_link_libraries(
     PRIVATE amrexplorer::pipeline amrexplorer::warnings
 )
 add_test(NAME display_transitions COMMAND test_display_transitions)
+
+add_executable(test_derived_field_query integration/test_derived_field_query.cpp)
+target_link_libraries(
+    test_derived_field_query PRIVATE amrexplorer::data amrexplorer::query
+    amrexplorer::warnings)
+add_test(NAME derived_field_query COMMAND test_derived_field_query)
 
 add_executable(test_slice_query integration/test_slice_query.cpp)
 target_link_libraries(test_slice_query PRIVATE amrexplorer::query amrexplorer::warnings)

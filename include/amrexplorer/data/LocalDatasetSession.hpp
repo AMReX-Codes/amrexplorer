@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/cache/ByteLruCache.hpp>
+#include <amrexplorer/core/DerivedField.hpp>
 #include <amrexplorer/data/DatasetSession.hpp>
 
 #include <array>
@@ -12,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <vector>
 
 namespace amrvis {
 
@@ -50,12 +52,17 @@ class LocalDatasetSession final : public DatasetSession {
 public:
     // The file version comes from the dataset's own metadata read; nothing
     // re-opens the Header for it.
+    // `derivedFields` are passed straight to the dataset, which resolves them
+    // against its stored field list and fails the open if one does not
+    // resolve (see PlotfileDataset).
     explicit LocalDatasetSession(std::shared_ptr<PlotfileDataset> dataset);
     LocalDatasetSession(const std::filesystem::path& path, DatasetId id,
-        std::uint64_t cacheBudgetBytes, StopToken cancellation = {});
+        std::uint64_t cacheBudgetBytes, StopToken cancellation = {},
+        std::vector<DerivedFieldDefinition> derivedFields = {});
     LocalDatasetSession(std::filesystem::path dataRoot, DatasetId id,
         std::uint64_t cacheBudgetBytes, PlotfileMetadataResult metadata,
-        StopToken cancellation = {});
+        StopToken cancellation = {},
+        std::vector<DerivedFieldDefinition> derivedFields = {});
 
     [[nodiscard]] DatasetId id() const noexcept override;
     [[nodiscard]] const DatasetMetadata& metadata() const noexcept override;
@@ -104,6 +111,16 @@ public:
     // it is false only while a pinned grid still exceeds it.
     [[nodiscard]] bool setVolumeGridCacheBudget(std::uint64_t bytes);
 
+    // Locally there is nothing between the definitions and the dataset that
+    // opens with them.
+    [[nodiscard]] bool supportsDerivedFields() const noexcept override
+    {
+        return true;
+    }
+    [[nodiscard]] std::size_t storedFieldCount() const noexcept override;
+    [[nodiscard]] std::vector<DerivedFieldSkip> skippedDerivedFields()
+        const override;
+
     // The block pool alone. setCacheBudget deliberately moves both pools,
     // which is what a user setting one number wants -- but a server applying
     // a *client's* requested budget must not let it raise the sampled-grid
@@ -128,6 +145,8 @@ private:
     MetadataReadMetrics m_metadataMetrics;
     std::string m_fileVersion;
     std::vector<ParticleSpeciesMetadata> m_particleSpecies;
+    std::size_t m_storedFieldCount = 0;
+    std::vector<DerivedFieldSkip> m_skippedDerivedFields;
     mutable std::mutex m_mutex;
     std::shared_ptr<PlotfileDataset> m_dataset;
     // File-scope ranges for a standalone FAB, by field. These are scanned out

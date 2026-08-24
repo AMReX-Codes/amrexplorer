@@ -105,6 +105,10 @@ LocalDatasetSession::LocalDatasetSession(
     , m_particleSpecies(
           dataset ? dataset->particleSpecies()
                   : std::vector<ParticleSpeciesMetadata>{})
+    , m_storedFieldCount(dataset ? dataset->storedFieldCount() : 0)
+    , m_skippedDerivedFields(
+          dataset ? dataset->skippedDerivedFields()
+                  : std::vector<DerivedFieldSkip>{})
     , m_dataset(std::move(dataset))
 {
     if (!m_dataset) {
@@ -120,17 +124,20 @@ LocalDatasetSession::LocalDatasetSession(
 }
 
 LocalDatasetSession::LocalDatasetSession(const std::filesystem::path& path,
-    DatasetId id, std::uint64_t cacheBudgetBytes, StopToken cancellation)
+    DatasetId id, std::uint64_t cacheBudgetBytes, StopToken cancellation,
+    std::vector<DerivedFieldDefinition> derivedFields)
     : LocalDatasetSession(std::make_shared<PlotfileDataset>(
-          path, id, cacheBudgetBytes, cancellation))
+          path, id, cacheBudgetBytes, cancellation, std::move(derivedFields)))
 {
 }
 
 LocalDatasetSession::LocalDatasetSession(std::filesystem::path dataRoot,
     DatasetId id, std::uint64_t cacheBudgetBytes,
-    PlotfileMetadataResult metadata, StopToken cancellation)
+    PlotfileMetadataResult metadata, StopToken cancellation,
+    std::vector<DerivedFieldDefinition> derivedFields)
     : LocalDatasetSession(std::make_shared<PlotfileDataset>(dataRoot, id,
-          cacheBudgetBytes, std::move(metadata), cancellation))
+          cacheBudgetBytes, std::move(metadata), cancellation,
+          std::move(derivedFields)))
 {
 }
 
@@ -282,6 +289,18 @@ ParticleSample LocalDatasetSession::requestParticleSample(
         m_metadata, m_particleSpecies, species, fraction);
     return requireDataset()->requestParticleSample(
         species, fraction, seed, cancellation, maximumPoints);
+}
+
+std::size_t LocalDatasetSession::storedFieldCount() const noexcept
+{
+    // Recorded at construction, like the metadata copy above it: the dataset
+    // may be closed by the time anything asks.
+    return m_storedFieldCount;
+}
+
+std::vector<DerivedFieldSkip> LocalDatasetSession::skippedDerivedFields() const
+{
+    return m_skippedDerivedFields;
 }
 
 bool LocalDatasetSession::supportsVolumeRendering() const noexcept

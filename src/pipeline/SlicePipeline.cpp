@@ -787,10 +787,11 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
     if (preparedMetadata) {
         dataset = std::make_shared<LocalDatasetSession>(
             std::move(dataRoot), datasetId, cacheBudgetBytes,
-            std::move(*preparedMetadata), cancellation);
+            std::move(*preparedMetadata), cancellation, spec.derivedFields);
     } else {
         dataset = std::make_shared<LocalDatasetSession>(
-            path, datasetId, cacheBudgetBytes, cancellation);
+            path, datasetId, cacheBudgetBytes, cancellation,
+            spec.derivedFields);
     }
     return executeSessionFrameLoad(
         std::move(dataset), spec, cancellation);

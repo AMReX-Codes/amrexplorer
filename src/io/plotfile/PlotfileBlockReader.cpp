@@ -88,7 +88,9 @@ IntBox grownBox(const IntBox& source, const Int3& ghost, int dimension)
     return detail::grownBox<BlockReadError>(source, ghost, dimension);
 }
 
-std::uint64_t pointCount(const IntBox& box, int dimension)
+} // namespace
+
+std::uint64_t fabPointCount(const IntBox& box, int dimension)
 {
     std::uint64_t result = 1;
     for (int axis = 0; axis < dimension; ++axis) {
@@ -106,8 +108,6 @@ std::uint64_t pointCount(const IntBox& box, int dimension)
     }
     return result;
 }
-
-} // namespace
 
 FabValues::FabValues(std::vector<float> values) noexcept
     : m_storage(std::move(values))
@@ -211,7 +211,7 @@ BlockReadResult PlotfileBlockReader::readBlock(
         throw BlockReadError("FAB and VisMF component counts disagree");
     }
 
-    const auto valuesPerComponent = pointCount(header.box, m_metadata->dimension);
+    const auto valuesPerComponent = fabPointCount(header.box, m_metadata->dimension);
     if (valuesPerComponent > std::numeric_limits<std::uint64_t>::max() / header.encoding.bytes) {
         throw BlockReadError("FAB component byte count overflows");
     }

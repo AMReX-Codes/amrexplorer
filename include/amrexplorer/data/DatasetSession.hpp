@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/cache/CacheMetrics.hpp>
+#include <amrexplorer/core/DerivedField.hpp>
 #include <amrexplorer/core/Metadata.hpp>
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Statistics.hpp>
@@ -11,6 +12,7 @@
 #include <amrexplorer/io/ParticleReader.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -94,6 +96,33 @@ public:
         static_cast<void>(cancellation);
         throw std::runtime_error(
             "volume rendering is not supported by this session");
+    }
+
+    // How many of metadata().fields the dataset stores rather than computes;
+    // any derived fields follow them. Everything, unless the session installed
+    // derived fields.
+    [[nodiscard]] virtual std::size_t storedFieldCount() const noexcept
+    {
+        return metadata().fields.size();
+    }
+    // The derived-field definitions this session was opened with and could not
+    // install, with the reason for each (core/DerivedField.hpp). Empty for a
+    // session that installs none.
+    [[nodiscard]] virtual std::vector<DerivedFieldSkip> skippedDerivedFields()
+        const
+    {
+        return {};
+    }
+
+    // Whether this session can present fields computed from expressions over
+    // the stored ones (core/DerivedField.hpp). They are installed when the
+    // dataset is opened, so a session that can offer them is one the GUI can
+    // reopen with a new definition list -- which a remote session cannot until
+    // the protocol carries them. False by default so no implementation, and no
+    // test fake, claims it by accident.
+    [[nodiscard]] virtual bool supportsDerivedFields() const noexcept
+    {
+        return false;
     }
 
     [[nodiscard]] virtual CacheMetrics cacheMetrics() const = 0;

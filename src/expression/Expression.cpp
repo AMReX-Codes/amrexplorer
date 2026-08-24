@@ -4,10 +4,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <locale>
+#include <cstdlib>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -61,24 +60,34 @@ std::string errorMessage(std::string message, std::size_t offset)
     return std::move(message) + " at byte " + std::to_string(offset);
 }
 
-// One source byte as it can safely appear in a message: printable ASCII as
-// itself, anything else as \xNN. Messages reach a Qt label as UTF-8, and a
-// byte spliced straight out of the source is not a character -- a pasted
-// U+2212 minus or U+00D7 times, which is what copying a formula out of a paper
-// gives you, is two or three bytes and each one alone is invalid UTF-8 that
-// renders as U+FFFD.
-std::string quotedByte(char value)
+// Source bytes as they can safely appear in a message: printable ASCII as
+// itself, anything else as \xNN. Messages reach a Qt label as UTF-8, and bytes
+// spliced straight out of the source are not characters -- a pasted U+2212
+// minus or U+00D7 times, which is what copying a formula out of a paper gives
+// you, is two or three bytes, and each one alone is invalid UTF-8 that renders
+// as U+FFFD. Whole tokens go through this too, not just the lexer's stray
+// byte: a ${...} name is taken verbatim, so a token can carry anything.
+std::string quotedText(std::string_view text)
 {
-    const auto byte = static_cast<unsigned char>(value);
-    if (byte >= 0x20 && byte < 0x7F) {
-        return "'" + std::string(1, value) + "'";
-    }
     constexpr std::string_view digits = "0123456789abcdef";
-    std::string quoted = "'\\x";
-    quoted += digits[byte >> 4U];
-    quoted += digits[byte & 0x0FU];
+    std::string quoted = "'";
+    for (const auto value : text) {
+        const auto byte = static_cast<unsigned char>(value);
+        if (byte >= 0x20 && byte < 0x7F) {
+            quoted += value;
+            continue;
+        }
+        quoted += "\\x";
+        quoted += digits[byte >> 4U];
+        quoted += digits[byte & 0x0FU];
+    }
     quoted += "'";
     return quoted;
+}
+
+std::string quotedByte(char value)
+{
+    return quotedText(std::string_view(&value, 1));
 }
 
 enum class TokenKind : std::uint8_t {
@@ -225,7 +234,7 @@ private:
         const auto start = m_position;
         while (m_position < m_source.size() && m_source[m_position] != '}') {
             if (m_source[m_position] == '\n' || m_source[m_position] == '\r') {
-                throw ExpressionError("newlines are not allowed", m_position);
+                throw ExpressionError("newlines are not allowed", offset);
             }
             // Refused rather than taken as part of the name, so a mistyped
             // nested reference ("${a${b}}") is a syntax error here instead of
@@ -283,35 +292,36 @@ private:
         }
 
         const auto text = m_source.substr(offset, m_position - offset);
-        // A literal whose significand is zero *is* zero, whatever its exponent
-        // says: "0e-9999" is 0.0 and not an error. Settled here, before the
-        // conversion, because the libraries disagree about how they report an
-        // out-of-range exponent -- some return zero with no error, others set
-        // the failbit -- and on the latter a verdict-driven check would reject
-        // this. The significand is the one thing that does not vary.
-        if (!hasNonzeroSignificand(text)) {
-            return {
-                .kind = TokenKind::Number,
-                .offset = offset,
-                .text = text,
-                .number = 0.0
-            };
-        }
-        double result = 0.0;
-        // The classic locale, not the process one: a decimal point must mean a
-        // decimal point wherever the viewer runs.
-        std::istringstream conversion(std::string{text});
-        conversion.imbue(std::locale::classic());
-        conversion >> result;
-        // The three ways a nonzero significand leaves the representable range,
-        // which the libraries also disagree about: a failbit, an infinity, and
-        // a silent zero from an underflowing exponent. Rejecting all three
-        // keeps the same source an error everywhere.
-        if (conversion.fail() || !std::isfinite(result) || result == 0.0) {
-            throw ExpressionError("numeric literal is out of range", offset);
-        }
-        if (!conversion.eof()) {
+        // strtod rather than an imbued istringstream, which is what this used
+        // to be. A stream's only signal for an overflowing literal is its
+        // failbit -- libstdc++ clamps the value to DBL_MAX rather than handing
+        // back an infinity -- and that same failbit is how libc++ and MSVC
+        // report the ERANGE a *legitimate* denormal raises. So no stream-based
+        // rule tells "1e9999" from "1e-320" the same way on every library, and
+        // the one written here accepted a denormal on Linux and would have
+        // refused it on macOS. strtod's contract separates them: an overflow
+        // is an infinity, a denormal is a finite nonzero. The plotfile reader
+        // settled on the same thing for the same reason (readStatisticValue,
+        // which spells out the ERANGE half). It reads LC_NUMERIC, which main()
+        // pins to "C" once, deliberately, for every call site like this one.
+        const std::string token{text};
+        const char* begin = token.c_str();
+        char* end = nullptr;
+        const double result = std::strtod(begin, &end);
+        if (end != begin + token.size()) {
+            // Unreachable through this lexer, whose numeric grammar is a
+            // subset of strtod's. Kept because that subset relationship is the
+            // assumption this conversion rests on, and the two grammars are
+            // under no obligation to stay in step.
             throw ExpressionError("invalid numeric literal", offset);
+        }
+        // Out of range two ways, neither of them a library's verdict: an
+        // overflow is an infinity, and an underflow is a zero whose digits
+        // were not. A significand that is itself zero is simply zero, whatever
+        // its exponent says, so "0e-9999" is 0.0 and not an error.
+        if (!std::isfinite(result)
+            || (result == 0.0 && hasNonzeroSignificand(text))) {
+            throw ExpressionError("numeric literal is out of range", offset);
         }
         return {
             .kind = TokenKind::Number,
@@ -391,7 +401,7 @@ private:
         if (m_current.kind == TokenKind::End) {
             fail("unexpected end of expression");
         }
-        fail("unexpected token '" + std::string(m_current.text) + "'");
+        fail("unexpected token " + quotedText(m_current.text));
     }
 
     void expect(TokenKind kind, std::string message)

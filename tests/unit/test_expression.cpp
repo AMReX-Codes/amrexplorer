@@ -82,6 +82,13 @@ void requireBatchMatchesScalar(
         "test supplied the wrong column count for '" + std::string(source)
             + "'");
     const auto points = columns.empty() ? std::size_t{0} : columns[0].size();
+    // Or it would run the batch evaluator over a zero-length output, skip the
+    // comparison loop and report success having compared nothing. The
+    // constant-program case is covered by its own block below, deliberately,
+    // because this helper cannot express it.
+    require(!columns.empty() && points > 0,
+        "requireBatchMatchesScalar was given nothing to compare for '"
+            + std::string(source) + "'");
 
     std::vector<std::span<const double>> views;
     views.reserve(columns.size());
@@ -306,6 +313,18 @@ int main()
         requireError("1e9999", 0, "out of range");
         requireError("1e-9999", 0, "out of range");
         requireError(".1e-9999", 0, "out of range");
+        // The accepted edge of the range, which is where the libraries
+        // disagree: a denormal is finite and nonzero, so it is a number, and
+        // only a rule that consults the library's error flag calls it out of
+        // range (strtod raises ERANGE for one). Exact comparisons: the same
+        // digits, converted by the same correctly-rounded conversion.
+        require(evaluate("1e-310") == 1e-310, "a denormal literal was rejected");
+        require(evaluate("4.9e-324") == 4.9e-324
+                && evaluate("4.9e-324") > 0.0,
+            "the smallest denormal was rejected");
+        // ...and the other end of the zero-significand shortcut.
+        require(evaluate("0e9999") == 0.0,
+            "a zero significand with a huge exponent was rejected");
         requireError("$density", 0, "expected '{'");
         // A brace inside the name is refused rather than taken as part of it,
         // which is what the documented grammar says and what turns a mistyped
@@ -315,8 +334,13 @@ int main()
         requireError("1 + ${", 4, "unterminated");
         requireError("1 + ${density", 4, "unterminated");
         requireError("${}", 0, "names no field");
-        requireError("${a\nb}", 3, "newlines are not allowed");
-        requireError("${a}${b}", 4, "unexpected token");
+        // At the '$', like every other failure inside a braced name -- the
+        // offset names the token, not the byte the scan happened to stop on.
+        requireError("${a\nb}", 0, "newlines are not allowed");
+        // A token's own text is escaped as well: a ${...} name is verbatim, so
+        // it can carry bytes that are not characters.
+        requireError("${a}${b}", 4, "unexpected token 'b'");
+        requireError("${a}${\xe2}", 4, "unexpected token '\\xe2'");
 
         // Deep nesting is bounded rather than left to the C++ stack: both the
         // parenthesis descent and a sign chain.

@@ -58,7 +58,19 @@ std::size_t insertOpacityPoint(
 {
     const OpacityPoint point{std::clamp(position, 0.0, 1.0),
         std::clamp(opacity, 0.0, 1.0)};
-    const auto at = std::upper_bound(curve.begin(), curve.end(), point,
+    // A curve too short to have two ends has no order to keep.
+    if (curve.size() < 2) {
+        curve.push_back(point);
+        return curve.size() - 1;
+    }
+    // Between the two end points and never outside them, so only the interior
+    // is searched. They anchor the curve to the ends of the range, and a click
+    // on the right edge of the plot clamps to position 1.0, which is not less
+    // than the last point's: searching the whole curve would append past that
+    // anchor. The new point would then be the end -- which removeOpacityPoint
+    // refuses to delete, and which opacityCurveValue extends flat, so it would
+    // shape a single entry of the table and nothing else.
+    const auto at = std::upper_bound(curve.begin() + 1, curve.end() - 1, point,
         [](const OpacityPoint& left, const OpacityPoint& right) {
             return left.position < right.position;
         });

@@ -1091,11 +1091,24 @@ int main(int argc, char** argv)
         require(std::abs(static_cast<double>(dragged[midEntry]) - 0.25) <= 0.06,
             "the drag did not reach the opacities in the request");
 
-        // The arrow keys, which is what the mouse cannot do: the drag above
-        // placed the point to the nearest pixel, and these move it by less
-        // than one. The point the press took is still the selected one, so
-        // the nudge lands on it without another click.
+        // The arrow keys: exact repeatable steps, where the drag above could
+        // only leave the point wherever the cursor's pixel fell. The point the
+        // press took is still the selected one, so the nudge lands on it
+        // without another click.
+        //
+        // Quiesced first. The drag armed the settle timer and the release
+        // emits nothing to stop it, so its full frame arriving later would
+        // stand in for the render the keys are supposed to cause -- the same
+        // trap the removal check below documents, which this check was blind
+        // to until here.
+        settle(application, 500);
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the drag's renders did not finish");
         auto nudged = session->requests.load();
+        settle(application, 150);
+        require(session->requests == nudged,
+            "the volume was still rendering of its own accord, so the render "
+            "below could not be the keys' doing");
         const auto placed = widget->curve()[1];
         const auto sendKey = [widget](int key, Qt::KeyboardModifiers modifiers) {
             QKeyEvent pressed(QEvent::KeyPress, key, modifiers);

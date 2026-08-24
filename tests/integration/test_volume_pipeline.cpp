@@ -297,6 +297,29 @@ int main()
                     && curve[1].opacity == 1.0,
                 "an inserted point was not sorted and clamped");
 
+            // The edges of the plot, where a press clamps to exactly 0.0 or
+            // 1.0. Both have to land inside the two anchors: a point appended
+            // past the last one would become the end, which cannot be removed
+            // and which opacityCurveValue extends flat, so it would shape one
+            // entry of the table and nothing else.
+            {
+                auto edge = amrvis::defaultOpacityCurve();
+                const auto top = amrvis::insertOpacityPoint(edge, 1.0, 0.5);
+                require(top == 1 && edge.size() == 3,
+                    "a point inserted at the top of the range did not land "
+                    "inside the curve's ends");
+                require(edge.back() == amrvis::OpacityPoint{1.0, 1.0},
+                    "inserting at the top of the range displaced the anchor");
+                require(amrvis::removeOpacityPoint(edge, top),
+                    "a point inserted at the top of the range could not be "
+                    "removed again");
+                const auto bottom = amrvis::insertOpacityPoint(edge, 0.0, 0.5);
+                require(bottom == 1
+                        && edge.front() == amrvis::OpacityPoint{0.0, 0.0},
+                    "inserting at the bottom of the range displaced the "
+                    "anchor");
+            }
+
             // An interior point cannot pass its neighbours.
             amrvis::moveOpacityPoint(curve, 2, 5.0, 0.5);
             require(curve[2].position == curve[3].position,

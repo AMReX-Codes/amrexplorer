@@ -323,10 +323,12 @@ match. Its own controls set the opacity:
   two end points stay at the ends of the range and move only up and down, so
   the curve always covers it.
 
-  The point you last clicked stays selected -- it is the filled one -- and the
-  arrow keys move it: one color slot sideways or one percent up and down,
-  which is finer than the mouse can place it, and ten times that with Shift
-  held. Drop a point roughly where you want it and then tune it with the keys.
+  The point you last clicked stays selected -- it is the one marked in the
+  highlight color while the plot has the keyboard focus -- and the arrow keys
+  move it in exact steps: one color slot sideways, one percent up and down,
+  and ten times either with Shift held. Drop a point roughly where you want it
+  with the mouse, then step it into place with the keys, which is easier than
+  holding a drag steady and repeatable when you want the same value twice.
 
   It starts as a straight line from transparent at the cold end to opaque at
   the hot end. Pull the low end up to see faint values, pull a stretch down to

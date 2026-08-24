@@ -1,5 +1,6 @@
 #include "OpacityCurveWidget.hpp"
 
+#include <QFocusEvent>
 #include <QImage>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -158,11 +159,14 @@ void OpacityCurveWidget::paintEvent(QPaintEvent* event)
     painter.drawPolyline(line);
 
     // The control points last, over the curve they define. The selected one is
-    // filled, so which point the arrow keys will move is visible rather than
-    // remembered.
+    // marked in the highlight colour, so which point the arrow keys will move
+    // is visible rather than remembered -- but only while the keys would
+    // actually come here, or the mark would advertise an edit that is going to
+    // whichever control took the focus instead.
+    const auto marked = hasFocus() ? m_selected : -1;
     for (std::size_t index = 0; index < m_curve.size(); ++index) {
         const auto at = widgetPosition(m_curve[index]);
-        painter.setBrush(palette().color(static_cast<int>(index) == m_selected
+        painter.setBrush(palette().color(static_cast<int>(index) == marked
                 ? QPalette::Highlight
                 : QPalette::Base));
         painter.setPen(QPen(palette().color(QPalette::WindowText),
@@ -175,6 +179,20 @@ void OpacityCurveWidget::paintEvent(QPaintEvent* event)
     painter.setBrush(Qt::NoBrush);
     painter.setPen(palette().color(QPalette::Mid));
     painter.drawRect(plot);
+}
+
+void OpacityCurveWidget::focusInEvent(QFocusEvent* event)
+{
+    QWidget::focusInEvent(event);
+    // The selection is kept across the focus change rather than dropped, so
+    // coming back from another window finds the same point marked again.
+    update();
+}
+
+void OpacityCurveWidget::focusOutEvent(QFocusEvent* event)
+{
+    QWidget::focusOutEvent(event);
+    update();
 }
 
 void OpacityCurveWidget::keyPressEvent(QKeyEvent* event)

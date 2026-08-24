@@ -30,8 +30,9 @@ class OpacityCurveWidget;
 // to zoom, XY/XZ/YZ presets, the domain wireframe and the slice planes, and
 // the grid boxes when they are switched on -- with the rendered volume drawn
 // under the wireframe, and a dock of controls: the opacity curve (or the
-// palette's own alpha ramp), the render quality, and the overlay toggles. The window holds no data logic: VolumeController
-// decides when to render and pushes each frame here.
+// palette's own alpha ramp), the render quality, and the overlay toggles. The
+// window holds no data logic: VolumeController decides when to render and
+// pushes each frame here.
 class VolumeWindow final : public QMainWindow {
     Q_OBJECT
 

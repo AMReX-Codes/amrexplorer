@@ -206,13 +206,20 @@ void VolumeWindow::buildControls()
     form->addRow(QString(), m_boxesCheck);
     form->addRow(QString(), m_outlineCheck);
     layout->addLayout(form);
-    m_rendering = new QLabel(panel);
-    m_rendering->setVisible(false);
-    layout->addWidget(m_rendering);
     m_status = new QLabel(panel);
     m_status->setWordWrap(true);
     m_status->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(m_status);
+    // Under the status rather than over it, and bold. It comes and goes with
+    // every render, so above the status it pushed those lines down and back
+    // each time; below, the numbers it belongs to hold still and the weight is
+    // what catches the eye instead of the movement.
+    m_rendering = new QLabel(panel);
+    auto renderingFont = m_rendering->font();
+    renderingFont.setBold(true);
+    m_rendering->setFont(renderingFont);
+    m_rendering->setVisible(false);
+    layout->addWidget(m_rendering);
     layout->addStretch(1);
     dock->setWidget(panel);
     addDockWidget(Qt::RightDockWidgetArea, dock);

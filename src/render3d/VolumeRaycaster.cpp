@@ -438,9 +438,28 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     // than invent data, and never let one NaN erode a voxel-wide rind. Every
     // corner is then mappable, so the result is a convex combination of
     // mappable values and is mappable itself.
+    // The eight corner values a sample interpolates, kept from one sample to
+    // the next. At two or more samples per voxel a ray takes several steps
+    // inside one cell -- four of them at the High preset -- and the corners do
+    // not change while it does, so the fetches and the coverage tests are the
+    // same work repeated. One of these lives per ray, not per frame, so the
+    // march stays a pure function of the sample's index.
+    //
+    // Corners are kept as the grid holds them, uncovered ones included, with a
+    // bit per corner saying which those were. Substitution happens on the way
+    // out instead: what stands in for an uncovered corner is the value of the
+    // voxel the sample landed in, and that changes within a cell, so a cell
+    // stored already-substituted could not be reused across the sample that
+    // changed it. This way every cell is reusable, boundaries included.
+    struct CellCache {
+        std::array<std::size_t, 3> low{};
+        std::array<double, 8> corner{};
+        unsigned uncovered = 0;
+        bool loaded = false;
+    };
     const auto linearValue
         = [&grid, &mappedRange, gridRowStride, slabStride](
-              const std::array<double, 3>& at, double landed) {
+              const std::array<double, 3>& at, double landed, CellCache& cache) {
               // Per axis: the two bracketing voxel indices and how far the
               // sample sits between them.
               std::array<std::array<std::size_t, 2>, 3> bracket{};
@@ -467,25 +486,61 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                       = static_cast<std::size_t>(low < limit ? low + 1.0 : limit);
                   weight[axis] = fraction;
               }
-              double result = 0.0;
-              for (std::size_t k = 0; k < 2; ++k) {
-                  const auto wz = k == 1 ? weight[2] : 1.0 - weight[2];
-                  for (std::size_t j = 0; j < 2; ++j) {
-                      const auto wy = j == 1 ? weight[1] : 1.0 - weight[1];
-                      for (std::size_t i = 0; i < 2; ++i) {
-                          const auto wx = i == 1 ? weight[0] : 1.0 - weight[0];
-                          const auto corner = bracket[0][i]
-                              + gridRowStride * bracket[1][j]
-                              + slabStride * bracket[2][k];
-                          auto value = static_cast<double>(grid.values[corner]);
-                          if (!mappableValue(value, mappedRange)) {
-                              value = landed;
+              // The same cell as the last sample on this ray, and that one
+              // needed no substitution: its corners still hold.
+              // Read straight into the cache and interpolate out of it, so a
+              // reused cell costs three comparisons and a fresh one costs no
+              // copy on top of its fetches.
+              if (!cache.loaded || cache.low[0] != bracket[0][0]
+                  || cache.low[1] != bracket[1][0]
+                  || cache.low[2] != bracket[2][0]) {
+                  cache.uncovered = 0;
+                  for (std::size_t k = 0; k < 2; ++k) {
+                      for (std::size_t j = 0; j < 2; ++j) {
+                          for (std::size_t i = 0; i < 2; ++i) {
+                              const auto corner = i + 2 * j + 4 * k;
+                              const auto offset = bracket[0][i]
+                                  + gridRowStride * bracket[1][j]
+                                  + slabStride * bracket[2][k];
+                              const auto value
+                                  = static_cast<double>(grid.values[offset]);
+                              if (!mappableValue(value, mappedRange)) {
+                                  cache.uncovered |= 1U << corner;
+                              }
+                              cache.corner[corner] = value;
                           }
-                          result += wx * wy * wz * value;
                       }
                   }
+                  cache.loaded = true;
+                  cache.low = {bracket[0][0], bracket[1][0], bracket[2][0]};
               }
-              return result;
+              // Seven interpolations along the axes in turn rather than
+              // eight corners each weighted by a product: the same value, and
+              // the weight products are what this loop spends its time on.
+              const auto between = [](double from, double to, double where) {
+                  return from + where * (to - from);
+              };
+              const auto blend = [&](const std::array<double, 8>& corner) {
+                  const auto lowY
+                      = between(between(corner[0], corner[1], weight[0]),
+                          between(corner[2], corner[3], weight[0]), weight[1]);
+                  const auto highY
+                      = between(between(corner[4], corner[5], weight[0]),
+                          between(corner[6], corner[7], weight[0]), weight[1]);
+                  return between(lowY, highY, weight[2]);
+              };
+              if (cache.uncovered == 0) {
+                  return blend(cache.corner);
+              }
+              // The uncommon path: a cell at the edge of what the levels
+              // cover. The landed voxel stands in for the corners they do not.
+              auto covered = cache.corner;
+              for (std::size_t corner = 0; corner < 8; ++corner) {
+                  if ((cache.uncovered & (1U << corner)) != 0) {
+                      covered[corner] = landed;
+                  }
+              }
+              return blend(covered);
           };
 
     const auto renderRow = [&](int row) {
@@ -537,6 +592,8 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                 voxelStart[axis] = (ray.origin[axis] + tEnter * ray.direction[axis]
                     - lower[axis]) * inversePitch[axis];
             }
+            // Per ray: what the previous sample on this ray read.
+            CellCache cell;
             double alpha = 0.0;
             double red = 0.0;
             double green = 0.0;
@@ -574,7 +631,8 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                 if (!mappableValue(nearest, mappedRange)) {
                     continue;
                 }
-                const auto value = linear ? linearValue(at, nearest) : nearest;
+                const auto value
+                    = linear ? linearValue(at, nearest, cell) : nearest;
                 const auto& entry = entries[static_cast<std::size_t>(
                     valueSlot(value, mappedRange, entryCount))];
                 if (!(entry.stepOpacity > 0.0)) {

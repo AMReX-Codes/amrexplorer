@@ -305,8 +305,8 @@ field: every pixel accumulates the color and opacity of the cells along its
 line of sight, so translucent structure inside the domain shows through. The
 window has its own copy of the isometric view -- drag to rotate, wheel
 to zoom, and the **XY**, **XZ**, **YZ** buttons for the axis-aligned views --
-with the domain outline, the grid boxes and the slice planes drawn over the
-rendered volume.
+with the domain outline and the slice planes drawn over the rendered volume.
+The AMR grid boxes can be drawn too, though they start off here.
 
 The window follows the main window: the field, the AMR level, the range mode
 and its User min/max, the logarithmic mapping and the palette are the ones
@@ -322,6 +322,13 @@ match. Its own controls set the opacity:
   move it, click the plot to add one, right-click a point to remove it. The
   two end points stay at the ends of the range and move only up and down, so
   the curve always covers it.
+
+  The point you last clicked stays selected -- it is the one marked in the
+  highlight color while the plot has the keyboard focus -- and the arrow keys
+  move it in exact steps: one color slot sideways, one percent up and down,
+  and ten times either with Shift held. Drop a point roughly where you want it
+  with the mouse, then step it into place with the keys, which is easier than
+  holding a drag steady and repeatable when you want the same value twice.
 
   It starts as a straight line from transparent at the cold end to opaque at
   the hot end. Pull the low end up to see faint values, pull a stretch down to
@@ -349,6 +356,10 @@ match. Its own controls set the opacity:
   A remote plotfile renders the same as a local one, unless the server was
   started with a tighter ceiling of its own -- in which case **High** may look
   no different from **Normal** (see [Remote datasets](#remote-datasets)).
+- **Grid boxes** and **Domain outline** draw the AMR box edges and the edge of
+  the domain over the volume. The outline is on by default and the boxes are
+  not: box edges crossing a translucent field read as structure in it, which
+  is worth asking for rather than having to switch off.
 
 While the camera moves the window shows quick half-resolution drafts and
 renders the full frame once it settles. Rotating and zooming reuse the field

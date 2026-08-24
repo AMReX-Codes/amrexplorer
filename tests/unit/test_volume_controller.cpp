@@ -21,6 +21,8 @@
 #include <QRectF>
 #include <QCheckBox>
 #include <QEvent>
+#include <QImage>
+#include <QKeyEvent>
 #include <QKeySequence>
 #include <QMouseEvent>
 #include <QCoreApplication>
@@ -1090,6 +1092,59 @@ int main(int argc, char** argv)
         require(std::abs(static_cast<double>(dragged[midEntry]) - 0.25) <= 0.06,
             "the drag did not reach the opacities in the request");
 
+        // The arrow keys: exact repeatable steps, where the drag above could
+        // only leave the point wherever the cursor's pixel fell. The point the
+        // press took is still the selected one, so the nudge lands on it
+        // without another click.
+        //
+        // Quiesced first. The drag armed the settle timer and the release
+        // emits nothing to stop it, so its full frame arriving later would
+        // stand in for the render the keys are supposed to cause -- the same
+        // trap the removal check below documents, which this check was blind
+        // to until here.
+        settle(application, 500);
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the drag's renders did not finish");
+        auto nudged = session->requests.load();
+        settle(application, 150);
+        require(session->requests == nudged,
+            "the volume was still rendering of its own accord, so the render "
+            "below could not be the keys' doing");
+        const auto placed = widget->curve()[1];
+        const auto sendKey = [widget](int key, Qt::KeyboardModifiers modifiers) {
+            QKeyEvent pressed(QEvent::KeyPress, key, modifiers);
+            QApplication::sendEvent(widget, &pressed);
+        };
+        for (int tap = 0; tap < 3; ++tap) {
+            sendKey(Qt::Key_Up, Qt::NoModifier);
+        }
+        require(std::abs(widget->curve()[1].opacity - (placed.opacity + 0.03))
+                <= 1.0e-9,
+            "three presses of Up did not raise the point by three percent");
+        // Shift is the same key covering ground, ten steps rather than one.
+        sendKey(Qt::Key_Right, Qt::ShiftModifier);
+        const auto slot = 1.0 / static_cast<double>(amrvis::Palette::colorSlots - 1);
+        require(std::abs(widget->curve()[1].position
+                    - (placed.position + 10.0 * slot)) <= 1.0e-9,
+            "Shift+Right did not move the point ten palette slots");
+        // And a nudge renders, down the same path a drag takes.
+        waitFor(application, [&] { return session->requests > nudged; },
+            "nudging a point with the arrow keys did not render");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the render after the nudge did not finish");
+
+        // Put it back where the drag left it, so the removal below still
+        // finds a point under the cursor -- and so the keys are shown to be
+        // symmetric rather than merely to move something.
+        sendKey(Qt::Key_Left, Qt::ShiftModifier);
+        for (int tap = 0; tap < 3; ++tap) {
+            sendKey(Qt::Key_Down, Qt::NoModifier);
+        }
+        require(std::abs(widget->curve()[1].position - placed.position) <= 1.0e-9
+                && std::abs(widget->curve()[1].opacity - placed.opacity)
+                    <= 1.0e-9,
+            "the opposite arrows did not return the point to where it was");
+
         // Quiesce before the next check. The drag armed the settle timer, and
         // its full frame arriving later would stand in for the render the
         // removal is supposed to cause -- which it did, until this was here.
@@ -1118,24 +1173,233 @@ int main(int argc, char** argv)
         require(std::abs(static_cast<double>(restored[midEntry]) - 0.5) <= 0.02,
             "removing the point did not put the straight ramp back");
 
+        // The point that was selected is the point that was just removed, so
+        // there is nothing to nudge: the arrows have to do nothing rather than
+        // move whichever point inherited the index. Down, because it would
+        // show on the end point the stale index names, where Up would clamp
+        // against the top and look innocent.
+        const auto untouched = widget->curve();
+        sendKey(Qt::Key_Down, Qt::NoModifier);
+        require(widget->curve().size() == untouched.size()
+                && widget->curve().back().opacity == untouched.back().opacity,
+            "an arrow key moved a point after the selected one was removed");
+
+        // The end points, where the curve's rules bite: an end may change
+        // opacity but never position, so a sideways key on one asks for a move
+        // it cannot have. That must not reach the renderer -- a held key would
+        // otherwise restart the settle timer on every repeat and re-render an
+        // identical volume, so the full frame would never arrive.
+        settle(application, 500);
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the renders from the earlier edits did not finish");
+        auto pinned = session->requests.load();
+        settle(application, 150);
+        require(session->requests == pinned,
+            "the volume was still rendering of its own accord, so the checks "
+            "below could not be the keys' doing");
+
+        // Where a curve point is drawn: the plot is inset on every side by a
+        // control point's half-width and the border. Worked out from the point
+        // rather than assumed, so a press keeps landing on it wherever an edit
+        // has left it -- pressing a corner instead only works while the point
+        // is still in it, and silently hits nothing once it moves.
+        const auto plotPoint
+            = [widget](const amrvis::OpacityPoint& point) {
+                  constexpr double inset = 4.0;
+                  return QPointF(
+                      inset + point.position * (widget->width() - 2.0 * inset),
+                      widget->height() - inset
+                          - point.opacity * (widget->height() - 2.0 * inset));
+              };
+        const auto lowEnd = plotPoint(widget->curve().front());
+        QMouseEvent takeEnd(QEvent::MouseButtonPress, lowEnd,
+            widget->mapToGlobal(lowEnd), Qt::LeftButton, Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &takeEnd);
+        QMouseEvent dropEnd(QEvent::MouseButtonRelease, lowEnd,
+            widget->mapToGlobal(lowEnd), Qt::LeftButton, Qt::NoButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &dropEnd);
+        require(widget->curve().size() == 2,
+            "the press missed the end point and added one instead");
+        sendKey(Qt::Key_Left, Qt::ShiftModifier);
+        sendKey(Qt::Key_Right, Qt::ShiftModifier);
+        require(widget->curve().front().position == 0.0,
+            "an arrow key moved the end point off the end of the range");
+        settle(application, 150);
+        require(session->requests == pinned,
+            "a nudge that moved nothing rendered an identical volume anyway");
+
+        // The same key up the other axis does move it, so the check above is
+        // the rule biting rather than the keys being dead on an end point.
+        sendKey(Qt::Key_Up, Qt::NoModifier);
+        require(widget->curve().front().opacity > 0.0,
+            "Up did not raise the end point, which is the one move it has");
+        waitFor(application, [&] { return session->requests > pinned; },
+            "raising the end point did not render");
+
+        // An arrow carrying any other modifier belongs to whatever else may
+        // want it -- the convention ImageView documents -- while the keypad
+        // modifier macOS stamps on the arrow keys still has to nudge.
+        // Checked one key at a time and both in the same direction: two
+        // opposite nudges would cancel and pass whether they were swallowed
+        // or not, which is how this first went in.
+        const auto held = widget->curve().front().opacity;
+        sendKey(Qt::Key_Up, Qt::ControlModifier);
+        require(widget->curve().front().opacity == held,
+            "Ctrl+arrow was swallowed as a nudge");
+        sendKey(Qt::Key_Up, Qt::AltModifier);
+        require(widget->curve().front().opacity == held,
+            "Alt+arrow was swallowed as a nudge");
+        sendKey(Qt::Key_Up, Qt::KeypadModifier);
+        require(widget->curve().front().opacity > held,
+            "the keypad modifier stopped an arrow key from nudging, which "
+            "would leave this dead on macOS");
+
+        // A drag that cannot move anything is not a render either, the same
+        // rule the keys follow. Dragging an end point sideways asks for the
+        // one move it refuses, so after the first move has settled its opacity
+        // to whatever that height means, every further move along the same
+        // height changes nothing at all. Two moves rather than one because the
+        // first still carries the cursor's own opacity onto the point.
+        const QPointF along(plotPoint(widget->curve().front()));
+        QMouseEvent takeIt(QEvent::MouseButtonPress, along,
+            widget->mapToGlobal(along), Qt::LeftButton, Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &takeIt);
+        const QPointF sideways(along.x() + 20.0, along.y());
+        QMouseEvent firstMove(QEvent::MouseMove, sideways,
+            widget->mapToGlobal(sideways), Qt::NoButton, Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &firstMove);
+        settle(application, 500);
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the drag's first move did not finish rendering");
+        const auto stuck = session->requests.load();
+        const QPointF further(along.x() + 40.0, along.y());
+        QMouseEvent secondMove(QEvent::MouseMove, further,
+            widget->mapToGlobal(further), Qt::NoButton, Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &secondMove);
+        settle(application, 200);
+        require(session->requests == stuck,
+            "dragging an end point sideways rendered a volume that could not "
+            "have changed");
+        QMouseEvent dropIt(QEvent::MouseButtonRelease, further,
+            widget->mapToGlobal(further), Qt::LeftButton, Qt::NoButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &dropIt);
+
+        // And not while a drag is in flight: the next mouse move would
+        // overwrite the nudge with the cursor's own position, so the key would
+        // cost a render and leave nothing behind.
+        const auto grabbed = widget->curve().front().opacity;
+        // Where the nudges above have left it, not where it started.
+        const auto raised = plotPoint(widget->curve().front());
+        QMouseEvent holdEnd(QEvent::MouseButtonPress, raised,
+            widget->mapToGlobal(raised), Qt::LeftButton, Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &holdEnd);
+        require(widget->curve().size() == 2,
+            "the press missed the raised end point and added one instead");
+        sendKey(Qt::Key_Up, Qt::NoModifier);
+        require(widget->curve().front().opacity == grabbed,
+            "an arrow key moved a point that was being dragged");
+        QMouseEvent letGoEnd(QEvent::MouseButtonRelease, raised,
+            widget->mapToGlobal(raised), Qt::LeftButton, Qt::NoButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &letGoEnd);
+
+        // The overlay toggles, and the volume window's own default: grid boxes
+        // off, because box edges crossing a translucent field read as
+        // structure in it. The view has to agree with the box it is labelled
+        // by -- setting a box before its connect fires no toggle, so an
+        // agreement left to the two defaults matching is one nobody checks.
+        auto* const boxesCheck = window->findChild<QCheckBox*>(
+            QStringLiteral("volumeGridBoxesCheck"));
+        auto* const outlineCheck = window->findChild<QCheckBox*>(
+            QStringLiteral("volumeDomainOutlineCheck"));
+        require(boxesCheck != nullptr && outlineCheck != nullptr,
+            "no overlay toggles in the volume window");
+        auto* const view = window->findChild<amrvis::qt::IsoWidget*>();
+        require(view != nullptr, "no iso view in the volume window");
+        require(!boxesCheck->isChecked() && !view->levelBoxesVisible(),
+            "the volume window opened drawing the grid boxes");
+        require(outlineCheck->isChecked() && view->domainOutlineVisible(),
+            "the volume window opened without the domain outline");
+        boxesCheck->setChecked(true);
+        require(view->levelBoxesVisible(),
+            "ticking the grid-boxes box did not reach the view");
+        boxesCheck->setChecked(false);
+        require(!view->levelBoxesVisible(),
+            "clearing the grid-boxes box did not reach the view");
+        // The outline the same way. Its opening state cannot be checked as
+        // sharply as the boxes' -- the box and the view's own default agree
+        // there, so nothing can tell a state that was pushed from one that was
+        // never needed -- but the toggle reaching the view can be.
+        outlineCheck->setChecked(false);
+        require(!view->domainOutlineVisible(),
+            "clearing the domain-outline box did not reach the view");
+        outlineCheck->setChecked(true);
+        require(view->domainOutlineVisible(),
+            "ticking the domain-outline box did not reach the view");
+
         // The palette's own alpha takes over from the curve, so the curve is
         // disabled: it has no say while that box is in effect, and a control
         // that looks editable and does nothing is the defect this replaced.
-        // Driven through setPaletteHasAlpha because the palette here carries
-        // no ramp, which is what leaves the box disabled.
+        //
+        // The box being enabled is the "this palette carries a ramp" bit, and
+        // pushPalette sets it from the palette it hands over. Every builtin
+        // carries one, this one included, so the box is already enabled here
+        // and the check below is of that wiring rather than of a state the
+        // test set for itself.
         auto* const alphaBox = window->findChild<QCheckBox*>(
             QStringLiteral("volumePaletteAlphaCheck"));
         require(alphaBox != nullptr, "no palette-alpha box in the volume window");
         require(widget->isEnabled(),
             "the curve is not editable with the palette-alpha box clear");
-        window->setPaletteHasAlpha(true);
+
+        // How far the widget's pixels sit from its own background, which is
+        // almost all the palette strip: everything else on it is the theme's
+        // greys, at or near that background. Measured against the background
+        // rather than as colourfulness because fading a colour towards a dark
+        // background barely changes how saturated it is -- a saturation
+        // measure separates the two states in a light theme and not in a dark
+        // one, which is a test that passes where it is run and nowhere else.
+        const auto fromBackground = [widget](const QImage& image) {
+            const auto base = widget->palette().color(QPalette::Base);
+            double total = 0.0;
+            for (int y = 0; y < image.height(); ++y) {
+                for (int x = 0; x < image.width(); ++x) {
+                    const auto pixel = image.pixelColor(x, y);
+                    total += std::abs(pixel.red() - base.red())
+                        + std::abs(pixel.green() - base.green())
+                        + std::abs(pixel.blue() - base.blue());
+                }
+            }
+            return total / static_cast<double>(image.width() * image.height());
+        };
+        const auto lively = fromBackground(widget->grab().toImage());
+        // Vacuity guard: with no palette there would be no strip to fade, and
+        // the comparison below would hold for the wrong reason.
+        require(lively > 60.0,
+            "the curve drew no palette strip, so fading it could not be "
+            "checked");
         require(alphaBox->isEnabled(),
-            "the box did not enable for a palette with a ramp, so ticking it "
-            "below would not be in effect");
+            "the controller did not offer the box for a palette that carries a "
+            "ramp, so ticking it below would not be in effect");
         alphaBox->setChecked(true);
         require(!widget->isEnabled(),
             "the curve stayed editable while the palette's own alpha was the "
             "opacity source");
+        // And the strip goes back with it. The line, the fill and the handles
+        // all grey out on their own, through QPalette::Disabled; the strip is
+        // painted from the data palette's own colours, which know nothing of
+        // the widget, so at full strength the boldest thing on an inert
+        // control would be the one part not saying it was inert.
+        const auto inert = fromBackground(widget->grab().toImage());
+        require(inert < 0.6 * lively,
+            "the palette strip kept its strength on a disabled curve");
         alphaBox->setChecked(false);
         require(widget->isEnabled(),
             "the curve did not become editable again when the palette's alpha "
@@ -1161,11 +1425,14 @@ int main(int argc, char** argv)
             "the renders from toggling palette alpha did not finish");
 
         // The two ends are not removable -- the curve has to span the range --
-        // and refusing must not pass for an edit either.
+        // and refusing must not pass for an edit either. Aimed at the point
+        // itself: the edits above raised it off the plot's bottom-left corner,
+        // and a press at the corner now misses it by more than the grab radius,
+        // so this check went on passing while testing nothing.
         const auto ends = session->requests.load();
-        const QPointF corner(0.0, static_cast<double>(widget->height()));
-        QMouseEvent atEnd(QEvent::MouseButtonPress, corner,
-            widget->mapToGlobal(corner), Qt::RightButton, Qt::RightButton,
+        const auto atLowEnd = plotPoint(widget->curve().front());
+        QMouseEvent atEnd(QEvent::MouseButtonPress, atLowEnd,
+            widget->mapToGlobal(atLowEnd), Qt::RightButton, Qt::RightButton,
             Qt::NoModifier);
         QApplication::sendEvent(widget, &atEnd);
         require(widget->curve().size() == 2,

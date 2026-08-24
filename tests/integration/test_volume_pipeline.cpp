@@ -297,6 +297,72 @@ int main()
                     && curve[1].opacity == 1.0,
                 "an inserted point was not sorted and clamped");
 
+            // The edges of the plot, where a press clamps to exactly 0.0 or
+            // 1.0. Both have to land inside the two anchors: a point appended
+            // past the last one would become the end, which cannot be removed
+            // and which opacityCurveValue extends flat, so it would shape one
+            // entry of the table and nothing else.
+            {
+                auto edge = amrvis::defaultOpacityCurve();
+                const auto top = amrvis::insertOpacityPoint(edge, 1.0, 0.5);
+                require(top == 1 && edge.size() == 3,
+                    "a point inserted at the top of the range did not land "
+                    "inside the curve's ends");
+                require(edge.back() == amrvis::OpacityPoint{1.0, 1.0},
+                    "inserting at the top of the range displaced the anchor");
+                require(amrvis::removeOpacityPoint(edge, top),
+                    "a point inserted at the top of the range could not be "
+                    "removed again");
+                // The same for the bottom, checked the same way: the index and
+                // the anchor alone would miss a point that landed as an end
+                // and could not be removed again.
+                const auto bottom = amrvis::insertOpacityPoint(edge, 0.0, 0.5);
+                require(bottom == 1 && edge.size() == 3
+                        && edge.front() == amrvis::OpacityPoint{0.0, 0.0},
+                    "inserting at the bottom of the range displaced the "
+                    "anchor");
+                require(amrvis::removeOpacityPoint(edge, bottom),
+                    "a point inserted at the bottom of the range could not be "
+                    "removed again");
+            }
+
+            // Keeping the new point inside the ends must not cost the sorting
+            // that opacityCurveValue reads and that moveOpacityPoint clamps
+            // between neighbours with. Nothing says the ends are at 0 and 1 --
+            // setCurve takes any two -- so a position outside the span they
+            // cover has to come to the span's edge, not to the near end of the
+            // interior.
+            {
+                const auto isSorted = [](const std::vector<amrvis::OpacityPoint>&
+                                              points) {
+                    for (std::size_t index = 1; index < points.size(); ++index) {
+                        if (points[index - 1].position > points[index].position) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+                const std::vector<amrvis::OpacityPoint> inset{
+                    {0.2, 0.0}, {0.5, 0.5}, {0.9, 1.0}};
+                auto below = inset;
+                const auto under = amrvis::insertOpacityPoint(below, 0.0, 0.5);
+                require(isSorted(below) && under == 1
+                        && below.front() == inset.front(),
+                    "inserting below the low end left the curve unsorted");
+                auto above = inset;
+                const auto over = amrvis::insertOpacityPoint(above, 1.0, 0.5);
+                require(isSorted(above) && over == above.size() - 2
+                        && above.back() == inset.back(),
+                    "inserting above the high end left the curve unsorted");
+
+                // And a curve too short to have two ends is still sorted, even
+                // though it has no ends to stay between.
+                std::vector<amrvis::OpacityPoint> lone{{0.8, 1.0}};
+                require(amrvis::insertOpacityPoint(lone, 0.2, 0.5) == 0
+                        && isSorted(lone),
+                    "inserting into a one-point curve did not keep it sorted");
+            }
+
             // An interior point cannot pass its neighbours.
             amrvis::moveOpacityPoint(curve, 2, 5.0, 0.5);
             require(curve[2].position == curve[3].position,

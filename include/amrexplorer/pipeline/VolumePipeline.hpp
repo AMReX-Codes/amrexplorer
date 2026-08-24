@@ -45,7 +45,11 @@ struct OpacityPoint {
 // mistakes live: a point dragged past its neighbour, an end point dragged off
 // the range, a curve left unsorted for opacityCurveValue to read.
 //
-// insert: a new point, keeping the list sorted; returns its index.
+// insert: a new point, keeping the list sorted; returns its index. On a curve
+//   with two ends it always lands between them -- its position is held to the
+//   span they cover and the returned index is never 0 or the last -- so the
+//   ends stay the ends: they are what makes the curve span the range, and an
+//   end that arrived by insertion could not be removed again.
 // move: point `index` to (position, opacity), clamped into [0, 1] and, for an
 //   interior point, between its neighbours. The two end points keep their
 //   positions -- the curve has to span the range -- and move only in opacity.

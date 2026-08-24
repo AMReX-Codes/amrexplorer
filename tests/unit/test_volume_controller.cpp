@@ -1279,8 +1279,12 @@ int main(int argc, char** argv)
         // The palette's own alpha takes over from the curve, so the curve is
         // disabled: it has no say while that box is in effect, and a control
         // that looks editable and does nothing is the defect this replaced.
-        // Driven through setPaletteHasAlpha because the palette here carries
-        // no ramp, which is what leaves the box disabled.
+        //
+        // The box being enabled is the "this palette carries a ramp" bit, and
+        // pushPalette sets it from the palette it hands over. Every builtin
+        // carries one, this one included, so the box is already enabled here
+        // and the check below is of that wiring rather than of a state the
+        // test set for itself.
         auto* const alphaBox = window->findChild<QCheckBox*>(
             QStringLiteral("volumePaletteAlphaCheck"));
         require(alphaBox != nullptr, "no palette-alpha box in the volume window");
@@ -1304,10 +1308,9 @@ int main(int argc, char** argv)
         require(lively > 20.0,
             "the curve drew no palette strip, so fading it could not be "
             "checked");
-        window->setPaletteHasAlpha(true);
         require(alphaBox->isEnabled(),
-            "the box did not enable for a palette with a ramp, so ticking it "
-            "below would not be in effect");
+            "the controller did not offer the box for a palette that carries a "
+            "ramp, so ticking it below would not be in effect");
         alphaBox->setChecked(true);
         require(!widget->isEnabled(),
             "the curve stayed editable while the palette's own alpha was the "

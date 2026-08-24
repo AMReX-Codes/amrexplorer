@@ -156,6 +156,12 @@ void VolumeWindow::buildControls()
     form->addRow(tr("Opacity:"), m_curve);
     m_paletteAlpha = new QCheckBox(tr("Use palette alpha ramp"), panel);
     m_paletteAlpha->setObjectName(QStringLiteral("volumePaletteAlphaCheck"));
+    // Whether this is available says whether the palette carries a ramp, so
+    // it starts unavailable and setPaletteHasAlpha decides: until a palette
+    // arrives there is nothing to take a ramp from. Left at the check box's
+    // own default it would read as "this palette has one" before any palette
+    // had been seen, and nothing would be asserting otherwise.
+    m_paletteAlpha->setEnabled(false);
     m_paletteAlpha->setToolTip(tr("Take each colour's opacity from the palette's "
                                   "alpha ramp (legacy .pal files carry one) "
                                   "instead of the curve above, which is "

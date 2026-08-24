@@ -294,6 +294,29 @@ Protocol policy:
 Packed messages are transient network data, not files. No persistence or
 cross-major migration path is promised.
 
+Verifying a version gate. A client-side capability gate -- the pattern
+protocol 1.3 uses for the volume march's sampling policy, where the client
+asks `supportsVolumeSampling()` before offering the control -- cannot be
+reached by an in-process test. `Connection` always negotiates the highest
+minor version both peers support, and neither `ConnectionOptions` nor
+`ServerOptions` exposes a cap, so a test cannot fabricate an older peer. The
+raw-socket tests in `test_remote_volume.cpp` drive a hand-written hello at a
+pinned version and so cover the *server's* refusal, but not the client's.
+
+What covers the client half is a real pair of binaries: build the server from
+a commit before the bump, and point a current client at it over ssh.
+
+```text
+(laptop) $ amrexplorer --ssh HOST --server /path/to/older/amrexplorer-server \
+    /path/to/plt3d
+```
+
+The client offers 0 through its own maximum, the older server answers with
+its own, and the capability query then reports false against a peer that
+really is older rather than one a test pretended was. Protocol 1.3's gate was
+checked this way: the control is greyed out and cleared, the volume still
+renders nearest, and returning to a session that can sample restores it.
+
 ### 5.3 Handshake and capabilities
 
 The first request must be `HelloRequest`. It will carry:

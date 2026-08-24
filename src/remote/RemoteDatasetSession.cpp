@@ -163,7 +163,7 @@ VolumeFrame RemoteDatasetSession::renderVolume(
     // different question from the one asked -- and nothing downstream could
     // tell. The window asks supportsVolumeSampling() first and offers no such
     // request, so reaching this means a caller that did not.
-    if (request.sampling != SamplingPolicy::Nearest
+    if (request.sampling == SamplingPolicy::Linear
         && !m_connection->supportsVolumeSampling()) {
         throw std::runtime_error(volumeSamplingUnsupportedMessage);
     }

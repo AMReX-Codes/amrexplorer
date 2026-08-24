@@ -302,11 +302,13 @@ public:
         if (!supportsVolumeRendering()) {
             throw std::runtime_error(volumeRenderingUnsupportedMessage);
         }
-        // Then anything the wire default cannot express. Tested against
-        // Nearest rather than for Linear: a peer older than 1.3 drops the
-        // field and renders nearest whatever it held, so Nearest is the only
-        // value that may travel there -- and the enum has a third.
-        if (request.sampling != SamplingPolicy::Nearest
+        // Then a sampling policy the peer cannot honour. Tested for Linear
+        // specifically, because that is the one the march itself distinguishes
+        // (VolumeRaycaster reads anything else as nearest): refusing
+        // PiecewiseConstant would refuse a request whose picture an older peer
+        // would have produced correctly. If that policy ever grows a march of
+        // its own, this has to widen with it.
+        if (request.sampling == SamplingPolicy::Linear
             && !supportsVolumeSampling()) {
             throw std::runtime_error(volumeSamplingUnsupportedMessage);
         }

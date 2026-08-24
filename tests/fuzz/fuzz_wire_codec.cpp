@@ -718,10 +718,11 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         request.camera = {0.5, -0.25, 1.5};
         request.outputSize = {64, 48};
         request.range = amrvis::VolumeRange{0.5, 2.0, true};
-        // Not the struct's default, so the corpus carries a buffer whose
-        // sampling field has to survive the trip rather than one that happens
-        // to match whatever it decodes to.
-        request.sampling = amrvis::SamplingPolicy::Nearest;
+        // Not the *wire* default: Nearest is the schema's zero, which
+        // flatbuffers omits from the buffer entirely, so a seed carrying it
+        // would be byte-identical to a pre-1.3 request and would exercise
+        // nothing. This one has to be written and read back.
+        request.sampling = amrvis::SamplingPolicy::Linear;
         request.transfer.colors = {0x0000FFU, 0x00FF00U, 0xFFFF00U, 0xFF0000U};
         request.transfer.opacities = {0.0F, 0.25F, 0.5F, 1.0F};
         request.samplesPerVoxel = 3;

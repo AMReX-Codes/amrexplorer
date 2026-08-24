@@ -26,7 +26,7 @@ inline constexpr OrthoCamera orthoPresetXZ{0.0, -1.5707963267948966, 1.0};
 inline constexpr OrthoCamera orthoPresetYZ{
     -1.5707963267948966, -1.5707963267948966, 1.0};
 
-// The angle the 3-D views open at: a fifth of a turn around the domain and
+// The angle the 3-D views open at: a twelfth of a turn around the domain and
 // tilted onto it from above. The elevation is negative for the same reason
 // the presets above are -- that is the sign that puts +z up. A positive one
 // looks at the domain from underneath, so a plume hangs from the ceiling

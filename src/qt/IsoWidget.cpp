@@ -300,7 +300,13 @@ void IsoWidget::mouseMoveEvent(QMouseEvent* event)
         const auto delta = event->pos() - m_lastMousePos;
         m_lastMousePos = event->pos();
         constexpr double sensitivity = 0.008;
-        m_camera.azimuth -= static_cast<double>(delta.x()) * sensitivity;
+        // Both signs turn the domain with the drag rather than walking the
+        // camera around it: the surface under the cursor follows the cursor.
+        // The two disagreed once -- a drag down tipped the top toward you
+        // while a drag right slid the near face left -- which reads as the
+        // horizontal being backwards, since the vertical is what everything
+        // else does too.
+        m_camera.azimuth += static_cast<double>(delta.x()) * sensitivity;
         m_camera.elevation += static_cast<double>(delta.y()) * sensitivity;
         m_camera.elevation = std::clamp(
             m_camera.elevation, -pi / 2.0 + 0.01, pi / 2.0 - 0.01);

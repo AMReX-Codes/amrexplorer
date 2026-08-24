@@ -357,21 +357,29 @@ int main()
             transfer.opacities.push_back(static_cast<float>(entry) / 40.0F);
         }
         const amrvis::OrthoCamera oblique{0.7, -0.4, 1.3};
-        auto single = settingsFor(oblique, 97, transfer, 3);
-        auto many = single;
-        many.threadCount = 7;
-        auto oversubscribed = single;
-        oversubscribed.threadCount = 500;   // more threads than rows: clamped
-        const auto one = amrvis::raycastVolume(grid, single);
-        const auto seven = amrvis::raycastVolume(grid, many);
-        const auto clamped = amrvis::raycastVolume(grid, oversubscribed);
-        require(one.pixels == seven.pixels && one.pixels == clamped.pixels,
-            "the thread split changed the picture");
-        std::size_t lit = 0;
-        for (const auto pixel : one.pixels) {
-            lit += pixel != 0U;
+        // Both policies, because rows are handed out on demand and Linear
+        // carries a cache that lives for one ray: a cache that outlived its
+        // ray would make a pixel depend on which worker reached it and in
+        // what order, and Nearest touches neither piece of machinery.
+        for (const auto policy : {amrvis::SamplingPolicy::Nearest,
+                 amrvis::SamplingPolicy::Linear}) {
+            auto single = settingsFor(oblique, 97, transfer, 3);
+            single.sampling = policy;
+            auto many = single;
+            many.threadCount = 7;
+            auto oversubscribed = single;
+            oversubscribed.threadCount = 500;   // more threads than rows
+            const auto one = amrvis::raycastVolume(grid, single);
+            const auto seven = amrvis::raycastVolume(grid, many);
+            const auto clamped = amrvis::raycastVolume(grid, oversubscribed);
+            require(one.pixels == seven.pixels && one.pixels == clamped.pixels,
+                "the thread split changed the picture");
+            std::size_t lit = 0;
+            for (const auto pixel : one.pixels) {
+                lit += pixel != 0U;
+            }
+            require(lit > 0, "the oblique render lit nothing");
         }
-        require(lit > 0, "the oblique render lit nothing");
     }
 
     // --- the value mapping is the 2-D renderer's --------------------------

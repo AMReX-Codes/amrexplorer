@@ -587,9 +587,14 @@ QString VolumeController::describe(
     const auto milliseconds = static_cast<double>(frame.metrics.renderMicroseconds
                                   + frame.metrics.sampleMicroseconds)
         / 1000.0;
-    const auto elapsed = milliseconds >= 1000.0
-        ? tr("%1 s").arg(milliseconds / 1000.0, 0, 'f', 2)
-        : tr("%1 ms").arg(milliseconds, 0, 'f', milliseconds >= 100.0 ? 0 : 1);
+    // Rounded before the threshold is tested, not after: 999.6 ms prints as
+    // a whole number, and testing the unrounded value would let it print
+    // "1000 ms" -- the second this switch exists to avoid claiming.
+    const auto whole = milliseconds >= 100.0;
+    const auto shown = whole ? std::round(milliseconds) : milliseconds;
+    const auto elapsed = shown >= 1000.0
+        ? tr("%1 s").arg(shown / 1000.0, 0, 'f', 2)
+        : tr("%1 ms").arg(shown, 0, 'f', whole ? 0 : 1);
     return tr("%1  level %2  range [%3, %4]%5\ngrid %6 x %7 x %8 (%9)  %10")
         .arg(fieldName)
         .arg(result.request.maximumLevel)

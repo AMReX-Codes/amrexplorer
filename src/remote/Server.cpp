@@ -806,7 +806,7 @@ private:
         // can only be a peer claiming one version and speaking another. Say so
         // rather than rendering by a rule it did not ask for -- a refusal the
         // client can read, and one that leaves the connection up.
-        if (request.sampling != SamplingPolicy::Nearest
+        if (request.sampling == SamplingPolicy::Linear
             && m_selectedMinorVersion < 3) {
             throw RemoteError(ErrorCode::UnsupportedProtocol,
                 "smooth volume sampling requires protocol 1.3");

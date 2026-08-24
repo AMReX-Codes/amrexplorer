@@ -383,9 +383,11 @@ row, threading note; `docs/building.md` unchanged.
   **Smooth sampling** box, on by default rather than tied to the High preset,
   since terracing shows most while rotating and that is when Draft is in use.
   It costs about twice the march at equal samples per voxel (900^2 over 256^3,
-  24 threads: 129 ms against 65 ms), so lowering the presets' samples now that
+  24 threads: 129 ms against 66 ms), so lowering the presets' samples now that
   each carries more is a follow-up worth measuring -- linear at 2 samples/voxel
-  is 76 ms, well under nearest at 4.
+  is 75 ms, about what nearest at 4 costs (67 ms), for a better picture. Not
+  cheaper than it: an earlier note here said "well under", which compared 2
+  samples against the wrong column.
 - **Box-averaged downsampling** — when the voxel budget forces a coarser
   pitch than the finest level, average the cells under a voxel instead of
   taking the one at its centre.

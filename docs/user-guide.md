@@ -362,8 +362,8 @@ match. Its own controls set the opacity:
   and renders the field as terraced blocks, which is the coarser look this
   replaces. Clear it to see the sampled voxels as they are. It costs about
   twice the march at the same number of samples per voxel -- though it buys
-  more per sample, so a smooth frame at half the samples beats a terraced one
-  at full, for less time than either.
+  more per sample, so a smooth frame at half the samples costs roughly what a
+  terraced one at full does, and shows more.
 
   It shapes only how the volume is drawn from the grid, not how the grid is
   built from the AMR data. Where the voxel budget forces a grid coarser than

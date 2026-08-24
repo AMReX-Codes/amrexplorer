@@ -1528,6 +1528,87 @@ int main(int argc, char** argv)
         settle(application, 200);
         require(session->requests == ends,
             "refusing to remove an end point rendered anyway");
+
+        // Dragging turns the domain rather than walking the camera around it:
+        // whichever face is nearest follows the cursor, on both axes. The two
+        // disagreed once -- a drag down tipped the top toward you while a drag
+        // right slid the near face the other way -- and one axis obeying the
+        // hand while the other opposes it reads as the second being backwards.
+        // Written against the projection rather than against the angles, since
+        // which way an angle turns the picture is the thing that was wrong.
+        {
+            const auto domain = amrvis::datasetSampleBounds(session->metadata());
+            const auto frame
+                = amrvis::viewportFrame(view->width(), view->height());
+            const std::array<amrvis::Real3, 6> faces{
+                amrvis::Real3{{1.0, 0.5, 0.5}}, amrvis::Real3{{0.0, 0.5, 0.5}},
+                amrvis::Real3{{0.5, 1.0, 0.5}}, amrvis::Real3{{0.5, 0.0, 0.5}},
+                amrvis::Real3{{0.5, 0.5, 1.0}}, amrvis::Real3{{0.5, 0.5, 0.0}}};
+            // In the domain's own coordinates, and the nearest of them:
+            // depth increases toward the viewer. A horizontal drag turns the
+            // domain about z, so the z faces sit on that axis and do not move
+            // sideways however far it turns -- picking one of those to follow
+            // would compare zero against zero. They are left out when the
+            // drag is horizontal.
+            const auto nearestFace = [&](const amrvis::OrthoCamera& camera,
+                                         bool aboutZ) {
+                amrvis::Real3 best{};
+                auto bestDepth = -std::numeric_limits<double>::infinity();
+                for (std::size_t index = 0; index < faces.size(); ++index) {
+                    if (aboutZ && index >= 4) {
+                        continue;
+                    }
+                    const auto& unit = faces[index];
+                    amrvis::Real3 point;
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        point[axis] = domain.lower[axis]
+                            + unit[axis] * (domain.upper[axis] - domain.lower[axis]);
+                    }
+                    const auto at
+                        = amrvis::projectPoint(camera, frame, domain, point);
+                    if (at.depth > bestDepth) {
+                        bestDepth = at.depth;
+                        best = point;
+                    }
+                }
+                return best;
+            };
+            const auto dragBy = [&](int dx, int dy) {
+                const QPointF from(0.5 * view->width(), 0.5 * view->height());
+                const QPointF to(from.x() + dx, from.y() + dy);
+                QMouseEvent orbitPress(QEvent::MouseButtonPress, from,
+                    view->mapToGlobal(from), Qt::LeftButton, Qt::LeftButton,
+                    Qt::NoModifier);
+                QApplication::sendEvent(view, &orbitPress);
+                QMouseEvent orbitMove(QEvent::MouseMove, to, view->mapToGlobal(to),
+                    Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(view, &orbitMove);
+                QMouseEvent orbitRelease(QEvent::MouseButtonRelease, to,
+                    view->mapToGlobal(to), Qt::LeftButton, Qt::NoButton,
+                    Qt::NoModifier);
+                QApplication::sendEvent(view, &orbitRelease);
+            };
+            const std::array<std::array<int, 2>, 4> drags{
+                {{{40, 0}}, {{-40, 0}}, {{0, 40}}, {{0, -40}}}};
+            for (const auto& pull : drags) {
+                const auto start = view->camera();
+                const auto face = nearestFace(start, pull[0] != 0);
+                const auto was
+                    = amrvis::projectPoint(start, frame, domain, face);
+                dragBy(pull[0], pull[1]);
+                const auto now = amrvis::projectPoint(
+                    view->camera(), frame, domain, face);
+                const auto shift = pull[0] != 0 ? now.x - was.x : now.y - was.y;
+                const auto asked = pull[0] != 0 ? pull[0] : pull[1];
+                require(shift * asked > 0.0,
+                    "the face under the cursor moved against the drag, so the "
+                    "view walks the camera around the domain on that axis "
+                    "instead of turning it");
+            }
+            settle(application, 500);
+            waitFor(application, [&] { return !controller.renderInFlight(); },
+                "the renders from the drags did not finish");
+        }
         controller.closeWindow();
     }
 

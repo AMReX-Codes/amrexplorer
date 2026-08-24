@@ -158,7 +158,10 @@ void checkConverted(const fb::RenderedFrameRequestT& wire,
     const amrvis::VolumeRenderRequest& result)
 {
     // fromWire promises finite camera and range values and a consistent,
-    // finite, bounded transfer function; the enum round-trips.
+    // finite, bounded transfer function; the enums round-trip. Converted once
+    // -- each call rebuilds the transfer vectors, and this runs every
+    // iteration that reaches it.
+    const auto roundTripped = codec::toWire(result);
     if (!finite(result.camera.azimuth) || !finite(result.camera.elevation)
         || !finite(result.camera.zoom) || !finite(result.region)
         || result.range.has_value() != wire.has_range
@@ -169,12 +172,12 @@ void checkConverted(const fb::RenderedFrameRequestT& wire,
         || !std::all_of(result.transfer.opacities.begin(),
             result.transfer.opacities.end(),
             [](float opacity) { return std::isfinite(opacity); })
-        || codec::toWire(result).composition != wire.composition
+        || roundTripped.composition != wire.composition
         // The same round-trip check for the second enum on this table: a
         // transposed mapping converts cleanly in both directions and shows up
         // only against a peer that disagrees, which is what the composition
         // check above exists to catch.
-        || codec::toWire(result).sampling != wire.sampling
+        || roundTripped.sampling != wire.sampling
         || result.outputSize[0] != wire.width || result.outputSize[1] != wire.height) {
         fail("RenderedFrameRequest converter accepted a bad request");
     }

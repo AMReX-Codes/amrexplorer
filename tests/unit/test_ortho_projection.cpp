@@ -54,6 +54,22 @@ int main()
     require(near(amrvis::viewportFrame(10, 10).scale, 1.0),
         "a tiny viewport did not clamp the scale to one pixel");
 
+    // The 3-D views open with +z drawn upward, like the two presets that show
+    // that axis. The sign of the elevation is what decides it, and getting it
+    // wrong is not obvious in the numbers -- the view simply shows the domain
+    // from underneath, so a plume hangs from the ceiling instead of rising
+    // from the floor. Checked against the presets, which promise it outright.
+    for (const auto& view : {amrvis::orthoDefaultView, amrvis::orthoPresetXZ,
+             amrvis::orthoPresetYZ}) {
+        const auto floorAt
+            = amrvis::projectPoint(view, frame, domain, point(1.0, 0.5, 0.0));
+        const auto ceilingAt
+            = amrvis::projectPoint(view, frame, domain, point(1.0, 0.5, 1.0));
+        require(ceilingAt.y < floorAt.y,
+            "a 3-D view draws +z downward, so it looks at the domain from "
+            "underneath");
+    }
+
     // Pinned from the iso view's projection formula: the upper corner under
     // azimuth 30 deg, elevation 30 deg, zoom 1.
     const amrvis::OrthoCamera oblique{30.0 * pi / 180.0, 30.0 * pi / 180.0, 1.0};

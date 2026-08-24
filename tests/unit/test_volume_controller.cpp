@@ -1371,8 +1371,32 @@ int main(int argc, char** argv)
         session->samplingSupported = true;
         controller.configureForDataset();
         application.processEvents();
-        require(smoothCheck->isEnabled(),
-            "the box did not come back for a session that can sample");
+        // Ticked again, not merely available: it is on by default, so a box
+        // left clear after one session that could not sample would turn that
+        // default off for the rest of the run, and every later render would
+        // quietly be nearest.
+        require(smoothCheck->isEnabled() && smoothCheck->isChecked(),
+            "the box did not come back ticked for a session that can sample, "
+            "so one older server turned smooth sampling off for good");
+        require(window->sampling() == amrvis::SamplingPolicy::Linear,
+            "smooth sampling did not resume once it was available again");
+
+        // And a deliberate clearing is not undone by the same round trip: the
+        // box comes back to what was asked of it, not to the default.
+        QMetaObject::invokeMethod(
+            window, [smoothCheck] { smoothCheck->setChecked(false); });
+        application.processEvents();
+        session->samplingSupported = false;
+        controller.configureForDataset();
+        session->samplingSupported = true;
+        controller.configureForDataset();
+        application.processEvents();
+        require(smoothCheck->isEnabled() && !smoothCheck->isChecked(),
+            "a session that could not sample re-ticked a box the user had "
+            "deliberately cleared");
+        QMetaObject::invokeMethod(
+            window, [smoothCheck] { smoothCheck->setChecked(true); });
+        application.processEvents();
 
         // The overlay toggles, and the volume window's own default: grid boxes
         // off, because box edges crossing a translucent field read as

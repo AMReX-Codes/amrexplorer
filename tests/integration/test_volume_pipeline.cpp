@@ -189,6 +189,13 @@ public:
     {
         return m_inner->supportsVolumeRendering();
     }
+    // Forwarded like everything else: the base class answers false, so a
+    // wrapper that forgot this would report a session that samples in
+    // process as one that cannot.
+    [[nodiscard]] bool supportsVolumeSampling() const noexcept override
+    {
+        return m_inner->supportsVolumeSampling();
+    }
     // The one that matters: render at one level coarser than asked and say
     // so, without ever throwing CacheBudgetExceeded at the pipeline.
     [[nodiscard]] amrvis::VolumeFrame renderVolume(

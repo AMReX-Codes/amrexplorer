@@ -577,7 +577,20 @@ QString VolumeController::describe(
 {
     const auto& frame = result.frame;
     const auto& range = frame.usedRange;
-    return tr("%1  level %2  range [%3, %4]%5\ngrid %6 x %7 x %8 (%9)  %10 ms")
+    // The metrics are microseconds (Volume.hpp says why), shown in whichever
+    // unit carries the digits that mean something. A draft is tens of
+    // milliseconds and its tenth is the difference between instant and not; a
+    // hundred milliseconds up, the tenth is noise on a line that changes every
+    // frame; past a second, four digits of milliseconds is not a number anyone
+    // reads. The switch to seconds waits for a whole one, so nothing ever
+    // rounds up into a second it has not reached.
+    const auto milliseconds = static_cast<double>(frame.metrics.renderMicroseconds
+                                  + frame.metrics.sampleMicroseconds)
+        / 1000.0;
+    const auto elapsed = milliseconds >= 1000.0
+        ? tr("%1 s").arg(milliseconds / 1000.0, 0, 'f', 2)
+        : tr("%1 ms").arg(milliseconds, 0, 'f', milliseconds >= 100.0 ? 0 : 1);
+    return tr("%1  level %2  range [%3, %4]%5\ngrid %6 x %7 x %8 (%9)  %10")
         .arg(fieldName)
         .arg(result.request.maximumLevel)
         .arg(range.minimum)
@@ -587,12 +600,7 @@ QString VolumeController::describe(
         .arg(frame.metrics.gridDims[1])
         .arg(frame.metrics.gridDims[2])
         .arg(frame.metrics.gridFromCache ? tr("cached") : tr("sampled"))
-        // The metrics are microseconds (Volume.hpp says why); one decimal
-        // place so a sub-millisecond render reads as fast rather than as 0.
-        .arg(static_cast<double>(frame.metrics.renderMicroseconds
-                 + frame.metrics.sampleMicroseconds)
-                / 1000.0,
-            0, 'f', 1);
+        .arg(elapsed);
 }
 
 } // namespace amrvis::qt

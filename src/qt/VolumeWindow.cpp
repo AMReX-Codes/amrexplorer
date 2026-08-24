@@ -207,6 +207,10 @@ void VolumeWindow::buildControls()
     form->addRow(QString(), m_outlineCheck);
     layout->addLayout(form);
     m_status = new QLabel(panel);
+    // Named for the same reason the check boxes are: neither label is the one
+    // an unqualified findChild would return twice running, and the order they
+    // are built in is a layout decision, not an identity.
+    m_status->setObjectName(QStringLiteral("volumeStatusLabel"));
     m_status->setWordWrap(true);
     m_status->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(m_status);
@@ -215,6 +219,7 @@ void VolumeWindow::buildControls()
     // each time; below, the numbers it belongs to hold still and the weight is
     // what catches the eye instead of the movement.
     m_rendering = new QLabel(panel);
+    m_rendering->setObjectName(QStringLiteral("volumeRenderingLabel"));
     auto renderingFont = m_rendering->font();
     renderingFont.setBold(true);
     m_rendering->setFont(renderingFont);
@@ -238,8 +243,12 @@ void VolumeWindow::buildControls()
         [this](int) { emit qualityChanged(); });
     connect(m_regionCheck, &QCheckBox::toggled, this,
         [this] { emit regionLimitChanged(); });
-    connect(m_smoothCheck, &QCheckBox::toggled, this,
-        [this] { emit samplingChanged(); });
+    connect(m_smoothCheck, &QCheckBox::toggled, this, [this](bool on) {
+        // Only what the user asked for: the tick setSamplingSelectable takes
+        // away and puts back is blocked, so it never overwrites this.
+        m_smoothWanted = on;
+        emit samplingChanged();
+    });
     connect(m_boxesCheck, &QCheckBox::toggled, this,
         [this](bool checked) { m_view->setLevelBoxesVisible(checked); });
     connect(m_outlineCheck, &QCheckBox::toggled, this,
@@ -362,15 +371,16 @@ SamplingPolicy VolumeWindow::sampling() const
 void VolumeWindow::setSamplingSelectable(bool selectable)
 {
     m_smoothCheck->setEnabled(selectable);
-    // Unticked as well as disabled, for the reason setPaletteHasAlpha gives:
-    // sampling() already reads a disabled box as Nearest, so a box left
-    // ticked would sit there claiming a smoothness the picture does not have,
-    // and re-arm itself the moment a session that can sample arrives.
-    // Silently, since whatever changed the session is already rendering.
-    if (!selectable && m_smoothCheck->isChecked()) {
-        const QSignalBlocker blocker(m_smoothCheck);
-        m_smoothCheck->setChecked(false);
-    }
+    // Unticked while unavailable, so it does not sit there claiming a
+    // smoothness the picture does not have -- and ticked again from what was
+    // last asked of it when it comes back. This is where it parts company
+    // with the palette-alpha box it otherwise copies: that one is off by
+    // default and has nothing to restore, while this one is on, so leaving it
+    // clear after one older server would turn the default off for the rest of
+    // the session. Silently either way, since whatever changed the session is
+    // already rendering.
+    const QSignalBlocker blocker(m_smoothCheck);
+    m_smoothCheck->setChecked(selectable && m_smoothWanted);
     m_smoothCheck->setToolTip(selectable
             ? tr("Read each ray sample from the eight voxels around it "
                  "instead of the one it lands in, which is what stops a "

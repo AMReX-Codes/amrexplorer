@@ -295,13 +295,20 @@ public:
         // Both refusals here as well as in RemoteDatasetSession: this class
         // is public, this is where the negotiated version lives, and a caller
         // that did not ask first would otherwise have its request quietly
-        // answered by a different rule than the one it named.
-        if (request.sampling == SamplingPolicy::Linear
-            && !supportsVolumeSampling()) {
-            throw std::runtime_error(volumeSamplingUnsupportedMessage);
-        }
+        // answered by a different rule than the one it named. Rendering
+        // first, because sampling defaults to Linear: a peer too old to render
+        // volumes at all would otherwise be reported as merely too old to
+        // smooth them, which is advice about the wrong problem.
         if (!supportsVolumeRendering()) {
             throw std::runtime_error(volumeRenderingUnsupportedMessage);
+        }
+        // Then anything the wire default cannot express. Tested against
+        // Nearest rather than for Linear: a peer older than 1.3 drops the
+        // field and renders nearest whatever it held, so Nearest is the only
+        // value that may travel there -- and the enum has a third.
+        if (request.sampling != SamplingPolicy::Nearest
+            && !supportsVolumeSampling()) {
+            throw std::runtime_error(volumeSamplingUnsupportedMessage);
         }
         // Indefinite: the first render of a field samples the plotfile,
         // which can outlast the request timeout; the token still cancels it.

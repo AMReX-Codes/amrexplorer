@@ -110,6 +110,11 @@ private:
     QComboBox* m_qualityCombo = nullptr;
     QCheckBox* m_regionCheck = nullptr;
     QCheckBox* m_smoothCheck = nullptr;
+    // What was last asked of the smooth-sampling box while it was available.
+    // The box itself cannot hold it: it is unticked while unavailable so it
+    // does not claim a smoothness the render lacks, and something has to
+    // remember what to put back.
+    bool m_smoothWanted = true;
     QCheckBox* m_boxesCheck = nullptr;
     QCheckBox* m_outlineCheck = nullptr;
     QLabel* m_status = nullptr;

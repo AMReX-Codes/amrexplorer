@@ -35,7 +35,7 @@ constexpr std::array<std::array<int, 2>, 12> boxEdges{{
 
 IsoWidget::IsoWidget(QWidget* parent)
     : QWidget(parent)
-    , m_camera{30.0 * pi / 180.0, 30.0 * pi / 180.0, 1.0}
+    , m_camera(orthoDefaultView)
 {
     setMinimumSize(200, 150);
     setMouseTracking(true);

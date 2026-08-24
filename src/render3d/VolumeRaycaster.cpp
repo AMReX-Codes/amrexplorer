@@ -517,8 +517,11 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
               // Seven interpolations along the axes in turn rather than
               // eight corners each weighted by a product: the same value, and
               // the weight products are what this loop spends its time on.
+              // std::lerp rather than from + where * (to - from): it is
+              // specified to return the endpoints exactly, which is what the
+              // clamped shell above leans on when it claims to read flat.
               const auto between = [](double from, double to, double where) {
-                  return from + where * (to - from);
+                  return std::lerp(from, to, where);
               };
               const auto blend = [&](const std::array<double, 8>& corner) {
                   const auto lowY

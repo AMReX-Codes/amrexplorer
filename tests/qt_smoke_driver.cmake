@@ -23,6 +23,7 @@
 #                 sequence-equal-size-transform-preserve |
 #                 sequence-geometry-refit | sequence-noop | sequence-failure |
 #                 remote-canvas-wheel | remote-cell-aspect | volume |
+#                 derived-field | derived-field-sequence |
 #                 scale-state | effective-scale |
 #                 arrow-key-routing | animation-dock-role | open-failure |
 #                 idle-ui-state | sequence-scale-report |
@@ -61,6 +62,26 @@ if(MODE STREQUAL "slice")
 elseif(MODE STREQUAL "volume")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --volume-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "derived-field")
+    if(NOT DEFINED SECOND_SOURCE)
+        message(FATAL_ERROR "derived-field requires -DSECOND_SOURCE=...")
+    endif()
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${MATERIALIZER}" "${SECOND_SOURCE}" "${WORK}/other")
+    # Three runs in one settings store (the driver isolates it per test, and
+    # does not clear it between runs): the first applies a definition, which
+    # persists it; the second must find it on the next launch; the third opens
+    # a dataset that cannot satisfy it, which must still open without it.
+    run_or_die("${AMREXPLORER_QT}" --derived-field-smoke-test "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --derived-field-restore-smoke-test
+        "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --derived-field-skip-smoke-test
+        "${WORK}/other")
+elseif(MODE STREQUAL "derived-field-sequence")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --derived-field-sequence-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "sequence")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")

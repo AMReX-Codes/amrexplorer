@@ -427,6 +427,59 @@ Useful shortcuts are:
 | Ctrl+1 through Ctrl+9 | Composite levels 0 through N |
 | Alt+0 through Alt+9 | Exact level N |
 
+## Derived fields
+
+**Variable > Expression Editor...** defines fields computed from the ones the
+plotfile stores. Give each a name and a single-line expression; **Apply**
+checks the whole list and, if it holds, reopens the dataset with the new
+fields, which then appear in the field selector and the **Variable** menu and
+behave like any other field -- slices, line plots, the volume view, the probe
+and export all work on them.
+
+Expressions use `+`, `-`, `*`, `/` and `**` (or the equivalent `pow(a,b)`),
+with `abs`, `sqrt`, `exp`, `log`, `exp10` and `log10`, and parentheses. For
+example:
+
+```text
+sqrt(x_velocity**2 + y_velocity**2)
+```
+
+A field whose name is not a plain identifier -- anything but letters, digits,
+`_` and `.` -- is written `${...}`, which takes the name exactly as given:
+
+```text
+sqrt(${x-momentum}**2 + ${y-momentum}**2) / density
+log10(${Y(H2)})
+```
+
+`x`, `y` and `z` are the sample's coordinates, so `sqrt(x**2 + y**2)` is a
+radius field. They are the dataset's own axis coordinates: on a spherical or
+cylindrical dataset they are (r, theta) or (r, z), not Cartesian. A dataset
+with a field actually named `x` uses that field instead. Coordinates are
+unavailable for standalone FABs and MultiFabs, which carry no physical
+geometry.
+
+An expression may also use the derived fields defined above it in the list, so
+a long formula can be built in steps. Each definition is checked against the
+dataset when you apply it, and an error names the definition and points into
+the expression.
+
+Other notes:
+
+- Derived fields have no stored minimum and maximum, so the **File** and
+  **Level** range modes are unavailable for them and the range starts on
+  **Visible**. **User** works as usual.
+- A result that is not a number -- `log` of a negative value, a division by
+  zero -- is treated as missing data, like any other non-finite sample.
+- The list is remembered between sessions and applies to whatever you open
+  next. A definition that a dataset cannot satisfy (a field it does not have)
+  is simply left out, and the status bar says which; the rest still apply.
+- **Import...** and **Export...** read and write the list as a JSON expression
+  list. An import replaces what the editor is showing; nothing reaches the
+  dataset until you select **Apply**.
+- Derived fields are computed where the data is read, so they are not
+  available for a dataset opened from a remote server.
+
 ## Ranges, logarithms, and palettes
 
 The **Range** control determines which values map to the ends of the color

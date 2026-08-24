@@ -115,6 +115,10 @@ void MainWindow::restoreSettings()
     }
     m_colorBar->setPalette(&m_paletteController->palette());
 
+    // Installed without validating: no dataset is open yet, and the next one
+    // to open takes what of the list it can resolve.
+    m_derivedFields->restore(settings);
+
     m_range->showLogarithmic(
         settings.value(QStringLiteral("range/logarithmic"), false).toBool());
     {
@@ -180,6 +184,7 @@ void MainWindow::saveSettings()
     // session would produce unexpected color bars.
     settings.setValue(QStringLiteral("range/logarithmic"), m_range->logarithmic());
     m_paletteController->save(settings);
+    m_derivedFields->save(settings);
     settings.setValue(QStringLiteral("numberFormat"), m_numberFormat);
     settings.setValue(QStringLiteral("animation/speed"),
         m_animationPanel->speedValue());
@@ -1014,6 +1019,15 @@ void MainWindow::requestInitialSlice(
     // file range (falling back to Visible when metadata statistics are
     // unavailable), linear scale, whole domain, midpoint positions.
     FrameSliceSpec spec = initialSpec.value_or(FrameSliceSpec{});
+    // Set whatever the spec came from: the derived-field list is a viewer-wide
+    // setting rather than per-frame state, and the specs that reach here
+    // without it are the ones that matter most -- a fresh open (which has no
+    // spec at all, so a list restored from settings would never be installed)
+    // and a FAB round-trip's default. A remote session is already open and
+    // installs none (see FrameSliceSpec::derivedFields).
+    spec.derivedFields = preparedSession
+        ? std::vector<DerivedFieldDefinition>{}
+        : m_derivedFields->definitions();
     if (!initialSpec) {
         spec.palette = m_paletteController->palette();
         spec.displayMode = m_displayMode;
@@ -1080,6 +1094,11 @@ void MainWindow::requestInitialSlice(
                         restoredSpec.has_value());
                     m_volumeController->configureForDataset();
                     configureSliceControls();
+                    // The dock was filled from the file's own metadata before
+                    // this session existed, so it lists neither the derived
+                    // fields the session installed nor, after a reload, the
+                    // ones that have gone.
+                    refreshMetadataDisplay();
                     if (restoredSpec) {
                         const QSignalBlocker fieldBlocker(m_fieldSelector);
                         const QSignalBlocker levelBlocker(m_levelSelector);
@@ -1168,6 +1187,9 @@ void MainWindow::requestInitialSlice(
                     }
                     const auto cache = m_dataset->cacheMetrics();
                     m_diagnosticsModel->setCacheMetrics(cache);
+                    // Before the cache-fallback notice below, for the same
+                    // reason the sequence path reports it in that order.
+                    reportSkippedDerivedFields();
                     if (result.cacheFallbackToLevel >= 0) {
                         // Non-modal: an informational cache-fallback notice must
                         // not pop a modal dialog that would block the quit path.

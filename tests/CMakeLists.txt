@@ -599,6 +599,30 @@ if(TARGET amrexplorer_qt)
     )
     add_test(NAME sequence_controller COMMAND test_sequence_controller)
 
+    add_executable(test_derived_field_controller
+        unit/test_derived_field_controller.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/DerivedFieldController.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/DerivedFieldController.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ExpressionEditorDialog.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ExpressionEditorDialog.hpp"
+    )
+    set_target_properties(test_derived_field_controller
+        PROPERTIES AUTOMOC ON)
+    target_include_directories(test_derived_field_controller
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_derived_field_controller
+        PRIVATE
+            amrexplorer::core
+            amrexplorer::warnings
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Widgets
+    )
+    # Builds the real editor widgets, so it needs a QPA platform.
+    add_test(NAME derived_field_controller
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_derived_field_controller>")
+
     add_executable(test_palette_controller
         unit/test_palette_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/PaletteController.cpp"
@@ -1280,6 +1304,39 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_volume_smoke_3d PROPERTIES TIMEOUT 60)
+
+    # Derived fields through the GUI: the Variable menu's Expression Editor
+    # refuses a definition the dataset cannot satisfy and reports it in place,
+    # then an accepted one reaches the field selector and the Variable menu and
+    # renders when selected. The 2-D fixture has the two fields the expression
+    # multiplies.
+    add_test(
+        NAME qt_derived_field_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DSECOND_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_derived_field"
+            -DMODE=derived-field
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_derived_field_smoke PROPERTIES TIMEOUT 60)
+
+    # Applying a definition while a plotfile sequence is open: the frame on
+    # screen reloads with it and the sequence is still navigable afterwards,
+    # which is what separates the reload from an ordinary dataset open.
+    add_test(
+        NAME qt_derived_field_sequence_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_derived_field_sequence"
+            -DMODE=derived-field-sequence
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_derived_field_sequence_smoke PROPERTIES TIMEOUT 60)
     add_test(
         NAME qt_particle_visible_range_smoke_3d
         COMMAND "${CMAKE_COMMAND}"

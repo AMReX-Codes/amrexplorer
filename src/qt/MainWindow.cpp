@@ -25,6 +25,42 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_paletteController, &PaletteController::loadFileRequested, this,
         [this] { loadPaletteFile(); });
 
+    // Derived fields: the controller owns the definition list, its editor and
+    // its persistence. It asks the window for the fields a definition may read
+    // (the open dataset's stored ones) and for the reload that installs a
+    // committed list, since only the window knows whether a sequence is
+    // running. buildFrameSpec is where the list reaches a dataset.
+    m_derivedFields = new DerivedFieldController(
+        DerivedFieldController::Hooks{
+            .available = [this] {
+                return m_dataset && m_dataset->supportsDerivedFields();
+            },
+            .storedMetadata = [this]() -> std::optional<DatasetMetadata> {
+                if (!m_dataset || !m_dataset->supportsDerivedFields()) {
+                    return std::nullopt;
+                }
+                auto metadata = m_dataset->metadata();
+                // The stored fields alone: a definition is validated against
+                // what the plotfile holds, not against the derived fields the
+                // open session already installed (which the list replaces).
+                const auto stored = std::min(
+                    m_dataset->storedFieldCount(), metadata.fields.size());
+                metadata.fields.resize(stored);
+                return metadata;
+            },
+            .reload = [this] { reloadCurrentDataset(); },
+            .settings = [] { return makeSettingsPtr(); },
+            .chooseFile =
+                [this](QWidget* dialog, bool forSaving) {
+                    return chooseExpressionListPath(dialog, forSaving);
+                },
+        },
+        this);
+    connect(m_derivedFields, &DerivedFieldController::statusMessage, this,
+        [this](const QString& message, int timeoutMs) {
+            statusBar()->showMessage(message, timeoutMs);
+        });
+
     // The plot area is a stacked widget: page 0 holds the single 2-D view,
     // page 1 the 3-D grid (XY top-left, XZ top-right, YZ bottom-left, iso
     // wireframe bottom-right).
@@ -1234,6 +1270,12 @@ void MainWindow::createMenus()
     // Variable menu: lists all fields with a bullet on the active one.
     m_variableMenu = menuBar()->addMenu(tr("&Variable"));
     m_variableGroup = new QActionGroup(this);
+    // Owned by the window, not the menu, so rebuildVariableMenu's clear()
+    // leaves it alive to be re-added. The menu itself stays enabled with no
+    // dataset open so the editor's own (disabled) entry is discoverable.
+    m_expressionEditorAction = m_derivedFields->createAction(this);
+    m_variableMenu->addAction(m_expressionEditorAction);
+    m_variableMenu->setEnabled(true);
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
     auto* guideAction = new QAction(tr("&User Guide..."), this);
@@ -1334,11 +1376,15 @@ void MainWindow::syncMenuChecks()
 void MainWindow::rebuildVariableMenu()
 {
     m_variableMenu->clear();
+    // The menu stays enabled with nothing open: it then holds the Expression
+    // Editor entry alone, disabled with a reason, which is more discoverable
+    // than a menu that cannot be opened at all.
+    m_variableMenu->setEnabled(true);
     if (!m_dataset) {
-        m_variableMenu->setEnabled(false);
+        m_variableMenu->addAction(m_expressionEditorAction);
+        m_derivedFields->refreshAvailability();
         return;
     }
-    m_variableMenu->setEnabled(true);
     const auto& metadata = m_dataset->metadata();
     const auto currentField = m_fieldSelector->currentIndex() >= 0
         ? m_fieldSelector->currentData().toUInt() : 0;
@@ -1357,6 +1403,11 @@ void MainWindow::rebuildVariableMenu()
             }
         });
     }
+    // Re-added after every rebuild: clear() above only *removes* it, because
+    // the action belongs to the window rather than to the menu.
+    m_variableMenu->addSeparator();
+    m_variableMenu->addAction(m_expressionEditorAction);
+    m_derivedFields->refreshAvailability();
 }
 
 void MainWindow::syncVariableMenu()
@@ -1366,7 +1417,9 @@ void MainWindow::syncVariableMenu()
     }
     const auto currentField = m_fieldSelector->currentIndex() >= 0
         ? m_fieldSelector->currentData().toUInt() : 0;
-    const auto actions = m_variableMenu->actions();
+    // Only the field entries, which are the ones in the group: the separator
+    // and the Expression Editor action follow them.
+    const auto actions = m_variableGroup->actions();
     for (int i = 0; i < actions.size(); ++i) {
         actions[i]->setChecked(
             static_cast<std::uint32_t>(i) == currentField);
@@ -1390,6 +1443,75 @@ void MainWindow::loadPaletteFile()
     auto writableSettings = makeSettings();
     writableSettings.setValue(QStringLiteral("lastOpenDirectory"),
         QFileInfo(filename).absolutePath());
+}
+
+QString MainWindow::chooseExpressionListPath(QWidget* parent, bool forSaving)
+{
+    auto settings = makeSettings();
+    const auto directory =
+        settings.value(QStringLiteral("lastOpenDirectory")).toString();
+    const auto filter = tr("Expression lists (*.json);;All files (*)");
+    // The offscreen platform the smoke tests run on has no native dialog to
+    // drive, and a native one would not be scriptable there either.
+    const auto options = QApplication::platformName()
+            == QLatin1String("offscreen")
+        ? QFileDialog::Options{QFileDialog::DontUseNativeDialog}
+        : QFileDialog::Options{};
+    const auto path = forSaving
+        ? QFileDialog::getSaveFileName(parent, tr("Export Derived Fields"),
+              directory.isEmpty()
+                  ? QStringLiteral("expressions.json")
+                  : directory + QStringLiteral("/expressions.json"),
+              filter, nullptr, options)
+        : QFileDialog::getOpenFileName(parent, tr("Import Derived Fields"),
+              directory, filter, nullptr, options);
+    if (!path.isEmpty()) {
+        settings.setValue(QStringLiteral("lastOpenDirectory"),
+            QFileInfo(path).absolutePath());
+    }
+    return path;
+}
+
+void MainWindow::reloadCurrentDataset()
+{
+    if (!m_dataset || m_datasetPath.empty()) {
+        return;
+    }
+    if (m_sequenceController->hasSequence()) {
+        // A prefetched frame was rendered against the previous field list.
+        m_sequenceController->invalidatePrefetch();
+        m_sequenceController->goToFrame(
+            m_sequenceController->currentIndex(), true);
+        return;
+    }
+    // Not openDataset: that ends the sequence, drops the zoom and closes the
+    // line-plot, dataset and volume windows. This is the same reload a
+    // sequence frame switch performs, on the frame already shown.
+    const auto generation = ++m_generation;
+    m_initialStopSource.request_stop();
+    m_initialStopSource = StopSource{};
+    for (auto* state : allViewStates()) {
+        state->stopSource.request_stop();
+        ++state->sliceGeneration;
+    }
+    m_sliceDebounce->stop();
+    requestInitialSlice(m_datasetPath, generation, std::nullopt,
+        m_dataset->metadata().isFab ? std::filesystem::path{}
+                                    : std::filesystem::path{},
+        buildFrameSpec());
+}
+
+void MainWindow::refreshMetadataDisplay()
+{
+    if (!m_dataset) {
+        return;
+    }
+    PlotfileMetadataResult displayed;
+    displayed.metadata =
+        std::make_shared<const DatasetMetadata>(m_dataset->metadata());
+    displayed.metrics = m_dataset->metadataReadMetrics();
+    displayed.fileVersion = m_dataset->fileVersion();
+    showMetadata(displayed, m_datasetPath);
 }
 
 void MainWindow::refreshPaletteDisplay()

@@ -30,6 +30,11 @@ void populateLevelCombo(QComboBox* combo, int finestLevel)
 void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
 {
     m_controlsReady = true;
+    // Both configure paths (a single dataset and a sequence frame) come
+    // through here, so this is where the editor's availability is re-derived
+    // for the newly installed session. What that session could *not* install
+    // is reported once its slices are on screen -- showSlice clears the status
+    // bar, so a message from here would not survive the load that follows it.
     m_fieldSelector->setEnabled(true);
     m_levelSelector->setEnabled(true);
     m_range->setControlsReady(true);
@@ -78,6 +83,26 @@ void MainWindow::configureSliceControls()
         publishSlicePositions();
     }
     ensureVectorFieldDefaults();
+}
+
+void MainWindow::reportSkippedDerivedFields()
+{
+    if (!m_dataset) {
+        return;
+    }
+    // Called from where a load's own notices are shown (after the slices, past
+    // showSlice's clearMessage), so this is a status message that stays up.
+    const auto report =
+        m_derivedFields->skippedReport(m_dataset->skippedDerivedFields());
+    // Only on a change: a sequence whose frames all lack the same field would
+    // otherwise repeat the message on every frame of a playback.
+    if (report == m_lastSkippedDerivedReport) {
+        return;
+    }
+    m_lastSkippedDerivedReport = report;
+    if (!report.isEmpty()) {
+        statusBar()->showMessage(report, 8000);
+    }
 }
 
 void MainWindow::publishSlicePositions()
@@ -1565,6 +1590,9 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     // from one. A scale picked on an earlier frame otherwise kept that frame's
     // number.
     refreshScaleReport();
+    // Before the cache-fallback notice, which is about the render the user is
+    // looking at and so takes the status bar if both happened.
+    reportSkippedDerivedFields();
     if (result.cacheFallbackToLevel >= 0) {
         statusBar()->showMessage(cacheFallbackMessage(
             *result.dataset, result.cacheFallbackFromLevel,
@@ -1672,6 +1700,13 @@ void MainWindow::updateRangeModeAvailability()
 FrameSliceSpec MainWindow::buildFrameSpec()
 {
     FrameSliceSpec spec;
+    // The session a frame load opens installs these. A remote session cannot,
+    // and the list can be non-empty over one (restored from settings, or
+    // applied to a local dataset before connecting), so the spec carries them
+    // only where they can be honoured -- see FrameSliceSpec::derivedFields.
+    spec.derivedFields = m_dataset && m_dataset->supportsDerivedFields()
+        ? m_derivedFields->definitions()
+        : std::vector<DerivedFieldDefinition>{};
     spec.displayMode = m_displayMode;
     spec.palette = m_paletteController->palette();
     spec.contourCount = m_contourCount;

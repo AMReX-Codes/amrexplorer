@@ -76,6 +76,7 @@ class LinePlotWindow;
 class ScientificDoubleSpinBox;
 class DiagnosticsModel;
 class FabNavigator;
+class DerivedFieldController;
 class PaletteController;
 class ParticleController;
 class RangeController;
@@ -523,6 +524,24 @@ private:
     void createMenus();
     void rebuildLevelMenu();
     void rebuildVariableMenu();
+    // Reopens what is on screen with the current frame spec -- the derived
+    // field list included -- without the teardown a fresh open performs: the
+    // sequence, the zoom and the open windows all stay. A sequence goes
+    // through its controller so its frame bookkeeping stays consistent; a
+    // single dataset is reloaded straight through requestInitialSlice, whose
+    // new generation both invalidates the in-flight work and gives the
+    // replacement session a dataset id of its own.
+    void reloadCurrentDataset();
+    // The Import/Export file dialog the derived-field controller asks for.
+    [[nodiscard]] QString chooseExpressionListPath(
+        QWidget* parent, bool forSaving);
+    // Rebuilds the Dataset Metadata dock from the open session's metadata,
+    // which a reload can change (a derived field appears or leaves) without
+    // going through the open path that first filled it.
+    void refreshMetadataDisplay();
+    // Says which committed definitions the session that has just been
+    // installed could not provide, once per change in that answer.
+    void reportSkippedDerivedFields();
     void syncMenuChecks();
     void syncVariableMenu();
     // Runs the palette-file dialog for the controller's Load Palette File...
@@ -885,6 +904,11 @@ private:
     QActionGroup* m_scaleGroup = nullptr;
     QActionGroup* m_levelGroup = nullptr;
     QActionGroup* m_variableGroup = nullptr;
+    // Window-owned so rebuildVariableMenu's clear() does not delete it.
+    QAction* m_expressionEditorAction = nullptr;
+    // The last skipped-definition report shown, so a sequence playback does
+    // not repeat it frame after frame.
+    QString m_lastSkippedDerivedReport;
     QAction* m_boxesAction = nullptr;
     QAction* m_slicePlanesAction = nullptr;
     QAction* m_resetZoomAction = nullptr;
@@ -937,6 +961,7 @@ private:
     // Owns the palette selection, its widgets and persistence; palette() is
     // what the renderer, color bar and overlays use.
     PaletteController* m_paletteController = nullptr;
+    DerivedFieldController* m_derivedFields = nullptr;
     QString m_numberFormat = defaultNumberFormat();
     bool m_controlsReady = false;
     std::uint64_t m_generation = 0;

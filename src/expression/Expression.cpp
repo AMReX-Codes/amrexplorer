@@ -9,6 +9,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -58,6 +59,26 @@ constexpr std::size_t batchPoints = 512;
 std::string errorMessage(std::string message, std::size_t offset)
 {
     return std::move(message) + " at byte " + std::to_string(offset);
+}
+
+// One source byte as it can safely appear in a message: printable ASCII as
+// itself, anything else as \xNN. Messages reach a Qt label as UTF-8, and a
+// byte spliced straight out of the source is not a character -- a pasted
+// U+2212 minus or U+00D7 times, which is what copying a formula out of a paper
+// gives you, is two or three bytes and each one alone is invalid UTF-8 that
+// renders as U+FFFD.
+std::string quotedByte(char value)
+{
+    const auto byte = static_cast<unsigned char>(value);
+    if (byte >= 0x20 && byte < 0x7F) {
+        return "'" + std::string(1, value) + "'";
+    }
+    constexpr std::string_view digits = "0123456789abcdef";
+    std::string quoted = "'\\x";
+    quoted += digits[byte >> 4U];
+    quoted += digits[byte & 0x0FU];
+    quoted += "'";
+    return quoted;
 }
 
 enum class TokenKind : std::uint8_t {
@@ -175,7 +196,7 @@ public:
             return {.kind = TokenKind::Comma, .offset = offset, .text = ","};
         default:
             throw ExpressionError(
-                "unexpected token '" + std::string(1, value) + "'", offset);
+                "unexpected token " + quotedByte(value), offset);
         }
     }
 
@@ -205,6 +226,13 @@ private:
         while (m_position < m_source.size() && m_source[m_position] != '}') {
             if (m_source[m_position] == '\n' || m_source[m_position] == '\r') {
                 throw ExpressionError("newlines are not allowed", m_position);
+            }
+            // Refused rather than taken as part of the name, so a mistyped
+            // nested reference ("${a${b}}") is a syntax error here instead of
+            // a symbol named "a${b" that fails much later as an unknown field.
+            if (m_source[m_position] == '{') {
+                throw ExpressionError("'{' is not allowed in a '${...}' name",
+                    offset);
             }
             ++m_position;
         }
@@ -255,18 +283,31 @@ private:
         }
 
         const auto text = m_source.substr(offset, m_position - offset);
+        // A literal whose significand is zero *is* zero, whatever its exponent
+        // says: "0e-9999" is 0.0 and not an error. Settled here, before the
+        // conversion, because the libraries disagree about how they report an
+        // out-of-range exponent -- some return zero with no error, others set
+        // the failbit -- and on the latter a verdict-driven check would reject
+        // this. The significand is the one thing that does not vary.
+        if (!hasNonzeroSignificand(text)) {
+            return {
+                .kind = TokenKind::Number,
+                .offset = offset,
+                .text = text,
+                .number = 0.0
+            };
+        }
         double result = 0.0;
         // The classic locale, not the process one: a decimal point must mean a
         // decimal point wherever the viewer runs.
         std::istringstream conversion(std::string{text});
         conversion.imbue(std::locale::classic());
         conversion >> result;
-        // The three ways a literal leaves the representable range, which the
-        // standard libraries disagree about: a failbit, an infinity, and a
-        // silent zero for an underflowing exponent ("1e-9999"). Rejecting all
-        // three keeps the same source an error everywhere.
-        if (conversion.fail() || !std::isfinite(result)
-            || (result == 0.0 && hasNonzeroSignificand(text))) {
+        // The three ways a nonzero significand leaves the representable range,
+        // which the libraries also disagree about: a failbit, an infinity, and
+        // a silent zero from an underflowing exponent. Rejecting all three
+        // keeps the same source an error everywhere.
+        if (conversion.fail() || !std::isfinite(result) || result == 0.0) {
             throw ExpressionError("numeric literal is out of range", offset);
         }
         if (!conversion.eof()) {
@@ -303,17 +344,27 @@ public:
     }
 
 private:
-    // Bounds both recursive descents below on the one counter: parenthesis and
-    // call nesting through parseExpression, and sign chains ("---x") through
-    // parseUnary. Without it a deep enough source overflows the C++ stack.
+    // Bounds every recursive descent below on the one counter: parenthesis and
+    // call nesting through parseExpression, sign chains ("---x") through
+    // parseUnary, and power chains ("a**a**a") through parsePower. Without it
+    // a deep enough source overflows the C++ stack. Each construct costs
+    // exactly one level, so the limit means the same thing whichever of the
+    // three does the nesting.
     class DepthGuard {
     public:
         explicit DepthGuard(Parser& parser)
             : m_parser(parser)
         {
-            if (++m_parser.m_depth > maximumExpressionDepth) {
+            // Checked before the increment, not after: a constructor that
+            // throws does not run its own destructor, so incrementing first
+            // would leave the counter permanently high -- invisible today,
+            // because the throw always leaves compile() and the parser is
+            // single-use, but a trap for anyone who later catches inside the
+            // parse to collect more than one diagnostic.
+            if (m_parser.m_depth >= maximumExpressionDepth) {
                 m_parser.fail("expression nests too deeply");
             }
+            ++m_parser.m_depth;
         }
         DepthGuard(const DepthGuard&) = delete;
         DepthGuard& operator=(const DepthGuard&) = delete;
@@ -409,6 +460,15 @@ private:
     {
         parsePrimary();
         if (m_current.kind == TokenKind::Power) {
+            // The third recursion the depth limit has to bound, and the one
+            // that is easiest to miss: the right operand of ** is a unary, so
+            // "a**a**a..." descends once per operator without passing through
+            // a parenthesis or a sign. Unguarded it overflowed the C++ stack
+            // on a thread with a small stack (a 1000-term chain, well inside
+            // the byte limit, faulted on 128 KiB) and drove the compiled
+            // stack depth -- and so the batch evaluator's slot buffer -- up
+            // with the chain's length.
+            const DepthGuard guard(*this);
             advance();
             parseUnary();
             emit(Opcode::Pow);

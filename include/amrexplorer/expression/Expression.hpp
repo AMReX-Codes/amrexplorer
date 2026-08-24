@@ -20,7 +20,7 @@
 //                    | unary-function "(" expression ")"
 //                    | "pow" "(" expression "," expression ")"
 //   unary-function  := "abs" | "sqrt" | "exp" | "log" | "exp10" | "log10"
-//   symbol          := identifier | "${" any-but-brace+ "}"
+//   symbol          := identifier | "${" any-but-brace-or-newline+ "}"
 //
 // A symbol is a bare identifier ([A-Za-z_][A-Za-z0-9_.]*) or, for a name a
 // bare identifier cannot spell -- "x-momentum", "Y(H2)" -- the same name

@@ -114,6 +114,29 @@ void exercise(std::string_view source)
     }
 }
 
+// A valid expression of exactly `bytes` bytes, so the length ceiling is probed
+// with something that would be *accepted* but for its length. A run of digits
+// is not: it is one enormous numeric literal, rejected as out of range however
+// short it is, which makes the just-inside probe say nothing.
+std::string additiveChain(std::size_t bytes)
+{
+    std::string source = bytes % 2 == 0 ? "11" : "1";
+    while (source.size() < bytes) {
+        source += "+1";
+    }
+    return source;
+}
+
+// "1**1**...", the recursion that a parenthesis or sign chain does not reach.
+std::string powerChain(std::size_t operators)
+{
+    std::string source = "1";
+    for (std::size_t index = 0; index < operators; ++index) {
+        source += "**1";
+    }
+    return source;
+}
+
 const std::vector<std::string>& expressionSeeds()
 {
     static const std::vector<std::string> seeds{
@@ -154,18 +177,24 @@ int main()
     for (const std::size_t n : {amrvis::maximumExpressionBytes - 1,
              amrvis::maximumExpressionBytes,
              amrvis::maximumExpressionBytes + 1}) {
-        const std::string text(n, '1');
-        amrvis::fuzz::setCurrentInput(iteration++, text.data(), text.size());
-        exercise(text);
+        for (const std::string& text : {additiveChain(n), std::string(n, '1')}) {
+            amrvis::fuzz::setCurrentInput(
+                iteration++, text.data(), text.size());
+            exercise(text);
+        }
     }
     for (const std::size_t n : {amrvis::maximumExpressionDepth - 1,
              amrvis::maximumExpressionDepth,
              amrvis::maximumExpressionDepth + 1,
-             amrvis::maximumExpressionBytes / 2}) {
+             amrvis::maximumExpressionBytes / 4}) {
+        // All three recursions, at and around the bound. The power chain is
+        // here because it was the one the bound did not cover, and a chain long
+        // enough to matter is well inside the byte limit.
         for (const std::string& text :
             {std::string(n, '(') + "1" + std::string(n, ')'),
                 std::string(n, '-') + "1",
-                std::string(n, '(') + "1"}) {
+                std::string(n, '(') + "1",
+                powerChain(n)}) {
             amrvis::fuzz::setCurrentInput(
                 iteration++, text.data(), text.size());
             exercise(text);

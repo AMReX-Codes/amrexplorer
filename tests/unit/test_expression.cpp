@@ -110,6 +110,29 @@ void requireBatchMatchesScalar(
     }
 }
 
+// A power chain of `operators` operators: "1**1**...". Right-associative and
+// all ones, so the value is 1 however deep it goes.
+std::string powerChain(std::size_t operators)
+{
+    std::string source = "1";
+    for (std::size_t index = 0; index < operators; ++index) {
+        source += "**1";
+    }
+    return source;
+}
+
+// A valid expression of exactly `bytes` bytes. Additive, because parseAdditive
+// iterates rather than recursing, so length can be probed without also hitting
+// the depth limit. Its value is the number of terms plus ten.
+std::string additiveChain(std::size_t bytes)
+{
+    std::string source = bytes % 2 == 0 ? "11" : "1";
+    while (source.size() < bytes) {
+        source += "+1";
+    }
+    return source;
+}
+
 std::vector<double> ramp(std::size_t count, double first, double step)
 {
     std::vector<double> values;
@@ -267,6 +290,12 @@ int main()
         requireError("1\n+2", 1, "newlines are not allowed");
         requireError("1\r+2", 1, "newlines are not allowed");
         requireError("2^3", 1, "unexpected token");
+        // A byte that is not a character is quoted as hex, never spliced into
+        // the message: the message is UTF-8 by the time a label shows it, and
+        // one byte of a pasted U+2212 minus is not valid UTF-8 on its own.
+        requireError("a \xe2\x88\x92 b", 2, "unexpected token '\\xe2'");
+        requireError("a\x0b+b", 1, "unexpected token '\\x0b'");
+        requireError(std::string("a\0+b", 4), 1, "unexpected token '\\x00'");
         requireError("x=1", 1, "unexpected token");
         requireError("1;2", 1, "unexpected token");
         requireError("sin(1)", 0, "unknown function");
@@ -278,6 +307,11 @@ int main()
         requireError("1e-9999", 0, "out of range");
         requireError(".1e-9999", 0, "out of range");
         requireError("$density", 0, "expected '{'");
+        // A brace inside the name is refused rather than taken as part of it,
+        // which is what the documented grammar says and what turns a mistyped
+        // "${a${b}}" into a syntax error instead of a symbol named "a${b".
+        requireError("${a{b}", 0, "not allowed in a '${...}' name");
+        requireError("${a${b}}", 0, "not allowed in a '${...}' name");
         requireError("1 + ${", 4, "unterminated");
         requireError("1 + ${density", 4, "unterminated");
         requireError("${}", 0, "names no field");
@@ -293,6 +327,13 @@ int main()
                 "nests too deeply");
             requireErrorMessage(
                 std::string(depth, '-') + "1", "nests too deeply");
+            // Power chains are the third recursion, and the one that went
+            // unbounded: the right operand of ** is a unary, so a chain
+            // descends once per operator without a parenthesis or a sign in
+            // sight. Both sides of the bound, as for the other two.
+            requireErrorMessage(powerChain(depth), "nests too deeply");
+            require(close(evaluate(powerChain(depth - 1)), 1.0),
+                "a power chain within the depth limit was rejected");
             // One parenthesis short of the limit still compiles, so the limit
             // bounds the recursion rather than the whole grammar.
             const auto allowed = std::string(depth - 1, '(') + "2"
@@ -304,9 +345,18 @@ int main()
                 "a sign chain within the depth limit was rejected");
         }
         {
-            const auto tooLong =
-                std::string(amrvis::maximumExpressionBytes + 1, '1');
-            requireError(tooLong, amrvis::maximumExpressionBytes, "exceeds");
+            const auto limit = amrvis::maximumExpressionBytes;
+            const auto tooLong = std::string(limit + 1, '1');
+            requireError(tooLong, limit, "exceeds");
+            // And the accepted side of the same bound. Without it the length
+            // check can be off by one -- ">" for ">=" -- with nothing to
+            // notice: every other length case here is a rejection.
+            const auto atLimit = additiveChain(limit);
+            require(atLimit.size() == limit, "the length fixture is the wrong "
+                                             "size");
+            require(close(evaluate(atLimit),
+                        10.0 + static_cast<double>(limit / 2)),
+                "an expression of exactly the maximum length was rejected");
         }
 
         std::cout << "expression parser tests passed\n";

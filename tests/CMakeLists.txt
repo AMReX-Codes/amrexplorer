@@ -18,6 +18,13 @@ function(amrexplorer_add_fuzz_target target)
     endif()
 endfunction()
 
+add_executable(test_expression unit/test_expression.cpp)
+target_link_libraries(
+    test_expression PRIVATE amrexplorer::expression amrexplorer::warnings
+    Threads::Threads
+)
+add_test(NAME expression COMMAND test_expression)
+
 add_executable(test_core_metadata unit/test_core_metadata.cpp)
 target_link_libraries(test_core_metadata PRIVATE amrexplorer::core amrexplorer::warnings)
 add_test(NAME core_metadata COMMAND test_core_metadata)
@@ -1850,3 +1857,14 @@ target_include_directories(fuzz_header_parsing PRIVATE
 target_link_libraries(
     fuzz_header_parsing PRIVATE amrexplorer::io amrexplorer::warnings)
 amrexplorer_add_fuzz_target(fuzz_header_parsing)
+
+# Fuzz/property harness for the expression parser. Expression text is typed by
+# hand but also imported from files, so it gets the same treatment as the other
+# untrusted-input parsers. Deterministic + bounded; see the file header for
+# libFuzzer use.
+add_executable(fuzz_expression fuzz/fuzz_expression.cpp)
+target_include_directories(fuzz_expression PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/fuzz")
+target_link_libraries(
+    fuzz_expression PRIVATE amrexplorer::expression amrexplorer::warnings)
+amrexplorer_add_fuzz_target(fuzz_expression)

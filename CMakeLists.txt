@@ -245,6 +245,7 @@ if(AMREXPLORER_LIBFUZZER)
     amrexplorer_enable_libfuzzer_instrumentation()
 endif()
 
+add_subdirectory(src/expression)
 add_subdirectory(src/core)
 add_subdirectory(src/cache)
 add_subdirectory(src/io)

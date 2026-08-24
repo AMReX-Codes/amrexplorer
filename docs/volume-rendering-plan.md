@@ -379,8 +379,13 @@ row, threading note; `docs/building.md` unchanged.
 - **Isosurfaces** — extracted and shaded iso-value surfaces alongside the
   translucent volume; needs a marching-cubes pass over the sampled grid and
   a depth-composited draw.
-- **Trilinear sampling** — a request/wire field and the High quality preset;
-  nearest-voxel today.
+- ~~**Trilinear sampling**~~ — done: a request/wire field (protocol 1.3) and a
+  **Smooth sampling** box, on by default rather than tied to the High preset,
+  since terracing shows most while rotating and that is when Draft is in use.
+  It costs about 2.4x the march at equal samples per voxel, so lowering the
+  presets' samples now that each one carries more is a follow-up worth
+  measuring: linear at 1 sample/voxel already beats nearest at 2 for 18% more
+  time.
 - **Box-averaged downsampling** — when the voxel budget forces a coarser
   pitch than the finest level, average the cells under a voxel instead of
   taking the one at its centre.

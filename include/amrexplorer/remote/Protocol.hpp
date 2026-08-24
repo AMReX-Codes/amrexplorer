@@ -18,8 +18,15 @@
 namespace amrvis::remote {
 
 inline constexpr std::uint16_t protocolMajor = 1;
-// 1.1 added directory browsing; 1.2 adds volume rendering (RenderedFrame*).
-inline constexpr std::uint16_t protocolMinorVersion = 2;
+// 1.1 added directory browsing; 1.2 adds volume rendering (RenderedFrame*);
+// 1.3 adds the volume march's sampling policy (RenderedFrameRequest.sampling).
+//
+// 1.3 is a version rather than a bare appended field because the field changes
+// the picture. A 1.2 server ignores what it cannot read and renders nearest,
+// so a client that simply sent it would offer a control that silently did
+// nothing there -- the defect this codebase keeps designing against. The
+// version lets the client ask first and say so instead.
+inline constexpr std::uint16_t protocolMinorVersion = 3;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,

@@ -75,6 +75,14 @@ public:
     {
         return false;
     }
+    // Whether the march's sampling policy can be chosen. Separate from
+    // rendering itself because a peer speaking 1.2 renders volumes perfectly
+    // well and simply cannot be asked how to sample them; a session that
+    // renders at all can, unless it says otherwise.
+    [[nodiscard]] virtual bool supportsVolumeSampling() const noexcept
+    {
+        return supportsVolumeRendering();
+    }
     [[nodiscard]] virtual VolumeFrame renderVolume(
         const VolumeRenderRequest& request, StopToken cancellation = {})
     {

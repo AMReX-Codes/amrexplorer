@@ -404,6 +404,9 @@ VolumeFrame LocalDatasetSession::renderVolume(const VolumeRenderRequest& request
     }
     settings.transfer = request.transfer;
     settings.samplesPerVoxel = request.samplesPerVoxel;
+    // Not part of VolumeGridKey: this shapes the march, not the grid, so both
+    // modes read the same cached grid.
+    settings.sampling = request.sampling;
     auto frame = raycastVolume(*grid, settings, cancellation);
     const auto renderMicroseconds = frame.metrics.renderMicroseconds;
     frame.metrics = metrics;

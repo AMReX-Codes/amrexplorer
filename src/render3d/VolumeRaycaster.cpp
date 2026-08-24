@@ -255,9 +255,13 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     const auto& lower = grid.region.lower;
     // The reciprocal, because the march divides by the pitch three times per
     // sample and the pitch is fixed for the frame. Unlike the range mapping,
-    // where the reciprocal costs the exact palette-slot ties, this quotient
-    // only feeds std::floor: the sole values it can move are samples landing
-    // exactly on a voxel plane, an arbitrary tie either way.
+    // where the reciprocal costs the exact palette-slot ties, what this
+    // quotient can move is bounded: under Nearest it only feeds std::floor, so
+    // the sole values it moves are samples landing exactly on a voxel plane,
+    // an arbitrary tie either way. Under Linear it also feeds an interpolation
+    // weight, where the rounding is no longer confined to ties -- but it is an
+    // ulp of a weight, three orders below the 8-bit channel the weight ends up
+    // in, so it cannot move a rendered pixel.
     std::array<double, 3> inversePitch{};
     for (std::size_t axis = 0; axis < 3; ++axis) {
         const auto pitch = (grid.region.upper[axis] - grid.region.lower[axis])
@@ -414,6 +418,76 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     for (std::size_t axis = 0; axis < 3; ++axis) {
         voxelStep[axis] = rays.direction[axis] * step * inversePitch[axis];
     }
+    // Hoisted: one loop-invariant branch per sample rather than a policy read.
+    const auto linear = settings.sampling == SamplingPolicy::Linear;
+    // Trilinear over the eight voxel centres bracketing the sample.
+    //
+    // Voxel i is centred at i + 0.5 in this coordinate (Volume.hpp says so),
+    // which is why the nearest rule above can just take the floor -- the half
+    // voxel cancels. Interpolating has to put it back, or the picture moves
+    // half a voxel and still looks entirely plausible.
+    //
+    // Outside the outermost centres the bracket collapses onto the edge voxel
+    // and the weight goes to zero, so the outer half-voxel shell reads flat --
+    // the same value the nearest rule gives there, which is what keeps a
+    // uniform slab compositing to its analytic opacity rather than fading at
+    // the boundary. A corner the range cannot map -- uncovered, or
+    // non-positive under a logarithmic range -- takes the landed voxel's value
+    // instead, the 3-D form of what the slice's bilinear sampler does at a
+    // domain edge (SliceQuery.cpp): clamp the field to its coverage rather
+    // than invent data, and never let one NaN erode a voxel-wide rind. Every
+    // corner is then mappable, so the result is a convex combination of
+    // mappable values and is mappable itself.
+    const auto linearValue
+        = [&grid, &mappedRange, gridRowStride, slabStride](
+              const std::array<double, 3>& at, double landed) {
+              // Per axis: the two bracketing voxel indices and how far the
+              // sample sits between them.
+              std::array<std::array<std::size_t, 2>, 3> bracket{};
+              std::array<double, 3> weight{};
+              for (std::size_t axis = 0; axis < 3; ++axis) {
+                  const auto centred = at[axis] - 0.5;
+                  const auto limit = static_cast<double>(grid.dims[axis] - 1);
+                  double low = 0.0;
+                  double fraction = 0.0;
+                  // Ordered so NaN takes the first branch's false arm, the way
+                  // the clamp above does: it reads voxel zero rather than
+                  // casting something undefined. A single-voxel axis has
+                  // limit 0 and lands here too, with both ends on voxel zero.
+                  if (centred > 0.0) {
+                      if (centred < limit) {
+                          low = std::floor(centred);
+                          fraction = centred - low;
+                      } else {
+                          low = limit;
+                      }
+                  }
+                  bracket[axis][0] = static_cast<std::size_t>(low);
+                  bracket[axis][1]
+                      = static_cast<std::size_t>(low < limit ? low + 1.0 : limit);
+                  weight[axis] = fraction;
+              }
+              double result = 0.0;
+              for (std::size_t k = 0; k < 2; ++k) {
+                  const auto wz = k == 1 ? weight[2] : 1.0 - weight[2];
+                  for (std::size_t j = 0; j < 2; ++j) {
+                      const auto wy = j == 1 ? weight[1] : 1.0 - weight[1];
+                      for (std::size_t i = 0; i < 2; ++i) {
+                          const auto wx = i == 1 ? weight[0] : 1.0 - weight[0];
+                          const auto corner = bracket[0][i]
+                              + gridRowStride * bracket[1][j]
+                              + slabStride * bracket[2][k];
+                          auto value = static_cast<double>(grid.values[corner]);
+                          if (!mappableValue(value, mappedRange)) {
+                              value = landed;
+                          }
+                          result += wx * wy * wz * value;
+                      }
+                  }
+              }
+              return result;
+          };
+
     const auto renderRow = [&](int row) {
         auto* pixels = frame.pixels.data() + rowStride * static_cast<std::size_t>(row);
         const auto pixelY = static_cast<double>(row) + 0.5;
@@ -475,10 +549,11 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                     return;
                 }
                 const auto offsetInSamples = static_cast<double>(sample) + 0.5;
+                std::array<double, 3> at{};
                 std::array<std::size_t, 3> index{};
                 for (std::size_t axis = 0; axis < 3; ++axis) {
-                    const auto voxel = std::floor(
-                        voxelStart[axis] + offsetInSamples * voxelStep[axis]);
+                    at[axis] = voxelStart[axis] + offsetInSamples * voxelStep[axis];
+                    const auto voxel = std::floor(at[axis]);
                     // Clamped as a double, before the cast: casting a value
                     // past the int range is undefined, and std::clamp passes
                     // a NaN straight through to it. Both are reachable from a
@@ -490,10 +565,16 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                 }
                 const auto offset = index[0] + gridRowStride * index[1]
                     + slabStride * index[2];
-                const auto value = static_cast<double>(grid.values[offset]);
-                if (!mappableValue(value, mappedRange)) {
+                // The voxel the sample lands in decides whether there is a
+                // sample at all. An uncovered one is not the field's to give
+                // whatever its neighbours hold, so interpolation never fills
+                // a hole in -- which is also what keeps an all-NaN grid
+                // completely transparent.
+                const auto nearest = static_cast<double>(grid.values[offset]);
+                if (!mappableValue(nearest, mappedRange)) {
                     continue;
                 }
+                const auto value = linear ? linearValue(at, nearest) : nearest;
                 const auto& entry = entries[static_cast<std::size_t>(
                     valueSlot(value, mappedRange, entryCount))];
                 if (!(entry.stepOpacity > 0.0)) {

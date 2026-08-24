@@ -279,6 +279,13 @@ public:
         return m_selectedMinorVersion >= 2;
     }
 
+    // Separately from rendering itself: a 1.2 server volume-renders perfectly
+    // well, it just cannot be asked how to sample.
+    [[nodiscard]] bool supportsVolumeSampling() const noexcept
+    {
+        return m_selectedMinorVersion >= 3;
+    }
+
     VolumeFrame renderVolume(
         const VolumeRenderRequest& request, StopToken cancellation)
     {
@@ -769,6 +776,11 @@ RemoteDirectoryListing Connection::listDirectory(
 bool Connection::supportsVolumeRendering() const noexcept
 {
     return m_impl->supportsVolumeRendering();
+}
+
+bool Connection::supportsVolumeSampling() const noexcept
+{
+    return m_impl->supportsVolumeSampling();
 }
 
 VolumeFrame Connection::renderVolume(

@@ -182,6 +182,7 @@ void VolumeController::showWindow(QWidget* parent)
     // Toggling the region limit moves the box in one step, in both
     // directions, so it renders at once rather than drafting.
     connect(window, &VolumeWindow::regionLimitChanged, this, endInteraction);
+    connect(window, &VolumeWindow::samplingChanged, this, endInteraction);
     connect(window, &VolumeWindow::paletteAlphaChanged, this, endInteraction);
     // A close from the title bar: closeWindow drops this connection before
     // closing, so reaching here means the user closed the window and nothing
@@ -246,6 +247,10 @@ void VolumeController::pushGeometry()
     const auto dataset = m_hooks.dataset ? m_hooks.dataset() : nullptr;
     if (dataset) {
         m_window->setDatasetGeometry(dataset->metadata());
+        // Whether this session can be asked how to sample: a local one always
+        // can, a server speaking an older protocol cannot. Pushed here so it
+        // follows the dataset, the way the palette's alpha ramp does.
+        m_window->setSamplingSelectable(dataset->supportsVolumeSampling());
     }
     pushPalette();
     slicePositionsChanged();
@@ -468,6 +473,9 @@ void VolumeController::startRender()
         m_hooks.palette ? m_hooks.palette() : builtinPalette(BuiltinPalette::Rainbow),
         m_window->ramp());
     request.samplesPerVoxel = draft ? 1 : quality.samplesPerVoxel;
+    // Drafts too: with fewer samples per voxel there is more distance between
+    // them, which is exactly where reading one voxel per sample terraces.
+    request.sampling = m_window->sampling();
     request.maximumVoxels = quality.maximumVoxels;
 
     const auto generation = ++m_generation;

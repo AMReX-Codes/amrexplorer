@@ -183,6 +183,14 @@ void VolumeWindow::buildControls()
         tr("Sample only the part of the domain the slice views are zoomed to, "
            "which spends the voxel budget on it instead of the whole field"));
     form->addRow(QString(), m_regionCheck);
+    m_smoothCheck = new QCheckBox(tr("Smooth sampling"), panel);
+    m_smoothCheck->setObjectName(QStringLiteral("volumeSmoothSamplingCheck"));
+    m_smoothCheck->setChecked(true);
+    form->addRow(QString(), m_smoothCheck);
+    // Available until a session says otherwise, the way the palette-alpha box
+    // is: this is a local render's answer, and setSamplingSelectable revises
+    // it for a server that cannot be asked.
+    setSamplingSelectable(true);
     // Grid boxes off, domain outline on: box edges crossing a translucent
     // field read as structure in it, which is worth asking for rather than
     // having to switch off. Both are said here and only here -- the view's own
@@ -223,6 +231,8 @@ void VolumeWindow::buildControls()
         [this](int) { emit qualityChanged(); });
     connect(m_regionCheck, &QCheckBox::toggled, this,
         [this] { emit regionLimitChanged(); });
+    connect(m_smoothCheck, &QCheckBox::toggled, this,
+        [this] { emit samplingChanged(); });
     connect(m_boxesCheck, &QCheckBox::toggled, this,
         [this](bool checked) { m_view->setLevelBoxesVisible(checked); });
     connect(m_outlineCheck, &QCheckBox::toggled, this,
@@ -330,6 +340,28 @@ QSize VolumeWindow::viewSize() const
 bool VolumeWindow::limitToVisibleRegion() const
 {
     return m_regionCheck->isChecked();
+}
+
+SamplingPolicy VolumeWindow::sampling() const
+{
+    // The same shape as the palette-alpha box: a ticked box that is not
+    // available is not in effect, so what the control offers and what the
+    // render does cannot disagree.
+    return m_smoothCheck->isEnabled() && m_smoothCheck->isChecked()
+        ? SamplingPolicy::Linear
+        : SamplingPolicy::Nearest;
+}
+
+void VolumeWindow::setSamplingSelectable(bool selectable)
+{
+    m_smoothCheck->setEnabled(selectable);
+    m_smoothCheck->setToolTip(selectable
+            ? tr("Read each ray sample from the eight voxels around it "
+                 "instead of the one it lands in, which is what stops a "
+                 "coarse volume looking terraced")
+            : tr("This server predates smooth sampling (protocol 1.3) and "
+                 "always reads the nearest voxel; install a current "
+                 "amrexplorer-server"));
 }
 
 qreal VolumeWindow::viewDevicePixelRatio() const

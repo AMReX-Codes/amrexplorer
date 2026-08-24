@@ -111,6 +111,12 @@ struct VolumeRenderRequest {
     // Ray samples per voxel along the ray (the step is the mean distance a
     // view ray spends crossing one voxel divided by this).
     int samplesPerVoxel = 2;
+    // How each sample reads the sampled grid: Linear interpolates over the
+    // eight voxel centres around it, Nearest and PiecewiseConstant take the
+    // voxel it lands in. A march property, not a sampling one -- it does not
+    // change the grid, so it is deliberately absent from VolumeSampleRequest
+    // and from the grid cache key, and one cached grid serves both.
+    SamplingPolicy sampling = SamplingPolicy::Linear;
     std::uint64_t maximumVoxels = defaultVolumeVoxelBudget;
     friend bool operator==(const VolumeRenderRequest&,
         const VolumeRenderRequest&) = default;

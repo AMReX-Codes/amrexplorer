@@ -1256,6 +1256,40 @@ int main(int argc, char** argv)
             "the keypad modifier stopped an arrow key from nudging, which "
             "would leave this dead on macOS");
 
+        // A drag that cannot move anything is not a render either, the same
+        // rule the keys follow. Dragging an end point sideways asks for the
+        // one move it refuses, so after the first move has settled its opacity
+        // to whatever that height means, every further move along the same
+        // height changes nothing at all. Two moves rather than one because the
+        // first still carries the cursor's own opacity onto the point.
+        const QPointF along(plotPoint(widget->curve().front()));
+        QMouseEvent takeIt(QEvent::MouseButtonPress, along,
+            widget->mapToGlobal(along), Qt::LeftButton, Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &takeIt);
+        const QPointF sideways(along.x() + 20.0, along.y());
+        QMouseEvent firstMove(QEvent::MouseMove, sideways,
+            widget->mapToGlobal(sideways), Qt::NoButton, Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &firstMove);
+        settle(application, 500);
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the drag's first move did not finish rendering");
+        const auto stuck = session->requests.load();
+        const QPointF further(along.x() + 40.0, along.y());
+        QMouseEvent secondMove(QEvent::MouseMove, further,
+            widget->mapToGlobal(further), Qt::NoButton, Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &secondMove);
+        settle(application, 200);
+        require(session->requests == stuck,
+            "dragging an end point sideways rendered a volume that could not "
+            "have changed");
+        QMouseEvent dropIt(QEvent::MouseButtonRelease, further,
+            widget->mapToGlobal(further), Qt::LeftButton, Qt::NoButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(widget, &dropIt);
+
         // And not while a drag is in flight: the next mouse move would
         // overwrite the nudge with the cursor's own position, so the key would
         // cost a render and leave nothing behind.
@@ -1276,6 +1310,40 @@ int main(int argc, char** argv)
             Qt::NoModifier);
         QApplication::sendEvent(widget, &letGoEnd);
 
+        // The overlay toggles, and the volume window's own default: grid boxes
+        // off, because box edges crossing a translucent field read as
+        // structure in it. The view has to agree with the box it is labelled
+        // by -- setting a box before its connect fires no toggle, so an
+        // agreement left to the two defaults matching is one nobody checks.
+        auto* const boxesCheck = window->findChild<QCheckBox*>(
+            QStringLiteral("volumeGridBoxesCheck"));
+        auto* const outlineCheck = window->findChild<QCheckBox*>(
+            QStringLiteral("volumeDomainOutlineCheck"));
+        require(boxesCheck != nullptr && outlineCheck != nullptr,
+            "no overlay toggles in the volume window");
+        auto* const view = window->findChild<amrvis::qt::IsoWidget*>();
+        require(view != nullptr, "no iso view in the volume window");
+        require(!boxesCheck->isChecked() && !view->levelBoxesVisible(),
+            "the volume window opened drawing the grid boxes");
+        require(outlineCheck->isChecked() && view->domainOutlineVisible(),
+            "the volume window opened without the domain outline");
+        boxesCheck->setChecked(true);
+        require(view->levelBoxesVisible(),
+            "ticking the grid-boxes box did not reach the view");
+        boxesCheck->setChecked(false);
+        require(!view->levelBoxesVisible(),
+            "clearing the grid-boxes box did not reach the view");
+        // The outline the same way. Its opening state cannot be checked as
+        // sharply as the boxes' -- the box and the view's own default agree
+        // there, so nothing can tell a state that was pushed from one that was
+        // never needed -- but the toggle reaching the view can be.
+        outlineCheck->setChecked(false);
+        require(!view->domainOutlineVisible(),
+            "clearing the domain-outline box did not reach the view");
+        outlineCheck->setChecked(true);
+        require(view->domainOutlineVisible(),
+            "ticking the domain-outline box did not reach the view");
+
         // The palette's own alpha takes over from the curve, so the curve is
         // disabled: it has no say while that box is in effect, and a control
         // that looks editable and does nothing is the defect this replaced.
@@ -1291,21 +1359,30 @@ int main(int argc, char** argv)
         require(widget->isEnabled(),
             "the curve is not editable with the palette-alpha box clear");
 
-        // How much colour the widget is carrying, which is almost all the
-        // palette strip: everything else on it is the theme's own greys.
-        const auto colourfulness = [](const QImage& image) {
+        // How far the widget's pixels sit from its own background, which is
+        // almost all the palette strip: everything else on it is the theme's
+        // greys, at or near that background. Measured against the background
+        // rather than as colourfulness because fading a colour towards a dark
+        // background barely changes how saturated it is -- a saturation
+        // measure separates the two states in a light theme and not in a dark
+        // one, which is a test that passes where it is run and nowhere else.
+        const auto fromBackground = [widget](const QImage& image) {
+            const auto base = widget->palette().color(QPalette::Base);
             double total = 0.0;
             for (int y = 0; y < image.height(); ++y) {
                 for (int x = 0; x < image.width(); ++x) {
-                    total += image.pixelColor(x, y).saturation();
+                    const auto pixel = image.pixelColor(x, y);
+                    total += std::abs(pixel.red() - base.red())
+                        + std::abs(pixel.green() - base.green())
+                        + std::abs(pixel.blue() - base.blue());
                 }
             }
             return total / static_cast<double>(image.width() * image.height());
         };
-        const auto lively = colourfulness(widget->grab().toImage());
+        const auto lively = fromBackground(widget->grab().toImage());
         // Vacuity guard: with no palette there would be no strip to fade, and
         // the comparison below would hold for the wrong reason.
-        require(lively > 20.0,
+        require(lively > 60.0,
             "the curve drew no palette strip, so fading it could not be "
             "checked");
         require(alphaBox->isEnabled(),
@@ -1320,7 +1397,7 @@ int main(int argc, char** argv)
         // painted from the data palette's own colours, which know nothing of
         // the widget, so at full strength the boldest thing on an inert
         // control would be the one part not saying it was inert.
-        const auto inert = colourfulness(widget->grab().toImage());
+        const auto inert = fromBackground(widget->grab().toImage());
         require(inert < 0.6 * lively,
             "the palette strip kept its strength on a disabled curve");
         alphaBox->setChecked(false);

@@ -31,7 +31,8 @@ constexpr double grabRadius = 6.0;
 constexpr double positionStep
     = 1.0 / static_cast<double>(Palette::colorSlots - 1);
 constexpr double opacityStep = 0.01;
-constexpr double coarseStep = 10.0;
+// A multiplier on either step above, not a step itself.
+constexpr double coarseMultiplier = 10.0;
 
 } // namespace
 
@@ -222,7 +223,7 @@ void OpacityCurveWidget::keyPressEvent(QKeyEvent* event)
         QWidget::keyPressEvent(event);
         return;
     }
-    const auto step = modifiers == Qt::ShiftModifier ? coarseStep : 1.0;
+    const auto step = modifiers == Qt::ShiftModifier ? coarseMultiplier : 1.0;
     double dx = 0.0;
     double dy = 0.0;
     switch (event->key()) {
@@ -318,11 +319,19 @@ void OpacityCurveWidget::mouseMoveEvent(QMouseEvent* event)
         QWidget::mouseMoveEvent(event);
         return;
     }
+    const auto index = static_cast<std::size_t>(m_dragging);
+    const auto before = m_curve[index];
     const auto moved = curvePosition(event->position());
-    moveOpacityPoint(m_curve, static_cast<std::size_t>(m_dragging),
-        moved.position, moved.opacity);
-    update();
-    emit curveChanged();
+    moveOpacityPoint(m_curve, index, moved.position, moved.opacity);
+    // Only a real move is worth a signal, for the reason keyPressEvent gives:
+    // an end dragged sideways, or an interior point dragged into a neighbour,
+    // moves nothing, and every mouse-move event would still restart the settle
+    // timer and re-render a volume that had not changed.
+    if (m_curve[index].position != before.position
+        || m_curve[index].opacity != before.opacity) {
+        update();
+        emit curveChanged();
+    }
     event->accept();
 }
 

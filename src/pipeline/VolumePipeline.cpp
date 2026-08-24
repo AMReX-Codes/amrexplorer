@@ -83,10 +83,13 @@ std::size_t insertOpacityPoint(
     // [0, 1]: bounding the search to the interior means a position outside
     // that span would land at the near end of the interior and leave the list
     // unsorted, which is what opacityCurveValue reads and what moveOpacityPoint
-    // would then clamp between inverted neighbours. The list is assumed sorted
-    // on the way in, so the front is never above the back.
+    // would then clamp between inverted neighbours. Written as a min of a max
+    // rather than a clamp because the list is only assumed sorted, not checked:
+    // std::clamp with a low above its high is undefined, so an unsorted curve
+    // would trade a wrong answer for undefined behaviour. This way it stays a
+    // wrong answer.
     const OpacityPoint point{
-        std::clamp(std::clamp(position, 0.0, 1.0), curve.front().position,
+        std::min(std::max(std::clamp(position, 0.0, 1.0), curve.front().position),
             curve.back().position),
         value};
     const auto at = std::upper_bound(

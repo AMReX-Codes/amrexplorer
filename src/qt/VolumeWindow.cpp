@@ -156,17 +156,16 @@ void VolumeWindow::buildControls()
     form->addRow(tr("Opacity:"), m_curve);
     m_paletteAlpha = new QCheckBox(tr("Use palette alpha ramp"), panel);
     m_paletteAlpha->setObjectName(QStringLiteral("volumePaletteAlphaCheck"));
-    // Whether this is available says whether the palette carries a ramp, so
-    // it starts unavailable and setPaletteHasAlpha decides: until a palette
-    // arrives there is nothing to take a ramp from. Left at the check box's
-    // own default it would read as "this palette has one" before any palette
-    // had been seen, and nothing would be asserting otherwise.
-    m_paletteAlpha->setEnabled(false);
-    m_paletteAlpha->setToolTip(tr("Take each colour's opacity from the palette's "
-                                  "alpha ramp (legacy .pal files carry one) "
-                                  "instead of the curve above, which is "
-                                  "disabled while this is on."));
     form->addRow(QString(), m_paletteAlpha);
+    // Whether this is available says whether the palette carries a ramp, so it
+    // starts unavailable: until a palette arrives there is nothing to take a
+    // ramp from. Left at the check box's own default it would read as "this
+    // palette has one" before any palette had been seen, and nothing would be
+    // asserting otherwise. Through setPaletteHasAlpha rather than setEnabled
+    // so the tooltip is the one that goes with the state -- the other says
+    // what the box would do, which is not the question while it cannot be
+    // ticked.
+    setPaletteHasAlpha(false);
     m_qualityCombo = new QComboBox(panel);
     m_qualityCombo->addItem(tr("Draft"), 0);
     m_qualityCombo->addItem(tr("Normal"), 1);
@@ -184,12 +183,17 @@ void VolumeWindow::buildControls()
         tr("Sample only the part of the domain the slice views are zoomed to, "
            "which spends the voxel budget on it instead of the whole field"));
     form->addRow(QString(), m_regionCheck);
-    // Unchecked by default: the boxes read as clutter over a volume. The view
-    // itself defaults to showing them (the grid page wants that), so it is
-    // told here rather than by a toggle that never fires.
+    // Grid boxes off, domain outline on: box edges crossing a translucent
+    // field read as structure in it, which is worth asking for rather than
+    // having to switch off. Both are said here and only here -- the view's own
+    // defaults suit the main window's quadrant, and the boxes below push these
+    // onto it once the toggles exist, so the check box is what the view
+    // follows rather than the two agreeing by luck.
     m_boxesCheck = new QCheckBox(tr("Grid boxes"), panel);
-    m_view->setLevelBoxesVisible(false);
+    m_boxesCheck->setObjectName(QStringLiteral("volumeGridBoxesCheck"));
+    m_boxesCheck->setChecked(false);
     m_outlineCheck = new QCheckBox(tr("Domain outline"), panel);
+    m_outlineCheck->setObjectName(QStringLiteral("volumeDomainOutlineCheck"));
     m_outlineCheck->setChecked(true);
     form->addRow(QString(), m_boxesCheck);
     form->addRow(QString(), m_outlineCheck);
@@ -223,6 +227,12 @@ void VolumeWindow::buildControls()
         [this](bool checked) { m_view->setLevelBoxesVisible(checked); });
     connect(m_outlineCheck, &QCheckBox::toggled, this,
         [this](bool checked) { m_view->setDomainOutlineVisible(checked); });
+    // The state above reaches the view once, here, because setting a box
+    // before its connect fires no toggle. Both go through the same call the
+    // toggles use, so there is one path from box to view and no dependence on
+    // what the view happened to default to.
+    m_view->setLevelBoxesVisible(m_boxesCheck->isChecked());
+    m_view->setDomainOutlineVisible(m_outlineCheck->isChecked());
 }
 
 void VolumeWindow::setDatasetGeometry(const DatasetMetadata& metadata)

@@ -313,11 +313,17 @@ int main()
                 require(amrvis::removeOpacityPoint(edge, top),
                     "a point inserted at the top of the range could not be "
                     "removed again");
+                // The same for the bottom, checked the same way: the index and
+                // the anchor alone would miss a point that landed as an end
+                // and could not be removed again.
                 const auto bottom = amrvis::insertOpacityPoint(edge, 0.0, 0.5);
-                require(bottom == 1
+                require(bottom == 1 && edge.size() == 3
                         && edge.front() == amrvis::OpacityPoint{0.0, 0.0},
                     "inserting at the bottom of the range displaced the "
                     "anchor");
+                require(amrvis::removeOpacityPoint(edge, bottom),
+                    "a point inserted at the bottom of the range could not be "
+                    "removed again");
             }
 
             // Keeping the new point inside the ends must not cost the sorting

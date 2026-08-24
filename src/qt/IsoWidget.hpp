@@ -61,6 +61,14 @@ public:
     // Overlay toggles for the volume view; the quadrant keeps both on.
     void setLevelBoxesVisible(bool visible);
     void setDomainOutlineVisible(bool visible);
+    [[nodiscard]] bool levelBoxesVisible() const noexcept
+    {
+        return m_levelBoxesVisible;
+    }
+    [[nodiscard]] bool domainOutlineVisible() const noexcept
+    {
+        return m_domainOutlineVisible;
+    }
 
 signals:
     void cameraChanged();

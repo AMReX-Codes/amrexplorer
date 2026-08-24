@@ -147,6 +147,14 @@ public:
     {
         return m_metadata.dimension == 3;
     }
+    // A local-shaped session: it renders in process, so it can be told how to
+    // sample. `samplingSupported` turns that off to stand in for a peer
+    // speaking a protocol that has no sampling field.
+    std::atomic<bool> samplingSupported{true};
+    [[nodiscard]] bool supportsVolumeSampling() const noexcept override
+    {
+        return supportsVolumeRendering() && samplingSupported;
+    }
     [[nodiscard]] amrvis::VolumeFrame renderVolume(
         const amrvis::VolumeRenderRequest& request,
         amrvis::StopToken cancellation) override
@@ -1310,6 +1318,86 @@ int main(int argc, char** argv)
             Qt::NoModifier);
         QApplication::sendEvent(widget, &letGoEnd);
 
+        // Smooth sampling: on by default, and a full frame rather than a
+        // draft when it changes, since it is a deliberate edit and not a
+        // camera in motion.
+        auto* const smoothCheck = window->findChild<QCheckBox*>(
+            QStringLiteral("volumeSmoothSamplingCheck"));
+        require(smoothCheck != nullptr,
+            "no smooth-sampling box in the volume window");
+        settle(application, 500);
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the earlier renders did not finish");
+        require(smoothCheck->isEnabled() && smoothCheck->isChecked(),
+            "the volume window did not offer smooth sampling for a session "
+            "that can be told how to sample");
+        require(session->requestsSoFar().back().sampling
+                == amrvis::SamplingPolicy::Linear,
+            "a ticked smooth-sampling box did not reach the request");
+        auto smoothed = session->requests.load();
+        QMetaObject::invokeMethod(
+            window, [smoothCheck] { smoothCheck->setChecked(false); });
+        application.processEvents();
+        waitFor(application, [&] { return session->requests > smoothed; },
+            "clearing smooth sampling did not render");
+        require(session->requestsSoFar().back().sampling
+                == amrvis::SamplingPolicy::Nearest,
+            "clearing the box did not reach the request");
+        require(session->requestsSoFar().back().samplesPerVoxel == 2,
+            "the render after the toggle was a draft rather than a full frame");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the render after clearing smooth sampling did not finish");
+        QMetaObject::invokeMethod(
+            window, [smoothCheck] { smoothCheck->setChecked(true); });
+        application.processEvents();
+
+        // A session that cannot be told how to sample takes the choice away,
+        // and takes the tick with it: a box left ticked but greyed would claim
+        // a smoothness the picture does not have, and would re-arm itself the
+        // moment a session that can sample arrived.
+        settle(application, 500);
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the renders from re-ticking did not finish");
+        session->samplingSupported = false;
+        controller.configureForDataset();
+        application.processEvents();
+        require(!smoothCheck->isEnabled(),
+            "the box stayed available for a session that cannot sample");
+        require(!smoothCheck->isChecked(),
+            "the box stayed ticked while unavailable, claiming a smoothness "
+            "the render does not have");
+        require(window->sampling() == amrvis::SamplingPolicy::Nearest,
+            "an unavailable box still asked for smooth sampling");
+        session->samplingSupported = true;
+        controller.configureForDataset();
+        application.processEvents();
+        // Ticked again, not merely available: it is on by default, so a box
+        // left clear after one session that could not sample would turn that
+        // default off for the rest of the run, and every later render would
+        // quietly be nearest.
+        require(smoothCheck->isEnabled() && smoothCheck->isChecked(),
+            "the box did not come back ticked for a session that can sample, "
+            "so one older server turned smooth sampling off for good");
+        require(window->sampling() == amrvis::SamplingPolicy::Linear,
+            "smooth sampling did not resume once it was available again");
+
+        // And a deliberate clearing is not undone by the same round trip: the
+        // box comes back to what was asked of it, not to the default.
+        QMetaObject::invokeMethod(
+            window, [smoothCheck] { smoothCheck->setChecked(false); });
+        application.processEvents();
+        session->samplingSupported = false;
+        controller.configureForDataset();
+        session->samplingSupported = true;
+        controller.configureForDataset();
+        application.processEvents();
+        require(smoothCheck->isEnabled() && !smoothCheck->isChecked(),
+            "a session that could not sample re-ticked a box the user had "
+            "deliberately cleared");
+        QMetaObject::invokeMethod(
+            window, [smoothCheck] { smoothCheck->setChecked(true); });
+        application.processEvents();
+
         // The overlay toggles, and the volume window's own default: grid boxes
         // off, because box edges crossing a translucent field read as
         // structure in it. The view has to agree with the box it is labelled
@@ -1440,6 +1528,87 @@ int main(int argc, char** argv)
         settle(application, 200);
         require(session->requests == ends,
             "refusing to remove an end point rendered anyway");
+
+        // Dragging turns the domain rather than walking the camera around it:
+        // whichever face is nearest follows the cursor, on both axes. The two
+        // disagreed once -- a drag down tipped the top toward you while a drag
+        // right slid the near face the other way -- and one axis obeying the
+        // hand while the other opposes it reads as the second being backwards.
+        // Written against the projection rather than against the angles, since
+        // which way an angle turns the picture is the thing that was wrong.
+        {
+            const auto domain = amrvis::datasetSampleBounds(session->metadata());
+            const auto frame
+                = amrvis::viewportFrame(view->width(), view->height());
+            const std::array<amrvis::Real3, 6> faces{
+                amrvis::Real3{{1.0, 0.5, 0.5}}, amrvis::Real3{{0.0, 0.5, 0.5}},
+                amrvis::Real3{{0.5, 1.0, 0.5}}, amrvis::Real3{{0.5, 0.0, 0.5}},
+                amrvis::Real3{{0.5, 0.5, 1.0}}, amrvis::Real3{{0.5, 0.5, 0.0}}};
+            // In the domain's own coordinates, and the nearest of them:
+            // depth increases toward the viewer. A horizontal drag turns the
+            // domain about z, so the z faces sit on that axis and do not move
+            // sideways however far it turns -- picking one of those to follow
+            // would compare zero against zero. They are left out when the
+            // drag is horizontal.
+            const auto nearestFace = [&](const amrvis::OrthoCamera& camera,
+                                         bool aboutZ) {
+                amrvis::Real3 best{};
+                auto bestDepth = -std::numeric_limits<double>::infinity();
+                for (std::size_t index = 0; index < faces.size(); ++index) {
+                    if (aboutZ && index >= 4) {
+                        continue;
+                    }
+                    const auto& unit = faces[index];
+                    amrvis::Real3 point;
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        point[axis] = domain.lower[axis]
+                            + unit[axis] * (domain.upper[axis] - domain.lower[axis]);
+                    }
+                    const auto at
+                        = amrvis::projectPoint(camera, frame, domain, point);
+                    if (at.depth > bestDepth) {
+                        bestDepth = at.depth;
+                        best = point;
+                    }
+                }
+                return best;
+            };
+            const auto dragBy = [&](int dx, int dy) {
+                const QPointF from(0.5 * view->width(), 0.5 * view->height());
+                const QPointF to(from.x() + dx, from.y() + dy);
+                QMouseEvent orbitPress(QEvent::MouseButtonPress, from,
+                    view->mapToGlobal(from), Qt::LeftButton, Qt::LeftButton,
+                    Qt::NoModifier);
+                QApplication::sendEvent(view, &orbitPress);
+                QMouseEvent orbitMove(QEvent::MouseMove, to, view->mapToGlobal(to),
+                    Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(view, &orbitMove);
+                QMouseEvent orbitRelease(QEvent::MouseButtonRelease, to,
+                    view->mapToGlobal(to), Qt::LeftButton, Qt::NoButton,
+                    Qt::NoModifier);
+                QApplication::sendEvent(view, &orbitRelease);
+            };
+            const std::array<std::array<int, 2>, 4> drags{
+                {{{40, 0}}, {{-40, 0}}, {{0, 40}}, {{0, -40}}}};
+            for (const auto& pull : drags) {
+                const auto start = view->camera();
+                const auto face = nearestFace(start, pull[0] != 0);
+                const auto was
+                    = amrvis::projectPoint(start, frame, domain, face);
+                dragBy(pull[0], pull[1]);
+                const auto now = amrvis::projectPoint(
+                    view->camera(), frame, domain, face);
+                const auto shift = pull[0] != 0 ? now.x - was.x : now.y - was.y;
+                const auto asked = pull[0] != 0 ? pull[0] : pull[1];
+                require(shift * asked > 0.0,
+                    "the face under the cursor moved against the drag, so the "
+                    "view walks the camera around the domain on that axis "
+                    "instead of turning it");
+            }
+            settle(application, 500);
+            waitFor(application, [&] { return !controller.renderInFlight(); },
+                "the renders from the drags did not finish");
+        }
         controller.closeWindow();
     }
 

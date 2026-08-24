@@ -36,6 +36,12 @@ struct ConnectionOptions {
 inline constexpr const char* volumeRenderingUnsupportedMessage
     = "the remote server predates volume rendering (protocol 1.2); install a "
       "current amrexplorer-server";
+// Its narrower sibling: the server renders volumes but always sampled
+// nearest, so smooth sampling is the one thing it cannot be asked for.
+inline constexpr const char* volumeSamplingUnsupportedMessage
+    = "the remote server predates smooth volume sampling (protocol 1.3) and "
+      "samples each ray at the nearest voxel; install a current "
+      "amrexplorer-server";
 
 class Connection : public std::enable_shared_from_this<Connection> {
 public:
@@ -67,6 +73,9 @@ public:
     // before the call so a caller can refuse the capability without the
     // failure looking like a misbehaving peer.
     [[nodiscard]] bool supportsVolumeRendering() const noexcept;
+    // Whether the negotiated protocol carries the volume march's sampling
+    // policy (1.3). A 1.2 peer renders volumes but always sampled nearest.
+    [[nodiscard]] bool supportsVolumeSampling() const noexcept;
     // Renders a volume on the server and returns the frame (protocol 1.2).
     // Ask supportsVolumeRendering() first: this throws when the server
     // negotiated an older protocol.

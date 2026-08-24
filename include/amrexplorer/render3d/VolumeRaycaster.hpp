@@ -40,6 +40,13 @@ struct RaycastSettings {
     // axis would otherwise be sampled many times per voxel and come out far
     // more opaque than its entry asks for.
     int samplesPerVoxel = 2;
+    // How a sample reads the grid. Linear is trilinear over the eight voxel
+    // centres bracketing the sample, which is what stops a ray from fetching
+    // one voxel repeatedly and terracing the picture; Nearest and
+    // PiecewiseConstant both take the voxel the sample lands in, the rule the
+    // 2-D slice shows cells with. The names are the slice's, so one vocabulary
+    // covers both -- see SamplingPolicy in core/Request.hpp.
+    SamplingPolicy sampling = SamplingPolicy::Linear;
     // 0 = std::thread::hardware_concurrency(); bounded above by the row count
     // and by a small multiple of the hardware's, so an outsized request costs
     // no more than a sensible one.

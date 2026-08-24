@@ -137,6 +137,11 @@ bool RemoteDatasetSession::supportsVolumeRendering() const noexcept
         && datasetSupportsVolumeRendering(m_metadata);
 }
 
+bool RemoteDatasetSession::supportsVolumeSampling() const noexcept
+{
+    return supportsVolumeRendering() && m_connection->supportsVolumeSampling();
+}
+
 VolumeFrame RemoteDatasetSession::renderVolume(
     const VolumeRenderRequest& request, StopToken cancellation)
 {
@@ -152,6 +157,15 @@ VolumeFrame RemoteDatasetSession::renderVolume(
     if (!datasetSupportsVolumeRendering(m_metadata)) {
         throw std::invalid_argument(
             "volume rendering requires a 3-D plotfile with physical geometry");
+    }
+    // Refused rather than sent and quietly ignored. A 1.2 server cannot read
+    // the field, so it would render nearest and return a frame that answers a
+    // different question from the one asked -- and nothing downstream could
+    // tell. The window asks supportsVolumeSampling() first and offers no such
+    // request, so reaching this means a caller that did not.
+    if (request.sampling == SamplingPolicy::Linear
+        && !m_connection->supportsVolumeSampling()) {
+        throw std::runtime_error(volumeSamplingUnsupportedMessage);
     }
     validateSessionVolumeRequest(m_metadata, m_id, request);
     return refusingInvalidResponses(*m_connection, [&] {

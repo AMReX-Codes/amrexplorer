@@ -82,6 +82,12 @@ public:
 
     // A 3-D plotfile with physical geometry can be volume-rendered.
     [[nodiscard]] bool supportsVolumeRendering() const noexcept override;
+    // Whatever this can render, it can sample either way: the choice only
+    // ever fails to reach a peer, and there is no peer here.
+    [[nodiscard]] bool supportsVolumeSampling() const noexcept override
+    {
+        return supportsVolumeRendering();
+    }
     [[nodiscard]] VolumeFrame renderVolume(const VolumeRenderRequest& request,
         StopToken cancellation = {}) override;
     // The same render with a bound on the threads it may use, or 0 to leave

@@ -35,7 +35,7 @@ constexpr std::array<std::array<int, 2>, 12> boxEdges{{
 
 IsoWidget::IsoWidget(QWidget* parent)
     : QWidget(parent)
-    , m_camera{30.0 * pi / 180.0, 30.0 * pi / 180.0, 1.0}
+    , m_camera(orthoDefaultView)
 {
     setMinimumSize(200, 150);
     setMouseTracking(true);
@@ -300,7 +300,13 @@ void IsoWidget::mouseMoveEvent(QMouseEvent* event)
         const auto delta = event->pos() - m_lastMousePos;
         m_lastMousePos = event->pos();
         constexpr double sensitivity = 0.008;
-        m_camera.azimuth -= static_cast<double>(delta.x()) * sensitivity;
+        // Both signs turn the domain with the drag rather than walking the
+        // camera around it: the surface under the cursor follows the cursor.
+        // The two disagreed once -- a drag down tipped the top toward you
+        // while a drag right slid the near face left -- which reads as the
+        // horizontal being backwards, since the vertical is what everything
+        // else does too.
+        m_camera.azimuth += static_cast<double>(delta.x()) * sensitivity;
         m_camera.elevation += static_cast<double>(delta.y()) * sensitivity;
         m_camera.elevation = std::clamp(
             m_camera.elevation, -pi / 2.0 + 0.01, pi / 2.0 - 0.01);
@@ -353,17 +359,17 @@ void IsoWidget::drawAxisIndicator(QPainter& painter) const
     const QPointF origin(static_cast<qreal>(originX),
         static_cast<qreal>(h - originY));
 
-    const auto cosAz = std::cos(m_camera.azimuth);
-    const auto sinAz = std::sin(m_camera.azimuth);
-    const auto cosEl = std::cos(m_camera.elevation);
-    const auto sinEl = std::sin(m_camera.elevation);
-
-    auto projectDir = [&](double dx, double dy, double dz) -> QPointF {
-        const auto x1 = dx * cosAz - dy * sinAz;
-        const auto y1 = dx * sinAz + dy * cosAz;
-        const auto y2 = y1 * cosEl - dz * sinEl;
-        return QPointF(static_cast<double>(armLen) * x1,
-            -static_cast<double>(armLen) * y2);
+    // Through the shared projection rather than a second copy of its
+    // rotation: the arms have to agree with the wireframe about which way is
+    // up, and a transcription agrees only until one of the two is edited.
+    const auto projectDir = [this](double dx, double dy, double dz) {
+        Real3 direction;
+        direction[0] = dx;
+        direction[1] = dy;
+        direction[2] = dz;
+        const auto view = projectDirection(m_camera, direction);
+        return QPointF(
+            static_cast<double>(armLen) * view.x, static_cast<double>(armLen) * view.y);
     };
 
     const auto xTip = origin + projectDir(1.0, 0.0, 0.0);

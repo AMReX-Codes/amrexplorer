@@ -498,6 +498,21 @@ int main()
     volume.maximumVoxels = 1 << 20;
     require(codec::fromWire(codec::toWire(volume)) == volume,
         "a volume request with a range did not round-trip");
+    // The value on the wire, not just that it survives a round trip. Two
+    // transposed mappings are inverses of each other, so every round-trip
+    // check in the suite passes while a peer on the other side of a real
+    // socket reads the wrong policy -- which is the only situation protocol
+    // 1.3 exists for, and the one no round trip can see.
+    volume.sampling = SamplingPolicy::Linear;
+    require(codec::toWire(volume).sampling == amrexplorer::wire::SamplingPolicy::Linear,
+        "Linear does not encode as Linear on the wire");
+    volume.sampling = SamplingPolicy::Nearest;
+    require(codec::toWire(volume).sampling == amrexplorer::wire::SamplingPolicy::Nearest,
+        "Nearest does not encode as Nearest on the wire");
+    volume.sampling = SamplingPolicy::PiecewiseConstant;
+    require(codec::toWire(volume).sampling == amrexplorer::wire::SamplingPolicy::PiecewiseConstant,
+        "PiecewiseConstant does not encode as PiecewiseConstant on the wire");
+    volume.sampling = SamplingPolicy::Linear;
     // The two logarithmic flags, against the wire rather than through a
     // round trip. They are both bools and mean opposite cases -- one is the
     // explicit range's mapping, the other the mapping asked for when there is

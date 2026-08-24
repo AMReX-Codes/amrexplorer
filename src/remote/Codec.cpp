@@ -947,6 +947,7 @@ fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value)
     wire.transfer_opacities = value.transfer.opacities;
     wire.samples_per_voxel = value.samplesPerVoxel;
     wire.maximum_voxels = value.maximumVoxels;
+    wire.sampling = toWireSampling(value.sampling);
     return wire;
 }
 
@@ -985,6 +986,7 @@ VolumeRenderRequest fromWire(const fb::RenderedFrameRequestT& value)
     result.transfer.opacities = value.transfer_opacities;
     result.samplesPerVoxel = value.samples_per_voxel;
     result.maximumVoxels = value.maximum_voxels;
+    result.sampling = fromWireSampling(value.sampling);
     return result;
 }
 

@@ -182,6 +182,7 @@ void VolumeController::showWindow(QWidget* parent)
     // Toggling the region limit moves the box in one step, in both
     // directions, so it renders at once rather than drafting.
     connect(window, &VolumeWindow::regionLimitChanged, this, endInteraction);
+    connect(window, &VolumeWindow::samplingChanged, this, endInteraction);
     connect(window, &VolumeWindow::paletteAlphaChanged, this, endInteraction);
     // A close from the title bar: closeWindow drops this connection before
     // closing, so reaching here means the user closed the window and nothing
@@ -246,6 +247,10 @@ void VolumeController::pushGeometry()
     const auto dataset = m_hooks.dataset ? m_hooks.dataset() : nullptr;
     if (dataset) {
         m_window->setDatasetGeometry(dataset->metadata());
+        // Whether this session can be asked how to sample: a local one always
+        // can, a server speaking an older protocol cannot. Pushed here so it
+        // follows the dataset, the way the palette's alpha ramp does.
+        m_window->setSamplingSelectable(dataset->supportsVolumeSampling());
     }
     pushPalette();
     slicePositionsChanged();
@@ -468,6 +473,9 @@ void VolumeController::startRender()
         m_hooks.palette ? m_hooks.palette() : builtinPalette(BuiltinPalette::Rainbow),
         m_window->ramp());
     request.samplesPerVoxel = draft ? 1 : quality.samplesPerVoxel;
+    // Drafts too: with fewer samples per voxel there is more distance between
+    // them, which is exactly where reading one voxel per sample terraces.
+    request.sampling = m_window->sampling();
     request.maximumVoxels = quality.maximumVoxels;
 
     const auto generation = ++m_generation;
@@ -569,7 +577,26 @@ QString VolumeController::describe(
 {
     const auto& frame = result.frame;
     const auto& range = frame.usedRange;
-    return tr("%1  level %2  range [%3, %4]%5\ngrid %6 x %7 x %8 (%9)  %10 ms")
+    // The metrics are microseconds (Volume.hpp says why), shown in whichever
+    // unit carries the digits that mean something. A draft is tens of
+    // milliseconds and its tenth is the difference between instant and not; a
+    // hundred milliseconds up, the tenth is noise on a line that changes every
+    // frame; past a second, four digits of milliseconds is not a number anyone
+    // reads. Something just short of a second has to round somewhere -- 999.6
+    // is either "1000 ms" or "1.00 s" -- and it reads better as the second,
+    // which is why the rounding happens before the unit is chosen below.
+    const auto milliseconds = static_cast<double>(frame.metrics.renderMicroseconds
+                                  + frame.metrics.sampleMicroseconds)
+        / 1000.0;
+    // Rounded before the threshold is tested, not after: 999.6 ms prints as
+    // a whole number, and testing the unrounded value would let it print
+    // "1000 ms" -- the second this switch exists to avoid claiming.
+    const auto whole = milliseconds >= 100.0;
+    const auto shown = whole ? std::round(milliseconds) : milliseconds;
+    const auto elapsed = shown >= 1000.0
+        ? tr("%1 s").arg(shown / 1000.0, 0, 'f', 2)
+        : tr("%1 ms").arg(shown, 0, 'f', whole ? 0 : 1);
+    return tr("%1  level %2  range [%3, %4]%5\ngrid %6 x %7 x %8 (%9)  %10")
         .arg(fieldName)
         .arg(result.request.maximumLevel)
         .arg(range.minimum)
@@ -579,12 +606,7 @@ QString VolumeController::describe(
         .arg(frame.metrics.gridDims[1])
         .arg(frame.metrics.gridDims[2])
         .arg(frame.metrics.gridFromCache ? tr("cached") : tr("sampled"))
-        // The metrics are microseconds (Volume.hpp says why); one decimal
-        // place so a sub-millisecond render reads as fast rather than as 0.
-        .arg(static_cast<double>(frame.metrics.renderMicroseconds
-                 + frame.metrics.sampleMicroseconds)
-                / 1000.0,
-            0, 'f', 1);
+        .arg(elapsed);
 }
 
 } // namespace amrvis::qt

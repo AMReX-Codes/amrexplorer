@@ -51,6 +51,10 @@ public:
     void setColorPalette(const Palette* palette);
     // Enables the "use palette alpha" control (the palette carries a ramp).
     void setPaletteHasAlpha(bool hasAlpha);
+    // Whether the session can be asked how to sample. A server speaking an
+    // older protocol renders volumes but always at the nearest voxel, so the
+    // control is offered only when asking for anything else would be heard.
+    void setSamplingSelectable(bool selectable);
 
     // The frame to draw, the camera it was rendered with (so a camera moved
     // since can be corrected for), and a line of status text; and whether a
@@ -70,6 +74,9 @@ public:
     [[nodiscard]] OpacityRamp ramp() const;
     // Whether the render should cover only what the slice views show.
     [[nodiscard]] bool limitToVisibleRegion() const;
+    // The march's sampling policy: Linear while the box is ticked and in
+    // effect, Nearest otherwise.
+    [[nodiscard]] SamplingPolicy sampling() const;
     [[nodiscard]] Quality quality() const;
 
 signals:
@@ -86,6 +93,7 @@ signals:
     void paletteAlphaChanged();
     void qualityChanged();
     void regionLimitChanged();
+    void samplingChanged();
     void viewResized();
     void viewScaleChanged();
 
@@ -101,6 +109,12 @@ private:
     QCheckBox* m_paletteAlpha = nullptr;
     QComboBox* m_qualityCombo = nullptr;
     QCheckBox* m_regionCheck = nullptr;
+    QCheckBox* m_smoothCheck = nullptr;
+    // What was last asked of the smooth-sampling box while it was available.
+    // The box itself cannot hold it: it is unticked while unavailable so it
+    // does not claim a smoothness the render lacks, and something has to
+    // remember what to put back.
+    bool m_smoothWanted = true;
     QCheckBox* m_boxesCheck = nullptr;
     QCheckBox* m_outlineCheck = nullptr;
     QLabel* m_status = nullptr;

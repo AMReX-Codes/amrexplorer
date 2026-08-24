@@ -290,6 +290,57 @@ int main(int argc, char* argv[])
                         == ErrorCode::UnsupportedProtocol,
                 "a 1.1 client's volume request was not refused as unsupported");
         }
+
+        // --- a 1.2 client is told smooth sampling needs 1.3 -------------
+        //
+        // The narrower gate: 1.2 renders volumes perfectly well and simply
+        // has no field to ask how they are sampled. A real 1.2 client cannot
+        // send one, so reaching the server with Linear means a peer claiming
+        // one version and speaking another -- and the answer has to be a
+        // refusal it can read rather than a frame sampled by another rule.
+        // The connection has to survive it: nothing about this says the peer
+        // misbehaved badly enough to lose every other dataset on it.
+        {
+            auto socket = connectTo("127.0.0.1", server.port());
+            HelloRequestData hello{"volume test", "test", 0, 2,
+                defaultMaximumFrameBytes, server.token(), {}};
+            writeFrame(socket, codec::encode(1, codec::toWire(hello), 2),
+                defaultMaximumFrameBytes);
+            auto response = readFrame(socket, defaultMaximumFrameBytes);
+            require(response.has_value(), "the server closed on a 1.2 hello");
+            auto envelope = codec::decode(*response);
+            require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse
+                    && codec::fromWire(*envelope->payload.AsHelloResponse())
+                            .selectedMinorVersion == 2,
+                "the server did not negotiate 1.2 with a 1.2 client");
+            auto request = requestFor(*remote);
+            request.sampling = SamplingPolicy::Linear;
+            writeFrame(socket, codec::encode(2, codec::toWire(request), 2),
+                defaultMaximumFrameBytes);
+            response = readFrame(socket, defaultMaximumFrameBytes);
+            require(response.has_value(),
+                "the server closed on a 1.2 client asking for smooth sampling");
+            envelope = codec::decode(*response);
+            require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
+                    && codec::fromWire(*envelope->payload.AsErrorResponse()).code
+                        == ErrorCode::UnsupportedProtocol,
+                "a 1.2 client's smooth-sampling request was not refused");
+
+            // And the connection is still there to be asked again. A
+            // refusal over a capability is not misbehaviour, and losing the
+            // session -- with every other dataset open on it -- would be a far
+            // larger answer than the question deserves.
+            writeFrame(socket, codec::encode(3, codec::toWire(request), 2),
+                defaultMaximumFrameBytes);
+            response = readFrame(socket, defaultMaximumFrameBytes);
+            require(response.has_value(),
+                "the refusal closed the connection instead of answering");
+            envelope = codec::decode(*response);
+            require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
+                    && codec::fromWire(*envelope->payload.AsErrorResponse()).code
+                        == ErrorCode::UnsupportedProtocol,
+                "the connection stopped answering after one refusal");
+        }
         remote->close();
         local->close();
     } catch (const std::exception& error) {

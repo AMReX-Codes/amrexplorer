@@ -158,7 +158,10 @@ void checkConverted(const fb::RenderedFrameRequestT& wire,
     const amrvis::VolumeRenderRequest& result)
 {
     // fromWire promises finite camera and range values and a consistent,
-    // finite, bounded transfer function; the enum round-trips.
+    // finite, bounded transfer function; the enums round-trip. Converted once
+    // -- each call rebuilds the transfer vectors, and this runs every
+    // iteration that reaches it.
+    const auto roundTripped = codec::toWire(result);
     if (!finite(result.camera.azimuth) || !finite(result.camera.elevation)
         || !finite(result.camera.zoom) || !finite(result.region)
         || result.range.has_value() != wire.has_range
@@ -169,7 +172,12 @@ void checkConverted(const fb::RenderedFrameRequestT& wire,
         || !std::all_of(result.transfer.opacities.begin(),
             result.transfer.opacities.end(),
             [](float opacity) { return std::isfinite(opacity); })
-        || codec::toWire(result).composition != wire.composition
+        || roundTripped.composition != wire.composition
+        // The same round-trip check for the second enum on this table: a
+        // transposed mapping converts cleanly in both directions and shows up
+        // only against a peer that disagrees, which is what the composition
+        // check above exists to catch.
+        || roundTripped.sampling != wire.sampling
         || result.outputSize[0] != wire.width || result.outputSize[1] != wire.height) {
         fail("RenderedFrameRequest converter accepted a bad request");
     }
@@ -710,6 +718,11 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         request.camera = {0.5, -0.25, 1.5};
         request.outputSize = {64, 48};
         request.range = amrvis::VolumeRange{0.5, 2.0, true};
+        // Not the *wire* default: Nearest is the schema's zero, which
+        // flatbuffers omits from the buffer entirely, so a seed carrying it
+        // would be byte-identical to a pre-1.3 request and would exercise
+        // nothing. This one has to be written and read back.
+        request.sampling = amrvis::SamplingPolicy::Linear;
         request.transfer.colors = {0x0000FFU, 0x00FF00U, 0xFFFF00U, 0xFF0000U};
         request.transfer.opacities = {0.0F, 0.25F, 0.5F, 1.0F};
         request.samplesPerVoxel = 3;

@@ -279,14 +279,38 @@ public:
         return m_selectedMinorVersion >= 2;
     }
 
+    // Separately from rendering itself: a 1.2 server volume-renders perfectly
+    // well, it just cannot be asked how to sample.
+    [[nodiscard]] bool supportsVolumeSampling() const noexcept
+    {
+        return m_selectedMinorVersion >= 3;
+    }
+
     VolumeFrame renderVolume(
         const VolumeRenderRequest& request, StopToken cancellation)
     {
         // Still refused here for a caller that did not ask first -- but the
         // wrapper that closes the connection on an unexpected exception has
         // supportsVolumeRendering() to test, so it never has to reach this.
+        // Both refusals here as well as in RemoteDatasetSession: this class
+        // is public, this is where the negotiated version lives, and a caller
+        // that did not ask first would otherwise have its request quietly
+        // answered by a different rule than the one it named. Rendering
+        // first, because sampling defaults to Linear: a peer too old to render
+        // volumes at all would otherwise be reported as merely too old to
+        // smooth them, which is advice about the wrong problem.
         if (!supportsVolumeRendering()) {
             throw std::runtime_error(volumeRenderingUnsupportedMessage);
+        }
+        // Then a sampling policy the peer cannot honour. Tested for Linear
+        // specifically, because that is the one the march itself distinguishes
+        // (VolumeRaycaster reads anything else as nearest): refusing
+        // PiecewiseConstant would refuse a request whose picture an older peer
+        // would have produced correctly. If that policy ever grows a march of
+        // its own, this has to widen with it.
+        if (request.sampling == SamplingPolicy::Linear
+            && !supportsVolumeSampling()) {
+            throw std::runtime_error(volumeSamplingUnsupportedMessage);
         }
         // Indefinite: the first render of a field samples the plotfile,
         // which can outlast the request timeout; the token still cancels it.
@@ -769,6 +793,11 @@ RemoteDirectoryListing Connection::listDirectory(
 bool Connection::supportsVolumeRendering() const noexcept
 {
     return m_impl->supportsVolumeRendering();
+}
+
+bool Connection::supportsVolumeSampling() const noexcept
+{
+    return m_impl->supportsVolumeSampling();
 }
 
 VolumeFrame Connection::renderVolume(

@@ -294,6 +294,29 @@ Protocol policy:
 Packed messages are transient network data, not files. No persistence or
 cross-major migration path is promised.
 
+Verifying a version gate. A client-side capability gate -- the pattern
+protocol 1.3 uses for the volume march's sampling policy, where the client
+asks `supportsVolumeSampling()` before offering the control -- cannot be
+reached by an in-process test. `Connection` always negotiates the highest
+minor version both peers support, and neither `ConnectionOptions` nor
+`ServerOptions` exposes a cap, so a test cannot fabricate an older peer. The
+raw-socket tests in `test_remote_volume.cpp` drive a hand-written hello at a
+pinned version and so cover the *server's* refusal, but not the client's.
+
+What covers the client half is a real pair of binaries: build the server from
+a commit before the bump, and point a current client at it over ssh.
+
+```text
+(laptop) $ amrexplorer --ssh HOST --server /path/to/older/amrexplorer-server \
+    /path/to/plt3d
+```
+
+The client offers 0 through its own maximum, the older server answers with
+its own, and the capability query then reports false against a peer that
+really is older rather than one a test pretended was. Protocol 1.3's gate was
+checked this way: the control is greyed out and cleared, the volume still
+renders nearest, and returning to a session that can sample restores it.
+
 ### 5.3 Handshake and capabilities
 
 The first request must be `HelloRequest`. It will carry:
@@ -335,7 +358,7 @@ The production schema will cover:
 | `CancelRequest` | `CancelAcknowledged` | Request cancellation by request ID |
 | `PingRequest` | `PongResponse` | Explicit health check |
 | `ListDirectoryRequest` (1.1) | `DirectoryListing` | List a server directory's subdirectories, marking plotfiles |
-| `RenderedFrameRequest` (1.2) | `RenderedFrameResponse` | Render one volume frame on the server: camera, range, transfer lookup and voxel budget in; premultiplied pixels, the range used and sampling metrics out |
+| `RenderedFrameRequest` (1.2; sampling policy 1.3) | `RenderedFrameResponse` | Render one volume frame on the server: camera, range, transfer lookup, voxel budget and sampling policy in; premultiplied pixels, the range used and sampling metrics out |
 | any request | `ErrorResponse` | Typed terminal failure |
 
 Every ordinary request has exactly one terminal response with the same
@@ -415,7 +438,8 @@ query APIs.
 orthographic camera, the physical region, the output size, an optional
 explicit range (or the request that the server resolve the "Visible" range
 from the sampled grid), the transfer function as an explicit colour/opacity
-lookup, the samples per voxel and a voxel budget; the response carries the
+lookup, the samples per voxel, a voxel budget and -- from 1.3 -- the march's
+sampling policy (nearest or trilinear, field id 20); the response carries the
 viewport-sized premultiplied image, the range used, and the sampling metrics.
 The server bounds every field before allocating -- output size against the
 negotiated frame, the voxel budget against its own `--max-volume-voxels`

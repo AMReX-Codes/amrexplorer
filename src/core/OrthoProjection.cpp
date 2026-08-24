@@ -156,4 +156,12 @@ Ray pixelRay(const OrthoCamera& camera, const ViewportFrame& frame,
     return rayAt(rayField(camera, frame, domain), pixelX, pixelY);
 }
 
+ViewDirection projectDirection(
+    const OrthoCamera& camera, const Real3& direction) noexcept
+{
+    const auto view = toView(rotationOf(camera), direction);
+    // Negated the way projectPoint negates it: screen y counts downward.
+    return {view.x1, -view.y2};
+}
+
 } // namespace amrvis

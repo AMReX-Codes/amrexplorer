@@ -367,6 +367,12 @@ table RenderedFrameRequest {
   samples_per_voxel:int (id: 17);
   maximum_voxels:ulong (id: 18);
   range_logarithmic:bool (id: 19);
+  // Protocol 1.3. Appended with the next free id rather than placed beside
+  // samples_per_voxel, the way range_logarithmic was: renumbering an id would
+  // make every older peer read the wrong field. The default is Nearest -- what
+  // a server that predates 1.3 does -- but a 1.3 client never relies on that,
+  // because the version gate stops it asking such a server for Linear at all.
+  sampling:SamplingPolicy (id: 20);
 }
 
 // Premultiplied 0xAARRGGBB pixels, row 0 at the top, exactly width x height.

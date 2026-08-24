@@ -255,9 +255,13 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     const auto& lower = grid.region.lower;
     // The reciprocal, because the march divides by the pitch three times per
     // sample and the pitch is fixed for the frame. Unlike the range mapping,
-    // where the reciprocal costs the exact palette-slot ties, this quotient
-    // only feeds std::floor: the sole values it can move are samples landing
-    // exactly on a voxel plane, an arbitrary tie either way.
+    // where the reciprocal costs the exact palette-slot ties, what this
+    // quotient can move is bounded: under Nearest it only feeds std::floor, so
+    // the sole values it moves are samples landing exactly on a voxel plane,
+    // an arbitrary tie either way. Under Linear it also feeds an interpolation
+    // weight, where the rounding is no longer confined to ties -- but it is an
+    // ulp of a weight, three orders below the 8-bit channel the weight ends up
+    // in, so it cannot move a rendered pixel.
     std::array<double, 3> inversePitch{};
     for (std::size_t axis = 0; axis < 3; ++axis) {
         const auto pitch = (grid.region.upper[axis] - grid.region.lower[axis])
@@ -414,6 +418,143 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     for (std::size_t axis = 0; axis < 3; ++axis) {
         voxelStep[axis] = rays.direction[axis] * step * inversePitch[axis];
     }
+    // The policy folded to a bool once per frame. The branch itself is still
+    // per sample -- specialising the row renderer on it would remove that, and
+    // has not been measured.
+    const auto linear = settings.sampling == SamplingPolicy::Linear;
+    // Trilinear over the eight voxel centres bracketing the sample.
+    //
+    // Voxel i is centred at i + 0.5 in this coordinate (Volume.hpp says so),
+    // which is why the nearest rule above can just take the floor -- the half
+    // voxel cancels. Interpolating has to put it back, or the picture moves
+    // half a voxel and still looks entirely plausible.
+    //
+    // Outside the outermost centres the bracket collapses onto the edge voxel
+    // and the weight goes to zero, so the outer half-voxel shell reads flat --
+    // the same value the nearest rule gives there, which is what keeps a
+    // uniform slab compositing to its analytic opacity rather than fading at
+    // the boundary. A corner the range cannot map -- uncovered, or
+    // non-positive under a logarithmic range -- takes the landed voxel's value
+    // instead, the 3-D form of what the slice's bilinear sampler does at a
+    // domain edge (SliceQuery.cpp): clamp the field to its coverage rather
+    // than invent data, and never let one NaN erode a voxel-wide rind. Every
+    // corner is then mappable, so the result is a convex combination of
+    // mappable values and is mappable itself.
+    // The eight corner values a sample interpolates, kept from one sample to
+    // the next. At two or more samples per voxel a ray takes several steps
+    // inside one cell -- four of them at the High preset -- and the corners do
+    // not change while it does, so the fetches and the coverage tests are the
+    // same work repeated. One of these lives per ray, not per frame, so the
+    // march stays a pure function of the sample's index.
+    //
+    // Corners are kept as the grid holds them, uncovered ones included, with a
+    // bit per corner saying which those were. Substitution happens on the way
+    // out instead: what stands in for an uncovered corner is the value of the
+    // voxel the sample landed in, and that changes within a cell, so a cell
+    // stored already-substituted could not be reused across the sample that
+    // changed it. This way every cell is reusable, boundaries included.
+    struct CellCache {
+        std::array<std::size_t, 3> low{};
+        std::array<double, 8> corner{};
+        unsigned uncovered = 0;
+        bool loaded = false;
+    };
+    const auto linearValue
+        = [&grid, &mappedRange, gridRowStride, slabStride](
+              const std::array<double, 3>& at, double landed, CellCache& cache) {
+              // Per axis: the two bracketing voxel indices and how far the
+              // sample sits between them.
+              std::array<std::array<std::size_t, 2>, 3> bracket{};
+              std::array<double, 3> weight{};
+              for (std::size_t axis = 0; axis < 3; ++axis) {
+                  const auto centred = at[axis] - 0.5;
+                  const auto limit = static_cast<double>(grid.dims[axis] - 1);
+                  double low = 0.0;
+                  double fraction = 0.0;
+                  // Ordered so NaN takes the first branch's false arm, the way
+                  // the clamp above does: it reads voxel zero rather than
+                  // casting something undefined. A single-voxel axis has
+                  // limit 0 and lands here too, with both ends on voxel zero.
+                  if (centred > 0.0) {
+                      if (centred < limit) {
+                          low = std::floor(centred);
+                          fraction = centred - low;
+                      } else {
+                          low = limit;
+                      }
+                  }
+                  bracket[axis][0] = static_cast<std::size_t>(low);
+                  bracket[axis][1]
+                      = static_cast<std::size_t>(low < limit ? low + 1.0 : limit);
+                  weight[axis] = fraction;
+              }
+              // The same cell as the last sample on this ray: its corners
+              // still hold, uncovered ones included, because they are stored
+              // as the grid has them and substituted on the way out.
+              // Read straight into the cache and interpolate out of it, so a
+              // reused cell costs three comparisons and a fresh one costs no
+              // copy on top of its fetches.
+              if (!cache.loaded || cache.low[0] != bracket[0][0]
+                  || cache.low[1] != bracket[1][0]
+                  || cache.low[2] != bracket[2][0]) {
+                  cache.uncovered = 0;
+                  for (std::size_t k = 0; k < 2; ++k) {
+                      for (std::size_t j = 0; j < 2; ++j) {
+                          for (std::size_t i = 0; i < 2; ++i) {
+                              const auto corner = i + 2 * j + 4 * k;
+                              const auto offset = bracket[0][i]
+                                  + gridRowStride * bracket[1][j]
+                                  + slabStride * bracket[2][k];
+                              const auto value
+                                  = static_cast<double>(grid.values[offset]);
+                              if (!mappableValue(value, mappedRange)) {
+                                  cache.uncovered |= 1U << corner;
+                              }
+                              cache.corner[corner] = value;
+                          }
+                      }
+                  }
+                  cache.loaded = true;
+                  cache.low = {bracket[0][0], bracket[1][0], bracket[2][0]};
+              }
+              // Seven interpolations along the axes in turn rather than
+              // eight corners each weighted by a product: the same value, and
+              // the weight products are what this loop spends its time on.
+              // Not std::lerp, which costs about a quarter of the frame here
+              // (160 ms against 129 at 900 square over 256 cubed): it carries
+              // guarantees about infinities and monotonicity that this does
+              // not need, and does not fold to the same arithmetic. The one
+              // guarantee that would matter -- returning the endpoints
+              // exactly -- is already had: the weight is exactly zero in the
+              // clamped shell, where this returns `from` unchanged, and the
+              // bracket only produces a fraction in [0, 1) elsewhere, so the
+              // far endpoint is never asked for.
+              const auto between = [](double from, double to, double where) {
+                  return from + where * (to - from);
+              };
+              const auto blend = [&](const std::array<double, 8>& corner) {
+                  const auto lowY
+                      = between(between(corner[0], corner[1], weight[0]),
+                          between(corner[2], corner[3], weight[0]), weight[1]);
+                  const auto highY
+                      = between(between(corner[4], corner[5], weight[0]),
+                          between(corner[6], corner[7], weight[0]), weight[1]);
+                  return between(lowY, highY, weight[2]);
+              };
+              if (cache.uncovered == 0) {
+                  return blend(cache.corner);
+              }
+              // The uncommon path: a cell at the edge of what the levels
+              // cover. The landed voxel stands in for the corners they do not.
+              auto covered = cache.corner;
+              for (std::size_t corner = 0; corner < 8; ++corner) {
+                  if ((cache.uncovered & (1U << corner)) != 0) {
+                      covered[corner] = landed;
+                  }
+              }
+              return blend(covered);
+          };
+
     const auto renderRow = [&](int row) {
         auto* pixels = frame.pixels.data() + rowStride * static_cast<std::size_t>(row);
         const auto pixelY = static_cast<double>(row) + 0.5;
@@ -463,6 +604,8 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                 voxelStart[axis] = (ray.origin[axis] + tEnter * ray.direction[axis]
                     - lower[axis]) * inversePitch[axis];
             }
+            // Per ray: what the previous sample on this ray read.
+            CellCache cell;
             double alpha = 0.0;
             double red = 0.0;
             double green = 0.0;
@@ -475,10 +618,11 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                     return;
                 }
                 const auto offsetInSamples = static_cast<double>(sample) + 0.5;
+                std::array<double, 3> at{};
                 std::array<std::size_t, 3> index{};
                 for (std::size_t axis = 0; axis < 3; ++axis) {
-                    const auto voxel = std::floor(
-                        voxelStart[axis] + offsetInSamples * voxelStep[axis]);
+                    at[axis] = voxelStart[axis] + offsetInSamples * voxelStep[axis];
+                    const auto voxel = std::floor(at[axis]);
                     // Clamped as a double, before the cast: casting a value
                     // past the int range is undefined, and std::clamp passes
                     // a NaN straight through to it. Both are reachable from a
@@ -490,10 +634,17 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                 }
                 const auto offset = index[0] + gridRowStride * index[1]
                     + slabStride * index[2];
-                const auto value = static_cast<double>(grid.values[offset]);
-                if (!mappableValue(value, mappedRange)) {
+                // The voxel the sample lands in decides whether there is a
+                // sample at all. An uncovered one is not the field's to give
+                // whatever its neighbours hold, so interpolation never fills
+                // a hole in -- which is also what keeps an all-NaN grid
+                // completely transparent.
+                const auto nearest = static_cast<double>(grid.values[offset]);
+                if (!mappableValue(nearest, mappedRange)) {
                     continue;
                 }
+                const auto value
+                    = linear ? linearValue(at, nearest, cell) : nearest;
                 const auto& entry = entries[static_cast<std::size_t>(
                     valueSlot(value, mappedRange, entryCount))];
                 if (!(entry.stepOpacity > 0.0)) {
@@ -516,14 +667,30 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     };
 
     const auto threadCount = raycastThreadCount(settings.threadCount, height);
-    const auto rowsPerThread = (height + threadCount - 1) / threadCount;
     std::exception_ptr failure;
     std::mutex failureMutex;
-    const auto renderBand = [&](int begin, int end) {
+    // Rows are taken one at a time from a shared counter rather than dealt
+    // out in contiguous bands. What a row costs varies enormously down the
+    // frame -- rows that miss the domain return at clipToBox, rows through
+    // the middle march the full depth, and an early-out ends a ray as soon as
+    // it is opaque -- so a band of neighbouring rows is a band of similar
+    // cost, and the thread holding the middle of the picture finishes long
+    // after the ones holding the top and bottom. Handing out rows on demand
+    // costs one relaxed increment each and lets every worker keep going until
+    // the frame is done.
+    //
+    // The picture cannot change: renderRow is a pure function of its index
+    // and writes only that row, so which worker takes it is not observable.
+    std::atomic<int> nextRow{0};
+    const auto renderShare = [&] {
         try {
-            // No separate per-row poll: renderRow checks at column 0 of
-            // every row and every stride within it, which subsumes one.
-            for (int row = begin; row < end; ++row) {
+            for (;;) {
+                const auto row = nextRow.fetch_add(1, std::memory_order_relaxed);
+                if (row >= height) {
+                    return;
+                }
+                // No separate per-row poll: renderRow checks at column 0 of
+                // every row and every stride within it, which subsumes one.
                 renderRow(row);
                 if (cancelled.load(std::memory_order_relaxed)) {
                     return;
@@ -538,21 +705,16 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
         }
     };
     if (threadCount == 1) {
-        renderBand(0, height);
+        renderShare();
     } else {
         std::vector<std::thread> threads;
         threads.reserve(static_cast<std::size_t>(threadCount));
         try {
-            for (int band = 0; band < threadCount; ++band) {
-                const auto begin = band * rowsPerThread;
-                const auto end = std::min(height, begin + rowsPerThread);
-                if (begin >= end) {
-                    break;
-                }
-                threads.emplace_back(renderBand, begin, end);
+            for (int worker = 0; worker < threadCount; ++worker) {
+                threads.emplace_back(renderShare);
             }
         } catch (...) {
-            // std::thread construction can fail once earlier bands are
+            // std::thread construction can fail once earlier workers are
             // already running -- a process thread limit, a loaded machine.
             // Stopping and joining them here is what keeps ~vector<thread>
             // from meeting a joinable thread and calling std::terminate.

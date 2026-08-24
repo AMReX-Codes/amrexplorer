@@ -802,6 +802,15 @@ private:
                 "volume rendering requires protocol 1.2");
         }
         auto request = codec::fromWire(*payload);
+        // A client that negotiated 1.2 has no sampling field to send, so this
+        // can only be a peer claiming one version and speaking another. Say so
+        // rather than rendering by a rule it did not ask for -- a refusal the
+        // client can read, and one that leaves the connection up.
+        if (request.sampling == SamplingPolicy::Linear
+            && m_selectedMinorVersion < 3) {
+            throw RemoteError(ErrorCode::UnsupportedProtocol,
+                "smooth volume sampling requires protocol 1.3");
+        }
         validateVolumeBound(request);
         // The server's own voxel cap applies on top of the client's budget.
         request.maximumVoxels = std::min<std::uint64_t>(

@@ -6,7 +6,13 @@
 // scale the workload via argv for real numbers:
 //
 //   bench_volume_render [gridDim] [outputDim] [samplesPerVoxel] [iterations]
-//                       [threads]
+//                       [threads] [linear]
+//
+// `linear` is 1 for trilinear sampling (the renderer's default) and 0 for
+// nearest, so the eight-fetch and one-fetch costs can be compared directly.
+// Measure at a grid that does not fit in cache -- 64^3 of float is 1 MiB and
+// sits in L2, where the seven extra fetches look free -- and pin the thread
+// count so two runs are comparable.
 //
 // The grid is a smooth radial field with an opaque core, so the rays do real
 // compositing work and the early-out fires for the central pixels as it does
@@ -61,6 +67,7 @@ int main(int argc, char** argv)
     const int samplesPerVoxel = argument(argc, argv, 3, 2);
     const int iterations = argument(argc, argv, 4, 2);
     const int threads = argument(argc, argv, 5, 0);
+    const int linear = argument(argc, argv, 6, 1);
     // Bounded as the renderer bounds them, so an out-of-range argument is
     // this file's own message rather than an uncaught std::invalid_argument
     // escaping main and aborting through std::terminate.
@@ -76,6 +83,7 @@ int main(int argc, char** argv)
         "the output dimension is too small for the check below to mean anything");
     require(samplesPerVoxel <= amrvis::maxVolumeSamplesPerVoxel,
         "samples per voxel exceeds the renderer's limit");
+    require(linear == 0 || linear == 1, "linear must be 0 or 1");
     require(amrvis::volumeVoxelCount({gridDim, gridDim, gridDim})
             <= amrvis::maxVolumeVoxelBudget,
         "the grid exceeds the renderer's voxel budget");
@@ -111,6 +119,8 @@ int main(int argc, char** argv)
     settings.range = {0.0, 1.0, false};
     settings.samplesPerVoxel = samplesPerVoxel;
     settings.threadCount = static_cast<unsigned>(std::max(0, threads));
+    settings.sampling = linear == 1 ? amrvis::SamplingPolicy::Linear
+                                    : amrvis::SamplingPolicy::Nearest;
     // A ramp that is transparent below 0.4 and opaque white above 0.9, so
     // the core stops rays and the halo composites.
     for (int entry = 0; entry < 253; ++entry) {
@@ -141,7 +151,8 @@ int main(int argc, char** argv)
               << samplesPerVoxel << " samples/voxel, "
               << amrvis::raycastThreadCount(
                      settings.threadCount, settings.outputSize[1])
-              << " threads: " << perFrame * 1000.0 << " ms/frame, "
+              << " threads, " << (linear == 1 ? "linear" : "nearest")
+              << ": " << perFrame * 1000.0 << " ms/frame, "
               << pixels / elapsed / 1.0e6 << " Mpx/s\n";
     return 0;
 }

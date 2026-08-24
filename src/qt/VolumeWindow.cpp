@@ -183,6 +183,13 @@ void VolumeWindow::buildControls()
         tr("Sample only the part of the domain the slice views are zoomed to, "
            "which spends the voxel budget on it instead of the whole field"));
     form->addRow(QString(), m_regionCheck);
+    m_smoothCheck = new QCheckBox(tr("Smooth sampling"), panel);
+    m_smoothCheck->setObjectName(QStringLiteral("volumeSmoothSamplingCheck"));
+    form->addRow(QString(), m_smoothCheck);
+    // Available until a session says otherwise, the way the palette-alpha box
+    // is: this is a local render's answer, and setSamplingSelectable revises
+    // it for a server that cannot be asked.
+    setSamplingSelectable(true);
     // Grid boxes off, domain outline on: box edges crossing a translucent
     // field read as structure in it, which is worth asking for rather than
     // having to switch off. Both are said here and only here -- the view's own
@@ -198,13 +205,25 @@ void VolumeWindow::buildControls()
     form->addRow(QString(), m_boxesCheck);
     form->addRow(QString(), m_outlineCheck);
     layout->addLayout(form);
-    m_rendering = new QLabel(panel);
-    m_rendering->setVisible(false);
-    layout->addWidget(m_rendering);
     m_status = new QLabel(panel);
+    // Named for the same reason the check boxes are: neither label is the one
+    // an unqualified findChild would return twice running, and the order they
+    // are built in is a layout decision, not an identity.
+    m_status->setObjectName(QStringLiteral("volumeStatusLabel"));
     m_status->setWordWrap(true);
     m_status->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(m_status);
+    // Under the status rather than over it, and bold. It comes and goes with
+    // every render, so above the status it pushed those lines down and back
+    // each time; below, the numbers it belongs to hold still and the weight is
+    // what catches the eye instead of the movement.
+    m_rendering = new QLabel(panel);
+    m_rendering->setObjectName(QStringLiteral("volumeRenderingLabel"));
+    auto renderingFont = m_rendering->font();
+    renderingFont.setBold(true);
+    m_rendering->setFont(renderingFont);
+    m_rendering->setVisible(false);
+    layout->addWidget(m_rendering);
     layout->addStretch(1);
     dock->setWidget(panel);
     addDockWidget(Qt::RightDockWidgetArea, dock);
@@ -223,6 +242,12 @@ void VolumeWindow::buildControls()
         [this](int) { emit qualityChanged(); });
     connect(m_regionCheck, &QCheckBox::toggled, this,
         [this] { emit regionLimitChanged(); });
+    connect(m_smoothCheck, &QCheckBox::toggled, this, [this](bool on) {
+        // Only what the user asked for: the tick setSamplingSelectable takes
+        // away and puts back is blocked, so it never overwrites this.
+        m_smoothWanted = on;
+        emit samplingChanged();
+    });
     connect(m_boxesCheck, &QCheckBox::toggled, this,
         [this](bool checked) { m_view->setLevelBoxesVisible(checked); });
     connect(m_outlineCheck, &QCheckBox::toggled, this,
@@ -330,6 +355,38 @@ QSize VolumeWindow::viewSize() const
 bool VolumeWindow::limitToVisibleRegion() const
 {
     return m_regionCheck->isChecked();
+}
+
+SamplingPolicy VolumeWindow::sampling() const
+{
+    // The same shape as the palette-alpha box: a ticked box that is not
+    // available is not in effect, so what the control offers and what the
+    // render does cannot disagree.
+    return m_smoothCheck->isEnabled() && m_smoothCheck->isChecked()
+        ? SamplingPolicy::Linear
+        : SamplingPolicy::Nearest;
+}
+
+void VolumeWindow::setSamplingSelectable(bool selectable)
+{
+    m_smoothCheck->setEnabled(selectable);
+    // Unticked while unavailable, so it does not sit there claiming a
+    // smoothness the picture does not have -- and ticked again from what was
+    // last asked of it when it comes back. This is where it parts company
+    // with the palette-alpha box it otherwise copies: that one is off by
+    // default and has nothing to restore, while this one is on, so leaving it
+    // clear after one older server would turn the default off for the rest of
+    // the session. Silently either way, since whatever changed the session is
+    // already rendering.
+    const QSignalBlocker blocker(m_smoothCheck);
+    m_smoothCheck->setChecked(selectable && m_smoothWanted);
+    m_smoothCheck->setToolTip(selectable
+            ? tr("Read each ray sample from the eight voxels around it "
+                 "instead of the one it lands in, which is what stops a "
+                 "coarse volume looking terraced")
+            : tr("This server predates smooth sampling (protocol 1.3) and "
+                 "always reads the nearest voxel; install a current "
+                 "amrexplorer-server"));
 }
 
 qreal VolumeWindow::viewDevicePixelRatio() const

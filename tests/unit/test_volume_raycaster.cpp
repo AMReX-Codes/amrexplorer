@@ -7,6 +7,8 @@
 
 #include <amrexplorer/render3d/VolumeRaycaster.hpp>
 
+#include <amrexplorer/core/ValueMapping.hpp>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -80,6 +82,11 @@ amrvis::RaycastSettings settingsFor(const amrvis::OrthoCamera& camera,
     settings.transfer = transfer;
     settings.samplesPerVoxel = samplesPerVoxel;
     settings.threadCount = 1;
+    // Nearest unless a case asks otherwise. Most of what is checked below is
+    // the march -- step length, opacity correction, path length, threading --
+    // and reading one voxel per sample keeps a case's expected value the
+    // voxel's own, so those checks stay about the thing they name.
+    settings.sampling = amrvis::SamplingPolicy::Nearest;
     return settings;
 }
 
@@ -99,6 +106,12 @@ std::uint32_t pixelAt(const amrvis::VolumeFrame& frame, int x, int y)
 int main()
 {
     // --- a lone opaque voxel projects to its footprint and nowhere else -----
+    //
+    // Nearest sampling, which this pins: the footprint is exactly the voxel's
+    // own projection, with nothing outside it. Linear deliberately breaks
+    // both halves -- it spreads the voxel half a voxel further and drops the
+    // value below the entry threshold inside -- and is checked on its own
+    // terms further down.
     {
         auto grid = uniformGrid(8, 0.0F);
         // Voxel (5, 2, 6): x in [0.625, 0.75), y in [0.25, 0.375), z in
@@ -344,21 +357,29 @@ int main()
             transfer.opacities.push_back(static_cast<float>(entry) / 40.0F);
         }
         const amrvis::OrthoCamera oblique{0.7, -0.4, 1.3};
-        auto single = settingsFor(oblique, 97, transfer, 3);
-        auto many = single;
-        many.threadCount = 7;
-        auto oversubscribed = single;
-        oversubscribed.threadCount = 500;   // more threads than rows: clamped
-        const auto one = amrvis::raycastVolume(grid, single);
-        const auto seven = amrvis::raycastVolume(grid, many);
-        const auto clamped = amrvis::raycastVolume(grid, oversubscribed);
-        require(one.pixels == seven.pixels && one.pixels == clamped.pixels,
-            "the thread split changed the picture");
-        std::size_t lit = 0;
-        for (const auto pixel : one.pixels) {
-            lit += pixel != 0U;
+        // Both policies, because rows are handed out on demand and Linear
+        // carries a cache that lives for one ray: a cache that outlived its
+        // ray would make a pixel depend on which worker reached it and in
+        // what order, and Nearest touches neither piece of machinery.
+        for (const auto policy : {amrvis::SamplingPolicy::Nearest,
+                 amrvis::SamplingPolicy::Linear}) {
+            auto single = settingsFor(oblique, 97, transfer, 3);
+            single.sampling = policy;
+            auto many = single;
+            many.threadCount = 7;
+            auto oversubscribed = single;
+            oversubscribed.threadCount = 500;   // more threads than rows
+            const auto one = amrvis::raycastVolume(grid, single);
+            const auto seven = amrvis::raycastVolume(grid, many);
+            const auto clamped = amrvis::raycastVolume(grid, oversubscribed);
+            require(one.pixels == seven.pixels && one.pixels == clamped.pixels,
+                "the thread split changed the picture");
+            std::size_t lit = 0;
+            for (const auto pixel : one.pixels) {
+                lit += pixel != 0U;
+            }
+            require(lit > 0, "the oblique render lit nothing");
         }
-        require(lit > 0, "the oblique render lit nothing");
     }
 
     // --- the value mapping is the 2-D renderer's --------------------------
@@ -415,6 +436,298 @@ int main()
         require(std::all_of(frame.pixels.begin(), frame.pixels.end(),
                     [](std::uint32_t pixel) { return pixel == 0U; }),
             "uncovered voxels were painted");
+    }
+
+    // --- linear sampling reads between the voxel centres --------------------
+    //
+    // A step from 0 to 1 between voxels 3 and 4 of an 8-voxel axis. Nearest
+    // jumps at the face they share, x = 0.5. Linear ramps between their
+    // centres, x = 0.4375 to x = 0.5625, and with two entries over [0, 1] only
+    // the very top of that ramp selects the opaque entry -- so the picture
+    // starts at the far centre, x = 0.5625, not at the face.
+    //
+    // This is the half-voxel offset, and it is the whole reason to write the
+    // case: voxel i is centred at i + 0.5, so interpolating without shifting
+    // by half a voxel moves the field half a voxel through the grid. That
+    // renders perfectly plausibly -- it just shows the wrong place, and every
+    // other check here would still pass.
+    {
+        constexpr int n = 8;
+        auto grid = uniformGrid(n, 0.0F);
+        for (int k = 0; k < n; ++k) {
+            for (int j = 0; j < n; ++j) {
+                for (int i = n / 2; i < n; ++i) {
+                    grid.values[voxel(grid, i, j, k)] = 1.0F;
+                }
+            }
+        }
+        auto settings = settingsFor(
+            amrvis::orthoPresetXY, 256, twoEntries(0x0000FFU, 1.0F), 4);
+        const auto viewport = amrvis::viewportFrame(256, 256);
+        const auto columnOf = [&](double worldX) {
+            amrvis::Real3 point;
+            point[0] = worldX;
+            point[1] = 0.5;
+            point[2] = 0.5;
+            return amrvis::projectPoint(
+                settings.camera, viewport, settings.domain, point)
+                .x;
+        };
+        const auto firstLit = [&](const amrvis::VolumeFrame& frame) {
+            for (int x = 0; x < 256; ++x) {
+                if (alphaOf(pixelAt(frame, x, 128)) > 0U) {
+                    return x;
+                }
+            }
+            return -1;
+        };
+
+        settings.sampling = amrvis::SamplingPolicy::Nearest;
+        const auto nearestFrame = amrvis::raycastVolume(grid, settings);
+        require(std::abs(static_cast<double>(firstLit(nearestFrame))
+                    - columnOf(0.5))
+                <= 1.0,
+            "nearest sampling did not step at the face between the voxels");
+
+        settings.sampling = amrvis::SamplingPolicy::Linear;
+        const auto linearFrame = amrvis::raycastVolume(grid, settings);
+        require(std::abs(static_cast<double>(firstLit(linearFrame))
+                    - columnOf(0.5625))
+                <= 1.0,
+            "linear sampling did not reach the top of its ramp at the far "
+            "voxel centre, so the half-voxel offset is wrong");
+    }
+
+    // --- linear sampling reproduces a linear field --------------------------
+    //
+    // The property that says the weights are right rather than merely smooth:
+    // over a field linear in the grid's own coordinates, interpolating between
+    // the centres returns the field itself. Read through the transfer
+    // function, which is the only way a value leaves a render: 253 entries,
+    // each painting its own index into the blue channel, so the pixel names
+    // the entry the sample chose and through valueSlot the value it read.
+    //
+    // The field varies along x and y, not one axis: with a single axis every
+    // per-axis weight could be swapped for another and nothing would show it,
+    // because the other axes' fractions never matter. It stays constant along
+    // z so that a ray down z crosses one value and the pixel is unambiguous.
+    {
+        constexpr int n = 16;
+        constexpr int entryCount = 253;
+        auto grid = uniformGrid(n, 0.0F);
+        for (int k = 0; k < n; ++k) {
+            for (int j = 0; j < n; ++j) {
+                for (int i = 0; i < n; ++i) {
+                    grid.values[voxel(grid, i, j, k)]
+                        = static_cast<float>(i + 3 * j)
+                        / static_cast<float>(4 * (n - 1));
+                }
+            }
+        }
+        amrvis::VolumeTransferFunction transfer;
+        for (int entry = 0; entry < entryCount; ++entry) {
+            transfer.colors.push_back(static_cast<std::uint32_t>(entry));
+            transfer.opacities.push_back(1.0F);
+        }
+        auto settings = settingsFor(amrvis::orthoPresetXY, 128, transfer, 1);
+        settings.sampling = amrvis::SamplingPolicy::Linear;
+        const auto frame = amrvis::raycastVolume(grid, settings);
+        const auto viewport = amrvis::viewportFrame(128, 128);
+        // Bisect the projection the renderer used rather than reinventing it,
+        // so this cannot drift from the camera. The XY preset maps world x to
+        // screen x and world y to screen y, so each axis inverts on its own.
+        const auto worldOn = [&](std::size_t axis, double screen) {
+            double low = 0.0;
+            double high = 1.0;
+            for (int step = 0; step < 60; ++step) {
+                const auto mid = 0.5 * (low + high);
+                amrvis::Real3 point;
+                point[0] = 0.5;
+                point[1] = 0.5;
+                point[2] = 0.5;
+                point[axis] = mid;
+                const auto projected = amrvis::projectPoint(
+                    settings.camera, viewport, settings.domain, point);
+                const auto at = axis == 0 ? projected.x : projected.y;
+                const auto rising = axis == 0;
+                if ((at < screen) == rising) {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            }
+            return 0.5 * (low + high);
+        };
+        // Down the diagonal, so both fractions vary and neither can stand in
+        // for the other. Only pixels the domain actually covers: the camera
+        // fits the whole box, so the outer ones render nothing at all.
+        auto checked = 0;
+        for (int step = 24; step < 104; ++step) {
+            if (alphaOf(pixelAt(frame, step, step)) == 0U) {
+                continue;
+            }
+            ++checked;
+            // Voxel i is centred at i + 0.5 voxels, so this is the field the
+            // grid holds, evaluated where the ray actually goes.
+            // Clamped the way the sampler clamps: outside the outermost
+            // centres the bracket collapses onto the edge voxel and the field
+            // reads flat, so the half voxel at each end is not the linear
+            // extrapolation of it.
+            const auto onCentres = [](double world) {
+                const auto centres = world * static_cast<double>(n) - 0.5;
+                return std::clamp(centres, 0.0, static_cast<double>(n - 1));
+            };
+            const auto centreX = onCentres(worldOn(0, static_cast<double>(step) + 0.5));
+            const auto centreY = onCentres(worldOn(1, static_cast<double>(step) + 0.5));
+            // Weighted unequally on purpose: a field symmetric in x and y
+            // reads the same with the two weights exchanged, so it cannot
+            // tell a correct interpolation from one that swaps them.
+            const auto expected
+                = (centreX + 3.0 * centreY) / static_cast<double>(4 * (n - 1));
+            const auto slot = amrvis::valueSlot(
+                expected, amrvis::ResolvedValueRange{0.0, 1.0, false},
+                entryCount);
+            const auto seen
+                = static_cast<int>(blueOf(pixelAt(frame, step, step)));
+            require(std::abs(seen - slot) <= 1,
+                "linear sampling did not reproduce a field linear in the "
+                "grid's own coordinates");
+        }
+        require(checked > 40,
+            "too few pixels landed on the domain to have checked the field");
+    }
+
+    // --- linear sampling interpolates along the ray as well -----------------
+    //
+    // Everything above varies across the ray, not along it, so a ray sees one
+    // value the whole way and nothing checks the axis it travels down. That
+    // axis is the one a per-ray cache can get wrong -- reuse the cell a ray
+    // started in and the field looks constant along it, which those cases
+    // cannot see -- and it is also where a mixed-up z weight hides.
+    //
+    // A step along z instead, read through the accumulated opacity. Nearest
+    // turns opaque at the face between voxels 3 and 4 (z = 0.5, four voxels of
+    // it); linear only where the ramp between their centres reaches the top
+    // entry, at z = 0.5625, which is three and a half voxels. The opacity
+    // correction makes a voxel contribute its entry's opacity once, so those
+    // are 1 - 0.7^4 and 1 - 0.7^3.5 -- far enough apart to tell, and both far
+    // from the 1 - 0.7^8 a ray would accumulate if it read one cell all the
+    // way down.
+    {
+        constexpr int n = 8;
+        auto grid = uniformGrid(n, 0.0F);
+        for (int k = n / 2; k < n; ++k) {
+            for (int j = 0; j < n; ++j) {
+                for (int i = 0; i < n; ++i) {
+                    grid.values[voxel(grid, i, j, k)] = 1.0F;
+                }
+            }
+        }
+        auto settings = settingsFor(
+            amrvis::orthoPresetXY, 64, twoEntries(0x0000FFU, 0.3F), 4);
+        settings.sampling = amrvis::SamplingPolicy::Linear;
+        const auto linearFrame = amrvis::raycastVolume(grid, settings);
+        settings.sampling = amrvis::SamplingPolicy::Nearest;
+        const auto nearestFrame = amrvis::raycastVolume(grid, settings);
+        const auto centreAlpha = [](const amrvis::VolumeFrame& frame) {
+            return static_cast<double>(alphaOf(pixelAt(frame, 32, 32))) / 255.0;
+        };
+        require(std::abs(centreAlpha(nearestFrame) - (1.0 - std::pow(0.7, 4.0)))
+                <= 4.0 / 255.0,
+            "nearest sampling did not turn opaque at the face along the ray");
+        require(std::abs(centreAlpha(linearFrame) - (1.0 - std::pow(0.7, 3.5)))
+                <= 4.0 / 255.0,
+            "linear sampling did not interpolate along the ray, which is the "
+            "axis a reused cell would freeze");
+    }
+
+    // --- the ray's own axis is interpolated, whichever axis that is ---------
+    //
+    // The step case above proves the axis a ray travels down is interpolated;
+    // it does not prove the right weight reaches it, because a step's corners
+    // are 0 and 1 and any weight short of 1 leaves the value below the top
+    // entry, so a substituted weight lands the transition in the same place.
+    // A ramp exposes it: the value inside a cell then depends on the fraction,
+    // and a wrong one -- another axis's, or a frozen one from a cell held over
+    // from the previous sample -- moves where the ramp crosses the entry
+    // threshold.
+    //
+    // Once per preset, since each looks down a different axis: the XY view
+    // travels z, XZ travels y, YZ travels x. A cache that compares only some
+    // of the three indices, or a weight taken from the wrong axis, survives
+    // every check that exercises one axis alone.
+    {
+        constexpr int n = 8;
+        const std::array<std::pair<amrvis::OrthoCamera, std::size_t>, 3> views{
+            {{amrvis::orthoPresetXY, 2}, {amrvis::orthoPresetXZ, 1},
+                {amrvis::orthoPresetYZ, 0}}};
+        for (const auto& [camera, axis] : views) {
+            auto grid = uniformGrid(n, 0.0F);
+            for (int k = 0; k < n; ++k) {
+                for (int j = 0; j < n; ++j) {
+                    for (int i = 0; i < n; ++i) {
+                        const std::array<int, 3> at{i, j, k};
+                        grid.values[voxel(grid, i, j, k)]
+                            = static_cast<float>(at[axis])
+                            / static_cast<float>(n - 1);
+                    }
+                }
+            }
+            auto settings = settingsFor(
+                camera, 64, twoEntries(0x0000FFU, 0.3F), 4);
+            // Half the field's span, so the top entry begins halfway up the
+            // ramp -- at the centre of voxel 3.5, which is the middle of the
+            // grid -- instead of only at its very top.
+            settings.range = {0.0, 0.5, false};
+            settings.sampling = amrvis::SamplingPolicy::Linear;
+            const auto frame = amrvis::raycastVolume(grid, settings);
+            const auto alpha
+                = static_cast<double>(alphaOf(pixelAt(frame, 32, 32))) / 255.0;
+            // The ramp reaches the threshold at the middle of the grid, so
+            // four of the eight voxels along the ray are opaque.
+            require(std::abs(alpha - (1.0 - std::pow(0.7, 4.0))) <= 4.0 / 255.0,
+                "linear sampling did not interpolate correctly along the axis "
+                "the ray travels down");
+        }
+    }
+
+    // --- linear sampling does not erode a coverage boundary -----------------
+    //
+    // The rule a plain eight-corner average gets wrong: a stencil touching an
+    // uncovered voxel would average NaN and drop the sample, eating a
+    // voxel-wide transparent rind inward from every boundary. A covered voxel
+    // beside NaN keeps its own value instead, which is what the slice's
+    // bilinear sampler does at a domain edge.
+    {
+        constexpr int n = 8;
+        auto grid = uniformGrid(n, 1.0F);
+        // Uncover the whole upper half in x, leaving a boundary mid-grid.
+        for (int k = 0; k < n; ++k) {
+            for (int j = 0; j < n; ++j) {
+                for (int i = n / 2; i < n; ++i) {
+                    grid.values[voxel(grid, i, j, k)]
+                        = std::numeric_limits<float>::quiet_NaN();
+                }
+            }
+        }
+        grid.coveredVoxels = grid.values.size() / 2;
+        auto settings = settingsFor(
+            amrvis::orthoPresetXY, 128, twoEntries(0xFFFFFFU, 1.0F), 4);
+        const auto countLit = [&](amrvis::SamplingPolicy policy) {
+            settings.sampling = policy;
+            const auto frame = amrvis::raycastVolume(grid, settings);
+            auto lit = 0;
+            for (int x = 0; x < 128; ++x) {
+                if (alphaOf(pixelAt(frame, x, 64)) > 0U) {
+                    ++lit;
+                }
+            }
+            return lit;
+        };
+        require(countLit(amrvis::SamplingPolicy::Linear)
+                == countLit(amrvis::SamplingPolicy::Nearest),
+            "linear sampling lit a different width than nearest at a coverage "
+            "boundary, so the stencil ate into the covered side");
     }
 
     // --- volumeGridRange ---------------------------------------------------

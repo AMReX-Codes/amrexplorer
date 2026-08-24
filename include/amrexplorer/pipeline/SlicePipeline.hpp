@@ -128,6 +128,17 @@ struct InitialSliceResult {
 struct FrameSliceSpec {
     DisplayMode displayMode = DisplayMode::Raster;
     std::uint32_t field = 0;
+    // The same selections by name, which is what actually carries them from
+    // one frame to the next. An index is only meaningful in the field list it
+    // came from: frames need not agree on their stored fields, and a derived
+    // definition that one frame cannot resolve is left out of that frame's
+    // list (DerivedFieldPolicy::Skip), which compacts every id after it. An
+    // index alone then lands on whatever now occupies that slot, silently.
+    // Empty means "no name to go on", and the index is used as it was.
+    std::string fieldName;
+    std::string vectorUFieldName;
+    std::string vectorVFieldName;
+    std::string vectorWFieldName;
     int levelSelection = -1;  // level combo data: -1 = finest available
     RangeMode rangeMode = RangeMode::File;
     std::optional<std::pair<double, double>> userRange;
@@ -155,15 +166,17 @@ struct FrameSliceSpec {
     std::vector<std::string> particleSpecies;
     double particleFraction = 1.0;
     std::uint64_t particleSeed = 0;
-    // Fields to compute rather than read (core/DerivedField.hpp). Installed by
-    // the session executeFrameLoad opens, so they follow the user's field
-    // selection across frames; a definition that does not resolve against a
-    // frame fails that frame's load with a named reason.
+    // Fields to compute rather than read (core/DerivedField.hpp), installed by
+    // the session executeFrameLoad opens. A definition this frame cannot
+    // resolve is left out of it rather than failing the load, and the session
+    // says which through DatasetSession::skippedDerivedFields().
     //
-    // Only executeFrameLoad can honour these -- it is what opens the session.
-    // A spec handed to executeSessionFrameLoad must leave them empty: that
-    // session is already open, and its field list is fixed. Callers gate on
-    // DatasetSession::supportsDerivedFields() rather than guessing.
+    // Only executeFrameLoad can act on these, because it is what opens the
+    // session. Passing a spec that carries them to executeSessionFrameLoad is
+    // not an error -- executeFrameLoad does exactly that, having already
+    // installed them -- but for a session opened elsewhere they are inert:
+    // its field list was fixed when it opened. Callers with a session in hand
+    // gate on DatasetSession::supportsDerivedFields().
     std::vector<DerivedFieldDefinition> derivedFields;
 };
 
@@ -179,6 +192,16 @@ struct LevelSelection {
 // Decodes the level combo's data encoding: -1 = finest available, N = level N
 // only, kUpdateToLevelOffset + N = composite levels 0..N.
 [[nodiscard]] LevelSelection decodeLevelData(int data, int finestLevel);
+
+// The field a carried selection means in *this* dataset: the one named, if it
+// is here, and otherwise the index clamped into range. Names are how a
+// selection survives a frame switch -- see FrameSliceSpec::fieldName for why
+// an index does not -- and the clamp is what happens when the frame simply
+// does not have the field any more. An empty name goes straight to the index,
+// which is the behaviour of every caller that has no name to give.
+[[nodiscard]] std::uint32_t resolveSpecField(
+    const DatasetMetadata& metadata, const std::string& name,
+    std::uint32_t index);
 
 // Upper bound on slice output dimensions. One pixel per finest cell is the
 // ideal, but a plane costs on the order of 10 bytes per pixel (float value,

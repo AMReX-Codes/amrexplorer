@@ -1,5 +1,6 @@
 #include <amrexplorer/core/DerivedField.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -74,6 +75,13 @@ DerivedFieldInstallation installDerivedFields(DatasetMetadata& metadata,
 {
     DerivedFieldInstallation installation;
     installation.programs.reserve(definitions.size());
+    // Where the stored fields end, so a resolved input can be recognised as
+    // derived (its id is storedCount + its program's index, which is how
+    // PlotfileDataset finds the program again), and the depth of each
+    // installed program, for the chain bound below.
+    const auto storedCount = metadata.fields.size();
+    std::vector<std::size_t> depths;
+    depths.reserve(definitions.size());
     for (std::size_t index = 0; index < definitions.size(); ++index) {
         const auto& definition = definitions[index];
         const auto fail = [index, &definition](const std::string& message,
@@ -114,10 +122,6 @@ DerivedFieldInstallation installDerivedFields(DatasetMetadata& metadata,
                 {}};
 
             const auto symbols = program.expression.symbols();
-            if (symbols.size() > maximumDerivedFieldInputs) {
-                throw fail("an expression may read at most "
-                    + std::to_string(maximumDerivedFieldInputs) + " fields");
-            }
             program.inputs.reserve(symbols.size());
             // Every field an expression reads must share one centering, because
             // its values are combined sample for sample; the derived field then
@@ -158,11 +162,43 @@ DerivedFieldInstallation installDerivedFields(DatasetMetadata& metadata,
                 throw fail("no field or coordinate is named '" + symbol + "'");
             }
 
+            // Counted over the fields, not the symbols: this bounds the
+            // blocks one evaluation holds pinned, and a coordinate is
+            // computed rather than read.
+            const auto fieldInputs = static_cast<std::size_t>(
+                std::count_if(program.inputs.begin(), program.inputs.end(),
+                    [](const DerivedFieldInput& input) {
+                        return !input.isCoordinate();
+                    }));
+            if (fieldInputs > maximumDerivedFieldInputs) {
+                throw fail("an expression may read at most "
+                    + std::to_string(maximumDerivedFieldInputs) + " fields");
+            }
+            // One deeper than the deepest derived field it reads. Evaluation
+            // recurses once per link, so this is what keeps that recursion off
+            // the end of the stack.
+            std::size_t depth = 1;
+            for (const auto& input : program.inputs) {
+                if (input.isCoordinate()) {
+                    continue;
+                }
+                const auto id = static_cast<std::size_t>(input.field.value);
+                if (id >= storedCount) {
+                    depth = std::max(depth, depths[id - storedCount] + 1);
+                }
+            }
+            if (depth > maximumDerivedFieldDepth) {
+                throw fail("a derived field may not read a chain of more than "
+                    + std::to_string(maximumDerivedFieldDepth)
+                    + " derived fields");
+            }
+
             metadata.fields.push_back(FieldMetadata{
                 .name = definition.name,
                 .centering = centering.value_or(Centering::Cell),
                 .componentNames = {}});
             installation.programs.push_back(std::move(program));
+            depths.push_back(depth);
         } catch (const DerivedFieldError& error) {
             if (policy == DerivedFieldPolicy::Strict) {
                 throw;

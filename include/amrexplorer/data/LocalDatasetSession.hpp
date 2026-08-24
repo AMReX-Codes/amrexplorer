@@ -53,8 +53,9 @@ public:
     // The file version comes from the dataset's own metadata read; nothing
     // re-opens the Header for it.
     // `derivedFields` are passed straight to the dataset, which resolves them
-    // against its stored field list and fails the open if one does not
-    // resolve (see PlotfileDataset).
+    // against its stored field list and leaves out any that do not resolve,
+    // reporting them through skippedDerivedFields() rather than failing the
+    // open (see PlotfileDataset).
     explicit LocalDatasetSession(std::shared_ptr<PlotfileDataset> dataset);
     LocalDatasetSession(const std::filesystem::path& path, DatasetId id,
         std::uint64_t cacheBudgetBytes, StopToken cancellation = {},

@@ -206,7 +206,63 @@ int main()
                 "not centered like", metadata);
         }
         {
-            // One symbol past the input cap.
+            // A chain of derived fields, each reading the one before it.
+            // Evaluating the last one recurses once per link, so the chain is
+            // bounded at installation; without that a long enough list is a
+            // stack overflow in whichever worker evaluates it.
+            const auto depth = amrvis::maximumDerivedFieldDepth;
+            const auto chain = [](std::size_t links) {
+                std::vector<DerivedFieldDefinition> definitions{
+                    {"d0", "density"}};
+                for (std::size_t index = 1; index < links; ++index) {
+                    definitions.push_back({"d" + std::to_string(index),
+                        "d" + std::to_string(index - 1) + " + 1"});
+                }
+                return definitions;
+            };
+            {
+                auto metadata = makeMetadata();
+                const auto programs = install(metadata, chain(depth));
+                require(programs.size() == depth,
+                    "a chain at the depth limit was not installed");
+            }
+            // ...and one link too many, which names the definition that
+            // crossed the line rather than the whole list.
+            requireRejected(chain(depth + 1), depth, "chain of more than");
+            // Depth is the longest path, not the count: a definition may read
+            // any number of shallow ones.
+            {
+                auto metadata = makeMetadata();
+                std::vector<DerivedFieldDefinition> wide{{"a", "density"},
+                    {"b", "temperature"}, {"c", "a + b"}};
+                require(install(metadata, wide).size() == 3,
+                    "a wide but shallow list was rejected");
+            }
+        }
+        {
+            // Coordinates are computed rather than read, so they do not count
+            // against the cap that bounds how many blocks one evaluation
+            // holds pinned -- and the message says "fields" because that is
+            // what it counts.
+            std::string expression = "x + y + z";
+            auto metadata = makeMetadata();
+            for (std::size_t index = 0; index < amrvis::maximumDerivedFieldInputs;
+                ++index) {
+                const auto name = "f" + std::to_string(index);
+                expression += " + " + name;
+                metadata.fields.push_back(FieldMetadata{
+                    .name = name, .centering = Centering::Cell,
+                    .componentNames = {}});
+            }
+            const auto programs = install(metadata, {{"a", expression}});
+            require(programs.size() == 1,
+                "three coordinates and the maximum fields were rejected");
+            require(programs[0].inputs.size()
+                    == amrvis::maximumDerivedFieldInputs + 3,
+                "the coordinates did not resolve alongside the fields");
+        }
+        {
+            // One field past the input cap.
             std::string expression = "density";
             for (std::size_t index = 0; index <= amrvis::maximumDerivedFieldInputs;
                 ++index) {

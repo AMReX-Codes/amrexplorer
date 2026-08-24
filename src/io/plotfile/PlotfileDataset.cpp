@@ -266,6 +266,25 @@ BlockReadResult PlotfileDataset::readDerivedBlock(const BlockRequest& request,
         throw BlockReadError("derived block exceeds addressable memory");
     }
     const auto count = static_cast<std::size_t>(points);
+    // What this block will occupy, checked against the budget before it is
+    // allocated rather than after. An expression over coordinates alone reads
+    // no file, so nothing else here bounds `count` by anything but what the
+    // metadata claimed -- and src/io bounds its allocations by real file
+    // evidence, not by a claimed count. A box array claiming 10^10 cells is
+    // an 80 GB request otherwise. The budget is the same bound the block
+    // would have been held to a moment later, when it was offered to the
+    // cache, so the failure is one callers already handle.
+    constexpr std::uint64_t blockBytes = sizeof(FabBlock);
+    if (count
+        > (std::numeric_limits<std::uint64_t>::max() - blockBytes)
+            / sizeof(double)) {
+        throw BlockReadError("derived block exceeds addressable memory");
+    }
+    const auto resident = blockBytes + count * sizeof(double);
+    if (resident > m_cache.metrics().budgetBytes) {
+        throw CacheBudgetExceeded(
+            "a derived field's block exceeds the entire byte budget");
+    }
 
     // Every input block, pinned for as long as the evaluation reads it, with
     // the arithmetic that turns a sample of the derived box into an offset

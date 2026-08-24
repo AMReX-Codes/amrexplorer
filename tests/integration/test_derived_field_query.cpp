@@ -505,6 +505,143 @@ int main()
         std::filesystem::remove_all(ghostRoot);
     }
 
+    // A crafted box array, claiming a grid far larger than the payload behind
+    // it. The stored reader bounds its buffer by the data file; a derived
+    // field over coordinates alone reads no file at all, so nothing else here
+    // bounds the allocation by anything but the claim. It has to be refused
+    // before it is made, not discovered afterwards.
+    {
+        const auto craftedRoot = std::filesystem::temp_directory_path()
+            / ("amrexplorer-derived-crafted-" + std::to_string(unique));
+        std::filesystem::create_directories(craftedRoot / "Level_0");
+        // 10^10 cells claimed; four on disk. At eight bytes a cell the
+        // allocation this guards would be 800 GB.
+        const std::string claimed = "((0,0) (99999,99999) (0,0))";
+        writeText(craftedRoot / "Header",
+            "HyperCLaw-V1.1\n"
+            "1\ndensity\n"
+            "2\n0.0\n0\n"
+            "0.0 0.0\n1.0 1.0\n"
+            "\n"
+            + claimed + "\n"
+            "0\n"
+            "0.5 0.5\n"
+            "0\n0\n"
+            "0 1 0.0\n0\n"
+            "0.0 1.0\n0.0 1.0\n"
+            "Level_0/Cell\n");
+        writeText(craftedRoot / "Level_0" / "Cell_H",
+            "1\n1\n1\n0\n(1 0\n" + claimed + "\n)\n"
+            "1\nFabOnDisk: Cell_D_00000 0\n\n"
+            "1,1\n0.0,\n\n1,1\n1.0,\n\n");
+        writeFab(craftedRoot / "Level_0" / "Cell_D_00000",
+            "((0,0) (1,1) (0,0))", {std::vector<double>(4, 1.0)});
+
+        amrvis::PlotfileDataset crafted(craftedRoot, amrvis::DatasetId{17},
+            8 * 1024 * 1024, {},
+            {{"here", "x + y"}, {"scaled", "density * 2"}});
+        for (const std::uint32_t field : {1U, 2U}) {
+            amrvis::BlockRequest request;
+            request.dataset.value = 17;
+            request.field.value = field;
+            bool refused = false;
+            try {
+                static_cast<void>(crafted.requestBlock(request));
+            } catch (const amrvis::CacheBudgetExceeded&) {
+                refused = true;
+            }
+            require(refused,
+                "a derived block larger than the whole cache budget was not "
+                "refused before it was allocated");
+        }
+        std::filesystem::remove_all(craftedRoot);
+    }
+
+    // Three dimensions, with ghosts: the k-direction stride and the third
+    // digit of the sample odometer are the one part of the derived gather that
+    // a 2-D fixture cannot reach, so everything above says nothing about them.
+    // Ghost cells hold a value no expectation can produce, as in the 2-D case.
+    {
+        constexpr int cells = 4;
+        constexpr double poison = -999.0;
+        const auto solidRoot = std::filesystem::temp_directory_path()
+            / ("amrexplorer-derived-3d-" + std::to_string(unique));
+        std::filesystem::create_directories(solidRoot / "Level_0");
+        writeText(solidRoot / "Header",
+            "HyperCLaw-V1.1\n"
+            "2\ndensity\ntemperature\n"
+            "3\n0.0\n0\n"
+            "0.0 0.0 0.0\n1.0 1.0 1.0\n"
+            "\n"
+            "((0,0,0) (3,3,3) (0,0,0))\n"
+            "0\n"
+            "0.25 0.25 0.25\n"
+            "0\n0\n"
+            "0 1 0.0\n0\n"
+            "0.0 1.0\n0.0 1.0\n0.0 1.0\n"
+            "Level_0/Cell\n");
+        writeText(solidRoot / "Level_0" / "Cell_H",
+            "1\n1\n2\n1\n(1 0\n((0,0,0) (3,3,3) (0,0,0))\n)\n"
+            "1\nFabOnDisk: Cell_D_00000 0\n\n"
+            "1,2\n-10000.0,-10000.0,\n\n"
+            "1,2\n10000.0,10000.0,\n\n");
+        std::vector<std::vector<double>> components(2);
+        for (int k = -1; k <= cells; ++k) {
+            for (int j = -1; j <= cells; ++j) {
+                for (int i = -1; i <= cells; ++i) {
+                    const auto ghost = i < 0 || j < 0 || k < 0 || i >= cells
+                        || j >= cells || k >= cells;
+                    // Distinct along every axis, k included, so a stride that
+                    // is wrong in the third direction cannot coincide.
+                    const auto value = 1.0 + static_cast<double>(i)
+                        + 10.0 * static_cast<double>(j)
+                        + 100.0 * static_cast<double>(k);
+                    components[0].push_back(ghost ? poison : value);
+                    components[1].push_back(ghost ? poison : 2.0 * value);
+                }
+            }
+        }
+        writeFab(solidRoot / "Level_0" / "Cell_D_00000",
+            "((-1,-1,-1) (4,4,4) (0,0,0))", components);
+
+        amrvis::PlotfileDataset solid(solidRoot, amrvis::DatasetId{13},
+            8 * 1024 * 1024, {},
+            {{"sum", "density + temperature"}, {"lifted", "density*z"}});
+        const auto& level = solid.metadata().levels[0];
+        for (const std::uint32_t field : {2U, 3U}) {
+            amrvis::BlockRequest request;
+            request.dataset.value = 13;
+            request.field.value = field;
+            const auto access = solid.requestBlock(request);
+            const auto& blockBox = access.handle->box;
+            require(blockBox.lower[2] == 0 && blockBox.upper[2] == cells - 1,
+                "the 3-D derived block does not span the valid box in k");
+            std::size_t compared = 0;
+            for (int k = 0; k < cells; ++k) {
+                for (int j = 0; j < cells; ++j) {
+                    for (int i = 0; i < cells; ++i) {
+                        const auto offset = static_cast<std::size_t>(
+                            i + cells * (j + cells * k));
+                        const auto density = 1.0 + static_cast<double>(i)
+                            + 10.0 * static_cast<double>(j)
+                            + 100.0 * static_cast<double>(k);
+                        const auto expected = field == 2
+                            ? 3.0 * density
+                            : density * amrvis::samplePosition(level, 2, k);
+                        require(close(access.handle->values[offset], expected),
+                            "a 3-D derived block read the wrong samples");
+                        ++compared;
+                    }
+                }
+            }
+            require(compared
+                    == static_cast<std::size_t>(cells * cells * cells),
+                "the 3-D derived block was not fully compared");
+        }
+        std::filesystem::remove_all(solidRoot);
+    }
+
+    std::filesystem::remove_all(root);
     std::cout << "derived field query tests passed\n";
     return EXIT_SUCCESS;
 }

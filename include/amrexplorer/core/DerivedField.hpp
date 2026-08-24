@@ -96,9 +96,20 @@ private:
     std::optional<std::size_t> m_sourceOffset;
 };
 
-// Symbols one derived field may read. The cap bounds how many blocks
-// evaluating one derived block has to hold pinned at once.
+// Fields one derived field may read. The cap bounds how many blocks evaluating
+// one derived block has to hold pinned at once, so it counts fields alone --
+// a coordinate is computed, not read, and pins nothing.
 inline constexpr std::size_t maximumDerivedFieldInputs = 16;
+
+// How long a chain of derived fields may depend on one another: a definition
+// reading a definition reading a definition. Evaluating a derived block
+// recurses once per link (PlotfileDataset::readDerivedBlock requests its
+// inputs, which may themselves be derived), and a definition list is as long
+// as its author cares to make it -- an imported one especially -- so without a
+// bound a long enough chain overflows the C++ stack of whichever worker
+// evaluates it. Bounded here, at installation, because that is where the chain
+// is known and where saying so can name the definition.
+inline constexpr std::size_t maximumDerivedFieldDepth = 16;
 
 // Appends one FieldMetadata per installed definition to metadata.fields, in
 // order, and returns the programs that produce them. Definitions are resolved

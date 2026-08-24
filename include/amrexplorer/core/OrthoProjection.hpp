@@ -35,6 +35,18 @@ inline constexpr OrthoCamera orthoPresetYZ{
 inline constexpr OrthoCamera orthoDefaultView{
     0.5235987755982988, -0.5235987755982988, 1.0};
 
+// Which way a direction in domain space points on screen, in screen sense
+// (y down), as a unit-ish vector a caller scales for itself. The same rotation
+// projectPoint applies, without the domain normalisation or the viewport
+// scale: an axis indicator drawn from this agrees with the picture because it
+// is the same arithmetic, not because someone transcribed it correctly.
+struct ViewDirection {
+    double x = 0.0;
+    double y = 0.0;
+};
+[[nodiscard]] ViewDirection projectDirection(
+    const OrthoCamera& camera, const Real3& direction) noexcept;
+
 // Where the projection lands in a viewport of the given pixel size: the
 // centre, and the pixel scale of one normalised unit (the normalised domain
 // spans [-0.5, 0.5], so a scale of half the shorter side minus the margin

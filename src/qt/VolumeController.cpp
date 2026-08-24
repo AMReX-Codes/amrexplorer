@@ -582,8 +582,9 @@ QString VolumeController::describe(
     // milliseconds and its tenth is the difference between instant and not; a
     // hundred milliseconds up, the tenth is noise on a line that changes every
     // frame; past a second, four digits of milliseconds is not a number anyone
-    // reads. The switch to seconds waits for a whole one, so nothing ever
-    // rounds up into a second it has not reached.
+    // reads. Something just short of a second has to round somewhere -- 999.6
+    // is either "1000 ms" or "1.00 s" -- and it reads better as the second,
+    // which is why the rounding happens before the unit is chosen below.
     const auto milliseconds = static_cast<double>(frame.metrics.renderMicroseconds
                                   + frame.metrics.sampleMicroseconds)
         / 1000.0;

@@ -185,7 +185,6 @@ void VolumeWindow::buildControls()
     form->addRow(QString(), m_regionCheck);
     m_smoothCheck = new QCheckBox(tr("Smooth sampling"), panel);
     m_smoothCheck->setObjectName(QStringLiteral("volumeSmoothSamplingCheck"));
-    m_smoothCheck->setChecked(true);
     form->addRow(QString(), m_smoothCheck);
     // Available until a session says otherwise, the way the palette-alpha box
     // is: this is a local render's answer, and setSamplingSelectable revises

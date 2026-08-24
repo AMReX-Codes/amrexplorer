@@ -68,6 +68,13 @@ int main()
         require(ceilingAt.y < floorAt.y,
             "a 3-D view draws +z downward, so it looks at the domain from "
             "underneath");
+        // And the axis indicator agrees, because it is drawn from the same
+        // rotation. This is the pair the default-view comment promises: an
+        // arrow pointing one way over a domain drawn the other would be worse
+        // than either alone.
+        const auto upward = amrvis::projectDirection(view, point(0.0, 0.0, 1.0));
+        require(upward.y < 0.0,
+            "the axis indicator draws +z downward while the view draws it up");
     }
 
     // Pinned from the iso view's projection formula: the upper corner under

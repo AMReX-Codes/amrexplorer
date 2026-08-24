@@ -382,12 +382,19 @@ row, threading note; `docs/building.md` unchanged.
 - ~~**Trilinear sampling**~~ — done: a request/wire field (protocol 1.3) and a
   **Smooth sampling** box, on by default rather than tied to the High preset,
   since terracing shows most while rotating and that is when Draft is in use.
-  It costs about twice the march at equal samples per voxel (900^2 over 256^3,
-  24 threads: 129 ms against 66 ms), so lowering the presets' samples now that
-  each carries more is a follow-up worth measuring -- linear at 2 samples/voxel
-  is 75 ms, about what nearest at 4 costs (67 ms), for a better picture. Not
-  cheaper than it: an earlier note here said "well under", which compared 2
-  samples against the wrong column.
+  It costs about twice the march at equal samples per voxel. One run of
+  `bench_volume_render 256 900 <spv> 3 0 <linear>`, 900^2 over 256^3 on 24
+  threads:
+
+  | samples/voxel | nearest | linear |
+  | --- | --- | --- |
+  | 4 | 65 ms | 127 ms |
+  | 2 | -- | 77 ms |
+
+  So lowering the presets' samples now that each carries more is a follow-up
+  worth measuring: linear at 2 costs about what nearest at 4 does, for a better
+  picture. Not less than it -- an earlier note here said "well under", which
+  compared against the wrong column.
 - **Box-averaged downsampling** — when the voxel budget forces a coarser
   pitch than the finest level, average the cells under a voxel instead of
   taking the one at its centre.

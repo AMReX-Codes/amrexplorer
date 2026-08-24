@@ -359,17 +359,17 @@ void IsoWidget::drawAxisIndicator(QPainter& painter) const
     const QPointF origin(static_cast<qreal>(originX),
         static_cast<qreal>(h - originY));
 
-    const auto cosAz = std::cos(m_camera.azimuth);
-    const auto sinAz = std::sin(m_camera.azimuth);
-    const auto cosEl = std::cos(m_camera.elevation);
-    const auto sinEl = std::sin(m_camera.elevation);
-
-    auto projectDir = [&](double dx, double dy, double dz) -> QPointF {
-        const auto x1 = dx * cosAz - dy * sinAz;
-        const auto y1 = dx * sinAz + dy * cosAz;
-        const auto y2 = y1 * cosEl - dz * sinEl;
-        return QPointF(static_cast<double>(armLen) * x1,
-            -static_cast<double>(armLen) * y2);
+    // Through the shared projection rather than a second copy of its
+    // rotation: the arms have to agree with the wireframe about which way is
+    // up, and a transcription agrees only until one of the two is edited.
+    const auto projectDir = [this](double dx, double dy, double dz) {
+        Real3 direction;
+        direction[0] = dx;
+        direction[1] = dy;
+        direction[2] = dz;
+        const auto view = projectDirection(m_camera, direction);
+        return QPointF(
+            static_cast<double>(armLen) * view.x, static_cast<double>(armLen) * view.y);
     };
 
     const auto xTip = origin + projectDir(1.0, 0.0, 0.0);

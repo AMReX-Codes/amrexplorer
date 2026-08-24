@@ -418,7 +418,9 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     for (std::size_t axis = 0; axis < 3; ++axis) {
         voxelStep[axis] = rays.direction[axis] * step * inversePitch[axis];
     }
-    // Hoisted: one loop-invariant branch per sample rather than a policy read.
+    // The policy folded to a bool once per frame. The branch itself is still
+    // per sample -- specialising the row renderer on it would remove that, and
+    // has not been measured.
     const auto linear = settings.sampling == SamplingPolicy::Linear;
     // Trilinear over the eight voxel centres bracketing the sample.
     //
@@ -486,8 +488,9 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                       = static_cast<std::size_t>(low < limit ? low + 1.0 : limit);
                   weight[axis] = fraction;
               }
-              // The same cell as the last sample on this ray, and that one
-              // needed no substitution: its corners still hold.
+              // The same cell as the last sample on this ray: its corners
+              // still hold, uncovered ones included, because they are stored
+              // as the grid has them and substituted on the way out.
               // Read straight into the cache and interpolate out of it, so a
               // reused cell costs three comparisons and a fresh one costs no
               // copy on top of its fetches.
@@ -711,7 +714,7 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                 threads.emplace_back(renderShare);
             }
         } catch (...) {
-            // std::thread construction can fail once earlier bands are
+            // std::thread construction can fail once earlier workers are
             // already running -- a process thread limit, a loaded machine.
             // Stopping and joining them here is what keeps ~vector<thread>
             // from meeting a joinable thread and calling std::terminate.

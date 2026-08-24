@@ -808,7 +808,11 @@ private:
     // Sequence frame switching lives in the SequenceController; this window
     // supplies the GUI-coupled pieces below as its hooks.
     void displayFrameResult(InitialSliceResult& result, bool defaultPositions);
-    void configureSequenceControls(bool defaultPositions);
+    // `displayedField` is the field the frame was actually rendered with,
+    // which the pipeline resolves by name (resolveSpecField) and so need not
+    // be the id -- or the combo position -- the previous frame used.
+    void configureSequenceControls(
+        bool defaultPositions, std::optional<std::uint32_t> displayedField);
     [[nodiscard]] FrameSliceSpec buildFrameSpec();
     // Stop timers and request stop on every async task this window can launch,
     // so an in-flight read that holds the global I/O mutex bails promptly and

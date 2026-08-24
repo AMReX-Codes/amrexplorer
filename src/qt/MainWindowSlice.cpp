@@ -1570,7 +1570,11 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
         ? result.fileVersion : m_fileVersion;
     showMetadata(frameMetadata, m_datasetPath);
 
-    configureSequenceControls(defaultPositions);
+    configureSequenceControls(defaultPositions,
+        result.displays.empty()
+            ? std::nullopt
+            : std::optional<std::uint32_t>{
+                  result.displays.front().request.field.value});
     if (selectCacheFallbackLevel(m_levelSelector, result.cacheFallbackToLevel)) {
         configureSlicePositionControls();
         updateRangeModeAvailability();
@@ -1600,7 +1604,8 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     }
 }
 
-void MainWindow::configureSequenceControls(bool defaultPositions)
+void MainWindow::configureSequenceControls(
+    bool defaultPositions, std::optional<std::uint32_t> displayedField)
 {
     if (!m_dataset) {
         return;
@@ -1623,8 +1628,18 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
                 QString::fromStdString(metadata.fields[field].name),
                 static_cast<unsigned int>(field));
         }
-        m_fieldSelector->setCurrentIndex(
-            std::clamp(previousField, 0, m_fieldSelector->count() - 1));
+        // The field this frame was rendered with, not the position the last
+        // frame's combo happened to be at: the two agree only while every
+        // frame lists the same fields in the same order, and a definition one
+        // frame cannot resolve compacts the ids after it. Selecting by
+        // position there would label the plot with a different field's name
+        // and point the colour range at it.
+        const auto displayedIndex = displayedField
+            ? m_fieldSelector->findData(*displayedField)
+            : -1;
+        m_fieldSelector->setCurrentIndex(displayedIndex >= 0
+                ? displayedIndex
+                : std::clamp(previousField, 0, m_fieldSelector->count() - 1));
         m_levelSelector->clear();
         populateLevelCombo(m_levelSelector, metadata.finestLevel);
         const auto levelIndex = m_levelSelector->findData(previousLevel);
@@ -1720,6 +1735,24 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     }
     spec.field = m_controlsReady && m_fieldSelector->currentIndex() >= 0
         ? m_fieldSelector->currentData().toUInt() : 0U;
+    // The names alongside the indices: an index means something only in the
+    // field list it came from, and the next frame's list can differ -- by its
+    // stored fields, or by a derived definition that frame could not resolve
+    // and left out, which compacts every id after it. Without a name the
+    // reload lands on whatever now occupies that slot (resolveSpecField).
+    const auto nameOf = [this](int field) {
+        if (!m_dataset) {
+            return std::string{};
+        }
+        const auto& fields = m_dataset->metadata().fields;
+        return field >= 0 && static_cast<std::size_t>(field) < fields.size()
+            ? fields[static_cast<std::size_t>(field)].name
+            : std::string{};
+    };
+    spec.fieldName = nameOf(static_cast<int>(spec.field));
+    spec.vectorUFieldName = nameOf(m_vectorUField);
+    spec.vectorVFieldName = nameOf(m_vectorVField);
+    spec.vectorWFieldName = nameOf(m_vectorWField);
     spec.levelSelection = m_controlsReady && m_levelSelector->currentIndex() >= 0
         ? m_levelSelector->currentData().toInt() : -1;
     spec.vectorUField = static_cast<std::uint32_t>(std::max(m_vectorUField, 0));

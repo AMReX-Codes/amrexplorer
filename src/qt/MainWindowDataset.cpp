@@ -1102,8 +1102,16 @@ void MainWindow::requestInitialSlice(
                     if (restoredSpec) {
                         const QSignalBlocker fieldBlocker(m_fieldSelector);
                         const QSignalBlocker levelBlocker(m_levelSelector);
-                        const auto fieldIndex = m_fieldSelector->findData(
-                            restoredSpec->field);
+                        // The field the load was actually rendered with,
+                        // which the pipeline resolves by name and so need not
+                        // be the id the spec carried (resolveSpecField).
+                        // Selecting the spec's id would name one field in the
+                        // combo while the view showed another.
+                        const auto rendered = result.displays.empty()
+                            ? restoredSpec->field
+                            : result.displays.front().request.field.value;
+                        const auto fieldIndex =
+                            m_fieldSelector->findData(rendered);
                         if (fieldIndex >= 0) {
                             m_fieldSelector->setCurrentIndex(fieldIndex);
                         }

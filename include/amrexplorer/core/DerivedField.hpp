@@ -96,10 +96,19 @@ private:
     std::optional<std::size_t> m_sourceOffset;
 };
 
-// Fields one derived field may read. The cap bounds how many blocks evaluating
-// one derived block has to hold pinned at once, so it counts fields alone --
-// a coordinate is computed, not read, and pins nothing.
+// Fields one derived field may read. The cap bounds how many blocks *one level*
+// of an evaluation holds pinned, and it counts fields alone -- a coordinate is
+// computed, not read, and pins nothing. A chain pins that many per link while
+// it recurses, so the whole of one request can hold up to this times
+// maximumDerivedFieldDepth.
 inline constexpr std::size_t maximumDerivedFieldInputs = 16;
+
+// How many derived fields a dataset may have. Installation resolves each
+// definition against the fields installed before it, so a list costs time in
+// its own length squared, and it is reinstalled for every frame of a sequence.
+// Bounded for the same reason the chain is: an imported list is as long as its
+// author cared to make it.
+inline constexpr std::size_t maximumDerivedFieldCount = 256;
 
 // How long a chain of derived fields may depend on one another: a definition
 // reading a definition reading a definition. Evaluating a derived block

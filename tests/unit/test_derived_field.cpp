@@ -206,6 +206,28 @@ int main()
                 "not centered like", metadata);
         }
         {
+            // The list length is bounded too, and past the bound the ones that
+            // fit are still installed -- Skip's promise -- while the rest are
+            // reported.
+            const auto limit = amrvis::maximumDerivedFieldCount;
+            std::vector<DerivedFieldDefinition> many;
+            for (std::size_t index = 0; index <= limit; ++index) {
+                many.push_back(
+                    {"f" + std::to_string(index), "density + 1"});
+            }
+            auto metadata = makeMetadata();
+            const auto installation = amrvis::installDerivedFields(
+                metadata, many, amrvis::DerivedFieldPolicy::Skip);
+            require(installation.programs.size() == limit,
+                "the definition cap installed the wrong number");
+            require(installation.skipped.size() == 1
+                    && installation.skipped[0].definitionIndex == limit
+                    && installation.skipped[0].reason.find("at most")
+                        != std::string::npos,
+                "the definition past the cap was not reported");
+            requireRejected(many, limit, "at most");
+        }
+        {
             // A chain of derived fields, each reading the one before it.
             // Evaluating the last one recurses once per link, so the chain is
             // bounded at installation; without that a long enough list is a

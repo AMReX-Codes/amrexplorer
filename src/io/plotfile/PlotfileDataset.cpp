@@ -5,6 +5,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -62,8 +63,7 @@ PlotfileDataset::Fields PlotfileDataset::installFields(
     std::span<const DerivedFieldDefinition> definitions)
 {
     if (!source.metadata) {
-        throw std::invalid_argument(
-            "selected FAB dataset requires metadata and an id");
+        throw std::invalid_argument("dataset metadata is unavailable");
     }
     if (definitions.empty()) {
         return {source.metadata, {}, source.metadata->fields.size(), {}};
@@ -111,7 +111,7 @@ PlotfileDataset::PlotfileDataset(std::filesystem::path root, DatasetId id,
     , m_cache(cacheBudgetBytes)
 {
     if (m_id.value == 0) {
-        throw std::invalid_argument("selected FAB dataset requires metadata and an id");
+        throw std::invalid_argument("selected FAB dataset requires an id");
     }
 }
 
@@ -261,30 +261,28 @@ BlockReadResult PlotfileDataset::readDerivedBlock(const BlockRequest& request,
     derived->box = level.blocks[static_cast<std::size_t>(request.gridIndex)].box;
     derived->field = request.field;
     derived->component = 0;
+    // What this block would occupy, decided in 64 bits and before it is
+    // allocated. An expression over coordinates alone reads no file, so
+    // nothing else here bounds the size by anything but what the metadata
+    // claimed -- and src/io bounds its allocations by real file evidence, not
+    // by a claimed count. A box array claiming 10^10 cells is an 80 GB request
+    // otherwise. The budget is the bound the block would have been held to a
+    // moment later anyway, when it was offered to the cache, so the failure is
+    // one callers already handle -- and passing it is what makes the narrowing
+    // below safe on any width of size_t.
     const auto points = fabPointCount(derived->box, metadata.dimension);
-    if (points > std::numeric_limits<std::size_t>::max()) {
-        throw BlockReadError("derived block exceeds addressable memory");
-    }
-    const auto count = static_cast<std::size_t>(points);
-    // What this block will occupy, checked against the budget before it is
-    // allocated rather than after. An expression over coordinates alone reads
-    // no file, so nothing else here bounds `count` by anything but what the
-    // metadata claimed -- and src/io bounds its allocations by real file
-    // evidence, not by a claimed count. A box array claiming 10^10 cells is
-    // an 80 GB request otherwise. The budget is the same bound the block
-    // would have been held to a moment later, when it was offered to the
-    // cache, so the failure is one callers already handle.
     constexpr std::uint64_t blockBytes = sizeof(FabBlock);
-    if (count
+    if (points
         > (std::numeric_limits<std::uint64_t>::max() - blockBytes)
             / sizeof(double)) {
         throw BlockReadError("derived block exceeds addressable memory");
     }
-    const auto resident = blockBytes + count * sizeof(double);
+    const auto resident = blockBytes + points * sizeof(double);
     if (resident > m_cache.metrics().budgetBytes) {
         throw CacheBudgetExceeded(
             "a derived field's block exceeds the entire byte budget");
     }
+    const auto count = static_cast<std::size_t>(points);
 
     // Every input block, pinned for as long as the evaluation reads it, with
     // the arithmetic that turns a sample of the derived box into an offset
@@ -344,7 +342,11 @@ BlockReadResult PlotfileDataset::readDerivedBlock(const BlockRequest& request,
             } else if (axis == 2) {
                 source.planeStride = stride;
             }
-            stride *= static_cast<std::size_t>(box.upper[i] - box.lower[i] + 1);
+            // Widened before the subtraction, as fabPointCount and
+            // valueOffset are: these are the same box bounds, and int
+            // arithmetic on them overflows for a crafted box.
+            stride *= static_cast<std::size_t>(
+                static_cast<std::int64_t>(box.upper[i]) - box.lower[i] + 1);
         }
         sourceOf[input] = sources.size();
         sources.push_back(std::move(source));
@@ -362,7 +364,12 @@ BlockReadResult PlotfileDataset::readDerivedBlock(const BlockRequest& request,
     std::array<int, 3> extent{1, 1, 1};
     for (int axis = 0; axis < metadata.dimension; ++axis) {
         const auto i = static_cast<std::size_t>(axis);
-        extent[i] = derived->box.upper[i] - derived->box.lower[i] + 1;
+        const auto length = static_cast<std::int64_t>(derived->box.upper[i])
+            - derived->box.lower[i] + 1;
+        if (length > std::numeric_limits<int>::max()) {
+            throw BlockReadError("derived block extent exceeds an index");
+        }
+        extent[i] = static_cast<int>(length);
     }
     auto evaluator = program.expression.makeEvaluator();
     for (std::size_t start = 0; start < count; start += derivedChunkPoints) {

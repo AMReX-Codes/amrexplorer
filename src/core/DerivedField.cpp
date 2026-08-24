@@ -94,6 +94,14 @@ DerivedFieldInstallation installDerivedFields(DatasetMetadata& metadata,
         // rather than as a return at every check so the two policies cannot
         // drift apart on which problems they report.
         try {
+            // Thrown per definition rather than up front so Skip keeps its
+            // promise: the ones that fit are installed and the rest are
+            // reported, instead of the whole list failing.
+            if (index >= maximumDerivedFieldCount) {
+                throw fail("a dataset may have at most "
+                    + std::to_string(maximumDerivedFieldCount)
+                    + " derived fields");
+            }
             if (definition.name.empty()) {
                 throw fail("a derived field needs a name");
             }

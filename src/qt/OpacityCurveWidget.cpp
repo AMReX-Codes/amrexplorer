@@ -130,7 +130,12 @@ void OpacityCurveWidget::paintEvent(QPaintEvent* event)
                 m_palette->slotArgb(Palette::paletteStart + entry)
                     | 0xFF000000U);
         }
-        painter.setOpacity(200.0 / 255.0);
+        // Well back when the control is inert. Everything drawn over the strip
+        // greys out on its own, through QPalette::Disabled, but these are the
+        // palette's own colours and would keep full strength -- leaving the
+        // boldest thing on a disabled control the one part that does not say
+        // so.
+        painter.setOpacity(isEnabled() ? 200.0 / 255.0 : 60.0 / 255.0);
         painter.drawImage(plot, strip);
         painter.setOpacity(1.0);
     }

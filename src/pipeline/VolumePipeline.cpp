@@ -56,12 +56,20 @@ double opacityCurveValue(
 std::size_t insertOpacityPoint(
     std::vector<OpacityPoint>& curve, double position, double opacity)
 {
-    const OpacityPoint point{std::clamp(position, 0.0, 1.0),
-        std::clamp(opacity, 0.0, 1.0)};
-    // A curve too short to have two ends has no order to keep.
+    const auto byPosition
+        = [](const OpacityPoint& left, const OpacityPoint& right) {
+              return left.position < right.position;
+          };
+    const auto value = std::clamp(opacity, 0.0, 1.0);
+    // Too short to have two ends: no anchors to stay inside, so this is the
+    // plain sorted insert.
     if (curve.size() < 2) {
-        curve.push_back(point);
-        return curve.size() - 1;
+        const OpacityPoint only{std::clamp(position, 0.0, 1.0), value};
+        const auto where
+            = std::upper_bound(curve.begin(), curve.end(), only, byPosition);
+        const auto at = static_cast<std::size_t>(where - curve.begin());
+        curve.insert(where, only);
+        return at;
     }
     // Between the two end points and never outside them, so only the interior
     // is searched. They anchor the curve to the ends of the range, and a click
@@ -70,10 +78,19 @@ std::size_t insertOpacityPoint(
     // anchor. The new point would then be the end -- which removeOpacityPoint
     // refuses to delete, and which opacityCurveValue extends flat, so it would
     // shape a single entry of the table and nothing else.
-    const auto at = std::upper_bound(curve.begin() + 1, curve.end() - 1, point,
-        [](const OpacityPoint& left, const OpacityPoint& right) {
-            return left.position < right.position;
-        });
+    //
+    // The position is held to the span the ends themselves cover, not just to
+    // [0, 1]: bounding the search to the interior means a position outside
+    // that span would land at the near end of the interior and leave the list
+    // unsorted, which is what opacityCurveValue reads and what moveOpacityPoint
+    // would then clamp between inverted neighbours. The list is assumed sorted
+    // on the way in, so the front is never above the back.
+    const OpacityPoint point{
+        std::clamp(std::clamp(position, 0.0, 1.0), curve.front().position,
+            curve.back().position),
+        value};
+    const auto at = std::upper_bound(
+        curve.begin() + 1, curve.end() - 1, point, byPosition);
     const auto index = static_cast<std::size_t>(at - curve.begin());
     curve.insert(at, point);
     return index;

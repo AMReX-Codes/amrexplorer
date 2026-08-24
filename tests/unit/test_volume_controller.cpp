@@ -21,6 +21,7 @@
 #include <QRectF>
 #include <QCheckBox>
 #include <QEvent>
+#include <QImage>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QMouseEvent>
@@ -1197,9 +1198,20 @@ int main(int argc, char** argv)
             "the volume was still rendering of its own accord, so the checks "
             "below could not be the keys' doing");
 
-        // The low end point sits in the bottom-left corner of the plot, which
-        // is inset by a control point's half-width and the border.
-        const QPointF lowEnd(4.0, widget->height() - 4.0);
+        // Where a curve point is drawn: the plot is inset on every side by a
+        // control point's half-width and the border. Worked out from the point
+        // rather than assumed, so a press keeps landing on it wherever an edit
+        // has left it -- pressing a corner instead only works while the point
+        // is still in it, and silently hits nothing once it moves.
+        const auto plotPoint
+            = [widget](const amrvis::OpacityPoint& point) {
+                  constexpr double inset = 4.0;
+                  return QPointF(
+                      inset + point.position * (widget->width() - 2.0 * inset),
+                      widget->height() - inset
+                          - point.opacity * (widget->height() - 2.0 * inset));
+              };
+        const auto lowEnd = plotPoint(widget->curve().front());
         QMouseEvent takeEnd(QEvent::MouseButtonPress, lowEnd,
             widget->mapToGlobal(lowEnd), Qt::LeftButton, Qt::LeftButton,
             Qt::NoModifier);
@@ -1248,15 +1260,19 @@ int main(int argc, char** argv)
         // overwrite the nudge with the cursor's own position, so the key would
         // cost a render and leave nothing behind.
         const auto grabbed = widget->curve().front().opacity;
-        QMouseEvent holdEnd(QEvent::MouseButtonPress, lowEnd,
-            widget->mapToGlobal(lowEnd), Qt::LeftButton, Qt::LeftButton,
+        // Where the nudges above have left it, not where it started.
+        const auto raised = plotPoint(widget->curve().front());
+        QMouseEvent holdEnd(QEvent::MouseButtonPress, raised,
+            widget->mapToGlobal(raised), Qt::LeftButton, Qt::LeftButton,
             Qt::NoModifier);
         QApplication::sendEvent(widget, &holdEnd);
+        require(widget->curve().size() == 2,
+            "the press missed the raised end point and added one instead");
         sendKey(Qt::Key_Up, Qt::NoModifier);
         require(widget->curve().front().opacity == grabbed,
             "an arrow key moved a point that was being dragged");
-        QMouseEvent letGoEnd(QEvent::MouseButtonRelease, lowEnd,
-            widget->mapToGlobal(lowEnd), Qt::LeftButton, Qt::NoButton,
+        QMouseEvent letGoEnd(QEvent::MouseButtonRelease, raised,
+            widget->mapToGlobal(raised), Qt::LeftButton, Qt::NoButton,
             Qt::NoModifier);
         QApplication::sendEvent(widget, &letGoEnd);
 
@@ -1270,6 +1286,24 @@ int main(int argc, char** argv)
         require(alphaBox != nullptr, "no palette-alpha box in the volume window");
         require(widget->isEnabled(),
             "the curve is not editable with the palette-alpha box clear");
+
+        // How much colour the widget is carrying, which is almost all the
+        // palette strip: everything else on it is the theme's own greys.
+        const auto colourfulness = [](const QImage& image) {
+            double total = 0.0;
+            for (int y = 0; y < image.height(); ++y) {
+                for (int x = 0; x < image.width(); ++x) {
+                    total += image.pixelColor(x, y).saturation();
+                }
+            }
+            return total / static_cast<double>(image.width() * image.height());
+        };
+        const auto lively = colourfulness(widget->grab().toImage());
+        // Vacuity guard: with no palette there would be no strip to fade, and
+        // the comparison below would hold for the wrong reason.
+        require(lively > 20.0,
+            "the curve drew no palette strip, so fading it could not be "
+            "checked");
         window->setPaletteHasAlpha(true);
         require(alphaBox->isEnabled(),
             "the box did not enable for a palette with a ramp, so ticking it "
@@ -1278,6 +1312,14 @@ int main(int argc, char** argv)
         require(!widget->isEnabled(),
             "the curve stayed editable while the palette's own alpha was the "
             "opacity source");
+        // And the strip goes back with it. The line, the fill and the handles
+        // all grey out on their own, through QPalette::Disabled; the strip is
+        // painted from the data palette's own colours, which know nothing of
+        // the widget, so at full strength the boldest thing on an inert
+        // control would be the one part not saying it was inert.
+        const auto inert = colourfulness(widget->grab().toImage());
+        require(inert < 0.6 * lively,
+            "the palette strip kept its strength on a disabled curve");
         alphaBox->setChecked(false);
         require(widget->isEnabled(),
             "the curve did not become editable again when the palette's alpha "
@@ -1303,11 +1345,14 @@ int main(int argc, char** argv)
             "the renders from toggling palette alpha did not finish");
 
         // The two ends are not removable -- the curve has to span the range --
-        // and refusing must not pass for an edit either.
+        // and refusing must not pass for an edit either. Aimed at the point
+        // itself: the edits above raised it off the plot's bottom-left corner,
+        // and a press at the corner now misses it by more than the grab radius,
+        // so this check went on passing while testing nothing.
         const auto ends = session->requests.load();
-        const QPointF corner(0.0, static_cast<double>(widget->height()));
-        QMouseEvent atEnd(QEvent::MouseButtonPress, corner,
-            widget->mapToGlobal(corner), Qt::RightButton, Qt::RightButton,
+        const auto atLowEnd = plotPoint(widget->curve().front());
+        QMouseEvent atEnd(QEvent::MouseButtonPress, atLowEnd,
+            widget->mapToGlobal(atLowEnd), Qt::RightButton, Qt::RightButton,
             Qt::NoModifier);
         QApplication::sendEvent(widget, &atEnd);
         require(widget->curve().size() == 2,

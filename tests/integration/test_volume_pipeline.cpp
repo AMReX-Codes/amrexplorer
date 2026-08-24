@@ -320,6 +320,43 @@ int main()
                     "anchor");
             }
 
+            // Keeping the new point inside the ends must not cost the sorting
+            // that opacityCurveValue reads and that moveOpacityPoint clamps
+            // between neighbours with. Nothing says the ends are at 0 and 1 --
+            // setCurve takes any two -- so a position outside the span they
+            // cover has to come to the span's edge, not to the near end of the
+            // interior.
+            {
+                const auto isSorted = [](const std::vector<amrvis::OpacityPoint>&
+                                              points) {
+                    for (std::size_t index = 1; index < points.size(); ++index) {
+                        if (points[index - 1].position > points[index].position) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+                const std::vector<amrvis::OpacityPoint> inset{
+                    {0.2, 0.0}, {0.5, 0.5}, {0.9, 1.0}};
+                auto below = inset;
+                const auto under = amrvis::insertOpacityPoint(below, 0.0, 0.5);
+                require(isSorted(below) && under == 1
+                        && below.front() == inset.front(),
+                    "inserting below the low end left the curve unsorted");
+                auto above = inset;
+                const auto over = amrvis::insertOpacityPoint(above, 1.0, 0.5);
+                require(isSorted(above) && over == above.size() - 2
+                        && above.back() == inset.back(),
+                    "inserting above the high end left the curve unsorted");
+
+                // And a curve too short to have two ends is still sorted, even
+                // though it has no ends to stay between.
+                std::vector<amrvis::OpacityPoint> lone{{0.8, 1.0}};
+                require(amrvis::insertOpacityPoint(lone, 0.2, 0.5) == 0
+                        && isSorted(lone),
+                    "inserting into a one-point curve did not keep it sorted");
+            }
+
             // An interior point cannot pass its neighbours.
             amrvis::moveOpacityPoint(curve, 2, 5.0, 0.5);
             require(curve[2].position == curve[3].position,

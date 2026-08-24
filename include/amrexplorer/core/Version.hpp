@@ -9,7 +9,7 @@ namespace amrvis {
 // a tagged release, "x.y.z-dev" while x.y.z is what the work is heading for.
 // CMake reads the x.y.z out of the line below for project(VERSION), so keep it
 // a single literal in this form.
-inline constexpr const char* kVersion = "0.3.0-dev";
+inline constexpr const char* kVersion = "0.3.0";
 
 // What --version prints after the program name: the version, and the commit it
 // came from in parentheses whenever the build had one to name. gitDescribe is

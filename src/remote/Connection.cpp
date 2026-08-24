@@ -292,6 +292,14 @@ public:
         // Still refused here for a caller that did not ask first -- but the
         // wrapper that closes the connection on an unexpected exception has
         // supportsVolumeRendering() to test, so it never has to reach this.
+        // Both refusals here as well as in RemoteDatasetSession: this class
+        // is public, this is where the negotiated version lives, and a caller
+        // that did not ask first would otherwise have its request quietly
+        // answered by a different rule than the one it named.
+        if (request.sampling == SamplingPolicy::Linear
+            && !supportsVolumeSampling()) {
+            throw std::runtime_error(volumeSamplingUnsupportedMessage);
+        }
         if (!supportsVolumeRendering()) {
             throw std::runtime_error(volumeRenderingUnsupportedMessage);
         }

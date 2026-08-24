@@ -335,7 +335,7 @@ The production schema will cover:
 | `CancelRequest` | `CancelAcknowledged` | Request cancellation by request ID |
 | `PingRequest` | `PongResponse` | Explicit health check |
 | `ListDirectoryRequest` (1.1) | `DirectoryListing` | List a server directory's subdirectories, marking plotfiles |
-| `RenderedFrameRequest` (1.2) | `RenderedFrameResponse` | Render one volume frame on the server: camera, range, transfer lookup and voxel budget in; premultiplied pixels, the range used and sampling metrics out |
+| `RenderedFrameRequest` (1.2; sampling policy 1.3) | `RenderedFrameResponse` | Render one volume frame on the server: camera, range, transfer lookup, voxel budget and sampling policy in; premultiplied pixels, the range used and sampling metrics out |
 | any request | `ErrorResponse` | Typed terminal failure |
 
 Every ordinary request has exactly one terminal response with the same
@@ -415,7 +415,8 @@ query APIs.
 orthographic camera, the physical region, the output size, an optional
 explicit range (or the request that the server resolve the "Visible" range
 from the sampled grid), the transfer function as an explicit colour/opacity
-lookup, the samples per voxel and a voxel budget; the response carries the
+lookup, the samples per voxel, a voxel budget and -- from 1.3 -- the march's
+sampling policy (nearest or trilinear, field id 20); the response carries the
 viewport-sized premultiplied image, the range used, and the sampling metrics.
 The server bounds every field before allocating -- output size against the
 negotiated frame, the voxel budget against its own `--max-volume-voxels`

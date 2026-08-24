@@ -360,10 +360,10 @@ match. Its own controls set the opacity:
   around it instead of the one it happens to land in. It is on by default:
   reading a single voxel makes a ray fetch the same value several times over
   and renders the field as terraced blocks, which is the coarser look this
-  replaces. Clear it to see the sampled voxels as they are. It costs roughly
-  twice the render time at the same number of samples per voxel -- though it
-  buys more per sample, so a smooth **Draft** frame is not much dearer than a
-  terraced **Normal** one.
+  replaces. Clear it to see the sampled voxels as they are. It costs about
+  twice the march at the same number of samples per voxel -- though it buys
+  more per sample, so a smooth frame at half the samples beats a terraced one
+  at full, for less time than either.
 
   It shapes only how the volume is drawn from the grid, not how the grid is
   built from the AMR data. Where the voxel budget forces a grid coarser than
@@ -386,8 +386,10 @@ sends back the picture, never the field. It needs an `amrexplorer-server`
 that speaks protocol 1.2; against an older server the menu item stays
 disabled. **Smooth sampling** needs protocol 1.3, since the server is what
 does the sampling; against a 1.2 server the box is greyed out and says so,
-and the volume is rendered from the nearest voxel. The server's `--max-volume-voxels` and `--volume-cache-mib` options
-set how large one volume and one dataset's cache may get. They are per volume
+and the volume is rendered from the nearest voxel.
+
+The server's `--max-volume-voxels` and `--volume-cache-mib` options set how
+large one volume and one dataset's cache may get. They are per volume
 and per dataset, not a total for the server, so sizing a host means multiplying
 them by how many datasets and connections you allow. `--max-volume-voxels`
 starts at the largest a client may ask for, so it is there to tighten a server

@@ -655,14 +655,30 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
     };
 
     const auto threadCount = raycastThreadCount(settings.threadCount, height);
-    const auto rowsPerThread = (height + threadCount - 1) / threadCount;
     std::exception_ptr failure;
     std::mutex failureMutex;
-    const auto renderBand = [&](int begin, int end) {
+    // Rows are taken one at a time from a shared counter rather than dealt
+    // out in contiguous bands. What a row costs varies enormously down the
+    // frame -- rows that miss the domain return at clipToBox, rows through
+    // the middle march the full depth, and an early-out ends a ray as soon as
+    // it is opaque -- so a band of neighbouring rows is a band of similar
+    // cost, and the thread holding the middle of the picture finishes long
+    // after the ones holding the top and bottom. Handing out rows on demand
+    // costs one relaxed increment each and lets every worker keep going until
+    // the frame is done.
+    //
+    // The picture cannot change: renderRow is a pure function of its index
+    // and writes only that row, so which worker takes it is not observable.
+    std::atomic<int> nextRow{0};
+    const auto renderShare = [&] {
         try {
-            // No separate per-row poll: renderRow checks at column 0 of
-            // every row and every stride within it, which subsumes one.
-            for (int row = begin; row < end; ++row) {
+            for (;;) {
+                const auto row = nextRow.fetch_add(1, std::memory_order_relaxed);
+                if (row >= height) {
+                    return;
+                }
+                // No separate per-row poll: renderRow checks at column 0 of
+                // every row and every stride within it, which subsumes one.
                 renderRow(row);
                 if (cancelled.load(std::memory_order_relaxed)) {
                     return;
@@ -677,18 +693,13 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
         }
     };
     if (threadCount == 1) {
-        renderBand(0, height);
+        renderShare();
     } else {
         std::vector<std::thread> threads;
         threads.reserve(static_cast<std::size_t>(threadCount));
         try {
-            for (int band = 0; band < threadCount; ++band) {
-                const auto begin = band * rowsPerThread;
-                const auto end = std::min(height, begin + rowsPerThread);
-                if (begin >= end) {
-                    break;
-                }
-                threads.emplace_back(renderBand, begin, end);
+            for (int worker = 0; worker < threadCount; ++worker) {
+                threads.emplace_back(renderShare);
             }
         } catch (...) {
             // std::thread construction can fail once earlier bands are

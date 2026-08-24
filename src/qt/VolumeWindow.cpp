@@ -362,6 +362,15 @@ SamplingPolicy VolumeWindow::sampling() const
 void VolumeWindow::setSamplingSelectable(bool selectable)
 {
     m_smoothCheck->setEnabled(selectable);
+    // Unticked as well as disabled, for the reason setPaletteHasAlpha gives:
+    // sampling() already reads a disabled box as Nearest, so a box left
+    // ticked would sit there claiming a smoothness the picture does not have,
+    // and re-arm itself the moment a session that can sample arrives.
+    // Silently, since whatever changed the session is already rendering.
+    if (!selectable && m_smoothCheck->isChecked()) {
+        const QSignalBlocker blocker(m_smoothCheck);
+        m_smoothCheck->setChecked(false);
+    }
     m_smoothCheck->setToolTip(selectable
             ? tr("Read each ray sample from the eight voxels around it "
                  "instead of the one it lands in, which is what stops a "

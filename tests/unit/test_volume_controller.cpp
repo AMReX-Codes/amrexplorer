@@ -147,6 +147,14 @@ public:
     {
         return m_metadata.dimension == 3;
     }
+    // A local-shaped session: it renders in process, so it can be told how to
+    // sample. `samplingSupported` turns that off to stand in for a peer
+    // speaking a protocol that has no sampling field.
+    std::atomic<bool> samplingSupported{true};
+    [[nodiscard]] bool supportsVolumeSampling() const noexcept override
+    {
+        return supportsVolumeRendering() && samplingSupported;
+    }
     [[nodiscard]] amrvis::VolumeFrame renderVolume(
         const amrvis::VolumeRenderRequest& request,
         amrvis::StopToken cancellation) override
@@ -1309,6 +1317,62 @@ int main(int argc, char** argv)
             widget->mapToGlobal(raised), Qt::LeftButton, Qt::NoButton,
             Qt::NoModifier);
         QApplication::sendEvent(widget, &letGoEnd);
+
+        // Smooth sampling: on by default, and a full frame rather than a
+        // draft when it changes, since it is a deliberate edit and not a
+        // camera in motion.
+        auto* const smoothCheck = window->findChild<QCheckBox*>(
+            QStringLiteral("volumeSmoothSamplingCheck"));
+        require(smoothCheck != nullptr,
+            "no smooth-sampling box in the volume window");
+        settle(application, 500);
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the earlier renders did not finish");
+        require(smoothCheck->isEnabled() && smoothCheck->isChecked(),
+            "the volume window did not offer smooth sampling for a session "
+            "that can be told how to sample");
+        require(session->requestsSoFar().back().sampling
+                == amrvis::SamplingPolicy::Linear,
+            "a ticked smooth-sampling box did not reach the request");
+        auto smoothed = session->requests.load();
+        QMetaObject::invokeMethod(
+            window, [smoothCheck] { smoothCheck->setChecked(false); });
+        application.processEvents();
+        waitFor(application, [&] { return session->requests > smoothed; },
+            "clearing smooth sampling did not render");
+        require(session->requestsSoFar().back().sampling
+                == amrvis::SamplingPolicy::Nearest,
+            "clearing the box did not reach the request");
+        require(session->requestsSoFar().back().samplesPerVoxel == 2,
+            "the render after the toggle was a draft rather than a full frame");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the render after clearing smooth sampling did not finish");
+        QMetaObject::invokeMethod(
+            window, [smoothCheck] { smoothCheck->setChecked(true); });
+        application.processEvents();
+
+        // A session that cannot be told how to sample takes the choice away,
+        // and takes the tick with it: a box left ticked but greyed would claim
+        // a smoothness the picture does not have, and would re-arm itself the
+        // moment a session that can sample arrived.
+        settle(application, 500);
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the renders from re-ticking did not finish");
+        session->samplingSupported = false;
+        controller.configureForDataset();
+        application.processEvents();
+        require(!smoothCheck->isEnabled(),
+            "the box stayed available for a session that cannot sample");
+        require(!smoothCheck->isChecked(),
+            "the box stayed ticked while unavailable, claiming a smoothness "
+            "the render does not have");
+        require(window->sampling() == amrvis::SamplingPolicy::Nearest,
+            "an unavailable box still asked for smooth sampling");
+        session->samplingSupported = true;
+        controller.configureForDataset();
+        application.processEvents();
+        require(smoothCheck->isEnabled(),
+            "the box did not come back for a session that can sample");
 
         // The overlay toggles, and the volume window's own default: grid boxes
         // off, because box edges crossing a translucent field read as

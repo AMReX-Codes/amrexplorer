@@ -603,6 +603,8 @@ if(TARGET amrexplorer_qt)
         unit/test_derived_field_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/DerivedFieldController.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/DerivedFieldController.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/DerivedFieldStore.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/DerivedFieldStore.hpp"
         "${PROJECT_SOURCE_DIR}/src/qt/ExpressionEditorDialog.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/ExpressionEditorDialog.hpp"
     )

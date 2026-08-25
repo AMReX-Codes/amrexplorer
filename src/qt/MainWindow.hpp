@@ -539,9 +539,6 @@ private:
     // which a reload can change (a derived field appears or leaves) without
     // going through the open path that first filled it.
     void refreshMetadataDisplay();
-    // Says which committed definitions the session that has just been
-    // installed could not provide, once per change in that answer.
-    void reportSkippedDerivedFields();
     // The vector-glyph selections travel by name for the same reason the
     // scalar one does: an id means something only in the field list it came
     // from. Captured before a load swaps the dataset, resolved again after.
@@ -555,6 +552,9 @@ private:
     // Selects a field entry, stepping past the separator if `index` lands on
     // it and falling back to the first entry when it is out of range.
     void selectFieldItem(int index);
+    // Greys a field-selector row, for a definition this dataset cannot
+    // provide: shown, but not something to choose.
+    void setFieldItemEnabled(int index, bool enabled);
     // An expression as a tooltip: one line, whatever its layout.
     [[nodiscard]] static QString expressionTooltip(
         const std::string& expression);
@@ -928,9 +928,6 @@ private:
     QActionGroup* m_variableGroup = nullptr;
     // Window-owned so rebuildVariableMenu's clear() does not delete it.
     QAction* m_expressionEditorAction = nullptr;
-    // The last skipped-definition report shown, so a sequence playback does
-    // not repeat it frame after frame.
-    QString m_lastSkippedDerivedReport;
     QAction* m_boxesAction = nullptr;
     QAction* m_slicePlanesAction = nullptr;
     QAction* m_resetZoomAction = nullptr;

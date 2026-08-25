@@ -833,11 +833,9 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_levelMenu->setEnabled(false);
     m_contoursAction->setEnabled(false);
     m_particleController->suspendAction();
-    // The dataset is gone as of the reset above: the editor must not stay open
-    // over nothing, and the next dataset's skip report must be said even if it
-    // reads exactly like this one's.
+    // The dataset is gone as of the reset above: the editor must not stay
+    // open over nothing.
     m_derivedFields->refreshAvailability();
-    m_lastSkippedDerivedReport.clear();
     m_datasetAction->setEnabled(false);
     m_exportAnimationAction->setEnabled(false);
     m_openMetadata.reset();
@@ -1203,9 +1201,6 @@ void MainWindow::requestInitialSlice(
                     }
                     const auto cache = m_dataset->cacheMetrics();
                     m_diagnosticsModel->setCacheMetrics(cache);
-                    // Before the cache-fallback notice below, for the same
-                    // reason the sequence path reports it in that order.
-                    reportSkippedDerivedFields();
                     if (result.cacheFallbackToLevel >= 0) {
                         // Non-modal: an informational cache-fallback notice must
                         // not pop a modal dialog that would block the quit path.

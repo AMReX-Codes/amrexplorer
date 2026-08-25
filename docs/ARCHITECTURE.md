@@ -67,7 +67,7 @@ the window, wired to it in one of two ways:
 | `FabNavigator` | standalone FAB / MultiFab navigation: the selector dock, drill-down and return, the async header reads | `test_fab_navigator` |
 | `RemoteSessionController` | the ssh-launched server session and its connection, the Open Remote dialog (`RemoteOpenDialog`), the remote browser (`RemoteFileDialog`), per-destination settings | `test_remote_session_controller`, `test_remote_open_dialog`, `test_remote_file_dialog` |
 | `RangeController` | the range mode / User min-max / Log widgets and the per-field range memory | `test_range_controller` |
-| `DerivedFieldController` | the window's derived-field definitions (deliberately not persisted), the Variable menu's Expression Editor and its dialog, and the expression-list JSON; validates a list before asking the host to reopen the dataset with it | `test_derived_field_controller`, the `--derived-field-*-smoke-test` harnesses |
+| `DerivedFieldController` | one window's view of `DerivedFieldStore` -- the derived-field definitions every window of the process shares, held for the session and never persisted -- plus the Variable menu's Expression Editor, its dialog and the expression-list JSON; checks a list for what is wrong whatever the data, then commits it to the store, from which every window reloads | `test_derived_field_controller`, the `--derived-field-*-smoke-test` harnesses |
 | `VolumeController` | the Volume Rendering window (an `IsoWidget` view with the rendered volume under its wireframe, and the opacity/quality controls), following the field, level, range and palette; render scheduling with drafts while the camera moves | `test_volume_controller` |
 
 Two rules keep the seams honest. A collaborator exposes only what has a

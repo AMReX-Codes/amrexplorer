@@ -66,7 +66,7 @@ MainWindow::MainWindow(QWidget* parent)
                     return chooseExpressionListPath(this, forSaving);
                 },
         },
-        this);
+        DerivedFieldStore::session(), this);
     connect(m_derivedFields, &DerivedFieldController::statusMessage, this,
         [this](const QString& message, int timeoutMs) {
             statusBar()->showMessage(message, timeoutMs);
@@ -1405,24 +1405,9 @@ void MainWindow::rebuildVariableMenu()
         ? m_fieldSelector->currentData().toUInt() : 0;
     const auto stored =
         std::min(m_dataset->storedFieldCount(), metadata.fields.size());
-    const auto& definitions = m_derivedFields->definitions();
-    for (std::size_t field = 0; field < metadata.fields.size(); ++field) {
-        if (field == stored) {
-            m_variableMenu->addSeparator();
-        }
-        const auto name = QString::fromStdString(metadata.fields[field].name);
+    const auto addField = [this, currentField](
+                              const QString& name, std::size_t field) {
         auto* action = m_variableMenu->addAction(name);
-        if (field >= stored) {
-            // Matched by name: a definition this dataset could not resolve is
-            // not in the field list, so the two are not index-for-index.
-            const auto definition = std::find_if(definitions.begin(),
-                definitions.end(), [&metadata, field](const auto& candidate) {
-                    return candidate.name == metadata.fields[field].name;
-                });
-            if (definition != definitions.end()) {
-                action->setToolTip(expressionTooltip(definition->expression));
-            }
-        }
         action->setCheckable(true);
         action->setActionGroup(m_variableGroup);
         action->setChecked(static_cast<std::uint32_t>(field) == currentField);
@@ -1434,7 +1419,47 @@ void MainWindow::rebuildVariableMenu()
                 m_fieldSelector->setCurrentIndex(index);
             }
         });
+    };
+    for (std::size_t field = 0; field < stored; ++field) {
+        addField(QString::fromStdString(metadata.fields[field].name), field);
     }
+
+    // The same list as the field selector, dimmed the same way: see
+    // populateFieldSelector.
+    const auto& definitions = m_derivedFields->definitions();
+    if (!definitions.empty()) {
+        m_variableMenu->addSeparator();
+    }
+    const auto skipped = m_dataset->skippedDerivedFields();
+    for (const auto& definition : definitions) {
+        const auto name = QString::fromStdString(definition.name);
+        const auto installed = std::find_if(
+            metadata.fields.begin() + static_cast<std::ptrdiff_t>(stored),
+            metadata.fields.end(),
+            [&definition](const FieldMetadata& field) {
+                return field.name == definition.name;
+            });
+        if (installed != metadata.fields.end()) {
+            addField(name, static_cast<std::size_t>(
+                std::distance(metadata.fields.begin(), installed)));
+            m_variableMenu->actions().back()->setToolTip(
+                expressionTooltip(definition.expression));
+            continue;
+        }
+        auto* action = m_variableMenu->addAction(name);
+        action->setEnabled(false);
+        const auto reason = std::find_if(skipped.begin(), skipped.end(),
+            [&definition](const DerivedFieldSkip& entry) {
+                return entry.name == definition.name;
+            });
+        action->setToolTip(reason != skipped.end()
+                ? tr("%1 -- unavailable here: %2")
+                      .arg(expressionTooltip(definition.expression),
+                          QString::fromStdString(reason->reason))
+                : tr("%1 -- unavailable for this dataset")
+                      .arg(expressionTooltip(definition.expression)));
+    }
+
     // Re-added after every rebuild: clear() above only *removes* it, because
     // the action belongs to the window rather than to the menu.
     m_variableMenu->addSeparator();
@@ -1520,6 +1545,12 @@ QString MainWindow::chooseExpressionListPath(QWidget* parent, bool forSaving)
 void MainWindow::reloadCurrentDataset()
 {
     if (!m_dataset || m_datasetPath.empty()) {
+        return;
+    }
+    if (m_playbackMode != PlaybackMode::None) {
+        // Mid-playback: reloading here would restart the frame under the user.
+        // Every frame load reads the list for itself (buildFrameSpec), so the
+        // next one picks the change up on its own.
         return;
     }
     if (m_sequenceController->hasSequence()) {

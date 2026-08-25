@@ -1,5 +1,7 @@
 #include "MainWindowInternal.hpp"
 
+#include <QStandardItemModel>
+
 namespace amrvis::qt {
 
 namespace {
@@ -89,6 +91,23 @@ QString MainWindow::expressionTooltip(const std::string& expression)
     return QString::fromStdString(expression).simplified();
 }
 
+void MainWindow::setFieldItemEnabled(int index, bool enabled)
+{
+    // Through the model, because a combo box has no per-item enable of its
+    // own: an item that is not selectable is skipped by the keyboard and drawn
+    // greyed by the style.
+    auto* model = qobject_cast<QStandardItemModel*>(m_fieldSelector->model());
+    if (model == nullptr) {
+        return;
+    }
+    if (auto* item = model->item(index); item != nullptr) {
+        item->setFlags(enabled
+                ? item->flags() | Qt::ItemIsSelectable | Qt::ItemIsEnabled
+                : item->flags()
+                    & ~(Qt::ItemIsSelectable | Qt::ItemIsEnabled));
+    }
+}
+
 void MainWindow::selectFieldItem(int index)
 {
     // The separator between the stored and the derived fields is an item, and
@@ -113,30 +132,56 @@ void MainWindow::populateFieldSelector()
     }
     const auto& fields = m_dataset->metadata().fields;
     const auto stored = std::min(m_dataset->storedFieldCount(), fields.size());
+    for (std::size_t field = 0; field < stored; ++field) {
+        m_fieldSelector->addItem(QString::fromStdString(fields[field].name),
+            static_cast<unsigned int>(field));
+    }
+
+    // Every definition the session carries, in the order it was written --
+    // including the ones this dataset cannot provide, which are listed greyed
+    // out rather than left out. The list is shared by every window, so a
+    // definition that means nothing here means something next door, and
+    // showing it as unavailable says so better than its absence does.
     const auto& definitions = m_derivedFields->definitions();
-    for (std::size_t field = 0; field < fields.size(); ++field) {
-        if (field == stored) {
-            // The computed fields are a different kind of thing from the ones
-            // the plotfile holds; the rule is worth showing rather than
-            // leaving to be inferred from the order.
-            m_fieldSelector->insertSeparator(m_fieldSelector->count());
-        }
-        const auto name = QString::fromStdString(fields[field].name);
-        m_fieldSelector->addItem(name, static_cast<unsigned int>(field));
-        if (field < stored) {
+    if (definitions.empty()) {
+        return;
+    }
+    // The computed fields are a different kind of thing from the ones the
+    // plotfile holds; the rule is worth showing rather than leaving to be
+    // inferred from the order.
+    m_fieldSelector->insertSeparator(m_fieldSelector->count());
+    const auto skipped = m_dataset->skippedDerivedFields();
+    for (const auto& definition : definitions) {
+        const auto name = QString::fromStdString(definition.name);
+        const auto installed = std::find_if(fields.begin() + static_cast<std::ptrdiff_t>(stored),
+            fields.end(), [&definition](const FieldMetadata& field) {
+                return field.name == definition.name;
+            });
+        const auto row = m_fieldSelector->count();
+        if (installed != fields.end()) {
+            m_fieldSelector->addItem(name,
+                static_cast<unsigned int>(
+                    std::distance(fields.begin(), installed)));
+            m_fieldSelector->setItemData(row,
+                expressionTooltip(definition.expression), Qt::ToolTipRole);
             continue;
         }
-        // What the field is, on the field itself. Matched by name rather than
-        // by position: a definition the dataset could not resolve is left out
-        // of the field list, so the two are not index-for-index.
-        const auto definition = std::find_if(definitions.begin(),
-            definitions.end(), [&fields, field](const auto& candidate) {
-                return candidate.name == fields[field].name;
+        // Not installed here: shown, not selectable, and saying why. No field
+        // id either, so nothing that reads item data can mistake it for one.
+        m_fieldSelector->addItem(name);
+        const auto reason = std::find_if(skipped.begin(), skipped.end(),
+            [&definition](const DerivedFieldSkip& entry) {
+                return entry.name == definition.name;
             });
-        if (definition != definitions.end()) {
-            m_fieldSelector->setItemData(m_fieldSelector->count() - 1,
-                expressionTooltip(definition->expression), Qt::ToolTipRole);
-        }
+        m_fieldSelector->setItemData(row,
+            reason != skipped.end()
+                ? tr("%1 -- unavailable here: %2")
+                      .arg(expressionTooltip(definition.expression),
+                          QString::fromStdString(reason->reason))
+                : tr("%1 -- unavailable for this dataset")
+                      .arg(expressionTooltip(definition.expression)),
+            Qt::ToolTipRole);
+        setFieldItemEnabled(row, false);
     }
 }
 
@@ -181,26 +226,6 @@ void MainWindow::restoreVectorFields(const std::array<std::string, 3>& names)
                 break;
             }
         }
-    }
-}
-
-void MainWindow::reportSkippedDerivedFields()
-{
-    if (!m_dataset) {
-        return;
-    }
-    // Called from where a load's own notices are shown (after the slices, past
-    // showSlice's clearMessage), so this is a status message that stays up.
-    const auto report =
-        m_derivedFields->skippedReport(m_dataset->skippedDerivedFields());
-    // Only on a change: a sequence whose frames all lack the same field would
-    // otherwise repeat the message on every frame of a playback.
-    if (report == m_lastSkippedDerivedReport) {
-        return;
-    }
-    m_lastSkippedDerivedReport = report;
-    if (!report.isEmpty()) {
-        statusBar()->showMessage(report, 8000);
     }
 }
 
@@ -1695,9 +1720,6 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     // from one. A scale picked on an earlier frame otherwise kept that frame's
     // number.
     refreshScaleReport();
-    // Before the cache-fallback notice, which is about the render the user is
-    // looking at and so takes the status bar if both happened.
-    reportSkippedDerivedFields();
     if (result.cacheFallbackToLevel >= 0) {
         statusBar()->showMessage(cacheFallbackMessage(
             *result.dataset, result.cacheFallbackFromLevel,
@@ -1788,11 +1810,6 @@ void MainWindow::configureSequenceControls(
 
 void MainWindow::resetRangeState()
 {
-    // The derived-field list is dataset-scoped for the same reason the range
-    // memory is, and is forgotten at the same two points: a different dataset,
-    // or a sequence, is being opened.
-    m_derivedFields->clear();
-    m_lastSkippedDerivedReport.clear();
     m_range->reset();
     m_displayCoordinator.invalidateRangeCache();
     m_pendingRangeStore.reset();

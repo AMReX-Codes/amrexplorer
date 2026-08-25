@@ -16,6 +16,7 @@
 #include <QSaveFile>
 #include <QWidget>
 
+#include <algorithm>
 #include <utility>
 
 namespace amrvis::qt {
@@ -101,10 +102,28 @@ QByteArray writeExpressionList(
     return QJsonDocument(root).toJson(QJsonDocument::Indented);
 }
 
-DerivedFieldController::DerivedFieldController(Hooks hooks, QObject* parent)
+DerivedFieldController::DerivedFieldController(
+    Hooks hooks, DerivedFieldStore& store, QObject* parent)
     : QObject(parent)
     , m_hooks(std::move(hooks))
+    , m_store(store)
 {
+    connect(&m_store, &DerivedFieldStore::changed, this,
+        [this] { adoptStoreChange(); });
+}
+
+void DerivedFieldController::adoptStoreChange()
+{
+    if (m_dialog) {
+        m_dialog->setDraft(m_store.definitions(), m_dialog->selectedIndex());
+    }
+    // Including the window whose Apply made the change: one path installs the
+    // list, whoever asked for it. A window that cannot take derived fields --
+    // a remote session, or a FAB -- has nothing to reload, and will not show
+    // them either way.
+    if (m_hooks.reload && m_hooks.available && m_hooks.available()) {
+        m_hooks.reload();
+    }
 }
 
 QAction* DerivedFieldController::createAction(QWidget* parent)
@@ -145,45 +164,47 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
     // The same question the action's enablement asks, not a weaker one: the
     // editor is modeless, so the window can enter a state it is disabled for
     // (a FAB drill-down) while it is still open in front of the user.
-    const auto usable = m_hooks.available && m_hooks.available();
-    auto stored = usable && m_hooks.storedMetadata ? m_hooks.storedMetadata()
-                                                   : std::nullopt;
-    if (!stored) {
+    if (!m_hooks.available || !m_hooks.available()) {
         return Refusal{tr("No dataset that can take derived fields is open."),
             std::nullopt};
     }
-    try {
-        // Strict, on a copy: the user is being told whether what they typed
-        // works, so the first problem is the answer -- and the metadata this
-        // validates against is thrown away either way.
-        static_cast<void>(installDerivedFields(
-            *stored, definitions, DerivedFieldPolicy::Strict));
-    } catch (const DerivedFieldError& error) {
-        return Refusal{QString::fromUtf8(error.what()),
-            error.definitionIndex()};
+
+    // Checked without reference to any dataset: whether a definition applies
+    // *here* is decided when a dataset installs it, and shown by greying the
+    // field out. One list is shared by windows showing different data, so only
+    // what is wrong whatever the data is can be refused.
+    for (std::size_t index = 0; index < definitions.size(); ++index) {
+        const auto& definition = definitions[index];
+        if (definition.name.empty()) {
+            return Refusal{tr("A derived field needs a name."), index};
+        }
+        const auto upto =
+            definitions.begin() + static_cast<std::ptrdiff_t>(index);
+        if (std::find_if(definitions.begin(), upto,
+                [&definition](const DerivedFieldDefinition& earlier) {
+                    return earlier.name == definition.name;
+                })
+            != upto) {
+            return Refusal{
+                tr("Another derived field is already called \"%1\".")
+                    .arg(QString::fromStdString(definition.name)),
+                index};
+        }
+        if (definition.expression.empty()) {
+            return Refusal{tr("A derived field needs an expression."), index};
+        }
+        try {
+            static_cast<void>(
+                CompiledExpression::compile(definition.expression));
+        } catch (const ExpressionError& error) {
+            return Refusal{QString::fromUtf8(error.what()), index};
+        }
     }
 
-    if (definitions == m_definitions) {
-        // Nothing to install: a reload here would re-read the plotfile and,
-        // for a sequence, close the Dataset and Line Plot windows.
-        return std::nullopt;
-    }
-    m_definitions = std::move(definitions);
-    if (m_hooks.reload) {
-        m_hooks.reload();
-    }
+    // set() is what reloads -- here and in every other window -- and does
+    // nothing at all when the list has not moved.
+    m_store.set(std::move(definitions));
     return std::nullopt;
-}
-
-void DerivedFieldController::clear()
-{
-    m_definitions.clear();
-    // The editor's draft too, committed or not: definitions typed against the
-    // last dataset's fields and never applied would otherwise sit there
-    // refusing every Apply against the new one.
-    if (m_dialog) {
-        m_dialog->setDraft({});
-    }
 }
 
 void DerivedFieldController::showEditor(QWidget* parent)
@@ -193,7 +214,8 @@ void DerivedFieldController::showEditor(QWidget* parent)
         m_dialog->activateWindow();
         return;
     }
-    auto* dialog = new ExpressionEditorDialog(m_definitions, parent);
+    auto* dialog =
+        new ExpressionEditorDialog(m_store.definitions(), parent);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     connect(dialog, &ExpressionEditorDialog::applyRequested, dialog,
         [this, dialog] {
@@ -207,11 +229,11 @@ void DerivedFieldController::showEditor(QWidget* parent)
             // apply() may have trimmed names, and the draft must not drift
             // from what the dataset was reopened with. On the row the user was
             // editing, which is the one they are looking at.
-            dialog->setDraft(m_definitions, dialog->selectedIndex());
+            dialog->setDraft(m_store.definitions(), dialog->selectedIndex());
             // Not a status message: apply() has already started the reload,
             // and showSlice clears the status bar when its slices land. The
             // editor is in front of the user anyway, so it says so itself.
-            dialog->showApplied(m_definitions.size());
+            dialog->showApplied(m_store.definitions().size());
         });
     connect(dialog, &ExpressionEditorDialog::importRequested, dialog,
         [this, dialog] {
@@ -276,29 +298,5 @@ void DerivedFieldController::showEditor(QWidget* parent)
     m_dialog = dialog;
     dialog->show();
 }
-
-QString DerivedFieldController::skippedReport(
-    const std::vector<DerivedFieldSkip>& skipped) const
-{
-    if (skipped.empty()) {
-        return {};
-    }
-    QStringList names;
-    for (const auto& entry : skipped) {
-        names.append(entry.name.empty()
-                ? tr("(unnamed)")
-                : QString::fromStdString(entry.name));
-    }
-    // One reason in full, the first: with several skips they are usually the
-    // same missing field, and the status bar has room for one.
-    const auto reason = QString::fromStdString(skipped.front().reason);
-    return skipped.size() == 1
-        ? tr("Derived field \"%1\" is unavailable for this dataset: %2")
-              .arg(names.front(), reason)
-        : tr("%1 derived fields are unavailable for this dataset: %2 (%3)")
-              .arg(skipped.size())
-              .arg(names.join(QStringLiteral(", ")), reason);
-}
-
 
 } // namespace amrvis::qt

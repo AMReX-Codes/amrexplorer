@@ -1,4 +1,5 @@
 #include "DerivedFieldController.hpp"
+#include "DerivedFieldStore.hpp"
 #include "ExpressionEditorDialog.hpp"
 
 #include <QApplication>
@@ -21,6 +22,7 @@ namespace {
 using amrvis::DerivedFieldDefinition;
 using amrvis::DerivedFieldSkip;
 using amrvis::qt::DerivedFieldController;
+using amrvis::qt::DerivedFieldStore;
 using amrvis::qt::ExpressionEditorDialog;
 
 void require(bool condition, const char* message)
@@ -97,16 +99,17 @@ int main(int argc, char** argv)
     // committing a list does.
     {
         Fixture fixture;
-        DerivedFieldController controller(fixture.hooks());
+        DerivedFieldStore store;
+        DerivedFieldController controller(fixture.hooks(), store);
 
         // A refusal changes nothing: not the committed list, and no reload.
-        const auto refusal = controller.apply({{"speed", "sqrt(absent)"}});
-        require(refusal.has_value(), "an unresolvable definition was accepted");
+        // What is refused is what is wrong whatever the data -- an expression
+        // that does not parse, an empty or repeated name.
+        const auto refusal = controller.apply({{"speed", "sqrt(absent"}});
+        require(refusal.has_value(), "an unparsable expression was accepted");
         require(refusal->definitionIndex.has_value()
                 && *refusal->definitionIndex == 0,
             "the refusal did not name the definition");
-        require(refusal->message.contains(QStringLiteral("absent")),
-            "the refusal does not say what was missing");
         require(controller.definitions().empty()
                 && fixture.reloads == 0,
             "a refused apply still changed the committed list");
@@ -123,18 +126,31 @@ int main(int argc, char** argv)
                 && fixture.reloads == 1,
             "an accepted apply did not commit and reload exactly once");
 
-        // The reverse order cannot resolve: a definition may only read the
-        // ones before it.
-        const auto reversed = controller.apply({good[1], good[0]});
-        require(reversed.has_value() && reversed->definitionIndex == 0,
-            "a forward reference was accepted");
-        require(controller.definitions() == good,
+        // A name this dataset does not have is not a refusal: the list is
+        // shared with windows that may have it, and it is shown greyed out
+        // where it does not apply.
+        auto withStranger = good;
+        withStranger.push_back({"stranger", "absent * 2"});
+        require(!controller.apply(withStranger).has_value(),
+            "a definition for another dataset was refused");
+        require(controller.definitions() == withStranger,
+            "the definition for another dataset was not committed");
+        // A repeated name is wrong whatever the data.
+        auto repeated = good;
+        repeated.push_back(good[0]);
+        const auto duplicate = controller.apply(repeated);
+        require(duplicate.has_value() && duplicate->definitionIndex == 2,
+            "a repeated name was accepted");
+        require(controller.definitions() == withStranger,
             "a refused apply replaced the committed list");
+        require(!controller.apply(good).has_value(), "restoring was refused");
 
         // An empty list is a legitimate commit: it clears the derived fields.
+        const auto before = fixture.reloads;
         require(!controller.apply({}).has_value(),
             "clearing the list was refused");
-        require(controller.definitions().empty() && fixture.reloads == 2,
+        require(controller.definitions().empty()
+                && fixture.reloads == before + 1,
             "clearing the list did not commit and reload");
     }
 
@@ -143,7 +159,8 @@ int main(int argc, char** argv)
     {
         Fixture fixture;
         fixture.datasetOpen = false;
-        DerivedFieldController controller(fixture.hooks());
+        DerivedFieldStore store;
+        DerivedFieldController controller(fixture.hooks(), store);
         auto* parent = new QWidget;
         auto* action = controller.createAction(parent);
         require(action != nullptr && !action->isEnabled(),
@@ -191,7 +208,8 @@ int main(int argc, char** argv)
     // and an export writes the draft rather than the committed list.
     {
         Fixture fixture;
-        DerivedFieldController controller(fixture.hooks());
+        DerivedFieldStore store;
+        DerivedFieldController controller(fixture.hooks(), store);
         require(!controller.apply({{"speed", "density"}}).has_value(),
             "the starting list was refused");
 
@@ -283,11 +301,12 @@ int main(int argc, char** argv)
                 "applying did not keep the draft it committed");
         }
 
-        // And a refusal from the editor shows in place, keeping the committed
-        // list.
+        // And a refusal from the editor -- an expression that does not parse,
+        // since a name this dataset lacks is no longer one -- shows in place,
+        // keeping the committed list.
         dialog->findChild<QPlainTextEdit*>(
                    QStringLiteral("expressionSource"))
-            ->setPlainText(QStringLiteral("absent + 1"));
+            ->setPlainText(QStringLiteral("absent +"));
         dialog->findChild<QPushButton*>(
                    QStringLiteral("applyExpressionsButton"))
             ->click();
@@ -298,33 +317,31 @@ int main(int argc, char** argv)
         delete parent;
     }
 
-    // Opening a different dataset forgets the list: a definition written
-    // against the last one's fields would otherwise refuse every later Apply,
-    // since the editor validates the whole list at once.
+    // Two windows, one store: a definition written in one is the other's too,
+    // and both reload so it reaches both field lists.
     {
-        Fixture fixture;
-        DerivedFieldController controller(fixture.hooks());
-        require(!controller.apply({{"speed", "density"}}).has_value(),
-            "the starting list was refused");
-        controller.clear();
-        require(controller.definitions().empty(),
-            "clearing left definitions behind");
-        require(fixture.reloads == 1,
-            "clearing reloaded, which the open it belongs to does itself");
-    }
-
-    // The report the host puts in the status bar when a dataset could not
-    // provide some of the committed list.
-    {
-        Fixture fixture;
-        DerivedFieldController controller(fixture.hooks());
-        require(controller.skippedReport({}).isEmpty(),
-            "nothing skipped still produced a report");
-        const auto report = controller.skippedReport(
-            {DerivedFieldSkip{0, "speed", "no field named 'u'"}});
-        require(report.contains(QStringLiteral("speed"))
-                && report.contains(QStringLiteral("no field named 'u'")),
-            "the skip report names neither the field nor the reason");
+        Fixture first;
+        Fixture second;
+        DerivedFieldStore store;
+        DerivedFieldController one(first.hooks(), store);
+        DerivedFieldController two(second.hooks(), store);
+        const std::vector<DerivedFieldDefinition> list{{"speed", "density"}};
+        require(!one.apply(list).has_value(), "the list was refused");
+        require(one.definitions() == list && two.definitions() == list,
+            "the other window did not see the definition");
+        require(first.reloads == 1 && second.reloads == 1,
+            "both windows should have reloaded exactly once");
+        // Applying what is already there moves nothing and reloads nobody.
+        require(!two.apply(list).has_value(), "re-applying was refused");
+        require(first.reloads == 1 && second.reloads == 1,
+            "an unchanged list reloaded a window");
+        // A window that cannot take derived fields is not reloaded, and still
+        // sees the list.
+        second.datasetOpen = false;
+        require(!one.apply({}).has_value(), "clearing was refused");
+        require(two.definitions().empty(), "the other window kept the list");
+        require(second.reloads == 1,
+            "a window with no usable dataset was reloaded");
     }
 
     std::cout << "derived field controller tests passed\n";

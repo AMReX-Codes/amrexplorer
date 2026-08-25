@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DerivedFieldStore.hpp"
+
 #include <amrexplorer/core/DerivedField.hpp>
 #include <amrexplorer/core/Metadata.hpp>
 
@@ -78,7 +80,11 @@ public:
         std::function<QString(QWidget* parent, bool forSaving)> chooseFile;
     };
 
-    explicit DerivedFieldController(Hooks hooks, QObject* parent = nullptr);
+    // `store` outlives the controller: the session's own, or a test's. Every
+    // window's controller shares one, which is how a definition written in one
+    // window reaches the others.
+    DerivedFieldController(
+        Hooks hooks, DerivedFieldStore& store, QObject* parent = nullptr);
 
     // The Variable menu's "Expression Editor..." action, enabled while the
     // open dataset can take derived fields. Owned by `parent`.
@@ -90,7 +96,7 @@ public:
     [[nodiscard]] const std::vector<DerivedFieldDefinition>& definitions()
         const noexcept
     {
-        return m_definitions;
+        return m_store.definitions();
     }
 
     struct Refusal {
@@ -99,38 +105,35 @@ public:
         std::optional<std::size_t> definitionIndex;
     };
 
-    // Validates the list against the open dataset and, if every definition
-    // resolves, commits it and asks the host to reload. Returns the refusal
-    // otherwise, having changed nothing; a list equal to the committed one is
-    // accepted and reloads nothing.
+    // Checks the list and, if it holds, commits it to the store -- from which
+    // this window and every other one takes it. Returns the refusal otherwise,
+    // having changed nothing; a list equal to the committed one changes and
+    // reloads nothing.
+    //
+    // Only what is wrong whatever the data is refused: a name that is empty or
+    // used twice, and an expression that does not parse. Whether a *particular*
+    // dataset can provide the fields a definition reads is not this list's
+    // business -- one list is shared by windows showing different data, so a
+    // definition simply does not apply in some of them, and is shown greyed
+    // out there rather than refused everywhere.
     [[nodiscard]] std::optional<Refusal> apply(
         std::vector<DerivedFieldDefinition> definitions);
-
-    // Forgets every definition. Called where a *different* dataset is opened,
-    // which is the point at which a list written against the last one stops
-    // meaning anything: the editor validates the whole list on Apply, so
-    // definitions naming fields the new dataset does not have would refuse
-    // every later edit until they were deleted by hand.
-    void clear();
 
     // Opens the editor (or raises it if it is already open) on the committed
     // list. Modeless: the reload an Apply triggers is an ordinary dataset load,
     // so there is nothing a nested event loop would have to be held back from.
     void showEditor(QWidget* parent);
 
-    // The definitions the last dataset load could not install, as a single
-    // line for the status bar, or empty when there were none. The host calls
-    // it once a load has settled -- a definition written for another plotfile
-    // is silently missing from the field list otherwise.
-    [[nodiscard]] QString skippedReport(
-        const std::vector<DerivedFieldSkip>& skipped) const;
-
 signals:
     void statusMessage(const QString& message, int timeoutMs);
 
 private:
+    // Re-reads the store: refreshes an open editor, and asks the host to
+    // reload so the change reaches this window's field list too.
+    void adoptStoreChange();
+
     Hooks m_hooks;
-    std::vector<DerivedFieldDefinition> m_definitions;
+    DerivedFieldStore& m_store;
     QPointer<QAction> m_action;
     QPointer<ExpressionEditorDialog> m_dialog;
 };

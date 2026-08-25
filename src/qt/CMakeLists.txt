@@ -13,6 +13,8 @@ add_executable(amrexplorer_qt
     DatasetWindow.hpp
     DerivedFieldController.cpp
     DerivedFieldController.hpp
+    DerivedFieldStore.cpp
+    DerivedFieldStore.hpp
     DiagnosticsModel.cpp
     DiagnosticsModel.hpp
     ExpressionEditorDialog.cpp

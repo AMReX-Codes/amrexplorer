@@ -465,9 +465,11 @@ geometry.
 
 An expression may also use the derived fields defined above it in the list, so
 a long formula can be built in steps. Each definition is checked against the
-dataset when you apply it; the editor selects the definition that failed and
-says what is wrong with it, and nothing reaches the dataset until the whole
-list is accepted.
+expression when you apply it: the editor selects the definition that failed and
+says what is wrong with it. Only what is wrong whatever the data is refused --
+a missing or repeated name, an expression that does not parse. Reading a field
+this particular dataset happens not to have is not an error; that definition is
+simply greyed out here.
 
 Other notes:
 
@@ -476,14 +478,16 @@ Other notes:
   **Visible**. **User** works as usual.
 - A result that is not a number -- `log` of a negative value, a division by
   zero -- is treated as missing data, like any other non-finite sample.
-- The list belongs to the window and to the dataset open in it: opening
-  another dataset, or a sequence, starts again with none. It is not saved
-  between sessions -- a definition is written against one plotfile's fields,
-  and kept around it would only reappear against unrelated data, where it can
-  do nothing but refuse the next thing you try to add.
-- Within a sequence the list stays put, so a definition follows the frames. One
-  a particular frame cannot satisfy is left out of that frame, and the status
-  bar says which; the rest still apply.
+- The list is shared by every window of one running viewer: define a field in
+  one window and it is there in the others too. It is not saved between
+  sessions, so quitting forgets it and a viewer started afresh has none. A
+  viewer launched separately from the command line is its own program with its
+  own list.
+- A definition the data in front of you cannot provide -- it reads a field this
+  plotfile does not have, or this frame of a sequence does not -- is greyed out
+  in the field selector and the **Variable** menu, with the reason on its
+  tooltip. It is still yours, and still applies wherever it can: in another
+  window on other data, or on a frame that does carry the field.
 - **Import...** and **Export...** read and write the list as a JSON expression
   list, which is how a set of definitions is kept for another session. An
   import replaces what the editor is showing; nothing reaches the dataset until

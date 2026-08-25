@@ -13,6 +13,7 @@
 #include <QMenuBar>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QStandardItemModel>
 #include <QStringList>
 #include <QTimer>
 
@@ -75,6 +76,27 @@ bool writeDefinition(amrvis::qt::ExpressionEditorDialog& dialog,
     return dialog.draft().size() == 1
         && dialog.draft().front().name == name.toStdString()
         && dialog.draft().front().expression == expression.toStdString();
+}
+
+// Adds a further definition rather than replacing the first.
+bool appendDefinition(amrvis::qt::ExpressionEditorDialog& dialog,
+    const QString& name, const QString& expression)
+{
+    auto* add =
+        dialog.findChild<QPushButton*>(QStringLiteral("newExpressionButton"));
+    auto* nameEdit =
+        dialog.findChild<QLineEdit*>(QStringLiteral("expressionName"));
+    auto* source =
+        dialog.findChild<QPlainTextEdit*>(QStringLiteral("expressionSource"));
+    if (add == nullptr || nameEdit == nullptr || source == nullptr) {
+        return false;
+    }
+    const auto before = dialog.draft().size();
+    add->click();
+    nameEdit->setText(name);
+    source->setPlainText(expression);
+    return dialog.draft().size() == before + 1
+        && dialog.draft().back().name == name.toStdString();
 }
 
 bool clickApply(amrvis::qt::ExpressionEditorDialog& dialog)
@@ -242,9 +264,13 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
                     return;
                 }
                 // A refusal must be reported in place and change nothing: not
-                // the field list, and not the dataset (no reload).
+                // the field list, and not the dataset (no reload). What is
+                // refused is what is wrong whatever the data -- here, an
+                // expression that does not parse. A name this dataset happens
+                // not to have is *not* refused; it is dimmed, which phase 4
+                // checks.
                 if (!writeDefinition(*dialog, QStringLiteral("product"),
-                        QStringLiteral("density * nonesuch"))) {
+                        QStringLiteral("density *"))) {
                     qCritical("the editor did not take the definition");
                     finish(6);
                     return;
@@ -255,7 +281,7 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
                     return;
                 }
                 if (!errorShown(*dialog)) {
-                    qCritical("an unresolvable definition was not refused");
+                    qCritical("an unparsable expression was not refused");
                     finish(7);
                     return;
                 }
@@ -334,8 +360,49 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
                     finish(10);
                     return;
                 }
+                // A definition this dataset cannot satisfy is accepted and
+                // shown greyed out rather than refused: the list is shared
+                // with windows that may well be able to satisfy it.
+                if (!appendDefinition(*dialog, QStringLiteral("elsewhere"),
+                        QStringLiteral("nonesuch * 2"))
+                    || !clickApply(*dialog) || errorShown(*dialog)) {
+                    qCritical("a definition for another dataset was refused");
+                    finish(14);
+                    return;
+                }
+                *phase = 4;
+                return;
+            }
+            if (*phase == 4) {
+                if (*loads < 3) {
+                    return;
+                }
                 auto* selector = window.findChild<QComboBox*>(
                     QStringLiteral("fieldSelector"));
+                const auto unavailable =
+                    selector->findText(QStringLiteral("elsewhere"));
+                if (unavailable < 0
+                    || selector->itemData(unavailable).isValid()) {
+                    qCritical("the unavailable definition is not listed, or "
+                              "is listed as a field");
+                    finish(15);
+                    return;
+                }
+                const auto* model = qobject_cast<const QStandardItemModel*>(
+                    selector->model());
+                if (model == nullptr
+                    || model->item(unavailable)->isEnabled()) {
+                    qCritical("the unavailable definition is not dimmed");
+                    finish(16);
+                    return;
+                }
+                if (!selector->itemData(unavailable, Qt::ToolTipRole)
+                        .toString()
+                        .contains(QStringLiteral("unavailable"))) {
+                    qCritical("the dimmed entry does not say why");
+                    finish(17);
+                    return;
+                }
                 // The derived field is set apart from the stored ones, and
                 // says what it is: the separator sits directly before it, and
                 // the entry carries its expression as a tooltip.
@@ -356,10 +423,10 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
                     return;
                 }
                 selector->setCurrentIndex(product);
-                *phase = 4;
+                *phase = 5;
                 return;
             }
-            if (*phase == 4) {
+            if (*phase == 5) {
                 if (window.sliceRequestPendingForTest()
                     || window.slicesInFlightForTest() != 0) {
                     return;  // the debounced re-slice is still coming

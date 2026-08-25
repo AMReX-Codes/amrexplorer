@@ -54,8 +54,11 @@ void validateSessionVolumeResult(const DatasetMetadata& metadata,
 // installed anything. The siblings above take the request and result objects
 // themselves, which is what makes them non-transposable; this one cannot,
 // because the reply it checks is a remote:: type and this header does not
-// depend on that layer. Naming them also makes leaving one out an error rather
-// than a zero, since a missing designated initializer is one here.
+// depend on that layer. Naming them does not by itself make leaving one out an
+// error: the counts have default initializers, which is what suppresses the
+// missing-initializer diagnostic, so an omitted count silently reads as zero
+// and passes every check below. Only skips, which has no default, is caught
+// that way. What the struct buys is that a swap has to be written down.
 struct SessionOpenedDerivedFields {
     // The reply's whole catalog, computed tail included.
     std::size_t fieldCount = 0;

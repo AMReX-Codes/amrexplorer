@@ -377,6 +377,11 @@ bool vectorsAligned(std::span<const std::uint8_t> bytes)
 std::string boundedReason(const std::string& reason)
 {
     constexpr std::string_view continued = "...";
+    // The bound is expression/Expression.hpp's, which is about expression
+    // source rather than about messages -- nothing here owns it. Were it ever
+    // set below the marker, the subtraction would wrap and the index below
+    // would read off the end of the string before substr could clamp it.
+    static_assert(maximumExpressionBytes > continued.size());
     if (reason.size() <= maximumExpressionBytes) {
         return reason;
     }

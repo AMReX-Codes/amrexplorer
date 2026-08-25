@@ -153,7 +153,13 @@ std::vector<MainWindow::DerivedFieldRow> MainWindow::derivedFieldRows() const
             [&definition](const DerivedFieldSkip& entry) {
                 return entry.name == definition.name;
             });
-        row.tooltip = richTooltip(reason != skipped.end()
+        // An empty reason falls back to the wording that promises none: the
+        // decoder accepts one (an absent wire string decodes as empty), and
+        // "unavailable here: " with nothing after the colon tells the user a
+        // reason exists while showing it to them blank.
+        const auto haveReason
+            = reason != skipped.end() && !reason->reason.empty();
+        row.tooltip = richTooltip(haveReason
                 ? tr("%1 -- unavailable here: %2")
                       .arg(expression,
                           QString::fromStdString(reason->reason)

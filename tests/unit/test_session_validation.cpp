@@ -1061,6 +1061,19 @@ int main()
         }, "installs and skips",
             "a reply accounting for more definitions than were sent was "
             "accepted");
+        // Two skips naming the same definition: every count above still adds
+        // up, so nothing else here would catch it.
+        const std::vector<amrvis::DerivedFieldSkip> twiceSkipped{
+            {0, "a", "why"}, {0, "a", "why again"}};
+        requireRejectedWith([&] {
+            amrvis::validateSessionOpenedDerivedFields({
+                .fieldCount = 5,
+                .derivedFieldCount = 0,
+                .skips = twiceSkipped,
+                .requestedCount = 3,
+            });
+        }, "the same definition twice",
+            "a reply skipping one definition twice was accepted");
         const std::vector<amrvis::DerivedFieldSkip> straySkip{
             {7, "stray", "why"}};
         requireRejectedWith([&] {

@@ -758,7 +758,19 @@ void validateSessionOpenedDerivedFields(
             "dataset catalog installs and skips more definitions than were "
             "requested");
     }
+    // Tracked rather than only bounded: without this a reply could skip one
+    // definition twice and leave the rest unaccounted for while every count
+    // above still added up, which is the state the comment on this function
+    // says cannot happen.
+    std::vector<bool> seen(requested, false);
     for (const auto& skip : reply.skips) {
+        if (skip.definitionIndex < requested) {
+            if (seen[skip.definitionIndex]) {
+                throw std::invalid_argument(
+                    "dataset catalog skips the same definition twice");
+            }
+            seen[skip.definitionIndex] = true;
+        }
         if (skip.definitionIndex >= requested) {
             throw std::invalid_argument(
                 "dataset catalog skips a definition that was not requested");

@@ -317,6 +317,17 @@ really is older rather than one a test pretended was. Protocol 1.3's gate was
 checked this way: the control is greyed out and cleared, the volume still
 renders nearest, and returning to a session that can sample restores it.
 
+Protocol 1.4's derived-field gate is the same shape and wants the same check.
+`RemoteDatasetSession::supportsDerivedFields()` reports the *connection's*
+capability, so against a pre-1.4 server the Expression Editor is greyed with a
+reason rather than offering a list the peer cannot install. Two halves to
+confirm against a real older binary: the editor is unavailable, and an open
+carrying definitions is refused answerably -- `UnsupportedProtocol`, with the
+connection still up and other datasets on it untouched, rather than a
+teardown. The server half is covered in-process by the raw-socket cases in
+`test_remote_server.cpp`, including that a 1.3 peer is told about the version
+rather than about the list.
+
 ### 5.3 Handshake and capabilities
 
 The first request must be `HelloRequest`. It will carry:
@@ -350,7 +361,7 @@ The production schema will cover:
 | Request | Successful response | Purpose |
 |---|---|---|
 | `HelloRequest` | `HelloResponse` | Negotiate the session |
-| `OpenDatasetRequest` | `DatasetOpened` | Open a path and return catalog metadata |
+| `OpenDatasetRequest` | `DatasetOpened` | Open a path and return catalog metadata (derived-field definitions 1.4; the reply's derived count and skips 1.4) |
 | `CloseDatasetRequest` | `DatasetClosed` | Release one remote handle |
 | `ViewDataRequest` | `ViewDataResponse` | Return cells needed for one 1-D/2-D viewport |
 | `DatasetPageRequest` | `DatasetPageResponse` | Populate one visible Dataset-window page |

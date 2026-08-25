@@ -818,16 +818,25 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
                     finish(18);
                     return;
                 }
-                // A definition this dataset cannot satisfy is accepted and
-                // shown greyed out rather than refused: the list is shared
-                // with windows that may well be able to satisfy it.
+                // Written here, a definition is a claim that it works on the
+                // data in front of the user, so one this dataset cannot
+                // satisfy is refused rather than quietly greyed out later.
                 if (!appendDefinition(*dialog, QStringLiteral("elsewhere"),
                         QStringLiteral("nonesuch * 2"))
-                    || !clickApply(*dialog) || errorShown(*dialog)) {
-                    qCritical("a definition for another dataset was refused");
+                    || !clickApply(*dialog) || !errorShown(*dialog)) {
+                    qCritical("a hand-written definition this dataset cannot "
+                              "provide was accepted");
                     finish(14);
                     return;
                 }
+                // The same list arriving as something the user did not write
+                // -- another window's Apply, on the list every window shares
+                // -- is committed and shown greyed out instead. That is what
+                // keeps one list usable across plotfiles, and what phase 4
+                // checks. Taken from the draft rather than written out again,
+                // so it is the same list the editor holds and the dialog
+                // counts it as committed.
+                amrvis::qt::DerivedFieldStore::session().set(dialog->draft());
                 *phase = 4;
                 return;
             }
@@ -1545,17 +1554,26 @@ void armRemoteDerivedChecks(
                 return;
             }
             if (*phase == 1) {
+                // `elsewhere` reads a field this dataset has not got, and it
+                // is written here, so Apply refuses it -- over a remote
+                // session as over a local one, since the check is the same
+                // resolution the server would perform.
                 if (dialog == nullptr
                     || !writeDefinition(*dialog, QStringLiteral("product"),
                         QStringLiteral("density * temperature"))
                     || !appendDefinition(*dialog,
                         QStringLiteral("elsewhere"),
                         QStringLiteral("nonesuch * 2"))
-                    || !clickApply(*dialog) || errorShown(*dialog)) {
-                    qCritical("the editor refused the definitions");
+                    || !clickApply(*dialog) || !errorShown(*dialog)) {
+                    qCritical("the editor accepted a definition this remote "
+                              "dataset cannot provide");
                     finish(6);
                     return;
                 }
+                // Committed the way a peer window commits it, which is the
+                // route that leaves an unresolvable definition greyed out
+                // rather than refused.
+                amrvis::qt::DerivedFieldStore::session().set(dialog->draft());
                 *ticks = 0;
                 *phase = 2;
                 return;

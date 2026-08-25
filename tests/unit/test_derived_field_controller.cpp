@@ -245,6 +245,36 @@ int main(int argc, char** argv)
         require(warning->text().isEmpty(),
             "an imported definition was complained about");
 
+        // And Apply takes it: it was never a claim about this dataset, so it
+        // is committed and greyed out in the field list, as a list carried
+        // from another plotfile is.
+        auto* applyButton = dialog->findChild<QPushButton*>(
+            QStringLiteral("applyExpressionsButton"));
+        auto* error =
+            dialog->findChild<QLabel*>(QStringLiteral("expressionError"));
+        require(applyButton != nullptr && error != nullptr,
+            "the editor is missing its Apply button or error label");
+        applyButton->click();
+        require(controller.definitions().size() == 1
+                && controller.definitions()[0].name == "stranger"
+                && error->text().isEmpty(),
+            "an imported definition this dataset cannot provide was refused");
+
+        // Typed here, the same kind of definition is held to the data in
+        // front of the user, and Apply says so rather than committing it to
+        // be discovered greyed out later.
+        source->setPlainText(QStringLiteral("absent * 3"));
+        settle();
+        require(!warning->text().isEmpty(),
+            "the edited definition did not warn");
+        applyButton->click();
+        require(!error->text().isEmpty(),
+            "a hand-written definition this dataset cannot provide was "
+            "accepted");
+        require(controller.definitions().size() == 1
+                && controller.definitions()[0].expression == "absent * 2",
+            "the refused edit was committed anyway");
+
         // And so is a dataset arriving that cannot provide what is already
         // written: refreshAvailability drops the warning rather than raising
         // one against a list the user has not touched.

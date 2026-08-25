@@ -220,18 +220,36 @@ void DerivedFieldController::refreshAvailability()
 
 void DerivedFieldController::refreshDraftDiagnostics()
 {
-    if (!m_dialog || !m_hooks.resolveAgainstOpenDataset) {
+    if (!m_dialog) {
         return;
     }
     const auto index = m_dialog->selectedIndex();
-    if (!index) {
+    // Only the row this was armed for, and only while it is still the user's
+    // own writing. A selection that moved on, or a draft an import replaced,
+    // leaves a timer running whose answer is about something they never
+    // touched -- and the one thing the warning must not do is complain about
+    // a definition they merely carried here.
+    if (!index || m_diagnosticsRow != index || !m_dialog->handEdited(*index)) {
+        return;
+    }
+    const auto& draft = m_dialog->draft();
+    // A fault in the definition first, and in its own words. It is wrong
+    // wherever it is installed, so calling it unavailable *in this dataset*
+    // would send the user looking for a plotfile that has the field when what
+    // they have is a typo.
+    if (const auto fault = definitionFault(draft);
+        fault && fault->definitionIndex == index) {
+        m_dialog->showResolutionWarning(fault->message);
+        return;
+    }
+    if (!m_hooks.resolveAgainstOpenDataset) {
         m_dialog->showResolutionWarning({});
         return;
     }
     // The whole draft, not the one definition: a definition may read the ones
     // written above it, so what this one resolves to depends on them, and one
     // of them failing is why this one cannot be had either.
-    const auto skipped = m_hooks.resolveAgainstOpenDataset(m_dialog->draft());
+    const auto skipped = m_hooks.resolveAgainstOpenDataset(draft);
     const auto entry = std::find_if(skipped.begin(), skipped.end(),
         [index](const DerivedFieldSkip& skip) {
             return skip.definitionIndex == *index;
@@ -240,30 +258,24 @@ void DerivedFieldController::refreshDraftDiagnostics()
         m_dialog->showResolutionWarning({});
         return;
     }
-    // Named as what it is: this dataset cannot provide the field, which is not
-    // the same as the definition being wrong. The wording says which, so a
-    // user who meant it for other data knows nothing needs fixing.
-    // Worded as the field list words it, so the same fact reads the same in
-    // both places.
-    m_dialog->showResolutionWarning(tr("Unavailable in this dataset: %1")
-            .arg(QString::fromStdString(entry->reason)));
+    // An empty reason takes the wording that promises none: a skip decoded
+    // off the wire may carry one, and "...: " with nothing after the colon
+    // tells the user a reason exists while showing it to them blank.
+    m_dialog->showResolutionWarning(entry->reason.empty()
+            ? tr("This dataset cannot provide this field.")
+            : tr("Unavailable in this dataset: %1")
+                  .arg(QString::fromStdString(entry->reason)));
 }
 
-std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
-    std::vector<DerivedFieldDefinition> definitions)
+// What is wrong with a list whatever the data it is installed against. Asked
+// by apply before it commits, and by the live diagnostics to tell a fault in
+// the definition from a field this dataset happens not to have -- the two read
+// alike in a DerivedFieldSkip's reason, and only the first is the user's to
+// fix wherever they are.
+std::optional<DerivedFieldController::Refusal>
+DerivedFieldController::definitionFault(
+    const std::vector<DerivedFieldDefinition>& definitions) const
 {
-    // The same question the action's enablement asks, not a weaker one: the
-    // editor is modeless, so the window can enter a state it is disabled for
-    // (a FAB drill-down) while it is still open in front of the user.
-    if (const auto reason = m_hooks.unavailableReason
-            ? m_hooks.unavailableReason()
-            : tr("Derived fields need a dataset.");
-        !reason.isEmpty()) {
-        // The same words the greyed action carries, so the editor and the menu
-        // give one answer rather than two.
-        return Refusal{reason, std::nullopt};
-    }
-
     // Bounded here as well as at installation, because this is where an
     // imported file's length is first seen: past the cap every dataset would
     // install the first 256 and skip the rest, so each window would list
@@ -319,6 +331,53 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
             fault->definitionIndex};
     }
 
+    return std::nullopt;
+}
+
+std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
+    std::vector<DerivedFieldDefinition> definitions,
+    std::vector<std::size_t> mustResolveHere)
+{
+    // The same question the action's enablement asks, not a weaker one: the
+    // editor is modeless, so the window can enter a state it is disabled for
+    // (a FAB drill-down) while it is still open in front of the user.
+    if (const auto reason = m_hooks.unavailableReason
+            ? m_hooks.unavailableReason()
+            : tr("Derived fields need a dataset.");
+        !reason.isEmpty()) {
+        // The same words the greyed action carries, so the editor and the menu
+        // give one answer rather than two.
+        return Refusal{reason, std::nullopt};
+    }
+
+    if (const auto fault = definitionFault(definitions)) {
+        return *fault;
+    }
+
+    // What the user has written must work on the data in front of them. Only
+    // what they wrote: the rest of the list may be theirs from another
+    // plotfile or somebody else's from a file, and neither is a claim about
+    // this dataset -- those install where they can and grey out where they
+    // cannot, which is what makes one list usable across plotfiles at all.
+    if (!mustResolveHere.empty() && m_hooks.resolveAgainstOpenDataset) {
+        const auto skipped = m_hooks.resolveAgainstOpenDataset(definitions);
+        std::sort(mustResolveHere.begin(), mustResolveHere.end());
+        for (const auto index : mustResolveHere) {
+            const auto entry = std::find_if(skipped.begin(), skipped.end(),
+                [index](const DerivedFieldSkip& skip) {
+                    return skip.definitionIndex == index;
+                });
+            if (entry == skipped.end()) {
+                continue;
+            }
+            return Refusal{entry->reason.empty()
+                    ? tr("This dataset cannot provide this field.")
+                    : tr("Unavailable in this dataset: %1")
+                          .arg(QString::fromStdString(entry->reason)),
+                index};
+        }
+    }
+
     // set() is what reloads -- here and in every other window -- and does
     // nothing at all when the list has not moved. That last part is deliberate
     // and tested ("an unchanged list reloaded a window"), so a list that has
@@ -358,13 +417,27 @@ void DerivedFieldController::showEditor(QWidget* parent)
             [this] { refreshDraftDiagnostics(); });
     }
     connect(dialog, &ExpressionEditorDialog::draftEdited, dialog,
-        [this] { m_diagnostics->start(); });
+        [this] {
+            m_diagnosticsRow = m_dialog ? m_dialog->selectedIndex()
+                                        : std::nullopt;
+            m_diagnostics->start();
+        });
     connect(dialog, &QObject::destroyed, this, [this] {
         m_diagnostics = nullptr;
     });
     connect(dialog, &ExpressionEditorDialog::applyRequested, dialog,
         [this, dialog] {
-            const auto refusal = apply(dialog->draft());
+            // The rows the user has typed into, which are the ones Apply
+            // holds to this dataset.
+            std::vector<std::size_t> handEdited;
+            for (std::size_t index = 0; index < dialog->draft().size();
+                ++index) {
+                if (dialog->handEdited(index)) {
+                    handEdited.push_back(index);
+                }
+            }
+            const auto refusal =
+                apply(dialog->draft(), std::move(handEdited));
             if (refusal) {
                 dialog->showError(
                     refusal->message, refusal->definitionIndex);

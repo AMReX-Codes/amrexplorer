@@ -83,6 +83,17 @@ public:
     // equivalent list can leave the user where they were.
     [[nodiscard]] std::optional<std::size_t> selectedIndex() const;
 
+    // Whether the user has typed into this definition's name or expression
+    // since the draft was last replaced -- by a commit, or by an import.
+    //
+    // This is what separates a definition the user is writing from one they
+    // are merely carrying: a list written for another plotfile, or imported
+    // whole, holds definitions this dataset may be unable to provide through
+    // no fault of anyone's, and those are committed and greyed out. One being
+    // written is a different claim -- that it works on the data in front of
+    // them -- and the host holds it to that.
+    [[nodiscard]] bool handEdited(std::size_t index) const;
+
     // The fields the open dataset stores, in its own order, listed beside the
     // expression so they need not be hunted for in the Variable menu. Double
     // -clicking one writes it into the expression at the cursor. Empty hides
@@ -125,6 +136,11 @@ private:
     // edit unapplied: compared rather than flagged, so typing something and
     // taking it back leaves nothing to protect.
     std::vector<DerivedFieldDefinition> m_committed;
+    // One flag per draft row: has the user typed into it. Kept beside m_draft
+    // rather than derived from m_committed, because "differs from what was
+    // committed" is also true of every row of an imported list, which is the
+    // case this has to tell apart. Cleared whenever the draft is replaced.
+    std::vector<bool> m_handEdited;
     QListWidget* m_list = nullptr;
     // The stored fields, and the caption over them: both hidden together when
     // there is nothing to list.

@@ -154,8 +154,18 @@ public:
     // business -- one list is shared by windows showing different data, so a
     // definition simply does not apply in some of them, and is shown greyed
     // out there rather than refused everywhere.
+    //
+    // `mustResolveHere` names the definitions the caller vouches for as the
+    // user's own writing -- what the editor has been typed into. Those are
+    // additionally required to resolve against the open dataset, because
+    // writing one is a claim that it works on the data in front of you.
+    // Everything else is committed whether this dataset can provide it or
+    // not: a list carried from another plotfile, or imported whole, is not
+    // that claim, and greying it out in the field list is the whole of what
+    // should happen to it.
     [[nodiscard]] std::optional<Refusal> apply(
-        std::vector<DerivedFieldDefinition> definitions);
+        std::vector<DerivedFieldDefinition> definitions,
+        std::vector<std::size_t> mustResolveHere = {});
 
     // Opens the editor (or raises it if it is already open) on the committed
     // list. Modeless: the reload an Apply triggers is an ordinary dataset load,
@@ -174,12 +184,21 @@ private:
     // by m_diagnostics: it answers a keystroke, and resolving a list costs
     // time in its own length squared.
     void refreshDraftDiagnostics();
+    // What is wrong with a list whatever the data, which is what apply may
+    // refuse outright and what the live warning must not blame a dataset for.
+    [[nodiscard]] std::optional<Refusal> definitionFault(
+        const std::vector<DerivedFieldDefinition>& definitions) const;
 
     Hooks m_hooks;
     DerivedFieldStore& m_store;
     QPointer<QAction> m_action;
     QPointer<ExpressionEditorDialog> m_dialog;
     QTimer* m_diagnostics = nullptr;
+    // The row the pending diagnostic was armed for. A timer that outlives the
+    // edit it belongs to -- the selection moved, or an import replaced the
+    // draft -- would otherwise answer about a definition the user never
+    // touched, which is the one thing the warning must never do.
+    std::optional<std::size_t> m_diagnosticsRow;
 };
 
 } // namespace amrvis::qt

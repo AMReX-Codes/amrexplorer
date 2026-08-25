@@ -49,6 +49,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     : QDialog(parent)
     , m_draft(std::move(definitions))
     , m_committed(m_draft)
+    , m_handEdited(m_draft.size(), false)
 {
     setObjectName(QStringLiteral("expressionEditor"));
     setWindowTitle(tr("Expression Editor"));
@@ -204,6 +205,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
             return;
         }
         m_draft[*index].name = text.trimmed().toStdString();
+        m_handEdited[*index] = true;
         m_list->item(static_cast<int>(*index))
             ->setText(displayName(m_draft[*index]));
         // A rename moves what the definitions after this one can read, so the
@@ -217,6 +219,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
         }
         m_draft[*index].expression =
             m_expression->toPlainText().trimmed().toStdString();
+        m_handEdited[*index] = true;
         emit draftEdited();
     });
     connect(m_apply, &QPushButton::clicked, this, [this] {
@@ -240,6 +243,9 @@ void ExpressionEditorDialog::setDraft(
     std::optional<std::size_t> select)
 {
     m_draft = std::move(definitions);
+    // None of it is the user's writing: an import is carried, and a commit is
+    // already answered for.
+    m_handEdited.assign(m_draft.size(), false);
     clearError();
     rebuildList(select);
     // Explicitly, rather than leaving it to the row change rebuildList makes:
@@ -271,6 +277,10 @@ void ExpressionEditorDialog::showResolutionWarning(const QString& message)
 void ExpressionEditorDialog::markDraftCommitted()
 {
     m_committed = m_draft;
+    // As setDraft does for the path that replaces the rows: what was the
+    // user's own writing has been answered for, and holding it to this
+    // dataset a second time would refuse a list that is already installed.
+    m_handEdited.assign(m_draft.size(), false);
     m_notice->clear();
     m_notice->setVisible(false);
 }
@@ -374,6 +384,7 @@ void ExpressionEditorDialog::addDefinition()
 {
     clearError();
     m_draft.push_back({});
+    m_handEdited.push_back(false);
     rebuildList(m_draft.size() - 1);
     m_name->setFocus();
 }
@@ -386,8 +397,15 @@ void ExpressionEditorDialog::removeSelected()
     }
     clearError();
     m_draft.erase(m_draft.begin() + static_cast<std::ptrdiff_t>(*index));
+    m_handEdited.erase(
+        m_handEdited.begin() + static_cast<std::ptrdiff_t>(*index));
     rebuildList(*index == 0 ? std::optional<std::size_t>{0}
                             : std::optional<std::size_t>{*index - 1});
+}
+
+bool ExpressionEditorDialog::handEdited(std::size_t index) const
+{
+    return index < m_handEdited.size() && m_handEdited[index];
 }
 
 std::optional<std::size_t> ExpressionEditorDialog::selectedIndex() const

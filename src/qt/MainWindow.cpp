@@ -103,7 +103,13 @@ MainWindow::MainWindow(QWidget* parent)
             .storedFieldNames =
                 [this] {
                     QStringList names;
-                    if (!m_dataset) {
+                    // The same gate derivedFieldRows applies, not a weaker
+                    // one: where no definition can be installed at all -- a
+                    // FAB, a peer that predates 1.4 -- offering the fields as
+                    // material tells the user they may write against them,
+                    // and the refusal then comes from somewhere else
+                    // entirely. available() is that one question, asked once.
+                    if (!m_dataset || !m_derivedFields->available()) {
                         return names;
                     }
                     const auto& fields = m_dataset->metadata().fields;
@@ -123,7 +129,12 @@ MainWindow::MainWindow(QWidget* parent)
             .resolveAgainstOpenDataset =
                 [this](const std::vector<DerivedFieldDefinition>& definitions) {
                     std::vector<DerivedFieldSkip> skipped;
-                    if (!m_dataset) {
+                    // As above. Answering here would be worse than saying
+                    // nothing: a remote session on an old peer reports every
+                    // field as stored, so every definition resolves and the
+                    // editor would report that it works -- right up until
+                    // Apply refuses it for a reason of its own.
+                    if (!m_dataset || !m_derivedFields->available()) {
                         return skipped;
                     }
                     // The session's metadata with the derived tail cut back

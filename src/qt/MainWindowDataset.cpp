@@ -775,6 +775,10 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         state->cachedVectorUField = 0;
         state->cachedVectorVField = 0;
         state->cachedContourCount = 0;
+        // Cleared, not stale: there is no raster to converge, and the open
+        // about to run will stamp whatever it displays. Set after the bump
+        // below would be too late -- resliceReplacedViews could run first.
+        state->planeSessionEpoch = m_sessionEpoch + 1;
     }
     m_initialStopSource.request_stop();
     m_linePlotStopSource.request_stop();
@@ -1110,6 +1114,34 @@ void MainWindow::requestInitialSlice(
                     const auto previousVectorFields = vectorFieldNames();
                     m_dataset = result.dataset;
                     ++m_sessionEpoch;
+                    // Which views a newer request has already claimed. Worked
+                    // out before anything below restores control state,
+                    // because that restoration replays the field, level and
+                    // range this load was launched with -- and if the user
+                    // moved any of them while it ran, replaying the old values
+                    // silently reverts what they did, and the re-slice this
+                    // load owes those views then renders the reverted
+                    // selection. The controls are one per window, so once any
+                    // view has been superseded the user's current state has to
+                    // win for all of them.
+                    std::vector<std::size_t> superseded;
+                    for (std::size_t index = 0; index < views.size(); ++index) {
+                        if (views[index]->sliceGeneration
+                            != viewGenerations[index]) {
+                            superseded.push_back(index);
+                        }
+                    }
+                    // By name, and before configureSliceControls below, which
+                    // repopulates the selector and calls selectFieldItem(0):
+                    // after that the user's choice is gone from the widget, and
+                    // the restore that follows would put back the field the
+                    // load was *launched* with. Ids renumber across a reload
+                    // when the derived tail changes, so the name is the only
+                    // stable handle. Level and range still come from the spec:
+                    // the field is what a user reads a reloading window with.
+                    const auto supersededField = superseded.empty()
+                        ? QString{}
+                        : m_fieldSelector->currentText();
                     restoreVectorFields(previousVectorFields);
                     m_particleController->setSamples(
                         std::move(result.particles));
@@ -1191,6 +1223,20 @@ void MainWindow::requestInitialSlice(
                         configureSlicePositionControls();
                         syncMenuChecks();
                     }
+                    // The user moved the field while this load ran, so theirs
+                    // is the selection that stands -- otherwise the re-slice
+                    // this load owes their view renders the field they left.
+                    if (!supersededField.isEmpty()) {
+                        const auto index
+                            = m_fieldSelector->findText(supersededField);
+                        if (index >= 0) {
+                            const QSignalBlocker blocker(m_fieldSelector);
+                            m_fieldSelector->setCurrentIndex(index);
+                            m_range->setTrackedField(
+                                m_fieldSelector->currentText());
+                            syncVariableMenu();
+                        }
+                    }
                     if (selectCacheFallbackLevel(
                             m_levelSelector, result.cacheFallbackToLevel)) {
                         configureSlicePositionControls();
@@ -1225,11 +1271,9 @@ void MainWindow::requestInitialSlice(
                     // this on its own: in the common ordering that newer
                     // request finished before this completion ran and was
                     // rightly accepted against the session then installed.
-                    std::vector<std::size_t> superseded;
                     for (std::size_t index = 0; index < views.size(); ++index) {
                         if (views[index]->sliceGeneration
                             != viewGenerations[index]) {
-                            superseded.push_back(index);
                             continue;
                         }
                         // A FAB round-trip preserved the zoom in restoredSpec and
@@ -1250,15 +1294,15 @@ void MainWindow::requestInitialSlice(
                                     result.displays[index].request.visibleRegion}
                                 : std::optional<RealBox>{};
                         }
-                        showSlice(*views[index], std::move(result.displays[index]));
+                        showSlice(*views[index],
+                            std::move(result.displays[index]), m_sessionEpoch);
                     }
-                    // Re-sliced against the session just installed, with
-                    // the view state as it now stands, which is what the newer
-                    // request was asking for anyway. Debounced, so a view that
-                    // the resize pass below also schedules is asked once.
-                    for (const auto index : superseded) {
-                        scheduleSliceRequest(*views[index]);
-                    }
+                    // Re-sliced against the session just installed. Driven
+                    // off each view's stamp rather than the list above, so a
+                    // debt survives the next reload clearing the debounce: if
+                    // that reload fails it re-checks the same stamps and the
+                    // view is asked again.
+                    resliceReplacedViews();
                     if (isRemote) {
                         // A resize during the initial worker cannot submit a
                         // slice yet because m_dataset is not published. Once
@@ -1323,6 +1367,12 @@ void MainWindow::requestInitialSlice(
                     // guards against: it runs when a load completes, not once
                     // per event-loop turn.
                     m_reloadAskedFor.reset();
+                    // The previous session is still installed and still fine,
+                    // so this does not wipe the display -- it asks any view
+                    // still showing an even older session's raster for one of
+                    // the installed session's. A reload dropped between the
+                    // debounce and this failure would otherwise be lost.
+                    resliceReplacedViews();
                     emit initialSliceFinished(false);
                 } else {
                     m_diagnosticsModel->noteStaleResult();

@@ -232,6 +232,11 @@ void armReloadRaceChecks(
     // completion queued behind this call, which is the only moment a test can
     // submit against the session on its way out.
     auto injected = std::make_shared<bool>(false);
+    // The field the injected interaction switches to. The reload's completion
+    // replays the field, level and range the load was launched with, so if it
+    // does that after the user has moved the selection, the change is reverted
+    // and the re-slice this load owes renders the old field.
+    auto chosenField = std::make_shared<QString>();
     QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
         &application, [&application, loads](bool success) {
             if (!success) {
@@ -240,18 +245,32 @@ void armReloadRaceChecks(
             }
             ++*loads;
         });
-    window.setInitialSliceLaunchedHookForTest([&window, loads, injected] {
-        if (*loads == 0 || *injected) {
-            return;
-        }
-        *injected = true;
-        window.requestActiveViewSliceForTest();
-    });
+    window.setInitialSliceLaunchedHookForTest(
+        [&window, loads, injected, chosenField] {
+            if (*loads == 0 || *injected) {
+                return;
+            }
+            *injected = true;
+            // Move the field, as a user reading a reloading window would, and
+            // then submit for it. Both matter: the submission is what
+            // supersedes the reload's display for this view, and the selection
+            // is what the completion must not roll back.
+            auto* selector = window.findChild<QComboBox*>(
+                QStringLiteral("fieldSelector"));
+            if (selector == nullptr || selector->count() < 2) {
+                return;
+            }
+            const auto next = selector->currentIndex() == 0 ? 1 : 0;
+            window.selectFieldItemForTest(next);
+            *chosenField = selector->currentText();
+            window.requestActiveViewSliceForTest();
+        });
 
     auto* timer = new QTimer(&window);
     timer->setInterval(25);
     QObject::connect(timer, &QTimer::timeout, &application,
-        [&window, &application, phase, loads, ticks, injected, timer] {
+        [&window, &application, phase, loads, ticks, injected, chosenField,
+            timer] {
             const auto finish = [&application, timer](int code) {
                 timer->stop();
                 application.exit(code);
@@ -276,10 +295,16 @@ void armReloadRaceChecks(
                 return;
             }
             if (*phase == 1) {
-                // Wait for the injection to have happened and everything it
-                // started to drain, including the re-slice the reload owes any
-                // view whose display it skipped.
-                if (!*injected || window.slicesInFlightForTest() != 0
+                // Wait for the reload's own load to have finished, not just
+                // for the view queues to be quiet: slicesInFlightForTest sums
+                // per-view pendingRequests and does not count the initial-slice
+                // worker, so without the load count this tick can fire while
+                // the reload is still running -- and then the outgoing session
+                // is still installed and the comparison below is against
+                // itself, which passes whatever the code does. `loads` is 1
+                // after the open and 2 once the reload has installed.
+                if (!*injected || *loads < 2
+                    || window.slicesInFlightForTest() != 0
                     || window.sliceRequestPendingForTest()) {
                     return;
                 }
@@ -293,6 +318,17 @@ void armReloadRaceChecks(
                 if (!window.activeViewSliceMatchesSessionForTest()) {
                     qCritical("the displayed slice outlived its session");
                     finish(23);
+                    return;
+                }
+                // And the interaction that superseded the reload was not
+                // quietly undone by the reload's own control restoration.
+                auto* selector = window.findChild<QComboBox*>(
+                    QStringLiteral("fieldSelector"));
+                if (selector == nullptr
+                    || (!chosenField->isEmpty()
+                        && selector->currentText() != *chosenField)) {
+                    qCritical("the reload reverted the field the user chose");
+                    finish(24);
                     return;
                 }
                 finish(0);

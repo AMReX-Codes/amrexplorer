@@ -725,7 +725,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     // than reading them back off a moved-from result.
                     const auto fallbackToLevel = result.cacheFallbackToLevel;
                     const auto fallbackFromLevel = result.cacheFallbackFromLevel;
-                    showSlice(state, std::move(result));
+                    showSlice(state, std::move(result), sessionEpoch);
                     // Cache the full-domain range. In 3-D the store defers to
                     // the (async) shared-range sync's completion so the union
                     // across all panels is captured; 2-D has no later sync
@@ -1142,8 +1142,10 @@ std::optional<QRectF> MainWindow::sphericalReframe(
         visible.width() * sx, visible.height() * sy);
 }
 
-void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
+void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
+    std::uint64_t sessionEpoch)
 {
+    state.planeSessionEpoch = sessionEpoch;
     if (!display.rasterUnchanged) {
         if (!display.image.valid()) {
             throw std::runtime_error("renderer produced an invalid image");
@@ -1285,6 +1287,18 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
     // scheduling call that fetched this plane ran while the previous one was
     // still displayed, and would have measured that.
     m_volumeController->regionChanged();
+}
+
+void MainWindow::resliceReplacedViews()
+{
+    if (!m_controlsReady || !m_dataset) {
+        return;
+    }
+    for (auto* state : currentViews()) {
+        if (state->planeSessionEpoch != m_sessionEpoch) {
+            scheduleSliceRequest(*state);
+        }
+    }
 }
 
 int MainWindow::slicesInFlight() const
@@ -1874,7 +1888,8 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
         throw std::runtime_error("frame slice count does not match the view set");
     }
     for (std::size_t index = 0; index < views.size(); ++index) {
-        showSlice(*views[index], std::move(result.displays[index]));
+        showSlice(*views[index], std::move(result.displays[index]),
+            m_sessionEpoch);
     }
     const auto cache = m_dataset->cacheMetrics();
     m_diagnosticsModel->setCacheMetrics(cache);

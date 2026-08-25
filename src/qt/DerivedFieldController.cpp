@@ -160,8 +160,9 @@ void DerivedFieldController::adoptStoreChange()
     }
     // Including the window whose Apply made the change: one path installs the
     // list, whoever asked for it. A window that cannot take derived fields --
-    // a remote session, or a FAB -- has nothing to reload, and will not show
-    // them either way.
+    // a FAB, or a session whose peer predates 1.4 -- has nothing to reload,
+    // and will not show them either way. (A remote session on a 1.4 peer very
+    // much does reload; that is what this protocol version is for.)
     if (m_hooks.reload && available()) {
         m_hooks.reload();
     }
@@ -271,7 +272,10 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
     }
 
     // set() is what reloads -- here and in every other window -- and does
-    // nothing at all when the list has not moved.
+    // nothing at all when the list has not moved. That last part is deliberate
+    // and tested ("an unchanged list reloaded a window"), which is also why an
+    // Apply cannot serve as the retry for a reload that failed: see the note
+    // on the failure path in MainWindowDataset.
     m_store.set(std::move(definitions));
     return std::nullopt;
 }

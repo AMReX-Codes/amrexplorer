@@ -526,6 +526,13 @@ private:
         std::uint32_t cachedVectorVField = 0;
         int cachedContourCount = 0;
         StopSource stopSource;
+        // The session epoch `plane` was produced under. A reload replaces the
+        // session while the outgoing one is still displayed, so this is what
+        // says whether the raster on screen belongs to the session now
+        // installed. Derived state rather than a debt flag on purpose: a
+        // pending re-slice can be discarded by the next reload clearing the
+        // debounce, and a comparison cannot be.
+        std::uint64_t planeSessionEpoch = 0;
         std::uint64_t sliceGeneration = 0;
         // Bumped every time `plane` (and its contour companions) is rewritten:
         // each showSlice apply and each dataset reset. The 3-D visible-range
@@ -825,7 +832,16 @@ private:
     // arrival carries -- at the 4096 output cap a ScalarPlane is around 117 MB
     // and the ImageBuffer around 67 MB -- and a const& forced this function to
     // deep-copy them again into the shared_ptr snapshots it publishes.
-    void showSlice(PlaneViewState& state, SliceDisplayResult display);
+    // sessionEpoch is the epoch the display was computed under, stamped onto
+    // the view. No default: every caller has to say which session produced
+    // what it is showing, which is the whole point of the stamp.
+    void showSlice(PlaneViewState& state, SliceDisplayResult display,
+        std::uint64_t sessionEpoch);
+    // Re-slices every current view whose raster came from a session that is no
+    // longer installed. Called wherever a load settles -- including when it
+    // fails, since a failed reload leaves the previous session installed and
+    // its own display untouched.
+    void resliceReplacedViews();
     void updateOverlay(PlaneViewState& state);
     void updateOverlays();
     void updateGridBoxes(PlaneViewState& state);
@@ -1027,12 +1043,6 @@ private:
     // reason derivedFieldsReachNextLoad gives: frame 0's spec is built while
     // the outgoing dataset is still installed.
     bool m_remoteSequenceDerivedFields = false;
-    // The definition list a reload was last started for, and whether one is
-    // still in flight. A reload is asked for on every frame a sequence
-    // displays, so a list a load cannot install would otherwise reopen the
-    // dataset once per event-loop turn -- a hung window, and a server past its
-    // per-session dataset limit within a few seconds. With these, a mismatch
-    // that survives a reload costs one wasted reload rather than a storm.
     // Which session is installed. Bumped wherever m_dataset is replaced or
     // cleared, and captured by a slice request at submission: an arrival whose
     // stamp no longer matches was computed against a session that is gone, and
@@ -1046,7 +1056,13 @@ private:
     // keeps a raster from a session that is no longer installed.
     std::uint64_t m_sessionEpoch = 0;
     // The list a reload has already been asked for, with the session epoch it
-    // was asked under. The epoch is what keeps it from getting stuck: any
+    // was asked under. What bounds the reopens is no longer the memo itself:
+    // any install invalidates it, so the bound rests on no install ever leaving
+    // a mismatch. That holds because a session records the list it was asked
+    // for, and all three paths that filter the list before an open -- a pre-1.4
+    // connection, either !derivedFieldsReachNextLoad case, and a prepared
+    // session opened with the copied list -- make available() false, so this is
+    // never reached for them. The epoch is what keeps it from getting stuck: any
     // install makes the memo stale by itself, so it cannot suppress a reload
     // for a different dataset or one that a later session could satisfy. It is
     // cleared outright when a reload stands aside or a load fails, neither of

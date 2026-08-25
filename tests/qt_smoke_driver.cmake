@@ -6,6 +6,7 @@
 #   SOURCE        fixture source directory (e.g. tests/data/plotfile_2d)
 #   WORK          directory the materialized copies are written into
 #   MODE          slice | sequence | sequence-after-fab |
+#                 derived-field-reload-race |
 #                 remote-sequence-after-fab | missing-range |
 #                 non-finite | raw-fab |
 #                 multifab-fab | quit | quit-on-failure | window-close-pool |

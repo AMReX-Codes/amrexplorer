@@ -229,7 +229,9 @@ void DerivedFieldController::refreshDraftDiagnostics()
     // leaves a timer running whose answer is about something they never
     // touched -- and the one thing the warning must not do is complain about
     // a definition they merely carried here.
-    if (!index || m_diagnosticsRow != index || !m_dialog->handEdited(*index)) {
+    if (!index || m_diagnosticsRow != index
+        || m_diagnosticsRevision != m_dialog->draftRevision()
+        || !m_dialog->handEdited(*index)) {
         return;
     }
     const auto& draft = m_dialog->draft();
@@ -237,9 +239,19 @@ void DerivedFieldController::refreshDraftDiagnostics()
     // wherever it is installed, so calling it unavailable *in this dataset*
     // would send the user looking for a plotfile that has the field when what
     // they have is a typo.
-    if (const auto fault = definitionFault(draft);
-        fault && fault->definitionIndex == index) {
+    if (const auto fault = definitionFaultAt(draft, *index)) {
         m_dialog->showResolutionWarning(fault->message);
+        return;
+    }
+    // And the faults that belong to the list rather than to a row -- an
+    // expression reading more fields than one evaluation may pin, a chain
+    // deeper than it may recurse -- where they name this one. Safe over a
+    // draft that does not compile: the check answers nullopt for that rather
+    // than throwing, leaving the row's own fault above to have spoken first.
+    if (const auto fault = validateDerivedFieldGraph(draft);
+        fault && fault->definitionIndex == *index) {
+        m_dialog->showResolutionWarning(
+            QString::fromStdString(fault->message));
         return;
     }
     if (!m_hooks.resolveAgainstOpenDataset) {
@@ -265,6 +277,41 @@ void DerivedFieldController::refreshDraftDiagnostics()
             ? tr("This dataset cannot provide this field.")
             : tr("Unavailable in this dataset: %1")
                   .arg(QString::fromStdString(entry->reason)));
+}
+
+std::optional<DerivedFieldController::Refusal>
+DerivedFieldController::definitionFaultAt(
+    const std::vector<DerivedFieldDefinition>& definitions,
+    std::size_t index) const
+{
+    if (index >= definitions.size()) {
+        return std::nullopt;
+    }
+    const auto& definition = definitions[index];
+    if (definition.name.empty()) {
+        return Refusal{tr("A derived field needs a name."), index};
+    }
+    // Against the rows before it only, which is the order installation
+    // resolves in: a name is a duplicate of an earlier one, never of a later.
+    const auto upto = definitions.begin() + static_cast<std::ptrdiff_t>(index);
+    if (std::find_if(definitions.begin(), upto,
+            [&definition](const DerivedFieldDefinition& earlier) {
+                return earlier.name == definition.name;
+            })
+        != upto) {
+        return Refusal{tr("Another derived field is already called \"%1\".")
+                           .arg(QString::fromStdString(definition.name)),
+            index};
+    }
+    if (definition.expression.empty()) {
+        return Refusal{tr("A derived field needs an expression."), index};
+    }
+    try {
+        static_cast<void>(CompiledExpression::compile(definition.expression));
+    } catch (const ExpressionError& error) {
+        return Refusal{QString::fromUtf8(error.what()), index};
+    }
+    return std::nullopt;
 }
 
 // What is wrong with a list whatever the data it is installed against. Asked
@@ -294,30 +341,8 @@ DerivedFieldController::definitionFault(
     // field out. One list is shared by windows showing different data, so only
     // what is wrong whatever the data is can be refused.
     for (std::size_t index = 0; index < definitions.size(); ++index) {
-        const auto& definition = definitions[index];
-        if (definition.name.empty()) {
-            return Refusal{tr("A derived field needs a name."), index};
-        }
-        const auto upto =
-            definitions.begin() + static_cast<std::ptrdiff_t>(index);
-        if (std::find_if(definitions.begin(), upto,
-                [&definition](const DerivedFieldDefinition& earlier) {
-                    return earlier.name == definition.name;
-                })
-            != upto) {
-            return Refusal{
-                tr("Another derived field is already called \"%1\".")
-                    .arg(QString::fromStdString(definition.name)),
-                index};
-        }
-        if (definition.expression.empty()) {
-            return Refusal{tr("A derived field needs an expression."), index};
-        }
-        try {
-            static_cast<void>(
-                CompiledExpression::compile(definition.expression));
-        } catch (const ExpressionError& error) {
-            return Refusal{QString::fromUtf8(error.what()), index};
+        if (auto fault = definitionFaultAt(definitions, index)) {
+            return fault;
         }
     }
 
@@ -420,6 +445,8 @@ void DerivedFieldController::showEditor(QWidget* parent)
         [this] {
             m_diagnosticsRow = m_dialog ? m_dialog->selectedIndex()
                                         : std::nullopt;
+            m_diagnosticsRevision =
+                m_dialog ? m_dialog->draftRevision() : 0;
             m_diagnostics->start();
         });
     connect(dialog, &QObject::destroyed, this, [this] {

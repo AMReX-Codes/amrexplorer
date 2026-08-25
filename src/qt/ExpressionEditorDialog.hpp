@@ -7,6 +7,7 @@
 #include <QStringList>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -94,6 +95,16 @@ public:
     // them -- and the host holds it to that.
     [[nodiscard]] bool handEdited(std::size_t index) const;
 
+    // Bumped by every change to the draft: a keystroke, a row added or
+    // deleted, a list imported or committed. A host that answers a question
+    // about the draft asynchronously captures this when it asks and compares
+    // it when it answers -- a row index alone is not an identity, because
+    // deleting a row slides its successor into the same number.
+    [[nodiscard]] std::uint64_t draftRevision() const noexcept
+    {
+        return m_draftRevision;
+    }
+
     // The fields the open dataset stores, in its own order, listed beside the
     // expression so they need not be hunted for in the Variable menu. Double
     // -clicking one writes it into the expression at the cursor. Empty hides
@@ -108,8 +119,11 @@ public:
     // definition that means nothing here is still committed -- and shown
     // greyed in the field list -- rather than blocked. That is also why it is
     // cleared and never recomputed when the selection moves, when a list is
-    // imported, or when a dataset opens: only a definition being typed is
-    // measured against the data, because only then is the user asking.
+    // imported, when a definition is deleted, or when a dataset opens: only a
+    // definition being typed is measured against the data, because only then
+    // is the user asking. A refusal replaces it too -- the same sentence in
+    // red and in amber says the advisory did not stop anything while it just
+    // did.
     void showResolutionWarning(const QString& message);
 
 signals:
@@ -141,6 +155,7 @@ private:
     // committed" is also true of every row of an imported list, which is the
     // case this has to tell apart. Cleared whenever the draft is replaced.
     std::vector<bool> m_handEdited;
+    std::uint64_t m_draftRevision = 0;
     QListWidget* m_list = nullptr;
     // The stored fields, and the caption over them: both hidden together when
     // there is nothing to list.

@@ -290,6 +290,107 @@ int main(int argc, char** argv)
         delete parent;
     }
 
+    // The warning belongs to the row being written: not to the first thing
+    // wrong in the list, and not to whatever slides into that row's number
+    // afterwards. A refusal replaces it, and a deletion takes it away.
+    {
+        Fixture fixture;
+        DerivedFieldStore store;
+        DerivedFieldController controller(fixture.hooks(store), store);
+        auto* parent = new QWidget;
+        controller.showEditor(parent);
+        auto* dialog = parent->findChild<ExpressionEditorDialog*>();
+        require(dialog != nullptr, "the editor did not open");
+        auto* warning =
+            dialog->findChild<QLabel*>(QStringLiteral("expressionWarning"));
+        auto* error =
+            dialog->findChild<QLabel*>(QStringLiteral("expressionError"));
+        auto* source = dialog->findChild<QPlainTextEdit*>(
+            QStringLiteral("expressionSource"));
+        auto* name =
+            dialog->findChild<QLineEdit*>(QStringLiteral("expressionName"));
+        auto* add = dialog->findChild<QPushButton*>(
+            QStringLiteral("newExpressionButton"));
+        auto* remove = dialog->findChild<QPushButton*>(
+            QStringLiteral("deleteExpressionButton"));
+        auto* applyButton = dialog->findChild<QPushButton*>(
+            QStringLiteral("applyExpressionsButton"));
+        require(warning != nullptr && error != nullptr && source != nullptr
+                && name != nullptr && add != nullptr && remove != nullptr
+                && applyButton != nullptr,
+            "the editor is missing a widget this block drives");
+
+        // Runs the loop until the diagnostic has had its say, or long enough
+        // to be sure it never will.
+        const auto waitFor = [](auto predicate) {
+            QElapsedTimer timer;
+            timer.start();
+            while (timer.elapsed() < 2000 && !predicate()) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            }
+        };
+        const auto waitQuiet = [] {
+            QElapsedTimer timer;
+            timer.start();
+            while (timer.elapsed() < 700) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            }
+        };
+
+        // Row 0 is left unnamed, which is a fault of its own and the first in
+        // the list; row 1 is where the user is typing. The warning must be
+        // about row 1's syntax, not about the data.
+        add->click();
+        source->setPlainText(QStringLiteral("density"));
+        add->click();
+        name->setText(QStringLiteral("bad"));
+        source->setPlainText(QStringLiteral("sqrt("));
+        waitFor([&] { return !warning->text().isEmpty(); });
+        require(!warning->text().isEmpty()
+                && !warning->text().contains(QStringLiteral("dataset")),
+            "a syntax error in the row being written was blamed on the "
+            "dataset");
+
+        // A refusal supersedes the advisory rather than standing beside it.
+        dialog->setDraft({{"twice", "density * 2"}});
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        waitFor([&] { return !warning->text().isEmpty(); });
+        require(!warning->text().isEmpty(), "the edited row did not warn");
+        applyButton->click();
+        require(!error->text().isEmpty() && warning->text().isEmpty(),
+            "a refusal left the same sentence showing twice");
+
+        // Deleting the only definition takes the warning with it: nothing is
+        // selected afterwards, so no row change would.
+        dialog->setDraft({{"twice", "nonesuch * 2"}});
+        source->setPlainText(QStringLiteral("nonesuch * 3"));
+        waitFor([&] { return !warning->text().isEmpty(); });
+        require(!warning->text().isEmpty(), "the edited row did not warn");
+        remove->click();
+        require(warning->text().isEmpty(),
+            "deleting the definition left its warning on screen");
+
+        // And a diagnostic queued for a row that is then deleted must not land
+        // on whatever takes its number -- here a row that was edited too, so
+        // every other guard passes.
+        dialog->setDraft({{"first", "density"}, {"second", "density"}});
+        auto* list =
+            dialog->findChild<QListWidget*>(QStringLiteral("expressionList"));
+        require(list != nullptr, "the editor has no definition list");
+        // The successor is edited *and* unresolvable, so a diagnostic that
+        // landed on it would have something to say -- which is what makes
+        // this a test rather than a coincidence.
+        list->setCurrentRow(1);
+        source->setPlainText(QStringLiteral("absent * 2"));
+        list->setCurrentRow(0);
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        remove->click();
+        waitQuiet();
+        require(warning->text().isEmpty(),
+            "a diagnostic queued for a deleted row landed on its successor");
+        delete parent;
+    }
+
     // A reload that fails leaves the list committed here and installed
     // nowhere, and the store emits nothing for a list that has not moved -- so
     // the Apply pressed again is the only thing left that can ask for it.

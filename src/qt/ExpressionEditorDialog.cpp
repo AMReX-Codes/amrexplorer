@@ -206,6 +206,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
         }
         m_draft[*index].name = text.trimmed().toStdString();
         m_handEdited[*index] = true;
+        ++m_draftRevision;
         m_list->item(static_cast<int>(*index))
             ->setText(displayName(m_draft[*index]));
         // A rename moves what the definitions after this one can read, so the
@@ -220,6 +221,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
         m_draft[*index].expression =
             m_expression->toPlainText().trimmed().toStdString();
         m_handEdited[*index] = true;
+        ++m_draftRevision;
         emit draftEdited();
     });
     connect(m_apply, &QPushButton::clicked, this, [this] {
@@ -246,6 +248,7 @@ void ExpressionEditorDialog::setDraft(
     // None of it is the user's writing: an import is carried, and a commit is
     // already answered for.
     m_handEdited.assign(m_draft.size(), false);
+    ++m_draftRevision;
     clearError();
     rebuildList(select);
     // Explicitly, rather than leaving it to the row change rebuildList makes:
@@ -308,6 +311,11 @@ void ExpressionEditorDialog::showError(
     }
     m_error->setText(message);
     m_error->setVisible(true);
+    // The refusal supersedes the advisory: they carry the same sentence when
+    // Apply refuses what the warning was about, and showing it twice -- once
+    // in red, once in amber -- says the advisory did not stop anything at the
+    // moment it did.
+    showResolutionWarning({});
 }
 
 void ExpressionEditorDialog::showApplied(std::size_t count)
@@ -385,6 +393,7 @@ void ExpressionEditorDialog::addDefinition()
     clearError();
     m_draft.push_back({});
     m_handEdited.push_back(false);
+    ++m_draftRevision;
     rebuildList(m_draft.size() - 1);
     m_name->setFocus();
 }
@@ -399,6 +408,12 @@ void ExpressionEditorDialog::removeSelected()
     m_draft.erase(m_draft.begin() + static_cast<std::ptrdiff_t>(*index));
     m_handEdited.erase(
         m_handEdited.begin() + static_cast<std::ptrdiff_t>(*index));
+    ++m_draftRevision;
+    // Deleting the last definition leaves nothing selected, and rebuildList
+    // reaches that by writing -1 over a current row the clear() already set
+    // to -1 -- no row changes, so the selection path that would have taken
+    // the warning down never runs. Said here rather than relied on there.
+    showResolutionWarning({});
     rebuildList(*index == 0 ? std::optional<std::size_t>{0}
                             : std::optional<std::size_t>{*index - 1});
 }

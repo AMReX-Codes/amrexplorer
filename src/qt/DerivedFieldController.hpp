@@ -10,6 +10,7 @@
 #include <QStringList>
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <functional>
 #include <optional>
@@ -188,17 +189,29 @@ private:
     // refuse outright and what the live warning must not blame a dataset for.
     [[nodiscard]] std::optional<Refusal> definitionFault(
         const std::vector<DerivedFieldDefinition>& definitions) const;
+    // The same, for one row in the context of the rows before it. definitionFault
+    // answers for the list and so reports only its first fault, which is the
+    // wrong question when the caller is asking about the definition someone is
+    // typing: a broken row above it would otherwise leave that one's own
+    // syntax error to be explained as something the dataset lacks.
+    [[nodiscard]] std::optional<Refusal> definitionFaultAt(
+        const std::vector<DerivedFieldDefinition>& definitions,
+        std::size_t index) const;
 
     Hooks m_hooks;
     DerivedFieldStore& m_store;
     QPointer<QAction> m_action;
     QPointer<ExpressionEditorDialog> m_dialog;
     QTimer* m_diagnostics = nullptr;
-    // The row the pending diagnostic was armed for. A timer that outlives the
-    // edit it belongs to -- the selection moved, or an import replaced the
-    // draft -- would otherwise answer about a definition the user never
-    // touched, which is the one thing the warning must never do.
+    // The row the pending diagnostic was armed for, and the draft it was armed
+    // against. A timer that outlives the edit it belongs to -- the selection
+    // moved, an import replaced the draft, a row above was deleted -- would
+    // otherwise answer about a definition the user never touched, which is the
+    // one thing the warning must never do. The revision is what makes the row
+    // number an identity: deleting a row slides its successor into it, and a
+    // successor that had been edited too passes every other guard.
     std::optional<std::size_t> m_diagnosticsRow;
+    std::uint64_t m_diagnosticsRevision = 0;
 };
 
 } // namespace amrvis::qt

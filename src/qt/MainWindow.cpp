@@ -33,7 +33,11 @@ MainWindow::MainWindow(QWidget* parent)
     m_derivedFields = new DerivedFieldController(
         DerivedFieldController::Hooks{
             .available = [this] {
-                return m_dataset && m_dataset->supportsDerivedFields();
+                // Not while a FAB drilled out of a MultiFab is displayed:
+                // applying reopens m_datasetPath, and that entry's metadata
+                // exists only as something the navigator synthesised.
+                return m_dataset && m_dataset->supportsDerivedFields()
+                    && !m_fabNavigator->fabMode();
             },
             .storedMetadata = [this]() -> std::optional<DatasetMetadata> {
                 if (!m_dataset || !m_dataset->supportsDerivedFields()) {
@@ -1377,8 +1381,10 @@ void MainWindow::rebuildVariableMenu()
 {
     m_variableMenu->clear();
     // The menu stays enabled with nothing open: it then holds the Expression
-    // Editor entry alone, disabled with a reason, which is more discoverable
-    // than a menu that cannot be opened at all.
+    // Editor entry alone, greyed out, which is more discoverable than a menu
+    // that cannot be opened at all. (The action carries its reason as a
+    // tooltip, which a QMenu shows only with setToolTipsVisible; nothing here
+    // sets it, so treat the reason as documentation rather than as UI.)
     m_variableMenu->setEnabled(true);
     if (!m_dataset) {
         m_variableMenu->addAction(m_expressionEditorAction);
@@ -1457,14 +1463,27 @@ QString MainWindow::chooseExpressionListPath(QWidget* parent, bool forSaving)
             == QLatin1String("offscreen")
         ? QFileDialog::Options{QFileDialog::DontUseNativeDialog}
         : QFileDialog::Options{};
-    const auto path = forSaving
-        ? QFileDialog::getSaveFileName(parent, tr("Export Derived Fields"),
-              directory.isEmpty()
-                  ? QStringLiteral("expressions.json")
-                  : directory + QStringLiteral("/expressions.json"),
-              filter, nullptr, options)
-        : QFileDialog::getOpenFileName(parent, tr("Import Derived Fields"),
-              directory, filter, nullptr, options);
+    QString path;
+    if (forSaving) {
+        // Built rather than taken from getSaveFileName so the default suffix
+        // is applied *before* the overwrite confirmation: appending ".json"
+        // afterwards means the dialog asks about "fields" while the write
+        // lands on an existing "fields.json" it never mentioned.
+        QFileDialog dialog(parent, tr("Export Derived Fields"),
+            directory.isEmpty() ? QStringLiteral("expressions.json")
+                                : directory + QStringLiteral("/expressions.json"),
+            filter);
+        dialog.setOptions(options);
+        dialog.setAcceptMode(QFileDialog::AcceptSave);
+        dialog.setDefaultSuffix(QStringLiteral("json"));
+        if (dialog.exec() == QDialog::Accepted
+            && !dialog.selectedFiles().isEmpty()) {
+            path = dialog.selectedFiles().front();
+        }
+    } else {
+        path = QFileDialog::getOpenFileName(parent,
+            tr("Import Derived Fields"), directory, filter, nullptr, options);
+    }
     if (!path.isEmpty()) {
         settings.setValue(QStringLiteral("lastOpenDirectory"),
             QFileInfo(path).absolutePath());
@@ -1495,10 +1514,19 @@ void MainWindow::reloadCurrentDataset()
         ++state->sliceGeneration;
     }
     m_sliceDebounce->stop();
-    requestInitialSlice(m_datasetPath, generation, std::nullopt,
-        m_dataset->metadata().isFab ? std::filesystem::path{}
-                                    : std::filesystem::path{},
-        buildFrameSpec());
+    // As openDatasetImpl and the frame-switch handler do: stopping the timer
+    // cancels the flush but leaves what it had coalesced, and that would be
+    // replayed against the new session by the next unrelated request.
+    m_pendingAllViews = false;
+    m_pendingViews.clear();
+    // No prepared metadata and no data root: with none, the session derives
+    // both from the path, which is what re-reading a plotfile means. A FAB
+    // drilled out of a MultiFab cannot be reopened this way -- its metadata is
+    // synthesised by the navigator, not read from the path -- which is why the
+    // editor is unavailable while one is on screen (see the controller's
+    // availability hook).
+    requestInitialSlice(
+        m_datasetPath, generation, std::nullopt, {}, buildFrameSpec());
 }
 
 void MainWindow::refreshMetadataDisplay()

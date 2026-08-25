@@ -461,8 +461,9 @@ geometry.
 
 An expression may also use the derived fields defined above it in the list, so
 a long formula can be built in steps. Each definition is checked against the
-dataset when you apply it, and an error names the definition and points into
-the expression.
+dataset when you apply it; the editor selects the definition that failed and
+says what is wrong with it, and nothing reaches the dataset until the whole
+list is accepted.
 
 Other notes:
 

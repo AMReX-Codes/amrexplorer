@@ -838,6 +838,11 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_levelMenu->setEnabled(false);
     m_contoursAction->setEnabled(false);
     m_particleController->suspendAction();
+    // The dataset is gone as of the reset above: the editor must not stay open
+    // over nothing, and the next dataset's skip report must be said even if it
+    // reads exactly like this one's.
+    m_derivedFields->refreshAvailability();
+    m_lastSkippedDerivedReport.clear();
     m_datasetAction->setEnabled(false);
     m_exportAnimationAction->setEnabled(false);
     m_openMetadata.reset();
@@ -1080,7 +1085,9 @@ void MainWindow::requestInitialSlice(
             try {
                 auto result = watcher->future().takeResult();
                 if (generation == m_generation) {
+                    const auto previousVectorFields = vectorFieldNames();
                     m_dataset = result.dataset;
+                    restoreVectorFields(previousVectorFields);
                     m_particleController->setSamples(
                         std::move(result.particles));
                     if (restoredSpec) {
@@ -1125,6 +1132,12 @@ void MainWindow::requestInitialSlice(
                         m_range->setTrackedField(
                             m_fieldSelector->currentData().toUInt());
                         m_range->commitFieldRange(m_range->trackedField());
+                        // The menu was rebuilt by configureSliceControls
+                        // above, while the combo still sat on field 0; it is
+                        // the same selection shown twice, so it has to follow
+                        // the combo here. (The sequence path rebuilds its menu
+                        // after selecting, so it needs none of this.)
+                        syncVariableMenu();
                         // Before the extraction the User bounds were written
                         // unblocked here, which scheduled a (redundant)
                         // re-slice; kept so this path renders as it did.

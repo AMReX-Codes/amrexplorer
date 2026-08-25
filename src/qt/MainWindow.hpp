@@ -542,6 +542,11 @@ private:
     // Says which committed definitions the session that has just been
     // installed could not provide, once per change in that answer.
     void reportSkippedDerivedFields();
+    // The vector-glyph selections travel by name for the same reason the
+    // scalar one does: an id means something only in the field list it came
+    // from. Captured before a load swaps the dataset, resolved again after.
+    [[nodiscard]] std::array<std::string, 3> vectorFieldNames() const;
+    void restoreVectorFields(const std::array<std::string, 3>& names);
     void syncMenuChecks();
     void syncVariableMenu();
     // Runs the palette-file dialog for the controller's Load Palette File...

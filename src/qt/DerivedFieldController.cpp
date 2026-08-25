@@ -182,8 +182,9 @@ void DerivedFieldController::showEditor(QWidget* parent)
             }
             // The committed list is what the editor should now be editing:
             // apply() may have trimmed names, and the draft must not drift
-            // from what the dataset was reopened with.
-            dialog->setDraft(m_definitions);
+            // from what the dataset was reopened with. On the row the user was
+            // editing, which is the one they are looking at.
+            dialog->setDraft(m_definitions, dialog->selectedIndex());
             emit statusMessage(
                 m_definitions.empty()
                     ? tr("Derived fields cleared.")
@@ -225,12 +226,9 @@ void DerivedFieldController::showEditor(QWidget* parent)
             if (!m_hooks.chooseFile) {
                 return;
             }
-            auto path = m_hooks.chooseFile(dialog, true);
+            const auto path = m_hooks.chooseFile(dialog, true);
             if (path.isEmpty()) {
                 return;
-            }
-            if (QFileInfo(path).suffix().isEmpty()) {
-                path += QStringLiteral(".json");
             }
             // The draft, which is what the user is looking at -- exporting
             // only what has been applied would silently drop their edits.

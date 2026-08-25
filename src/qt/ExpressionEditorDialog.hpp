@@ -50,6 +50,9 @@ public:
     void showError(
         const QString& message, std::optional<std::size_t> definitionIndex);
     void clearError();
+    // The row being edited, so a host that replaces the draft with an
+    // equivalent list can leave the user where they were.
+    [[nodiscard]] std::optional<std::size_t> selectedIndex() const;
 
 signals:
     // The draft is offered for validation; the host accepts it (setDraft, and
@@ -63,7 +66,6 @@ private:
     void showSelected();
     void addDefinition();
     void removeSelected();
-    [[nodiscard]] std::optional<std::size_t> selectedIndex() const;
 
     std::vector<DerivedFieldDefinition> m_draft;
     QListWidget* m_list = nullptr;

@@ -298,6 +298,31 @@ int main(int argc, char** argv)
         require(error != nullptr && !error->isVisible(),
             "an accepted apply left an error showing");
 
+        // Applying leaves the user on the definition they were editing, not
+        // back at the first one.
+        {
+            auto* second = dialog->findChild<QPushButton*>(
+                QStringLiteral("newExpressionButton"));
+            second->click();
+            dialog->findChild<QLineEdit*>(QStringLiteral("expressionName"))
+                ->setText(QStringLiteral("later"));
+            dialog->findChild<QPlainTextEdit*>(
+                       QStringLiteral("expressionSource"))
+                ->setPlainText(QStringLiteral("density"));
+            require(dialog->selectedIndex().has_value()
+                    && *dialog->selectedIndex() == 1,
+                "the new definition was not the selected one");
+            dialog->findChild<QPushButton*>(
+                       QStringLiteral("applyExpressionsButton"))
+                ->click();
+            require(dialog->selectedIndex().has_value()
+                    && *dialog->selectedIndex() == 1,
+                "applying moved the editor off the row being edited");
+            require(dialog->draft().size() == 2
+                    && dialog->draft()[1].name == "later",
+                "applying did not keep the draft it committed");
+        }
+
         // And a refusal from the editor shows in place, keeping the committed
         // list.
         dialog->findChild<QPlainTextEdit*>(

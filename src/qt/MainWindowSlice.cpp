@@ -85,6 +85,42 @@ void MainWindow::configureSliceControls()
     ensureVectorFieldDefaults();
 }
 
+std::array<std::string, 3> MainWindow::vectorFieldNames() const
+{
+    std::array<std::string, 3> names;
+    if (!m_dataset) {
+        return names;
+    }
+    const auto& fields = m_dataset->metadata().fields;
+    const std::array<int, 3> selected{
+        m_vectorUField, m_vectorVField, m_vectorWField};
+    for (std::size_t axis = 0; axis < names.size(); ++axis) {
+        const auto field = selected[axis];
+        if (field >= 0 && static_cast<std::size_t>(field) < fields.size()) {
+            names[axis] = fields[static_cast<std::size_t>(field)].name;
+        }
+    }
+    return names;
+}
+
+void MainWindow::restoreVectorFields(const std::array<std::string, 3>& names)
+{
+    if (!m_dataset) {
+        return;
+    }
+    const auto& metadata = m_dataset->metadata();
+    std::array<int*, 3> selected{
+        &m_vectorUField, &m_vectorVField, &m_vectorWField};
+    for (std::size_t axis = 0; axis < names.size(); ++axis) {
+        auto* field = selected[axis];
+        if (*field < 0) {
+            continue;
+        }
+        *field = static_cast<int>(resolveSpecField(metadata, names[axis],
+            static_cast<std::uint32_t>(*field)));
+    }
+}
+
 void MainWindow::reportSkippedDerivedFields()
 {
     if (!m_dataset) {
@@ -1555,7 +1591,9 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
         m_pendingRangeStore.reset();
         m_remoteSequenceConnectionGeneration = result.connectionGeneration;
     }
+    const auto previousVectorFields = vectorFieldNames();
     m_dataset = result.dataset;
+    restoreVectorFields(previousVectorFields);
     m_particleController->setSamples(std::move(result.particles));
     m_particleController->configureForDataset(true);
     m_volumeController->configureForDataset();
@@ -1640,6 +1678,11 @@ void MainWindow::configureSequenceControls(
         m_fieldSelector->setCurrentIndex(displayedIndex >= 0
                 ? displayedIndex
                 : std::clamp(previousField, 0, m_fieldSelector->count() - 1));
+        // The range memory is keyed by field id, and the ids moved with the
+        // field list, so the widgets have to be told which field they now
+        // represent or the next switch commits this frame's range onto
+        // whatever field used to hold that id.
+        m_range->setTrackedField(m_fieldSelector->currentData().toUInt());
         m_levelSelector->clear();
         populateLevelCombo(m_levelSelector, metadata.finestLevel);
         const auto levelIndex = m_levelSelector->findData(previousLevel);

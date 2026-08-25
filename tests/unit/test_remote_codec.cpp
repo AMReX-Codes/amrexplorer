@@ -413,6 +413,28 @@ int main()
                 == maximumExpressionBytes,
             "a bounded skip reason did not survive the wire");
 
+        // A peer built from any other 1.4 commit sends the reason
+        // installation produced, unbounded -- and 1.4 cannot tell it from a
+        // peer that bounds it. Clamped on the way in, not refused: this decode
+        // runs inside refusingInvalidResponses, where a throw would close the
+        // connection and take every other dataset on it.
+        auto unboundedPeer = codec::toWire(derived);
+        // Every character three bytes wide, so a clean cut is a multiple of
+        // three: a ${...} symbol is taken verbatim, so a reason really can
+        // carry multi-byte text, and the clamp must not leave half of one.
+        std::string wide;
+        while (wide.size() < maximumExpressionBytes + 64) {
+            wide += "\xe2\x82\xac";
+        }
+        unboundedPeer.derived_field_skips[0]->reason = wide;
+        const auto clamped
+            = codec::fromWire(unboundedPeer).derivedFieldSkips[0].reason;
+        require(clamped.size() <= maximumExpressionBytes
+                && clamped.ends_with("..."),
+            "an over-long reason from a peer was not clamped on the way in");
+        require((clamped.size() - 3) % 3 == 0,
+            "the clamp cut a multi-byte sequence in half");
+
         auto namelessSkip = codec::toWire(derived);
         namelessSkip.derived_field_skips[0]->name.clear();
         requireRejected(

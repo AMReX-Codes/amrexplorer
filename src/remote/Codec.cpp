@@ -924,17 +924,18 @@ OpenedDataset fromWire(const fb::DatasetOpenedT& value)
             throw std::invalid_argument(
                 "wire derived-field skip has no name");
         }
-        if (skip->reason.size() > maximumExpressionBytes) {
-            // Rendered into a tooltip, so bounded like the expression it is
-            // about rather than left to whatever a peer cares to send. What
-            // our own encoder sends is held to this same bound by
-            // boundedReason, so reaching this throw means the peer sent it.
-            throw std::invalid_argument(
-                "wire derived-field skip reason is too long");
-        }
+        // Clamped rather than refused. A reason over the bound is what a
+        // *correct* peer produces -- installation quotes the symbol it could
+        // not resolve, so the reason runs to the expression's own bound plus
+        // the words around it -- and protocol 1.4 cannot tell a peer that
+        // bounds it from one that does not. This decode runs inside
+        // refusingInvalidResponses, where a throw closes the connection and
+        // takes every other dataset on it, so display-only text must not be
+        // able to do that. Our encoder bounds what we send; this is what
+        // makes a peer built from any other 1.4 commit safe to talk to.
         result.derivedFieldSkips.push_back(
             DerivedFieldSkip{skip->definition_index, skip->name,
-                skip->reason});
+                boundedReason(skip->reason)});
     }
     return result;
 }

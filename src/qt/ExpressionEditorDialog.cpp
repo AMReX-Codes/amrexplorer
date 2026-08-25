@@ -24,6 +24,24 @@ QString displayName(const DerivedFieldDefinition& definition)
         : QString::fromStdString(definition.name);
 }
 
+// A field name as an expression writes it: bare when it is a plain
+// identifier, and in ${...} otherwise -- which is the grammar's own escape for
+// a name holding anything else, and the rule the help text states.
+QString asSymbol(const QString& name)
+{
+    const auto plain = !name.isEmpty()
+        && (name.front().isLetter() || name.front() == QLatin1Char('_'))
+        && std::all_of(name.cbegin(), name.cend(), [](QChar character) {
+               return character.isLetterOrNumber()
+                   || character == QLatin1Char('_');
+           });
+    // isLetterOrNumber accepts non-ASCII letters, which the grammar's
+    // identifier rule does not, so anything outside ASCII takes the escape.
+    const auto ascii = std::all_of(name.cbegin(), name.cend(),
+        [](QChar character) { return character.unicode() < 128; });
+    return plain && ascii ? name : QStringLiteral("${%1}").arg(name);
+}
+
 } // namespace
 
 ExpressionEditorDialog::ExpressionEditorDialog(
@@ -91,6 +109,25 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     m_notice->setWordWrap(true);
     m_notice->setVisible(false);
 
+    m_warning = new QLabel(this);
+    m_warning->setObjectName(QStringLiteral("expressionWarning"));
+    m_warning->setWordWrap(true);
+    m_warning->setVisible(false);
+    // Quotes the user's own text, as the error does.
+    m_warning->setTextFormat(Qt::PlainText);
+    // Not the error's red: this one does not stop anything, and colouring the
+    // two alike would say the definition had been refused when it has not.
+    m_warning->setStyleSheet(QStringLiteral("QLabel { color: #b8860b; }"));
+
+    m_fieldsCaption = new QLabel(tr("Fields in this dataset"), this);
+    m_fields = new QListWidget(this);
+    m_fields->setObjectName(QStringLiteral("storedFieldList"));
+    m_fields->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_fields->setMinimumWidth(160);
+    m_fields->setToolTip(
+        tr("The fields this dataset stores. Double-click one to write it into "
+           "the expression."));
+
     auto* buttons = new QDialogButtonBox(this);
     m_apply = buttons->addButton(QDialogButtonBox::Apply);
     m_apply->setObjectName(QStringLiteral("applyExpressionsButton"));
@@ -116,13 +153,19 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     editor->addLayout(form);
     editor->addWidget(help);
     editor->addWidget(m_error);
+    editor->addWidget(m_warning);
     editor->addWidget(m_applied);
     editor->addWidget(m_notice);
     editor->addStretch(1);
 
+    auto* fields = new QVBoxLayout;
+    fields->addWidget(m_fieldsCaption);
+    fields->addWidget(m_fields, 1);
+
     auto* columns = new QHBoxLayout;
     columns->addLayout(sidebar);
     columns->addLayout(editor, 1);
+    columns->addLayout(fields);
     auto* root = new QVBoxLayout(this);
     root->addLayout(columns, 1);
     root->addWidget(buttons);
@@ -130,7 +173,24 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     connect(m_list, &QListWidget::currentRowChanged, this, [this] {
         clearError();
         showSelected();
+        // Cleared, not recomputed. The warning answers "does what you are
+        // writing work here", so it belongs to an edit and not to a row: a
+        // definition written against another plotfile is unresolvable here by
+        // design, and saying so every time the user looks at it would be
+        // nagging about something that is not wrong.
+        showResolutionWarning({});
     });
+    connect(m_fields, &QListWidget::itemDoubleClicked, this,
+        [this](QListWidgetItem* item) {
+            if (item == nullptr || !selectedIndex()) {
+                return;
+            }
+            // Into the expression at the cursor, and leave the focus there:
+            // the point of the list is to save typing a name, not to take the
+            // user out of what they were writing.
+            m_expression->insertPlainText(asSymbol(item->text()));
+            m_expression->setFocus();
+        });
     connect(add, &QPushButton::clicked, this, [this] { addDefinition(); });
     connect(
         m_remove, &QPushButton::clicked, this, [this] { removeSelected(); });
@@ -146,6 +206,9 @@ ExpressionEditorDialog::ExpressionEditorDialog(
         m_draft[*index].name = text.trimmed().toStdString();
         m_list->item(static_cast<int>(*index))
             ->setText(displayName(m_draft[*index]));
+        // A rename moves what the definitions after this one can read, so the
+        // whole draft is re-resolved, not just this row.
+        emit draftEdited();
     });
     connect(m_expression, &QPlainTextEdit::textChanged, this, [this] {
         const auto index = selectedIndex();
@@ -154,6 +217,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
         }
         m_draft[*index].expression =
             m_expression->toPlainText().trimmed().toStdString();
+        emit draftEdited();
     });
     connect(m_apply, &QPushButton::clicked, this, [this] {
         clearError();
@@ -165,7 +229,10 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     rebuildList(m_draft.empty() ? std::nullopt : std::optional<std::size_t>{0});
-    resize(720, 420);
+    // Wide enough for the three columns at their minimums (180 + 360 + 160)
+    // plus the layout's own spacing; at 720 the field list arrived squeezing
+    // the expression box rather than sitting beside it.
+    resize(900, 440);
 }
 
 void ExpressionEditorDialog::setDraft(
@@ -175,6 +242,30 @@ void ExpressionEditorDialog::setDraft(
     m_draft = std::move(definitions);
     clearError();
     rebuildList(select);
+    // Explicitly, rather than leaving it to the row change rebuildList makes:
+    // an import that lands on the row already selected changes no row at all.
+    // Cleared and not recomputed -- an imported list is tolerated whole, and
+    // what this dataset cannot provide of it is shown greyed in the field
+    // list rather than complained about here.
+    showResolutionWarning({});
+}
+
+void ExpressionEditorDialog::setStoredFields(const QStringList& names)
+{
+    m_fields->clear();
+    m_fields->addItems(names);
+    // Hidden rather than shown empty: an empty box beside the expression
+    // reads as "this dataset stores no fields", which is not what no open
+    // dataset means.
+    const auto any = !names.isEmpty();
+    m_fields->setVisible(any);
+    m_fieldsCaption->setVisible(any);
+}
+
+void ExpressionEditorDialog::showResolutionWarning(const QString& message)
+{
+    m_warning->setText(message);
+    m_warning->setVisible(!message.isEmpty());
 }
 
 void ExpressionEditorDialog::markDraftCommitted()

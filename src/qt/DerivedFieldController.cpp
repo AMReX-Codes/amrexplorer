@@ -13,6 +13,7 @@
 #include <QJsonValue>
 #include <QPointer>
 #include <QSaveFile>
+#include <QTimer>
 #include <QWidget>
 
 #include <algorithm>
@@ -199,6 +200,53 @@ void DerivedFieldController::refreshAvailability()
     // ordinary File > Open, which resets the dataset for the whole of the
     // load. Apply refuses meanwhile, saying why, and starts working again by
     // itself when a dataset it can install into arrives.
+    if (m_dialog) {
+        // The fields on offer are this dataset's, so they follow it.
+        m_dialog->setStoredFields(
+            m_hooks.storedFieldNames ? m_hooks.storedFieldNames()
+                                     : QStringList{});
+        // The warning is dropped rather than recomputed against the new
+        // dataset. A session may open a plotfile of an entirely different
+        // shape, which makes definitions written for the last one
+        // unresolvable through no fault of the user's; the field list greys
+        // those out, and repeating it here would read as a correction being
+        // demanded. Only what is being typed is measured against the data.
+        m_dialog->showResolutionWarning({});
+        if (m_diagnostics) {
+            m_diagnostics->stop();
+        }
+    }
+}
+
+void DerivedFieldController::refreshDraftDiagnostics()
+{
+    if (!m_dialog || !m_hooks.resolveAgainstOpenDataset) {
+        return;
+    }
+    const auto index = m_dialog->selectedIndex();
+    if (!index) {
+        m_dialog->showResolutionWarning({});
+        return;
+    }
+    // The whole draft, not the one definition: a definition may read the ones
+    // written above it, so what this one resolves to depends on them, and one
+    // of them failing is why this one cannot be had either.
+    const auto skipped = m_hooks.resolveAgainstOpenDataset(m_dialog->draft());
+    const auto entry = std::find_if(skipped.begin(), skipped.end(),
+        [index](const DerivedFieldSkip& skip) {
+            return skip.definitionIndex == *index;
+        });
+    if (entry == skipped.end()) {
+        m_dialog->showResolutionWarning({});
+        return;
+    }
+    // Named as what it is: this dataset cannot provide the field, which is not
+    // the same as the definition being wrong. The wording says which, so a
+    // user who meant it for other data knows nothing needs fixing.
+    // Worded as the field list words it, so the same fact reads the same in
+    // both places.
+    m_dialog->showResolutionWarning(tr("Unavailable in this dataset: %1")
+            .arg(QString::fromStdString(entry->reason)));
 }
 
 std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
@@ -296,6 +344,24 @@ void DerivedFieldController::showEditor(QWidget* parent)
     auto* dialog =
         new ExpressionEditorDialog(m_store.definitions(), parent);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setStoredFields(
+        m_hooks.storedFieldNames ? m_hooks.storedFieldNames() : QStringList{});
+    // Owned by the dialog, so it goes when the dialog does and cannot fire
+    // into a m_dialog that has been destroyed. Single-shot and restarted by
+    // each edit: what the user wants is the verdict on what they have
+    // finished typing, not one per keystroke.
+    if (m_diagnostics == nullptr) {
+        m_diagnostics = new QTimer(dialog);
+        m_diagnostics->setSingleShot(true);
+        m_diagnostics->setInterval(250);
+        connect(m_diagnostics, &QTimer::timeout, this,
+            [this] { refreshDraftDiagnostics(); });
+    }
+    connect(dialog, &ExpressionEditorDialog::draftEdited, dialog,
+        [this] { m_diagnostics->start(); });
+    connect(dialog, &QObject::destroyed, this, [this] {
+        m_diagnostics = nullptr;
+    });
     connect(dialog, &ExpressionEditorDialog::applyRequested, dialog,
         [this, dialog] {
             const auto refusal = apply(dialog->draft());

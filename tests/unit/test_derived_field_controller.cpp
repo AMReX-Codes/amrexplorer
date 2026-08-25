@@ -3,7 +3,9 @@
 #include "ExpressionEditorDialog.hpp"
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QDialog>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QLabel>
 #include <QLineEdit>
@@ -50,6 +52,10 @@ struct Fixture {
     // What the next chooseFile answers, and what it was asked for.
     QString chosenPath;
     std::optional<bool> lastChooseForSaving;
+    // The fields the open dataset stores. Empty stands for no dataset open,
+    // which the editor shows no field list and no warning for.
+    QStringList storedFields{
+        QStringLiteral("density"), QStringLiteral("temperature")};
 
     [[nodiscard]] DerivedFieldController::Hooks hooks(
         const DerivedFieldStore& store)
@@ -73,6 +79,26 @@ struct Fixture {
                 [this](QWidget*, bool forSaving) {
                     lastChooseForSaving = forSaving;
                     return chosenPath;
+                },
+            .storedFieldNames = [this] { return storedFields; },
+            // The real resolution against a dataset of those fields, so the
+            // reasons the editor shows here are the ones a dataset gives.
+            .resolveAgainstOpenDataset =
+                [this](const std::vector<DerivedFieldDefinition>& definitions) {
+                    std::vector<DerivedFieldSkip> skipped;
+                    if (storedFields.isEmpty()) {
+                        return skipped;
+                    }
+                    amrvis::DatasetMetadata metadata;
+                    metadata.dimension = 2;
+                    for (const auto& name : storedFields) {
+                        amrvis::FieldMetadata field;
+                        field.name = name.toStdString();
+                        metadata.fields.push_back(std::move(field));
+                    }
+                    return amrvis::installDerivedFields(metadata, definitions,
+                        amrvis::DerivedFieldPolicy::Skip)
+                        .skipped;
                 },
         };
     }
@@ -151,6 +177,87 @@ int main(int argc, char** argv)
         require(controller.definitions().empty()
                 && fixture.reloads == before + 1,
             "clearing the list did not commit and reload");
+    }
+
+    // The editor lists the dataset's stored fields, and measures a definition
+    // against that dataset as it is *typed* -- and only then. A plotfile of
+    // another shape opening under a list written for the last one is not the
+    // user's error to correct, so nothing but an edit asks the question.
+    {
+        Fixture fixture;
+        DerivedFieldStore store;
+        DerivedFieldController controller(fixture.hooks(store), store);
+        require(!controller.apply({{"twice", "density * 2"}}).has_value(),
+            "a resolvable definition was refused");
+
+        auto* parent = new QWidget;
+        controller.showEditor(parent);
+        auto* dialog = parent->findChild<ExpressionEditorDialog*>();
+        require(dialog != nullptr, "the editor did not open");
+
+        auto* fields =
+            dialog->findChild<QListWidget*>(QStringLiteral("storedFieldList"));
+        require(fields != nullptr && fields->count() == 2
+                && fields->item(0)->text() == QStringLiteral("density")
+                && fields->item(1)->text() == QStringLiteral("temperature"),
+            "the editor does not list the dataset's stored fields");
+
+        auto* warning =
+            dialog->findChild<QLabel*>(QStringLiteral("expressionWarning"));
+        auto* source = dialog->findChild<QPlainTextEdit*>(
+            QStringLiteral("expressionSource"));
+        require(warning != nullptr && source != nullptr,
+            "the editor is missing its expression box or warning");
+        require(warning->text().isEmpty(),
+            "a definition this dataset can provide warned about itself");
+
+        // Past the diagnostics debounce, which is what makes this the verdict
+        // on what was typed rather than one per keystroke.
+        const auto settle = [] {
+            QElapsedTimer timer;
+            timer.start();
+            while (timer.elapsed() < 600) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            }
+        };
+
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        settle();
+        require(!warning->text().isEmpty(),
+            "a hand-written expression naming no field of this dataset said "
+            "nothing");
+        // Named as the dataset's limitation rather than as a mistake, and
+        // still committable: the list is shared with windows and plotfiles
+        // that may have the field.
+        require(!controller.apply(dialog->draft()).has_value(),
+            "a definition this dataset cannot provide was refused");
+
+        source->setPlainText(QStringLiteral("density * 3"));
+        settle();
+        require(warning->text().isEmpty(),
+            "the warning outlived the expression it was about");
+
+        // What the user did not type is left alone. An import replaces every
+        // row at once and is tolerated whole; the field list greys out what
+        // this dataset cannot provide.
+        dialog->setDraft({{"stranger", "absent * 2"}});
+        settle();
+        require(warning->text().isEmpty(),
+            "an imported definition was complained about");
+
+        // And so is a dataset arriving that cannot provide what is already
+        // written: refreshAvailability drops the warning rather than raising
+        // one against a list the user has not touched.
+        fixture.storedFields = QStringList{QStringLiteral("other")};
+        controller.refreshAvailability();
+        settle();
+        require(warning->text().isEmpty(),
+            "opening another dataset raised a warning about an untouched "
+            "definition");
+        require(fields->count() == 1
+                && fields->item(0)->text() == QStringLiteral("other"),
+            "the field list did not follow the dataset");
+        delete parent;
     }
 
     // A reload that fails leaves the list committed here and installed

@@ -100,6 +100,56 @@ MainWindow::MainWindow(QWidget* parent)
                     // parents to the window for the same reason.
                     return chooseExpressionListPath(this, forSaving);
                 },
+            .storedFieldNames =
+                [this] {
+                    QStringList names;
+                    if (!m_dataset) {
+                        return names;
+                    }
+                    const auto& fields = m_dataset->metadata().fields;
+                    // The stored ones alone. The derived tail is what the
+                    // editor is for writing, and offering it back as material
+                    // would suggest a definition may read one written below
+                    // it, which installation does not allow.
+                    const auto stored = std::min(
+                        m_dataset->storedFieldCount(), fields.size());
+                    names.reserve(static_cast<qsizetype>(stored));
+                    for (std::size_t field = 0; field < stored; ++field) {
+                        names.append(
+                            QString::fromStdString(fields[field].name));
+                    }
+                    return names;
+                },
+            .resolveAgainstOpenDataset =
+                [this](const std::vector<DerivedFieldDefinition>& definitions) {
+                    std::vector<DerivedFieldSkip> skipped;
+                    if (!m_dataset) {
+                        return skipped;
+                    }
+                    // The session's metadata with the derived tail cut back
+                    // off: installDerivedFields appends what it resolves, so
+                    // handing it a list that already holds the last
+                    // installation's fields would resolve every definition
+                    // against itself. The whole metadata is copied rather
+                    // than a made-up subset of it, so this asks the question
+                    // exactly as opening the dataset asks it -- the box lists
+                    // ride along, which the debounce is what pays for.
+                    auto metadata = m_dataset->metadata();
+                    const auto stored = std::min(
+                        m_dataset->storedFieldCount(), metadata.fields.size());
+                    metadata.fields.resize(stored);
+                    try {
+                        return installDerivedFields(metadata, definitions,
+                            DerivedFieldPolicy::Skip)
+                            .skipped;
+                    } catch (const std::exception&) {
+                        // Skip resolves every definition it can and records
+                        // the rest, so nothing here should throw -- but this
+                        // runs while the user types, and a diagnostic is not
+                        // worth taking the editor down for.
+                        return skipped;
+                    }
+                },
         },
         DerivedFieldStore::session(), this);
     connect(m_derivedFields, &DerivedFieldController::statusMessage, this,

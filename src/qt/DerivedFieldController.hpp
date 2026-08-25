@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 
 #include <cstddef>
 #include <string>
@@ -16,6 +17,7 @@
 
 class QAction;
 class QByteArray;
+class QTimer;
 class QWidget;
 
 namespace amrvis::qt {
@@ -90,6 +92,20 @@ public:
         // A path to import from (forSaving false) or export to (true); empty
         // cancels. The host runs the file dialog, as it does for palettes.
         std::function<QString(QWidget* parent, bool forSaving)> chooseFile;
+        // The names of the fields the open dataset stores, in its own order,
+        // for the editor to list beside the expression being written. Empty
+        // with no dataset open.
+        std::function<QStringList()> storedFieldNames;
+        // Resolves `definitions` against the open dataset the way opening it
+        // would (DerivedFieldPolicy::Skip) and answers with what could not be
+        // installed and why. The host does it because only it holds the
+        // dataset; this is asked again whenever the draft changes, so it must
+        // not be expensive enough to be felt while typing. Empty where every
+        // definition resolves, and where there is no dataset to resolve
+        // against -- the editor has nothing to say about either.
+        std::function<std::vector<DerivedFieldSkip>(
+            const std::vector<DerivedFieldDefinition>&)>
+            resolveAgainstOpenDataset;
     };
 
     // `store` outlives the controller: the session's own, or a test's. Every
@@ -153,11 +169,17 @@ private:
     // Re-reads the store: refreshes an open editor, and asks the host to
     // reload so the change reaches this window's field list too.
     void adoptStoreChange();
+    // Resolves the open editor's draft against the open dataset and tells it
+    // what this dataset cannot make of the definition being typed. Debounced
+    // by m_diagnostics: it answers a keystroke, and resolving a list costs
+    // time in its own length squared.
+    void refreshDraftDiagnostics();
 
     Hooks m_hooks;
     DerivedFieldStore& m_store;
     QPointer<QAction> m_action;
     QPointer<ExpressionEditorDialog> m_dialog;
+    QTimer* m_diagnostics = nullptr;
 };
 
 } // namespace amrvis::qt

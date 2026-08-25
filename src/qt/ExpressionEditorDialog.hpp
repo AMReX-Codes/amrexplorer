@@ -4,6 +4,7 @@
 
 #include <QDialog>
 #include <QString>
+#include <QStringList>
 
 #include <cstddef>
 #include <optional>
@@ -27,6 +28,12 @@ namespace amrvis::qt {
 //
 // Names are kept as typed. An empty one is shown as "(unnamed)" in the list
 // and refused by the host, which is where every rule about a definition lives.
+//
+// It shows two things about the open dataset without knowing anything about
+// it: the stored field names an expression may use (setStoredFields) and,
+// while a definition is being written, why this dataset could not provide it
+// (showResolutionWarning). Both are handed in by the host, which resolves the
+// draft as it changes -- draftEdited says when that is.
 class ExpressionEditorDialog final : public QDialog {
     Q_OBJECT
 
@@ -76,12 +83,35 @@ public:
     // equivalent list can leave the user where they were.
     [[nodiscard]] std::optional<std::size_t> selectedIndex() const;
 
+    // The fields the open dataset stores, in its own order, listed beside the
+    // expression so they need not be hunted for in the Variable menu. Double
+    // -clicking one writes it into the expression at the cursor. Empty hides
+    // the list, which is what no open dataset looks like.
+    void setStoredFields(const QStringList& names);
+    // Why the open dataset could not provide the definition the user is
+    // *writing*, as the host's resolution of the draft reports it. An empty
+    // message clears it.
+    //
+    // Advisory, not a refusal: the list is shared by windows showing different
+    // data, and a session may open a plotfile of another shape entirely, so a
+    // definition that means nothing here is still committed -- and shown
+    // greyed in the field list -- rather than blocked. That is also why it is
+    // cleared and never recomputed when the selection moves, when a list is
+    // imported, or when a dataset opens: only a definition being typed is
+    // measured against the data, because only then is the user asking.
+    void showResolutionWarning(const QString& message);
+
 signals:
     // The draft is offered for validation; the host accepts it (setDraft, and
     // usually accept()) or refuses it (showError).
     void applyRequested();
     void importRequested();
     void exportRequested();
+    // The user typed into the selected definition's name or expression. What
+    // the host resolves on to answer with showResolutionWarning. Only hand
+    // editing: an import, a row change and a dataset opening all clear the
+    // warning instead, for the reason given there.
+    void draftEdited();
 
 private:
     void clearError();
@@ -96,6 +126,10 @@ private:
     // taking it back leaves nothing to protect.
     std::vector<DerivedFieldDefinition> m_committed;
     QListWidget* m_list = nullptr;
+    // The stored fields, and the caption over them: both hidden together when
+    // there is nothing to list.
+    QListWidget* m_fields = nullptr;
+    QLabel* m_fieldsCaption = nullptr;
     QLineEdit* m_name = nullptr;
     QPlainTextEdit* m_expression = nullptr;
     QLabel* m_error = nullptr;
@@ -106,6 +140,10 @@ private:
     // list that moved elsewhere. Its own widget for the same reason m_applied
     // is one.
     QLabel* m_notice = nullptr;
+    // What this dataset cannot make of the definition being edited. Standing
+    // rather than momentary -- it describes the draft, not the last thing
+    // done -- so clearError leaves it alone, as it does the notice.
+    QLabel* m_warning = nullptr;
     QPushButton* m_remove = nullptr;
     QPushButton* m_apply = nullptr;
     // Set while the widgets are being written from the draft, so the edit

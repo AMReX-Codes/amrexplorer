@@ -635,6 +635,11 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_sequenceController, &SequenceController::frameLoadFailed,
         this, [this](const QString& message) {
             statusBar()->showMessage(tr("Frame load failed"));
+            // A reload handed to the sequence and then failed installs
+            // nothing, so the memo must not remember it as asked: the epoch
+            // has not moved, and Apply cannot ask again because the store does
+            // not emit for a list that has not moved.
+            m_reloadAskedFor.reset();
             // Stop playing. Playback wraps, so without this it comes back to
             // the same unreadable frame -- or the same disconnected server --
             // every cycle, raising a diagnostic each time. The user is left on

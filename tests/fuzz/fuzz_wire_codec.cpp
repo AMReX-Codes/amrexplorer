@@ -143,14 +143,27 @@ void checkConverted(
             fail("DatasetOpened derived-field skip did not convert "
                  "faithfully");
         }
-        // Equality unless the decoder was entitled to clamp: an over-long
-        // reason comes back no longer than the bound. Not *at* the bound --
-        // the clamp backs off a partial UTF-8 sequence, so a legitimate one
-        // lands a byte or two under it.
+        // Equality unless the decoder was entitled to clamp. What survives a
+        // clamp is a shape, not a length: a prefix of what was sent followed
+        // by the marker. A bare length bound would be satisfied by an empty
+        // reason or a transposed field, which is what this check exists to
+        // catch; an exact length would reject the legitimate case, since the
+        // clamp backs off a partial UTF-8 sequence and lands under the bound.
+        // No length lower bound either -- an input of continuation bytes drives
+        // the backoff to zero, leaving just the marker.
+        auto clamped = [&] {
+            if (skip.reason.size() > amrvis::maximumExpressionBytes
+                || !skip.reason.ends_with("...")) {
+                return false;
+            }
+            const auto kept = std::string_view{skip.reason}.substr(
+                0, skip.reason.size() - 3);
+            return entry->reason.starts_with(kept);
+        };
         const auto reasonKept
             = entry->reason.size() <= amrvis::maximumExpressionBytes
             ? skip.reason == entry->reason
-            : skip.reason.size() <= amrvis::maximumExpressionBytes;
+            : clamped();
         if (skip.name != entry->name
             || skip.definitionIndex != entry->definition_index || !reasonKept) {
             fail("DatasetOpened derived-field skip did not convert "

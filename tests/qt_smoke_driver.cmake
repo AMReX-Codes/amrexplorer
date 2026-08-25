@@ -68,6 +68,10 @@ elseif(MODE STREQUAL "derived-field")
     run_or_die("${AMREXPLORER_QT}" --derived-field-smoke-test "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --field-range-memory-smoke-test
         "${WORK}/plt")
+elseif(MODE STREQUAL "derived-field-reload-race")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --derived-field-reload-race-smoke-test
+        "${WORK}/plt")
 elseif(MODE STREQUAL "derived-field-frames")
     # Two frames that do not list the same fields: the second drops the one a
     # definition reads, so that definition is left out of it and every id after

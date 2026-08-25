@@ -214,6 +214,94 @@ void armRangeMemoryChecks(
     QTimer::singleShot(30000, &application, [&application] { application.exit(13); });
 }
 
+// Arms the one ordering that reading this code kept missing: an interaction
+// that lands while a reload is still replacing the session. The reload skips
+// its own display for that view, because a newer request for it exists, and
+// the interaction's own raster came from the session being replaced -- so
+// unless something re-slices, the window keeps the outgoing session's pixels
+// while its catalog, field list and colour bar are the new session's. Exit 0
+// once the raster on screen and the installed session agree again.
+void armReloadRaceChecks(
+    amrvis::qt::MainWindow& window, QApplication& application)
+{
+    auto phase = std::make_shared<int>(0);
+    auto loads = std::make_shared<int>(0);
+    auto ticks = std::make_shared<int>(0);
+    // Fired once, on the reload's load rather than the opening one: the hook
+    // runs inside requestInitialSlice with the work already dispatched and the
+    // completion queued behind this call, which is the only moment a test can
+    // submit against the session on its way out.
+    auto injected = std::make_shared<bool>(false);
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [&application, loads](bool success) {
+            if (!success) {
+                application.exit(2);
+                return;
+            }
+            ++*loads;
+        });
+    window.setInitialSliceLaunchedHookForTest([&window, loads, injected] {
+        if (*loads == 0 || *injected) {
+            return;
+        }
+        *injected = true;
+        window.requestActiveViewSliceForTest();
+    });
+
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, loads, ticks, injected, timer] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            ++*ticks;
+            if (*ticks > 400) {
+                qCritical("the reload race scenario never settled");
+                finish(20);
+                return;
+            }
+            if (*loads == 0) {
+                return;
+            }
+            if (*phase == 0) {
+                // A definition every 2-D plotfile here can compute, so the
+                // reload it triggers succeeds and installs a new session. Set
+                // on the shared store, which is what an Apply in any window
+                // does and what makes every window reload.
+                amrvis::qt::DerivedFieldStore::session().set(
+                    {{"twice", "density * 2"}});
+                *phase = 1;
+                return;
+            }
+            if (*phase == 1) {
+                // Wait for the injection to have happened and everything it
+                // started to drain, including the re-slice the reload owes any
+                // view whose display it skipped.
+                if (!*injected || window.slicesInFlightForTest() != 0
+                    || window.sliceRequestPendingForTest()) {
+                    return;
+                }
+                if (window.backgroundErrorCountForTest() != 0) {
+                    qCritical("the reload race reported an error");
+                    finish(22);
+                    return;
+                }
+                // The invariant: no view keeps a raster from a session that is
+                // no longer installed.
+                if (!window.activeViewSliceMatchesSessionForTest()) {
+                    qCritical("the displayed slice outlived its session");
+                    finish(23);
+                    return;
+                }
+                finish(0);
+                return;
+            }
+        });
+    timer->start();
+}
+
 // Arms the scenario on `window`: exit 0 once a derived field has been
 // refused, accepted, and rendered; a nonzero code names the step that failed.
 void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
@@ -1250,6 +1338,8 @@ Outcome dispatchDerived(Context& context)
         armRangeMemoryChecks(window, application);
     } else if (option == "--derived-field-smoke-test") {
         armDerivedChecks(window, application);
+    } else if (option == "--derived-field-reload-race-smoke-test") {
+        armReloadRaceChecks(window, application);
     } else if (option == "--derived-field-playback-smoke-test") {
         armPlaybackChecks(window, application, path);
     } else if (option == "--remote-derived-field-smoke-test") {

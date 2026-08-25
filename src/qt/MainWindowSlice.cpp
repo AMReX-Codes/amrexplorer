@@ -247,36 +247,35 @@ void MainWindow::reloadIfDefinitionsMoved()
         || openSessionHasCurrentDefinitions()) {
         return;
     }
-    // Once per list, and one at a time. This is asked on every frame a
-    // sequence displays, so a list the load cannot install -- a server that
-    // skips all of it, a path that forgets to pass it on -- would otherwise
-    // reopen the dataset on every event-loop turn until the session hit its
-    // dataset limit. A reload already started for this exact list is enough.
-    if (m_reloadInFlight
-        || (m_reloadStartedFor
-            && *m_reloadStartedFor == m_derivedFields->definitions())) {
+    // Once per list per session. This is asked on every frame a sequence
+    // displays, so without a memo a list the load cannot install would reopen
+    // the dataset on every event-loop turn until the session hit its dataset
+    // limit. Pairing the list with the session epoch is what keeps the memo
+    // from becoming a trap: installing anything at all makes it stale, so it
+    // can only ever suppress a retry that would be asking the same question of
+    // the same session. It also replaces the separate in-flight flag, which
+    // guarded a single event-loop turn rather than the reload.
+    if (m_reloadAskedFor
+        && m_reloadAskedFor->first == m_derivedFields->definitions()
+        && m_reloadAskedFor->second == m_sessionEpoch) {
         return;
     }
-    m_reloadInFlight = true;
+    m_reloadAskedFor = {m_derivedFields->definitions(), m_sessionEpoch};
     // Not now: the frame path is called from inside the sequence controller's
     // own load completion, which sets m_inFlight and emits frameDisplayed
     // after this returns -- starting a load from here would have it clobber
     // the load this reload starts.
     QTimer::singleShot(0, this, [this] {
-        m_reloadInFlight = false;
         if (m_closing || !m_derivedFields->available()
             || openSessionHasCurrentDefinitions()) {
             return;
         }
-        // Armed before the call, so a reload that asks for this one again
-        // from inside its own completion is still suppressed -- and dropped
-        // again if the reload stood aside, because mid-playback the frames
+        // Dropped again if the reload stood aside: mid-playback the frames
         // carry the list themselves and setPlaybackMode asks once more when
-        // they stop. Recording a reload that never ran is what left the
+        // they stop, so recording a reload that never ran is what left the
         // definition uninstalled with the editor reporting it applied.
-        m_reloadStartedFor = m_derivedFields->definitions();
         if (!reloadCurrentDataset()) {
-            m_reloadStartedFor.reset();
+            m_reloadAskedFor.reset();
         }
     });
 }
@@ -608,6 +607,10 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     state.stopSource = StopSource{};
     const auto cancellation = state.stopSource.get_token();
     const auto generation = m_generation;
+    // The session this request is about to be computed against. A reload leaves
+    // the outgoing one installed while its replacement loads, so this is what
+    // tells an arrival apart from the session that is current when it lands.
+    const auto sessionEpoch = m_sessionEpoch;
     const auto sliceGeneration = ++state.sliceGeneration;
     ++state.pendingRequests;
     m_diagnosticsModel->adjustActivity(1);
@@ -657,8 +660,8 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
 
     auto* watcher = new QFutureWatcher<SliceDisplayResult>(this);
     connect(watcher, &QFutureWatcher<SliceDisplayResult>::finished, this,
-        [this, watcher, dataset, generation, sliceGeneration, cancellation,
-         &state, rangeMode] {
+        [this, watcher, dataset, generation, sliceGeneration, sessionEpoch,
+         cancellation, &state, rangeMode] {
             --state.pendingRequests;
             m_diagnosticsModel->adjustActivity(-1);
             if (m_closing) {
@@ -670,20 +673,20 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                 // the future and copying out of it duplicates every plane in
                 // the arrival before showSlice has even seen it.
                 auto result = watcher->future().takeResult();
-                // The session too, not just the two generations: a reload
-                // leaves the outgoing session installed while it runs (that is
-                // what keeps a working display up if the reopen fails), so an
-                // interaction meanwhile submits against the old session under
-                // the *new* m_generation. The reload then installs the new
-                // session and skips its own display for this view, because the
-                // interaction moved sliceGeneration past the value it captured
-                // -- and this slice would be accepted as current, leaving the
-                // catalog and the pixels from different datasets. After an edit
-                // that renumbers the derived tail, that is values from the old
-                // expression under the new field list.
+                // The session too, by the epoch captured at submission
+                // rather than by comparing the pointer: `dataset == m_dataset`
+                // reads like a staleness test but is really a test of whether
+                // the reload's completion has run yet, since m_dataset is only
+                // swapped there. Both forms accept in the common ordering,
+                // where this slice finishes before the reload installs -- and
+                // it is right to, because that session is still the installed
+                // one. What makes the display consistent is the other half of
+                // the invariant: the reload re-slices the views whose display
+                // it skipped, so a raster stamped with a session that has since
+                // been replaced does not stay on screen.
                 if (generation == m_generation
                     && sliceGeneration == state.sliceGeneration
-                    && dataset == m_dataset) {
+                    && sessionEpoch == m_sessionEpoch) {
                     // Cache the full-domain range whenever we get a non-zoomed
                     // Visible-range slice; reuse it for zoomed (subregion)
                     // slices so the color bar stays stable during pan and zoom.
@@ -761,8 +764,14 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     m_diagnosticsModel->noteStaleResult();
                 }
             } catch (const std::exception& error) {
+                // The same three tests as the success arm: a slice the window
+                // has decided is not current must not raise an error either.
+                // A reopen that pushes the connection past a server limit, or
+                // a budget the outgoing session's cache cannot meet, would
+                // otherwise report a failure for work already superseded.
                 if (generation == m_generation
                     && sliceGeneration == state.sliceGeneration
+                    && sessionEpoch == m_sessionEpoch
                     && !cancellation.stop_requested()) {
                     reportBackgroundError(
                         tr("Cannot load slice: %1").arg(exceptionMessage(error)));
@@ -1834,6 +1843,7 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     }
     const auto previousVectorFields = vectorFieldNames();
     m_dataset = result.dataset;
+    ++m_sessionEpoch;
     restoreVectorFields(previousVectorFields);
     m_particleController->setSamples(std::move(result.particles));
     m_particleController->configureForDataset(true);

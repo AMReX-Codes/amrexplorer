@@ -1324,6 +1324,24 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_derived_field_smoke PROPERTIES TIMEOUT 60)
 
+    # An interaction that lands while a reload is still replacing the session.
+    # The reload skips its own display for that view and the interaction's
+    # raster came from the session being replaced, so without the re-slice the
+    # reload owes it, the window keeps the outgoing session's pixels under the
+    # new catalog.
+    add_test(
+        NAME qt_derived_field_reload_race_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_derived_reload_race"
+            -DMODE=derived-field-reload-race
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(
+        qt_derived_field_reload_race_smoke PROPERTIES TIMEOUT 60)
+
     # The two ways a committed definition can miss the session on screen: an
     # Apply during a plane sweep, which never reopens the dataset of its own
     # accord, and a list changed while this window is opening one, when it

@@ -151,6 +151,16 @@ public:
     // release build does not have is: the body cannot be inline here, where
     // AMREXPLORER_QT_TEST_ACCESS is not necessarily on.
     void setInitialSliceLaunchedHookForTest(std::function<void()> hook);
+    // Submits a slice for the active view the way an interaction does --
+    // synchronously, bumping the view's slice generation. Paired with the hook
+    // above it reproduces an interaction that lands while a reload is still
+    // replacing the session, which is the one ordering no arrival-side check
+    // can sort out on its own.
+    void requestActiveViewSliceForTest();
+    // Whether the raster on screen came from the session now installed. A
+    // reload leaves the outgoing session displayed while its replacement
+    // loads, so this is the invariant that says the two have converged.
+    [[nodiscard]] bool activeViewSliceMatchesSessionForTest() const;
     // The sequence frame waiting in the prefetch slot, if any.
     [[nodiscard]] std::optional<int> prefetchedSequenceFrameForTest() const;
     // The slot an idle frame-slider press-and-release lands in, which must not
@@ -1023,8 +1033,26 @@ private:
     // dataset once per event-loop turn -- a hung window, and a server past its
     // per-session dataset limit within a few seconds. With these, a mismatch
     // that survives a reload costs one wasted reload rather than a storm.
-    std::optional<std::vector<DerivedFieldDefinition>> m_reloadStartedFor;
-    bool m_reloadInFlight = false;
+    // Which session is installed. Bumped wherever m_dataset is replaced or
+    // cleared, and captured by a slice request at submission: an arrival whose
+    // stamp no longer matches was computed against a session that is gone, and
+    // the catalog, field list and colour bar on screen are the new one's.
+    //
+    // Note what this cannot do on its own. In the common ordering an
+    // interactive slice finishes *before* the reload installs, so its stamp
+    // still matches and it is rightly accepted -- it only goes stale a moment
+    // later. Acceptance is therefore only half the invariant; the other half is
+    // that a view whose display the reload skipped is re-sliced, so no view
+    // keeps a raster from a session that is no longer installed.
+    std::uint64_t m_sessionEpoch = 0;
+    // The list a reload has already been asked for, with the session epoch it
+    // was asked under. The epoch is what keeps it from getting stuck: any
+    // install makes the memo stale by itself, so it cannot suppress a reload
+    // for a different dataset or one that a later session could satisfy. It is
+    // cleared outright when a reload stands aside or a load fails, neither of
+    // which installs anything.
+    std::optional<std::pair<std::vector<DerivedFieldDefinition>, std::uint64_t>>
+        m_reloadAskedFor;
     QTreeWidget* m_metadataTree = nullptr;
     QDockWidget* m_metadataDock = nullptr;
     QDockWidget* m_diagnosticsDock = nullptr;

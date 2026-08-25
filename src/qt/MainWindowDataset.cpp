@@ -790,6 +790,9 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     }
     m_activeView = nullptr;
     m_dataset.reset();
+    // Nothing is installed now, which is a change of session like any other:
+    // a slice still on a worker for the outgoing one must not be displayed.
+    ++m_sessionEpoch;
     // The dock's edge trigger is per dataset, not per session: an open is a new
     // context, so the next update re-asserts it. Without this the flags could
     // hold (false, true) straight across a 3-D -> 3-D open -- closeSequence
@@ -1106,6 +1109,7 @@ void MainWindow::requestInitialSlice(
                 if (generation == m_generation) {
                     const auto previousVectorFields = vectorFieldNames();
                     m_dataset = result.dataset;
+                    ++m_sessionEpoch;
                     restoreVectorFields(previousVectorFields);
                     m_particleController->setSamples(
                         std::move(result.particles));
@@ -1208,9 +1212,24 @@ void MainWindow::requestInitialSlice(
                     for (const auto& display : result.displays) {
                         requestedSizes.push_back(display.request.outputSize);
                     }
+                    // Views this load will not display, because a newer
+                    // request for them was submitted while it ran. Collected
+                    // rather than merely skipped: each is still showing a
+                    // raster produced by the session installed *before* this
+                    // one, while m_dataset, the field selector, the range
+                    // widgets and the colour bar have all just become the new
+                    // session's. Leaving them is the catalog-vs-pixels
+                    // mismatch -- after an edit that renumbers the derived
+                    // tail, values from the old expression under the new field
+                    // list -- and it is why an arrival-side check cannot close
+                    // this on its own: in the common ordering that newer
+                    // request finished before this completion ran and was
+                    // rightly accepted against the session then installed.
+                    std::vector<std::size_t> superseded;
                     for (std::size_t index = 0; index < views.size(); ++index) {
                         if (views[index]->sliceGeneration
                             != viewGenerations[index]) {
+                            superseded.push_back(index);
                             continue;
                         }
                         // A FAB round-trip preserved the zoom in restoredSpec and
@@ -1232,6 +1251,13 @@ void MainWindow::requestInitialSlice(
                                 : std::optional<RealBox>{};
                         }
                         showSlice(*views[index], std::move(result.displays[index]));
+                    }
+                    // Re-sliced against the session just installed, with
+                    // the view state as it now stands, which is what the newer
+                    // request was asking for anyway. Debounced, so a view that
+                    // the resize pass below also schedules is asked once.
+                    for (const auto index : superseded) {
+                        scheduleSliceRequest(*views[index]);
                     }
                     if (isRemote) {
                         // A resize during the initial worker cannot submit a
@@ -1296,7 +1322,7 @@ void MainWindow::requestInitialSlice(
                     // reported it applied. This cannot loop the way the memo
                     // guards against: it runs when a load completes, not once
                     // per event-loop turn.
-                    m_reloadStartedFor.reset();
+                    m_reloadAskedFor.reset();
                     emit initialSliceFinished(false);
                 } else {
                     m_diagnosticsModel->noteStaleResult();

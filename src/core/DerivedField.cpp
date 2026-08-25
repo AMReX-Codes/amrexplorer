@@ -55,6 +55,7 @@ DerivedFieldError::DerivedFieldError(std::size_t definitionIndex,
     : std::invalid_argument(describe(definitionIndex, name, message))
     , m_definitionIndex(definitionIndex)
     , m_sourceOffset(sourceOffset)
+    , m_message(message)
 {
 }
 
@@ -67,6 +68,11 @@ const std::optional<std::size_t>& DerivedFieldError::sourceOffset()
     const noexcept
 {
     return m_sourceOffset;
+}
+
+const std::string& DerivedFieldError::message() const noexcept
+{
+    return m_message;
 }
 
 DerivedFieldInstallation installDerivedFields(DatasetMetadata& metadata,
@@ -97,7 +103,7 @@ DerivedFieldInstallation installDerivedFields(DatasetMetadata& metadata,
             // Thrown per definition rather than up front so Skip keeps its
             // promise: the ones that fit are installed and the rest are
             // reported, instead of the whole list failing.
-            if (index >= maximumDerivedFieldCount) {
+            if (installation.programs.size() >= maximumDerivedFieldCount) {
                 throw fail("a dataset may have at most "
                     + std::to_string(maximumDerivedFieldCount)
                     + " derived fields");
@@ -212,7 +218,7 @@ DerivedFieldInstallation installDerivedFields(DatasetMetadata& metadata,
                 throw;
             }
             installation.skipped.push_back(
-                {index, definition.name, error.what()});
+                {index, definition.name, error.message()});
         }
     }
     return installation;

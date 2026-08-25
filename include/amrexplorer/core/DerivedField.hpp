@@ -90,10 +90,15 @@ public:
     // was inside the expression itself.
     [[nodiscard]] const std::optional<std::size_t>& sourceOffset()
         const noexcept;
+    // The problem alone, without the "derived field 'x':" that what() prefixes
+    // it with. A DerivedFieldSkip carries the name in a field of its own, so
+    // anything composing the two would otherwise say it twice.
+    [[nodiscard]] const std::string& message() const noexcept;
 
 private:
     std::size_t m_definitionIndex;
     std::optional<std::size_t> m_sourceOffset;
+    std::string m_message;
 };
 
 // Fields one derived field may read. The cap bounds how many blocks *one level*

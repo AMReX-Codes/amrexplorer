@@ -226,6 +226,29 @@ int main()
                         != std::string::npos,
                 "the definition past the cap was not reported");
             requireRejected(many, limit, "at most");
+
+            // The cap counts what was installed, not how far down the list we
+            // are: definitions the dataset cannot resolve take no slot, so the
+            // ones after them still fit.
+            std::vector<DerivedFieldDefinition> mixed;
+            for (std::size_t index = 0; index < 8; ++index) {
+                mixed.push_back({"skip" + std::to_string(index), "absent"});
+            }
+            for (std::size_t index = 0; index < limit; ++index) {
+                mixed.push_back({"keep" + std::to_string(index), "density"});
+            }
+            auto second = makeMetadata();
+            const auto capped = amrvis::installDerivedFields(
+                second, mixed, amrvis::DerivedFieldPolicy::Skip);
+            require(capped.programs.size() == limit,
+                "unresolvable definitions consumed slots from the cap");
+            require(capped.skipped.size() == 8,
+                "the cap rejected definitions that had room");
+            // The reason is the problem alone; the name lives beside it, and a
+            // caller composing the two should not say it twice.
+            require(capped.skipped[0].name == "skip0"
+                    && capped.skipped[0].reason.rfind("derived field", 0) != 0,
+                "the skip reason repeats the name it is stored with");
         }
         {
             // A chain of derived fields, each reading the one before it.

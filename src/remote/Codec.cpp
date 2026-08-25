@@ -634,11 +634,17 @@ fb::OpenDatasetRequestT toWire(const OpenDatasetData& value)
 
 OpenDatasetData fromWire(const fb::OpenDatasetRequestT& value)
 {
-    // The definition list arrives from a client, so it is bounded here rather
-    // than left to installation: installDerivedFields caps the programs it
-    // *installs*, so a list whose first maximumDerivedFieldCount entries all
-    // fail would otherwise still compile every entry after them, bounded only
-    // by the frame size. Same shape as the directory-listing cap above.
+    // Only what a skip cannot express is refused here. The server installs
+    // this list under DerivedFieldPolicy::Skip, so a definition it cannot
+    // resolve comes back as one greyed row instead of an open that failed, and
+    // a check repeated here would turn that row into a refusal the same list
+    // never gets from a local dataset.
+    //
+    // These two are the exceptions, because the reply has no way to carry
+    // them: a skip is reported by name, so a nameless definition cannot be
+    // named back, and the reply's vector of skips is bounded by this same
+    // maximumDerivedFieldCount, so a list past the cap could only be answered
+    // with a reply this decoder would itself reject.
     if (value.derived_fields.size() > maximumDerivedFieldCount) {
         throw std::invalid_argument(
             "wire open request carries too many derived-field definitions");
@@ -656,10 +662,10 @@ OpenDatasetData fromWire(const fb::OpenDatasetRequestT& value)
             throw std::invalid_argument(
                 "wire derived-field definition has no name");
         }
-        if (entry->expression.size() > maximumExpressionBytes) {
-            throw std::invalid_argument(
-                "wire derived-field expression is too long");
-        }
+        // The expression's length is not checked: CompiledExpression::compile
+        // refuses one past maximumExpressionBytes before it parses anything, so
+        // installation already skips it with a bounded reason, which is what a
+        // local dataset does with the same definition.
         result.derivedFields.push_back(
             DerivedFieldDefinition{entry->name, entry->expression});
     }

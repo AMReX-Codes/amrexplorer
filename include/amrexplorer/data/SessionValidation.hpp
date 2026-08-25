@@ -1,8 +1,11 @@
 #pragma once
 
+#include <amrexplorer/core/DerivedField.hpp>
 #include <amrexplorer/data/DatasetPage.hpp>
 #include <amrexplorer/data/DatasetSession.hpp>
 
+#include <cstddef>
+#include <span>
 #include <string>
 
 namespace amrvis {
@@ -43,8 +46,27 @@ void validateSessionVolumeResult(const DatasetMetadata& metadata,
 // them than were asked for, and cannot skip a definition that was never sent
 // or report more skips than there were definitions -- and a definition cannot
 // be both installed and skipped, which is what the counts add up to.
-void validateSessionOpenedDerivedFields(std::size_t fieldCount,
-    std::uint32_t derivedFieldCount,
-    const std::vector<DerivedFieldSkip>& skips, std::size_t requestedCount);
+//
+// Gathered into one named argument rather than passed as four: fieldCount and
+// requestedCount are both counts of the same type, and positionally a caller
+// that swapped them would still compile and still satisfy every check on any
+// reply whose catalog is larger than its request -- which is every reply that
+// installed anything. The siblings above take the request and result objects
+// themselves, which is what makes them non-transposable; this one cannot,
+// because the reply it checks is a remote:: type and this header does not
+// depend on that layer. Naming them also makes leaving one out an error rather
+// than a zero, since a missing designated initializer is one here.
+struct SessionOpenedDerivedFields {
+    // The reply's whole catalog, computed tail included.
+    std::size_t fieldCount = 0;
+    // How many of that tail the reply claims it installed.
+    std::size_t derivedFieldCount = 0;
+    // The definitions it reports it could not.
+    std::span<const DerivedFieldSkip> skips;
+    // How many definitions the request carried.
+    std::size_t requestedCount = 0;
+};
+void validateSessionOpenedDerivedFields(
+    const SessionOpenedDerivedFields& reply);
 
 } // namespace amrvis

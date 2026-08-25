@@ -371,12 +371,16 @@ int main()
         requireRejected([&] { static_cast<void>(codec::fromWire(tooMany)); },
             "a definition list past the cap was accepted");
 
+        // Not a rejection, and deliberately so: compile() refuses an
+        // expression past maximumExpressionBytes, so installation reports one
+        // as a skip. Refusing it here would fail an open that the very same
+        // definition list opens locally.
         auto longExpression = codec::toWire(open);
-        longExpression.derived_fields[0]->expression
-            = std::string(maximumExpressionBytes + 1, 'x');
-        requireRejected(
-            [&] { static_cast<void>(codec::fromWire(longExpression)); },
-            "an over-long expression was accepted");
+        const auto overLong = std::string(maximumExpressionBytes + 1, 'x');
+        longExpression.derived_fields[0]->expression = overLong;
+        require(codec::fromWire(longExpression).derivedFields.front().expression
+                == overLong,
+            "an over-long expression did not survive the wire");
 
         auto namelessDefinition = codec::toWire(open);
         namelessDefinition.derived_fields[0]->name.clear();

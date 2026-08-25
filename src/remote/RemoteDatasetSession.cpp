@@ -69,9 +69,12 @@ std::shared_ptr<RemoteDatasetSession> RemoteDatasetSession::open(
         // What the decoder could not check: it does not know how many
         // definitions were sent. A reply that disagrees with the request is a
         // peer that stopped speaking the protocol, so it belongs in here.
-        validateSessionOpenedDerivedFields(
-            answer.catalog.fields.size(), answer.derivedFieldCount,
-            answer.derivedFieldSkips, derivedFields.size());
+        validateSessionOpenedDerivedFields({
+            .fieldCount = answer.catalog.fields.size(),
+            .derivedFieldCount = answer.derivedFieldCount,
+            .skips = answer.derivedFieldSkips,
+            .requestedCount = derivedFields.size(),
+        });
         return answer;
     });
     return std::shared_ptr<RemoteDatasetSession>(

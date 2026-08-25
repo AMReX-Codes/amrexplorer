@@ -329,12 +329,16 @@ int main(int argc, char* argv[])
     // client is told how many of the fields are computed. A definition this
     // plotfile cannot resolve is skipped with its reason rather than failing
     // the open, and the skip names the definition it belongs to by index.
+    // An expression past maximumExpressionBytes is one of those rather than a
+    // refusal: compile() bounds it before parsing anything, so the remote
+    // answer for such a list is the one a local dataset gives.
     envelope = exchange(socket, 16,
         codec::toWire(OpenDatasetData{
             std::filesystem::path(argv[1]).string(),
             16ULL * 1024ULL * 1024ULL,
             {{"product", "density * temperature"},
-                {"elsewhere", "nonesuch * 2"}}}),
+                {"elsewhere", "nonesuch * 2"},
+                {"overlong", std::string(maximumExpressionBytes + 1, 'x')}}}),
         hello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
         "server refused an open carrying derived fields");
@@ -345,11 +349,19 @@ int main(int argc, char* argv[])
         "the computed field is not the tail of the catalog");
     require(derivedOpen.derivedFieldCount == 1,
         "server did not report exactly one field as computed");
-    require(derivedOpen.derivedFieldSkips.size() == 1
+    require(derivedOpen.derivedFieldSkips.size() == 2
             && derivedOpen.derivedFieldSkips.front().definitionIndex == 1
             && derivedOpen.derivedFieldSkips.front().name == "elsewhere"
             && !derivedOpen.derivedFieldSkips.front().reason.empty(),
         "the unresolvable definition did not come back as a skip");
+    // Reported, not refused -- and the reason is the bounded one compile()
+    // gives, not the expression it is about.
+    require(derivedOpen.derivedFieldSkips.back().definitionIndex == 2
+            && derivedOpen.derivedFieldSkips.back().name == "overlong"
+            && !derivedOpen.derivedFieldSkips.back().reason.empty()
+            && derivedOpen.derivedFieldSkips.back().reason.size()
+                <= maximumExpressionBytes,
+        "the over-long expression did not come back as a bounded skip");
     // A derived field has no stored statistics, so the server reports no File
     // range for it -- the same answer a local session gives.
     require(derivedOpen.fileRangeAvailable.size()

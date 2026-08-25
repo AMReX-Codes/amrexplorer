@@ -1137,11 +1137,25 @@ void MainWindow::requestInitialSlice(
                     // the restore that follows would put back the field the
                     // load was *launched* with. Ids renumber across a reload
                     // when the derived tail changes, so the name is the only
-                    // stable handle. Level and range still come from the spec:
-                    // the field is what a user reads a reloading window with.
+                    // stable handle.
                     const auto supersededField = superseded.empty()
                         ? QString{}
                         : m_fieldSelector->currentText();
+                    // The level and the range are read here for the same
+                    // reason: configureSliceControls puts the level combo back
+                    // to its first row, and the spec restore below writes both
+                    // outright. The level travels as the combo's data rather
+                    // than its position, which is what the spec carries too --
+                    // the reloaded session need not offer the same rows.
+                    std::optional<int> supersededLevel;
+                    std::optional<RangeController::Selection> supersededRange;
+                    if (!superseded.empty()) {
+                        if (m_levelSelector->currentIndex() >= 0) {
+                            supersededLevel
+                                = m_levelSelector->currentData().toInt();
+                        }
+                        supersededRange = m_range->selection();
+                    }
                     restoreVectorFields(previousVectorFields);
                     m_particleController->setSamples(
                         std::move(result.particles));
@@ -1236,6 +1250,34 @@ void MainWindow::requestInitialSlice(
                                 m_fieldSelector->currentText());
                             syncVariableMenu();
                         }
+                    }
+                    // The level and the range that same interaction moved, put
+                    // back after the field: the range widgets represent the
+                    // selected field, and its name is the key commitFieldRange
+                    // files them under. Blocked, as the spec restore above is
+                    // -- the re-slice these views are owed comes from
+                    // resliceReplacedViews below, and a signal from here would
+                    // queue a second one for every view.
+                    if (supersededLevel) {
+                        const auto index
+                            = m_levelSelector->findData(*supersededLevel);
+                        if (index >= 0) {
+                            const QSignalBlocker blocker(m_levelSelector);
+                            m_levelSelector->setCurrentIndex(index);
+                            configureSlicePositionControls();
+                            syncMenuChecks();
+                        }
+                    }
+                    if (supersededRange) {
+                        m_range->setSelection(*supersededRange);
+                        m_range->commitFieldRange(m_range->trackedField());
+                    }
+                    if (supersededLevel || supersededRange) {
+                        // A mode the restored field and level cannot offer
+                        // falls back here rather than staying selected and
+                        // unavailable, which is what the spec restore's own
+                        // call does for the values it put back.
+                        updateRangeModeAvailability();
                     }
                     if (selectCacheFallbackLevel(
                             m_levelSelector, result.cacheFallbackToLevel)) {

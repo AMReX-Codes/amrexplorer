@@ -25,6 +25,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -232,11 +233,17 @@ void armReloadRaceChecks(
     // completion queued behind this call, which is the only moment a test can
     // submit against the session on its way out.
     auto injected = std::make_shared<bool>(false);
-    // The field the injected interaction switches to. The reload's completion
+    // What the injected interaction switches to. The reload's completion
     // replays the field, level and range the load was launched with, so if it
-    // does that after the user has moved the selection, the change is reverted
-    // and the re-slice this load owes renders the old field.
+    // does that after the user has moved them, the change is reverted and the
+    // re-slice this load owes renders what they left. All three, because the
+    // controls are one set per window: an interaction that supersedes the
+    // reload can have moved any of them, and each is restored from the same
+    // launch-time spec. Empty for a control the dataset gave nothing to move
+    // to, which the checks below then skip.
     auto chosenField = std::make_shared<QString>();
+    auto chosenLevel = std::make_shared<std::optional<int>>();
+    auto chosenRangeMode = std::make_shared<std::optional<int>>();
     QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
         &application, [&application, loads](bool success) {
             if (!success) {
@@ -246,15 +253,16 @@ void armReloadRaceChecks(
             ++*loads;
         });
     window.setInitialSliceLaunchedHookForTest(
-        [&window, loads, injected, chosenField] {
+        [&window, loads, injected, chosenField, chosenLevel,
+            chosenRangeMode] {
             if (*loads == 0 || *injected) {
                 return;
             }
             *injected = true;
-            // Move the field, as a user reading a reloading window would, and
-            // then submit for it. Both matter: the submission is what
-            // supersedes the reload's display for this view, and the selection
-            // is what the completion must not roll back.
+            // Move the controls, as a user reading a reloading window would,
+            // and then submit for them. Both matter: the submission is what
+            // supersedes the reload's display for this view, and the
+            // selections are what the completion must not roll back.
             auto* selector = window.findChild<QComboBox*>(
                 QStringLiteral("fieldSelector"));
             if (selector == nullptr || selector->count() < 2) {
@@ -263,6 +271,26 @@ void armReloadRaceChecks(
             const auto next = selector->currentIndex() == 0 ? 1 : 0;
             window.selectFieldItemForTest(next);
             *chosenField = selector->currentText();
+            // Through the widgets, which is what a user's click reaches: the
+            // level combo carries its selection as item data (the position
+            // means nothing across a repopulate), and the range mode goes to
+            // Visible, the one mode no dataset can leave unavailable.
+            auto* levels = window.findChild<QComboBox*>(
+                QStringLiteral("levelSelector"));
+            if (levels != nullptr && levels->count() > 1) {
+                levels->setCurrentIndex(levels->currentIndex() == 0 ? 1 : 0);
+                *chosenLevel = levels->currentData().toInt();
+            }
+            auto* modes = window.findChild<QComboBox*>(
+                QStringLiteral("rangeModeSelector"));
+            if (modes != nullptr) {
+                const auto visible = modes->findData(
+                    static_cast<int>(amrvis::qt::RangeMode::Visible));
+                if (visible >= 0 && modes->currentIndex() != visible) {
+                    modes->setCurrentIndex(visible);
+                    *chosenRangeMode = modes->currentData().toInt();
+                }
+            }
             window.requestActiveViewSliceForTest();
         });
 
@@ -270,7 +298,7 @@ void armReloadRaceChecks(
     timer->setInterval(25);
     QObject::connect(timer, &QTimer::timeout, &application,
         [&window, &application, phase, loads, ticks, injected, chosenField,
-            timer] {
+            chosenLevel, chosenRangeMode, timer] {
             const auto finish = [&application, timer](int code) {
                 timer->stop();
                 application.exit(code);
@@ -329,6 +357,26 @@ void armReloadRaceChecks(
                         && selector->currentText() != *chosenField)) {
                     qCritical("the reload reverted the field the user chose");
                     finish(24);
+                    return;
+                }
+                auto* levels = window.findChild<QComboBox*>(
+                    QStringLiteral("levelSelector"));
+                if (chosenLevel->has_value()
+                    && (levels == nullptr
+                        || levels->currentData().toInt() != **chosenLevel)) {
+                    qCritical("the reload reverted the level the user chose");
+                    finish(25);
+                    return;
+                }
+                auto* modes = window.findChild<QComboBox*>(
+                    QStringLiteral("rangeModeSelector"));
+                if (chosenRangeMode->has_value()
+                    && (modes == nullptr
+                        || modes->currentData().toInt()
+                            != **chosenRangeMode)) {
+                    qCritical(
+                        "the reload reverted the range mode the user chose");
+                    finish(26);
                     return;
                 }
                 finish(0);

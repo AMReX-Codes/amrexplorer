@@ -1049,6 +1049,10 @@ void armRemoteDerivedChecks(
     auto phase = std::make_shared<int>(0);
     auto loads = std::make_shared<int>(0);
     auto ticks = std::make_shared<int>(0);
+    // The load count when the Apply settled, so the idle turns that follow can
+    // be told from the loads the Apply itself caused. Read on every tick it
+    // would compare against itself and never fail.
+    auto loadsAtSettle = std::make_shared<int>(0);
     QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
         &application, [&application, loads](bool success) {
             if (!success) {
@@ -1061,7 +1065,7 @@ void armRemoteDerivedChecks(
     auto* timer = new QTimer(&window);
     timer->setInterval(25);
     QObject::connect(timer, &QTimer::timeout, &application,
-        [&window, &application, phase, loads, ticks, timer] {
+        [&window, &application, phase, loads, ticks, loadsAtSettle, timer] {
             const auto finish = [&application, timer](int code) {
                 timer->stop();
                 application.exit(code);
@@ -1182,6 +1186,7 @@ void armRemoteDerivedChecks(
                 // And the reload settled: one Apply must not leave the window
                 // reopening the dataset for ever, which is what would happen
                 // if the session and the editor disagreed about the list.
+                *loadsAtSettle = *loads;
                 *ticks = 0;
                 *phase = 4;
                 return;
@@ -1189,11 +1194,10 @@ void armRemoteDerivedChecks(
             if (*phase == 4) {
                 // A few idle turns with nothing in flight: a reload loop shows
                 // up here as loads climbing without anything asking.
-                const auto settled = *loads;
                 if (*ticks < 20) {
                     return;
                 }
-                if (*loads != settled) {
+                if (*loads != *loadsAtSettle) {
                     qCritical("the window is still reopening the dataset");
                     finish(13);
                     return;

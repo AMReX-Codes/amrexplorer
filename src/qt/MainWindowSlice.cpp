@@ -257,7 +257,6 @@ void MainWindow::reloadIfDefinitionsMoved()
             && *m_reloadStartedFor == m_derivedFields->definitions())) {
         return;
     }
-    m_reloadStartedFor = m_derivedFields->definitions();
     m_reloadInFlight = true;
     // Not now: the frame path is called from inside the sequence controller's
     // own load completion, which sets m_inFlight and emits frameDisplayed
@@ -269,7 +268,16 @@ void MainWindow::reloadIfDefinitionsMoved()
             || openSessionHasCurrentDefinitions()) {
             return;
         }
-        reloadCurrentDataset();
+        // Armed before the call, so a reload that asks for this one again
+        // from inside its own completion is still suppressed -- and dropped
+        // again if the reload stood aside, because mid-playback the frames
+        // carry the list themselves and setPlaybackMode asks once more when
+        // they stop. Recording a reload that never ran is what left the
+        // definition uninstalled with the editor reporting it applied.
+        m_reloadStartedFor = m_derivedFields->definitions();
+        if (!reloadCurrentDataset()) {
+            m_reloadStartedFor.reset();
+        }
     });
 }
 

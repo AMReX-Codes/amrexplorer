@@ -577,7 +577,10 @@ private:
     // single dataset is reloaded straight through requestInitialSlice, whose
     // new generation both invalidates the in-flight work and gives the
     // replacement session a dataset id of its own.
-    void reloadCurrentDataset();
+    // Reopens the dataset on the list as it now stands. False when it stood
+    // aside without reloading -- mid-sequence playback, or nothing open --
+    // which is what reloadIfDefinitionsMoved's memo must not record as done.
+    bool reloadCurrentDataset();
     // The directory the last file dialog ended in, remembered across all of
     // them. The dialogs themselves stay separate -- one picks several
     // directories, one saves with a default suffix -- but this was copied into

@@ -54,19 +54,34 @@ MainWindow::MainWindow(QWidget* parent)
                 if (!m_dataset) {
                     return tr("Derived fields need an open dataset.");
                 }
-                if (m_dataset->metadata().isFab
-                    || !derivedFieldsReachNextLoad()) {
-                    return tr("Derived fields are not available for a FAB "
-                              "drilled out of a MultiFab.");
-                }
+                // Asked before the shape of the next load, because
+                // derivedFieldsReachNextLoad() is also false for a remote
+                // sequence on a peer too old to install them -- and answering
+                // that with the FAB wording below tells the user their dataset
+                // is something it is not, which is the lie this reason exists
+                // to remove. The one case a user can act on is checked first.
                 if (!m_dataset->supportsDerivedFields()) {
-                    // The one case a user can act on: their server is old.
                     // A remote session says so in the words both layers share;
                     // anything else cannot compute fields at all.
                     return std::dynamic_pointer_cast<
                                remote::RemoteDatasetSession>(m_dataset)
                         ? tr(remote::derivedFieldsUnsupportedMessage)
                         : tr("This dataset cannot compute fields.");
+                }
+                // Both FABs, not just the drilled one: a standalone FAB opened
+                // straight from a file reopens no better than one drilled out
+                // of a MultiFab.
+                if (m_dataset->metadata().isFab
+                    || m_fabNavigator->fabMode()) {
+                    return tr("Derived fields are not available for a FAB.");
+                }
+                if (!derivedFieldsReachNextLoad()) {
+                    // What is left once the two above are ruled out. Kept so
+                    // every state the availability hook calls unavailable has
+                    // a reason to show, rather than a greyed control saying
+                    // nothing.
+                    return tr("Derived fields are not available for this "
+                              "remote sequence.");
                 }
                 return {};
             },
@@ -1547,13 +1562,13 @@ QString MainWindow::chooseExpressionListPath(QWidget* parent, bool forSaving)
     return path;
 }
 
-void MainWindow::reloadCurrentDataset()
+bool MainWindow::reloadCurrentDataset()
 {
     // Not while closing: another window's Apply reaches every window, and a
     // worker started here would hold the I/O mutex against the quit. The
     // completion handler checks m_closing, but the read still runs.
     if (m_closing || !m_dataset || m_datasetPath.empty() || !m_openMetadata) {
-        return;
+        return false;
     }
     if (m_playbackMode == PlaybackMode::Sequence) {
         // Mid-playback: reloading here would restart the frame under the user,
@@ -1568,14 +1583,17 @@ void MainWindow::reloadCurrentDataset()
         // definition uninstalled for good, with the editor reporting that it
         // had been applied.
         m_sequenceController->invalidatePrefetch();
-        return;
+        // Nothing was reloaded, which the caller has to know: a reload only
+        // asked for is not one that happened, and treating the two alike is
+        // how the definition would stay uninstalled for good.
+        return false;
     }
     if (m_sequenceController->hasSequence()) {
         // A prefetched frame was rendered against the previous field list.
         m_sequenceController->invalidatePrefetch();
         m_sequenceController->goToFrame(
             m_sequenceController->currentIndex(), true);
-        return;
+        return true;
     }
     // Not openDataset: that ends the sequence, drops the zoom and closes the
     // line-plot, dataset and volume windows. This is the same reload a
@@ -1617,7 +1635,7 @@ void MainWindow::reloadCurrentDataset()
             buildFrameSpec(),
             SliceLoad{{}, RemoteOpen{remote->connection(),
                            remote->remotePath()}});
-        return;
+        return true;
     }
     // No prepared metadata and no data root: with none, the session derives
     // both from the path, which is what re-reading a plotfile means. A FAB
@@ -1627,6 +1645,7 @@ void MainWindow::reloadCurrentDataset()
     // availability hook).
     requestInitialSlice(
         m_datasetPath, generation, std::nullopt, {}, buildFrameSpec());
+    return true;
 }
 
 void MainWindow::refreshMetadataDisplay()

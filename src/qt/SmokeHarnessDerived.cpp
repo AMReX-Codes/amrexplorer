@@ -2,9 +2,11 @@
 
 #include "ExpressionEditorDialog.hpp"
 #include "MainWindow.hpp"
+#include "RangeController.hpp"
 
 #include <QAction>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -91,6 +93,97 @@ bool errorShown(const amrvis::qt::ExpressionEditorDialog& dialog)
     const auto* error =
         dialog.findChild<QLabel*>(QStringLiteral("expressionError"));
     return error != nullptr && error->isVisible() && !error->text().isEmpty();
+}
+
+// Arms the range-memory scenario: a User range set on one field must still be
+// there when the user comes back to it. The memory is keyed by field name, and
+// the name it is filed under comes from the host -- so the host has to tell the
+// controller which field the widgets represent on *every* path that selects
+// one, the plain open included.
+void armRangeMemoryChecks(
+    amrvis::qt::MainWindow& window, QApplication& application)
+{
+    auto phase = std::make_shared<int>(0);
+    auto loaded = std::make_shared<bool>(false);
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [&application, loaded](bool success) {
+            if (!success) {
+                application.exit(2);
+                return;
+            }
+            *loaded = true;
+        });
+
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, loaded, timer] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            if (!*loaded || window.sliceRequestPendingForTest()
+                || window.slicesInFlightForTest() != 0) {
+                return;
+            }
+            auto* selector = window.findChild<QComboBox*>(
+                QStringLiteral("fieldSelector"));
+            auto* mode = window.findChild<QComboBox*>(
+                QStringLiteral("rangeModeSelector"));
+            // The two range bounds, found through the toolbar that holds the
+            // mode selector: ScientificDoubleSpinBox has no Q_OBJECT of its
+            // own, and other spin boxes live elsewhere in the window.
+            const auto bounds = mode == nullptr
+                ? QList<QDoubleSpinBox*>{}
+                : mode->parentWidget()->findChildren<QDoubleSpinBox*>();
+            if (selector == nullptr || mode == nullptr || bounds.size() < 2
+                || selector->count() < 2) {
+                qCritical("the range widgets or a second field are missing");
+                finish(3);
+                return;
+            }
+            if (*phase == 0) {
+                const auto user = mode->findData(
+                    static_cast<int>(amrvis::qt::RangeMode::User));
+                if (user < 0) {
+                    qCritical("the range mode selector has no User entry");
+                    finish(4);
+                    return;
+                }
+                mode->setCurrentIndex(user);
+                bounds[0]->setValue(10.0);
+                bounds[1]->setValue(20.0);
+                *phase = 1;
+                return;
+            }
+            if (*phase == 1) {
+                selector->setCurrentIndex(1);  // another field
+                *phase = 2;
+                return;
+            }
+            if (*phase == 2) {
+                selector->setCurrentIndex(0);  // and back to the first
+                *phase = 3;
+                return;
+            }
+            if (*phase == 3) {
+                const auto restored = mode->currentData().toInt()
+                    == static_cast<int>(amrvis::qt::RangeMode::User)
+                    && bounds[0]->value() == 10.0
+                    && bounds[1]->value() == 20.0;
+                if (!restored) {
+                    qCritical("the first field's User range did not come back "
+                              "(mode %d, %g..%g)",
+                        mode->currentData().toInt(), bounds[0]->value(),
+                        bounds[1]->value());
+                    finish(5);
+                    return;
+                }
+                finish(0);
+            }
+        });
+    timer->start();
+    QTimer::singleShot(30000, &application, [&application] { application.exit(13); });
 }
 
 // Arms the scenario on `window`: exit 0 once a derived field has been
@@ -180,8 +273,9 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
                     finish(5);
                     return;
                 }
+                // Written over two lines, as a long expression would be.
                 if (!writeDefinition(*dialog, QStringLiteral("product"),
-                        QStringLiteral("density * temperature"))
+                        QStringLiteral("density *\n    temperature"))
                     || !clickApply(*dialog)) {
                     qCritical("the editor did not take the corrected "
                               "definition");
@@ -251,6 +345,7 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
                     finish(14);
                     return;
                 }
+                // The tooltip folds the layout back onto one line.
                 if (selector->itemData(product, Qt::ToolTipRole).toString()
                     != QStringLiteral("density * temperature")) {
                     qCritical("the derived field carries no expression: %s",
@@ -291,19 +386,25 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
 // is open must reload the frame on screen *and* leave the sequence navigable,
 // with the definition surviving the next frame switch. A reload that went
 // through the ordinary open path would end the sequence instead.
-void armSequenceChecks(amrvis::qt::MainWindow& window, QApplication& application)
+void armSequenceChecks(amrvis::qt::MainWindow& window,
+    QApplication& application, QStringList afterStep)
 {
     auto phase = std::make_shared<int>(0);
     auto frames = std::make_shared<int>(0);
     const QStringList expected{QStringLiteral("density"),
         QStringLiteral("temperature"), QStringLiteral("product")};
+    // What the frame stepped to should list: the same again when the frames
+    // match, and only its own fields when it cannot satisfy the definition.
+    if (afterStep.isEmpty()) {
+        afterStep = expected;
+    }
     QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
         &application, [frames](int) { ++*frames; });
 
     auto* timer = new QTimer(&window);
     timer->setInterval(25);
     QObject::connect(timer, &QTimer::timeout, &application,
-        [&window, &application, phase, frames, timer, expected] {
+        [&window, &application, phase, frames, timer, expected, afterStep] {
             const auto finish = [&application, timer](int code) {
                 timer->stop();
                 application.exit(code);
@@ -314,10 +415,15 @@ void armSequenceChecks(amrvis::qt::MainWindow& window, QApplication& application
             auto* dialog =
                 window.findChild<amrvis::qt::ExpressionEditorDialog*>();
             if (*phase == 0) {
-                window
-                    .findChild<QAction*>(
-                        QStringLiteral("expressionEditorAction"))
-                    ->trigger();
+                auto* action = window.findChild<QAction*>(
+                    QStringLiteral("expressionEditorAction"));
+                if (action == nullptr || !action->isEnabled()) {
+                    qCritical("the Expression Editor action is not available "
+                              "over a sequence");
+                    finish(4);
+                    return;
+                }
+                action->trigger();
                 *phase = 1;
                 return;
             }
@@ -351,13 +457,25 @@ void armSequenceChecks(amrvis::qt::MainWindow& window, QApplication& application
                 return;
             }
             if (*phase == 3) {
-                if (*frames < 3) {
+                if (*frames < 3 || window.sliceRequestPendingForTest()
+                    || window.slicesInFlightForTest() != 0) {
                     return;
                 }
-                if (fieldNames(window) != expected) {
-                    qCritical("the derived field did not survive a frame "
-                              "switch");
+                const auto names = fieldNames(window);
+                if (names != afterStep) {
+                    qCritical("the stepped-to frame lists: %s",
+                        qPrintable(names.join(QStringLiteral(", "))));
                     finish(10);
+                    return;
+                }
+                // Whatever it lists, the combo must name the field the frame
+                // was actually rendered with.
+                auto* selector = window.findChild<QComboBox*>(
+                    QStringLiteral("fieldSelector"));
+                if (selector == nullptr
+                    || !selector->currentData().isValid()) {
+                    qCritical("the field selector is on no field at all");
+                    finish(11);
                     return;
                 }
                 if (window.backgroundErrorCountForTest() != 0) {
@@ -372,17 +490,137 @@ void armSequenceChecks(amrvis::qt::MainWindow& window, QApplication& application
     QTimer::singleShot(30000, &application, [&application] { application.exit(13); });
 }
 
+// Arms the frame-identity scenario. Two frames that list different fields, and
+// a selection whose *id* means a different field on the second: frame 0 is
+// [density, temperature, double], the user is on `temperature` (id 1), and
+// frame 1 has no `density`, so it lists [temperature, double] and id 1 is
+// `double`. Carrying the selection as an index lands on `double` while the
+// combo and the range still say `temperature`; carrying the name does not.
+void armFrameIdentityChecks(
+    amrvis::qt::MainWindow& window, QApplication& application)
+{
+    auto phase = std::make_shared<int>(0);
+    auto frames = std::make_shared<int>(0);
+    QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
+        &application, [frames](int) { ++*frames; });
+
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, frames, timer] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            if (*frames == 0 || window.sliceRequestPendingForTest()
+                || window.slicesInFlightForTest() != 0) {
+                return;
+            }
+            auto* dialog =
+                window.findChild<amrvis::qt::ExpressionEditorDialog*>();
+            auto* selector = window.findChild<QComboBox*>(
+                QStringLiteral("fieldSelector"));
+            if (selector == nullptr) {
+                qCritical("there is no field selector");
+                finish(3);
+                return;
+            }
+            if (*phase == 0) {
+                auto* action = window.findChild<QAction*>(
+                    QStringLiteral("expressionEditorAction"));
+                if (action == nullptr || !action->isEnabled()) {
+                    qCritical("the Expression Editor is unavailable");
+                    finish(4);
+                    return;
+                }
+                action->trigger();
+                *phase = 1;
+                return;
+            }
+            if (*phase == 1) {
+                // Reads only `temperature`, so the frame that drops `density`
+                // still has it -- at a different id.
+                if (dialog == nullptr
+                    || !writeDefinition(*dialog, QStringLiteral("double"),
+                        QStringLiteral("temperature * 2"))
+                    || !clickApply(*dialog) || errorShown(*dialog)) {
+                    qCritical("the editor refused the definition");
+                    finish(6);
+                    return;
+                }
+                *phase = 2;
+                return;
+            }
+            if (*phase == 2) {
+                if (*frames < 2) {
+                    return;
+                }
+                const auto temperature = selector->findText(
+                    QStringLiteral("temperature"));
+                if (temperature < 0 || selector->count() < 4) {
+                    qCritical("frame 0 does not list what it should");
+                    finish(9);
+                    return;
+                }
+                selector->setCurrentIndex(temperature);
+                *phase = 3;
+                return;
+            }
+            if (*phase == 3) {
+                window.requestSequenceFrameForTest(1);
+                *phase = 4;
+                return;
+            }
+            if (*phase == 4) {
+                if (*frames < 3) {
+                    return;
+                }
+                if (fieldNames(window)
+                    != QStringList{QStringLiteral("temperature"),
+                        QStringLiteral("double")}) {
+                    qCritical("the stepped-to frame lists: %s",
+                        qPrintable(fieldNames(window).join(
+                            QStringLiteral(", "))));
+                    finish(10);
+                    return;
+                }
+                if (selector->currentText() != QStringLiteral("temperature")) {
+                    qCritical("the selection became \"%s\" across the frame "
+                              "switch",
+                        qPrintable(selector->currentText()));
+                    finish(11);
+                    return;
+                }
+                if (window.backgroundErrorCountForTest() != 0) {
+                    qCritical("the frame switch reported an error");
+                    finish(12);
+                    return;
+                }
+                finish(0);
+            }
+        });
+    timer->start();
+    QTimer::singleShot(30000, &application, [&application] { application.exit(13); });
+}
+
 Outcome dispatchDerivedSequence(Context& context)
 {
-    if (context.argc != 4
-        || std::string_view(context.argv[1])
-            != "--derived-field-sequence-smoke-test") {
+    if (context.argc != 4) {
+        return {false, std::nullopt};
+    }
+    const std::string_view option(context.argv[1]);
+    if (option != "--derived-field-sequence-smoke-test"
+        && option != "--derived-field-frames-smoke-test") {
         return {false, std::nullopt};
     }
     const std::vector<std::filesystem::path> frames{
         std::filesystem::path(context.argv[2]),
         std::filesystem::path(context.argv[3])};
-    armSequenceChecks(context.window, context.application);
+    if (option == "--derived-field-frames-smoke-test") {
+        armFrameIdentityChecks(context.window, context.application);
+    } else {
+        armSequenceChecks(context.window, context.application, {});
+    }
     QTimer::singleShot(0, &context.window,
         [&window = context.window, frames] { window.openSequence(frames); });
     return {true, std::nullopt};
@@ -402,10 +640,13 @@ Outcome dispatchDerived(Context& context)
     }
     const std::string_view option(context.argv[1]);
     const std::filesystem::path path(context.argv[2]);
-    if (option != "--derived-field-smoke-test") {
+    if (option == "--field-range-memory-smoke-test") {
+        armRangeMemoryChecks(window, application);
+    } else if (option == "--derived-field-smoke-test") {
+        armDerivedChecks(window, application);
+    } else {
         return {false, std::nullopt};
     }
-    armDerivedChecks(window, application);
     QTimer::singleShot(
         0, &window, [&window, path] { window.openDataset(path); });
     return {true, std::nullopt};

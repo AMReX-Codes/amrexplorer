@@ -6,7 +6,7 @@
 //
 // Usage:
 //   fixture_materializer <sourceFixtureDir> <destDir>
-//       [newTime] [--no-statistics] [--non-finite]
+//       [newTime] [--no-statistics] [--non-finite] [--drop-field <name>]
 //
 // Copies the fixture into destDir and writes each level's Cell_D_* payloads
 // at the FabOnDisk offsets its Cell_H records. An optional time value replaces
@@ -21,6 +21,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <algorithm>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -283,7 +284,7 @@ int main(int argc, char* argv[])
     require(argc >= 3 && argc <= 10,
         "usage: fixture_materializer <sourceFixtureDir> <destDir> "
         "[newTime] [--no-statistics] [--non-finite] [--scale <factor>] "
-        "[--domain-upper-x <value>]");
+        "[--domain-upper-x <value>] [--drop-field <name>]");
     const std::filesystem::path source(argv[1]);
     const std::filesystem::path destination(argv[2]);
     std::optional<std::string> newTime;
@@ -293,6 +294,11 @@ int main(int argc, char* argv[])
     // sequence can carry different ranges (used by the range-cache test).
     double scale = 1.0;
     std::optional<double> domainUpperX;
+    // Takes a field out of the Header's list, leaving the stored components
+    // alone: what a frame that simply does not carry that field looks like.
+    // A sequence of two such copies is the one shape that makes a field id
+    // mean different things from one frame to the next.
+    std::optional<std::string> droppedField;
     for (int argument = 3; argument < argc; ++argument) {
         const std::string value(argv[argument]);
         if (value == "--no-statistics") {
@@ -311,6 +317,11 @@ int main(int argc, char* argv[])
             } catch (const std::exception&) {
                 require(false, "--scale factor is not a number");
             }
+        } else if (value == "--drop-field") {
+            require(argument + 1 < argc, "--drop-field requires a name");
+            require(!droppedField.has_value(),
+                "--drop-field was specified more than once");
+            droppedField = argv[++argument];
         } else if (value == "--domain-upper-x") {
             require(argument + 1 < argc,
                 "--domain-upper-x requires a value");
@@ -326,7 +337,7 @@ int main(int argc, char* argv[])
     }
     require(std::filesystem::is_directory(source),
         "the source fixture directory is missing");
-    const auto header = readHeader(source / "Header");
+    auto header = readHeader(source / "Header");
 
     std::error_code error;
     std::filesystem::remove_all(destination, error);
@@ -339,7 +350,8 @@ int main(int argc, char* argv[])
         source, destination, std::filesystem::copy_options::recursive, error);
     require(!error, "could not copy the fixture");
 
-    if (newTime.has_value() || domainUpperX.has_value()) {
+    if (newTime.has_value() || domainUpperX.has_value()
+        || droppedField.has_value()) {
         auto lines = header.lines;
         if (newTime.has_value()) {
             lines[header.timeLine] = *newTime;
@@ -363,6 +375,19 @@ int main(int argc, char* argv[])
                 output << upper[axis];
             }
             lines[header.physicalUpperLine] = output.str();
+        }
+        if (droppedField) {
+            const auto first = lines.begin() + 2;
+            const auto last = first + header.fieldCount;
+            const auto found = std::find(first, last, *droppedField);
+            require(found != last, "the fixture has no such field to drop");
+            lines.erase(found);
+            --header.fieldCount;
+            lines[1] = std::to_string(header.fieldCount);
+            // The VisMF header carries the component count too, and the two
+            // are cross-checked when the plotfile is read, so its statistics
+            // (one column per component) go with the dropped field.
+            omitStatistics = true;
         }
         std::ofstream output(destination / "Header", std::ios::trunc);
         require(static_cast<bool>(output), "could not rewrite the Header");

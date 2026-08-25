@@ -49,6 +49,10 @@ public:
     // the definition it belongs to so the user is looking at what failed.
     void showError(
         const QString& message, std::optional<std::size_t> definitionIndex);
+    // Confirms an accepted Apply in the same place a refusal appears. Said
+    // here rather than in the status bar, which the reload this announces
+    // clears as soon as its slices arrive.
+    void showApplied(std::size_t count);
     // The row being edited, so a host that replaces the draft with an
     // equivalent list can leave the user where they were.
     [[nodiscard]] std::optional<std::size_t> selectedIndex() const;
@@ -72,6 +76,9 @@ private:
     QLineEdit* m_name = nullptr;
     QPlainTextEdit* m_expression = nullptr;
     QLabel* m_error = nullptr;
+    // Kept apart from m_error so "is something wrong?" stays a question the
+    // dialog -- and a test -- can answer by looking at one widget.
+    QLabel* m_applied = nullptr;
     QPushButton* m_remove = nullptr;
     QPushButton* m_apply = nullptr;
     // Set while the widgets are being written from the draft, so the edit

@@ -147,16 +147,13 @@ public:
 
     Token next()
     {
-        skipHorizontalWhitespace();
+        skipWhitespace();
         if (m_position == m_source.size()) {
             return {.kind = TokenKind::End, .offset = m_position};
         }
 
         const auto offset = m_position;
         const auto value = m_source[m_position];
-        if (value == '\n' || value == '\r') {
-            throw ExpressionError("newlines are not allowed", offset);
-        }
         if ((value >= '0' && value <= '9')
             || (value == '.' && m_position + 1 < m_source.size()
                 && m_source[m_position + 1] >= '0'
@@ -210,11 +207,16 @@ public:
     }
 
 private:
-    void skipHorizontalWhitespace()
+    // Line breaks are whitespace like any other: a long expression reads
+    // better broken across lines, and nothing in the grammar needs a line to
+    // mean anything. A break inside a ${...} name is still refused -- there it
+    // is a typo rather than a layout choice.
+    void skipWhitespace()
     {
         while (m_position < m_source.size()
-            && (m_source[m_position] == ' '
-                || m_source[m_position] == '\t')) {
+            && (m_source[m_position] == ' ' || m_source[m_position] == '\t'
+                || m_source[m_position] == '\n'
+                || m_source[m_position] == '\r')) {
             ++m_position;
         }
     }

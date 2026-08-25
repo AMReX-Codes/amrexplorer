@@ -27,8 +27,7 @@ class ExpressionEditorDialog;
 //  "expressions": [{"name": ..., "expression": ...}, ...]}
 //
 // Both directions live here rather than in the dialog so the format is
-// testable without a widget, and because it is the same format the settings
-// store keeps the list in.
+// testable without a widget.
 struct ExpressionListFile {
     std::vector<DerivedFieldDefinition> definitions;
     // Empty when the parse succeeded. Nothing is returned in definitions
@@ -101,8 +100,9 @@ public:
     };
 
     // Validates the list against the open dataset and, if every definition
-    // resolves, commits it, persists it and asks the host to reload. Returns
-    // the refusal otherwise, having changed nothing.
+    // resolves, commits it and asks the host to reload. Returns the refusal
+    // otherwise, having changed nothing; a list equal to the committed one is
+    // accepted and reloads nothing.
     [[nodiscard]] std::optional<Refusal> apply(
         std::vector<DerivedFieldDefinition> definitions);
 

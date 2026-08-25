@@ -1019,10 +1019,10 @@ void MainWindow::requestInitialSlice(
     // file range (falling back to Visible when metadata statistics are
     // unavailable), linear scale, whole domain, midpoint positions.
     FrameSliceSpec spec = initialSpec.value_or(FrameSliceSpec{});
-    // Only where there is no spec to have decided already: a fresh open has
-    // none, so a list restored from settings would otherwise never be
-    // installed. A spec built by buildFrameSpec has its own rule and must not
-    // be second-guessed here -- two rules for one field is how they drift.
+    // Only where there is no spec to have decided already: an open with no
+    // spec has nothing else to carry the list. A spec built by buildFrameSpec
+    // has its own rule and must not be second-guessed here -- two rules for
+    // one field is how they drift.
     if (!initialSpec) {
         spec.derivedFields = preparedSession
             ? std::vector<DerivedFieldDefinition>{}

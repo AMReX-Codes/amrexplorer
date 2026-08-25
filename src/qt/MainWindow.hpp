@@ -552,6 +552,12 @@ private:
     // stay findData-based and the separator (which carries none) cannot be
     // mistaken for a field.
     void populateFieldSelector();
+    // Selects a field entry, stepping past the separator if `index` lands on
+    // it and falling back to the first entry when it is out of range.
+    void selectFieldItem(int index);
+    // An expression as a tooltip: one line, whatever its layout.
+    [[nodiscard]] static QString expressionTooltip(
+        const std::string& expression);
     [[nodiscard]] std::array<std::string, 3> vectorFieldNames() const;
     void restoreVectorFields(const std::array<std::string, 3>& names);
     void syncMenuChecks();

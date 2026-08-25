@@ -1420,8 +1420,7 @@ void MainWindow::rebuildVariableMenu()
                     return candidate.name == metadata.fields[field].name;
                 });
             if (definition != definitions.end()) {
-                action->setToolTip(
-                    QString::fromStdString(definition->expression));
+                action->setToolTip(expressionTooltip(definition->expression));
             }
         }
         action->setCheckable(true);

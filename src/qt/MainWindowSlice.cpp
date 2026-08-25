@@ -51,7 +51,12 @@ void MainWindow::configureSliceControls()
     const auto& metadata = m_dataset->metadata();
 
     populateFieldSelector();
-    m_fieldSelector->setCurrentIndex(0);
+    selectFieldItem(0);
+    // The range memory is filed under the field's name, so the widgets have to
+    // be told which field they represent here too -- the restored-spec and
+    // sequence paths are not the only ones that select a field, and without
+    // this the first field's range is committed under an empty name and lost.
+    m_range->setTrackedField(m_fieldSelector->currentText());
 
     populateLevelCombo(m_levelSelector, metadata.finestLevel);
     m_levelSelector->setCurrentIndex(0);
@@ -74,6 +79,30 @@ void MainWindow::configureSliceControls()
         publishSlicePositions();
     }
     ensureVectorFieldDefaults();
+}
+
+QString MainWindow::expressionTooltip(const std::string& expression)
+{
+    // One line: an expression may be laid out over several, and a tooltip
+    // showing the breaks would be as tall as the editor it was typed in.
+    // simplified() folds every run of whitespace into a single space.
+    return QString::fromStdString(expression).simplified();
+}
+
+void MainWindow::selectFieldItem(int index)
+{
+    // The separator between the stored and the derived fields is an item, and
+    // setCurrentIndex does not skip one: landing there shows a blank row whose
+    // currentData() is invalid, which every reader of it then takes for field
+    // 0 while the range memory files itself under an empty name.
+    if (index >= 0 && index < m_fieldSelector->count()
+        && !m_fieldSelector->itemData(index).isValid()) {
+        ++index;
+    }
+    if (index < 0 || index >= m_fieldSelector->count()) {
+        index = 0;
+    }
+    m_fieldSelector->setCurrentIndex(index);
 }
 
 void MainWindow::populateFieldSelector()
@@ -106,8 +135,7 @@ void MainWindow::populateFieldSelector()
             });
         if (definition != definitions.end()) {
             m_fieldSelector->setItemData(m_fieldSelector->count() - 1,
-                QString::fromStdString(definition->expression),
-                Qt::ToolTipRole);
+                expressionTooltip(definition->expression), Qt::ToolTipRole);
         }
     }
 }
@@ -1705,7 +1733,7 @@ void MainWindow::configureSequenceControls(
         const auto displayedIndex = displayedField
             ? m_fieldSelector->findData(*displayedField)
             : -1;
-        m_fieldSelector->setCurrentIndex(displayedIndex >= 0
+        selectFieldItem(displayedIndex >= 0
                 ? displayedIndex
                 : std::clamp(previousField, 0, m_fieldSelector->count() - 1));
         // The range memory is keyed by field id, and the ids moved with the
@@ -1764,6 +1792,7 @@ void MainWindow::resetRangeState()
     // memory is, and is forgotten at the same two points: a different dataset,
     // or a sequence, is being opened.
     m_derivedFields->clear();
+    m_lastSkippedDerivedReport.clear();
     m_range->reset();
     m_displayCoordinator.invalidateRangeCache();
     m_pendingRangeStore.reset();

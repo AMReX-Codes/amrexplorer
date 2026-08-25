@@ -8,8 +8,10 @@
 #include <string_view>
 #include <vector>
 
-// Single-line algebraic expressions over named symbols, compiled once into a
-// flat instruction list and evaluated by a small stack machine. The grammar:
+// Algebraic expressions over named symbols, compiled once into a flat
+// instruction list and evaluated by a small stack machine. Line breaks are
+// whitespace, so a long expression may be laid out over several lines. The
+// grammar:
 //
 //   expression      := additive
 //   additive        := multiplicative (("+" | "-") multiplicative)*

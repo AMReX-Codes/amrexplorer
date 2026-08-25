@@ -1336,6 +1336,20 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_derived_field_sequence_smoke PROPERTIES TIMEOUT 60)
+
+    # The same, over frames that list different fields: the definition is left
+    # out of the frame that cannot satisfy it, which moves every id after it.
+    add_test(
+        NAME qt_derived_field_frames_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_derived_field_frames"
+            -DMODE=derived-field-frames
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_derived_field_frames_smoke PROPERTIES TIMEOUT 60)
     add_test(
         NAME qt_particle_visible_range_smoke_3d
         COMMAND "${CMAKE_COMMAND}"

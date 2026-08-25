@@ -12,6 +12,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QJsonValue>
+#include <QPointer>
 #include <QSaveFile>
 #include <QWidget>
 
@@ -29,11 +30,19 @@ ExpressionListFile parseExpressionList(const QByteArray& json)
 {
     QJsonParseError parseError{};
     const auto document = QJsonDocument::fromJson(json, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+    if (parseError.error != QJsonParseError::NoError) {
         return {{},
             DerivedFieldController::tr("not a valid expression-list JSON "
                                        "file: %1")
                 .arg(parseError.errorString())};
+    }
+    if (!document.isObject()) {
+        // Well-formed JSON that is not an object: errorString() would say "no
+        // error occurred", which is not a reason anyone can act on.
+        return {{},
+            DerivedFieldController::tr(
+                "not an expression list: the file's top level is not an "
+                "object")};
     }
     const auto root = document.object();
     const auto format = root.value(QStringLiteral("format"));
@@ -133,8 +142,12 @@ void DerivedFieldController::refreshAvailability()
 std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
     std::vector<DerivedFieldDefinition> definitions)
 {
-    auto stored = m_hooks.storedMetadata ? m_hooks.storedMetadata()
-                                         : std::nullopt;
+    // The same question the action's enablement asks, not a weaker one: the
+    // editor is modeless, so the window can enter a state it is disabled for
+    // (a FAB drill-down) while it is still open in front of the user.
+    const auto usable = m_hooks.available && m_hooks.available();
+    auto stored = usable && m_hooks.storedMetadata ? m_hooks.storedMetadata()
+                                                   : std::nullopt;
     if (!stored) {
         return Refusal{tr("No dataset that can take derived fields is open."),
             std::nullopt};
@@ -150,6 +163,11 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
             error.definitionIndex()};
     }
 
+    if (definitions == m_definitions) {
+        // Nothing to install: a reload here would re-read the plotfile and,
+        // for a sequence, close the Dataset and Line Plot windows.
+        return std::nullopt;
+    }
     m_definitions = std::move(definitions);
     if (m_hooks.reload) {
         m_hooks.reload();
@@ -159,10 +177,10 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
 
 void DerivedFieldController::clear()
 {
-    if (m_definitions.empty()) {
-        return;
-    }
     m_definitions.clear();
+    // The editor's draft too, committed or not: definitions typed against the
+    // last dataset's fields and never applied would otherwise sit there
+    // refusing every Apply against the new one.
     if (m_dialog) {
         m_dialog->setDraft({});
     }
@@ -190,20 +208,23 @@ void DerivedFieldController::showEditor(QWidget* parent)
             // from what the dataset was reopened with. On the row the user was
             // editing, which is the one they are looking at.
             dialog->setDraft(m_definitions, dialog->selectedIndex());
-            emit statusMessage(
-                m_definitions.empty()
-                    ? tr("Derived fields cleared.")
-                    : tr("Applied %n derived field(s).", nullptr,
-                          static_cast<int>(m_definitions.size())),
-                4000);
+            // Not a status message: apply() has already started the reload,
+            // and showSlice clears the status bar when its slices land. The
+            // editor is in front of the user anyway, so it says so itself.
+            dialog->showApplied(m_definitions.size());
         });
     connect(dialog, &ExpressionEditorDialog::importRequested, dialog,
         [this, dialog] {
             if (!m_hooks.chooseFile) {
                 return;
             }
+            // chooseFile runs a nested event loop, which can deliver the
+            // deleteLater that closing this editor posts (refreshAvailability
+            // closes it when the dataset goes away). Nothing below may assume
+            // the dialog outlived the call.
+            const QPointer<ExpressionEditorDialog> alive(dialog);
             const auto path = m_hooks.chooseFile(dialog, false);
-            if (path.isEmpty()) {
+            if (path.isEmpty() || alive.isNull()) {
                 return;
             }
             QFile file(path);
@@ -231,8 +252,9 @@ void DerivedFieldController::showEditor(QWidget* parent)
             if (!m_hooks.chooseFile) {
                 return;
             }
+            const QPointer<ExpressionEditorDialog> alive(dialog);
             const auto path = m_hooks.chooseFile(dialog, true);
-            if (path.isEmpty()) {
+            if (path.isEmpty() || alive.isNull()) {
                 return;
             }
             // The draft, which is what the user is looking at -- exporting

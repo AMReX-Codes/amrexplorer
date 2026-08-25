@@ -294,8 +294,12 @@ int main()
         }
 
         requireError("", 0, "expected expression");
-        requireError("1\n+2", 1, "newlines are not allowed");
-        requireError("1\r+2", 1, "newlines are not allowed");
+        // Line breaks are whitespace, so a long expression can be laid out.
+        require(close(evaluate("1\n+2"), 3.0), "a newline broke an expression");
+        require(close(evaluate("1\r\n+\n2"), 3.0),
+            "a CRLF break broke an expression");
+        require(close(evaluate("sqrt(\n  9\n)"), 3.0),
+            "a call broken across lines failed");
         requireError("2^3", 1, "unexpected token");
         // A byte that is not a character is quoted as hex, never spliced into
         // the message: the message is UTF-8 by the time a label shows it, and
@@ -336,6 +340,7 @@ int main()
         requireError("${}", 0, "names no field");
         // At the '$', like every other failure inside a braced name -- the
         // offset names the token, not the byte the scan happened to stop on.
+        // ...but not inside a name, where it is a typo rather than layout.
         requireError("${a\nb}", 0, "newlines are not allowed");
         // A token's own text is escaped as well: a ${...} name is verbatim, so
         // it can carry bytes that are not characters.

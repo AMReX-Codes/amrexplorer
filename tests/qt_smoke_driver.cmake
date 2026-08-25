@@ -65,6 +65,18 @@ elseif(MODE STREQUAL "volume")
 elseif(MODE STREQUAL "derived-field")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --derived-field-smoke-test "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --field-range-memory-smoke-test
+        "${WORK}/plt")
+elseif(MODE STREQUAL "derived-field-frames")
+    # Two frames that do not list the same fields: the second drops the one a
+    # definition reads, so that definition is left out of it and every id after
+    # it moves. The one shape in which a carried field *index* means a
+    # different field from one frame to the next.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5"
+        --drop-field density)
+    run_or_die("${AMREXPLORER_QT}" --derived-field-frames-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "derived-field-sequence")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")

@@ -430,7 +430,8 @@ Useful shortcuts are:
 ## Derived fields
 
 **Variable > Expression Editor...** defines fields computed from the ones the
-plotfile stores. Give each a name and a single-line expression; **Apply**
+plotfile stores. Give each a name and an expression, which may run over
+several lines if that reads better; **Apply**
 checks the whole list and, if it holds, reopens the dataset with the new
 fields, which then behave like any other field -- slices, line plots, the
 volume view, the probe and export all work on them.

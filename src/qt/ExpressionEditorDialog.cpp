@@ -76,6 +76,11 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     // As SetContoursDialog styles its own warning.
     m_error->setStyleSheet(QStringLiteral("QLabel { color: red; }"));
 
+    m_applied = new QLabel(this);
+    m_applied->setObjectName(QStringLiteral("expressionApplied"));
+    m_applied->setWordWrap(true);
+    m_applied->setVisible(false);
+
     auto* buttons = new QDialogButtonBox(this);
     m_apply = buttons->addButton(QDialogButtonBox::Apply);
     m_apply->setObjectName(QStringLiteral("applyExpressionsButton"));
@@ -101,6 +106,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     editor->addLayout(form);
     editor->addWidget(help);
     editor->addWidget(m_error);
+    editor->addWidget(m_applied);
     editor->addStretch(1);
 
     auto* columns = new QHBoxLayout;
@@ -160,6 +166,8 @@ void ExpressionEditorDialog::setDraft(
 void ExpressionEditorDialog::showError(
     const QString& message, std::optional<std::size_t> definitionIndex)
 {
+    m_applied->clear();
+    m_applied->setVisible(false);
     if (definitionIndex && *definitionIndex < m_draft.size()) {
         m_list->setCurrentRow(static_cast<int>(*definitionIndex));
     }
@@ -167,10 +175,22 @@ void ExpressionEditorDialog::showError(
     m_error->setVisible(true);
 }
 
+void ExpressionEditorDialog::showApplied(std::size_t count)
+{
+    clearError();
+    m_applied->setText(count == 0
+            ? tr("Applied: no derived fields.")
+            : tr("Applied %n derived field(s).", nullptr,
+                  static_cast<int>(count)));
+    m_applied->setVisible(true);
+}
+
 void ExpressionEditorDialog::clearError()
 {
     m_error->clear();
     m_error->setVisible(false);
+    m_applied->clear();
+    m_applied->setVisible(false);
 }
 
 void ExpressionEditorDialog::rebuildList(std::optional<std::size_t> select)

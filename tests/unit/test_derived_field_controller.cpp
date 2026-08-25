@@ -93,14 +93,13 @@ int main(int argc, char** argv)
     QTemporaryDir dir;
     require(dir.isValid(), "could not create a scratch directory");
 
-    // Validation, commit, persistence and the reload, which are the whole of
-    // what committing a list does.
+    // Validation, commit and the reload, which are the whole of what
+    // committing a list does.
     {
         Fixture fixture;
         DerivedFieldController controller(fixture.hooks());
 
-        // A refusal changes nothing: not the committed list, not the settings,
-        // and no reload.
+        // A refusal changes nothing: not the committed list, and no reload.
         const auto refusal = controller.apply({{"speed", "sqrt(absent)"}});
         require(refusal.has_value(), "an unresolvable definition was accepted");
         require(refusal->definitionIndex.has_value()
@@ -132,8 +131,7 @@ int main(int argc, char** argv)
         require(controller.definitions() == good,
             "a refused apply replaced the committed list");
 
-        // An empty list is a legitimate commit -- it clears the derived fields
-        // -- and takes the stored key with it.
+        // An empty list is a legitimate commit: it clears the derived fields.
         require(!controller.apply({}).has_value(),
             "clearing the list was refused");
         require(controller.definitions().empty() && fixture.reloads == 2,

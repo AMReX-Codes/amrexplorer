@@ -432,9 +432,12 @@ Useful shortcuts are:
 **Variable > Expression Editor...** defines fields computed from the ones the
 plotfile stores. Give each a name and a single-line expression; **Apply**
 checks the whole list and, if it holds, reopens the dataset with the new
-fields, which then appear in the field selector and the **Variable** menu and
-behave like any other field -- slices, line plots, the volume view, the probe
-and export all work on them.
+fields, which then behave like any other field -- slices, line plots, the
+volume view, the probe and export all work on them.
+
+They appear in the field selector and the **Variable** menu below the fields
+the plotfile stores, separated from them by a line, and each shows its own
+expression as a tooltip.
 
 Expressions use `+`, `-`, `*`, `/` and `**` (or the equivalent `pow(a,b)`),
 with `abs`, `sqrt`, `exp`, `log`, `exp10` and `log10`, and parentheses. For
@@ -472,12 +475,18 @@ Other notes:
   **Visible**. **User** works as usual.
 - A result that is not a number -- `log` of a negative value, a division by
   zero -- is treated as missing data, like any other non-finite sample.
-- The list is remembered between sessions and applies to whatever you open
-  next. A definition that a dataset cannot satisfy (a field it does not have)
-  is simply left out, and the status bar says which; the rest still apply.
+- The list belongs to the window and to the dataset open in it: opening
+  another dataset, or a sequence, starts again with none. It is not saved
+  between sessions -- a definition is written against one plotfile's fields,
+  and kept around it would only reappear against unrelated data, where it can
+  do nothing but refuse the next thing you try to add.
+- Within a sequence the list stays put, so a definition follows the frames. One
+  a particular frame cannot satisfy is left out of that frame, and the status
+  bar says which; the rest still apply.
 - **Import...** and **Export...** read and write the list as a JSON expression
-  list. An import replaces what the editor is showing; nothing reaches the
-  dataset until you select **Apply**.
+  list, which is how a set of definitions is kept for another session. An
+  import replaces what the editor is showing; nothing reaches the dataset until
+  you select **Apply**.
 - Derived fields are computed where the data is read, so they are not
   available for a dataset opened from a remote server.
 

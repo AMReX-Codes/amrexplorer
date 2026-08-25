@@ -13,7 +13,6 @@
 #include <QJsonParseError>
 #include <QJsonValue>
 #include <QSaveFile>
-#include <QSettings>
 #include <QWidget>
 
 #include <utility>
@@ -23,11 +22,6 @@ namespace {
 
 constexpr auto kExpressionListFormat = "amrexplorer-expression-list";
 constexpr int kExpressionListVersion = 1;
-
-QString settingsKey()
-{
-    return QStringLiteral("derivedFields/list");
-}
 
 } // namespace
 
@@ -157,15 +151,21 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
     }
 
     m_definitions = std::move(definitions);
-    if (m_hooks.settings) {
-        if (auto settings = m_hooks.settings()) {
-            save(*settings);
-        }
-    }
     if (m_hooks.reload) {
         m_hooks.reload();
     }
     return std::nullopt;
+}
+
+void DerivedFieldController::clear()
+{
+    if (m_definitions.empty()) {
+        return;
+    }
+    m_definitions.clear();
+    if (m_dialog) {
+        m_dialog->setDraft({});
+    }
 }
 
 void DerivedFieldController::showEditor(QWidget* parent)
@@ -278,27 +278,5 @@ QString DerivedFieldController::skippedReport(
               .arg(names.join(QStringLiteral(", ")), reason);
 }
 
-void DerivedFieldController::restore(const QSettings& settings)
-{
-    const auto stored = settings.value(settingsKey()).toString();
-    if (stored.isEmpty()) {
-        return;
-    }
-    auto parsed = parseExpressionList(stored.toUtf8());
-    if (!parsed.error.isEmpty()) {
-        return;
-    }
-    m_definitions = std::move(parsed.definitions);
-}
-
-void DerivedFieldController::save(QSettings& settings) const
-{
-    if (m_definitions.empty()) {
-        settings.remove(settingsKey());
-        return;
-    }
-    settings.setValue(settingsKey(),
-        QString::fromUtf8(writeExpressionList(m_definitions)));
-}
 
 } // namespace amrvis::qt

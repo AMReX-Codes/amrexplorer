@@ -11,7 +11,6 @@
 #include <QMenuBar>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QStatusBar>
 #include <QStringList>
 #include <QTimer>
 
@@ -42,6 +41,11 @@ QStringList fieldNames(const amrvis::qt::MainWindow& window)
         return names;
     }
     for (int index = 0; index < selector->count(); ++index) {
+        // Fields carry their id as item data; the separator between the stored
+        // and the derived ones carries none.
+        if (!selector->itemData(index).isValid()) {
+            continue;
+        }
         names.append(selector->itemText(index));
     }
     return names;
@@ -87,52 +91,6 @@ bool errorShown(const amrvis::qt::ExpressionEditorDialog& dialog)
     const auto* error =
         dialog.findChild<QLabel*>(QStringLiteral("expressionError"));
     return error != nullptr && error->isVisible() && !error->text().isEmpty();
-}
-
-// Arms the follow-on scenarios, which run in the same isolated settings store
-// the accept scenario above wrote to: the committed list comes back on the next
-// launch, and a dataset that cannot satisfy it still opens without the
-// definition and without an error. `expected` is the field list the selector
-// must show once the dataset is up.
-void armRestoreChecks(amrvis::qt::MainWindow& window, QApplication& application,
-    QStringList expected, bool expectSkipReport)
-{
-    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-        &application,
-        [&window, &application, expected = std::move(expected),
-            expectSkipReport](bool success) {
-            if (!success) {
-                qCritical("the dataset did not open with a restored list");
-                application.exit(2);
-                return;
-            }
-            const auto names = fieldNames(window);
-            if (names != expected) {
-                qCritical("the restored list produced the wrong fields: %s",
-                    qPrintable(names.join(QStringLiteral(", "))));
-                application.exit(3);
-                return;
-            }
-            // A definition this dataset cannot satisfy is left out, not
-            // reported as a failure: the open is a success either way.
-            if (window.backgroundErrorCountForTest() != 0) {
-                qCritical("a skipped definition was reported as an error");
-                application.exit(4);
-                return;
-            }
-            // It has to be *said*, though: a definition silently missing from
-            // the field list is the failure mode this reports against.
-            const auto message = window.statusBar()->currentMessage();
-            const auto reported = message.contains(QStringLiteral("product"))
-                && message.contains(QStringLiteral("unavailable"));
-            if (reported != expectSkipReport) {
-                qCritical("the status bar said \"%s\"", qPrintable(message));
-                application.exit(5);
-                return;
-            }
-            application.exit(0);
-        });
-    QTimer::singleShot(30000, &application, [&application] { application.exit(13); });
 }
 
 // Arms the scenario on `window`: exit 0 once a derived field has been
@@ -284,7 +242,25 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
                 }
                 auto* selector = window.findChild<QComboBox*>(
                     QStringLiteral("fieldSelector"));
-                selector->setCurrentIndex(2);
+                // The derived field is set apart from the stored ones, and
+                // says what it is: the separator sits directly before it, and
+                // the entry carries its expression as a tooltip.
+                const auto product = selector->findData(2U);
+                if (product < 1 || selector->itemData(product - 1).isValid()) {
+                    qCritical("no separator precedes the derived field");
+                    finish(14);
+                    return;
+                }
+                if (selector->itemData(product, Qt::ToolTipRole).toString()
+                    != QStringLiteral("density * temperature")) {
+                    qCritical("the derived field carries no expression: %s",
+                        qPrintable(selector
+                                ->itemData(product, Qt::ToolTipRole)
+                                .toString()));
+                    finish(15);
+                    return;
+                }
+                selector->setCurrentIndex(product);
                 *phase = 4;
                 return;
             }
@@ -426,21 +402,10 @@ Outcome dispatchDerived(Context& context)
     }
     const std::string_view option(context.argv[1]);
     const std::filesystem::path path(context.argv[2]);
-    if (option == "--derived-field-smoke-test") {
-        armDerivedChecks(window, application);
-    } else if (option == "--derived-field-restore-smoke-test") {
-        // The definition the accept scenario applied, persisted by it.
-        armRestoreChecks(window, application,
-            QStringList{QStringLiteral("density"),
-                QStringLiteral("temperature"), QStringLiteral("product")},
-            false);
-    } else if (option == "--derived-field-skip-smoke-test") {
-        // A dataset with neither field the persisted definition reads.
-        armRestoreChecks(
-            window, application, QStringList{QStringLiteral("q")}, true);
-    } else {
+    if (option != "--derived-field-smoke-test") {
         return {false, std::nullopt};
     }
+    armDerivedChecks(window, application);
     QTimer::singleShot(
         0, &window, [&window, path] { window.openDataset(path); });
     return {true, std::nullopt};

@@ -2,11 +2,8 @@
 
 #include "MainWindow.hpp"
 
-#include <QSettings>
 #include <QString>
 
-#include <cstdlib>
-#include <string_view>
 
 #include <amrexplorer/remote/Connection.hpp>
 #include <amrexplorer/remote/Server.hpp>
@@ -34,38 +31,6 @@ void attachSmokeServer(amrvis::qt::MainWindow& window,
                 .clientName = "AMReXplorer Qt smoke",
                 .sessionToken = server->token()}),
         QStringLiteral("127.0.0.1:%1").arg(server->port()));
-}
-
-void isolateSettings(int argc, char** argv)
-{
-    if (argc < 2) {
-        return;
-    }
-    const std::string_view option(argv[1]);
-    if (option.find("-smoke-test") == std::string_view::npos
-        && option.find("-repro") == std::string_view::npos) {
-        return;
-    }
-#if defined(_MSC_VER)
-    char* configured = nullptr;
-    std::size_t configuredSize = 0;
-    if (::_dupenv_s(&configured, &configuredSize, "XDG_CONFIG_HOME") != 0) {
-        return;
-    }
-    const auto directory = configured == nullptr
-        ? QString() : QString::fromLocal8Bit(configured);
-    std::free(configured);
-#else
-    const auto* configured = std::getenv("XDG_CONFIG_HOME");
-    const auto directory = configured == nullptr
-        ? QString() : QString::fromLocal8Bit(configured);
-#endif
-    if (directory.isEmpty()) {
-        return;
-    }
-    QSettings::setDefaultFormat(QSettings::IniFormat);
-    QSettings::setPath(
-        QSettings::IniFormat, QSettings::UserScope, directory);
 }
 
 Outcome dispatch(Context& context)

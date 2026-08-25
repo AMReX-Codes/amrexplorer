@@ -50,11 +50,7 @@ void MainWindow::configureSliceControls()
     const QSignalBlocker levelBlocker(m_levelSelector);
     const auto& metadata = m_dataset->metadata();
 
-    m_fieldSelector->clear();
-    for (std::size_t field = 0; field < metadata.fields.size(); ++field) {
-        m_fieldSelector->addItem(QString::fromStdString(metadata.fields[field].name),
-            static_cast<unsigned int>(field));
-    }
+    populateFieldSelector();
     m_fieldSelector->setCurrentIndex(0);
 
     populateLevelCombo(m_levelSelector, metadata.finestLevel);
@@ -78,6 +74,42 @@ void MainWindow::configureSliceControls()
         publishSlicePositions();
     }
     ensureVectorFieldDefaults();
+}
+
+void MainWindow::populateFieldSelector()
+{
+    m_fieldSelector->clear();
+    if (!m_dataset) {
+        return;
+    }
+    const auto& fields = m_dataset->metadata().fields;
+    const auto stored = std::min(m_dataset->storedFieldCount(), fields.size());
+    const auto& definitions = m_derivedFields->definitions();
+    for (std::size_t field = 0; field < fields.size(); ++field) {
+        if (field == stored) {
+            // The computed fields are a different kind of thing from the ones
+            // the plotfile holds; the rule is worth showing rather than
+            // leaving to be inferred from the order.
+            m_fieldSelector->insertSeparator(m_fieldSelector->count());
+        }
+        const auto name = QString::fromStdString(fields[field].name);
+        m_fieldSelector->addItem(name, static_cast<unsigned int>(field));
+        if (field < stored) {
+            continue;
+        }
+        // What the field is, on the field itself. Matched by name rather than
+        // by position: a definition the dataset could not resolve is left out
+        // of the field list, so the two are not index-for-index.
+        const auto definition = std::find_if(definitions.begin(),
+            definitions.end(), [&fields, field](const auto& candidate) {
+                return candidate.name == fields[field].name;
+            });
+        if (definition != definitions.end()) {
+            m_fieldSelector->setItemData(m_fieldSelector->count() - 1,
+                QString::fromStdString(definition->expression),
+                Qt::ToolTipRole);
+        }
+    }
 }
 
 std::array<std::string, 3> MainWindow::vectorFieldNames() const
@@ -1663,12 +1695,7 @@ void MainWindow::configureSequenceControls(
     {
         const QSignalBlocker fieldBlocker(m_fieldSelector);
         const QSignalBlocker levelBlocker(m_levelSelector);
-        m_fieldSelector->clear();
-        for (std::size_t field = 0; field < metadata.fields.size(); ++field) {
-            m_fieldSelector->addItem(
-                QString::fromStdString(metadata.fields[field].name),
-                static_cast<unsigned int>(field));
-        }
+        populateFieldSelector();
         // The field this frame was rendered with, not the position the last
         // frame's combo happened to be at: the two agree only while every
         // frame lists the same fields in the same order, and a definition one
@@ -1733,6 +1760,10 @@ void MainWindow::configureSequenceControls(
 
 void MainWindow::resetRangeState()
 {
+    // The derived-field list is dataset-scoped for the same reason the range
+    // memory is, and is forgotten at the same two points: a different dataset,
+    // or a sequence, is being opened.
+    m_derivedFields->clear();
     m_range->reset();
     m_displayCoordinator.invalidateRangeCache();
     m_pendingRangeStore.reset();

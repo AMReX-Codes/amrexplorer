@@ -10,13 +10,11 @@
 
 #include <cstddef>
 #include <functional>
-#include <memory>
 #include <optional>
 #include <vector>
 
 class QAction;
 class QByteArray;
-class QSettings;
 class QWidget;
 
 namespace amrvis::qt {
@@ -42,9 +40,15 @@ struct ExpressionListFile {
 [[nodiscard]] QByteArray writeExpressionList(
     const std::vector<DerivedFieldDefinition>& definitions);
 
-// The derived-field definitions the viewer carries: the committed list, the
-// Variable menu's Expression Editor action and its modeless dialog, the
-// import/export of an expression list, and the settings persistence.
+// The derived-field definitions this window carries: the committed list, the
+// Variable menu's Expression Editor action and its modeless dialog, and the
+// import/export of an expression list.
+//
+// The list lives as long as the window and is deliberately not persisted. A
+// definition is written against the fields of a particular dataset, so one
+// restored into a later session showed up against unrelated plotfiles, where
+// it could only be reported as unavailable. Export writes one to a file for
+// anyone who wants it back.
 //
 // The list is installed when a dataset is opened, so committing a change means
 // asking the host to reopen what is on screen with the new list (the `reload`
@@ -70,7 +74,6 @@ public:
         std::function<std::optional<DatasetMetadata>()> storedMetadata;
         // Reopen the open dataset with the committed definitions.
         std::function<void()> reload;
-        std::function<std::unique_ptr<QSettings>()> settings;
         // A path to import from (forSaving false) or export to (true); empty
         // cancels. The host runs the file dialog, as it does for palettes.
         std::function<QString(QWidget* parent, bool forSaving)> chooseFile;
@@ -103,6 +106,13 @@ public:
     [[nodiscard]] std::optional<Refusal> apply(
         std::vector<DerivedFieldDefinition> definitions);
 
+    // Forgets every definition. Called where a *different* dataset is opened,
+    // which is the point at which a list written against the last one stops
+    // meaning anything: the editor validates the whole list on Apply, so
+    // definitions naming fields the new dataset does not have would refuse
+    // every later edit until they were deleted by hand.
+    void clear();
+
     // Opens the editor (or raises it if it is already open) on the committed
     // list. Modeless: the reload an Apply triggers is an ordinary dataset load,
     // so there is nothing a nested event loop would have to be held back from.
@@ -114,13 +124,6 @@ public:
     // is silently missing from the field list otherwise.
     [[nodiscard]] QString skippedReport(
         const std::vector<DerivedFieldSkip>& skipped) const;
-
-    // "derivedFields/list": the committed list, in the same JSON as an
-    // exported file. restore() installs it without validating (there is no
-    // dataset open yet) and without reloading, so a host that has wired
-    // definitionsChanged is not made to reload nothing at startup.
-    void restore(const QSettings& settings);
-    void save(QSettings& settings) const;
 
 signals:
     void statusMessage(const QString& message, int timeoutMs);

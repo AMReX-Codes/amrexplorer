@@ -418,10 +418,6 @@ int main(int argc, char* argv[])
     icon.addFile(QStringLiteral(":/amrexplorer-256.png"));
     application.setWindowIcon(icon);
     ensureDesktopEntry();
-#ifdef AMREXPLORER_QT_TEST_ACCESS
-    // Before the window, whose constructor restores settings.
-    amrvis::qt::smoke::isolateSettings(argc, argv);
-#endif
     amrvis::qt::MainWindow window;
     window.show();
     // The smoke-test harnesses (SmokeHarness*.cpp) claim their options first;

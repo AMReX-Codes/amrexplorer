@@ -115,10 +115,6 @@ void MainWindow::restoreSettings()
     }
     m_colorBar->setPalette(&m_paletteController->palette());
 
-    // Installed without validating: no dataset is open yet, and the next one
-    // to open takes what of the list it can resolve.
-    m_derivedFields->restore(settings);
-
     m_range->showLogarithmic(
         settings.value(QStringLiteral("range/logarithmic"), false).toBool());
     {
@@ -184,7 +180,6 @@ void MainWindow::saveSettings()
     // session would produce unexpected color bars.
     settings.setValue(QStringLiteral("range/logarithmic"), m_range->logarithmic());
     m_paletteController->save(settings);
-    m_derivedFields->save(settings);
     settings.setValue(QStringLiteral("numberFormat"), m_numberFormat);
     settings.setValue(QStringLiteral("animation/speed"),
         m_animationPanel->speedValue());

@@ -8,7 +8,6 @@
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QSettings>
 #include <QTemporaryDir>
 
 #include <cstdlib>
@@ -61,7 +60,6 @@ struct Fixture {
     // remote one) or for no dataset at all.
     bool datasetOpen = true;
     int reloads = 0;
-    QString settingsPath;
     // What the next chooseFile answers, and what it was asked for.
     QString chosenPath;
     std::optional<bool> lastChooseForSaving;
@@ -78,11 +76,6 @@ struct Fixture {
                 return storedMetadata();
             },
             .reload = [this] { ++reloads; },
-            .settings =
-                [this] {
-                    return std::make_unique<QSettings>(
-                        settingsPath, QSettings::IniFormat);
-                },
             .chooseFile =
                 [this](QWidget*, bool forSaving) {
                     lastChooseForSaving = forSaving;
@@ -104,7 +97,6 @@ int main(int argc, char** argv)
     // what committing a list does.
     {
         Fixture fixture;
-        fixture.settingsPath = dir.filePath(QStringLiteral("apply.ini"));
         DerivedFieldController controller(fixture.hooks());
 
         // A refusal changes nothing: not the committed list, not the settings,
@@ -119,8 +111,6 @@ int main(int argc, char** argv)
         require(controller.definitions().empty()
                 && fixture.reloads == 0,
             "a refused apply still changed the committed list");
-        require(!QFile::exists(fixture.settingsPath),
-            "a refused apply wrote settings");
 
         // The second definition is what makes this more than a single-entry
         // check: it reads the first, which only resolves because the list is
@@ -142,34 +132,12 @@ int main(int argc, char** argv)
         require(controller.definitions() == good,
             "a refused apply replaced the committed list");
 
-        // Persisted, and restored into a fresh controller as the same list.
-        {
-            Fixture other;
-            other.settingsPath = fixture.settingsPath;
-            DerivedFieldController restored(other.hooks());
-            const QSettings settings(
-                fixture.settingsPath, QSettings::IniFormat);
-            restored.restore(settings);
-            require(restored.definitions() == good,
-                "the committed list did not survive a restore");
-            require(other.reloads == 0,
-                "restoring reloaded, which would reload nothing at startup");
-        }
-
         // An empty list is a legitimate commit -- it clears the derived fields
         // -- and takes the stored key with it.
         require(!controller.apply({}).has_value(),
             "clearing the list was refused");
         require(controller.definitions().empty() && fixture.reloads == 2,
             "clearing the list did not commit and reload");
-        {
-            const QSettings settings(
-                fixture.settingsPath, QSettings::IniFormat);
-            DerivedFieldController restored(fixture.hooks());
-            restored.restore(settings);
-            require(restored.definitions().empty(),
-                "a cleared list came back from the settings");
-        }
     }
 
     // With no dataset that can take derived fields, the action is disabled and
@@ -177,7 +145,6 @@ int main(int argc, char** argv)
     {
         Fixture fixture;
         fixture.datasetOpen = false;
-        fixture.settingsPath = dir.filePath(QStringLiteral("closed.ini"));
         DerivedFieldController controller(fixture.hooks());
         auto* parent = new QWidget;
         auto* action = controller.createAction(parent);
@@ -226,7 +193,6 @@ int main(int argc, char** argv)
     // and an export writes the draft rather than the committed list.
     {
         Fixture fixture;
-        fixture.settingsPath = dir.filePath(QStringLiteral("io.ini"));
         DerivedFieldController controller(fixture.hooks());
         require(!controller.apply({{"speed", "density"}}).has_value(),
             "the starting list was refused");
@@ -334,11 +300,25 @@ int main(int argc, char** argv)
         delete parent;
     }
 
+    // Opening a different dataset forgets the list: a definition written
+    // against the last one's fields would otherwise refuse every later Apply,
+    // since the editor validates the whole list at once.
+    {
+        Fixture fixture;
+        DerivedFieldController controller(fixture.hooks());
+        require(!controller.apply({{"speed", "density"}}).has_value(),
+            "the starting list was refused");
+        controller.clear();
+        require(controller.definitions().empty(),
+            "clearing left definitions behind");
+        require(fixture.reloads == 1,
+            "clearing reloaded, which the open it belongs to does itself");
+    }
+
     // The report the host puts in the status bar when a dataset could not
     // provide some of the committed list.
     {
         Fixture fixture;
-        fixture.settingsPath = dir.filePath(QStringLiteral("skip.ini"));
         DerivedFieldController controller(fixture.hooks());
         require(controller.skippedReport({}).isEmpty(),
             "nothing skipped still produced a report");

@@ -25,11 +25,11 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_paletteController, &PaletteController::loadFileRequested, this,
         [this] { loadPaletteFile(); });
 
-    // Derived fields: the controller owns the definition list, its editor and
-    // its persistence. It asks the window for the fields a definition may read
-    // (the open dataset's stored ones) and for the reload that installs a
-    // committed list, since only the window knows whether a sequence is
-    // running. buildFrameSpec is where the list reaches a dataset.
+    // Derived fields: the controller owns this window's definition list and
+    // its editor. It asks the window for the fields a definition may read (the
+    // open dataset's stored ones) and for the reload that installs a committed
+    // list, since only the window knows whether a sequence is running.
+    // buildFrameSpec is where the list reaches a dataset.
     m_derivedFields = new DerivedFieldController(
         DerivedFieldController::Hooks{
             .available = [this] {
@@ -56,7 +56,6 @@ MainWindow::MainWindow(QWidget* parent)
                 return metadata;
             },
             .reload = [this] { reloadCurrentDataset(); },
-            .settings = [] { return makeSettingsPtr(); },
             .chooseFile =
                 [this](QWidget*, bool forSaving) {
                     // Parented to the window, not to the editor that asked:
@@ -1281,6 +1280,10 @@ void MainWindow::createMenus()
 
     // Variable menu: lists all fields with a bullet on the active one.
     m_variableMenu = menuBar()->addMenu(tr("&Variable"));
+    // Menus hide action tooltips unless asked: the derived fields carry their
+    // expressions there, and the Expression Editor entry carries the reason it
+    // is unavailable, neither of which reaches anyone otherwise.
+    m_variableMenu->setToolTipsVisible(true);
     m_variableGroup = new QActionGroup(this);
     // Owned by the window, not the menu, so rebuildVariableMenu's clear()
     // leaves it alive to be re-added. The menu itself stays enabled with no
@@ -1389,10 +1392,8 @@ void MainWindow::rebuildVariableMenu()
 {
     m_variableMenu->clear();
     // The menu stays enabled with nothing open: it then holds the Expression
-    // Editor entry alone, greyed out, which is more discoverable than a menu
-    // that cannot be opened at all. (The action carries its reason as a
-    // tooltip, which a QMenu shows only with setToolTipsVisible; nothing here
-    // sets it, so treat the reason as documentation rather than as UI.)
+    // Editor entry alone, greyed out with the reason on its tooltip, which is
+    // more discoverable than a menu that cannot be opened at all.
     m_variableMenu->setEnabled(true);
     if (!m_dataset) {
         m_variableMenu->addAction(m_expressionEditorAction);
@@ -1402,9 +1403,27 @@ void MainWindow::rebuildVariableMenu()
     const auto& metadata = m_dataset->metadata();
     const auto currentField = m_fieldSelector->currentIndex() >= 0
         ? m_fieldSelector->currentData().toUInt() : 0;
+    const auto stored =
+        std::min(m_dataset->storedFieldCount(), metadata.fields.size());
+    const auto& definitions = m_derivedFields->definitions();
     for (std::size_t field = 0; field < metadata.fields.size(); ++field) {
+        if (field == stored) {
+            m_variableMenu->addSeparator();
+        }
         const auto name = QString::fromStdString(metadata.fields[field].name);
         auto* action = m_variableMenu->addAction(name);
+        if (field >= stored) {
+            // Matched by name: a definition this dataset could not resolve is
+            // not in the field list, so the two are not index-for-index.
+            const auto definition = std::find_if(definitions.begin(),
+                definitions.end(), [&metadata, field](const auto& candidate) {
+                    return candidate.name == metadata.fields[field].name;
+                });
+            if (definition != definitions.end()) {
+                action->setToolTip(
+                    QString::fromStdString(definition->expression));
+            }
+        }
         action->setCheckable(true);
         action->setActionGroup(m_variableGroup);
         action->setChecked(static_cast<std::uint32_t>(field) == currentField);

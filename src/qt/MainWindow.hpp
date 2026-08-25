@@ -545,6 +545,13 @@ private:
     // The vector-glyph selections travel by name for the same reason the
     // scalar one does: an id means something only in the field list it came
     // from. Captured before a load swaps the dataset, resolved again after.
+    // Fills the field selector from the open dataset: the stored fields, then
+    // a separator, then the derived ones, each carrying its expression as a
+    // tooltip. Shared by the two configure paths, which populated it
+    // identically. Every item carries its field id as item data, so lookups
+    // stay findData-based and the separator (which carries none) cannot be
+    // mistaken for a field.
+    void populateFieldSelector();
     [[nodiscard]] std::array<std::string, 3> vectorFieldNames() const;
     void restoreVectorFields(const std::array<std::string, 3>& names);
     void syncMenuChecks();

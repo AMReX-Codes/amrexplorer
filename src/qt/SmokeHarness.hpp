@@ -42,16 +42,6 @@ struct Outcome {
     std::optional<int> exitCode;
 };
 
-// Points QSettings at a store of this run's own, before anything reads one.
-// A scenario persists settings deliberately -- the derived-field ones apply a
-// definition in one run and expect it back in the next -- so each test needs
-// its own store, which the driver arranges through XDG_CONFIG_HOME. QSettings
-// honours that on Unix only: on Windows it is registry-backed, where every
-// test of a run shares one key and they overwrite each other's state. Pinning
-// the format and the path makes the driver's isolation hold everywhere. A
-// no-op unless argv names a smoke scenario.
-void isolateSettings(int argc, char** argv);
-
 // Arms the scenario argv names, exactly as the inline branches in main() did:
 // connections and single-shot timers on the window and the application.
 // {false, nullopt} for a non-smoke option.

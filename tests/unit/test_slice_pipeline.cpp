@@ -3,7 +3,8 @@
 // coveredCells (a request's data resolution along an axis), finestNativeOutputSize
 // (native render resolution), and slicePlaneAxes (the in-plane axis pair).
 // resolveRange/resolveDisplayRange/effectiveRangeMode already have coverage in
-// test_slice_range_resolver.cpp.
+// test_slice_range_resolver.cpp. resolveSpecField (what a carried field
+// selection means in the next frame's own field list) is here too.
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 
 #include <amrexplorer/core/Metadata.hpp>
@@ -12,6 +13,8 @@
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -225,6 +228,40 @@ int main()
         fine2d, huge, 2, {800, 600});
     require(largeViewport == (std::array<int, 2>{600, 600}),
         "remote viewport sizing did not retain bounded downsampling");
+
+    // --- resolveSpecField -------------------------------------------------
+    {
+        const auto listed = [](const std::vector<std::string>& names) {
+            amrvis::DatasetMetadata metadata;
+            metadata.dimension = 2;
+            for (const auto& name : names) {
+                metadata.fields.push_back(
+                    {name, amrvis::Centering::Cell, {}});
+            }
+            return metadata;
+        };
+        // The frame the selection was made on: "speed" is a derived field at
+        // id 4, after three stored fields and one earlier derived one.
+        const auto before = listed({"rho", "temp", "vel", "flux", "speed"});
+        require(amrvis::resolveSpecField(before, "speed", 4) == 4,
+            "a name present at its own index did not resolve to it");
+
+        // The next frame lacks "temp", so "flux" (which read it) was skipped
+        // and every id after it moved down two. The index alone lands on a
+        // different field; the name is what still means the same thing.
+        const auto after = listed({"rho", "vel", "speed"});
+        require(amrvis::resolveSpecField(after, "speed", 4) == 2,
+            "the name did not follow the field through a renumbering");
+        require(amrvis::resolveSpecField(after, "", 4) == 2,
+            "an index with no name is not clamped into range");
+        require(amrvis::resolveSpecField(after, "flux", 3) == 2,
+            "a name this frame does not have did not fall back to the index");
+        require(amrvis::resolveSpecField(after, "rho", 4) == 0,
+            "a name did not win over an out-of-range index");
+        // Nothing to select from at all.
+        require(amrvis::resolveSpecField(listed({}), "rho", 7) == 0,
+            "an empty field list did not resolve to zero");
+    }
 
     // --- slicePlaneAxes ---------------------------------------------------
     require(amrvis::slicePlaneAxes(2, 0) == (std::array<int, 2>{0, 1}),

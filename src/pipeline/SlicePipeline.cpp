@@ -571,6 +571,23 @@ std::vector<ParticleSample> loadParticleSamples(
     return samples;
 }
 
+std::uint32_t resolveSpecField(const DatasetMetadata& metadata,
+    const std::string& name, std::uint32_t index)
+{
+    if (metadata.fields.empty()) {
+        return 0;
+    }
+    if (!name.empty()) {
+        for (std::size_t field = 0; field < metadata.fields.size(); ++field) {
+            if (metadata.fields[field].name == name) {
+                return static_cast<std::uint32_t>(field);
+            }
+        }
+    }
+    return std::min(index,
+        static_cast<std::uint32_t>(metadata.fields.size() - 1));
+}
+
 InitialSliceResult executeSessionFrameLoad(
     std::shared_ptr<DatasetSession> dataset, const FrameSliceSpec& spec,
     StopToken cancellation)
@@ -589,8 +606,7 @@ InitialSliceResult executeSessionFrameLoad(
     }
     result.fileVersion = result.dataset->fileVersion();
 
-    const auto fieldCount = static_cast<std::uint32_t>(metadata.fields.size());
-    const auto field = std::min(spec.field, fieldCount - 1);
+    const auto field = resolveSpecField(metadata, spec.fieldName, spec.field);
     // An out-of-range exact level falls back to finest-available, matching
     // the level combo's behavior when a frame has fewer levels.
     // Combo data encoding: -1=finest, N=level N only, 1000+N=update to N.
@@ -689,9 +705,12 @@ InitialSliceResult executeSessionFrameLoad(
                         cancellation, display);
                 }
                 if (spec.displayMode == DisplayMode::VelocityVectors) {
-                    const auto u = std::min(spec.vectorUField, fieldCount - 1);
-                    const auto v = std::min(spec.vectorVField, fieldCount - 1);
-                    const auto w = std::min(spec.vectorWField, fieldCount - 1);
+                    const auto u = resolveSpecField(
+                        metadata, spec.vectorUFieldName, spec.vectorUField);
+                    const auto v = resolveSpecField(
+                        metadata, spec.vectorVFieldName, spec.vectorVField);
+                    const auto w = resolveSpecField(
+                        metadata, spec.vectorWFieldName, spec.vectorWField);
                     auto [f1, f2] = (metadata.dimension == 3)
                         ? (normal == 0 ? std::pair{v, w}
                            : normal == 1 ? std::pair{u, w}
@@ -787,10 +806,11 @@ InitialSliceResult executeFrameLoad(const std::filesystem::path& path,
     if (preparedMetadata) {
         dataset = std::make_shared<LocalDatasetSession>(
             std::move(dataRoot), datasetId, cacheBudgetBytes,
-            std::move(*preparedMetadata), cancellation);
+            std::move(*preparedMetadata), cancellation, spec.derivedFields);
     } else {
         dataset = std::make_shared<LocalDatasetSession>(
-            path, datasetId, cacheBudgetBytes, cancellation);
+            path, datasetId, cacheBudgetBytes, cancellation,
+            spec.derivedFields);
     }
     return executeSessionFrameLoad(
         std::move(dataset), spec, cancellation);

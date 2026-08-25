@@ -1341,6 +1341,23 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_derived_field_playback_smoke PROPERTIES TIMEOUT 60)
 
+    # Derived fields over the protocol (1.4): the editor is available over a
+    # remote dataset, Apply reopens it on its own connection with the
+    # definitions, the computed field arrives as the tail of the catalog and
+    # renders, one the plotfile cannot satisfy is greyed with the server's own
+    # reason, and the reload settles instead of looping. The server runs
+    # in-process, so the "remote" path is the materialized fixture.
+    add_test(
+        NAME qt_remote_derived_field_smoke
+        COMMAND "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-derived-field-smoke-test
+            "${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_server"
+    )
+    set_tests_properties(qt_remote_derived_field_smoke PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        FIXTURES_REQUIRED remote_server_materialized
+        TIMEOUT 90)
+
     # Applying a definition while a plotfile sequence is open: the frame on
     # screen reloads with it and the sequence is still navigable afterwards,
     # which is what separates the reload from an ordinary dataset open.

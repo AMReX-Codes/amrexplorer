@@ -48,7 +48,10 @@ struct Fixture {
     [[nodiscard]] DerivedFieldController::Hooks hooks()
     {
         return DerivedFieldController::Hooks{
-            .available = [this] { return datasetOpen; },
+            .unavailableReason = [this]() -> QString {
+                return datasetOpen ? QString()
+                                   : QStringLiteral("no dataset here");
+            },
             .reload = [this] { ++reloads; },
             .chooseFile =
                 [this](QWidget*, bool forSaving) {

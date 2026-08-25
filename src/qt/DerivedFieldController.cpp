@@ -179,7 +179,10 @@ QAction* DerivedFieldController::createAction(QWidget* parent)
 
 void DerivedFieldController::refreshAvailability()
 {
-    const auto usable = available();
+    const auto reason = m_hooks.unavailableReason
+        ? m_hooks.unavailableReason()
+        : tr("Derived fields need a dataset.");
+    const auto usable = reason.isEmpty();
     if (m_action) {
         m_action->setEnabled(usable);
         // Never empty: the Variable menu shows tooltips (for the derived
@@ -187,7 +190,7 @@ void DerivedFieldController::refreshAvailability()
         // a tooltip repeating the entry's label.
         m_action->setToolTip(usable
                 ? tr("Define fields computed from the stored ones")
-                : tr("Derived fields need a local dataset."));
+                : reason);
     }
     // The editor stays open when the dataset does not. It edits the session's
     // list rather than the dataset's, and closing it would take with it a
@@ -203,9 +206,13 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
     // The same question the action's enablement asks, not a weaker one: the
     // editor is modeless, so the window can enter a state it is disabled for
     // (a FAB drill-down) while it is still open in front of the user.
-    if (!available()) {
-        return Refusal{tr("No dataset that can take derived fields is open."),
-            std::nullopt};
+    if (const auto reason = m_hooks.unavailableReason
+            ? m_hooks.unavailableReason()
+            : tr("Derived fields need a dataset.");
+        !reason.isEmpty()) {
+        // The same words the greyed action carries, so the editor and the menu
+        // give one answer rather than two.
+        return Refusal{reason, std::nullopt};
     }
 
     // Bounded here as well as at installation, because this is where an

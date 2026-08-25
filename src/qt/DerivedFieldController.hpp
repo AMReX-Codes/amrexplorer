@@ -70,10 +70,13 @@ class DerivedFieldController final : public QObject {
 
 public:
     struct Hooks {
-        // Whether a dataset that can take derived fields is open. Asked on
-        // every dataset load, so it answers from one pointer rather than by
-        // copying anything.
-        std::function<bool()> available;
+        // Empty while a dataset that can take derived fields is open, and
+        // otherwise why not, in the words the greyed action shows. A reason
+        // rather than a bool because there is more than one: no dataset, a FAB
+        // drilled out of a MultiFab, or a server too old for them -- and
+        // telling a remote user their dataset is not local would be a lie.
+        // Asked on every dataset load, so it answers without copying anything.
+        std::function<QString()> unavailableReason;
         // Reopen the open dataset with the committed definitions.
         std::function<void()> reload;
         // A path to import from (forSaving false) or export to (true); empty
@@ -100,7 +103,8 @@ public:
     // window but not the session it was opening.
     [[nodiscard]] bool available() const
     {
-        return m_hooks.available && m_hooks.available();
+        return m_hooks.unavailableReason
+            && m_hooks.unavailableReason().isEmpty();
     }
 
     [[nodiscard]] const std::vector<DerivedFieldDefinition>& definitions()

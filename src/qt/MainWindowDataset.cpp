@@ -908,7 +908,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                         requestInitialSlice(path, generation,
                             std::move(result.metadata), std::move(root),
                             std::move(initialSpec),
-                            std::move(result.session));
+                            SliceLoad{std::move(result.session), std::nullopt});
                     }
                 } else {
                     m_diagnosticsModel->noteStaleResult();
@@ -943,12 +943,15 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     watcher->setFuture(QtConcurrent::run(
         [path, preparedMetadata = std::move(preparedMetadata),
             cancellation = metadataCancellation, preserveFabSelector,
-            remoteOpen = std::move(remoteOpen)]() mutable {
+            remoteOpen = std::move(remoteOpen),
+            // Copied here, on the GUI thread: the store has no locking and any
+            // window's Apply mutates it, so reading it inside the worker would
+            // race.
+            derivedFields = m_derivedFields->definitions()]() mutable {
         OpenedDataset opened;
         if (remoteOpen) {
-            opened.session = remote::RemoteDatasetSession::open(
-                std::move(remoteOpen->connection), remoteOpen->remotePath,
-                initialCacheBudget(), cancellation);
+            opened.session = openRemoteSessionForLoad(remoteOpen->connection,
+                remoteOpen->remotePath, derivedFields, cancellation);
             opened.metadata.metadata
                 = std::make_shared<const DatasetMetadata>(
                     opened.session->metadata());
@@ -972,12 +975,32 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     }));
 }
 
+bool MainWindow::SliceLoad::isRemote() const
+{
+    return reopen.has_value()
+        || std::dynamic_pointer_cast<remote::RemoteDatasetSession>(session)
+            != nullptr;
+}
+
+std::optional<std::uint32_t> MainWindow::SliceLoad::responseBytes() const
+{
+    if (session) {
+        return session->maximumResponseBytes();
+    }
+    if (reopen && reopen->connection) {
+        // What the session would report once it exists: the frame size the
+        // connection negotiated.
+        return reopen->connection->serverInfo().maximumFrameBytes;
+    }
+    return std::nullopt;
+}
+
 void MainWindow::requestInitialSlice(
     const std::filesystem::path& path, std::uint64_t generation,
     std::optional<PlotfileMetadataResult> preparedMetadata,
     std::filesystem::path dataRoot,
     std::optional<FrameSliceSpec> initialSpec,
-    std::shared_ptr<DatasetSession> preparedSession)
+    SliceLoad load)
 {
     validateVectorMode();
     const auto& metadata = *m_openMetadata;
@@ -1028,7 +1051,7 @@ void MainWindow::requestInitialSlice(
         // sees it, which is a property of the load rather than of the window,
         // so it is asked here and the rest through the shared predicate.
         spec.derivedFields
-            = preparedSession || !derivedFieldsReachNextLoad()
+            = load.session || !derivedFieldsReachNextLoad()
             ? std::vector<DerivedFieldDefinition>{}
             : m_derivedFields->definitions();
         spec.palette = m_paletteController->palette();
@@ -1044,16 +1067,15 @@ void MainWindow::requestInitialSlice(
         spec.sphericalSupersample = m_sphericalSupersample;
         spec.sphericalDisplay = m_sphericalDisplay;
     }
-    const auto isRemote = std::dynamic_pointer_cast<
-        remote::RemoteDatasetSession>(preparedSession) != nullptr;
+    const auto isRemote = load.isRemote();
     if (spec.outputSizes.size() != views.size()) {
         spec.outputSizes.clear();
         spec.outputSizes.reserve(views.size());
         for (const auto* state : views) {
             auto outputSize = sliceOutputSize(*state, isRemote);
-            if (preparedSession) {
-                outputSize = frameBudgetBoundedOutputSize(outputSize,
-                    preparedSession->maximumResponseBytes());
+            if (const auto responseBytes = load.responseBytes()) {
+                outputSize
+                    = frameBudgetBoundedOutputSize(outputSize, responseBytes);
             }
             spec.outputSizes.push_back(outputSize);
         }
@@ -1251,9 +1273,20 @@ void MainWindow::requestInitialSlice(
                     // panels are still on the open's placeholder with nothing
                     // left in flight to replace it. The dataset name is known
                     // here, so say which one has no displayable slice.
-                    setAllViewPlaceholders(
-                        tr("Could not display %1")
-                            .arg(QString::fromStdString(m_datasetPath.string())));
+                    //
+                    // Only when nothing is installed, which is what tells an
+                    // open from a reload: a reload never resets m_dataset, so
+                    // the session on screen is still live and its rasters are
+                    // still what it produced. Wiping them because a reopen
+                    // failed -- a definition the server would not take, a
+                    // connection that went away -- would throw away a working
+                    // display over a change that simply did not happen.
+                    if (!m_dataset) {
+                        setAllViewPlaceholders(
+                            tr("Could not display %1")
+                                .arg(QString::fromStdString(
+                                    m_datasetPath.string())));
+                    }
                     emit initialSliceFinished(false);
                 } else {
                     m_diagnosticsModel->noteStaleResult();
@@ -1266,10 +1299,17 @@ void MainWindow::requestInitialSlice(
         [path, generation, spec = std::move(spec), cancellation,
             preparedMetadata = std::move(preparedMetadata),
             dataRoot = std::move(dataRoot),
-            preparedSession = std::move(preparedSession)]() mutable {
-        if (preparedSession) {
+            load = std::move(load)]() mutable {
+        if (load.session) {
             return executeSessionFrameLoad(
-                std::move(preparedSession), spec, cancellation);
+                std::move(load.session), spec, cancellation);
+        }
+        if (load.reopen) {
+            // The quiet reopen of a remote dataset: same loader the sequence
+            // frames use, so the connected() pre-check and the derived-field
+            // capability gate are the ones written once.
+            return loadRemoteFrame(load.reopen->connection,
+                load.reopen->remotePath, 0, spec, cancellation);
         }
         return executeFrameLoad(path, DatasetId{generation}, spec,
             initialCacheBudget(), cancellation,

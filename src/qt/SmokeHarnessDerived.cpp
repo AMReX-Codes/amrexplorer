@@ -3,6 +3,8 @@
 #include "DerivedFieldStore.hpp"
 #include "ExpressionEditorDialog.hpp"
 #include "MainWindow.hpp"
+
+#include <amrexplorer/remote/Server.hpp>
 #include "RangeController.hpp"
 
 #include <QAction>
@@ -1035,6 +1037,174 @@ void armPlaybackChecks(amrvis::qt::MainWindow& window,
     QTimer::singleShot(30000, &application, [&application] { application.exit(13); });
 }
 
+// Arms the remote scenario. Everything the local one checks, but with the
+// session on the far side of the protocol: the editor is available over a
+// remote dataset (which it was not before 1.4), Apply reopens the dataset on
+// its own connection with the definitions, the computed field arrives as the
+// tail of the catalog and renders, and a definition the plotfile cannot
+// satisfy comes back greyed with the *server's* reason.
+void armRemoteDerivedChecks(
+    amrvis::qt::MainWindow& window, QApplication& application)
+{
+    auto phase = std::make_shared<int>(0);
+    auto loads = std::make_shared<int>(0);
+    auto ticks = std::make_shared<int>(0);
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [&application, loads](bool success) {
+            if (!success) {
+                application.exit(2);
+                return;
+            }
+            ++*loads;
+        });
+
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, loads, ticks, timer] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            ++*ticks;
+            if (*loads == 0) {
+                return;  // the remote dataset is still opening
+            }
+            auto* selector = window.findChild<QComboBox*>(
+                QStringLiteral("fieldSelector"));
+            auto* action = window.findChild<QAction*>(
+                QStringLiteral("expressionEditorAction"));
+            if (selector == nullptr || action == nullptr) {
+                qCritical("the window is missing its field selector or action");
+                finish(3);
+                return;
+            }
+            auto* dialog =
+                window.findChild<amrvis::qt::ExpressionEditorDialog*>();
+            if (*phase == 0) {
+                if (fieldNames(window)
+                    != QStringList{QStringLiteral("density"),
+                        QStringLiteral("temperature")}) {
+                    qCritical("the remote dataset lists: %s",
+                        qPrintable(fieldNames(window).join(
+                            QStringLiteral(", "))));
+                    finish(4);
+                    return;
+                }
+                // The whole point of 1.4: over a remote session this used to
+                // be disabled, saying derived fields needed a local dataset.
+                if (!action->isEnabled()) {
+                    qCritical("the Expression Editor is unavailable over a "
+                              "remote dataset: %s",
+                        qPrintable(action->toolTip()));
+                    finish(5);
+                    return;
+                }
+                action->trigger();
+                *phase = 1;
+                return;
+            }
+            if (*phase == 1) {
+                if (dialog == nullptr
+                    || !writeDefinition(*dialog, QStringLiteral("product"),
+                        QStringLiteral("density * temperature"))
+                    || !appendDefinition(*dialog,
+                        QStringLiteral("elsewhere"),
+                        QStringLiteral("nonesuch * 2"))
+                    || !clickApply(*dialog) || errorShown(*dialog)) {
+                    qCritical("the editor refused the definitions");
+                    finish(6);
+                    return;
+                }
+                *ticks = 0;
+                *phase = 2;
+                return;
+            }
+            if (*phase == 2) {
+                // Apply reopens the remote dataset on its own connection.
+                if (!fieldNames(window).contains(QStringLiteral("product"))) {
+                    if (*ticks > 400) {
+                        qCritical("applying over a remote session never "
+                                  "reached the field list: %s",
+                            qPrintable(fieldNames(window).join(
+                                QStringLiteral(", "))));
+                        finish(7);
+                        return;
+                    }
+                    return;
+                }
+                // The one the plotfile cannot satisfy is listed, greyed, with
+                // the server's own reason on it.
+                const auto unavailable
+                    = selector->findText(QStringLiteral("elsewhere"));
+                if (unavailable < 0
+                    || selector->itemData(unavailable).isValid()) {
+                    qCritical("the unavailable definition is not listed, or "
+                              "is listed as a field");
+                    finish(8);
+                    return;
+                }
+                if (!selector->itemData(unavailable, Qt::ToolTipRole)
+                        .toString()
+                        .contains(QStringLiteral("unavailable"))) {
+                    qCritical("the dimmed entry does not say why");
+                    finish(9);
+                    return;
+                }
+                const auto product
+                    = selector->findText(QStringLiteral("product"));
+                selector->setCurrentIndex(product);
+                *ticks = 0;
+                *phase = 3;
+                return;
+            }
+            if (*phase == 3) {
+                if (window.sliceRequestPendingForTest()
+                    || window.slicesInFlightForTest() != 0) {
+                    if (*ticks > 400) {
+                        qCritical("the computed field never finished slicing");
+                        finish(10);
+                        return;
+                    }
+                    return;
+                }
+                const auto size = window.activeViewImageSizeForTest();
+                if (size[0] <= 0 || size[1] <= 0) {
+                    qCritical("the computed field rendered nothing");
+                    finish(11);
+                    return;
+                }
+                if (window.backgroundErrorCountForTest() != 0) {
+                    qCritical("the remote computed field reported an error");
+                    finish(12);
+                    return;
+                }
+                // And the reload settled: one Apply must not leave the window
+                // reopening the dataset for ever, which is what would happen
+                // if the session and the editor disagreed about the list.
+                *ticks = 0;
+                *phase = 4;
+                return;
+            }
+            if (*phase == 4) {
+                // A few idle turns with nothing in flight: a reload loop shows
+                // up here as loads climbing without anything asking.
+                const auto settled = *loads;
+                if (*ticks < 20) {
+                    return;
+                }
+                if (*loads != settled) {
+                    qCritical("the window is still reopening the dataset");
+                    finish(13);
+                    return;
+                }
+                finish(0);
+            }
+        });
+    timer->start();
+    QTimer::singleShot(40000, &application, [&application] { application.exit(14); });
+}
+
 Outcome dispatchDerivedSequence(Context& context)
 {
     if (context.argc != 4) {
@@ -1078,6 +1248,20 @@ Outcome dispatchDerived(Context& context)
         armDerivedChecks(window, application);
     } else if (option == "--derived-field-playback-smoke-test") {
         armPlaybackChecks(window, application, path);
+    } else if (option == "--remote-derived-field-smoke-test") {
+        // The in-process loopback server, as the remote theme starts one: the
+        // handshake takes milliseconds and runs on the GUI thread.
+        context.server = std::make_shared<amrvis::remote::Server>();
+        context.serverThread.emplace(
+            [server = context.server] { server->run(); });
+        armRemoteDerivedChecks(window, application);
+        QTimer::singleShot(0, &window,
+            [&window, remotePath = path.string(),
+                server = context.server] {
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(remotePath);
+            });
+        return {true, std::nullopt};
     } else {
         return {false, std::nullopt};
     }

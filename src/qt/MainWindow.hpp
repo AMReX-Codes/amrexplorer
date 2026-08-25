@@ -60,6 +60,7 @@ struct DatasetMetadata;
 struct LineResult;
 namespace remote {
 class Connection;
+class RemoteDatasetSession;
 }
 enum class CompositionPolicy : std::uint8_t;
 }
@@ -621,6 +622,26 @@ private:
     // frame 1 would make them appear. A prepared session cannot take them
     // either, but that is a property of the load, not of the window, so
     // requestInitialSlice asks it there.
+    // Opens a remote session for one load and renders it. Shared by the
+    // sequence loader and the reload of a single remote dataset, so the
+    // connected() pre-check and -- the reason it exists -- the derived-field
+    // capability gate are written once. A peer that predates protocol 1.4 gets
+    // an open with no definitions rather than a refusal, so a session that
+    // cannot compute fields still shows the ones it stores.
+    // Opens a remote session for a load, sending only the definitions the peer
+    // can install. Not a refusal for an older peer: a list the user happens to
+    // have must not stop it from opening a plotfile, and the editor is greyed
+    // with the reason instead.
+    [[nodiscard]] static std::shared_ptr<remote::RemoteDatasetSession>
+    openRemoteSessionForLoad(
+        const std::shared_ptr<remote::Connection>& connection,
+        const std::string& remotePath,
+        const std::vector<DerivedFieldDefinition>& derivedFields,
+        StopToken cancellation);
+    [[nodiscard]] static InitialSliceResult loadRemoteFrame(
+        const std::shared_ptr<remote::Connection>& connection,
+        const std::string& remotePath, std::uint64_t connectionGeneration,
+        const FrameSliceSpec& spec, StopToken cancellation);
     [[nodiscard]] bool derivedFieldsReachNextLoad() const;
     // Whether the session on screen was opened with the list the editor now
     // holds. Asked of the session itself rather than inferred from when
@@ -840,12 +861,29 @@ private:
     void scheduleSliceRequest(PlaneViewState& state, bool rasterDirty = true);
     void flushSliceRequests();
     void requestSlice(PlaneViewState& state, bool rasterDirty);
+    // How requestInitialSlice is to get its session: one that is already open,
+    // or a remote endpoint to reopen. Exactly one applies, which is why they
+    // travel together rather than as two parameters that must not both be set.
+    // Both isRemote() and responseBytes() are asked *before* the worker runs --
+    // they size the output rasters and arm the post-load resize coalescing --
+    // so the reopen case has to be able to answer them without a session.
+    struct SliceLoad {
+        // Already open: the initial remote open, which needed the session on
+        // the GUI thread for its metadata.
+        std::shared_ptr<DatasetSession> session;
+        // To be opened on the worker: the quiet reload of a remote dataset,
+        // which must not tear the window down the way a fresh open does.
+        std::optional<RemoteOpen> reopen;
+        [[nodiscard]] bool isRemote() const;
+        // The negotiated frame size, which bounds a remote raster.
+        [[nodiscard]] std::optional<std::uint32_t> responseBytes() const;
+    };
     void requestInitialSlice(const std::filesystem::path& path,
         std::uint64_t generation,
         std::optional<PlotfileMetadataResult> preparedMetadata = std::nullopt,
         std::filesystem::path dataRoot = {},
         std::optional<FrameSliceSpec> initialSpec = std::nullopt,
-        std::shared_ptr<DatasetSession> preparedSession = {});
+        SliceLoad load = {});
     // The scale the toolbar button and the View > Scale radio group report.
     // They are one state shown twice, so there is one setter: picking "4x" from
     // the toolbar used to leave the View menu unchecked, and neither reset when
@@ -971,6 +1009,19 @@ private:
     // same event for the user-facing diagnostics panel.
     std::uint64_t m_visibleSyncStaleSkips = 0;
 #endif
+    // Whether the connection a remote sequence was opened on can install
+    // derived fields. Captured there rather than asked of m_dataset, for the
+    // reason derivedFieldsReachNextLoad gives: frame 0's spec is built while
+    // the outgoing dataset is still installed.
+    bool m_remoteSequenceDerivedFields = false;
+    // The definition list a reload was last started for, and whether one is
+    // still in flight. A reload is asked for on every frame a sequence
+    // displays, so a list a load cannot install would otherwise reopen the
+    // dataset once per event-loop turn -- a hung window, and a server past its
+    // per-session dataset limit within a few seconds. With these, a mismatch
+    // that survives a reload costs one wasted reload rather than a storm.
+    std::optional<std::vector<DerivedFieldDefinition>> m_reloadStartedFor;
+    bool m_reloadInFlight = false;
     QTreeWidget* m_metadataTree = nullptr;
     QDockWidget* m_metadataDock = nullptr;
     QDockWidget* m_diagnosticsDock = nullptr;

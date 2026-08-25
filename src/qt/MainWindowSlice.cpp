@@ -241,11 +241,24 @@ void MainWindow::reloadIfDefinitionsMoved()
         || openSessionHasCurrentDefinitions()) {
         return;
     }
+    // Once per list, and one at a time. This is asked on every frame a
+    // sequence displays, so a list the load cannot install -- a server that
+    // skips all of it, a path that forgets to pass it on -- would otherwise
+    // reopen the dataset on every event-loop turn until the session hit its
+    // dataset limit. A reload already started for this exact list is enough.
+    if (m_reloadInFlight
+        || (m_reloadStartedFor
+            && *m_reloadStartedFor == m_derivedFields->definitions())) {
+        return;
+    }
+    m_reloadStartedFor = m_derivedFields->definitions();
+    m_reloadInFlight = true;
     // Not now: the frame path is called from inside the sequence controller's
     // own load completion, which sets m_inFlight and emits frameDisplayed
     // after this returns -- starting a load from here would have it clobber
     // the load this reload starts.
     QTimer::singleShot(0, this, [this] {
+        m_reloadInFlight = false;
         if (m_closing || !m_derivedFields->available()
             || openSessionHasCurrentDefinitions()) {
             return;
@@ -254,12 +267,52 @@ void MainWindow::reloadIfDefinitionsMoved()
     });
 }
 
+std::shared_ptr<remote::RemoteDatasetSession>
+MainWindow::openRemoteSessionForLoad(
+    const std::shared_ptr<remote::Connection>& connection,
+    const std::string& remotePath,
+    const std::vector<DerivedFieldDefinition>& derivedFields,
+    StopToken cancellation)
+{
+    return remote::RemoteDatasetSession::open(connection, remotePath,
+        initialCacheBudget(), cancellation,
+        connection && connection->supportsDerivedFields()
+            ? derivedFields
+            : std::vector<DerivedFieldDefinition>{});
+}
+
+InitialSliceResult MainWindow::loadRemoteFrame(
+    const std::shared_ptr<remote::Connection>& connection,
+    const std::string& remotePath, std::uint64_t connectionGeneration,
+    const FrameSliceSpec& spec, StopToken cancellation)
+{
+    // Foreground loads and prefetches share the session's connection, which
+    // multiplexes their requests. There is no reconnect: the connection lives
+    // as long as the ssh session, and a lost session is reported to the user
+    // rather than silently re-established -- said here, because "not
+    // connected" is the message a user can act on and a bare transact failure
+    // is not.
+    if (!connection || !connection->connected()) {
+        throw std::runtime_error("remote session is not connected: "
+            + (connection ? connection->disconnectReason()
+                          : std::string("no connection")));
+    }
+    auto session = openRemoteSessionForLoad(
+        connection, remotePath, spec.derivedFields, cancellation);
+    auto result = executeSessionFrameLoad(
+        std::move(session), spec, cancellation);
+    result.connectionGeneration = connectionGeneration;
+    return result;
+}
+
 bool MainWindow::derivedFieldsReachNextLoad() const
 {
-    // A remote sequence fixes its field lists on the server, and a FAB
-    // drilled out of a MultiFab is what the editor is unavailable over -- for
-    // the same reason the reload cannot rebuild one.
-    return !m_remoteSequence && !m_fabNavigator->fabMode();
+    // A remote sequence carries them only when the server it was opened on can
+    // install them (protocol 1.4); a FAB drilled out of a MultiFab is what the
+    // editor is unavailable over -- for the same reason the reload cannot
+    // rebuild one.
+    return (!m_remoteSequence || m_remoteSequenceDerivedFields)
+        && !m_fabNavigator->fabMode();
 }
 
 std::array<std::string, 3> MainWindow::vectorFieldNames() const
@@ -1654,6 +1707,8 @@ void MainWindow::openRemoteSequence(
 
     prepareSequence(remotePaths.size());
     m_remoteSequence = true;
+    m_remoteSequenceDerivedFields
+        = connection && connection->supportsDerivedFields();
 
     std::vector<std::filesystem::path> frames;
     frames.reserve(remotePaths.size());
@@ -1668,16 +1723,8 @@ void MainWindow::openRemoteSequence(
                       generation = connectionGeneration](
                       const std::filesystem::path& path, DatasetId,
                       const FrameSliceSpec& spec, StopToken cancellation) {
-        if (!connection->connected()) {
-            throw std::runtime_error("remote session is not connected: "
-                + connection->disconnectReason());
-        }
-        auto session = remote::RemoteDatasetSession::open(
-            connection, path.string(), initialCacheBudget(), cancellation);
-        auto result = executeSessionFrameLoad(
-            std::move(session), spec, cancellation);
-        result.connectionGeneration = generation;
-        return result;
+        return loadRemoteFrame(
+            connection, path.string(), generation, spec, cancellation);
     };
     m_sequenceController->open(std::move(frames), std::move(loader));
 }

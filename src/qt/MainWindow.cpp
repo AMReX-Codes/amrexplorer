@@ -44,18 +44,31 @@ MainWindow::MainWindow(QWidget* parent)
     // buildFrameSpec is where the list reaches a dataset.
     m_derivedFields = new DerivedFieldController(
         DerivedFieldController::Hooks{
-            .available = [this] {
-                // Two questions, and both have to hold: whether the open
-                // session can take derived fields, and whether a load built
-                // now would carry them (derivedFieldsReachNextLoad). Not for a
-                // standalone FAB, drilled out of a MultiFab or opened straight
-                // from a file: applying reopens m_datasetPath, and what that
-                // entry describes -- a synthesised metadata, or one record of
-                // a multi-record file -- is not what re-reading the path
-                // produces.
-                return m_dataset && m_dataset->supportsDerivedFields()
-                    && !m_dataset->metadata().isFab
-                    && derivedFieldsReachNextLoad();
+            .unavailableReason = [this]() -> QString {
+                // Each answer names the thing the user would have to change.
+                // Not for a standalone FAB, drilled out of a MultiFab or opened
+                // straight from a file: applying reopens m_datasetPath, and
+                // what that entry describes -- a synthesised metadata, or one
+                // record of a multi-record file -- is not what re-reading the
+                // path produces.
+                if (!m_dataset) {
+                    return tr("Derived fields need an open dataset.");
+                }
+                if (m_dataset->metadata().isFab
+                    || !derivedFieldsReachNextLoad()) {
+                    return tr("Derived fields are not available for a FAB "
+                              "drilled out of a MultiFab.");
+                }
+                if (!m_dataset->supportsDerivedFields()) {
+                    // The one case a user can act on: their server is old.
+                    // A remote session says so in the words both layers share;
+                    // anything else cannot compute fields at all.
+                    return std::dynamic_pointer_cast<
+                               remote::RemoteDatasetSession>(m_dataset)
+                        ? tr(remote::derivedFieldsUnsupportedMessage)
+                        : tr("This dataset cannot compute fields.");
+                }
+                return {};
             },
             .reload = [this] { reloadCurrentDataset(); },
             .chooseFile =
@@ -1539,7 +1552,7 @@ void MainWindow::reloadCurrentDataset()
     // Not while closing: another window's Apply reaches every window, and a
     // worker started here would hold the I/O mutex against the quit. The
     // completion handler checks m_closing, but the read still runs.
-    if (m_closing || !m_dataset || m_datasetPath.empty()) {
+    if (m_closing || !m_dataset || m_datasetPath.empty() || !m_openMetadata) {
         return;
     }
     if (m_playbackMode == PlaybackMode::Sequence) {
@@ -1592,6 +1605,20 @@ void MainWindow::reloadCurrentDataset()
     // replayed against the new session by the next unrelated request.
     m_pendingAllViews = false;
     m_pendingViews.clear();
+    // A remote dataset is reopened on *its own* connection, not on whatever
+    // the session controller currently holds: server dataset ids come from a
+    // counter per connection, so a reload over a newer connection would
+    // restart them at 1 and let a cached display range alias a renumbered
+    // field. A connection that has gone fails the reload cleanly instead,
+    // which is the honest outcome.
+    if (const auto remote
+        = std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)) {
+        requestInitialSlice(m_datasetPath, generation, std::nullopt, {},
+            buildFrameSpec(),
+            SliceLoad{{}, RemoteOpen{remote->connection(),
+                           remote->remotePath()}});
+        return;
+    }
     // No prepared metadata and no data root: with none, the session derives
     // both from the path, which is what re-reading a plotfile means. A FAB
     // drilled out of a MultiFab cannot be reopened this way -- its metadata is

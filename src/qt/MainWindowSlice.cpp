@@ -86,25 +86,6 @@ void MainWindow::configureSliceControls()
     ensureVectorFieldDefaults();
 }
 
-QString MainWindow::escapedExpression(const std::string& expression)
-{
-    // One line: an expression may be laid out over several, and a tooltip
-    // showing the breaks would be as tall as the editor it was typed in.
-    // simplified() folds every run of whitespace into a single space. Escaped
-    // because it is the user's own bytes; richTooltip is what makes the
-    // escaping show through as the characters they stand for.
-    return QString::fromStdString(expression).simplified().toHtmlEscaped();
-}
-
-QString MainWindow::richTooltip(const QString& escaped)
-{
-    // Qt renders a tooltip as rich text only when it thinks it might be some:
-    // `&lt;` decides it, `&amp;` on its own does not, so escaped text is shown
-    // either as the user wrote it or with the escapes visible, depending on
-    // which characters they used. The wrapper settles it for every string.
-    return QStringLiteral("<qt>%1</qt>").arg(escaped);
-}
-
 bool MainWindow::addUnavailableFieldItem(
     const QString& name, const QString& tooltip)
 {
@@ -245,6 +226,32 @@ void MainWindow::populateFieldSelector(const std::vector<DerivedFieldRow>& rows)
             row.name, static_cast<unsigned int>(*row.field));
         m_fieldSelector->setItemData(index, row.tooltip, Qt::ToolTipRole);
     }
+}
+
+bool MainWindow::openSessionHasCurrentDefinitions() const
+{
+    return m_dataset
+        && m_dataset->derivedFieldDefinitions()
+            == m_derivedFields->definitions();
+}
+
+void MainWindow::reloadIfDefinitionsMoved()
+{
+    if (m_closing || !m_derivedFields->available()
+        || openSessionHasCurrentDefinitions()) {
+        return;
+    }
+    // Not now: the frame path is called from inside the sequence controller's
+    // own load completion, which sets m_inFlight and emits frameDisplayed
+    // after this returns -- starting a load from here would have it clobber
+    // the load this reload starts.
+    QTimer::singleShot(0, this, [this] {
+        if (m_closing || !m_derivedFields->available()
+            || openSessionHasCurrentDefinitions()) {
+            return;
+        }
+        reloadCurrentDataset();
+    });
 }
 
 bool MainWindow::derivedFieldsReachNextLoad() const
@@ -1519,7 +1526,6 @@ void MainWindow::reportVisibleSyncFailure(const std::exception& error)
 
 void MainWindow::choosePlotfileSequence()
 {
-    const auto settings = makeSettings();
     // Select the plotfile directories directly with click / Ctrl-click /
     // Shift-click. QFileDialog::Directory only permits selecting more than one
     // directory on the non-native dialog, so disable the native one and force
@@ -1528,7 +1534,7 @@ void MainWindow::choosePlotfileSequence()
     // plotfiles (Header + Level_N) by openSequence.
     QFileDialog dialog(this,
         tr("Open Plotfile Sequence — select two or more plotfile directories"),
-        settings.value(QStringLiteral("lastOpenDirectory")).toString());
+        rememberedDialogDirectory());
     dialog.setFileMode(QFileDialog::Directory);
     dialog.setOption(QFileDialog::DontUseNativeDialog, true);
     for (auto* view : dialog.findChildren<QListView*>()) {
@@ -1789,14 +1795,11 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     }
     const auto cache = m_dataset->cacheMetrics();
     m_diagnosticsModel->setCacheMetrics(cache);
-    // As the open path does: this window has no dataset while it opens a
-    // sequence, so a definition committed in another window meanwhile reached
-    // every window but this one, and this frame carries the older list.
-    // Mid-playback the reload stands aside and setPlaybackMode picks it up.
-    if (m_frameSpecRevision != m_derivedFields->storeRevision()
-        && m_derivedFields->available()) {
-        reloadCurrentDataset();
-    }
+    // This window has no dataset while it opens a sequence, so a definition
+    // committed in another window meanwhile reached every window but this one,
+    // and this frame carries the older list. Mid-playback the reload stands
+    // aside and setPlaybackMode picks it up.
+    reloadIfDefinitionsMoved();
     validateVectorMode();
     // Frames need not share a domain, and the clamped scale report is computed
     // from one. A scale picked on an earlier frame otherwise kept that frame's
@@ -1838,9 +1841,11 @@ void MainWindow::configureSequenceControls(
         const auto displayedIndex = displayedField
             ? m_fieldSelector->findData(*displayedField)
             : -1;
-        selectFieldItem(displayedIndex >= 0
-                ? displayedIndex
-                : std::clamp(previousField, 0, m_fieldSelector->count() - 1));
+        // Not clamped: std::clamp is undefined when the list is empty
+        // (count() - 1 < 0), and selectFieldItem takes any index and comes to
+        // rest on a field or on nothing.
+        selectFieldItem(
+            displayedIndex >= 0 ? displayedIndex : previousField);
         // The range memory is keyed by field id, and the ids moved with the
         // field list, so the widgets have to be told which field they now
         // represent or the next switch commits this frame's range onto
@@ -2043,12 +2048,12 @@ void MainWindow::setPlaybackMode(PlaybackMode mode)
         m_playbackTimer->start(m_animationPanel->frameDelayMs());
     }
     // Playback is why the reload stood aside: the next frame reads the list
-    // for itself, and stopping means there is no next frame. What is on
-    // screen was rendered against the list as it was, so it is reloaded here
-    // rather than left computing an expression the editor has replaced.
-    if (wasSequence && mode != PlaybackMode::Sequence
-        && m_frameSpecRevision != m_derivedFields->storeRevision()) {
-        reloadCurrentDataset();
+    // for itself, and stopping means there is no next frame. What is on screen
+    // may then have been rendered against an older list, and only the session
+    // itself can say -- a prefetch of the next frame is built from the current
+    // one, so "when was a spec last built" answers a different question.
+    if (wasSequence && mode != PlaybackMode::Sequence) {
+        reloadIfDefinitionsMoved();
     }
     // Every frame of a sequence renders the volume as a draft, so what is
     // standing in the window when playback stops is a half-size one. Ask for

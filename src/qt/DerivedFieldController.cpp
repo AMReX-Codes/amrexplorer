@@ -26,6 +26,25 @@ constexpr int kExpressionListVersion = 1;
 
 } // namespace
 
+QString escapedExpression(const std::string& expression)
+{
+    // One line: an expression may be laid out over several, and a tooltip
+    // showing the breaks would be as tall as the editor it was typed in.
+    // simplified() folds every run of whitespace into a single space. Escaped
+    // because it is the user's own bytes; richTooltip is what makes the
+    // escaping show through as the characters they stand for.
+    return QString::fromStdString(expression).simplified().toHtmlEscaped();
+}
+
+QString richTooltip(const QString& escaped)
+{
+    // Qt renders a tooltip as rich text only when it thinks it might be some:
+    // `&lt;` decides it, `&amp;` on its own does not, so escaped text is shown
+    // either as the user wrote it or with the escapes visible, depending on
+    // which characters they used. The wrapper settles it for every string.
+    return QStringLiteral("<qt>%1</qt>").arg(escaped);
+}
+
 ExpressionListFile parseExpressionList(const QByteArray& json)
 {
     QJsonParseError parseError{};
@@ -122,9 +141,13 @@ DerivedFieldController::DerivedFieldController(
 
 void DerivedFieldController::adoptStoreChange()
 {
-    // Nothing to replace in the window whose own Apply made the change: its
-    // draft is already exactly this list.
-    if (m_dialog && m_dialog->draft() != m_store.definitions()) {
+    if (m_dialog && m_dialog->draft() == m_store.definitions()) {
+        // Already editing exactly this list: nothing to replace, but it is now
+        // the committed one -- whether this window's own Apply made the change
+        // or a peer committed the same thing -- and saying otherwise leaves
+        // the editor reporting unapplied edits it does not have.
+        m_dialog->markDraftCommitted();
+    } else if (m_dialog) {
         if (m_dialog->hasUnappliedEdits()) {
             // Written here and not applied. One list is shared by every
             // window, so adopting would take an editor out from under the user
@@ -159,8 +182,11 @@ void DerivedFieldController::refreshAvailability()
     const auto usable = available();
     if (m_action) {
         m_action->setEnabled(usable);
+        // Never empty: the Variable menu shows tooltips (for the derived
+        // rows), and QAction falls back to its own text, so an empty one pops
+        // a tooltip repeating the entry's label.
         m_action->setToolTip(usable
-                ? QString()
+                ? tr("Define fields computed from the stored ones")
                 : tr("Derived fields need a local dataset."));
     }
     // The editor stays open when the dataset does not. It edits the session's
@@ -225,6 +251,16 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
         } catch (const ExpressionError& error) {
             return Refusal{QString::fromUtf8(error.what()), index};
         }
+    }
+
+    // What is wrong with the list as a list, whatever the data: too many
+    // fields read at once, or a dependency chain deeper than evaluation may
+    // recurse. Left to installation these would be skipped per dataset, so
+    // every window would grey the same row and say why, over a fault no data
+    // could fix.
+    if (const auto fault = validateDerivedFieldGraph(definitions)) {
+        return Refusal{QString::fromStdString(fault->message),
+            fault->definitionIndex};
     }
 
     // set() is what reloads -- here and in every other window -- and does

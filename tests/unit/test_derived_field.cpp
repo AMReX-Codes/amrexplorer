@@ -364,7 +364,42 @@ int main()
                 "Skip left an installed definition pointing at the wrong id");
         }
 
-        std::cout << "derived field tests passed\n";
+        // Faults in the list as a list, which no dataset can make good and which
+    // an editor therefore refuses once rather than every dataset greying the
+    // same row: a chain deeper than evaluation recurses, and an expression
+    // reading more fields than one evaluation may pin.
+    {
+        std::vector<amrvis::DerivedFieldDefinition> chain{
+            {"d0", "density"}};
+        for (std::size_t link = 1;
+            link <= amrvis::maximumDerivedFieldDepth; ++link) {
+            chain.push_back({"d" + std::to_string(link),
+                "d" + std::to_string(link - 1) + " * 2"});
+        }
+        const auto fault = amrvis::validateDerivedFieldGraph(chain);
+        require(fault.has_value()
+                && fault->definitionIndex == amrvis::maximumDerivedFieldDepth,
+            "a chain past the depth limit was accepted");
+        chain.pop_back();
+        require(!amrvis::validateDerivedFieldGraph(chain).has_value(),
+            "a chain at the depth limit was refused");
+
+        std::string wide = "a0";
+        for (std::size_t input = 1;
+            input <= amrvis::maximumDerivedFieldInputs; ++input) {
+            wide += " + a" + std::to_string(input);
+        }
+        const std::vector<amrvis::DerivedFieldDefinition> many{{"wide", wide}};
+        require(amrvis::validateDerivedFieldGraph(many).has_value(),
+            "an expression reading more fields than the cap was accepted");
+        // x, y and z are computed rather than read, so they do not count.
+        const std::vector<amrvis::DerivedFieldDefinition> coordinates{
+            {"place", "x + y + z + density"}};
+        require(!amrvis::validateDerivedFieldGraph(coordinates).has_value(),
+            "coordinates were counted as fields read");
+    }
+
+    std::cout << "derived field tests passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         std::cerr << "test_derived_field failed: " << error.what() << '\n';

@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -576,6 +577,13 @@ private:
     // new generation both invalidates the in-flight work and gives the
     // replacement session a dataset id of its own.
     void reloadCurrentDataset();
+    // The directory the last file dialog ended in, remembered across all of
+    // them. The dialogs themselves stay separate -- one picks several
+    // directories, one saves with a default suffix -- but this was copied into
+    // each of them, as was the offscreen option (fileDialogOptions, in
+    // MainWindow.cpp, where both its callers are).
+    [[nodiscard]] QString rememberedDialogDirectory() const;
+    void rememberDialogDirectory(const QString& path);
     // The Import/Export file dialog the derived-field controller asks for.
     [[nodiscard]] QString chooseExpressionListPath(
         QWidget* parent, bool forSaving);
@@ -606,13 +614,6 @@ private:
     // is read as field 0 by everything downstream.
     [[nodiscard]] bool addUnavailableFieldItem(
         const QString& name, const QString& tooltip);
-    // An expression for a tooltip: one line whatever its layout, and escaped.
-    [[nodiscard]] static QString escapedExpression(
-        const std::string& expression);
-    // Escaped text as a tooltip Qt is certain to render as rich text. Without
-    // the wrapper, an expression holding `<` decides it and one holding only
-    // `&` does not, so the escapes show up as themselves.
-    [[nodiscard]] static QString richTooltip(const QString& escaped);
     // Whether a load built from the window's state as it stands can install
     // derived fields. Deliberately not asked of m_dataset: a sequence builds
     // its first spec while the *outgoing* dataset is still installed (see
@@ -621,6 +622,17 @@ private:
     // either, but that is a property of the load, not of the window, so
     // requestInitialSlice asks it there.
     [[nodiscard]] bool derivedFieldsReachNextLoad() const;
+    // Whether the session on screen was opened with the list the editor now
+    // holds. Asked of the session itself rather than inferred from when
+    // things happened: a window is not told to reload while it has no dataset
+    // (the whole of an open), a reload stands aside during playback, and a FAB
+    // return reopens from a spec captured before any of it.
+    [[nodiscard]] bool openSessionHasCurrentDefinitions() const;
+    // Reloads the open dataset if it does not, once the caller's own work is
+    // off the stack. Deferred because the frame path reaches this from inside
+    // SequenceController::finishLoad, which goes on to touch its own state
+    // after the display call returns.
+    void reloadIfDefinitionsMoved();
     // The vector-glyph selections travel by name for the same reason the
     // scalar one does: an id means something only in the field list it came
     // from. Captured before a load swaps the dataset, resolved again after.
@@ -949,9 +961,6 @@ private:
     bool m_visibleSyncInFlight = false;
     bool m_visibleSyncRerun = false;
     std::optional<amrvis::DisplayCoordinator::RangeKey> m_pendingRangeStore;
-    // The store revision the last sequence frame spec was built with, so a
-    // frame that loaded with an older list can be told from one that did not.
-    std::uint64_t m_frameSpecRevision = 0;
 #ifdef AMREXPLORER_QT_TEST_ACCESS
     // Test-only: run just after an initial-slice load is launched; see
     // setInitialSliceLaunchedHookForTest.

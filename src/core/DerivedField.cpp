@@ -75,6 +75,60 @@ const std::string& DerivedFieldError::message() const noexcept
     return m_message;
 }
 
+std::optional<DerivedFieldListFault> validateDerivedFieldGraph(
+    std::span<const DerivedFieldDefinition> definitions)
+{
+    // Mirrors what installDerivedFields counts, without a dataset to resolve
+    // against: a symbol naming an earlier definition is a derived input, x/y/z
+    // is a coordinate, and anything else is a stored field -- which is what it
+    // will be in every dataset that can satisfy the list at all.
+    std::vector<std::size_t> depths;
+    depths.reserve(definitions.size());
+    for (std::size_t index = 0; index < definitions.size(); ++index) {
+        const auto& definition = definitions[index];
+        // Not default-constructible, and an expression that does not parse is
+        // the caller's to report, with the offset it carries.
+        std::optional<CompiledExpression> expression;
+        try {
+            expression = CompiledExpression::compile(definition.expression);
+        } catch (const ExpressionError&) {
+            return std::nullopt;
+        }
+        std::size_t fieldInputs = 0;
+        std::size_t depth = 1;
+        for (const auto& symbol : expression->symbols()) {
+            std::optional<std::size_t> earlier;
+            for (std::size_t before = 0; before < index; ++before) {
+                if (definitions[before].name == symbol) {
+                    earlier = before;
+                }
+            }
+            if (earlier) {
+                ++fieldInputs;
+                depth = std::max(depth, depths[*earlier] + 1);
+                continue;
+            }
+            if (coordinateAxis(symbol)) {
+                continue;
+            }
+            ++fieldInputs;
+        }
+        if (fieldInputs > maximumDerivedFieldInputs) {
+            return DerivedFieldListFault{index,
+                "an expression may read at most "
+                    + std::to_string(maximumDerivedFieldInputs) + " fields"};
+        }
+        if (depth > maximumDerivedFieldDepth) {
+            return DerivedFieldListFault{index,
+                "a derived field may not read a chain of more than "
+                    + std::to_string(maximumDerivedFieldDepth)
+                    + " derived fields"};
+        }
+        depths.push_back(depth);
+    }
+    return std::nullopt;
+}
+
 DerivedFieldInstallation installDerivedFields(DatasetMetadata& metadata,
     std::span<const DerivedFieldDefinition> definitions,
     DerivedFieldPolicy policy)

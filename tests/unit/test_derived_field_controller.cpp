@@ -3,6 +3,7 @@
 #include "ExpressionEditorDialog.hpp"
 
 #include <QApplication>
+#include <QDialog>
 #include <QFile>
 #include <QLabel>
 #include <QLineEdit>
@@ -10,6 +11,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QTemporaryDir>
+#include <QTextDocument>
 
 #include <cstdlib>
 #include <iostream>
@@ -167,6 +169,23 @@ int main(int argc, char** argv)
         require(action->isEnabled(),
             "the action stayed disabled after a dataset opened");
 
+        // Close closes it. Nothing asserted this, which is how removing the
+        // button's connection -- on the belief that a parented
+        // QDialogButtonBox wires rejected() to its dialog, which it does not
+        // -- shipped as a dialog whose Close button did nothing.
+        controller.showEditor(parent);
+        auto* closable = parent->findChild<ExpressionEditorDialog*>();
+        require(closable != nullptr, "the editor did not open");
+        int finished = 0;
+        QObject::connect(closable, &QDialog::finished,
+            closable, [&finished](int) { ++finished; });
+        closable->findChild<QPushButton*>(
+                     QStringLiteral("closeExpressionsButton"))
+            ->click();
+        require(finished == 1 && !closable->isVisible(),
+            "the editor's Close button did not close it");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
         // An editor open when the dataset goes stays open: it edits the
         // session's list, not the dataset's, and File > Open leaves the
         // window without one for the whole of the load. Closing it would
@@ -183,6 +202,27 @@ int main(int argc, char** argv)
         require(parent->findChild<ExpressionEditorDialog*>() != nullptr,
             "losing the dataset closed the editor and its draft");
         delete parent;
+    }
+
+    // The tooltip format, which a GUI smoke test could only assert through a
+    // combo box: an expression is folded onto one line, escaped, and wrapped
+    // so Qt renders it as rich text whichever characters it happens to hold.
+    {
+        require(amrvis::qt::escapedExpression("density *\n    temperature")
+                == QStringLiteral("density * temperature"),
+            "the expression was not folded onto one line");
+        require(amrvis::qt::escapedExpression("${a<b} & ${c}")
+                == QStringLiteral("${a&lt;b} &amp; ${c}"),
+            "the expression was not escaped");
+        require(amrvis::qt::richTooltip(QStringLiteral("a &amp; b"))
+                == QStringLiteral("<qt>a &amp; b</qt>"),
+            "the tooltip was not wrapped as rich text");
+        // Which is the point of the wrapper: on its own, text escaped for
+        // markup is only *read* as markup when it holds an escaped `<`.
+        require(!Qt::mightBeRichText(QStringLiteral("a &amp; b"))
+                && Qt::mightBeRichText(
+                    amrvis::qt::richTooltip(QStringLiteral("a &amp; b"))),
+            "the wrapper does not make Qt read the tooltip as rich text");
     }
 
     // An imported list is bounded where its length is first seen, so an

@@ -9,7 +9,7 @@
 #include <QString>
 
 #include <cstddef>
-#include <cstdint>
+#include <string>
 #include <functional>
 #include <optional>
 #include <vector>
@@ -35,6 +35,13 @@ struct ExpressionListFile {
     // otherwise: an expression list is imported whole or not at all.
     QString error;
 };
+
+// An expression as a tooltip: one line whatever its layout, and escaped.
+[[nodiscard]] QString escapedExpression(const std::string& expression);
+// Escaped text as a tooltip Qt is certain to render as rich text. Without the
+// wrapper, an expression holding `<` decides it and one holding only `&` does
+// not, so the escapes show up as themselves.
+[[nodiscard]] QString richTooltip(const QString& escaped);
 
 [[nodiscard]] ExpressionListFile parseExpressionList(const QByteArray& json);
 [[nodiscard]] QByteArray writeExpressionList(
@@ -87,18 +94,13 @@ public:
     // when a dataset opens or closes.
     void refreshAvailability();
 
-    // Whether a dataset that can take derived fields is open, and how many
-    // times the shared list has changed. The host asks both when one of its
-    // own loads lands: it counts as unavailable for the whole of an open, so
-    // a change committed meanwhile reached every other window but not the
-    // session it was opening (see DerivedFieldStore::revision).
+    // Whether a dataset that can take derived fields is open. The host asks
+    // it when one of its own loads lands: a window counts as unavailable for
+    // the whole of an open, so a list committed meanwhile reached every other
+    // window but not the session it was opening.
     [[nodiscard]] bool available() const
     {
         return m_hooks.available && m_hooks.available();
-    }
-    [[nodiscard]] std::uint64_t storeRevision() const noexcept
-    {
-        return m_store.revision();
     }
 
     [[nodiscard]] const std::vector<DerivedFieldDefinition>& definitions()

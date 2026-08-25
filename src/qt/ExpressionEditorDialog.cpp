@@ -94,9 +94,6 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     auto* buttons = new QDialogButtonBox(this);
     m_apply = buttons->addButton(QDialogButtonBox::Apply);
     m_apply->setObjectName(QStringLiteral("applyExpressionsButton"));
-    // Left to the button box, whose rejected() this dialog already receives
-    // as its parent: wiring clicked() as well would run reject() twice and
-    // emit finished() twice for one close.
     auto* close = buttons->addButton(QDialogButtonBox::Close);
     close->setObjectName(QStringLiteral("closeExpressionsButton"));
 
@@ -162,6 +159,10 @@ ExpressionEditorDialog::ExpressionEditorDialog(
         clearError();
         emit applyRequested();
     });
+    // Explicitly: a QDialogButtonBox parented to a dialog does *not* have its
+    // rejected() wired to that dialog's reject() -- probed, not assumed --
+    // so without this the Close button does nothing at all.
+    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     rebuildList(m_draft.empty() ? std::nullopt : std::optional<std::size_t>{0});
     resize(720, 420);
@@ -174,6 +175,13 @@ void ExpressionEditorDialog::setDraft(
     m_draft = std::move(definitions);
     clearError();
     rebuildList(select);
+}
+
+void ExpressionEditorDialog::markDraftCommitted()
+{
+    m_committed = m_draft;
+    m_notice->clear();
+    m_notice->setVisible(false);
 }
 
 void ExpressionEditorDialog::setCommitted(

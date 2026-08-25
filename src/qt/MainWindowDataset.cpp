@@ -833,8 +833,11 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_levelMenu->setEnabled(false);
     m_contoursAction->setEnabled(false);
     m_particleController->suspendAction();
-    // The dataset is gone as of the reset above: the editor must not stay
-    // open over nothing.
+    // The dataset is gone as of the reset above, so the Variable menu's field
+    // entries name a session that no longer exists: triggering one would drive
+    // a combo that is merely disabled, not emptied. This is the caller the
+    // menu's no-dataset branch was written for.
+    rebuildVariableMenu({});
     m_derivedFields->refreshAvailability();
     m_datasetAction->setEnabled(false);
     m_exportAnimationAction->setEnabled(false);
@@ -1067,17 +1070,10 @@ void MainWindow::requestInitialSlice(
     statusBar()->showMessage(tr("Loading initial slice..."));
     updateDiagnostics();
 
-    // The list this load is being launched with. A window counts as unable to
-    // take derived fields for the whole of an open -- m_dataset is null from
-    // openDatasetImpl until the load below lands -- so a definition committed
-    // in another window meanwhile reloads every window but this one, and this
-    // session would keep the older list.
-    const auto derivedRevision = m_derivedFields->storeRevision();
-
     auto* watcher = new QFutureWatcher<InitialSliceResult>(this);
     connect(watcher, &QFutureWatcher<InitialSliceResult>::finished, this,
         [this, watcher, generation, cancellation, views, viewGenerations,
-            restoredSpec, isRemote, derivedRevision] {
+            restoredSpec, isRemote] {
             m_diagnosticsModel->adjustActivity(-1);
             if (m_closing) {
                 watcher->deleteLater();
@@ -1238,15 +1234,12 @@ void MainWindow::requestInitialSlice(
                     }
                     emit initialSliceFinished(true);
                     // Emitted first: this load did finish, and what follows
-                    // is a fresh one. The list moved while it was on a worker,
-                    // so the session on screen was built from the older one --
-                    // its derived fields would otherwise sit greyed out here
-                    // while every other window had them, or, on a name written
-                    // twice, show one expression and compute another.
-                    if (derivedRevision != m_derivedFields->storeRevision()
-                        && m_derivedFields->available()) {
-                        reloadCurrentDataset();
-                    }
+                    // is a fresh one. A window counts as unable to take
+                    // derived fields for the whole of an open, so a list
+                    // committed meanwhile reached every window but this one,
+                    // and a FAB return reopens from a spec captured before any
+                    // of it. Either way the session says so itself.
+                    reloadIfDefinitionsMoved();
                 } else {
                     m_diagnosticsModel->noteStaleResult();
                 }

@@ -121,6 +121,8 @@ public:
     [[nodiscard]] std::size_t storedFieldCount() const noexcept override;
     [[nodiscard]] std::vector<DerivedFieldSkip> skippedDerivedFields()
         const override;
+    [[nodiscard]] std::vector<DerivedFieldDefinition> derivedFieldDefinitions()
+        const override;
 
     // The block pool alone. setCacheBudget deliberately moves both pools,
     // which is what a user setting one number wants -- but a server applying
@@ -148,6 +150,7 @@ private:
     std::vector<ParticleSpeciesMetadata> m_particleSpecies;
     std::size_t m_storedFieldCount = 0;
     std::vector<DerivedFieldSkip> m_skippedDerivedFields;
+    std::vector<DerivedFieldDefinition> m_derivedFieldDefinitions;
     mutable std::mutex m_mutex;
     std::shared_ptr<PlotfileDataset> m_dataset;
     // File-scope ranges for a standalone FAB, by field. These are scanned out

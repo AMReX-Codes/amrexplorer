@@ -66,14 +66,15 @@ PlotfileDataset::Fields PlotfileDataset::installFields(
         throw std::invalid_argument("dataset metadata is unavailable");
     }
     if (definitions.empty()) {
-        return {source.metadata, {}, source.metadata->fields.size(), {}};
+        return {source.metadata, {}, source.metadata->fields.size(), {}, {}};
     }
     auto metadata = std::make_shared<DatasetMetadata>(*source.metadata);
     const auto storedCount = metadata->fields.size();
     auto installation = installDerivedFields(
         *metadata, definitions, DerivedFieldPolicy::Skip);
     return {std::move(metadata), std::move(installation.programs), storedCount,
-        std::move(installation.skipped)};
+        std::move(installation.skipped),
+        {definitions.begin(), definitions.end()}};
 }
 
 PlotfileDataset::PlotfileDataset(
@@ -124,6 +125,12 @@ bool PlotfileDataset::isDerivedField(FieldId field) const noexcept
 {
     return field.value >= m_fields.storedCount
         && static_cast<std::size_t>(field.value) < m_fields.metadata->fields.size();
+}
+
+const std::vector<DerivedFieldDefinition>&
+PlotfileDataset::derivedFieldDefinitions() const noexcept
+{
+    return m_fields.definitions;
 }
 
 std::size_t PlotfileDataset::storedFieldCount() const noexcept

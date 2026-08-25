@@ -50,6 +50,9 @@ public:
     // window.
     void setCommitted(std::vector<DerivedFieldDefinition> definitions,
         std::optional<std::size_t> select = std::nullopt);
+    // Takes the draft as committed without touching the widgets, for a draft
+    // that already equals the list someone else committed.
+    void markDraftCommitted();
     // Whether the draft has moved since it was last committed. One list is
     // shared by every window, so a commit made elsewhere asks this before
     // replacing what is on screen here.

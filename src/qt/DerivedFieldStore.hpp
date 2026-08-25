@@ -4,7 +4,6 @@
 
 #include <QObject>
 
-#include <cstdint>
 #include <vector>
 
 namespace amrvis::qt {
@@ -43,17 +42,6 @@ public:
     // already installed does not make every other window reload.
     void set(std::vector<DerivedFieldDefinition> definitions);
 
-    // How many times the list has actually changed. A window is not told to
-    // reload while it has no dataset -- which is the whole of an open, not
-    // just its start -- so a load launched before a change lands after it,
-    // holding a session built from the older list. Capturing this when the
-    // load is launched and reading it again when the load lands is how that
-    // window notices.
-    [[nodiscard]] std::uint64_t revision() const noexcept
-    {
-        return m_revision;
-    }
-
 signals:
     // The list changed. Every window re-reads it: the one that made the change
     // and the ones that did not.
@@ -61,7 +49,6 @@ signals:
 
 private:
     std::vector<DerivedFieldDefinition> m_definitions;
-    std::uint64_t m_revision = 0;
 };
 
 } // namespace amrvis::qt

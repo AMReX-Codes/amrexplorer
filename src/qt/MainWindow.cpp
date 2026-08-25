@@ -10,6 +10,18 @@
 #include <QStyle>
 
 namespace amrvis::qt {
+namespace {
+
+// The offscreen platform the smoke tests run on has no native dialog to drive,
+// and a native one would not be scriptable there either.
+[[nodiscard]] QFileDialog::Options fileDialogOptions()
+{
+    return QApplication::platformName() == QLatin1String("offscreen")
+        ? QFileDialog::Options{QFileDialog::DontUseNativeDialog}
+        : QFileDialog::Options{};
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -410,15 +422,7 @@ MainWindow::MainWindow(QWidget* parent)
     // shutdown flag) and reacts to its signals below.
     m_sequenceController = new SequenceController(
         SequenceController::Hooks{
-            [this] {
-                // The list this frame is being loaded with. A window has no
-                // dataset while it opens a sequence, so a change committed
-                // meanwhile is not reported to it (available()), and during
-                // playback the reload stands aside; both are noticed by
-                // comparing this against the store afterwards.
-                m_frameSpecRevision = m_derivedFields->storeRevision();
-                return buildFrameSpec();
-            },
+            [this] { return buildFrameSpec(); },
             [this](InitialSliceResult& result, bool defaultPositions) {
                 displayFrameResult(result, defaultPositions);
             },
@@ -1467,13 +1471,29 @@ void MainWindow::syncVariableMenu()
     }
 }
 
+QString MainWindow::rememberedDialogDirectory() const
+{
+    return makeSettings()
+        .value(QStringLiteral("lastOpenDirectory"))
+        .toString();
+}
+
+void MainWindow::rememberDialogDirectory(const QString& path)
+{
+    if (path.isEmpty()) {
+        return;
+    }
+    auto settings = makeSettings();
+    settings.setValue(QStringLiteral("lastOpenDirectory"),
+        QFileInfo(path).absolutePath());
+}
+
 void MainWindow::loadPaletteFile()
 {
-    const auto settings = makeSettings();
     const auto filename = QFileDialog::getOpenFileName(this,
-        tr("Load Palette File"),
-        settings.value(QStringLiteral("lastOpenDirectory")).toString(),
-        tr("Legacy palette files (*.pal);;All files (*)"));
+        tr("Load Palette File"), rememberedDialogDirectory(),
+        tr("Legacy palette files (*.pal);;All files (*)"), nullptr,
+        fileDialogOptions());
     if (filename.isEmpty()) {
         return;
     }
@@ -1481,23 +1501,14 @@ void MainWindow::loadPaletteFile()
         QMessageBox::critical(this, tr("Cannot load palette"), *error);
         return;
     }
-    auto writableSettings = makeSettings();
-    writableSettings.setValue(QStringLiteral("lastOpenDirectory"),
-        QFileInfo(filename).absolutePath());
+    rememberDialogDirectory(filename);
 }
 
 QString MainWindow::chooseExpressionListPath(QWidget* parent, bool forSaving)
 {
-    auto settings = makeSettings();
-    const auto directory =
-        settings.value(QStringLiteral("lastOpenDirectory")).toString();
+    const auto directory = rememberedDialogDirectory();
     const auto filter = tr("Expression lists (*.json);;All files (*)");
-    // The offscreen platform the smoke tests run on has no native dialog to
-    // drive, and a native one would not be scriptable there either.
-    const auto options = QApplication::platformName()
-            == QLatin1String("offscreen")
-        ? QFileDialog::Options{QFileDialog::DontUseNativeDialog}
-        : QFileDialog::Options{};
+    const auto options = fileDialogOptions();
     QString path;
     if (forSaving) {
         // Built rather than taken from getSaveFileName so the default suffix
@@ -1519,16 +1530,16 @@ QString MainWindow::chooseExpressionListPath(QWidget* parent, bool forSaving)
         path = QFileDialog::getOpenFileName(parent,
             tr("Import Derived Fields"), directory, filter, nullptr, options);
     }
-    if (!path.isEmpty()) {
-        settings.setValue(QStringLiteral("lastOpenDirectory"),
-            QFileInfo(path).absolutePath());
-    }
+    rememberDialogDirectory(path);
     return path;
 }
 
 void MainWindow::reloadCurrentDataset()
 {
-    if (!m_dataset || m_datasetPath.empty()) {
+    // Not while closing: another window's Apply reaches every window, and a
+    // worker started here would hold the I/O mutex against the quit. The
+    // completion handler checks m_closing, but the read still runs.
+    if (m_closing || !m_dataset || m_datasetPath.empty()) {
         return;
     }
     if (m_playbackMode == PlaybackMode::Sequence) {

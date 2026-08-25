@@ -113,6 +113,16 @@ public:
     {
         return {};
     }
+    // The derived-field definitions this session was opened with, installed or
+    // not. A caller holding a newer list compares against this to find out
+    // whether the session on screen is the one that list describes; the field
+    // names cannot answer it, because an expression can change under a name
+    // that does not. Empty for a session that installs none.
+    [[nodiscard]] virtual std::vector<DerivedFieldDefinition>
+    derivedFieldDefinitions() const
+    {
+        return {};
+    }
 
     // Whether this session can present fields computed from expressions over
     // the stored ones (core/DerivedField.hpp). They are installed when the

@@ -640,11 +640,17 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_sequenceController, &SequenceController::frameLoadFailed,
         this, [this](const QString& message) {
             statusBar()->showMessage(tr("Frame load failed"));
-            // A reload handed to the sequence and then failed installs
+            // Armed across the stop below and cleared after it. Stopping is
+            // where the frames' standing aside is made good -- setPlaybackMode
+            // asks for the reload once there is no next frame to read the list
+            // -- and asking from here would reopen the frame that just failed,
+            // against the same unreadable file or the same connection that has
+            // gone, for a second report of one failure. Cleared afterwards
+            // because a reload handed to the sequence and then failed installs
             // nothing, so the memo must not remember it as asked: the epoch
-            // has not moved, and Apply cannot ask again because the store does
-            // not emit for a list that has not moved.
-            m_reloadAskedFor.reset();
+            // has not moved, and without the clear the next load could not ask
+            // either.
+            m_reloadAskedFor = {m_derivedFields->definitions(), m_sessionEpoch};
             // Stop playing. Playback wraps, so without this it comes back to
             // the same unreadable frame -- or the same disconnected server --
             // every cycle, raising a diagnostic each time. The user is left on
@@ -654,6 +660,7 @@ MainWindow::MainWindow(QWidget* parent)
             if (m_playbackMode == PlaybackMode::Sequence) {
                 setPlaybackMode(PlaybackMode::None);
             }
+            m_reloadAskedFor.reset();
             // During animation export the failure is reported by the export
             // handler; avoid a second dialog.
             const bool wasExporting = m_animationExporter->active();

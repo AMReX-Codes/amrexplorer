@@ -1145,7 +1145,6 @@ std::optional<QRectF> MainWindow::sphericalReframe(
 void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     std::uint64_t sessionEpoch)
 {
-    state.planeSessionEpoch = sessionEpoch;
     if (!display.rasterUnchanged) {
         if (!display.image.valid()) {
             throw std::runtime_error("renderer produced an invalid image");
@@ -1204,6 +1203,13 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
             state.rasterGeometry = incomingGeometry;
         }
     }
+    // Stamped once the view is showing this session's pixels, not on the way
+    // in: ahead of the validity check above, a view that threw before adopting
+    // anything still counted as the installed session's, and
+    // resliceReplacedViews -- which the failure arm calls for exactly this --
+    // would never ask for it again. Anything below that throws has already put
+    // the raster on screen, so the stamp belongs here rather than at the end.
+    state.planeSessionEpoch = sessionEpoch;
     // Fresh immutable snapshots: replace the pointers, never mutate the
     // pointees a cached-planes refresh worker may still be reading. The cache
     // fast path already holds the plane by shared_ptr, so adopt it directly;

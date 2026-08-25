@@ -1259,16 +1259,36 @@ void MainWindow::requestInitialSlice(
                     // The user moved the field while this load ran, so theirs
                     // is the selection that stands -- otherwise the re-slice
                     // this load owes their view renders the field they left.
+                    bool fieldRestored = false;
                     if (!supersededField.isEmpty()) {
                         const auto index
                             = m_fieldSelector->findText(supersededField);
-                        if (index >= 0) {
+                        // Only a row that is a field. A definition this
+                        // session skipped is listed under the same name,
+                        // greyed and carrying no id, and setCurrentIndex takes
+                        // one as readily as any other -- leaving the combo,
+                        // the Variable menu and the range on that name while
+                        // every reader of currentData() renders field 0. Where
+                        // the user's field did not survive the reload there is
+                        // nothing of theirs to restore, and the field the load
+                        // rendered stands.
+                        if (index >= 0
+                            && m_fieldSelector->itemData(index).isValid()) {
                             const QSignalBlocker blocker(m_fieldSelector);
                             m_fieldSelector->setCurrentIndex(index);
                             m_range->setTrackedField(
                                 m_fieldSelector->currentText());
                             syncVariableMenu();
+                            fieldRestored = true;
                         }
+                    }
+                    if (!fieldRestored) {
+                        // A range belongs to the field it was set on, and the
+                        // memory is keyed by that field's name. Restoring it
+                        // over a field the user was not looking at would
+                        // render that field with their bounds and remember
+                        // them there.
+                        supersededRange.reset();
                     }
                     // The level and the range that same interaction moved, put
                     // back after the field: the range widgets represent the

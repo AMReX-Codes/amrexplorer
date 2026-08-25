@@ -394,6 +394,129 @@ void armReloadRaceChecks(amrvis::qt::MainWindow& window,
     timer->start();
 }
 
+// Arms the skipped-definition race: the user is displaying a derived field
+// when an edit arrives that this dataset cannot resolve. The reload lists that
+// definition greyed out -- same name, no field id -- while a view superseded
+// meanwhile has the completion restore the user's field *by that name*. Exit 0
+// if what ends up selected is a field; a nonzero code names the step that
+// failed.
+void armSkippedFieldChecks(
+    amrvis::qt::MainWindow& window, QApplication& application)
+{
+    auto phase = std::make_shared<int>(0);
+    auto loads = std::make_shared<int>(0);
+    auto ticks = std::make_shared<int>(0);
+    auto armed = std::make_shared<bool>(false);
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [&application, loads](bool success) {
+            if (!success) {
+                application.exit(2);
+                return;
+            }
+            ++*loads;
+        });
+    window.setInitialSliceLaunchedHookForTest([&window, armed] {
+        if (!*armed) {
+            return;
+        }
+        *armed = false;
+        // Supersedes the reload's display for this view without touching the
+        // selection: the field the completion then restores is the one the
+        // user is on, which is the whole of what the restore is for.
+        window.requestActiveViewSliceForTest();
+    });
+
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, loads, ticks, armed, timer] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            ++*ticks;
+            if (*ticks > 400) {
+                qCritical("the skipped-definition scenario never settled");
+                finish(40);
+                return;
+            }
+            if (*loads == 0) {
+                return;
+            }
+            auto* selector = window.findChild<QComboBox*>(
+                QStringLiteral("fieldSelector"));
+            if (selector == nullptr) {
+                qCritical("the window has no field selector");
+                finish(41);
+                return;
+            }
+            const auto settled = [&window] {
+                return window.slicesInFlightForTest() == 0
+                    && !window.sliceRequestPendingForTest();
+            };
+            if (*phase == 0) {
+                amrvis::qt::DerivedFieldStore::session().set(
+                    {{"twice", "density * 2"}});
+                *phase = 1;
+                return;
+            }
+            if (*phase == 1) {
+                if (*loads < 2 || !settled()) {
+                    return;
+                }
+                const auto index = selector->findText(QStringLiteral("twice"));
+                if (index < 0 || !selector->itemData(index).isValid()) {
+                    qCritical("a definition this dataset can compute was not "
+                              "installed as a field");
+                    finish(42);
+                    return;
+                }
+                window.selectFieldItemForTest(index);
+                if (selector->currentText() != QStringLiteral("twice")) {
+                    qCritical("the derived field could not be selected");
+                    finish(42);
+                    return;
+                }
+                *phase = 2;
+                return;
+            }
+            if (*phase == 2) {
+                if (!settled()) {
+                    return;
+                }
+                // The same name, now reading a field this dataset does not
+                // have: the session skips it and the window lists it greyed.
+                *armed = true;
+                amrvis::qt::DerivedFieldStore::session().set(
+                    {{"twice", "nonesuch * 2"}});
+                *phase = 3;
+                return;
+            }
+            if (*phase == 3) {
+                if (*loads < 3 || !settled()) {
+                    return;
+                }
+                const auto index = selector->findText(QStringLiteral("twice"));
+                if (index < 0 || selector->itemData(index).isValid()) {
+                    qCritical("a definition this dataset cannot resolve is "
+                              "not listed greyed out");
+                    finish(43);
+                    return;
+                }
+                // The row carrying no id is exactly what setCurrentIndex will
+                // take and every reader of currentData() will call field 0.
+                if (!selector->currentData().isValid()) {
+                    qCritical("the reload selected a row that is not a field");
+                    finish(44);
+                    return;
+                }
+                finish(0);
+                return;
+            }
+        });
+    timer->start();
+}
+
 // Arms the retry scenario: a reload that fails leaves the list committed and
 // uninstalled, and the store emits nothing for a list that has not moved, so
 // the Apply the user presses again has to ask for the reload itself. Exit 0
@@ -1569,6 +1692,8 @@ Outcome dispatchDerived(Context& context)
         armReloadRaceChecks(window, application, false);
     } else if (option == "--derived-field-reload-retry-smoke-test") {
         armReloadRetryChecks(window, application);
+    } else if (option == "--derived-field-skipped-race-smoke-test") {
+        armSkippedFieldChecks(window, application);
     } else if (option == "--derived-field-playback-smoke-test") {
         armPlaybackChecks(window, application, path);
     } else if (option == "--remote-derived-field-smoke-test") {

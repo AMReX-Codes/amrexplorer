@@ -317,6 +317,87 @@ int main()
                         codec::fromWire(inconsistent)); },
         "inconsistent slice vectors were accepted");
 
+    // Protocol 1.4, on the wire rather than through a round trip: the request
+    // carries the definitions in order, and the reply carries the *derived*
+    // count (not the stored one) plus a skip per definition it could not
+    // install. A converter that transposed name and expression, or that sent
+    // the stored count, round-trips cleanly here and mislabels every field
+    // against a real peer.
+    {
+        OpenDatasetData open;
+        open.path = "/plt";
+        open.cacheBudgetBytes = 1024;
+        open.derivedFields = {{"speed", "sqrt(u**2 + v**2)"}, {"twice", "2*speed"}};
+        const auto openWire = codec::toWire(open);
+        require(openWire.derived_fields.size() == 2
+                && openWire.derived_fields[0]->name == "speed"
+                && openWire.derived_fields[0]->expression == "sqrt(u**2 + v**2)"
+                && openWire.derived_fields[1]->name == "twice",
+            "the derived-field definitions are not on the wire in order");
+        require(codec::fromWire(openWire).derivedFields == open.derivedFields,
+            "the derived-field definitions did not survive the wire");
+
+        auto derived = opened;
+        derived.catalog.fields.push_back(FieldMetadata{
+            .name = "speed", .centering = {}, .componentNames = {}});
+        derived.fileRangeAvailable.push_back(0);
+        derived.levelRangeAvailable.push_back(0);
+        derived.derivedFieldCount = 1;
+        derived.derivedFieldSkips = {DerivedFieldSkip{1, "twice",
+            "no field or coordinate is named 'speed'"}};
+        const auto derivedWire = codec::toWire(derived);
+        require(derivedWire.derived_field_count == 1,
+            "the derived field count is not on the wire");
+        require(derivedWire.derived_field_skips.size() == 1
+                && derivedWire.derived_field_skips[0]->definition_index == 1
+                && derivedWire.derived_field_skips[0]->name == "twice",
+            "a skip's definition index and name are not on the wire");
+        const auto derivedBack = codec::fromWire(derivedWire);
+        require(derivedBack.derivedFieldCount == 1
+                && derivedBack.derivedFieldSkips.size() == 1
+                && derivedBack.derivedFieldSkips[0].definitionIndex == 1,
+            "the derived reply did not survive the wire");
+
+        // Rejections, one per new bound.
+        auto tooMany = openWire;
+        tooMany.derived_fields.clear();
+        for (std::size_t index = 0; index <= maximumDerivedFieldCount; ++index) {
+            auto entry = std::make_unique<
+                amrexplorer::wire::DerivedFieldDefinitionT>();
+            entry->name = "f" + std::to_string(index);
+            entry->expression = "density";
+            tooMany.derived_fields.push_back(std::move(entry));
+        }
+        requireRejected([&] { static_cast<void>(codec::fromWire(tooMany)); },
+            "a definition list past the cap was accepted");
+
+        auto longExpression = codec::toWire(open);
+        longExpression.derived_fields[0]->expression
+            = std::string(maximumExpressionBytes + 1, 'x');
+        requireRejected(
+            [&] { static_cast<void>(codec::fromWire(longExpression)); },
+            "an over-long expression was accepted");
+
+        auto namelessDefinition = codec::toWire(open);
+        namelessDefinition.derived_fields[0]->name.clear();
+        requireRejected(
+            [&] { static_cast<void>(codec::fromWire(namelessDefinition)); },
+            "a definition with no name was accepted");
+
+        auto tooManyDerived = derivedWire;
+        tooManyDerived.derived_field_count
+            = static_cast<std::uint32_t>(derived.catalog.fields.size() + 1);
+        requireRejected(
+            [&] { static_cast<void>(codec::fromWire(tooManyDerived)); },
+            "a derived count past the field list was accepted");
+
+        auto namelessSkip = codec::toWire(derived);
+        namelessSkip.derived_field_skips[0]->name.clear();
+        requireRejected(
+            [&] { static_cast<void>(codec::fromWire(namelessSkip)); },
+            "a skip with no name was accepted");
+    }
+
     auto openedWire = codec::toWire(opened);
     openedWire.dimension = 4;
     requireRejected([&] { static_cast<void>(codec::fromWire(openedWire)); },

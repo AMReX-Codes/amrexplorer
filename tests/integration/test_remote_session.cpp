@@ -153,6 +153,74 @@ int main(int argc, char* argv[])
                 && slice.plane.physicalRegion
                     == localSlice.plane.physicalRegion,
             "local and remote slice values differ");
+
+        // Protocol 1.4: a field computed on the server must be the same field
+        // a local session computes. The definitions are installed in the same
+        // order at both ends, so the derived field takes the same id, and the
+        // slice through it must match value for value -- which is the check
+        // that catches a server-side install that silently differs.
+        {
+            const std::vector<amrvis::DerivedFieldDefinition> definitions{
+                {"product", "density * temperature"},
+                {"elsewhere", "nonesuch * 2"}};
+            auto derivedRemote = amrvis::remote::RemoteDatasetSession::open(
+                connection, std::filesystem::path(argv[1]).string(),
+                16ULL * 1024ULL * 1024ULL, {}, definitions);
+            amrvis::LocalDatasetSession derivedLocal(
+                std::filesystem::path(argv[1]), amrvis::DatasetId{1002},
+                16ULL * 1024ULL * 1024ULL, {}, definitions);
+
+            require(derivedRemote->supportsDerivedFields(),
+                "a 1.4 session does not report derived-field support");
+            require(derivedRemote->storedFieldCount()
+                    == derivedLocal.storedFieldCount(),
+                "local and remote disagree on how many fields are stored");
+            require(derivedRemote->metadata().fields.size()
+                    == derivedLocal.metadata().fields.size(),
+                "local and remote installed a different number of fields");
+            require(derivedRemote->derivedFieldDefinitions() == definitions,
+                "the session did not report the list it was opened with");
+
+            // The one this plotfile cannot resolve, reported the same way at
+            // both ends including the index of the definition it belongs to.
+            const auto remoteSkips = derivedRemote->skippedDerivedFields();
+            const auto localSkips = derivedLocal.skippedDerivedFields();
+            require(remoteSkips.size() == localSkips.size()
+                    && remoteSkips.size() == 1
+                    && remoteSkips.front().definitionIndex
+                        == localSkips.front().definitionIndex
+                    && remoteSkips.front().name == localSkips.front().name
+                    && remoteSkips.front().reason == localSkips.front().reason,
+                "local and remote report the skipped definition differently");
+
+            const auto derivedField = amrvis::FieldId{
+                static_cast<std::uint32_t>(derivedRemote->storedFieldCount())};
+            auto remoteDerivedRequest = sliceRequest(*derivedRemote, 8, 6);
+            remoteDerivedRequest.field = derivedField;
+            auto localDerivedRequest = sliceRequest(derivedLocal, 8, 6);
+            localDerivedRequest.field = derivedField;
+            const auto remoteDerivedSlice = std::get<amrvis::SliceQueryResult>(
+                derivedRemote->requestView(remoteDerivedRequest));
+            const auto localDerivedSlice = std::get<amrvis::SliceQueryResult>(
+                derivedLocal.requestView(localDerivedRequest));
+            require(remoteDerivedSlice.plane.values
+                        == localDerivedSlice.plane.values
+                    && remoteDerivedSlice.plane.valid
+                        == localDerivedSlice.plane.valid,
+                "a computed field differs between a local and a remote session");
+            // And it is genuinely the product, not a copy of a stored field.
+            require(remoteDerivedSlice.plane.values != slice.plane.values,
+                "the computed slice is identical to the stored field's");
+
+            // A derived field has no stored statistics at either end.
+            const amrvis::RangeRequest derivedRange{derivedField,
+                derivedRemote->metadata().finestLevel,
+                amrvis::CompositionPolicy::FinestAvailable,
+                amrvis::RangeScope::File};
+            require(derivedRemote->rangeAvailable(derivedRange)
+                    == derivedLocal.rangeAvailable(derivedRange),
+                "local and remote disagree on a computed field's File range");
+        }
         require(slice.gridBoxesIncluded && !slice.gridBoxes.empty(),
             "remote slice omitted view-local grid geometry");
         for (const auto& box : slice.gridBoxes) {

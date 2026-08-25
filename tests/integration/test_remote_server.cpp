@@ -104,11 +104,13 @@ private:
 template <typename Payload>
 std::unique_ptr<amrvis::remote::codec::NativeEnvelope> exchange(
     const amrvis::remote::Socket& socket, std::uint64_t requestId,
-    Payload payload, std::uint32_t maximumFrameBytes)
+    Payload payload, std::uint32_t maximumFrameBytes,
+    std::uint16_t minorVersion = amrvis::remote::protocolMinorVersion)
 {
     using namespace amrvis::remote;
     writeFrame(socket,
-        codec::encode(requestId, std::move(payload)), maximumFrameBytes);
+        codec::encode(requestId, std::move(payload), minorVersion),
+        maximumFrameBytes);
     const auto response = readFrame(socket, maximumFrameBytes);
     require(response.has_value(), "server closed before sending a response");
     auto envelope = codec::decode(*response);
@@ -309,7 +311,7 @@ int main(int argc, char* argv[])
     envelope = exchange(socket, 2,
         codec::toWire(OpenDatasetData{
             std::filesystem::path(argv[1]).string(),
-            16ULL * 1024ULL * 1024ULL}),
+            16ULL * 1024ULL * 1024ULL, {}}),
         hello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
         "server did not open the materialized plotfile");
@@ -318,6 +320,50 @@ int main(int argc, char* argv[])
     require(opened.catalog.dimension == 2
             && opened.catalog.levels.size() == 2,
         "server returned an incomplete dataset catalog");
+    require(opened.derivedFieldCount == 0 && opened.derivedFieldSkips.empty(),
+        "server reported derived fields for a request that carried none");
+    const auto storedFields = opened.catalog.fields.size();
+
+    // Protocol 1.4: the definitions are installed on the session the server
+    // opens, so the catalog comes back with the computed field appended and the
+    // client is told how many of the fields are computed. A definition this
+    // plotfile cannot resolve is skipped with its reason rather than failing
+    // the open, and the skip names the definition it belongs to by index.
+    envelope = exchange(socket, 16,
+        codec::toWire(OpenDatasetData{
+            std::filesystem::path(argv[1]).string(),
+            16ULL * 1024ULL * 1024ULL,
+            {{"product", "density * temperature"},
+                {"elsewhere", "nonesuch * 2"}}}),
+        hello.maximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
+        "server refused an open carrying derived fields");
+    const auto derivedOpen = codec::fromWire(
+        *envelope->payload.AsDatasetOpened());
+    require(derivedOpen.catalog.fields.size() == storedFields + 1
+            && derivedOpen.catalog.fields.back().name == "product",
+        "the computed field is not the tail of the catalog");
+    require(derivedOpen.derivedFieldCount == 1,
+        "server did not report exactly one field as computed");
+    require(derivedOpen.derivedFieldSkips.size() == 1
+            && derivedOpen.derivedFieldSkips.front().definitionIndex == 1
+            && derivedOpen.derivedFieldSkips.front().name == "elsewhere"
+            && !derivedOpen.derivedFieldSkips.front().reason.empty(),
+        "the unresolvable definition did not come back as a skip");
+    // A derived field has no stored statistics, so the server reports no File
+    // range for it -- the same answer a local session gives.
+    require(derivedOpen.fileRangeAvailable.size()
+                == derivedOpen.catalog.fields.size()
+            && derivedOpen.fileRangeAvailable.back() == 0,
+        "server claimed a File range for a computed field");
+    // Released again: this session's dataset limit is 2, and the cases below
+    // need the slot.
+    codec::fb::CloseDatasetRequestT closeDerived;
+    closeDerived.dataset_id = derivedOpen.id.value;
+    envelope = exchange(socket, 17, std::move(closeDerived),
+        hello.maximumFrameBytes);
+    require(codec::inspect(*envelope).payload == PayloadKind::DatasetClosed,
+        "server did not close the dataset opened with derived fields");
 
     DatasetPageRequest smallPage;
     smallPage.dataset = opened.id;
@@ -426,7 +472,7 @@ int main(int argc, char* argv[])
         envelope = exchange(socket, 14,
             codec::toWire(OpenDatasetData{
                 (std::filesystem::path(argv[1]) / "CraftedHeader").string(),
-                16ULL * 1024ULL * 1024ULL}),
+                16ULL * 1024ULL * 1024ULL, {}}),
             hello.maximumFrameBytes);
         require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse,
             "a crafted plotfile Header was opened as a dataset");
@@ -489,7 +535,7 @@ int main(int argc, char* argv[])
     envelope = exchange(socket, 5,
         codec::toWire(OpenDatasetData{
             std::filesystem::path(argv[1]).string(),
-            16ULL * 1024ULL * 1024ULL}),
+            16ULL * 1024ULL * 1024ULL, {}}),
         hello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
         "server rejected the second allowed dataset");
@@ -499,7 +545,7 @@ int main(int argc, char* argv[])
     envelope = exchange(socket, 6,
         codec::toWire(OpenDatasetData{
             std::filesystem::path(argv[1]).string(),
-            16ULL * 1024ULL * 1024ULL}),
+            16ULL * 1024ULL * 1024ULL, {}}),
         hello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
             && codec::fromWire(*envelope->payload.AsErrorResponse()).code
@@ -512,6 +558,50 @@ int main(int argc, char* argv[])
         hello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetClosed,
         "server did not close the second dataset");
+
+    // A peer that negotiated 1.3 asking for derived fields anyway. encode()
+    // stamps the envelope's version but filters no fields, so the request can
+    // physically carry the vector -- the server's guard is the only thing that
+    // refuses it, and it must refuse answerably: a capability the peer is too
+    // old for is not a peer that has stopped speaking the protocol.
+    {
+        auto olderSocket = connectTo("127.0.0.1", server.port());
+        auto olderHello = helloRequest(server.token());
+        olderHello.maximumMinorVersion = 3;
+        auto olderEnvelope = exchange(olderSocket, 1,
+            codec::toWire(olderHello), defaultMaximumFrameBytes, 3);
+        require(codec::inspect(*olderEnvelope).payload
+                == PayloadKind::HelloResponse,
+            "server rejected a 1.3 handshake");
+        const auto olderInfo = codec::fromWire(
+            *olderEnvelope->payload.AsHelloResponse());
+        require(olderInfo.selectedMinorVersion == 3,
+            "server did not negotiate down to the peer maximum");
+
+        olderEnvelope = exchange(olderSocket, 2,
+            codec::toWire(OpenDatasetData{
+                std::filesystem::path(argv[1]).string(),
+                16ULL * 1024ULL * 1024ULL,
+                {{"product", "density * temperature"}}}),
+            olderInfo.maximumFrameBytes, 3);
+        require(codec::inspect(*olderEnvelope).payload
+                == PayloadKind::ErrorResponse,
+            "a 1.3 peer derived-field open was not refused");
+        const auto olderError = codec::fromWire(
+            *olderEnvelope->payload.AsErrorResponse());
+        require(olderError.code == ErrorCode::UnsupportedProtocol,
+            "a 1.3 peer derived-field open returned the wrong error");
+
+        // And the session survives it: an open without definitions still works.
+        olderEnvelope = exchange(olderSocket, 3,
+            codec::toWire(OpenDatasetData{
+                std::filesystem::path(argv[1]).string(),
+                16ULL * 1024ULL * 1024ULL, {}}),
+            olderInfo.maximumFrameBytes, 3);
+        require(codec::inspect(*olderEnvelope).payload
+                == PayloadKind::DatasetOpened,
+            "the refusal closed a session that should have survived it");
+    }
 
     ServerOptions duplicateOptions;
     duplicateOptions.workerCount = 2;
@@ -531,7 +621,7 @@ int main(int argc, char* argv[])
         *envelope->payload.AsHelloResponse());
     const OpenDatasetData duplicateOpen{
         std::filesystem::path(argv[1]).string(),
-        16ULL * 1024ULL * 1024ULL};
+        16ULL * 1024ULL * 1024ULL, {}};
     envelope = exchange(duplicateSocket, 2, codec::toWire(duplicateOpen),
         duplicateHello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
@@ -775,7 +865,7 @@ int main(int argc, char* argv[])
         codec::toWire(OpenDatasetData{
             std::string(
                 handshakeFrameOptions.maximumHandshakeFrameBytes * 2U, 'x'),
-            16ULL * 1024ULL * 1024ULL}),
+            16ULL * 1024ULL * 1024ULL, {}}),
         defaultMaximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse,
         "server retained the handshake frame cap after authentication");
@@ -799,7 +889,7 @@ int main(int argc, char* argv[])
         envelope = exchange(boundedSocket, requestId,
             codec::toWire(OpenDatasetData{
                 std::filesystem::path(argv[1]).string(),
-                16ULL * 1024ULL * 1024ULL}),
+                16ULL * 1024ULL * 1024ULL, {}}),
             boundedOptions.maximumFrameBytes);
         require(codec::inspect(*envelope).payload
                     == PayloadKind::ErrorResponse
@@ -864,7 +954,7 @@ int main(int argc, char* argv[])
         envelope = exchange(slow, 2,
             codec::toWire(OpenDatasetData{
                 std::filesystem::path(argv[1]).string(),
-                16ULL * 1024ULL * 1024ULL}),
+                16ULL * 1024ULL * 1024ULL, {}}),
             defaultMaximumFrameBytes);
         require(codec::inspect(*envelope).payload
                 == PayloadKind::DatasetOpened,
@@ -931,7 +1021,7 @@ int main(int argc, char* argv[])
         envelope = exchange(neighbour, 2,
             codec::toWire(OpenDatasetData{
                 std::filesystem::path(argv[1]).string(),
-                16ULL * 1024ULL * 1024ULL}),
+                16ULL * 1024ULL * 1024ULL, {}}),
             defaultMaximumFrameBytes);
         require(codec::inspect(*envelope).payload
                 == PayloadKind::DatasetOpened,

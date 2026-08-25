@@ -2,6 +2,8 @@
 
 #include "amrexplorer_wire_bfbs_generated.h"
 
+#include <amrexplorer/expression/Expression.hpp>
+
 #include <flatbuffers/reflection.h>
 #include <flatbuffers/verifier.h>
 
@@ -620,12 +622,48 @@ fb::OpenDatasetRequestT toWire(const OpenDatasetData& value)
     fb::OpenDatasetRequestT wire;
     wire.path = value.path;
     wire.cache_budget_bytes = value.cacheBudgetBytes;
+    wire.derived_fields.reserve(value.derivedFields.size());
+    for (const auto& definition : value.derivedFields) {
+        auto entry = std::make_unique<fb::DerivedFieldDefinitionT>();
+        entry->name = definition.name;
+        entry->expression = definition.expression;
+        wire.derived_fields.push_back(std::move(entry));
+    }
     return wire;
 }
 
 OpenDatasetData fromWire(const fb::OpenDatasetRequestT& value)
 {
-    return {value.path, value.cache_budget_bytes};
+    // The definition list arrives from a client, so it is bounded here rather
+    // than left to installation: installDerivedFields caps the programs it
+    // *installs*, so a list whose first maximumDerivedFieldCount entries all
+    // fail would otherwise still compile every entry after them, bounded only
+    // by the frame size. Same shape as the directory-listing cap above.
+    if (value.derived_fields.size() > maximumDerivedFieldCount) {
+        throw std::invalid_argument(
+            "wire open request carries too many derived-field definitions");
+    }
+    OpenDatasetData result;
+    result.path = value.path;
+    result.cacheBudgetBytes = value.cache_budget_bytes;
+    result.derivedFields.reserve(value.derived_fields.size());
+    for (const auto& entry : value.derived_fields) {
+        if (!entry) {
+            throw std::invalid_argument(
+                "wire derived-field definition is missing");
+        }
+        if (entry->name.empty()) {
+            throw std::invalid_argument(
+                "wire derived-field definition has no name");
+        }
+        if (entry->expression.size() > maximumExpressionBytes) {
+            throw std::invalid_argument(
+                "wire derived-field expression is too long");
+        }
+        result.derivedFields.push_back(
+            DerivedFieldDefinition{entry->name, entry->expression});
+    }
+    return result;
 }
 
 fb::DatasetOpenedT toWire(const OpenedDataset& value)
@@ -681,6 +719,16 @@ fb::DatasetOpenedT toWire(const OpenedDataset& value)
         = value.metadataMetrics.payloadBytesRead;
     wire.file_version = value.fileVersion;
     wire.cache = toWire(value.cache);
+    wire.derived_field_count = value.derivedFieldCount;
+    wire.derived_field_skips.reserve(value.derivedFieldSkips.size());
+    for (const auto& skip : value.derivedFieldSkips) {
+        auto converted = std::make_unique<fb::DerivedFieldSkipT>();
+        converted->definition_index
+            = static_cast<std::uint32_t>(skip.definitionIndex);
+        converted->name = skip.name;
+        converted->reason = skip.reason;
+        wire.derived_field_skips.push_back(std::move(converted));
+    }
     return wire;
 }
 
@@ -820,6 +868,41 @@ OpenedDataset fromWire(const fb::DatasetOpenedT& value)
             throw std::invalid_argument(
                 "wire particle species component count is outside its bounds");
         }
+    }
+    // The derived fields are the tail of the catalog, so a count past its
+    // length would leave the client splitting the list at an index that is not
+    // in it. What the count cannot be checked against here is the number of
+    // definitions the client sent -- the decoder does not know it -- which is
+    // what validateSessionOpenedDerivedFields is for.
+    result.derivedFieldCount = value.derived_field_count;
+    if (result.derivedFieldCount > result.catalog.fields.size()) {
+        throw std::invalid_argument(
+            "wire dataset catalog claims more derived fields than it has "
+            "fields");
+    }
+    if (value.derived_field_skips.size() > maximumDerivedFieldCount) {
+        throw std::invalid_argument(
+            "wire dataset catalog carries too many derived-field skips");
+    }
+    result.derivedFieldSkips.reserve(value.derived_field_skips.size());
+    for (const auto& skip : value.derived_field_skips) {
+        if (!skip) {
+            throw std::invalid_argument(
+                "wire derived-field skip is missing");
+        }
+        if (skip->name.empty()) {
+            throw std::invalid_argument(
+                "wire derived-field skip has no name");
+        }
+        if (skip->reason.size() > maximumExpressionBytes) {
+            // Rendered into a tooltip, so bounded like the expression it is
+            // about rather than left to whatever a peer cares to send.
+            throw std::invalid_argument(
+                "wire derived-field skip reason is too long");
+        }
+        result.derivedFieldSkips.push_back(
+            DerivedFieldSkip{skip->definition_index, skip->name,
+                skip->reason});
     }
     return result;
 }

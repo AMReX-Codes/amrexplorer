@@ -37,5 +37,14 @@ void validateSessionParticleSampleResult(
 // and sampling metrics the dataset and the request's budget could produce.
 void validateSessionVolumeResult(const DatasetMetadata& metadata,
     const VolumeRenderRequest& request, const VolumeFrame& frame);
+// The derived-field half of an open reply, which the wire decoder cannot check
+// on its own: it does not know how many definitions the request carried. A
+// catalog cannot hold more derived fields than fields, cannot report more of
+// them than were asked for, and cannot skip a definition that was never sent
+// or report more skips than there were definitions -- and a definition cannot
+// be both installed and skipped, which is what the counts add up to.
+void validateSessionOpenedDerivedFields(std::size_t fieldCount,
+    std::uint32_t derivedFieldCount,
+    const std::vector<DerivedFieldSkip>& skips, std::size_t requestedCount);
 
 } // namespace amrvis

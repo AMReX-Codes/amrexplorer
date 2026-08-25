@@ -91,8 +91,17 @@ void checkConverted(const fb::OpenDatasetRequestT& wire,
     const amrvis::remote::OpenDatasetData& result)
 {
     if (result.path != wire.path
-        || result.cacheBudgetBytes != wire.cache_budget_bytes) {
+        || result.cacheBudgetBytes != wire.cache_budget_bytes
+        || result.derivedFields.size() != wire.derived_fields.size()) {
         fail("OpenDatasetRequest did not convert faithfully");
+    }
+    for (std::size_t index = 0; index < result.derivedFields.size(); ++index) {
+        const auto& entry = wire.derived_fields[index];
+        if (!entry || result.derivedFields[index].name != entry->name
+            || result.derivedFields[index].expression != entry->expression) {
+            fail("OpenDatasetRequest derived field did not convert "
+                 "faithfully");
+        }
     }
 }
 
@@ -533,6 +542,19 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         fb::OpenDatasetRequestT open;
         open.path = "/plt00000";
         open.cache_budget_bytes = 1 << 20;
+        // Protocol 1.4, and non-empty on purpose: an absent vector is the
+        // schema default and is left out of the buffer, so a seed without one
+        // would be byte-identical to a pre-1.4 request and would reach none of
+        // the definition bounds. Two entries so the mutator can corrupt one
+        // while the other stays well formed.
+        auto first = std::make_unique<fb::DerivedFieldDefinitionT>();
+        first->name = "speed";
+        first->expression = "sqrt(u**2 + v**2)";
+        open.derived_fields.push_back(std::move(first));
+        auto second = std::make_unique<fb::DerivedFieldDefinitionT>();
+        second->name = "twice";
+        second->expression = "2*speed";
+        open.derived_fields.push_back(std::move(second));
         add(std::move(open));
     }
     {

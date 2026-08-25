@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/cache/CacheMetrics.hpp>
+#include <amrexplorer/core/DerivedField.hpp>
 #include <amrexplorer/core/Metadata.hpp>
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/data/DatasetPage.hpp>
@@ -19,14 +20,21 @@ namespace amrvis::remote {
 
 inline constexpr std::uint16_t protocolMajor = 1;
 // 1.1 added directory browsing; 1.2 adds volume rendering (RenderedFrame*);
-// 1.3 adds the volume march's sampling policy (RenderedFrameRequest.sampling).
+// 1.3 adds the volume march's sampling policy (RenderedFrameRequest.sampling);
+// 1.4 adds derived fields (OpenDatasetRequest.derived_fields, and the derived
+// count and skip reasons on DatasetOpened).
 //
 // 1.3 is a version rather than a bare appended field because the field changes
 // the picture. A 1.2 server ignores what it cannot read and renders nearest,
 // so a client that simply sent it would offer a control that silently did
 // nothing there -- the defect this codebase keeps designing against. The
 // version lets the client ask first and say so instead.
-inline constexpr std::uint16_t protocolMinorVersion = 3;
+//
+// 1.4 is a version for the same reason, one step worse: a 1.3 server would
+// answer a plain catalog, so the client would show an Expression Editor whose
+// Apply reported success while every slice kept coming back from the stored
+// fields alone.
+inline constexpr std::uint16_t protocolMinorVersion = 4;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,
@@ -108,6 +116,11 @@ struct HelloResponseData {
 struct OpenDatasetData {
     std::string path;
     std::uint64_t cacheBudgetBytes = 0;
+    // Protocol 1.4. The fields the session should compute as well as read; the
+    // server installs them under DerivedFieldPolicy::Skip, so one it cannot
+    // resolve comes back in OpenedDataset::derivedFieldSkips rather than
+    // failing the open.
+    std::vector<DerivedFieldDefinition> derivedFields;
 };
 
 // One subdirectory of a listed directory. Only directories are listed:
@@ -148,6 +161,12 @@ struct OpenedDataset {
     std::vector<std::uint8_t> fileRangeAvailable;
     std::vector<std::uint8_t> levelRangeAvailable;
     CacheMetrics cache;
+    // Protocol 1.4. How many of catalog.fields are computed rather than stored
+    // (the last ones, in definition order), and the definitions the server
+    // could not install. Zero and empty for a server that was sent none -- and
+    // for one too old to have been sent any.
+    std::uint32_t derivedFieldCount = 0;
+    std::vector<DerivedFieldSkip> derivedFieldSkips;
 };
 
 struct ErrorData {

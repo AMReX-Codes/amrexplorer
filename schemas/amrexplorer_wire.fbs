@@ -92,9 +92,30 @@ table HelloResponse {
   capabilities:[ulong] (id: 7);
 }
 
+// One derived-field definition: a name and the expression that produces it
+// (core/DerivedField.hpp). Carried on an open request, so the session the
+// server builds computes these fields alongside the ones the plotfile stores.
+table DerivedFieldDefinition {
+  name:string (id: 0);
+  expression:string (id: 1);
+}
+
+// A definition the server could not install, and why (DerivedFieldPolicy::Skip).
+// The index is into the definition list the client sent, which is what lets an
+// editor select the row the reason belongs to.
+table DerivedFieldSkip {
+  definition_index:uint (id: 0);
+  name:string (id: 1);
+  reason:string (id: 2);
+}
+
 table OpenDatasetRequest {
   path:string (id: 0);
   cache_budget_bytes:ulong (id: 1);
+  // Protocol 1.4. A peer that negotiated less refuses a non-empty list rather
+  // than dropping it: the field it cannot read would leave the client offering
+  // an editor whose Apply silently did nothing.
+  derived_fields:[DerivedFieldDefinition] (id: 2);
 }
 
 table FieldCatalog {
@@ -145,6 +166,13 @@ table DatasetOpened {
   metadata_metrics:MetadataReadMetrics (id: 13);
   file_version:string (id: 14);
   cache:CacheState (id: 15);
+  // Protocol 1.4. How many of `fields` are computed rather than stored; they
+  // are the last ones, in the order their definitions were given. The *derived*
+  // count rather than the stored one because flatbuffers reads an absent uint
+  // as 0, and 0 derived fields is the truth about a server that installed none
+  // -- while a stored count of 0 would empty the client's field list.
+  derived_field_count:uint (id: 16);
+  derived_field_skips:[DerivedFieldSkip] (id: 17);
 }
 
 table CloseDatasetRequest {

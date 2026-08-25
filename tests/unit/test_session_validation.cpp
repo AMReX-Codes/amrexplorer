@@ -1002,5 +1002,87 @@ int main()
         }
         require(cancelled, "a cancelled Visible range scan did not throw");
     }
+    {
+        // The derived-field half of an open reply. The catalog is larger than
+        // the request in every case below and each refusal is matched on its
+        // own message, so a call site that swapped fieldCount for
+        // requestedCount fails here instead of passing silently.
+        const std::vector<amrvis::DerivedFieldSkip> noSkips;
+        const std::vector<amrvis::DerivedFieldSkip> oneSkip{
+            {1, "twice", "no field or coordinate is named 'speed'"}};
+        requireAccepted([&] {
+            amrvis::validateSessionOpenedDerivedFields({
+                .fieldCount = 5,
+                .derivedFieldCount = 1,
+                .skips = oneSkip,
+                .requestedCount = 2,
+            });
+        }, "a well-formed derived-field reply was rejected");
+        requireRejectedWith([&] {
+            amrvis::validateSessionOpenedDerivedFields({
+                .fieldCount = 1,
+                .derivedFieldCount = 2,
+                .skips = noSkips,
+                .requestedCount = 2,
+            });
+        }, "than it has fields",
+            "a catalog claiming more derived fields than fields was accepted");
+        requireRejectedWith([&] {
+            amrvis::validateSessionOpenedDerivedFields({
+                .fieldCount = 5,
+                .derivedFieldCount = 3,
+                .skips = noSkips,
+                .requestedCount = 2,
+            });
+        }, "reports more derived fields",
+            "a reply installing more definitions than were sent was accepted");
+        const std::vector<amrvis::DerivedFieldSkip> threeSkips{
+            {0, "a", "why"}, {1, "b", "why"}, {2, "c", "why"}};
+        requireRejectedWith([&] {
+            amrvis::validateSessionOpenedDerivedFields({
+                .fieldCount = 5,
+                .derivedFieldCount = 0,
+                .skips = threeSkips,
+                .requestedCount = 2,
+            });
+        }, "skips more definitions",
+            "a reply skipping more definitions than were sent was accepted");
+        // The sum, which is the only check the two above cannot stand in for:
+        // neither count alone is past the request.
+        const std::vector<amrvis::DerivedFieldSkip> twoSkips{
+            {0, "a", "why"}, {1, "b", "why"}};
+        requireRejectedWith([&] {
+            amrvis::validateSessionOpenedDerivedFields({
+                .fieldCount = 5,
+                .derivedFieldCount = 2,
+                .skips = twoSkips,
+                .requestedCount = 3,
+            });
+        }, "installs and skips",
+            "a reply accounting for more definitions than were sent was "
+            "accepted");
+        const std::vector<amrvis::DerivedFieldSkip> straySkip{
+            {7, "stray", "why"}};
+        requireRejectedWith([&] {
+            amrvis::validateSessionOpenedDerivedFields({
+                .fieldCount = 5,
+                .derivedFieldCount = 0,
+                .skips = straySkip,
+                .requestedCount = 2,
+            });
+        }, "was not requested",
+            "a skip naming a definition that was never sent was accepted");
+        // A peer that installed none is not a peer that lied: the reply a
+        // pre-1.4 server sends decodes to zeroes, and an empty request is
+        // answered the same way.
+        requireAccepted([&] {
+            amrvis::validateSessionOpenedDerivedFields({
+                .fieldCount = 5,
+                .derivedFieldCount = 0,
+                .skips = noSkips,
+                .requestedCount = 0,
+            });
+        }, "a reply carrying no derived fields was rejected");
+    }
     return 0;
 }

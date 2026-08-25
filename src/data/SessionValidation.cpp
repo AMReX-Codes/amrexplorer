@@ -733,4 +733,37 @@ void validateSessionParticleSampleResult(
     }
 }
 
+void validateSessionOpenedDerivedFields(
+    const SessionOpenedDerivedFields& reply)
+{
+    const auto derived = reply.derivedFieldCount;
+    const auto requested = reply.requestedCount;
+    if (derived > reply.fieldCount) {
+        throw std::invalid_argument(
+            "dataset catalog claims more derived fields than it has fields");
+    }
+    if (derived > requested) {
+        throw std::invalid_argument(
+            "dataset catalog reports more derived fields than were requested");
+    }
+    if (reply.skips.size() > requested) {
+        throw std::invalid_argument(
+            "dataset catalog skips more definitions than were requested");
+    }
+    // Every definition was either installed or skipped, so the two cannot add
+    // up to more than were sent. Fewer is legal: nothing says a server must
+    // account for each one separately, only that it cannot invent them.
+    if (derived + reply.skips.size() > requested) {
+        throw std::invalid_argument(
+            "dataset catalog installs and skips more definitions than were "
+            "requested");
+    }
+    for (const auto& skip : reply.skips) {
+        if (skip.definitionIndex >= requested) {
+            throw std::invalid_argument(
+                "dataset catalog skips a definition that was not requested");
+        }
+    }
+}
+
 } // namespace amrvis

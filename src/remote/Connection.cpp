@@ -234,10 +234,19 @@ public:
     }
 
     OpenedDataset openDataset(const std::string& path,
-        std::uint64_t cacheBudgetBytes, StopToken cancellation)
+        std::uint64_t cacheBudgetBytes, StopToken cancellation,
+        std::vector<DerivedFieldDefinition> derivedFields)
     {
+        // Refused here as well as in RemoteDatasetSession, for the reason
+        // renderVolume gives: this class is public, this is where the
+        // negotiated version lives, and a caller that did not ask first must
+        // not have its request answered by a different rule than the one it
+        // named. A caller that did ask never reaches this.
+        if (!derivedFields.empty() && !supportsDerivedFields()) {
+            throw std::runtime_error(derivedFieldsUnsupportedMessage);
+        }
         const auto response = transact(codec::toWire(
-            OpenDatasetData{path, cacheBudgetBytes}),
+            OpenDatasetData{path, cacheBudgetBytes, std::move(derivedFields)}),
             PayloadKind::DatasetOpened, cancellation,
             ResponseWait::Indefinite);
         const auto* payload = response->payload.AsDatasetOpened();
@@ -284,6 +293,13 @@ public:
     [[nodiscard]] bool supportsVolumeSampling() const noexcept
     {
         return m_selectedMinorVersion >= 3;
+    }
+
+    // Likewise: a 1.3 server opens datasets perfectly well, it just cannot be
+    // asked to compute a field from an expression.
+    [[nodiscard]] bool supportsDerivedFields() const noexcept
+    {
+        return m_selectedMinorVersion >= 4;
     }
 
     VolumeFrame renderVolume(
@@ -779,9 +795,11 @@ std::string Connection::disconnectReason() const
 }
 
 OpenedDataset Connection::openDataset(const std::string& path,
-    std::uint64_t cacheBudgetBytes, StopToken cancellation)
+    std::uint64_t cacheBudgetBytes, StopToken cancellation,
+    std::vector<DerivedFieldDefinition> derivedFields)
 {
-    return m_impl->openDataset(path, cacheBudgetBytes, cancellation);
+    return m_impl->openDataset(
+        path, cacheBudgetBytes, cancellation, std::move(derivedFields));
 }
 
 RemoteDirectoryListing Connection::listDirectory(
@@ -798,6 +816,11 @@ bool Connection::supportsVolumeRendering() const noexcept
 bool Connection::supportsVolumeSampling() const noexcept
 {
     return m_impl->supportsVolumeSampling();
+}
+
+bool Connection::supportsDerivedFields() const noexcept
+{
+    return m_impl->supportsDerivedFields();
 }
 
 VolumeFrame Connection::renderVolume(

@@ -42,6 +42,12 @@ inline constexpr const char* volumeSamplingUnsupportedMessage
     = "the remote server predates smooth volume sampling (protocol 1.3) and "
       "samples each ray at the nearest voxel; install a current "
       "amrexplorer-server";
+// And for derived fields, which a 1.3 server would not read off an open
+// request at all -- so it would answer a catalog of stored fields while the
+// client believed the definitions had been installed.
+inline constexpr const char* derivedFieldsUnsupportedMessage
+    = "the remote server predates derived fields (protocol 1.4); install a "
+      "current amrexplorer-server";
 
 class Connection : public std::enable_shared_from_this<Connection> {
 public:
@@ -62,8 +68,13 @@ public:
     [[nodiscard]] bool connected() const;
     [[nodiscard]] std::string disconnectReason() const;
 
+    // `derivedFields` are installed by the server on the session it opens
+    // (protocol 1.4). Ask supportsDerivedFields() first: a non-empty list
+    // against an older peer throws, because a peer that cannot read the field
+    // would answer a catalog of stored fields alone.
     [[nodiscard]] OpenedDataset openDataset(const std::string& path,
-        std::uint64_t cacheBudgetBytes, StopToken cancellation = {});
+        std::uint64_t cacheBudgetBytes, StopToken cancellation = {},
+        std::vector<DerivedFieldDefinition> derivedFields = {});
     // Lists the subdirectories of a server-side directory (protocol 1.1);
     // an empty path is the server's home. Throws when the server negotiated
     // protocol 1.0, i.e. predates browsing.
@@ -76,6 +87,10 @@ public:
     // Whether the negotiated protocol carries the volume march's sampling
     // policy (1.3). A 1.2 peer renders volumes but always sampled nearest.
     [[nodiscard]] bool supportsVolumeSampling() const noexcept;
+    // Whether the negotiated protocol carries derived-field definitions on an
+    // open request (1.4). A 1.3 peer opens datasets perfectly well; it just
+    // cannot be asked to compute a field.
+    [[nodiscard]] bool supportsDerivedFields() const noexcept;
     // Renders a volume on the server and returns the frame (protocol 1.2).
     // Ask supportsVolumeRendering() first: this throws when the server
     // negotiated an older protocol.

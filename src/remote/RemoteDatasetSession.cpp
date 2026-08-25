@@ -47,25 +47,44 @@ decltype(auto) refusingInvalidResponses(
 
 std::shared_ptr<RemoteDatasetSession> RemoteDatasetSession::open(
     std::shared_ptr<Connection> connection, const std::string& path,
-    std::uint64_t cacheBudgetBytes, StopToken cancellation)
+    std::uint64_t cacheBudgetBytes, StopToken cancellation,
+    std::vector<DerivedFieldDefinition> derivedFields)
 {
     if (!connection) {
         throw std::invalid_argument(
             "remote dataset requires a connection");
     }
+    // Outside refusingInvalidResponses below, whose catch(...) closes the
+    // connection: a peer too old to compute a field is not a peer that has
+    // stopped speaking the protocol, and closing here would take every other
+    // dataset on the connection with it. Same placement as renderVolume's.
+    if (!derivedFields.empty() && !connection->supportsDerivedFields()) {
+        throw std::runtime_error(derivedFieldsUnsupportedMessage);
+    }
     // The catalog is validated while it is decoded, so an impossible one throws
     // in here rather than at a later call.
     auto opened = refusingInvalidResponses(*connection, [&] {
-        return connection->openDataset(path, cacheBudgetBytes, cancellation);
+        auto answer = connection->openDataset(
+            path, cacheBudgetBytes, cancellation, derivedFields);
+        // What the decoder could not check: it does not know how many
+        // definitions were sent. A reply that disagrees with the request is a
+        // peer that stopped speaking the protocol, so it belongs in here.
+        validateSessionOpenedDerivedFields({
+            .fieldCount = answer.catalog.fields.size(),
+            .derivedFieldCount = answer.derivedFieldCount,
+            .skips = answer.derivedFieldSkips,
+            .requestedCount = derivedFields.size(),
+        });
+        return answer;
     });
     return std::shared_ptr<RemoteDatasetSession>(
-        new RemoteDatasetSession(
-            std::move(connection), path, std::move(opened)));
+        new RemoteDatasetSession(std::move(connection), path,
+            std::move(opened), std::move(derivedFields)));
 }
 
 RemoteDatasetSession::RemoteDatasetSession(
     std::shared_ptr<Connection> connection, std::string path,
-    OpenedDataset opened)
+    OpenedDataset opened, std::vector<DerivedFieldDefinition> derivedFields)
     : m_connection(std::move(connection))
     , m_path(std::move(path))
     , m_id(opened.id)
@@ -75,6 +94,12 @@ RemoteDatasetSession::RemoteDatasetSession(
     , m_particleSpecies(std::move(opened.particleSpecies))
     , m_fileRangeAvailable(std::move(opened.fileRangeAvailable))
     , m_levelRangeAvailable(std::move(opened.levelRangeAvailable))
+    , m_derivedFieldDefinitions(std::move(derivedFields))
+    // The stored fields are what is left when the derived tail is taken off;
+    // the decoder has already refused a count past the field list's length.
+    , m_storedFieldCount(
+          m_metadata.fields.size() - opened.derivedFieldCount)
+    , m_derivedFieldSkips(std::move(opened.derivedFieldSkips))
 {
 }
 
@@ -135,6 +160,30 @@ bool RemoteDatasetSession::supportsVolumeRendering() const noexcept
     // refusals can name its own cause.
     return m_connection->supportsVolumeRendering()
         && datasetSupportsVolumeRendering(m_metadata);
+}
+
+bool RemoteDatasetSession::supportsDerivedFields() const noexcept
+{
+    // The one answer that keeps the GUI's reload loop terminating: a session
+    // that could not have installed the list it was handed must say so, and a
+    // pre-1.4 peer never received one.
+    return m_connection && m_connection->supportsDerivedFields();
+}
+
+std::size_t RemoteDatasetSession::storedFieldCount() const noexcept
+{
+    return m_storedFieldCount;
+}
+
+std::vector<DerivedFieldSkip> RemoteDatasetSession::skippedDerivedFields() const
+{
+    return m_derivedFieldSkips;
+}
+
+std::vector<DerivedFieldDefinition>
+RemoteDatasetSession::derivedFieldDefinitions() const
+{
+    return m_derivedFieldDefinitions;
 }
 
 bool RemoteDatasetSession::supportsVolumeSampling() const noexcept

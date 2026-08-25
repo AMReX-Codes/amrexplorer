@@ -2,6 +2,8 @@
 
 #include "amrexplorer_wire_bfbs_generated.h"
 
+#include <amrexplorer/expression/Expression.hpp>
+
 #include <flatbuffers/reflection.h>
 #include <flatbuffers/verifier.h>
 
@@ -11,6 +13,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -364,6 +367,29 @@ bool vectorsAligned(std::span<const std::uint8_t> bytes)
         .aligned(*schema.root_table(), *flatbuffers::GetAnyRoot(bytes.data()));
 }
 
+// A skip's reason is written by installation, which quotes a symbol out of the
+// expression it could not resolve -- so it runs to the expression's own bound
+// plus the words around it, which is longer than the bound fromWire enforces
+// on the way back in. Bounded here rather than left to disagree: a decoder
+// that refused its own encoder's output would take the throw inside
+// refusingInvalidResponses and close the connection, losing every other
+// dataset on it over a reply the server was right to send.
+std::string boundedReason(const std::string& reason)
+{
+    constexpr std::string_view continued = "...";
+    if (reason.size() <= maximumExpressionBytes) {
+        return reason;
+    }
+    auto kept = maximumExpressionBytes - continued.size();
+    // Not mid-character: splitting a UTF-8 sequence would put bytes on the
+    // wire that no longer read as text in the tooltip this ends up in.
+    while (kept > 0
+        && (static_cast<unsigned char>(reason[kept]) & 0xC0U) == 0x80U) {
+        --kept;
+    }
+    return reason.substr(0, kept) + std::string(continued);
+}
+
 } // namespace
 
 std::unique_ptr<NativeEnvelope> decode(
@@ -620,12 +646,54 @@ fb::OpenDatasetRequestT toWire(const OpenDatasetData& value)
     fb::OpenDatasetRequestT wire;
     wire.path = value.path;
     wire.cache_budget_bytes = value.cacheBudgetBytes;
+    wire.derived_fields.reserve(value.derivedFields.size());
+    for (const auto& definition : value.derivedFields) {
+        auto entry = std::make_unique<fb::DerivedFieldDefinitionT>();
+        entry->name = definition.name;
+        entry->expression = definition.expression;
+        wire.derived_fields.push_back(std::move(entry));
+    }
     return wire;
 }
 
 OpenDatasetData fromWire(const fb::OpenDatasetRequestT& value)
 {
-    return {value.path, value.cache_budget_bytes};
+    // Only what a skip cannot express is refused here. The server installs
+    // this list under DerivedFieldPolicy::Skip, so a definition it cannot
+    // resolve comes back as one greyed row instead of an open that failed, and
+    // a check repeated here would turn that row into a refusal the same list
+    // never gets from a local dataset.
+    //
+    // These two are the exceptions, because the reply has no way to carry
+    // them: a skip is reported by name, so a nameless definition cannot be
+    // named back, and the reply's vector of skips is bounded by this same
+    // maximumDerivedFieldCount, so a list past the cap could only be answered
+    // with a reply this decoder would itself reject.
+    if (value.derived_fields.size() > maximumDerivedFieldCount) {
+        throw std::invalid_argument(
+            "wire open request carries too many derived-field definitions");
+    }
+    OpenDatasetData result;
+    result.path = value.path;
+    result.cacheBudgetBytes = value.cache_budget_bytes;
+    result.derivedFields.reserve(value.derived_fields.size());
+    for (const auto& entry : value.derived_fields) {
+        if (!entry) {
+            throw std::invalid_argument(
+                "wire derived-field definition is missing");
+        }
+        if (entry->name.empty()) {
+            throw std::invalid_argument(
+                "wire derived-field definition has no name");
+        }
+        // The expression's length is not checked: CompiledExpression::compile
+        // refuses one past maximumExpressionBytes before it parses anything, so
+        // installation already skips it with a bounded reason, which is what a
+        // local dataset does with the same definition.
+        result.derivedFields.push_back(
+            DerivedFieldDefinition{entry->name, entry->expression});
+    }
+    return result;
 }
 
 fb::DatasetOpenedT toWire(const OpenedDataset& value)
@@ -681,6 +749,16 @@ fb::DatasetOpenedT toWire(const OpenedDataset& value)
         = value.metadataMetrics.payloadBytesRead;
     wire.file_version = value.fileVersion;
     wire.cache = toWire(value.cache);
+    wire.derived_field_count = value.derivedFieldCount;
+    wire.derived_field_skips.reserve(value.derivedFieldSkips.size());
+    for (const auto& skip : value.derivedFieldSkips) {
+        auto converted = std::make_unique<fb::DerivedFieldSkipT>();
+        converted->definition_index
+            = static_cast<std::uint32_t>(skip.definitionIndex);
+        converted->name = skip.name;
+        converted->reason = boundedReason(skip.reason);
+        wire.derived_field_skips.push_back(std::move(converted));
+    }
     return wire;
 }
 
@@ -820,6 +898,44 @@ OpenedDataset fromWire(const fb::DatasetOpenedT& value)
             throw std::invalid_argument(
                 "wire particle species component count is outside its bounds");
         }
+    }
+    // The derived fields are the tail of the catalog, so a count past its
+    // length would leave the client splitting the list at an index that is not
+    // in it. What the count cannot be checked against here is the number of
+    // definitions the client sent -- the decoder does not know it -- which is
+    // what validateSessionOpenedDerivedFields is for.
+    result.derivedFieldCount = value.derived_field_count;
+    if (result.derivedFieldCount > result.catalog.fields.size()) {
+        throw std::invalid_argument(
+            "wire dataset catalog claims more derived fields than it has "
+            "fields");
+    }
+    if (value.derived_field_skips.size() > maximumDerivedFieldCount) {
+        throw std::invalid_argument(
+            "wire dataset catalog carries too many derived-field skips");
+    }
+    result.derivedFieldSkips.reserve(value.derived_field_skips.size());
+    for (const auto& skip : value.derived_field_skips) {
+        if (!skip) {
+            throw std::invalid_argument(
+                "wire derived-field skip is missing");
+        }
+        if (skip->name.empty()) {
+            throw std::invalid_argument(
+                "wire derived-field skip has no name");
+        }
+        // Clamped rather than refused. A reason over the bound is what a
+        // *correct* peer produces -- installation quotes the symbol it could
+        // not resolve, so the reason runs to the expression's own bound plus
+        // the words around it -- and protocol 1.4 cannot tell a peer that
+        // bounds it from one that does not. This decode runs inside
+        // refusingInvalidResponses, where a throw closes the connection and
+        // takes every other dataset on it, so display-only text must not be
+        // able to do that. Our encoder bounds what we send; this is what
+        // makes a peer built from any other 1.4 commit safe to talk to.
+        result.derivedFieldSkips.push_back(
+            DerivedFieldSkip{skip->definition_index, skip->name,
+                boundedReason(skip->reason)});
     }
     return result;
 }

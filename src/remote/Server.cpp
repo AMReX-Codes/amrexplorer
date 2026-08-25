@@ -604,6 +604,19 @@ private:
         if (request == nullptr || request->path.empty()) {
             throw std::invalid_argument("dataset path is empty");
         }
+        // Decoded here, before the reservation below: this is what bounds the
+        // definition list a client sent (codec::fromWire), and an over-cap list
+        // should be refused before anything is reserved or allocated for it.
+        auto open = codec::fromWire(*request);
+        // Also before the reservation, so an early return need not know that
+        // bookkeeping. Not theatre: encode() stamps the envelope's version but
+        // filters no fields, so a 1.3-negotiated envelope can physically carry
+        // this vector -- and a client that read our Hello knows better, so this
+        // is answerable rather than fatal.
+        if (!open.derivedFields.empty() && m_selectedMinorVersion < 4) {
+            throw RemoteError(ErrorCode::UnsupportedProtocol,
+                "derived fields require protocol 1.4");
+        }
         {
             std::scoped_lock lock(m_stateMutex);
             if (m_stopping.load() || cancellation.stop_requested()) {
@@ -621,9 +634,13 @@ private:
         std::shared_ptr<LocalDatasetSession> dataset;
         bool reservationActive = true;
         try {
+            // The definitions are installed under DerivedFieldPolicy::Skip,
+            // so one this plotfile cannot resolve is reported back rather than
+            // failing the open -- a list written for another dataset must not
+            // make this one unopenable.
             dataset = std::make_shared<LocalDatasetSession>(
-                resolveDatasetPath(request->path), id,
-                request->cache_budget_bytes, cancellation);
+                resolveDatasetPath(open.path), id, open.cacheBudgetBytes,
+                cancellation, std::move(open.derivedFields));
             // The operator's number, on its own. The constructor has just
             // seeded the grid pool from cache_budget_bytes, which is the
             // client's *block* cache budget -- a different pool holding
@@ -645,6 +662,12 @@ private:
             opened.metadataMetrics = dataset->metadataReadMetrics();
             opened.fileVersion = dataset->fileVersion();
             opened.particleSpecies = dataset->particleSpecies();
+            // The derived tail of the catalog, and what could not be
+            // installed. Both come from the session just built, so the client
+            // is told exactly what it is looking at.
+            opened.derivedFieldCount = static_cast<std::uint32_t>(
+                opened.catalog.fields.size() - dataset->storedFieldCount());
+            opened.derivedFieldSkips = dataset->skippedDerivedFields();
             opened.fileRangeAvailable.reserve(opened.catalog.fields.size());
             opened.levelRangeAvailable.reserve(opened.catalog.fields.size()
                 * opened.catalog.levels.size());

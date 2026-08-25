@@ -7,6 +7,11 @@ void MainWindow::setInitialSliceLaunchedHookForTest(std::function<void()> hook)
     m_initialSliceLaunchedForTest = std::move(hook);
 }
 
+void MainWindow::failNextInitialSliceForTest()
+{
+    m_failNextInitialSliceForTest = true;
+}
+
 void MainWindow::requestActiveViewSliceForTest()
 {
     if (m_activeView != nullptr) {

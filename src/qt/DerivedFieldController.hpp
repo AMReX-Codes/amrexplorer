@@ -79,6 +79,14 @@ public:
         std::function<QString()> unavailableReason;
         // Reopen the open dataset with the committed definitions.
         std::function<void()> reload;
+        // Reopen it only if it is not already showing them. What an Apply that
+        // changed nothing asks for: a reload that failed leaves the list
+        // committed and uninstalled, and the store emits nothing to ask again
+        // with, so without this the only ways back are editing the list to
+        // something else and back, or reopening the dataset. A window whose
+        // session already carries the list does nothing here, which is what
+        // keeps a merely redundant Apply from reloading anything.
+        std::function<void()> reloadIfMissing;
         // A path to import from (forSaving false) or export to (true); empty
         // cancels. The host runs the file dialog, as it does for palettes.
         std::function<QString(QWidget* parent, bool forSaving)> chooseFile;

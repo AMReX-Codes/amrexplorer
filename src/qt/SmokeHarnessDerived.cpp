@@ -222,8 +222,14 @@ void armRangeMemoryChecks(
 // unless something re-slices, the window keeps the outgoing session's pixels
 // while its catalog, field list and colour bar are the new session's. Exit 0
 // once the raster on screen and the installed session agree again.
-void armReloadRaceChecks(
-    amrvis::qt::MainWindow& window, QApplication& application)
+// `dispatch` decides how the injected interaction reaches the slice pipeline.
+// True submits for the view there and then, which is the ordering an
+// arrival-side check cannot sort out: the view is showing a raster the
+// outgoing session produced. False leaves the request queued behind the
+// debounce, as a real click does -- sliceGeneration has not moved when the
+// reload completes, so only the queue says the user has been here.
+void armReloadRaceChecks(amrvis::qt::MainWindow& window,
+    QApplication& application, bool dispatch)
 {
     auto phase = std::make_shared<int>(0);
     auto loads = std::make_shared<int>(0);
@@ -253,8 +259,8 @@ void armReloadRaceChecks(
             ++*loads;
         });
     window.setInitialSliceLaunchedHookForTest(
-        [&window, loads, injected, chosenField, chosenLevel,
-            chosenRangeMode] {
+        [&window, loads, injected, chosenField, chosenLevel, chosenRangeMode,
+            dispatch] {
             if (*loads == 0 || *injected) {
                 return;
             }
@@ -291,7 +297,9 @@ void armReloadRaceChecks(
                     *chosenRangeMode = modes->currentData().toInt();
                 }
             }
-            window.requestActiveViewSliceForTest();
+            if (dispatch) {
+                window.requestActiveViewSliceForTest();
+            }
         });
 
     auto* timer = new QTimer(&window);
@@ -380,6 +388,139 @@ void armReloadRaceChecks(
                     return;
                 }
                 finish(0);
+                return;
+            }
+        });
+    timer->start();
+}
+
+// Arms the retry scenario: a reload that fails leaves the list committed and
+// uninstalled, and the store emits nothing for a list that has not moved, so
+// the Apply the user presses again has to ask for the reload itself. Exit 0
+// once the definition the first Apply could not install is on the field list;
+// a nonzero code names the step that failed.
+void armReloadRetryChecks(
+    amrvis::qt::MainWindow& window, QApplication& application)
+{
+    auto phase = std::make_shared<int>(0);
+    auto loads = std::make_shared<int>(0);
+    auto failures = std::make_shared<int>(0);
+    auto ticks = std::make_shared<int>(0);
+    // The tick the retry was pressed on, so the wait for it to land is bounded
+    // by itself rather than by the scenario's own budget -- what the bug looks
+    // like is nothing happening, and it should say so in those words.
+    auto retryTick = std::make_shared<int>(0);
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [loads, failures](bool success) {
+            if (success) {
+                ++*loads;
+            } else {
+                ++*failures;
+            }
+        });
+
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, loads, failures, ticks, retryTick,
+            timer] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            ++*ticks;
+            if (*ticks > 400) {
+                qCritical("the reload retry scenario never settled");
+                finish(30);
+                return;
+            }
+            if (*loads == 0) {
+                return;
+            }
+            auto* dialog =
+                window.findChild<amrvis::qt::ExpressionEditorDialog*>();
+            if (*phase == 0) {
+                auto* action = window.findChild<QAction*>(
+                    QStringLiteral("expressionEditorAction"));
+                if (action == nullptr || !action->isEnabled()) {
+                    qCritical("the Expression Editor action is not available");
+                    finish(31);
+                    return;
+                }
+                action->trigger();
+                *phase = 1;
+                return;
+            }
+            if (*phase == 1) {
+                if (dialog == nullptr) {
+                    qCritical("the Expression Editor did not open");
+                    finish(32);
+                    return;
+                }
+                // The reload this Apply starts goes down its failure arm,
+                // which is what a server refusing the reopen -- or a
+                // connection that has gone -- leaves behind: the list
+                // committed, the previous session still installed, and the
+                // editor reporting a definition that never arrived.
+                window.failNextInitialSliceForTest();
+                if (!writeDefinition(*dialog, QStringLiteral("twice"),
+                        QStringLiteral("density * 2"))
+                    || !clickApply(*dialog)) {
+                    qCritical("the editor did not take the definition");
+                    finish(33);
+                    return;
+                }
+                if (errorShown(*dialog)) {
+                    qCritical("a definition this dataset can compute was "
+                              "refused");
+                    finish(33);
+                    return;
+                }
+                *phase = 2;
+                return;
+            }
+            if (*phase == 2) {
+                if (*failures == 0) {
+                    return;  // the reload is still running
+                }
+                if (fieldNames(window).contains(QStringLiteral("twice"))) {
+                    qCritical("a failed reload installed the definition");
+                    finish(34);
+                    return;
+                }
+                if (dialog == nullptr) {
+                    qCritical("the editor closed over a failed reload");
+                    finish(35);
+                    return;
+                }
+                // The same list a second time, which the store does not emit
+                // for. Nothing else in the window can ask for that reload
+                // again, so without the Apply doing it the definition stays
+                // uninstalled for good.
+                if (!clickApply(*dialog)) {
+                    qCritical("the editor has no Apply button");
+                    finish(35);
+                    return;
+                }
+                *retryTick = *ticks;
+                *phase = 3;
+                return;
+            }
+            if (*phase == 3) {
+                if (fieldNames(window).contains(QStringLiteral("twice"))) {
+                    if (window.slicesInFlightForTest() != 0
+                        || window.sliceRequestPendingForTest()) {
+                        return;
+                    }
+                    finish(0);
+                    return;
+                }
+                if (*ticks - *retryTick > 120) {
+                    qCritical("an unchanged Apply did not retry the reload "
+                              "that failed");
+                    finish(36);
+                    return;
+                }
                 return;
             }
         });
@@ -1423,7 +1564,11 @@ Outcome dispatchDerived(Context& context)
     } else if (option == "--derived-field-smoke-test") {
         armDerivedChecks(window, application);
     } else if (option == "--derived-field-reload-race-smoke-test") {
-        armReloadRaceChecks(window, application);
+        armReloadRaceChecks(window, application, true);
+    } else if (option == "--derived-field-reload-debounce-smoke-test") {
+        armReloadRaceChecks(window, application, false);
+    } else if (option == "--derived-field-reload-retry-smoke-test") {
+        armReloadRetryChecks(window, application);
     } else if (option == "--derived-field-playback-smoke-test") {
         armPlaybackChecks(window, application, path);
     } else if (option == "--remote-derived-field-smoke-test") {

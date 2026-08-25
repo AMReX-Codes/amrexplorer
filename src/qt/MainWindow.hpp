@@ -151,6 +151,11 @@ public:
     // release build does not have is: the body cannot be inline here, where
     // AMREXPLORER_QT_TEST_ACCESS is not necessarily on.
     void setInitialSliceLaunchedHookForTest(std::function<void()> hook);
+    // Sends the next initial-slice completion down its failure arm, standing
+    // in for the reopen a server refuses or a connection that has gone. The
+    // one state a test cannot reach through the widgets, and the one the
+    // retry an unchanged Apply performs exists for.
+    void failNextInitialSliceForTest();
     // Submits a slice for the active view the way an interaction does --
     // synchronously, bumping the view's slice generation. Paired with the hook
     // above it reproduces an interaction that lands while a reload is still
@@ -1032,6 +1037,10 @@ private:
     // Test-only: run just after an initial-slice load is launched; see
     // setInitialSliceLaunchedHookForTest.
     std::function<void()> m_initialSliceLaunchedForTest;
+    // Test-only: consumed by the next initial-slice completion, which then
+    // throws where a load that failed would have. See
+    // failNextInitialSliceForTest.
+    bool m_failNextInitialSliceForTest = false;
     // Test-only: superseded visible-range sync outcomes dropped by the
     // rerun guard. Sole writer is that drop, so the overlapping-sync test can
     // assert an exact count. The DiagnosticsModel's stale count carries the

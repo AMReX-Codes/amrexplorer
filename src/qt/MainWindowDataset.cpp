@@ -1110,6 +1110,15 @@ void MainWindow::requestInitialSlice(
             }
             try {
                 auto result = watcher->future().takeResult();
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+                // Before anything is installed, which is where a load that
+                // failed gives up: the session this one opened dies with
+                // `result` and the arm below finds the previous one still on
+                // screen. See failNextInitialSliceForTest.
+                if (std::exchange(m_failNextInitialSliceForTest, false)) {
+                    throw std::runtime_error("initial slice failed for test");
+                }
+#endif
                 if (generation == m_generation) {
                     const auto previousVectorFields = vectorFieldNames();
                     m_dataset = result.dataset;
@@ -1124,12 +1133,22 @@ void MainWindow::requestInitialSlice(
                     // selection. The controls are one per window, so once any
                     // view has been superseded the user's current state has to
                     // win for all of them.
-                    std::vector<std::size_t> superseded;
-                    for (std::size_t index = 0; index < views.size(); ++index) {
-                        if (views[index]->sliceGeneration
-                            != viewGenerations[index]) {
-                            superseded.push_back(index);
-                        }
+                    //
+                    // A request queued behind the debounce counts as much as
+                    // one already dispatched: an edit only starts that timer,
+                    // and sliceGeneration does not move until it flushes, so a
+                    // load completing inside the window between the two would
+                    // find nothing superseded and replay the spec over what
+                    // the user had just done -- and the flush that followed
+                    // would then render the replayed values. Every path that
+                    // launches a load empties the queue first, so anything in
+                    // it now was queued while this load ran.
+                    bool superseded
+                        = m_pendingAllViews || !m_pendingViews.empty();
+                    for (std::size_t index = 0;
+                        index < views.size() && !superseded; ++index) {
+                        superseded = views[index]->sliceGeneration
+                            != viewGenerations[index];
                     }
                     // By name, and before configureSliceControls below, which
                     // repopulates the selector and calls selectFieldItem(0):
@@ -1138,9 +1157,9 @@ void MainWindow::requestInitialSlice(
                     // load was *launched* with. Ids renumber across a reload
                     // when the derived tail changes, so the name is the only
                     // stable handle.
-                    const auto supersededField = superseded.empty()
-                        ? QString{}
-                        : m_fieldSelector->currentText();
+                    const auto supersededField = superseded
+                        ? m_fieldSelector->currentText()
+                        : QString{};
                     // The level and the range are read here for the same
                     // reason: configureSliceControls puts the level combo back
                     // to its first row, and the spec restore below writes both
@@ -1149,7 +1168,7 @@ void MainWindow::requestInitialSlice(
                     // the reloaded session need not offer the same rows.
                     std::optional<int> supersededLevel;
                     std::optional<RangeController::Selection> supersededRange;
-                    if (!superseded.empty()) {
+                    if (superseded) {
                         if (m_levelSelector->currentIndex() >= 0) {
                             supersededLevel
                                 = m_levelSelector->currentData().toInt();

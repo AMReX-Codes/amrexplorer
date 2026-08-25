@@ -86,6 +86,11 @@ MainWindow::MainWindow(QWidget* parent)
                 return {};
             },
             .reload = [this] { reloadCurrentDataset(); },
+            // Which asks nothing of a session that already carries the list,
+            // and remembers the ask it does make, so pressing Apply on an
+            // unchanged list repeatedly starts one reload rather than one
+            // each time.
+            .reloadIfMissing = [this] { reloadIfDefinitionsMoved(); },
             .chooseFile =
                 [this](QWidget*, bool forSaving) {
                     // Parented to the window, not to the editor that asked:

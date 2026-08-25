@@ -273,10 +273,16 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
 
     // set() is what reloads -- here and in every other window -- and does
     // nothing at all when the list has not moved. That last part is deliberate
-    // and tested ("an unchanged list reloaded a window"), which is also why an
-    // Apply cannot serve as the retry for a reload that failed: see the note
-    // on the failure path in MainWindowDataset.
+    // and tested ("an unchanged list reloaded a window"), so a list that has
+    // not moved is asked for again here instead, and only of this window: the
+    // reload that failed is the one the user is looking at, and the hook drops
+    // the ask where the session already carries the list, which is every
+    // window an unchanged Apply has nothing to do in.
+    const bool moved = definitions != m_store.definitions();
     m_store.set(std::move(definitions));
+    if (!moved && m_hooks.reloadIfMissing) {
+        m_hooks.reloadIfMissing();
+    }
     return std::nullopt;
 }
 

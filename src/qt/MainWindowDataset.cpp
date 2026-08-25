@@ -1287,6 +1287,16 @@ void MainWindow::requestInitialSlice(
                                 .arg(QString::fromStdString(
                                     m_datasetPath.string())));
                     }
+                    // A reload that started and then failed must not count as
+                    // one that happened: the list is still uninstalled, and
+                    // pressing Apply again cannot ask for it a second time
+                    // because DerivedFieldStore::set returns without emitting
+                    // for a list that has not moved. Left armed, the window
+                    // stayed on the older list for good while the editor
+                    // reported it applied. This cannot loop the way the memo
+                    // guards against: it runs when a load completes, not once
+                    // per event-loop turn.
+                    m_reloadStartedFor.reset();
                     emit initialSliceFinished(false);
                 } else {
                     m_diagnosticsModel->noteStaleResult();

@@ -670,8 +670,20 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                 // the future and copying out of it duplicates every plane in
                 // the arrival before showSlice has even seen it.
                 auto result = watcher->future().takeResult();
+                // The session too, not just the two generations: a reload
+                // leaves the outgoing session installed while it runs (that is
+                // what keeps a working display up if the reopen fails), so an
+                // interaction meanwhile submits against the old session under
+                // the *new* m_generation. The reload then installs the new
+                // session and skips its own display for this view, because the
+                // interaction moved sliceGeneration past the value it captured
+                // -- and this slice would be accepted as current, leaving the
+                // catalog and the pixels from different datasets. After an edit
+                // that renumbers the derived tail, that is values from the old
+                // expression under the new field list.
                 if (generation == m_generation
-                    && sliceGeneration == state.sliceGeneration) {
+                    && sliceGeneration == state.sliceGeneration
+                    && dataset == m_dataset) {
                     // Cache the full-domain range whenever we get a non-zoomed
                     // Visible-range slice; reuse it for zoomed (subregion)
                     // slices so the color bar stays stable during pan and zoom.

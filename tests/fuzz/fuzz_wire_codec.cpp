@@ -144,12 +144,13 @@ void checkConverted(
                  "faithfully");
         }
         // Equality unless the decoder was entitled to clamp: an over-long
-        // reason comes back at the bound, and that is the only change it may
-        // make to one.
+        // reason comes back no longer than the bound. Not *at* the bound --
+        // the clamp backs off a partial UTF-8 sequence, so a legitimate one
+        // lands a byte or two under it.
         const auto reasonKept
             = entry->reason.size() <= amrvis::maximumExpressionBytes
             ? skip.reason == entry->reason
-            : skip.reason.size() == amrvis::maximumExpressionBytes;
+            : skip.reason.size() <= amrvis::maximumExpressionBytes;
         if (skip.name != entry->name
             || skip.definitionIndex != entry->definition_index || !reasonKept) {
             fail("DatasetOpened derived-field skip did not convert "

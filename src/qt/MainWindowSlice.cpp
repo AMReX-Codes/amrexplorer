@@ -88,7 +88,11 @@ QString MainWindow::expressionTooltip(const std::string& expression)
     // One line: an expression may be laid out over several, and a tooltip
     // showing the breaks would be as tall as the editor it was typed in.
     // simplified() folds every run of whitespace into a single space.
-    return QString::fromStdString(expression).simplified();
+    //
+    // Escaped, because the expression is the user's own bytes and Qt reads a
+    // tooltip as rich text as soon as it might be one: ${a<b} would otherwise
+    // be taken for markup and shown with a piece missing.
+    return QString::fromStdString(expression).simplified().toHtmlEscaped();
 }
 
 void MainWindow::setFieldItemEnabled(int index, bool enabled)
@@ -110,18 +114,34 @@ void MainWindow::setFieldItemEnabled(int index, bool enabled)
 
 void MainWindow::selectFieldItem(int index)
 {
-    // The separator between the stored and the derived fields is an item, and
-    // setCurrentIndex does not skip one: landing there shows a blank row whose
-    // currentData() is invalid, which every reader of it then takes for field
-    // 0 while the range memory files itself under an empty name.
-    if (index >= 0 && index < m_fieldSelector->count()
-        && !m_fieldSelector->itemData(index).isValid()) {
-        ++index;
+    // Not every row is a field: the separator between the stored and the
+    // derived ones carries no item data, and neither does a definition this
+    // dataset cannot provide. setCurrentIndex skips none of them, and landing
+    // on one shows a row whose currentData() is invalid, which every reader of
+    // it then takes for field 0 while the range memory files itself under that
+    // row's name. So the caller's index is where to start looking rather than
+    // what to select: the selection goes to the first field at or after it,
+    // and failing that to the nearest one before it.
+    const auto count = m_fieldSelector->count();
+    const auto isField = [this](int row) {
+        return m_fieldSelector->itemData(row).isValid();
+    };
+    auto selected = -1;
+    for (auto row = std::max(index, 0); row < count; ++row) {
+        if (isField(row)) {
+            selected = row;
+            break;
+        }
     }
-    if (index < 0 || index >= m_fieldSelector->count()) {
-        index = 0;
+    for (auto row = std::min(index, count) - 1; selected < 0 && row >= 0;
+        --row) {
+        if (isField(row)) {
+            selected = row;
+        }
     }
-    m_fieldSelector->setCurrentIndex(index);
+    // -1 when the list holds no field at all, which leaves nothing selected
+    // rather than naming a row that is not one.
+    m_fieldSelector->setCurrentIndex(selected);
 }
 
 void MainWindow::populateFieldSelector()
@@ -177,7 +197,8 @@ void MainWindow::populateFieldSelector()
             reason != skipped.end()
                 ? tr("%1 -- unavailable here: %2")
                       .arg(expressionTooltip(definition.expression),
-                          QString::fromStdString(reason->reason))
+                          QString::fromStdString(reason->reason)
+                              .toHtmlEscaped())
                 : tr("%1 -- unavailable for this dataset")
                       .arg(expressionTooltip(definition.expression)),
             Qt::ToolTipRole);
@@ -216,16 +237,20 @@ void MainWindow::restoreVectorFields(const std::array<std::string, 3>& names)
         if (*field < 0 || names[axis].empty()) {
             continue;
         }
-        // Only where the name is actually here. Clamping an unresolved one
-        // into range instead would put all three on the same field *and* look
-        // valid to ensureVectorFieldDefaults, which then skips the re-detection
-        // that an out-of-range id is precisely the signal for.
-        for (std::size_t candidate = 0; candidate < fields.size(); ++candidate) {
-            if (fields[candidate].name == names[axis]) {
-                *field = static_cast<int>(candidate);
-                break;
-            }
-        }
+        // By name, and out of range when the name is not here. Leaving the
+        // old id would re-point the component at whatever field now holds it:
+        // the derived fields are part of this list, so an id outlives the
+        // definition it named and means a different one afterwards. Clamping
+        // would be worse still -- all three on one field, and looking valid to
+        // ensureVectorFieldDefaults, which then skips the re-detection that an
+        // out-of-range id is precisely the signal for.
+        const auto found = std::find_if(fields.begin(), fields.end(),
+            [&names, axis](const FieldMetadata& candidate) {
+                return candidate.name == names[axis];
+            });
+        *field = found != fields.end()
+            ? static_cast<int>(std::distance(fields.begin(), found))
+            : -1;
     }
 }
 

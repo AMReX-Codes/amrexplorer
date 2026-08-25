@@ -3,7 +3,6 @@
 #include "DerivedFieldStore.hpp"
 
 #include <amrexplorer/core/DerivedField.hpp>
-#include <amrexplorer/core/Metadata.hpp>
 
 #include <QObject>
 #include <QPointer>
@@ -11,6 +10,7 @@
 #include <QStringList>
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <vector>
@@ -45,34 +45,29 @@ struct ExpressionListFile {
 // Variable menu's Expression Editor action and its modeless dialog, and the
 // import/export of an expression list.
 //
-// The list lives as long as the window and is deliberately not persisted. A
-// definition is written against the fields of a particular dataset, so one
-// restored into a later session showed up against unrelated plotfiles, where
-// it could only be reported as unavailable. Export writes one to a file for
-// anyone who wants it back.
+// The list lives in the session's DerivedFieldStore, shared by every window,
+// and is deliberately not persisted: a definition is written against the
+// fields of a particular dataset, so one restored into a later session showed
+// up against unrelated plotfiles it could only be unavailable for. Export
+// writes one to a file for anyone who wants it back.
 //
 // The list is installed when a dataset is opened, so committing a change means
 // asking the host to reopen what is on screen with the new list (the `reload`
 // hook, which the host answers the way it answers a sequence frame switch).
-// Validation happens here, before any of that: an editor's Apply is checked
-// strictly against the open dataset's stored fields so the user is told which
-// definition is wrong and why, while a dataset opening with the committed list
+// Validation happens here, before any of that, and only of what is wrong
+// whatever the data (see apply): a dataset opening with the committed list
 // skips what it cannot resolve (DerivedFieldPolicy) rather than refusing to
-// open -- a list written for one plotfile must not make another unopenable.
+// open -- a list written for one plotfile must not make another unopenable --
+// and the window shows what was skipped greyed out.
 class DerivedFieldController final : public QObject {
     Q_OBJECT
 
 public:
     struct Hooks {
         // Whether a dataset that can take derived fields is open. Asked on
-        // every dataset load, which is why it is not storedMetadata's
-        // has_value(): that copies a whole field and block list to answer a
-        // question about one pointer.
+        // every dataset load, so it answers from one pointer rather than by
+        // copying anything.
         std::function<bool()> available;
-        // The fields a definition may read: the open dataset's metadata with
-        // the derived fields removed, or nullopt when none is open. Asked only
-        // when a list is validated.
-        std::function<std::optional<DatasetMetadata>()> storedMetadata;
         // Reopen the open dataset with the committed definitions.
         std::function<void()> reload;
         // A path to import from (forSaving false) or export to (true); empty
@@ -92,6 +87,20 @@ public:
     // Re-derives the action's enablement from the hooks; the host calls it
     // when a dataset opens or closes.
     void refreshAvailability();
+
+    // Whether a dataset that can take derived fields is open, and how many
+    // times the shared list has changed. The host asks both when one of its
+    // own loads lands: it counts as unavailable for the whole of an open, so
+    // a change committed meanwhile reached every other window but not the
+    // session it was opening (see DerivedFieldStore::revision).
+    [[nodiscard]] bool available() const
+    {
+        return m_hooks.available && m_hooks.available();
+    }
+    [[nodiscard]] std::uint64_t storeRevision() const noexcept
+    {
+        return m_store.revision();
+    }
 
     [[nodiscard]] const std::vector<DerivedFieldDefinition>& definitions()
         const noexcept

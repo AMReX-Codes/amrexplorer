@@ -15,6 +15,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace {
@@ -33,30 +34,6 @@ void require(bool condition, const char* message)
     }
 }
 
-// The stored fields a definition is validated against.
-amrvis::DatasetMetadata storedMetadata()
-{
-    amrvis::DatasetMetadata metadata;
-    metadata.dimension = 2;
-    metadata.finestLevel = 0;
-    metadata.hasPhysicalGeometry = true;
-    for (std::size_t axis = 0; axis < 3; ++axis) {
-        metadata.physicalDomain.lower[axis] = 0.0;
-        metadata.physicalDomain.upper[axis] = 1.0;
-    }
-    amrvis::LevelMetadata level;
-    level.cellSize = amrvis::Real3{{0.25, 0.25, 0.25}};
-    level.domain.upper = amrvis::Int3{{3, 3, 3}};
-    metadata.levels.push_back(level);
-    metadata.fields = {
-        amrvis::FieldMetadata{
-            .name = "density", .centering = {}, .componentNames = {}},
-        amrvis::FieldMetadata{
-            .name = "temperature", .centering = {}, .componentNames = {}},
-    };
-    return metadata;
-}
-
 struct Fixture {
     // Set to false to stand for a session that cannot take derived fields (a
     // remote one) or for no dataset at all.
@@ -70,13 +47,6 @@ struct Fixture {
     {
         return DerivedFieldController::Hooks{
             .available = [this] { return datasetOpen; },
-            .storedMetadata =
-                [this]() -> std::optional<amrvis::DatasetMetadata> {
-                if (!datasetOpen) {
-                    return std::nullopt;
-                }
-                return storedMetadata();
-            },
             .reload = [this] { ++reloads; },
             .chooseFile =
                 [this](QWidget*, bool forSaving) {
@@ -152,6 +122,30 @@ int main(int argc, char** argv)
         require(controller.definitions().empty()
                 && fixture.reloads == before + 1,
             "clearing the list did not commit and reload");
+    }
+
+    // A list longer than a dataset can install is refused whole. Committing
+    // it would install the first maximumDerivedFieldCount against every
+    // dataset and skip the rest, so every window would list what it had
+    // greyed out -- and an imported file is where such a length comes from.
+    {
+        Fixture fixture;
+        DerivedFieldStore store;
+        DerivedFieldController controller(fixture.hooks(), store);
+        std::vector<DerivedFieldDefinition> many;
+        many.reserve(amrvis::maximumDerivedFieldCount + 1);
+        for (std::size_t index = 0; index <= amrvis::maximumDerivedFieldCount;
+            ++index) {
+            many.push_back({"f" + std::to_string(index), "density"});
+        }
+        const auto refusal = controller.apply(many);
+        require(refusal.has_value() && !refusal->definitionIndex.has_value(),
+            "a list past the cap was accepted");
+        require(controller.definitions().empty() && fixture.reloads == 0,
+            "a refused list was committed");
+        many.pop_back();
+        require(!controller.apply(many).has_value(),
+            "a list at the cap was refused");
     }
 
     // With no dataset that can take derived fields, the action is disabled and
@@ -342,6 +336,62 @@ int main(int argc, char** argv)
         require(two.definitions().empty(), "the other window kept the list");
         require(second.reloads == 1,
             "a window with no usable dataset was reloaded");
+    }
+
+    // An editor open in another window: a definition committed next door
+    // reaches it, but never over work started here and not yet applied.
+    {
+        Fixture first;
+        Fixture second;
+        DerivedFieldStore store;
+        DerivedFieldController one(first.hooks(), store);
+        DerivedFieldController two(second.hooks(), store);
+
+        auto* parent = new QWidget;
+        two.showEditor(parent);
+        auto* peer = parent->findChild<ExpressionEditorDialog*>();
+        require(peer != nullptr, "the editor did not open");
+        const auto* notice =
+            peer->findChild<QLabel*>(QStringLiteral("expressionNotice"));
+        require(notice != nullptr && !notice->isVisible(),
+            "the editor opened on a notice");
+
+        // Nothing typed here, so the change is taken as it stands.
+        require(!one.apply({{"speed", "density"}}).has_value(),
+            "the list was refused");
+        require(peer->draft().size() == 1 && peer->draft()[0].name == "speed",
+            "an idle editor did not adopt the shared list");
+        require(!peer->hasUnappliedEdits(),
+            "an adopted list was left looking like an unapplied edit");
+        require(!notice->isVisible(), "an adopted change was announced");
+
+        // Now with a definition written here and not applied.
+        peer->findChild<QPushButton*>(QStringLiteral("newExpressionButton"))
+            ->click();
+        peer->findChild<QLineEdit*>(QStringLiteral("expressionName"))
+            ->setText(QStringLiteral("mine"));
+        peer->findChild<QPlainTextEdit*>(QStringLiteral("expressionSource"))
+            ->setPlainText(QStringLiteral("temperature"));
+        require(peer->hasUnappliedEdits(), "typing left no unapplied edit");
+        require(!one.apply({{"theirs", "density"}}).has_value(),
+            "the second list was refused");
+        require(peer->draft().size() == 2 && peer->draft()[1].name == "mine",
+            "a commit in another window discarded unapplied work");
+        require(notice->isVisible(),
+            "the editor was not told the shared list had moved");
+
+        // The kept edits are still the ones Apply commits, and committing
+        // them ends the notice rather than leaving it standing.
+        peer->findChild<QPushButton*>(
+                QStringLiteral("applyExpressionsButton"))
+            ->click();
+        require(store.definitions().size() == 2
+                && store.definitions()[1].name == "mine",
+            "applying the kept edits did not commit them");
+        require(!peer->hasUnappliedEdits(),
+            "an applied draft was still an unapplied edit");
+        require(!notice->isVisible(), "the notice outlived the apply");
+        delete parent;
     }
 
     std::cout << "derived field controller tests passed\n";

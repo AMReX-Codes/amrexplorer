@@ -42,19 +42,6 @@ MainWindow::MainWindow(QWidget* parent)
                     && !m_dataset->metadata().isFab
                     && !m_fabNavigator->fabMode();
             },
-            .storedMetadata = [this]() -> std::optional<DatasetMetadata> {
-                if (!m_dataset || !m_dataset->supportsDerivedFields()) {
-                    return std::nullopt;
-                }
-                auto metadata = m_dataset->metadata();
-                // The stored fields alone: a definition is validated against
-                // what the plotfile holds, not against the derived fields the
-                // open session already installed (which the list replaces).
-                const auto stored = std::min(
-                    m_dataset->storedFieldCount(), metadata.fields.size());
-                metadata.fields.resize(stored);
-                return metadata;
-            },
             .reload = [this] { reloadCurrentDataset(); },
             .chooseFile =
                 [this](QWidget*, bool forSaving) {
@@ -1455,7 +1442,8 @@ void MainWindow::rebuildVariableMenu()
         action->setToolTip(reason != skipped.end()
                 ? tr("%1 -- unavailable here: %2")
                       .arg(expressionTooltip(definition.expression),
-                          QString::fromStdString(reason->reason))
+                          QString::fromStdString(reason->reason)
+                              .toHtmlEscaped())
                 : tr("%1 -- unavailable for this dataset")
                       .arg(expressionTooltip(definition.expression)));
     }
@@ -1547,10 +1535,14 @@ void MainWindow::reloadCurrentDataset()
     if (!m_dataset || m_datasetPath.empty()) {
         return;
     }
-    if (m_playbackMode != PlaybackMode::None) {
-        // Mid-playback: reloading here would restart the frame under the user.
-        // Every frame load reads the list for itself (buildFrameSpec), so the
-        // next one picks the change up on its own.
+    if (m_playbackMode == PlaybackMode::Sequence) {
+        // Mid-playback: reloading here would restart the frame under the user,
+        // and every frame load reads the list for itself (buildFrameSpec), so
+        // the next frame picks the change up on its own. A plane sweep is not
+        // that -- it moves the slice position on the session already open and
+        // never reopens it -- so skipping the reload there would leave the
+        // definition uninstalled for good, with the editor reporting that it
+        // had been applied.
         return;
     }
     if (m_sequenceController->hasSequence()) {

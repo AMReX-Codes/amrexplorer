@@ -24,6 +24,7 @@ void DerivedFieldStore::set(std::vector<DerivedFieldDefinition> definitions)
         return;
     }
     m_definitions = std::move(definitions);
+    ++m_revision;
     emit changed();
 }
 

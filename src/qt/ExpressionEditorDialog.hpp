@@ -40,10 +40,23 @@ public:
     {
         return m_draft;
     }
-    // Replaces the draft: an accepted apply, or an import. Selects the row
-    // named by `select` when it is still in range, otherwise the first.
+    // Replaces the draft with content the user has not committed -- an
+    // import. Selects the row named by `select` when it is still in range,
+    // otherwise the first.
     void setDraft(std::vector<DerivedFieldDefinition> definitions,
         std::optional<std::size_t> select = std::nullopt);
+    // Replaces the draft with the committed list, which later edits are then
+    // measured against: an accepted apply, or a list committed in another
+    // window.
+    void setCommitted(std::vector<DerivedFieldDefinition> definitions,
+        std::optional<std::size_t> select = std::nullopt);
+    // Whether the draft has moved since it was last committed. One list is
+    // shared by every window, so a commit made elsewhere asks this before
+    // replacing what is on screen here.
+    [[nodiscard]] bool hasUnappliedEdits() const noexcept
+    {
+        return m_draft != m_committed;
+    }
 
     // Reports a refusal in place rather than over a second dialog, and selects
     // the definition it belongs to so the user is looking at what failed.
@@ -53,6 +66,9 @@ public:
     // here rather than in the status bar, which the reload this announces
     // clears as soon as its slices arrive.
     void showApplied(std::size_t count);
+    // Says that the shared list was committed in another window and that this
+    // editor's own edits were kept rather than replaced by it.
+    void showListChangedElsewhere();
     // The row being edited, so a host that replaces the draft with an
     // equivalent list can leave the user where they were.
     [[nodiscard]] std::optional<std::size_t> selectedIndex() const;
@@ -72,6 +88,10 @@ private:
     void removeSelected();
 
     std::vector<DerivedFieldDefinition> m_draft;
+    // The draft as it was last committed, which is the whole of what makes an
+    // edit unapplied: compared rather than flagged, so typing something and
+    // taking it back leaves nothing to protect.
+    std::vector<DerivedFieldDefinition> m_committed;
     QListWidget* m_list = nullptr;
     QLineEdit* m_name = nullptr;
     QPlainTextEdit* m_expression = nullptr;
@@ -79,6 +99,10 @@ private:
     // Kept apart from m_error so "is something wrong?" stays a question the
     // dialog -- and a test -- can answer by looking at one widget.
     QLabel* m_applied = nullptr;
+    // Neither a refusal nor a confirmation of this window's own work: a shared
+    // list that moved elsewhere. Its own widget for the same reason m_applied
+    // is one.
+    QLabel* m_notice = nullptr;
     QPushButton* m_remove = nullptr;
     QPushButton* m_apply = nullptr;
     // Set while the widgets are being written from the draft, so the edit

@@ -24,6 +24,7 @@
 #                 sequence-geometry-refit | sequence-noop | sequence-failure |
 #                 remote-canvas-wheel | remote-cell-aspect | volume |
 #                 derived-field | derived-field-sequence |
+#                 derived-field-frames | derived-field-playback |
 #                 scale-state | effective-scale |
 #                 arrow-key-routing | animation-dock-role | open-failure |
 #                 idle-ui-state | sequence-scale-report |
@@ -77,6 +78,13 @@ elseif(MODE STREQUAL "derived-field-frames")
         --drop-field density)
     run_or_die("${AMREXPLORER_QT}" --derived-field-frames-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "derived-field-playback")
+    # A plane sweep never reopens the dataset, and a window counts as unable to
+    # take derived fields for the whole of an open: two ways a committed
+    # definition can fail to reach the session on screen.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --derived-field-playback-smoke-test
+        "${WORK}/plt")
 elseif(MODE STREQUAL "derived-field-sequence")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")

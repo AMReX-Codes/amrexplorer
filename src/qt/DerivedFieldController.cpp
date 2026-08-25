@@ -114,14 +114,24 @@ DerivedFieldController::DerivedFieldController(
 
 void DerivedFieldController::adoptStoreChange()
 {
-    if (m_dialog) {
-        m_dialog->setDraft(m_store.definitions(), m_dialog->selectedIndex());
+    // Nothing to replace in the window whose own Apply made the change: its
+    // draft is already exactly this list.
+    if (m_dialog && m_dialog->draft() != m_store.definitions()) {
+        if (m_dialog->hasUnappliedEdits()) {
+            // Written here and not applied. One list is shared by every
+            // window, so adopting would take an editor out from under the user
+            // mid-sentence, with nothing said and nothing to undo it with.
+            m_dialog->showListChangedElsewhere();
+        } else {
+            m_dialog->setCommitted(
+                m_store.definitions(), m_dialog->selectedIndex());
+        }
     }
     // Including the window whose Apply made the change: one path installs the
     // list, whoever asked for it. A window that cannot take derived fields --
     // a remote session, or a FAB -- has nothing to reload, and will not show
     // them either way.
-    if (m_hooks.reload && m_hooks.available && m_hooks.available()) {
+    if (m_hooks.reload && available()) {
         m_hooks.reload();
     }
 }
@@ -138,16 +148,16 @@ QAction* DerivedFieldController::createAction(QWidget* parent)
 
 void DerivedFieldController::refreshAvailability()
 {
-    const auto available = m_hooks.available && m_hooks.available();
+    const auto usable = available();
     if (m_action) {
-        m_action->setEnabled(available);
-        m_action->setToolTip(available
+        m_action->setEnabled(usable);
+        m_action->setToolTip(usable
                 ? QString()
                 : tr("Derived fields need a local dataset."));
     }
     // An editor left open over a dataset that has gone (or a remote one that
     // cannot take derived fields) would apply into nothing.
-    if (!available && m_dialog) {
+    if (!usable && m_dialog) {
         // Cleared here rather than left to the deleteLater that close()
         // schedules: until that is delivered the pointer is still set, and a
         // showEditor before then would raise the dying dialog instead of
@@ -164,8 +174,20 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
     // The same question the action's enablement asks, not a weaker one: the
     // editor is modeless, so the window can enter a state it is disabled for
     // (a FAB drill-down) while it is still open in front of the user.
-    if (!m_hooks.available || !m_hooks.available()) {
+    if (!available()) {
         return Refusal{tr("No dataset that can take derived fields is open."),
+            std::nullopt};
+    }
+
+    // Bounded here as well as at installation, because this is where an
+    // imported file's length is first seen: past the cap every dataset would
+    // install the first 256 and skip the rest, so each window would list
+    // thousands of definitions it has greyed out, and re-install the list
+    // frame by frame through a sequence.
+    if (definitions.size() > maximumDerivedFieldCount) {
+        return Refusal{tr("A list may define at most %1 derived fields.")
+                           .arg(static_cast<qulonglong>(
+                               maximumDerivedFieldCount)),
             std::nullopt};
     }
 
@@ -225,11 +247,13 @@ void DerivedFieldController::showEditor(QWidget* parent)
                     refusal->message, refusal->definitionIndex);
                 return;
             }
-            // The committed list is what the editor should now be editing:
-            // apply() may have trimmed names, and the draft must not drift
-            // from what the dataset was reopened with. On the row the user was
-            // editing, which is the one they are looking at.
-            dialog->setDraft(m_store.definitions(), dialog->selectedIndex());
+            // The draft is now the committed list, which is what later
+            // edits are measured against -- and what a change arriving from
+            // another window may replace without asking. Same content, so
+            // nothing on screen moves but the row the user was editing, which
+            // is kept.
+            dialog->setCommitted(
+                m_store.definitions(), dialog->selectedIndex());
             // Not a status message: apply() has already started the reload,
             // and showSlice clears the status bar when its slices land. The
             // editor is in front of the user anyway, so it says so itself.

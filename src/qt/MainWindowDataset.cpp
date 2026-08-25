@@ -1066,10 +1066,17 @@ void MainWindow::requestInitialSlice(
     statusBar()->showMessage(tr("Loading initial slice..."));
     updateDiagnostics();
 
+    // The list this load is being launched with. A window counts as unable to
+    // take derived fields for the whole of an open -- m_dataset is null from
+    // openDatasetImpl until the load below lands -- so a definition committed
+    // in another window meanwhile reloads every window but this one, and this
+    // session would keep the older list.
+    const auto derivedRevision = m_derivedFields->storeRevision();
+
     auto* watcher = new QFutureWatcher<InitialSliceResult>(this);
     connect(watcher, &QFutureWatcher<InitialSliceResult>::finished, this,
         [this, watcher, generation, cancellation, views, viewGenerations,
-            restoredSpec, isRemote] {
+            restoredSpec, isRemote, derivedRevision] {
             m_diagnosticsModel->adjustActivity(-1);
             if (m_closing) {
                 watcher->deleteLater();
@@ -1093,12 +1100,17 @@ void MainWindow::requestInitialSlice(
                     m_particleController->configureForDataset(
                         restoredSpec.has_value());
                     m_volumeController->configureForDataset();
-                    configureSliceControls();
-                    // The dock was filled from the file's own metadata before
-                    // this session existed, so it lists neither the derived
-                    // fields the session installed nor, after a reload, the
-                    // ones that have gone.
+                    // Before configureSliceControls, which reads the open
+                    // metadata this replaces: ensureVectorFieldDefaults checks
+                    // the just-restored vector fields against it, and against
+                    // the outgoing list an index that has gone out of range
+                    // still looks valid. The sequence path shows the metadata
+                    // first for the same reason. The dock was filled from the
+                    // file's own metadata before this session existed, so it
+                    // lists neither the derived fields the session installed
+                    // nor, after a reload, the ones that have gone.
                     refreshMetadataDisplay();
+                    configureSliceControls();
                     if (restoredSpec) {
                         const QSignalBlocker fieldBlocker(m_fieldSelector);
                         const QSignalBlocker levelBlocker(m_levelSelector);
@@ -1209,6 +1221,16 @@ void MainWindow::requestInitialSlice(
                             result.cacheFallbackToLevel));
                     }
                     emit initialSliceFinished(true);
+                    // Emitted first: this load did finish, and what follows
+                    // is a fresh one. The list moved while it was on a worker,
+                    // so the session on screen was built from the older one --
+                    // its derived fields would otherwise sit greyed out here
+                    // while every other window had them, or, on a name written
+                    // twice, show one expression and compute another.
+                    if (derivedRevision != m_derivedFields->storeRevision()
+                        && m_derivedFields->available()) {
+                        reloadCurrentDataset();
+                    }
                 } else {
                     m_diagnosticsModel->noteStaleResult();
                 }
@@ -1244,6 +1266,15 @@ void MainWindow::requestInitialSlice(
             initialCacheBudget(), cancellation,
             std::move(preparedMetadata), std::move(dataRoot));
     }));
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+    // The one moment a test can act *during* a load: the spec above is built
+    // and the work is running, while the completion is a queued signal that
+    // cannot be delivered until this returns. Changing the derived-field list
+    // here is what another window's Apply does to a window that is opening.
+    if (m_initialSliceLaunchedForTest) {
+        m_initialSliceLaunchedForTest();
+    }
+#endif
 }
 
 } // namespace amrvis::qt

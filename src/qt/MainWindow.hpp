@@ -135,9 +135,40 @@ public:
     }
     void setAnimationDockVisibleForTest(bool visible);
     void toggleSequencePlaybackForTest() { toggleSequencePlayback(); }
+    // The plane sweep, which unlike sequence playback never reopens the
+    // dataset: a change that needs a reload has to be given one outright.
+    void toggleSweepPlaybackForTest() { toggleSweepPlayback(); }
+    [[nodiscard]] bool sweepPlayingForTest() const noexcept
+    {
+        return m_playbackMode == PlaybackMode::Sweep;
+    }
+    // Runs on the GUI thread just after an initial-slice load is launched --
+    // the only point at which a test can change something while one is in
+    // flight, since the completion arrives as a queued signal.
+    void setInitialSliceLaunchedHookForTest(std::function<void()> hook)
+    {
+        m_initialSliceLaunchedForTest = std::move(hook);
+    }
     // The slot an idle frame-slider press-and-release lands in, which must not
     // restart a frame that is already on screen.
     void requestSequenceFrameForTest(int index) { goToSequenceFrame(index); }
+    // The step every field selection goes through, so a test can ask for a row
+    // that is not a field -- the separator, or a definition this dataset
+    // cannot provide -- and see where the selection actually lands.
+    void selectFieldItemForTest(int index) { selectFieldItem(index); }
+    // The vector-glyph selections, as ids into the open field list. A reload
+    // carries them by name (restoreVectorFields), so a test needs to set them
+    // over one dataset and read them back over the next.
+    [[nodiscard]] std::array<int, 3> vectorFieldsForTest() const
+    {
+        return {m_vectorUField, m_vectorVField, m_vectorWField};
+    }
+    void setVectorFieldsForTest(int u, int v, int w)
+    {
+        m_vectorUField = u;
+        m_vectorVField = v;
+        m_vectorWField = w;
+    }
 
     // Test-only: move each 3-D plane to slicePositions (per axis, so the three
     // panels sample different data with different local ranges), switch to
@@ -884,6 +915,9 @@ private:
     bool m_visibleSyncRerun = false;
     std::optional<amrvis::DisplayCoordinator::RangeKey> m_pendingRangeStore;
 #ifdef AMREXPLORER_QT_TEST_ACCESS
+    // Test-only: run just after an initial-slice load is launched; see
+    // setInitialSliceLaunchedHookForTest.
+    std::function<void()> m_initialSliceLaunchedForTest;
     // Test-only: superseded visible-range sync outcomes dropped by the
     // rerun guard. Sole writer is that drop, so the overlapping-sync test can
     // assert an exact count. The DiagnosticsModel's stale count carries the

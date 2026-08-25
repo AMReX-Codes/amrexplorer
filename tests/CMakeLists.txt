@@ -1324,6 +1324,23 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_derived_field_smoke PROPERTIES TIMEOUT 60)
 
+    # The two ways a committed definition can miss the session on screen: an
+    # Apply during a plane sweep, which never reopens the dataset of its own
+    # accord, and a list changed while this window is opening one, when it
+    # counts as unable to take derived fields and is told nothing. The 3-D
+    # fixture is what a plane sweep needs.
+    add_test(
+        NAME qt_derived_field_playback_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_derived_field_playback"
+            -DMODE=derived-field-playback
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_derived_field_playback_smoke PROPERTIES TIMEOUT 60)
+
     # Applying a definition while a plotfile sequence is open: the frame on
     # screen reloads with it and the sequence is still navigable afterwards,
     # which is what separates the reload from an ordinary dataset open.

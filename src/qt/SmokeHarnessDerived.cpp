@@ -1,5 +1,6 @@
 #include "SmokeHarnessInternal.hpp"
 
+#include "DerivedFieldStore.hpp"
 #include "ExpressionEditorDialog.hpp"
 #include "MainWindow.hpp"
 #include "RangeController.hpp"
@@ -12,7 +13,9 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QPlainTextEdit>
+#include <QListWidget>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QStandardItemModel>
 #include <QStringList>
 #include <QTimer>
@@ -442,6 +445,90 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
                     finish(12);
                     return;
                 }
+                // A vector component pointed at the derived field, which is
+                // then renamed out from under it. The ids do not move, so a
+                // component that carried its old id over would now be reading
+                // a field the user never chose -- silently, since the id is
+                // still in range.
+                window.setVectorFieldsForTest(2, 1, 1);
+                if (dialog == nullptr) {
+                    qCritical("the editor closed before the rename");
+                    finish(18);
+                    return;
+                }
+                {
+                    auto* list = dialog->findChild<QListWidget*>(
+                        QStringLiteral("expressionList"));
+                    auto* nameEdit = dialog->findChild<QLineEdit*>(
+                        QStringLiteral("expressionName"));
+                    if (list == nullptr || nameEdit == nullptr) {
+                        qCritical("the editor has no list to rename in");
+                        finish(18);
+                        return;
+                    }
+                    list->setCurrentRow(0);
+                    nameEdit->setText(QStringLiteral("speed"));
+                    if (!clickApply(*dialog) || errorShown(*dialog)) {
+                        qCritical("the rename was refused");
+                        finish(18);
+                        return;
+                    }
+                }
+                *phase = 6;
+                return;
+            }
+            if (*phase == 6) {
+                if (*loads < 4 || window.sliceRequestPendingForTest()
+                    || window.slicesInFlightForTest() != 0) {
+                    return;
+                }
+                auto* selector = window.findChild<QComboBox*>(
+                    QStringLiteral("fieldSelector"));
+                if (selector == nullptr) {
+                    qCritical("there is no field selector");
+                    finish(19);
+                    return;
+                }
+                if (fieldNames(window)
+                    != QStringList{QStringLiteral("density"),
+                        QStringLiteral("temperature"),
+                        QStringLiteral("speed")}) {
+                    qCritical("the rename did not reach the field list: %s",
+                        qPrintable(fieldNames(window).join(
+                            QStringLiteral(", "))));
+                    finish(19);
+                    return;
+                }
+                // Read back through the selector, which is the same mapping
+                // from field id to name the glyphs are drawn through.
+                const auto vectors = window.vectorFieldsForTest();
+                for (const auto field : vectors) {
+                    if (field < 0
+                        || selector->findData(
+                               static_cast<unsigned int>(field))
+                            < 0) {
+                        qCritical("a vector component names no field: %d",
+                            field);
+                        finish(20);
+                        return;
+                    }
+                }
+                // `product` is gone, so the component set to it has to have
+                // been re-detected rather than left on the id, which now
+                // belongs to `speed`.
+                if (selector->itemText(selector->findData(
+                        static_cast<unsigned int>(vectors[0])))
+                    == QStringLiteral("speed")) {
+                    qCritical("the vector component followed its id onto "
+                              "\"speed\", which was never chosen");
+                    finish(21);
+                    return;
+                }
+                if (window.backgroundErrorCountForTest() != 0) {
+                    qCritical("the rename reported an error");
+                    finish(12);
+                    return;
+                }
                 finish(0);
             }
         });
@@ -605,13 +692,20 @@ void armFrameIdentityChecks(
                 return;
             }
             if (*phase == 1) {
-                // Reads only `temperature`, so the frame that drops `density`
-                // still has it -- at a different id.
+                // Two, in this order on purpose. The first reads `density`,
+                // which the stepped-to frame does not have, so there it is
+                // listed greyed out -- immediately after the separator, which
+                // puts two rows that are not fields next to each other. The
+                // second reads only `temperature`, so it survives the step at
+                // a different id.
                 if (dialog == nullptr
-                    || !writeDefinition(*dialog, QStringLiteral("double"),
+                    || !writeDefinition(*dialog,
+                        QStringLiteral("fromDensity"),
+                        QStringLiteral("density * 2"))
+                    || !appendDefinition(*dialog, QStringLiteral("double"),
                         QStringLiteral("temperature * 2"))
                     || !clickApply(*dialog) || errorShown(*dialog)) {
-                    qCritical("the editor refused the definition");
+                    qCritical("the editor refused the definitions");
                     finish(6);
                     return;
                 }
@@ -624,8 +718,11 @@ void armFrameIdentityChecks(
                 }
                 const auto temperature = selector->findText(
                     QStringLiteral("temperature"));
-                if (temperature < 0 || selector->count() < 4) {
-                    qCritical("frame 0 does not list what it should");
+                // density, temperature, the separator, and both definitions,
+                // which this frame can resolve.
+                if (temperature < 0 || selector->count() != 5) {
+                    qCritical("frame 0 lists %d row(s), not the 5 expected",
+                        selector->count());
                     finish(9);
                     return;
                 }
@@ -661,6 +758,173 @@ void armFrameIdentityChecks(
                 if (window.backgroundErrorCountForTest() != 0) {
                     qCritical("the frame switch reported an error");
                     finish(12);
+                    return;
+                }
+                // temperature, the separator, the greyed-out `fromDensity`
+                // and `double`: the two adjacent rows that are not fields are
+                // what the sweep below needs to be about anything.
+                if (selector->count() != 4) {
+                    qCritical("the stepped-to frame lists %d row(s), not the "
+                              "4 expected",
+                        selector->count());
+                    finish(14);
+                    return;
+                }
+                {
+                    // Wherever a selection is aimed -- a restored index, a
+                    // clamped one -- it has to come to rest on a field. A row
+                    // with no item data is read as field 0 by everything
+                    // downstream while the combo names something else.
+                    const QSignalBlocker blocker(selector);
+                    const auto restore = selector->currentIndex();
+                    for (int index = 0; index < selector->count(); ++index) {
+                        window.selectFieldItemForTest(index);
+                        if (!selector->currentData().isValid()) {
+                            qCritical("selecting row %d came to rest on row "
+                                      "%d, which is not a field",
+                                index, selector->currentIndex());
+                            finish(15);
+                            return;
+                        }
+                    }
+                    selector->setCurrentIndex(restore);
+                }
+                finish(0);
+            }
+        });
+    timer->start();
+    QTimer::singleShot(30000, &application, [&application] { application.exit(13); });
+}
+
+// Arms the playback/late-change scenario. Two ways a committed definition can
+// fail to reach the session on screen, neither of which the other scenarios
+// pass through: a plane sweep, which moves the slice position on the session
+// already open and never reopens it, so the reload an Apply asks for is the
+// only thing that can install the definition; and a list that changes while
+// this window is opening a dataset, when the window counts as unable to take
+// derived fields and so is not told to reload at all.
+void armPlaybackChecks(amrvis::qt::MainWindow& window,
+    QApplication& application, const std::filesystem::path& path)
+{
+    auto phase = std::make_shared<int>(0);
+    auto loads = std::make_shared<int>(0);
+    // Bounds the waits below, so a change that never arrives fails saying so
+    // rather than running into the watchdog.
+    auto ticks = std::make_shared<int>(0);
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [&application, loads](bool success) {
+            if (!success) {
+                application.exit(2);
+                return;
+            }
+            ++*loads;
+        });
+
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, loads, ticks, timer, path] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            ++*ticks;
+            if (*loads == 0) {
+                return;  // the dataset is still opening
+            }
+            auto* selector = window.findChild<QComboBox*>(
+                QStringLiteral("fieldSelector"));
+            if (selector == nullptr) {
+                qCritical("there is no field selector");
+                finish(3);
+                return;
+            }
+            if (*phase == 0) {
+                window.toggleSweepPlaybackForTest();
+                if (!window.sweepPlayingForTest()) {
+                    qCritical("the plane sweep did not start");
+                    finish(4);
+                    return;
+                }
+                auto* action = window.findChild<QAction*>(
+                    QStringLiteral("expressionEditorAction"));
+                if (action == nullptr || !action->isEnabled()) {
+                    qCritical("the Expression Editor is unavailable");
+                    finish(5);
+                    return;
+                }
+                action->trigger();
+                *phase = 1;
+                return;
+            }
+            auto* dialog =
+                window.findChild<amrvis::qt::ExpressionEditorDialog*>();
+            if (*phase == 1) {
+                if (dialog == nullptr
+                    || !writeDefinition(*dialog, QStringLiteral("swept"),
+                        QStringLiteral("q * 2"))
+                    || !clickApply(*dialog) || errorShown(*dialog)) {
+                    qCritical("the editor refused the definition");
+                    finish(6);
+                    return;
+                }
+                *ticks = 0;
+                *phase = 2;
+                return;
+            }
+            if (*phase == 2) {
+                if (!fieldNames(window).contains(QStringLiteral("swept"))) {
+                    if (*ticks > 200) {
+                        qCritical("applying during a plane sweep never "
+                                  "reached the field list");
+                        finish(7);
+                        return;
+                    }
+                    return;
+                }
+                if (!window.sweepPlayingForTest()) {
+                    qCritical("the reload stopped the plane sweep");
+                    finish(8);
+                    return;
+                }
+                window.toggleSweepPlaybackForTest();
+                // What another window's Apply looks like from here: the list
+                // moves while this window has no dataset, which is the whole
+                // of an open rather than just its start.
+                *ticks = 0;
+                // Committed while the load is on a worker, which is the only
+                // time it can be missed: the spec that load carries was built
+                // a moment earlier, and this window is not told to reload
+                // because it has no dataset until the load lands. Left armed
+                // for the reload that follows, where it re-commits the same
+                // list and so changes nothing.
+                window.setInitialSliceLaunchedHookForTest([] {
+                    amrvis::qt::DerivedFieldStore::session().set(
+                        {{"swept", "q * 2"}, {"raced", "q + 1"}});
+                });
+                window.openDataset(path);
+                *phase = 3;
+                return;
+            }
+            if (*phase == 3) {
+                const auto raced = selector->findText(QStringLiteral("raced"));
+                // Listed *and* a field: a definition reaches the selector
+                // either way, greyed out when the open session could not
+                // install it.
+                if (raced < 0 || !selector->itemData(raced).isValid()) {
+                    if (*ticks > 200) {
+                        qCritical("a definition committed while the dataset "
+                                  "was opening never reached the session: %s",
+                            qPrintable(fieldNames(window).join(
+                                QStringLiteral(", "))));
+                        finish(9);
+                        return;
+                    }
+                    return;
+                }
+                if (window.backgroundErrorCountForTest() != 0) {
+                    qCritical("the late change reported an error");
+                    finish(10);
                     return;
                 }
                 finish(0);
@@ -711,6 +975,8 @@ Outcome dispatchDerived(Context& context)
         armRangeMemoryChecks(window, application);
     } else if (option == "--derived-field-smoke-test") {
         armDerivedChecks(window, application);
+    } else if (option == "--derived-field-playback-smoke-test") {
+        armPlaybackChecks(window, application, path);
     } else {
         return {false, std::nullopt};
     }

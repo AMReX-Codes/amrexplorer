@@ -30,6 +30,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     std::vector<DerivedFieldDefinition> definitions, QWidget* parent)
     : QDialog(parent)
     , m_draft(std::move(definitions))
+    , m_committed(m_draft)
 {
     setObjectName(QStringLiteral("expressionEditor"));
     setWindowTitle(tr("Expression Editor"));
@@ -73,6 +74,10 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     m_error->setObjectName(QStringLiteral("expressionError"));
     m_error->setWordWrap(true);
     m_error->setVisible(false);
+    // The message quotes what the user typed, and a QLabel left on AutoText
+    // renders anything Qt takes for markup: an expression holding `<` would be
+    // shown with a piece missing.
+    m_error->setTextFormat(Qt::PlainText);
     // As SetContoursDialog styles its own warning.
     m_error->setStyleSheet(QStringLiteral("QLabel { color: red; }"));
 
@@ -80,6 +85,11 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     m_applied->setObjectName(QStringLiteral("expressionApplied"));
     m_applied->setWordWrap(true);
     m_applied->setVisible(false);
+
+    m_notice = new QLabel(this);
+    m_notice->setObjectName(QStringLiteral("expressionNotice"));
+    m_notice->setWordWrap(true);
+    m_notice->setVisible(false);
 
     auto* buttons = new QDialogButtonBox(this);
     m_apply = buttons->addButton(QDialogButtonBox::Apply);
@@ -107,6 +117,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     editor->addWidget(help);
     editor->addWidget(m_error);
     editor->addWidget(m_applied);
+    editor->addWidget(m_notice);
     editor->addStretch(1);
 
     auto* columns = new QHBoxLayout;
@@ -163,6 +174,14 @@ void ExpressionEditorDialog::setDraft(
     rebuildList(select);
 }
 
+void ExpressionEditorDialog::setCommitted(
+    std::vector<DerivedFieldDefinition> definitions,
+    std::optional<std::size_t> select)
+{
+    setDraft(std::move(definitions), select);
+    m_committed = m_draft;
+}
+
 void ExpressionEditorDialog::showError(
     const QString& message, std::optional<std::size_t> definitionIndex)
 {
@@ -185,12 +204,24 @@ void ExpressionEditorDialog::showApplied(std::size_t count)
     m_applied->setVisible(true);
 }
 
+void ExpressionEditorDialog::showListChangedElsewhere()
+{
+    clearError();
+    m_notice->setText(
+        tr("The derived fields were changed in another window. The edits here "
+           "are unapplied and have been kept; Apply replaces the shared list "
+           "with them."));
+    m_notice->setVisible(true);
+}
+
 void ExpressionEditorDialog::clearError()
 {
     m_error->clear();
     m_error->setVisible(false);
     m_applied->clear();
     m_applied->setVisible(false);
+    m_notice->clear();
+    m_notice->setVisible(false);
 }
 
 void ExpressionEditorDialog::rebuildList(std::optional<std::size_t> select)

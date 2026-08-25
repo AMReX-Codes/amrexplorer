@@ -141,6 +141,23 @@ inline constexpr std::size_t maximumDerivedFieldDepth = 16;
 // the metadata it passed in; under Skip the metadata is always left usable.
 // Either way the caller passes a copy, since a dataset's stored metadata is
 // shared.
+// A fault in a definition list that no dataset can make good: an expression
+// reading more fields than one evaluation may pin, or a dependency chain
+// deeper than evaluation may recurse. Both are properties of the list alone --
+// a symbol that names no earlier definition and no coordinate is a stored
+// field wherever the list is installed -- so an editor can refuse them once
+// instead of every dataset greying the same row and saying why.
+//
+// Nullopt when the list has no such fault. Names, duplicates and expressions
+// that do not parse are the caller's own to check first; this assumes the list
+// got that far.
+struct DerivedFieldListFault {
+    std::size_t definitionIndex = 0;
+    std::string message;
+};
+[[nodiscard]] std::optional<DerivedFieldListFault> validateDerivedFieldGraph(
+    std::span<const DerivedFieldDefinition> definitions);
+
 [[nodiscard]] DerivedFieldInstallation installDerivedFields(
     DatasetMetadata& metadata,
     std::span<const DerivedFieldDefinition> definitions,

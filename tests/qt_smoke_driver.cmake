@@ -23,6 +23,8 @@
 #                 sequence-equal-size-transform-preserve |
 #                 sequence-geometry-refit | sequence-noop | sequence-failure |
 #                 remote-canvas-wheel | remote-cell-aspect | volume |
+#                 derived-field | derived-field-sequence |
+#                 derived-field-frames | derived-field-playback |
 #                 scale-state | effective-scale |
 #                 arrow-key-routing | animation-dock-role | open-failure |
 #                 idle-ui-state | sequence-scale-report |
@@ -61,6 +63,33 @@ if(MODE STREQUAL "slice")
 elseif(MODE STREQUAL "volume")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --volume-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "derived-field")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --derived-field-smoke-test "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --field-range-memory-smoke-test
+        "${WORK}/plt")
+elseif(MODE STREQUAL "derived-field-frames")
+    # Two frames that do not list the same fields: the second drops the one a
+    # definition reads, so that definition is left out of it and every id after
+    # it moves. The one shape in which a carried field *index* means a
+    # different field from one frame to the next.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5"
+        --drop-field density)
+    run_or_die("${AMREXPLORER_QT}" --derived-field-frames-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "derived-field-playback")
+    # A plane sweep never reopens the dataset, and a window counts as unable to
+    # take derived fields for the whole of an open: two ways a committed
+    # definition can fail to reach the session on screen.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --derived-field-playback-smoke-test
+        "${WORK}/plt")
+elseif(MODE STREQUAL "derived-field-sequence")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --derived-field-sequence-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "sequence")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")

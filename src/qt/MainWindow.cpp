@@ -10,6 +10,18 @@
 #include <QStyle>
 
 namespace amrvis::qt {
+namespace {
+
+// The offscreen platform the smoke tests run on has no native dialog to drive,
+// and a native one would not be scriptable there either.
+[[nodiscard]] QFileDialog::Options fileDialogOptions()
+{
+    return QApplication::platformName() == QLatin1String("offscreen")
+        ? QFileDialog::Options{QFileDialog::DontUseNativeDialog}
+        : QFileDialog::Options{};
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -24,6 +36,43 @@ MainWindow::MainWindow(QWidget* parent)
     m_paletteController = new PaletteController(this);
     connect(m_paletteController, &PaletteController::loadFileRequested, this,
         [this] { loadPaletteFile(); });
+
+    // Derived fields: the controller owns this window's definition list and
+    // its editor. It asks the window for the fields a definition may read (the
+    // open dataset's stored ones) and for the reload that installs a committed
+    // list, since only the window knows whether a sequence is running.
+    // buildFrameSpec is where the list reaches a dataset.
+    m_derivedFields = new DerivedFieldController(
+        DerivedFieldController::Hooks{
+            .available = [this] {
+                // Two questions, and both have to hold: whether the open
+                // session can take derived fields, and whether a load built
+                // now would carry them (derivedFieldsReachNextLoad). Not for a
+                // standalone FAB, drilled out of a MultiFab or opened straight
+                // from a file: applying reopens m_datasetPath, and what that
+                // entry describes -- a synthesised metadata, or one record of
+                // a multi-record file -- is not what re-reading the path
+                // produces.
+                return m_dataset && m_dataset->supportsDerivedFields()
+                    && !m_dataset->metadata().isFab
+                    && derivedFieldsReachNextLoad();
+            },
+            .reload = [this] { reloadCurrentDataset(); },
+            .chooseFile =
+                [this](QWidget*, bool forSaving) {
+                    // Parented to the window, not to the editor that asked:
+                    // the editor is WA_DeleteOnClose, and a dataset load
+                    // settling inside the file dialog's nested loop can close
+                    // it -- destroying the file dialog with it. loadPaletteFile
+                    // parents to the window for the same reason.
+                    return chooseExpressionListPath(this, forSaving);
+                },
+        },
+        DerivedFieldStore::session(), this);
+    connect(m_derivedFields, &DerivedFieldController::statusMessage, this,
+        [this](const QString& message, int timeoutMs) {
+            statusBar()->showMessage(message, timeoutMs);
+        });
 
     // The plot area is a stacked widget: page 0 holds the single 2-D view,
     // page 1 the 3-D grid (XY top-left, XZ top-right, YZ bottom-left, iso
@@ -210,7 +259,7 @@ MainWindow::MainWindow(QWidget* parent)
             // animation blocks signals and preserves the index, so the range
             // stays constant across frames.
             if (m_controlsReady && index >= 0) {
-                m_range->switchField(m_fieldSelector->itemData(index).toUInt());
+                m_range->switchField(m_fieldSelector->itemText(index));
             }
             // A deferred full-domain range store (m_pendingRangeStore) is keyed
             // to the field/level/mode in effect when it was queued. Changing any
@@ -255,6 +304,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_metadataDock = new QDockWidget(tr("Dataset Metadata"), this);
     m_metadataTree = new QTreeWidget(m_metadataDock);
+    m_metadataTree->setObjectName(QStringLiteral("metadataTree"));
     m_metadataTree->setColumnCount(2);
     m_metadataTree->setHeaderLabels({tr("Property"), tr("Value")});
     m_metadataTree->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
@@ -1233,7 +1283,17 @@ void MainWindow::createMenus()
 
     // Variable menu: lists all fields with a bullet on the active one.
     m_variableMenu = menuBar()->addMenu(tr("&Variable"));
+    // Menus hide action tooltips unless asked: the derived fields carry their
+    // expressions there, and the Expression Editor entry carries the reason it
+    // is unavailable, neither of which reaches anyone otherwise.
+    m_variableMenu->setToolTipsVisible(true);
     m_variableGroup = new QActionGroup(this);
+    // Owned by the window, not the menu, so rebuildVariableMenu's clear()
+    // leaves it alive to be re-added. The menu itself stays enabled with no
+    // dataset open so the editor's own (disabled) entry is discoverable.
+    m_expressionEditorAction = m_derivedFields->createAction(this);
+    m_variableMenu->addAction(m_expressionEditorAction);
+    m_variableMenu->setEnabled(true);
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
     auto* guideAction = new QAction(tr("&User Guide..."), this);
@@ -1331,20 +1391,29 @@ void MainWindow::syncMenuChecks()
     }
 }
 
-void MainWindow::rebuildVariableMenu()
+void MainWindow::rebuildVariableMenu(const std::vector<DerivedFieldRow>& rows)
 {
     m_variableMenu->clear();
+    // The menu stays enabled with nothing open: it then holds the Expression
+    // Editor entry alone, greyed out with the reason on its tooltip, which is
+    // more discoverable than a menu that cannot be opened at all.
+    m_variableMenu->setEnabled(true);
     if (!m_dataset) {
-        m_variableMenu->setEnabled(false);
+        m_variableMenu->addAction(m_expressionEditorAction);
+        m_derivedFields->refreshAvailability();
         return;
     }
-    m_variableMenu->setEnabled(true);
     const auto& metadata = m_dataset->metadata();
     const auto currentField = m_fieldSelector->currentIndex() >= 0
         ? m_fieldSelector->currentData().toUInt() : 0;
-    for (std::size_t field = 0; field < metadata.fields.size(); ++field) {
-        const auto name = QString::fromStdString(metadata.fields[field].name);
+    const auto stored =
+        std::min(m_dataset->storedFieldCount(), metadata.fields.size());
+    const auto addField = [this, currentField](
+                              const QString& name, std::size_t field) {
         auto* action = m_variableMenu->addAction(name);
+        // Returned rather than looked up again: QMenu::actions() copies the
+        // whole list, and "the one just added is last" stops being true the
+        // moment addField grows a separator or a submenu.
         action->setCheckable(true);
         action->setActionGroup(m_variableGroup);
         action->setChecked(static_cast<std::uint32_t>(field) == currentField);
@@ -1356,7 +1425,33 @@ void MainWindow::rebuildVariableMenu()
                 m_fieldSelector->setCurrentIndex(index);
             }
         });
+        return action;
+    };
+    for (std::size_t field = 0; field < stored; ++field) {
+        // A tooltip of its own, because the menu shows them for the derived
+        // rows and QAction falls back to the action's own text: without this
+        // every plotfile field pops a tooltip repeating its name.
+        addField(QString::fromStdString(metadata.fields[field].name), field)
+            ->setToolTip(tr("Stored in the plotfile"));
     }
+
+    // The same rows the field selector was given, dimmed the same way.
+    if (!rows.empty()) {
+        m_variableMenu->addSeparator();
+    }
+    for (const auto& row : rows) {
+        auto* action = row.field
+            ? addField(row.name, static_cast<std::size_t>(*row.field))
+            : m_variableMenu->addAction(row.name);
+        action->setEnabled(row.field.has_value());
+        action->setToolTip(row.tooltip);
+    }
+
+    // Re-added after every rebuild: clear() above only *removes* it, because
+    // the action belongs to the window rather than to the menu.
+    m_variableMenu->addSeparator();
+    m_variableMenu->addAction(m_expressionEditorAction);
+    m_derivedFields->refreshAvailability();
 }
 
 void MainWindow::syncVariableMenu()
@@ -1366,20 +1461,39 @@ void MainWindow::syncVariableMenu()
     }
     const auto currentField = m_fieldSelector->currentIndex() >= 0
         ? m_fieldSelector->currentData().toUInt() : 0;
-    const auto actions = m_variableMenu->actions();
-    for (int i = 0; i < actions.size(); ++i) {
-        actions[i]->setChecked(
-            static_cast<std::uint32_t>(i) == currentField);
+    // Only the field entries, which are the ones in the group: the separator
+    // and the Expression Editor action follow them.
+    // By the id each action carries, not by its position: the two agree only
+    // while every field in the list is in the group, and a definition the
+    // open session could not install is listed without being one of them.
+    for (auto* action : m_variableGroup->actions()) {
+        action->setChecked(action->data().toUInt() == currentField);
     }
+}
+
+QString MainWindow::rememberedDialogDirectory() const
+{
+    return makeSettings()
+        .value(QStringLiteral("lastOpenDirectory"))
+        .toString();
+}
+
+void MainWindow::rememberDialogDirectory(const QString& path)
+{
+    if (path.isEmpty()) {
+        return;
+    }
+    auto settings = makeSettings();
+    settings.setValue(QStringLiteral("lastOpenDirectory"),
+        QFileInfo(path).absolutePath());
 }
 
 void MainWindow::loadPaletteFile()
 {
-    const auto settings = makeSettings();
     const auto filename = QFileDialog::getOpenFileName(this,
-        tr("Load Palette File"),
-        settings.value(QStringLiteral("lastOpenDirectory")).toString(),
-        tr("Legacy palette files (*.pal);;All files (*)"));
+        tr("Load Palette File"), rememberedDialogDirectory(),
+        tr("Legacy palette files (*.pal);;All files (*)"), nullptr,
+        fileDialogOptions());
     if (filename.isEmpty()) {
         return;
     }
@@ -1387,9 +1501,118 @@ void MainWindow::loadPaletteFile()
         QMessageBox::critical(this, tr("Cannot load palette"), *error);
         return;
     }
-    auto writableSettings = makeSettings();
-    writableSettings.setValue(QStringLiteral("lastOpenDirectory"),
-        QFileInfo(filename).absolutePath());
+    rememberDialogDirectory(filename);
+}
+
+QString MainWindow::chooseExpressionListPath(QWidget* parent, bool forSaving)
+{
+    const auto directory = rememberedDialogDirectory();
+    const auto filter = tr("Expression lists (*.json);;All files (*)");
+    const auto options = fileDialogOptions();
+    QString path;
+    if (forSaving) {
+        // Built rather than taken from getSaveFileName so the default suffix
+        // is applied *before* the overwrite confirmation: appending ".json"
+        // afterwards means the dialog asks about "fields" while the write
+        // lands on an existing "fields.json" it never mentioned.
+        QFileDialog dialog(parent, tr("Export Derived Fields"),
+            directory.isEmpty() ? QStringLiteral("expressions.json")
+                                : directory + QStringLiteral("/expressions.json"),
+            filter);
+        dialog.setOptions(options);
+        dialog.setAcceptMode(QFileDialog::AcceptSave);
+        dialog.setDefaultSuffix(QStringLiteral("json"));
+        if (dialog.exec() == QDialog::Accepted
+            && !dialog.selectedFiles().isEmpty()) {
+            path = dialog.selectedFiles().front();
+        }
+    } else {
+        path = QFileDialog::getOpenFileName(parent,
+            tr("Import Derived Fields"), directory, filter, nullptr, options);
+    }
+    rememberDialogDirectory(path);
+    return path;
+}
+
+void MainWindow::reloadCurrentDataset()
+{
+    // Not while closing: another window's Apply reaches every window, and a
+    // worker started here would hold the I/O mutex against the quit. The
+    // completion handler checks m_closing, but the read still runs.
+    if (m_closing || !m_dataset || m_datasetPath.empty()) {
+        return;
+    }
+    if (m_playbackMode == PlaybackMode::Sequence) {
+        // Mid-playback: reloading here would restart the frame under the user,
+        // and every frame load reads the list for itself (buildFrameSpec), so
+        // the next frame picks the change up on its own -- but only if it is
+        // actually loaded. The frame after this one may already be prefetched,
+        // rendered against the list as it was, and goToFrame publishes such a
+        // frame instead of loading it; dropping it is what makes "the next
+        // frame reads the list" true. A plane sweep is not this case at all --
+        // it moves the slice position on the session already open and never
+        // reopens it -- so skipping the reload there would leave the
+        // definition uninstalled for good, with the editor reporting that it
+        // had been applied.
+        m_sequenceController->invalidatePrefetch();
+        return;
+    }
+    if (m_sequenceController->hasSequence()) {
+        // A prefetched frame was rendered against the previous field list.
+        m_sequenceController->invalidatePrefetch();
+        m_sequenceController->goToFrame(
+            m_sequenceController->currentIndex(), true);
+        return;
+    }
+    // Not openDataset: that ends the sequence, drops the zoom and closes the
+    // line-plot, dataset and volume windows. This is the same reload a
+    // sequence frame switch performs, on the frame already shown.
+    // The Dataset window and the line plot are snapshots of the session this
+    // is about to replace: the frame switch closes them for that reason
+    // (frameSwitchStarted) and a reload is the same replacement. Left open
+    // they would show the old field list with no sign of being stale, and
+    // pin the outgoing session and its block cache besides.
+    closeDatasetWindow();
+    auto* linePlotWindow = m_linePlotWindow;
+    m_linePlotWindow = nullptr;
+    if (linePlotWindow != nullptr) {
+        linePlotWindow->close();
+    }
+    // No m_initialStopSource reset here: requestInitialSlice stops and
+    // replaces it on the way in, and the token the worker is given comes from
+    // that one.
+    const auto generation = ++m_generation;
+    for (auto* state : allViewStates()) {
+        state->stopSource.request_stop();
+        ++state->sliceGeneration;
+    }
+    m_sliceDebounce->stop();
+    // As openDatasetImpl and the frame-switch handler do: stopping the timer
+    // cancels the flush but leaves what it had coalesced, and that would be
+    // replayed against the new session by the next unrelated request.
+    m_pendingAllViews = false;
+    m_pendingViews.clear();
+    // No prepared metadata and no data root: with none, the session derives
+    // both from the path, which is what re-reading a plotfile means. A FAB
+    // drilled out of a MultiFab cannot be reopened this way -- its metadata is
+    // synthesised by the navigator, not read from the path -- which is why the
+    // editor is unavailable while one is on screen (see the controller's
+    // availability hook).
+    requestInitialSlice(
+        m_datasetPath, generation, std::nullopt, {}, buildFrameSpec());
+}
+
+void MainWindow::refreshMetadataDisplay()
+{
+    if (!m_dataset) {
+        return;
+    }
+    PlotfileMetadataResult displayed;
+    displayed.metadata =
+        std::make_shared<const DatasetMetadata>(m_dataset->metadata());
+    displayed.metrics = m_dataset->metadataReadMetrics();
+    displayed.fileVersion = m_dataset->fileVersion();
+    showMetadata(displayed, m_datasetPath);
 }
 
 void MainWindow::refreshPaletteDisplay()

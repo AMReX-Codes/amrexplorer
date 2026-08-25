@@ -427,6 +427,74 @@ Useful shortcuts are:
 | Ctrl+1 through Ctrl+9 | Composite levels 0 through N |
 | Alt+0 through Alt+9 | Exact level N |
 
+## Derived fields
+
+**Variable > Expression Editor...** defines fields computed from the ones the
+plotfile stores. Give each a name and an expression, which may run over
+several lines if that reads better; **Apply**
+checks the whole list and, if it holds, reopens the dataset with the new
+fields, which then behave like any other field -- slices, line plots, the
+volume view, the probe and export all work on them.
+
+They appear in the field selector and the **Variable** menu below the fields
+the plotfile stores, separated from them by a line, and each shows its own
+expression as a tooltip.
+
+Expressions use `+`, `-`, `*`, `/` and `**` (or the equivalent `pow(a,b)`),
+with `abs`, `sqrt`, `exp`, `log`, `exp10` and `log10`, and parentheses. For
+example:
+
+```text
+sqrt(x_velocity**2 + y_velocity**2)
+```
+
+A field whose name is not a plain identifier -- anything but letters, digits,
+`_` and `.` -- is written `${...}`, which takes the name exactly as given:
+
+```text
+sqrt(${x-momentum}**2 + ${y-momentum}**2) / density
+log10(${Y(H2)})
+```
+
+`x`, `y` and `z` are the sample's coordinates, so `sqrt(x**2 + y**2)` is a
+radius field. They are the dataset's own axis coordinates: on a spherical or
+cylindrical dataset they are (r, theta) or (r, z), not Cartesian. A dataset
+with a field actually named `x` uses that field instead. Coordinates are
+unavailable for standalone FABs and MultiFabs, which carry no physical
+geometry.
+
+An expression may also use the derived fields defined above it in the list, so
+a long formula can be built in steps. Each definition is checked against the
+expression when you apply it: the editor selects the definition that failed and
+says what is wrong with it. Only what is wrong whatever the data is refused --
+a missing or repeated name, an expression that does not parse. Reading a field
+this particular dataset happens not to have is not an error; that definition is
+simply greyed out here.
+
+Other notes:
+
+- Derived fields have no stored minimum and maximum, so the **File** and
+  **Level** range modes are unavailable for them and the range starts on
+  **Visible**. **User** works as usual.
+- A result that is not a number -- `log` of a negative value, a division by
+  zero -- is treated as missing data, like any other non-finite sample.
+- The list is shared by every window of one running viewer: define a field in
+  one window and it is there in the others too. It is not saved between
+  sessions, so quitting forgets it and a viewer started afresh has none. A
+  viewer launched separately from the command line is its own program with its
+  own list.
+- A definition the data in front of you cannot provide -- it reads a field this
+  plotfile does not have, or this frame of a sequence does not -- is greyed out
+  in the field selector and the **Variable** menu, with the reason on its
+  tooltip. It is still yours, and still applies wherever it can: in another
+  window on other data, or on a frame that does carry the field.
+- **Import...** and **Export...** read and write the list as a JSON expression
+  list, which is how a set of definitions is kept for another session. An
+  import replaces what the editor is showing; nothing reaches the dataset until
+  you select **Apply**.
+- Derived fields are computed where the data is read, so they are not
+  available for a dataset opened from a remote server.
+
 ## Ranges, logarithms, and palettes
 
 The **Range** control determines which values map to the ends of the color

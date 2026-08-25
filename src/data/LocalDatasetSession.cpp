@@ -109,6 +109,9 @@ LocalDatasetSession::LocalDatasetSession(
     , m_skippedDerivedFields(
           dataset ? dataset->skippedDerivedFields()
                   : std::vector<DerivedFieldSkip>{})
+    , m_derivedFieldDefinitions(
+          dataset ? dataset->derivedFieldDefinitions()
+                  : std::vector<DerivedFieldDefinition>{})
     , m_dataset(std::move(dataset))
 {
     if (!m_dataset) {
@@ -301,6 +304,12 @@ std::size_t LocalDatasetSession::storedFieldCount() const noexcept
 std::vector<DerivedFieldSkip> LocalDatasetSession::skippedDerivedFields() const
 {
     return m_skippedDerivedFields;
+}
+
+std::vector<DerivedFieldDefinition>
+LocalDatasetSession::derivedFieldDefinitions() const
+{
+    return m_derivedFieldDefinitions;
 }
 
 bool LocalDatasetSession::supportsVolumeRendering() const noexcept

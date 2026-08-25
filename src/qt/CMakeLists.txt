@@ -11,8 +11,14 @@ add_executable(amrexplorer_qt
     DatasetExtract.hpp
     DatasetWindow.cpp
     DatasetWindow.hpp
+    DerivedFieldController.cpp
+    DerivedFieldController.hpp
+    DerivedFieldStore.cpp
+    DerivedFieldStore.hpp
     DiagnosticsModel.cpp
     DiagnosticsModel.hpp
+    ExpressionEditorDialog.cpp
+    ExpressionEditorDialog.hpp
     FabNavigator.cpp
     FabNavigator.hpp
     FabSelectorDock.cpp
@@ -82,6 +88,7 @@ if(AMREXPLORER_BUILD_TESTS)
         MainWindowTestAccess.cpp
         SmokeHarness.cpp
         SmokeHarness.hpp
+        SmokeHarnessDerived.cpp
         SmokeHarnessFab.cpp
         SmokeHarnessInternal.hpp
         SmokeHarnessLifecycle.cpp

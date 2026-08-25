@@ -1,5 +1,7 @@
 #include "MainWindowInternal.hpp"
 
+#include <QStandardItemModel>
+
 namespace amrvis::qt {
 
 namespace {
@@ -50,19 +52,23 @@ void MainWindow::configureSliceControls()
     const QSignalBlocker levelBlocker(m_levelSelector);
     const auto& metadata = m_dataset->metadata();
 
-    m_fieldSelector->clear();
-    for (std::size_t field = 0; field < metadata.fields.size(); ++field) {
-        m_fieldSelector->addItem(QString::fromStdString(metadata.fields[field].name),
-            static_cast<unsigned int>(field));
-    }
-    m_fieldSelector->setCurrentIndex(0);
+    // Built once and shared: the field selector and the Variable menu list
+    // the same definitions.
+    const auto derivedRows = derivedFieldRows();
+    populateFieldSelector(derivedRows);
+    selectFieldItem(0);
+    // The range memory is filed under the field's name, so the widgets have to
+    // be told which field they represent here too -- the restored-spec and
+    // sequence paths are not the only ones that select a field, and without
+    // this the first field's range is committed under an empty name and lost.
+    m_range->setTrackedField(m_fieldSelector->currentText());
 
     populateLevelCombo(m_levelSelector, metadata.finestLevel);
     m_levelSelector->setCurrentIndex(0);
 
     enableDatasetControls(metadata);
 
-    rebuildVariableMenu();
+    rebuildVariableMenu(derivedRows);
     updateRangeModeAvailability();
 
     // Switch the stacked page to match the dataset dimension and, for 3-D,
@@ -78,6 +84,230 @@ void MainWindow::configureSliceControls()
         publishSlicePositions();
     }
     ensureVectorFieldDefaults();
+}
+
+bool MainWindow::addUnavailableFieldItem(
+    const QString& name, const QString& tooltip)
+{
+    // Through the model, because a combo box has no per-item enable of its
+    // own: an item that is not selectable is skipped by the keyboard and drawn
+    // greyed by the style. Without one there is no way to add this row safely,
+    // so it is not added -- leaving a definition off a list says less than
+    // showing it greyed out, but far less than offering a broken selection.
+    auto* model = qobject_cast<QStandardItemModel*>(m_fieldSelector->model());
+    if (model == nullptr) {
+        return false;
+    }
+    const auto row = m_fieldSelector->count();
+    // No field id: nothing that reads item data can mistake it for one.
+    m_fieldSelector->addItem(name);
+    m_fieldSelector->setItemData(row, tooltip, Qt::ToolTipRole);
+    auto* item = model->item(row);
+    if (item == nullptr) {
+        m_fieldSelector->removeItem(row);
+        return false;
+    }
+    item->setFlags(
+        item->flags() & ~(Qt::ItemIsSelectable | Qt::ItemIsEnabled));
+    return true;
+}
+
+std::vector<MainWindow::DerivedFieldRow> MainWindow::derivedFieldRows() const
+{
+    std::vector<DerivedFieldRow> rows;
+    // Nothing at all where no definition could ever apply: a remote session
+    // reports every field as stored, so each one would list as "unavailable
+    // for this dataset" beside an editor saying derived fields need a local
+    // one -- two explanations of the same fact, and clutter that cannot
+    // become usable while this session is open.
+    if (!m_dataset || !m_dataset->supportsDerivedFields()
+        || m_dataset->metadata().isFab) {
+        return rows;
+    }
+    const auto& fields = m_dataset->metadata().fields;
+    const auto stored = std::min(m_dataset->storedFieldCount(), fields.size());
+    const auto& definitions = m_derivedFields->definitions();
+    const auto skipped = m_dataset->skippedDerivedFields();
+    rows.reserve(definitions.size());
+    for (const auto& definition : definitions) {
+        DerivedFieldRow row;
+        row.name = QString::fromStdString(definition.name);
+        const auto expression = escapedExpression(definition.expression);
+        const auto installed = std::find_if(
+            fields.begin() + static_cast<std::ptrdiff_t>(stored), fields.end(),
+            [&definition](const FieldMetadata& field) {
+                return field.name == definition.name;
+            });
+        if (installed != fields.end()) {
+            row.field = static_cast<std::uint32_t>(
+                std::distance(fields.begin(), installed));
+            row.tooltip = richTooltip(expression);
+            rows.push_back(std::move(row));
+            continue;
+        }
+        // Not installed here, and saying why. The list is shared by every
+        // window, so a definition that means nothing here means something
+        // next door, and showing it as unavailable says so better than its
+        // absence does.
+        const auto reason = std::find_if(skipped.begin(), skipped.end(),
+            [&definition](const DerivedFieldSkip& entry) {
+                return entry.name == definition.name;
+            });
+        row.tooltip = richTooltip(reason != skipped.end()
+                ? tr("%1 -- unavailable here: %2")
+                      .arg(expression,
+                          QString::fromStdString(reason->reason)
+                              .toHtmlEscaped())
+                : tr("%1 -- unavailable for this dataset").arg(expression));
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
+void MainWindow::selectFieldItem(int index)
+{
+    // Not every row is a field: the separator between the stored and the
+    // derived ones carries no item data, and neither does a definition this
+    // dataset cannot provide. setCurrentIndex skips none of them, and landing
+    // on one shows a row whose currentData() is invalid, which every reader of
+    // it then takes for field 0 while the range memory files itself under that
+    // row's name. So the caller's index is where to start looking rather than
+    // what to select: the selection goes to the first field at or after it,
+    // and failing that to the nearest one before it.
+    const auto count = m_fieldSelector->count();
+    const auto isField = [this](int row) {
+        return m_fieldSelector->itemData(row).isValid();
+    };
+    auto selected = -1;
+    for (auto row = std::max(index, 0); row < count; ++row) {
+        if (isField(row)) {
+            selected = row;
+            break;
+        }
+    }
+    for (auto row = std::min(index, count) - 1; selected < 0 && row >= 0;
+        --row) {
+        if (isField(row)) {
+            selected = row;
+        }
+    }
+    // -1 when the list holds no field at all, which leaves nothing selected
+    // rather than naming a row that is not one.
+    m_fieldSelector->setCurrentIndex(selected);
+}
+
+void MainWindow::populateFieldSelector(const std::vector<DerivedFieldRow>& rows)
+{
+    m_fieldSelector->clear();
+    if (!m_dataset) {
+        return;
+    }
+    const auto& fields = m_dataset->metadata().fields;
+    const auto stored = std::min(m_dataset->storedFieldCount(), fields.size());
+    for (std::size_t field = 0; field < stored; ++field) {
+        m_fieldSelector->addItem(QString::fromStdString(fields[field].name),
+            static_cast<unsigned int>(field));
+    }
+
+    if (rows.empty()) {
+        return;
+    }
+    // The computed fields are a different kind of thing from the ones the
+    // plotfile holds; the rule is worth showing rather than leaving to be
+    // inferred from the order.
+    m_fieldSelector->insertSeparator(m_fieldSelector->count());
+    for (const auto& row : rows) {
+        if (!row.field) {
+            static_cast<void>(addUnavailableFieldItem(row.name, row.tooltip));
+            continue;
+        }
+        const auto index = m_fieldSelector->count();
+        m_fieldSelector->addItem(
+            row.name, static_cast<unsigned int>(*row.field));
+        m_fieldSelector->setItemData(index, row.tooltip, Qt::ToolTipRole);
+    }
+}
+
+bool MainWindow::openSessionHasCurrentDefinitions() const
+{
+    return m_dataset
+        && m_dataset->derivedFieldDefinitions()
+            == m_derivedFields->definitions();
+}
+
+void MainWindow::reloadIfDefinitionsMoved()
+{
+    if (m_closing || !m_derivedFields->available()
+        || openSessionHasCurrentDefinitions()) {
+        return;
+    }
+    // Not now: the frame path is called from inside the sequence controller's
+    // own load completion, which sets m_inFlight and emits frameDisplayed
+    // after this returns -- starting a load from here would have it clobber
+    // the load this reload starts.
+    QTimer::singleShot(0, this, [this] {
+        if (m_closing || !m_derivedFields->available()
+            || openSessionHasCurrentDefinitions()) {
+            return;
+        }
+        reloadCurrentDataset();
+    });
+}
+
+bool MainWindow::derivedFieldsReachNextLoad() const
+{
+    // A remote sequence fixes its field lists on the server, and a FAB
+    // drilled out of a MultiFab is what the editor is unavailable over -- for
+    // the same reason the reload cannot rebuild one.
+    return !m_remoteSequence && !m_fabNavigator->fabMode();
+}
+
+std::array<std::string, 3> MainWindow::vectorFieldNames() const
+{
+    std::array<std::string, 3> names;
+    if (!m_dataset) {
+        return names;
+    }
+    const auto& fields = m_dataset->metadata().fields;
+    const std::array<int, 3> selected{
+        m_vectorUField, m_vectorVField, m_vectorWField};
+    for (std::size_t axis = 0; axis < names.size(); ++axis) {
+        const auto field = selected[axis];
+        if (field >= 0 && static_cast<std::size_t>(field) < fields.size()) {
+            names[axis] = fields[static_cast<std::size_t>(field)].name;
+        }
+    }
+    return names;
+}
+
+void MainWindow::restoreVectorFields(const std::array<std::string, 3>& names)
+{
+    if (!m_dataset) {
+        return;
+    }
+    const auto& fields = m_dataset->metadata().fields;
+    std::array<int*, 3> selected{
+        &m_vectorUField, &m_vectorVField, &m_vectorWField};
+    for (std::size_t axis = 0; axis < names.size(); ++axis) {
+        auto* field = selected[axis];
+        if (*field < 0 || names[axis].empty()) {
+            continue;
+        }
+        // By name, and out of range when the name is not here. Leaving the
+        // old id would re-point the component at whatever field now holds it:
+        // the derived fields are part of this list, so an id outlives the
+        // definition it named and means a different one afterwards. Clamping
+        // would be worse still -- all three on one field, and looking valid to
+        // ensureVectorFieldDefaults, which then skips the re-detection that an
+        // out-of-range id is precisely the signal for.
+        const auto found = std::find_if(fields.begin(), fields.end(),
+            [&names, axis](const FieldMetadata& candidate) {
+                return candidate.name == names[axis];
+            });
+        *field = found != fields.end()
+            ? static_cast<int>(std::distance(fields.begin(), found))
+            : -1;
+    }
 }
 
 void MainWindow::publishSlicePositions()
@@ -1296,7 +1526,6 @@ void MainWindow::reportVisibleSyncFailure(const std::exception& error)
 
 void MainWindow::choosePlotfileSequence()
 {
-    const auto settings = makeSettings();
     // Select the plotfile directories directly with click / Ctrl-click /
     // Shift-click. QFileDialog::Directory only permits selecting more than one
     // directory on the non-native dialog, so disable the native one and force
@@ -1305,7 +1534,7 @@ void MainWindow::choosePlotfileSequence()
     // plotfiles (Header + Level_N) by openSequence.
     QFileDialog dialog(this,
         tr("Open Plotfile Sequence — select two or more plotfile directories"),
-        settings.value(QStringLiteral("lastOpenDirectory")).toString());
+        rememberedDialogDirectory());
     dialog.setFileMode(QFileDialog::Directory);
     dialog.setOption(QFileDialog::DontUseNativeDialog, true);
     for (auto* view : dialog.findChildren<QListView*>()) {
@@ -1530,7 +1759,9 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
         m_pendingRangeStore.reset();
         m_remoteSequenceConnectionGeneration = result.connectionGeneration;
     }
+    const auto previousVectorFields = vectorFieldNames();
     m_dataset = result.dataset;
+    restoreVectorFields(previousVectorFields);
     m_particleController->setSamples(std::move(result.particles));
     m_particleController->configureForDataset(true);
     m_volumeController->configureForDataset();
@@ -1545,7 +1776,11 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
         ? result.fileVersion : m_fileVersion;
     showMetadata(frameMetadata, m_datasetPath);
 
-    configureSequenceControls(defaultPositions);
+    configureSequenceControls(defaultPositions,
+        result.displays.empty()
+            ? std::nullopt
+            : std::optional<std::uint32_t>{
+                  result.displays.front().request.field.value});
     if (selectCacheFallbackLevel(m_levelSelector, result.cacheFallbackToLevel)) {
         configureSlicePositionControls();
         updateRangeModeAvailability();
@@ -1560,6 +1795,11 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     }
     const auto cache = m_dataset->cacheMetrics();
     m_diagnosticsModel->setCacheMetrics(cache);
+    // This window has no dataset while it opens a sequence, so a definition
+    // committed in another window meanwhile reached every window but this one,
+    // and this frame carries the older list. Mid-playback the reload stands
+    // aside and setPlaybackMode picks it up.
+    reloadIfDefinitionsMoved();
     validateVectorMode();
     // Frames need not share a domain, and the clamped scale report is computed
     // from one. A scale picked on an earlier frame otherwise kept that frame's
@@ -1572,7 +1812,8 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     }
 }
 
-void MainWindow::configureSequenceControls(bool defaultPositions)
+void MainWindow::configureSequenceControls(
+    bool defaultPositions, std::optional<std::uint32_t> displayedField)
 {
     if (!m_dataset) {
         return;
@@ -1586,17 +1827,30 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
     const auto previousLevel = m_controlsReady
         && m_levelSelector->currentIndex() >= 0
             ? m_levelSelector->currentData().toInt() : -1;
+    const auto derivedRows = derivedFieldRows();
     {
         const QSignalBlocker fieldBlocker(m_fieldSelector);
         const QSignalBlocker levelBlocker(m_levelSelector);
-        m_fieldSelector->clear();
-        for (std::size_t field = 0; field < metadata.fields.size(); ++field) {
-            m_fieldSelector->addItem(
-                QString::fromStdString(metadata.fields[field].name),
-                static_cast<unsigned int>(field));
-        }
-        m_fieldSelector->setCurrentIndex(
-            std::clamp(previousField, 0, m_fieldSelector->count() - 1));
+        populateFieldSelector(derivedRows);
+        // The field this frame was rendered with, not the position the last
+        // frame's combo happened to be at: the two agree only while every
+        // frame lists the same fields in the same order, and a definition one
+        // frame cannot resolve compacts the ids after it. Selecting by
+        // position there would label the plot with a different field's name
+        // and point the colour range at it.
+        const auto displayedIndex = displayedField
+            ? m_fieldSelector->findData(*displayedField)
+            : -1;
+        // Not clamped: std::clamp is undefined when the list is empty
+        // (count() - 1 < 0), and selectFieldItem takes any index and comes to
+        // rest on a field or on nothing.
+        selectFieldItem(
+            displayedIndex >= 0 ? displayedIndex : previousField);
+        // The range memory is keyed by field id, and the ids moved with the
+        // field list, so the widgets have to be told which field they now
+        // represent or the next switch commits this frame's range onto
+        // whatever field used to hold that id.
+        m_range->setTrackedField(m_fieldSelector->currentText());
         m_levelSelector->clear();
         populateLevelCombo(m_levelSelector, metadata.finestLevel);
         const auto levelIndex = m_levelSelector->findData(previousLevel);
@@ -1637,7 +1891,7 @@ void MainWindow::configureSequenceControls(bool defaultPositions)
 
     enableDatasetControls(metadata);
     m_exportAnimationAction->setEnabled(true);
-    rebuildVariableMenu();
+    rebuildVariableMenu(derivedRows);
     ensureVectorFieldDefaults();
     updateRangeModeAvailability();
 }
@@ -1666,12 +1920,17 @@ void MainWindow::updateRangeModeAvailability()
             .level = m_dataset->rangeAvailable(RangeRequest{
                 field, maximumLevel, composition, RangeScope::Level}),
         },
-        field.value);
+        m_fieldSelector->currentText());
 }
 
 FrameSliceSpec MainWindow::buildFrameSpec()
 {
     FrameSliceSpec spec;
+    // A viewer-wide setting, so it travels with every spec except where the
+    // load it is built for cannot install it (derivedFieldsReachNextLoad).
+    spec.derivedFields = derivedFieldsReachNextLoad()
+        ? m_derivedFields->definitions()
+        : std::vector<DerivedFieldDefinition>{};
     spec.displayMode = m_displayMode;
     spec.palette = m_paletteController->palette();
     spec.contourCount = m_contourCount;
@@ -1685,6 +1944,24 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     }
     spec.field = m_controlsReady && m_fieldSelector->currentIndex() >= 0
         ? m_fieldSelector->currentData().toUInt() : 0U;
+    // The names alongside the indices: an index means something only in the
+    // field list it came from, and the next frame's list can differ -- by its
+    // stored fields, or by a derived definition that frame could not resolve
+    // and left out, which compacts every id after it. Without a name the
+    // reload lands on whatever now occupies that slot (resolveSpecField).
+    const auto nameOf = [this](int field) {
+        if (!m_dataset) {
+            return std::string{};
+        }
+        const auto& fields = m_dataset->metadata().fields;
+        return field >= 0 && static_cast<std::size_t>(field) < fields.size()
+            ? fields[static_cast<std::size_t>(field)].name
+            : std::string{};
+    };
+    spec.fieldName = nameOf(static_cast<int>(spec.field));
+    spec.vectorUFieldName = nameOf(m_vectorUField);
+    spec.vectorVFieldName = nameOf(m_vectorVField);
+    spec.vectorWFieldName = nameOf(m_vectorWField);
     spec.levelSelection = m_controlsReady && m_levelSelector->currentIndex() >= 0
         ? m_levelSelector->currentData().toInt() : -1;
     spec.vectorUField = static_cast<std::uint32_t>(std::max(m_vectorUField, 0));
@@ -1769,6 +2046,14 @@ void MainWindow::setPlaybackMode(PlaybackMode mode)
         m_playbackTimer->stop();
     } else {
         m_playbackTimer->start(m_animationPanel->frameDelayMs());
+    }
+    // Playback is why the reload stood aside: the next frame reads the list
+    // for itself, and stopping means there is no next frame. What is on screen
+    // may then have been rendered against an older list, and only the session
+    // itself can say -- a prefetch of the next frame is built from the current
+    // one, so "when was a spec last built" answers a different question.
+    if (wasSequence && mode != PlaybackMode::Sequence) {
+        reloadIfDefinitionsMoved();
     }
     // Every frame of a sequence renders the volume as a draft, so what is
     // standing in the window when playback stops is a half-size one. Ask for

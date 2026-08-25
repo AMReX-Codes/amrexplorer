@@ -107,6 +107,17 @@ signals:
     // dropped; the host counts these in its diagnostics.
     void staleResultDropped();
 
+public:
+    // The frame sitting in the prefetch slot, if any. A frame prefetched
+    // before the derived-field list changed was rendered against the list as
+    // it was, so a change has to have dropped it (invalidatePrefetch).
+    [[nodiscard]] std::optional<int> prefetchedFrameForTest() const
+    {
+        return m_prefetched
+            ? std::optional<int>{m_prefetched->frameIndex}
+            : std::nullopt;
+    }
+
 private:
     // One prefetched sequence frame: the dataset plus its rendered slice(s),
     // consumable only while the slice spec that produced it is unchanged.

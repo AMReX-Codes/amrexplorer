@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -76,6 +77,7 @@ class LinePlotWindow;
 class ScientificDoubleSpinBox;
 class DiagnosticsModel;
 class FabNavigator;
+class DerivedFieldController;
 class PaletteController;
 class ParticleController;
 class RangeController;
@@ -134,9 +136,42 @@ public:
     }
     void setAnimationDockVisibleForTest(bool visible);
     void toggleSequencePlaybackForTest() { toggleSequencePlayback(); }
+    // The plane sweep, which unlike sequence playback never reopens the
+    // dataset: a change that needs a reload has to be given one outright.
+    void toggleSweepPlaybackForTest() { toggleSweepPlayback(); }
+    [[nodiscard]] bool sweepPlayingForTest() const noexcept
+    {
+        return m_playbackMode == PlaybackMode::Sweep;
+    }
+    // Runs on the GUI thread just after an initial-slice load is launched --
+    // the only point at which a test can change something while one is in
+    // flight, since the completion arrives as a queued signal. Defined in
+    // MainWindowTestAccess.cpp, as every accessor that touches a member the
+    // release build does not have is: the body cannot be inline here, where
+    // AMREXPLORER_QT_TEST_ACCESS is not necessarily on.
+    void setInitialSliceLaunchedHookForTest(std::function<void()> hook);
+    // The sequence frame waiting in the prefetch slot, if any.
+    [[nodiscard]] std::optional<int> prefetchedSequenceFrameForTest() const;
     // The slot an idle frame-slider press-and-release lands in, which must not
     // restart a frame that is already on screen.
     void requestSequenceFrameForTest(int index) { goToSequenceFrame(index); }
+    // The step every field selection goes through, so a test can ask for a row
+    // that is not a field -- the separator, or a definition this dataset
+    // cannot provide -- and see where the selection actually lands.
+    void selectFieldItemForTest(int index) { selectFieldItem(index); }
+    // The vector-glyph selections, as ids into the open field list. A reload
+    // carries them by name (restoreVectorFields), so a test needs to set them
+    // over one dataset and read them back over the next.
+    [[nodiscard]] std::array<int, 3> vectorFieldsForTest() const
+    {
+        return {m_vectorUField, m_vectorVField, m_vectorWField};
+    }
+    void setVectorFieldsForTest(int u, int v, int w)
+    {
+        m_vectorUField = u;
+        m_vectorVField = v;
+        m_vectorWField = w;
+    }
 
     // Test-only: move each 3-D plane to slicePositions (per axis, so the three
     // panels sample different data with different local ranges), switch to
@@ -522,7 +557,87 @@ private:
         bool includeColorBar, qreal scaleFactor) const;
     void createMenus();
     void rebuildLevelMenu();
-    void rebuildVariableMenu();
+    // One row of the derived part of a field list.
+    struct DerivedFieldRow {
+        QString name;
+        // The id this dataset installed the definition under; nullopt when it
+        // could not, which is what the row being shown greyed out means.
+        std::optional<std::uint32_t> field;
+        // Rich text, so the expression survives whatever the user wrote:
+        // Qt reads a tooltip as markup as soon as it might be one, and only
+        // some of the escapes it needs make it decide that.
+        QString tooltip;
+    };
+    void rebuildVariableMenu(const std::vector<DerivedFieldRow>& rows);
+    // Reopens what is on screen with the current frame spec -- the derived
+    // field list included -- without the teardown a fresh open performs: the
+    // sequence, the zoom and the open windows all stay. A sequence goes
+    // through its controller so its frame bookkeeping stays consistent; a
+    // single dataset is reloaded straight through requestInitialSlice, whose
+    // new generation both invalidates the in-flight work and gives the
+    // replacement session a dataset id of its own.
+    void reloadCurrentDataset();
+    // The directory the last file dialog ended in, remembered across all of
+    // them. The dialogs themselves stay separate -- one picks several
+    // directories, one saves with a default suffix -- but this was copied into
+    // each of them, as was the offscreen option (fileDialogOptions, in
+    // MainWindow.cpp, where both its callers are).
+    [[nodiscard]] QString rememberedDialogDirectory() const;
+    void rememberDialogDirectory(const QString& path);
+    // The Import/Export file dialog the derived-field controller asks for.
+    [[nodiscard]] QString chooseExpressionListPath(
+        QWidget* parent, bool forSaving);
+    // Rebuilds the Dataset Metadata dock from the open session's metadata,
+    // which a reload can change (a derived field appears or leaves) without
+    // going through the open path that first filled it.
+    void refreshMetadataDisplay();
+    // Fills the field selector from the open dataset: the stored fields, then
+    // a separator, then the derived ones (see derivedFieldRows). Shared by the
+    // two configure paths, which populated it identically. Only the field rows
+    // carry a field id as item data, so lookups stay findData-based and
+    // nothing that reads item data can take the separator -- or a definition
+    // this dataset could not install -- for a field.
+    // `rows` is derivedFieldRows(), which the caller shares with
+    // rebuildVariableMenu: the two views are the same list, and building it
+    // twice per load means twice the work per sequence frame.
+    void populateFieldSelector(const std::vector<DerivedFieldRow>& rows);
+    // Selects a field entry: `index` is where to start looking, and the
+    // selection comes to rest on the nearest row that is actually a field.
+    void selectFieldItem(int index);
+    // The session's definitions as rows to list, in the order they were
+    // written. The field selector and the Variable menu are the same list
+    // shown twice, and the comment saying so kept them in step by hand.
+    [[nodiscard]] std::vector<DerivedFieldRow> derivedFieldRows() const;
+    // Adds a listed-but-unchoosable row to the field selector. False when the
+    // combo's model is not one whose item flags can be set, in which case no
+    // row is added at all: a row that looks selectable but carries no field id
+    // is read as field 0 by everything downstream.
+    [[nodiscard]] bool addUnavailableFieldItem(
+        const QString& name, const QString& tooltip);
+    // Whether a load built from the window's state as it stands can install
+    // derived fields. Deliberately not asked of m_dataset: a sequence builds
+    // its first spec while the *outgoing* dataset is still installed (see
+    // prepareSequence), so frame 0 would load without the definitions and
+    // frame 1 would make them appear. A prepared session cannot take them
+    // either, but that is a property of the load, not of the window, so
+    // requestInitialSlice asks it there.
+    [[nodiscard]] bool derivedFieldsReachNextLoad() const;
+    // Whether the session on screen was opened with the list the editor now
+    // holds. Asked of the session itself rather than inferred from when
+    // things happened: a window is not told to reload while it has no dataset
+    // (the whole of an open), a reload stands aside during playback, and a FAB
+    // return reopens from a spec captured before any of it.
+    [[nodiscard]] bool openSessionHasCurrentDefinitions() const;
+    // Reloads the open dataset if it does not, once the caller's own work is
+    // off the stack. Deferred because the frame path reaches this from inside
+    // SequenceController::finishLoad, which goes on to touch its own state
+    // after the display call returns.
+    void reloadIfDefinitionsMoved();
+    // The vector-glyph selections travel by name for the same reason the
+    // scalar one does: an id means something only in the field list it came
+    // from. Captured before a load swaps the dataset, resolved again after.
+    [[nodiscard]] std::array<std::string, 3> vectorFieldNames() const;
+    void restoreVectorFields(const std::array<std::string, 3>& names);
     void syncMenuChecks();
     void syncVariableMenu();
     // Runs the palette-file dialog for the controller's Load Palette File...
@@ -789,7 +904,11 @@ private:
     // Sequence frame switching lives in the SequenceController; this window
     // supplies the GUI-coupled pieces below as its hooks.
     void displayFrameResult(InitialSliceResult& result, bool defaultPositions);
-    void configureSequenceControls(bool defaultPositions);
+    // `displayedField` is the field the frame was actually rendered with,
+    // which the pipeline resolves by name (resolveSpecField) and so need not
+    // be the id -- or the combo position -- the previous frame used.
+    void configureSequenceControls(
+        bool defaultPositions, std::optional<std::uint32_t> displayedField);
     [[nodiscard]] FrameSliceSpec buildFrameSpec();
     // Stop timers and request stop on every async task this window can launch,
     // so an in-flight read that holds the global I/O mutex bails promptly and
@@ -843,6 +962,9 @@ private:
     bool m_visibleSyncRerun = false;
     std::optional<amrvis::DisplayCoordinator::RangeKey> m_pendingRangeStore;
 #ifdef AMREXPLORER_QT_TEST_ACCESS
+    // Test-only: run just after an initial-slice load is launched; see
+    // setInitialSliceLaunchedHookForTest.
+    std::function<void()> m_initialSliceLaunchedForTest;
     // Test-only: superseded visible-range sync outcomes dropped by the
     // rerun guard. Sole writer is that drop, so the overlapping-sync test can
     // assert an exact count. The DiagnosticsModel's stale count carries the
@@ -885,6 +1007,8 @@ private:
     QActionGroup* m_scaleGroup = nullptr;
     QActionGroup* m_levelGroup = nullptr;
     QActionGroup* m_variableGroup = nullptr;
+    // Window-owned so rebuildVariableMenu's clear() does not delete it.
+    QAction* m_expressionEditorAction = nullptr;
     QAction* m_boxesAction = nullptr;
     QAction* m_slicePlanesAction = nullptr;
     QAction* m_resetZoomAction = nullptr;
@@ -937,6 +1061,7 @@ private:
     // Owns the palette selection, its widgets and persistence; palette() is
     // what the renderer, color bar and overlays use.
     PaletteController* m_paletteController = nullptr;
+    DerivedFieldController* m_derivedFields = nullptr;
     QString m_numberFormat = defaultNumberFormat();
     bool m_controlsReady = false;
     std::uint64_t m_generation = 0;

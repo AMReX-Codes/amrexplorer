@@ -43,5 +43,7 @@ Outcome dispatchFab(Context& context);
 Outcome dispatchSequence(Context& context);
 // SmokeHarnessVolume.cpp
 Outcome dispatchVolume(Context& context);
+// SmokeHarnessDerived.cpp
+Outcome dispatchDerived(Context& context);
 
 } // namespace amrvis::qt::smoke

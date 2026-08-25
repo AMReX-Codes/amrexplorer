@@ -833,6 +833,12 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_levelMenu->setEnabled(false);
     m_contoursAction->setEnabled(false);
     m_particleController->suspendAction();
+    // The dataset is gone as of the reset above, so the Variable menu's field
+    // entries name a session that no longer exists: triggering one would drive
+    // a combo that is merely disabled, not emptied. This is the caller the
+    // menu's no-dataset branch was written for.
+    rebuildVariableMenu({});
+    m_derivedFields->refreshAvailability();
     m_datasetAction->setEnabled(false);
     m_exportAnimationAction->setEnabled(false);
     m_openMetadata.reset();
@@ -1015,6 +1021,16 @@ void MainWindow::requestInitialSlice(
     // unavailable), linear scale, whole domain, midpoint positions.
     FrameSliceSpec spec = initialSpec.value_or(FrameSliceSpec{});
     if (!initialSpec) {
+        // An open with no spec has nothing else to carry the list; one built
+        // by buildFrameSpec has decided already and must not be
+        // second-guessed here, since two rules for one field is how they
+        // drift. A prepared session's field list is fixed before this window
+        // sees it, which is a property of the load rather than of the window,
+        // so it is asked here and the rest through the shared predicate.
+        spec.derivedFields
+            = preparedSession || !derivedFieldsReachNextLoad()
+            ? std::vector<DerivedFieldDefinition>{}
+            : m_derivedFields->definitions();
         spec.palette = m_paletteController->palette();
         spec.displayMode = m_displayMode;
         spec.includeGridBoxes = m_boxesAction->isChecked();
@@ -1066,7 +1082,9 @@ void MainWindow::requestInitialSlice(
             try {
                 auto result = watcher->future().takeResult();
                 if (generation == m_generation) {
+                    const auto previousVectorFields = vectorFieldNames();
                     m_dataset = result.dataset;
+                    restoreVectorFields(previousVectorFields);
                     m_particleController->setSamples(
                         std::move(result.particles));
                     if (restoredSpec) {
@@ -1079,12 +1097,45 @@ void MainWindow::requestInitialSlice(
                     m_particleController->configureForDataset(
                         restoredSpec.has_value());
                     m_volumeController->configureForDataset();
+                    // Before configureSliceControls, which reads the open
+                    // metadata this replaces: ensureVectorFieldDefaults checks
+                    // the just-restored vector fields against it, and against
+                    // the outgoing list an index that has gone out of range
+                    // still looks valid. The sequence path shows the metadata
+                    // first for the same reason.
+                    //
+                    // Only when the session's fields are not the ones already
+                    // listed: the open path filled the dock from the file's
+                    // own metadata a moment ago, and rebuilding it costs a
+                    // copy of every level's box list and a tree item per box.
+                    // What it can miss is the derived fields the session
+                    // installed, and, after a reload, the ones that have gone.
+                    const auto& sessionFields = m_dataset->metadata().fields;
+                    const auto listed = m_openMetadata
+                        && std::equal(m_openMetadata->fields.begin(),
+                            m_openMetadata->fields.end(),
+                            sessionFields.begin(), sessionFields.end(),
+                            [](const FieldMetadata& shown,
+                                const FieldMetadata& session) {
+                                return shown.name == session.name;
+                            });
+                    if (!listed) {
+                        refreshMetadataDisplay();
+                    }
                     configureSliceControls();
                     if (restoredSpec) {
                         const QSignalBlocker fieldBlocker(m_fieldSelector);
                         const QSignalBlocker levelBlocker(m_levelSelector);
-                        const auto fieldIndex = m_fieldSelector->findData(
-                            restoredSpec->field);
+                        // The field the load was actually rendered with,
+                        // which the pipeline resolves by name and so need not
+                        // be the id the spec carried (resolveSpecField).
+                        // Selecting the spec's id would name one field in the
+                        // combo while the view showed another.
+                        const auto rendered = result.displays.empty()
+                            ? restoredSpec->field
+                            : result.displays.front().request.field.value;
+                        const auto fieldIndex =
+                            m_fieldSelector->findData(rendered);
                         if (fieldIndex >= 0) {
                             m_fieldSelector->setCurrentIndex(fieldIndex);
                         }
@@ -1096,8 +1147,14 @@ void MainWindow::requestInitialSlice(
                         m_range->setSelection({restoredSpec->rangeMode,
                             restoredSpec->userRange, restoredSpec->logarithmic});
                         m_range->setTrackedField(
-                            m_fieldSelector->currentData().toUInt());
+                            m_fieldSelector->currentText());
                         m_range->commitFieldRange(m_range->trackedField());
+                        // The menu was rebuilt by configureSliceControls
+                        // above, while the combo still sat on field 0; it is
+                        // the same selection shown twice, so it has to follow
+                        // the combo here. (The sequence path rebuilds its menu
+                        // after selecting, so it needs none of this.)
+                        syncVariableMenu();
                         // Before the extraction the User bounds were written
                         // unblocked here, which scheduled a (redundant)
                         // re-slice; kept so this path renders as it did.
@@ -1176,6 +1233,13 @@ void MainWindow::requestInitialSlice(
                             result.cacheFallbackToLevel));
                     }
                     emit initialSliceFinished(true);
+                    // Emitted first: this load did finish, and what follows
+                    // is a fresh one. A window counts as unable to take
+                    // derived fields for the whole of an open, so a list
+                    // committed meanwhile reached every window but this one,
+                    // and a FAB return reopens from a spec captured before any
+                    // of it. Either way the session says so itself.
+                    reloadIfDefinitionsMoved();
                 } else {
                     m_diagnosticsModel->noteStaleResult();
                 }
@@ -1211,6 +1275,15 @@ void MainWindow::requestInitialSlice(
             initialCacheBudget(), cancellation,
             std::move(preparedMetadata), std::move(dataRoot));
     }));
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+    // The one moment a test can act *during* a load: the spec above is built
+    // and the work is running, while the completion is a queued signal that
+    // cannot be delivered until this returns. Changing the derived-field list
+    // here is what another window's Apply does to a window that is opening.
+    if (m_initialSliceLaunchedForTest) {
+        m_initialSliceLaunchedForTest();
+    }
+#endif
 }
 
 } // namespace amrvis::qt

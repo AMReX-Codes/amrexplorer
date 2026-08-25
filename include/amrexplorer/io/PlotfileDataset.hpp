@@ -79,6 +79,13 @@ public:
     // asked for it to say so.
     [[nodiscard]] const std::vector<DerivedFieldSkip>& skippedDerivedFields()
         const noexcept;
+    // The definitions this dataset was opened with, installed or not. What a
+    // caller holding a newer list compares against to find out whether this
+    // session is still the one that list describes -- which cannot be
+    // inferred from the field names, since an expression can change under a
+    // name that does not.
+    [[nodiscard]] const std::vector<DerivedFieldDefinition>&
+    derivedFieldDefinitions() const noexcept;
 
     // A block of any field the metadata lists. A derived field's block is
     // evaluated from its inputs' blocks (recursively, so one derived field may
@@ -102,6 +109,9 @@ private:
         std::vector<DerivedFieldProgram> programs;
         std::size_t storedCount = 0;
         std::vector<DerivedFieldSkip> skipped;
+        // As given, not as installed: a caller comparing against its own list
+        // is asking what this session was built from.
+        std::vector<DerivedFieldDefinition> definitions;
     };
     [[nodiscard]] static Fields installFields(
         const PlotfileMetadataResult& source,

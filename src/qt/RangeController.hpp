@@ -2,12 +2,11 @@
 
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 
+#include <QHash>
 #include <QObject>
 #include <QString>
 
-#include <cstdint>
 #include <optional>
-#include <unordered_map>
 #include <utility>
 
 class QCheckBox;
@@ -68,28 +67,32 @@ public:
     void setControlsReady(bool ready);
     void setNumberFormat(const QString& format);
 
-    // Per-field memory. The widgets represent trackedField(); switchField
-    // snapshots them for that field and loads the new field's snapshot (or
-    // the default: File, no range) -- a no-op for the same field. commit
-    // snapshots the widgets for a field outright (a restore, after
-    // setSelection). reset forgets every field for a fresh dataset and puts
-    // the widgets back to File, 0..1, min/max disabled.
-    void switchField(std::uint32_t field);
-    void commitFieldRange(std::uint32_t field);
+    // Per-field memory, keyed by the field's *name*. The widgets represent
+    // trackedField(); switchField snapshots them for that field and loads the
+    // new field's snapshot (or the default: File, no range) -- a no-op for the
+    // same field. commit snapshots the widgets for a field outright (a
+    // restore, after setSelection). reset forgets every field for a fresh
+    // dataset and puts the widgets back to File, 0..1, min/max disabled.
+    //
+    // By name and not by field id: an id means something only in the field
+    // list it came from, and that list moves -- a sequence frame need not
+    // agree with the last one, and a derived definition that one frame cannot
+    // resolve compacts every id after it. Keyed by id, selecting a field then
+    // restored whichever field used to hold that number.
+    void switchField(const QString& field);
+    void commitFieldRange(const QString& field);
     void reset();
-    [[nodiscard]] std::uint32_t trackedField() const noexcept
+    [[nodiscard]] const QString& trackedField() const noexcept
     {
         return m_trackedField;
     }
-    void setTrackedField(std::uint32_t field) noexcept
-    {
-        m_trackedField = field;
-    }
+    void setTrackedField(const QString& field) { m_trackedField = field; }
     // Enables or disables the File and Level entries for what `field` at the
     // current level can offer. A selected mode that became unavailable falls
     // back to Visible (recorded in the field's snapshot) with a status
     // message; that fallback is silent otherwise -- no modeChanged.
-    void updateAvailability(const Availability& availability, std::uint32_t field);
+    void updateAvailability(
+        const Availability& availability, const QString& field);
 
 signals:
     // A user's edit of the mode, of a User bound, or of Log. Blocked writes
@@ -106,7 +109,7 @@ private:
     };
 
     void setMode(RangeMode mode);
-    void applyFieldRange(std::uint32_t field);
+    void applyFieldRange(const QString& field);
     void updateUserRangeEnabled();
 
     QComboBox* m_mode = nullptr;
@@ -114,8 +117,8 @@ private:
     ScientificDoubleSpinBox* m_maximum = nullptr;
     QCheckBox* m_logarithmic = nullptr;
     bool m_controlsReady = false;
-    std::unordered_map<std::uint32_t, FieldRange> m_fieldRanges;
-    std::uint32_t m_trackedField = 0;
+    QHash<QString, FieldRange> m_fieldRanges;
+    QString m_trackedField;
 };
 
 } // namespace amrvis::qt

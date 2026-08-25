@@ -146,18 +146,31 @@ void RangeController::setNumberFormat(const QString& format)
     m_maximum->setNumberFormat(format);
 }
 
-void RangeController::switchField(std::uint32_t field)
+void RangeController::switchField(const QString& field)
 {
     if (field == m_trackedField) {
         return;
     }
-    commitFieldRange(m_trackedField);
+    // Nothing tracked yet -- before the first setTrackedField, or where a
+    // selection could not come to rest on a field -- so there is no field
+    // whose range this is. Committing would file the widgets' current state
+    // under the empty name and hand it back to whatever asked for it next.
+    if (!m_trackedField.isEmpty()) {
+        commitFieldRange(m_trackedField);
+    }
     m_trackedField = field;
     applyFieldRange(field);
 }
 
-void RangeController::commitFieldRange(std::uint32_t field)
+void RangeController::commitFieldRange(const QString& field)
 {
+    // The empty name is not a field. Its callers can reach here with nothing
+    // tracked -- a restored spec commits whatever trackedField() says, and
+    // that is empty until a field is selected -- and a snapshot filed under
+    // it is handed back to the next switch as if it belonged to something.
+    if (field.isEmpty()) {
+        return;
+    }
     FieldRange range;
     range.mode = mode();
     if (range.mode == RangeMode::User) {
@@ -166,10 +179,10 @@ void RangeController::commitFieldRange(std::uint32_t field)
     m_fieldRanges[field] = std::move(range);
 }
 
-void RangeController::applyFieldRange(std::uint32_t field)
+void RangeController::applyFieldRange(const QString& field)
 {
-    const auto it = m_fieldRanges.find(field);
-    const auto range = it != m_fieldRanges.end() ? it->second : FieldRange{};
+    const auto it = m_fieldRanges.constFind(field);
+    const auto range = it != m_fieldRanges.constEnd() ? it.value() : FieldRange{};
     {
         const QSignalBlocker minBlocker(m_minimum);
         const QSignalBlocker maxBlocker(m_maximum);
@@ -185,7 +198,7 @@ void RangeController::applyFieldRange(std::uint32_t field)
 void RangeController::reset()
 {
     m_fieldRanges.clear();
-    m_trackedField = 0;
+    m_trackedField.clear();
     const QSignalBlocker minBlocker(m_minimum);
     const QSignalBlocker maxBlocker(m_maximum);
     setMode(RangeMode::File);
@@ -196,7 +209,7 @@ void RangeController::reset()
 }
 
 void RangeController::updateAvailability(
-    const Availability& availability, std::uint32_t field)
+    const Availability& availability, const QString& field)
 {
     auto* model = qobject_cast<QStandardItemModel*>(m_mode->model());
     if (model == nullptr) {
@@ -226,7 +239,11 @@ void RangeController::updateAvailability(
     setMode(RangeMode::Visible);
     m_minimum->setEnabled(false);
     m_maximum->setEnabled(false);
-    m_fieldRanges[field].mode = RangeMode::Visible;
+    if (!field.isEmpty()) {
+        // As commitFieldRange: nothing is remembered for a name that is not
+        // a field's, or the next switch to one inherits it.
+        m_fieldRanges[field].mode = RangeMode::Visible;
+    }
     emit statusMessage(
         tr("Metadata range unavailable; using the visible-data range."), 0);
 }

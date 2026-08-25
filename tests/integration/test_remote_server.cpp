@@ -331,14 +331,19 @@ int main(int argc, char* argv[])
     // the open, and the skip names the definition it belongs to by index.
     // An expression past maximumExpressionBytes is one of those rather than a
     // refusal: compile() bounds it before parsing anything, so the remote
-    // answer for such a list is the one a local dataset gives.
+    // answer for such a list is the one a local dataset gives. The last
+    // definition is the other side of that bound -- long enough to name a
+    // symbol installation must quote back, so the reason it produces is longer
+    // than the reason bound, and the reply only decodes because toWire holds
+    // it to that bound.
     envelope = exchange(socket, 16,
         codec::toWire(OpenDatasetData{
             std::filesystem::path(argv[1]).string(),
             16ULL * 1024ULL * 1024ULL,
             {{"product", "density * temperature"},
                 {"elsewhere", "nonesuch * 2"},
-                {"overlong", std::string(maximumExpressionBytes + 1, 'x')}}}),
+                {"overlong", std::string(maximumExpressionBytes + 1, 'x')},
+                {"longreason", std::string(maximumExpressionBytes - 6, 'a')}}}),
         hello.maximumFrameBytes);
     require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
         "server refused an open carrying derived fields");
@@ -349,19 +354,28 @@ int main(int argc, char* argv[])
         "the computed field is not the tail of the catalog");
     require(derivedOpen.derivedFieldCount == 1,
         "server did not report exactly one field as computed");
-    require(derivedOpen.derivedFieldSkips.size() == 2
-            && derivedOpen.derivedFieldSkips.front().definitionIndex == 1
-            && derivedOpen.derivedFieldSkips.front().name == "elsewhere"
-            && !derivedOpen.derivedFieldSkips.front().reason.empty(),
+    require(derivedOpen.derivedFieldSkips.size() == 3
+            && derivedOpen.derivedFieldSkips[0].definitionIndex == 1
+            && derivedOpen.derivedFieldSkips[0].name == "elsewhere"
+            && !derivedOpen.derivedFieldSkips[0].reason.empty(),
         "the unresolvable definition did not come back as a skip");
-    // Reported, not refused -- and the reason is the bounded one compile()
-    // gives, not the expression it is about.
-    require(derivedOpen.derivedFieldSkips.back().definitionIndex == 2
-            && derivedOpen.derivedFieldSkips.back().name == "overlong"
-            && !derivedOpen.derivedFieldSkips.back().reason.empty()
-            && derivedOpen.derivedFieldSkips.back().reason.size()
-                <= maximumExpressionBytes,
+    // Reported, not refused -- and the reason is the short one compile() gives,
+    // not the expression it is about.
+    require(derivedOpen.derivedFieldSkips[1].definitionIndex == 2
+            && derivedOpen.derivedFieldSkips[1].name == "overlong"
+            && !derivedOpen.derivedFieldSkips[1].reason.empty()
+            && derivedOpen.derivedFieldSkips[1].reason.size()
+                < maximumExpressionBytes,
         "the over-long expression did not come back as a bounded skip");
+    // The reason installation produced for this one is longer than the bound
+    // fromWire enforces, so reaching this line at all is the point: before
+    // toWire bounded it, the decode above threw and the connection closed.
+    // The marker is what proves it was truncated rather than merely short.
+    const auto& longest = derivedOpen.derivedFieldSkips[2];
+    require(longest.definitionIndex == 3 && longest.name == "longreason"
+            && longest.reason.size() == maximumExpressionBytes
+            && longest.reason.ends_with("..."),
+        "an over-long skip reason was not bounded on the way out");
     // A derived field has no stored statistics, so the server reports no File
     // range for it -- the same answer a local session gives.
     require(derivedOpen.fileRangeAvailable.size()

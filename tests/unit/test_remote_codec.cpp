@@ -395,6 +395,24 @@ int main()
             [&] { static_cast<void>(codec::fromWire(tooManyDerived)); },
             "a derived count past the field list was accepted");
 
+        // The encoder holds a reason to the bound the decoder enforces, so
+        // the codec cannot refuse its own output. Installation quotes an
+        // unresolved symbol into the reason, so one longer than the bound is
+        // what a *correct* server produces, not a malformed one.
+        auto longReason = derived;
+        longReason.derivedFieldSkips[0].reason
+            = std::string(maximumExpressionBytes + 500, 'r');
+        const auto longReasonWire = codec::toWire(longReason);
+        require(longReasonWire.derived_field_skips[0]->reason.size()
+                    == maximumExpressionBytes
+                && longReasonWire.derived_field_skips[0]->reason.ends_with(
+                    "..."),
+            "an over-long skip reason was not bounded on the way out");
+        require(codec::fromWire(longReasonWire).derivedFieldSkips[0].reason
+                    .size()
+                == maximumExpressionBytes,
+            "a bounded skip reason did not survive the wire");
+
         auto namelessSkip = codec::toWire(derived);
         namelessSkip.derived_field_skips[0]->name.clear();
         requireRejected(

@@ -13,6 +13,7 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -364,6 +365,29 @@ bool vectorsAligned(std::span<const std::uint8_t> bytes)
         = *reflection::GetSchema(fb::EnvelopeBinarySchema::data());
     return VectorAlignmentWalk(schema, bytes.data())
         .aligned(*schema.root_table(), *flatbuffers::GetAnyRoot(bytes.data()));
+}
+
+// A skip's reason is written by installation, which quotes a symbol out of the
+// expression it could not resolve -- so it runs to the expression's own bound
+// plus the words around it, which is longer than the bound fromWire enforces
+// on the way back in. Bounded here rather than left to disagree: a decoder
+// that refused its own encoder's output would take the throw inside
+// refusingInvalidResponses and close the connection, losing every other
+// dataset on it over a reply the server was right to send.
+std::string boundedReason(const std::string& reason)
+{
+    constexpr std::string_view continued = "...";
+    if (reason.size() <= maximumExpressionBytes) {
+        return reason;
+    }
+    auto kept = maximumExpressionBytes - continued.size();
+    // Not mid-character: splitting a UTF-8 sequence would put bytes on the
+    // wire that no longer read as text in the tooltip this ends up in.
+    while (kept > 0
+        && (static_cast<unsigned char>(reason[kept]) & 0xC0U) == 0x80U) {
+        --kept;
+    }
+    return reason.substr(0, kept) + std::string(continued);
 }
 
 } // namespace
@@ -732,7 +756,7 @@ fb::DatasetOpenedT toWire(const OpenedDataset& value)
         converted->definition_index
             = static_cast<std::uint32_t>(skip.definitionIndex);
         converted->name = skip.name;
-        converted->reason = skip.reason;
+        converted->reason = boundedReason(skip.reason);
         wire.derived_field_skips.push_back(std::move(converted));
     }
     return wire;
@@ -902,7 +926,9 @@ OpenedDataset fromWire(const fb::DatasetOpenedT& value)
         }
         if (skip->reason.size() > maximumExpressionBytes) {
             // Rendered into a tooltip, so bounded like the expression it is
-            // about rather than left to whatever a peer cares to send.
+            // about rather than left to whatever a peer cares to send. What
+            // our own encoder sends is held to this same bound by
+            // boundedReason, so reaching this throw means the peer sent it.
             throw std::invalid_argument(
                 "wire derived-field skip reason is too long");
         }

@@ -6,7 +6,6 @@
 #include <QByteArray>
 #include <QDir>
 #include <QFile>
-#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -61,8 +60,17 @@ ExpressionListFile parseExpressionList(const QByteArray& json)
                 .arg(kExpressionListVersion)};
     }
 
-    std::vector<DerivedFieldDefinition> definitions;
     const auto array = entries.toArray();
+    // Refused before a row is built for any of it: the draft goes into a list
+    // widget an item at a time, so a file with a hundred thousand entries
+    // would freeze the window long before Apply could refuse its length.
+    if (static_cast<std::size_t>(array.size()) > maximumDerivedFieldCount) {
+        return {{},
+            DerivedFieldController::tr(
+                "an expression list may define at most %1 derived fields")
+                .arg(static_cast<qulonglong>(maximumDerivedFieldCount))};
+    }
+    std::vector<DerivedFieldDefinition> definitions;
     definitions.reserve(static_cast<std::size_t>(array.size()));
     for (const auto& value : array) {
         if (!value.isObject()) {
@@ -155,17 +163,12 @@ void DerivedFieldController::refreshAvailability()
                 ? QString()
                 : tr("Derived fields need a local dataset."));
     }
-    // An editor left open over a dataset that has gone (or a remote one that
-    // cannot take derived fields) would apply into nothing.
-    if (!usable && m_dialog) {
-        // Cleared here rather than left to the deleteLater that close()
-        // schedules: until that is delivered the pointer is still set, and a
-        // showEditor before then would raise the dying dialog instead of
-        // opening one.
-        auto* dialog = m_dialog.data();
-        m_dialog = nullptr;
-        dialog->close();
-    }
+    // The editor stays open when the dataset does not. It edits the session's
+    // list rather than the dataset's, and closing it would take with it a
+    // draft the user has typed or imported and not yet applied -- during an
+    // ordinary File > Open, which resets the dataset for the whole of the
+    // load. Apply refuses meanwhile, saying why, and starts working again by
+    // itself when a dataset it can install into arrives.
 }
 
 std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
@@ -190,6 +193,7 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
                                maximumDerivedFieldCount)),
             std::nullopt};
     }
+
 
     // Checked without reference to any dataset: whether a definition applies
     // *here* is decided when a dataset installs it, and shown by greying the

@@ -556,7 +556,18 @@ private:
         bool includeColorBar, qreal scaleFactor) const;
     void createMenus();
     void rebuildLevelMenu();
-    void rebuildVariableMenu();
+    // One row of the derived part of a field list.
+    struct DerivedFieldRow {
+        QString name;
+        // The id this dataset installed the definition under; nullopt when it
+        // could not, which is what the row being shown greyed out means.
+        std::optional<std::uint32_t> field;
+        // Rich text, so the expression survives whatever the user wrote:
+        // Qt reads a tooltip as markup as soon as it might be one, and only
+        // some of the escapes it needs make it decide that.
+        QString tooltip;
+    };
+    void rebuildVariableMenu(const std::vector<DerivedFieldRow>& rows);
     // Reopens what is on screen with the current frame spec -- the derived
     // field list included -- without the teardown a fresh open performs: the
     // sequence, the zoom and the open windows all stay. A sequence goes
@@ -578,21 +589,13 @@ private:
     // carry a field id as item data, so lookups stay findData-based and
     // nothing that reads item data can take the separator -- or a definition
     // this dataset could not install -- for a field.
-    void populateFieldSelector();
+    // `rows` is derivedFieldRows(), which the caller shares with
+    // rebuildVariableMenu: the two views are the same list, and building it
+    // twice per load means twice the work per sequence frame.
+    void populateFieldSelector(const std::vector<DerivedFieldRow>& rows);
     // Selects a field entry: `index` is where to start looking, and the
     // selection comes to rest on the nearest row that is actually a field.
     void selectFieldItem(int index);
-    // One row of the derived part of a field list.
-    struct DerivedFieldRow {
-        QString name;
-        // The id this dataset installed the definition under; nullopt when it
-        // could not, which is what the row being shown greyed out means.
-        std::optional<std::uint32_t> field;
-        // Rich text, so the expression survives whatever the user wrote:
-        // Qt reads a tooltip as markup as soon as it might be one, and only
-        // some of the escapes it needs make it decide that.
-        QString tooltip;
-    };
     // The session's definitions as rows to list, in the order they were
     // written. The field selector and the Variable menu are the same list
     // shown twice, and the comment saying so kept them in step by hand.
@@ -610,9 +613,6 @@ private:
     // the wrapper, an expression holding `<` decides it and one holding only
     // `&` does not, so the escapes show up as themselves.
     [[nodiscard]] static QString richTooltip(const QString& escaped);
-    // The vector-glyph selections travel by name for the same reason the
-    // scalar one does: an id means something only in the field list it came
-    // from. Captured before a load swaps the dataset, resolved again after.
     // Whether a load built from the window's state as it stands can install
     // derived fields. Deliberately not asked of m_dataset: a sequence builds
     // its first spec while the *outgoing* dataset is still installed (see
@@ -621,6 +621,9 @@ private:
     // either, but that is a property of the load, not of the window, so
     // requestInitialSlice asks it there.
     [[nodiscard]] bool derivedFieldsReachNextLoad() const;
+    // The vector-glyph selections travel by name for the same reason the
+    // scalar one does: an id means something only in the field list it came
+    // from. Captured before a load swaps the dataset, resolved again after.
     [[nodiscard]] std::array<std::string, 3> vectorFieldNames() const;
     void restoreVectorFields(const std::array<std::string, 3>& names);
     void syncMenuChecks();
@@ -946,6 +949,9 @@ private:
     bool m_visibleSyncInFlight = false;
     bool m_visibleSyncRerun = false;
     std::optional<amrvis::DisplayCoordinator::RangeKey> m_pendingRangeStore;
+    // The store revision the last sequence frame spec was built with, so a
+    // frame that loaded with an older list can be told from one that did not.
+    std::uint64_t m_frameSpecRevision = 0;
 #ifdef AMREXPLORER_QT_TEST_ACCESS
     // Test-only: run just after an initial-slice load is launched; see
     // setInitialSliceLaunchedHookForTest.

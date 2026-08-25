@@ -177,6 +177,13 @@ std::optional<FrameSliceSpec> FabNavigator::selectedEntrySpec() const
         spec->levelSelection = -1;
         spec->rangeMode = RangeMode::File;
         spec->userRange.reset();
+        // Not the derived fields: this spec is built before the drill-down
+        // sets fabMode, so the host still believes they can travel. A FAB
+        // session is what the Expression Editor is disabled over, so carrying
+        // them here installs fields the user cannot then edit or remove --
+        // and the next drill-down, made with fabMode already set, drops them
+        // again for no reason it could explain.
+        spec->derivedFields.clear();
     }
     return spec;
 }

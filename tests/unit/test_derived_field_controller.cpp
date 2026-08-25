@@ -166,7 +166,43 @@ int main(int argc, char** argv)
         controller.refreshAvailability();
         require(action->isEnabled(),
             "the action stayed disabled after a dataset opened");
+
+        // An editor open when the dataset goes stays open: it edits the
+        // session's list, not the dataset's, and File > Open leaves the
+        // window without one for the whole of the load. Closing it would
+        // take an unapplied draft -- an import, say -- with it.
+        controller.showEditor(parent);
+        require(parent->findChild<ExpressionEditorDialog*>() != nullptr,
+            "the editor did not open");
+        fixture.datasetOpen = false;
+        controller.refreshAvailability();
+        // The editor is WA_DeleteOnClose, so a close() would only schedule the
+        // deletion: without delivering that, this passes whether the editor
+        // was closed or not.
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        require(parent->findChild<ExpressionEditorDialog*>() != nullptr,
+            "losing the dataset closed the editor and its draft");
         delete parent;
+    }
+
+    // An imported list is bounded where its length is first seen, so an
+    // oversized file never becomes a row per entry in the editor's list.
+    {
+        QByteArray entries;
+        for (std::size_t index = 0; index <= amrvis::maximumDerivedFieldCount;
+            ++index) {
+            entries += entries.isEmpty() ? "" : ",";
+            entries += QByteArray("{\"name\":\"f")
+                + QByteArray::number(static_cast<qulonglong>(index))
+                + "\",\"expression\":\"density\"}";
+        }
+        const auto json = QByteArray(
+                              "{\"format\":\"amrexplorer-expression-list\","
+                              "\"version\":1,\"expressions\":[")
+            + entries + "]}";
+        const auto parsed = amrvis::qt::parseExpressionList(json);
+        require(!parsed.error.isEmpty() && parsed.definitions.empty(),
+            "an expression list past the cap was parsed anyway");
     }
 
     // The expression-list format, both directions, and the entries it refuses.

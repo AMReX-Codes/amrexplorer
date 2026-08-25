@@ -410,7 +410,15 @@ MainWindow::MainWindow(QWidget* parent)
     // shutdown flag) and reacts to its signals below.
     m_sequenceController = new SequenceController(
         SequenceController::Hooks{
-            [this] { return buildFrameSpec(); },
+            [this] {
+                // The list this frame is being loaded with. A window has no
+                // dataset while it opens a sequence, so a change committed
+                // meanwhile is not reported to it (available()), and during
+                // playback the reload stands aside; both are noticed by
+                // comparing this against the store afterwards.
+                m_frameSpecRevision = m_derivedFields->storeRevision();
+                return buildFrameSpec();
+            },
             [this](InitialSliceResult& result, bool defaultPositions) {
                 displayFrameResult(result, defaultPositions);
             },
@@ -1379,7 +1387,7 @@ void MainWindow::syncMenuChecks()
     }
 }
 
-void MainWindow::rebuildVariableMenu()
+void MainWindow::rebuildVariableMenu(const std::vector<DerivedFieldRow>& rows)
 {
     m_variableMenu->clear();
     // The menu stays enabled with nothing open: it then holds the Expression
@@ -1416,12 +1424,14 @@ void MainWindow::rebuildVariableMenu()
         return action;
     };
     for (std::size_t field = 0; field < stored; ++field) {
-        addField(QString::fromStdString(metadata.fields[field].name), field);
+        // A tooltip of its own, because the menu shows them for the derived
+        // rows and QAction falls back to the action's own text: without this
+        // every plotfile field pops a tooltip repeating its name.
+        addField(QString::fromStdString(metadata.fields[field].name), field)
+            ->setToolTip(tr("Stored in the plotfile"));
     }
 
-    // The same rows as the field selector, from the same place, dimmed the
-    // same way (derivedFieldRows).
-    const auto rows = derivedFieldRows();
+    // The same rows the field selector was given, dimmed the same way.
     if (!rows.empty()) {
         m_variableMenu->addSeparator();
     }
@@ -1546,6 +1556,17 @@ void MainWindow::reloadCurrentDataset()
     // Not openDataset: that ends the sequence, drops the zoom and closes the
     // line-plot, dataset and volume windows. This is the same reload a
     // sequence frame switch performs, on the frame already shown.
+    // The Dataset window and the line plot are snapshots of the session this
+    // is about to replace: the frame switch closes them for that reason
+    // (frameSwitchStarted) and a reload is the same replacement. Left open
+    // they would show the old field list with no sign of being stale, and
+    // pin the outgoing session and its block cache besides.
+    closeDatasetWindow();
+    auto* linePlotWindow = m_linePlotWindow;
+    m_linePlotWindow = nullptr;
+    if (linePlotWindow != nullptr) {
+        linePlotWindow->close();
+    }
     // No m_initialStopSource reset here: requestInitialSlice stops and
     // replaces it on the way in, and the token the worker is given comes from
     // that one.

@@ -164,6 +164,13 @@ void RangeController::switchField(const QString& field)
 
 void RangeController::commitFieldRange(const QString& field)
 {
+    // The empty name is not a field. Its callers can reach here with nothing
+    // tracked -- a restored spec commits whatever trackedField() says, and
+    // that is empty until a field is selected -- and a snapshot filed under
+    // it is handed back to the next switch as if it belonged to something.
+    if (field.isEmpty()) {
+        return;
+    }
     FieldRange range;
     range.mode = mode();
     if (range.mode == RangeMode::User) {
@@ -232,7 +239,11 @@ void RangeController::updateAvailability(
     setMode(RangeMode::Visible);
     m_minimum->setEnabled(false);
     m_maximum->setEnabled(false);
-    m_fieldRanges[field].mode = RangeMode::Visible;
+    if (!field.isEmpty()) {
+        // As commitFieldRange: nothing is remembered for a name that is not
+        // a field's, or the next switch to one inherits it.
+        m_fieldRanges[field].mode = RangeMode::Visible;
+    }
     emit statusMessage(
         tr("Metadata range unavailable; using the visible-data range."), 0);
 }

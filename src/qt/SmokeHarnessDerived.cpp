@@ -566,6 +566,9 @@ void armSequenceChecks(
     auto frames = std::make_shared<int>(0);
     // Bounds the wait for a prefetch in phase 4.
     auto ticks = std::make_shared<int>(0);
+    // The frame count when playback was stopped, so the reload that follows
+    // can be told from the frames playback itself displayed.
+    auto framesAtStop = std::make_shared<int>(0);
     // Both frames list the same fields, so the frame stepped to lists what
     // this one does; frames that disagree are armFrameIdentityChecks.
     const QStringList expected{QStringLiteral("density"),
@@ -576,7 +579,8 @@ void armSequenceChecks(
     auto* timer = new QTimer(&window);
     timer->setInterval(25);
     QObject::connect(timer, &QTimer::timeout, &application,
-        [&window, &application, phase, frames, ticks, timer, expected] {
+        [&window, &application, phase, frames, ticks, framesAtStop, timer,
+            expected] {
             ++*ticks;
             const auto finish = [&application, timer](int code) {
                 timer->stop();
@@ -700,7 +704,40 @@ void armSequenceChecks(
                     finish(17);
                     return;
                 }
+                // Stopping now is the case the prefetch drop cannot cover:
+                // there is no next frame to read the list, so the frame on
+                // screen would go on computing the old expression.
+                *framesAtStop = *frames;
+                *ticks = 0;
                 window.toggleSequencePlaybackForTest();
+                *phase = 5;
+                return;
+            }
+            if (*phase == 5) {
+                if (*frames == *framesAtStop
+                    || window.sliceRequestPendingForTest()
+                    || window.slicesInFlightForTest() != 0) {
+                    if (*ticks > 200) {
+                        qCritical("stopping playback after an Apply never "
+                                  "reloaded the frame on screen");
+                        finish(18);
+                        return;
+                    }
+                    return;
+                }
+                if (!fieldNames(window).contains(QStringLiteral("late"))) {
+                    qCritical("the frame on screen lists %s, without the "
+                              "definition applied during playback",
+                        qPrintable(fieldNames(window).join(
+                            QStringLiteral(", "))));
+                    finish(19);
+                    return;
+                }
+                if (window.backgroundErrorCountForTest() != 0) {
+                    qCritical("the reload after playback reported an error");
+                    finish(12);
+                    return;
+                }
                 finish(0);
             }
         });

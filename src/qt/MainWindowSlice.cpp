@@ -52,7 +52,10 @@ void MainWindow::configureSliceControls()
     const QSignalBlocker levelBlocker(m_levelSelector);
     const auto& metadata = m_dataset->metadata();
 
-    populateFieldSelector();
+    // Built once and shared: the field selector and the Variable menu list
+    // the same definitions.
+    const auto derivedRows = derivedFieldRows();
+    populateFieldSelector(derivedRows);
     selectFieldItem(0);
     // The range memory is filed under the field's name, so the widgets have to
     // be told which field they represent here too -- the restored-spec and
@@ -65,7 +68,7 @@ void MainWindow::configureSliceControls()
 
     enableDatasetControls(metadata);
 
-    rebuildVariableMenu();
+    rebuildVariableMenu(derivedRows);
     updateRangeModeAvailability();
 
     // Switch the stacked page to match the dataset dimension and, for 3-D,
@@ -131,7 +134,13 @@ bool MainWindow::addUnavailableFieldItem(
 std::vector<MainWindow::DerivedFieldRow> MainWindow::derivedFieldRows() const
 {
     std::vector<DerivedFieldRow> rows;
-    if (!m_dataset) {
+    // Nothing at all where no definition could ever apply: a remote session
+    // reports every field as stored, so each one would list as "unavailable
+    // for this dataset" beside an editor saying derived fields need a local
+    // one -- two explanations of the same fact, and clutter that cannot
+    // become usable while this session is open.
+    if (!m_dataset || !m_dataset->supportsDerivedFields()
+        || m_dataset->metadata().isFab) {
         return rows;
     }
     const auto& fields = m_dataset->metadata().fields;
@@ -206,7 +215,7 @@ void MainWindow::selectFieldItem(int index)
     m_fieldSelector->setCurrentIndex(selected);
 }
 
-void MainWindow::populateFieldSelector()
+void MainWindow::populateFieldSelector(const std::vector<DerivedFieldRow>& rows)
 {
     m_fieldSelector->clear();
     if (!m_dataset) {
@@ -219,7 +228,6 @@ void MainWindow::populateFieldSelector()
             static_cast<unsigned int>(field));
     }
 
-    const auto rows = derivedFieldRows();
     if (rows.empty()) {
         return;
     }
@@ -1781,6 +1789,14 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     }
     const auto cache = m_dataset->cacheMetrics();
     m_diagnosticsModel->setCacheMetrics(cache);
+    // As the open path does: this window has no dataset while it opens a
+    // sequence, so a definition committed in another window meanwhile reached
+    // every window but this one, and this frame carries the older list.
+    // Mid-playback the reload stands aside and setPlaybackMode picks it up.
+    if (m_frameSpecRevision != m_derivedFields->storeRevision()
+        && m_derivedFields->available()) {
+        reloadCurrentDataset();
+    }
     validateVectorMode();
     // Frames need not share a domain, and the clamped scale report is computed
     // from one. A scale picked on an earlier frame otherwise kept that frame's
@@ -1808,10 +1824,11 @@ void MainWindow::configureSequenceControls(
     const auto previousLevel = m_controlsReady
         && m_levelSelector->currentIndex() >= 0
             ? m_levelSelector->currentData().toInt() : -1;
+    const auto derivedRows = derivedFieldRows();
     {
         const QSignalBlocker fieldBlocker(m_fieldSelector);
         const QSignalBlocker levelBlocker(m_levelSelector);
-        populateFieldSelector();
+        populateFieldSelector(derivedRows);
         // The field this frame was rendered with, not the position the last
         // frame's combo happened to be at: the two agree only while every
         // frame lists the same fields in the same order, and a definition one
@@ -1869,7 +1886,7 @@ void MainWindow::configureSequenceControls(
 
     enableDatasetControls(metadata);
     m_exportAnimationAction->setEnabled(true);
-    rebuildVariableMenu();
+    rebuildVariableMenu(derivedRows);
     ensureVectorFieldDefaults();
     updateRangeModeAvailability();
 }
@@ -2024,6 +2041,14 @@ void MainWindow::setPlaybackMode(PlaybackMode mode)
         m_playbackTimer->stop();
     } else {
         m_playbackTimer->start(m_animationPanel->frameDelayMs());
+    }
+    // Playback is why the reload stood aside: the next frame reads the list
+    // for itself, and stopping means there is no next frame. What is on
+    // screen was rendered against the list as it was, so it is reloaded here
+    // rather than left computing an expression the editor has replaced.
+    if (wasSequence && mode != PlaybackMode::Sequence
+        && m_frameSpecRevision != m_derivedFields->storeRevision()) {
+        reloadCurrentDataset();
     }
     // Every frame of a sequence renders the volume as a draft, so what is
     // standing in the window when playback stops is a half-size one. Ask for

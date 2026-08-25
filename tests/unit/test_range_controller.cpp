@@ -361,6 +361,17 @@ int main(int argc, char* argv[])
         require(controller.selection().userRange
                 != std::pair{1.0, 2.0},
             "a range was filed under the empty name and handed back");
+
+        // The same rule in the writer a restored spec goes through, which
+        // commits whatever trackedField() says.
+        selectMode(*widgets.mode, RangeMode::User);
+        widgets.minimum->setValue(3.0);
+        widgets.maximum->setValue(4.0);
+        controller.commitFieldRange(QString());
+        controller.switchField(QStringLiteral("temperature"));
+        controller.switchField(QString());
+        require(controller.selection().userRange != std::pair{3.0, 4.0},
+            "commitFieldRange filed a range under the empty name");
     }
 
     std::cout << "range controller tests passed\n";

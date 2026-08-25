@@ -94,6 +94,9 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     auto* buttons = new QDialogButtonBox(this);
     m_apply = buttons->addButton(QDialogButtonBox::Apply);
     m_apply->setObjectName(QStringLiteral("applyExpressionsButton"));
+    // Left to the button box, whose rejected() this dialog already receives
+    // as its parent: wiring clicked() as well would run reject() twice and
+    // emit finished() twice for one close.
     auto* close = buttons->addButton(QDialogButtonBox::Close);
     close->setObjectName(QStringLiteral("closeExpressionsButton"));
 
@@ -159,7 +162,6 @@ ExpressionEditorDialog::ExpressionEditorDialog(
         clearError();
         emit applyRequested();
     });
-    connect(close, &QPushButton::clicked, this, &QDialog::reject);
 
     rebuildList(m_draft.empty() ? std::nullopt : std::optional<std::size_t>{0});
     resize(720, 420);

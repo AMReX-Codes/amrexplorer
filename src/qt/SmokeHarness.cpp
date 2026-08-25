@@ -4,7 +4,6 @@
 
 #include <QString>
 
-
 #include <amrexplorer/remote/Connection.hpp>
 #include <amrexplorer/remote/Server.hpp>
 

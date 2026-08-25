@@ -268,9 +268,17 @@ BlockReadResult PlotfileDataset::readDerivedBlock(const BlockRequest& request,
     // by a claimed count. A box array claiming 10^10 cells is an 80 GB request
     // otherwise. The budget is the bound the block would have been held to a
     // moment later anyway, when it was offered to the cache, so the failure is
-    // one callers already handle -- and passing it is what makes the narrowing
-    // below safe on any width of size_t.
+    // one callers already handle.
     const auto points = fabPointCount(derived->box, metadata.dimension);
+    // The budget does not bound this: it is a uint64 read from the
+    // environment and clamped to nothing, so where size_t is narrower than it
+    // a budget large enough leaves points past what the cast below can hold,
+    // and the block would then advertise a box its payload does not fill. A
+    // no-op the compiler folds away wherever size_t is 64 bits, which is every
+    // target we build -- and the whole guard where it is not.
+    if (points > std::numeric_limits<std::size_t>::max()) {
+        throw BlockReadError("derived block exceeds addressable memory");
+    }
     constexpr std::uint64_t blockBytes = sizeof(FabBlock);
     if (points
         > (std::numeric_limits<std::uint64_t>::max() - blockBytes)

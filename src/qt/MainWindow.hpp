@@ -144,11 +144,13 @@ public:
     }
     // Runs on the GUI thread just after an initial-slice load is launched --
     // the only point at which a test can change something while one is in
-    // flight, since the completion arrives as a queued signal.
-    void setInitialSliceLaunchedHookForTest(std::function<void()> hook)
-    {
-        m_initialSliceLaunchedForTest = std::move(hook);
-    }
+    // flight, since the completion arrives as a queued signal. Defined in
+    // MainWindowTestAccess.cpp, as every accessor that touches a member the
+    // release build does not have is: the body cannot be inline here, where
+    // AMREXPLORER_QT_TEST_ACCESS is not necessarily on.
+    void setInitialSliceLaunchedHookForTest(std::function<void()> hook);
+    // The sequence frame waiting in the prefetch slot, if any.
+    [[nodiscard]] std::optional<int> prefetchedSequenceFrameForTest() const;
     // The slot an idle frame-slider press-and-release lands in, which must not
     // restart a frame that is already on screen.
     void requestSequenceFrameForTest(int index) { goToSequenceFrame(index); }
@@ -570,25 +572,55 @@ private:
     // which a reload can change (a derived field appears or leaves) without
     // going through the open path that first filled it.
     void refreshMetadataDisplay();
+    // Fills the field selector from the open dataset: the stored fields, then
+    // a separator, then the derived ones (see derivedFieldRows). Shared by the
+    // two configure paths, which populated it identically. Only the field rows
+    // carry a field id as item data, so lookups stay findData-based and
+    // nothing that reads item data can take the separator -- or a definition
+    // this dataset could not install -- for a field.
+    void populateFieldSelector();
+    // Selects a field entry: `index` is where to start looking, and the
+    // selection comes to rest on the nearest row that is actually a field.
+    void selectFieldItem(int index);
+    // One row of the derived part of a field list.
+    struct DerivedFieldRow {
+        QString name;
+        // The id this dataset installed the definition under; nullopt when it
+        // could not, which is what the row being shown greyed out means.
+        std::optional<std::uint32_t> field;
+        // Rich text, so the expression survives whatever the user wrote:
+        // Qt reads a tooltip as markup as soon as it might be one, and only
+        // some of the escapes it needs make it decide that.
+        QString tooltip;
+    };
+    // The session's definitions as rows to list, in the order they were
+    // written. The field selector and the Variable menu are the same list
+    // shown twice, and the comment saying so kept them in step by hand.
+    [[nodiscard]] std::vector<DerivedFieldRow> derivedFieldRows() const;
+    // Adds a listed-but-unchoosable row to the field selector. False when the
+    // combo's model is not one whose item flags can be set, in which case no
+    // row is added at all: a row that looks selectable but carries no field id
+    // is read as field 0 by everything downstream.
+    [[nodiscard]] bool addUnavailableFieldItem(
+        const QString& name, const QString& tooltip);
+    // An expression for a tooltip: one line whatever its layout, and escaped.
+    [[nodiscard]] static QString escapedExpression(
+        const std::string& expression);
+    // Escaped text as a tooltip Qt is certain to render as rich text. Without
+    // the wrapper, an expression holding `<` decides it and one holding only
+    // `&` does not, so the escapes show up as themselves.
+    [[nodiscard]] static QString richTooltip(const QString& escaped);
     // The vector-glyph selections travel by name for the same reason the
     // scalar one does: an id means something only in the field list it came
     // from. Captured before a load swaps the dataset, resolved again after.
-    // Fills the field selector from the open dataset: the stored fields, then
-    // a separator, then the derived ones, each carrying its expression as a
-    // tooltip. Shared by the two configure paths, which populated it
-    // identically. Every item carries its field id as item data, so lookups
-    // stay findData-based and the separator (which carries none) cannot be
-    // mistaken for a field.
-    void populateFieldSelector();
-    // Selects a field entry, stepping past the separator if `index` lands on
-    // it and falling back to the first entry when it is out of range.
-    void selectFieldItem(int index);
-    // Greys a field-selector row, for a definition this dataset cannot
-    // provide: shown, but not something to choose.
-    void setFieldItemEnabled(int index, bool enabled);
-    // An expression as a tooltip: one line, whatever its layout.
-    [[nodiscard]] static QString expressionTooltip(
-        const std::string& expression);
+    // Whether a load built from the window's state as it stands can install
+    // derived fields. Deliberately not asked of m_dataset: a sequence builds
+    // its first spec while the *outgoing* dataset is still installed (see
+    // prepareSequence), so frame 0 would load without the definitions and
+    // frame 1 would make them appear. A prepared session cannot take them
+    // either, but that is a property of the load, not of the window, so
+    // requestInitialSlice asks it there.
+    [[nodiscard]] bool derivedFieldsReachNextLoad() const;
     [[nodiscard]] std::array<std::string, 3> vectorFieldNames() const;
     void restoreVectorFields(const std::array<std::string, 3>& names);
     void syncMenuChecks();

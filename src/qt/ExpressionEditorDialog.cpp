@@ -180,6 +180,11 @@ void ExpressionEditorDialog::setCommitted(
 {
     setDraft(std::move(definitions), select);
     m_committed = m_draft;
+    // The draft and the shared list agree again, which is the only thing that
+    // ends the conflict the notice is about -- whether that came of adopting
+    // the change or of committing over it.
+    m_notice->clear();
+    m_notice->setVisible(false);
 }
 
 void ExpressionEditorDialog::showError(
@@ -206,7 +211,6 @@ void ExpressionEditorDialog::showApplied(std::size_t count)
 
 void ExpressionEditorDialog::showListChangedElsewhere()
 {
-    clearError();
     m_notice->setText(
         tr("The derived fields were changed in another window. The edits here "
            "are unapplied and have been kept; Apply replaces the shared list "
@@ -216,12 +220,15 @@ void ExpressionEditorDialog::showListChangedElsewhere()
 
 void ExpressionEditorDialog::clearError()
 {
+    // Not the notice: a peer's commit is a standing conflict, not a message
+    // about the last thing done here. Selecting another row, adding a
+    // definition or pressing Apply all come through here, and any of them
+    // taking the warning away would leave a draft that still overwrites the
+    // shared list with nothing on screen saying so. setCommitted ends it.
     m_error->clear();
     m_error->setVisible(false);
     m_applied->clear();
     m_applied->setVisible(false);
-    m_notice->clear();
-    m_notice->setVisible(false);
 }
 
 void ExpressionEditorDialog::rebuildList(std::optional<std::size_t> select)

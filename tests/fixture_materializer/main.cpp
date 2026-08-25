@@ -281,7 +281,7 @@ void writeHeaderWithoutStatistics(const std::filesystem::path& path,
 
 int main(int argc, char* argv[])
 {
-    require(argc >= 3 && argc <= 10,
+    require(argc >= 3 && argc <= 12,
         "usage: fixture_materializer <sourceFixtureDir> <destDir> "
         "[newTime] [--no-statistics] [--non-finite] [--scale <factor>] "
         "[--domain-upper-x <value>] [--drop-field <name>]");

@@ -33,14 +33,17 @@ MainWindow::MainWindow(QWidget* parent)
     m_derivedFields = new DerivedFieldController(
         DerivedFieldController::Hooks{
             .available = [this] {
-                // Not for a standalone FAB, drilled out of a MultiFab or
-                // opened straight from a file: applying reopens m_datasetPath,
-                // and what that entry describes -- a synthesised metadata, or
-                // one record of a multi-record file -- is not what re-reading
-                // the path produces.
+                // Two questions, and both have to hold: whether the open
+                // session can take derived fields, and whether a load built
+                // now would carry them (derivedFieldsReachNextLoad). Not for a
+                // standalone FAB, drilled out of a MultiFab or opened straight
+                // from a file: applying reopens m_datasetPath, and what that
+                // entry describes -- a synthesised metadata, or one record of
+                // a multi-record file -- is not what re-reading the path
+                // produces.
                 return m_dataset && m_dataset->supportsDerivedFields()
                     && !m_dataset->metadata().isFab
-                    && !m_fabNavigator->fabMode();
+                    && derivedFieldsReachNextLoad();
             },
             .reload = [this] { reloadCurrentDataset(); },
             .chooseFile =
@@ -289,6 +292,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_metadataDock = new QDockWidget(tr("Dataset Metadata"), this);
     m_metadataTree = new QTreeWidget(m_metadataDock);
+    m_metadataTree->setObjectName(QStringLiteral("metadataTree"));
     m_metadataTree->setColumnCount(2);
     m_metadataTree->setHeaderLabels({tr("Property"), tr("Value")});
     m_metadataTree->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
@@ -1395,6 +1399,9 @@ void MainWindow::rebuildVariableMenu()
     const auto addField = [this, currentField](
                               const QString& name, std::size_t field) {
         auto* action = m_variableMenu->addAction(name);
+        // Returned rather than looked up again: QMenu::actions() copies the
+        // whole list, and "the one just added is last" stops being true the
+        // moment addField grows a separator or a submenu.
         action->setCheckable(true);
         action->setActionGroup(m_variableGroup);
         action->setChecked(static_cast<std::uint32_t>(field) == currentField);
@@ -1406,46 +1413,24 @@ void MainWindow::rebuildVariableMenu()
                 m_fieldSelector->setCurrentIndex(index);
             }
         });
+        return action;
     };
     for (std::size_t field = 0; field < stored; ++field) {
         addField(QString::fromStdString(metadata.fields[field].name), field);
     }
 
-    // The same list as the field selector, dimmed the same way: see
-    // populateFieldSelector.
-    const auto& definitions = m_derivedFields->definitions();
-    if (!definitions.empty()) {
+    // The same rows as the field selector, from the same place, dimmed the
+    // same way (derivedFieldRows).
+    const auto rows = derivedFieldRows();
+    if (!rows.empty()) {
         m_variableMenu->addSeparator();
     }
-    const auto skipped = m_dataset->skippedDerivedFields();
-    for (const auto& definition : definitions) {
-        const auto name = QString::fromStdString(definition.name);
-        const auto installed = std::find_if(
-            metadata.fields.begin() + static_cast<std::ptrdiff_t>(stored),
-            metadata.fields.end(),
-            [&definition](const FieldMetadata& field) {
-                return field.name == definition.name;
-            });
-        if (installed != metadata.fields.end()) {
-            addField(name, static_cast<std::size_t>(
-                std::distance(metadata.fields.begin(), installed)));
-            m_variableMenu->actions().back()->setToolTip(
-                expressionTooltip(definition.expression));
-            continue;
-        }
-        auto* action = m_variableMenu->addAction(name);
-        action->setEnabled(false);
-        const auto reason = std::find_if(skipped.begin(), skipped.end(),
-            [&definition](const DerivedFieldSkip& entry) {
-                return entry.name == definition.name;
-            });
-        action->setToolTip(reason != skipped.end()
-                ? tr("%1 -- unavailable here: %2")
-                      .arg(expressionTooltip(definition.expression),
-                          QString::fromStdString(reason->reason)
-                              .toHtmlEscaped())
-                : tr("%1 -- unavailable for this dataset")
-                      .arg(expressionTooltip(definition.expression)));
+    for (const auto& row : rows) {
+        auto* action = row.field
+            ? addField(row.name, static_cast<std::size_t>(*row.field))
+            : m_variableMenu->addAction(row.name);
+        action->setEnabled(row.field.has_value());
+        action->setToolTip(row.tooltip);
     }
 
     // Re-added after every rebuild: clear() above only *removes* it, because
@@ -1464,10 +1449,11 @@ void MainWindow::syncVariableMenu()
         ? m_fieldSelector->currentData().toUInt() : 0;
     // Only the field entries, which are the ones in the group: the separator
     // and the Expression Editor action follow them.
-    const auto actions = m_variableGroup->actions();
-    for (int i = 0; i < actions.size(); ++i) {
-        actions[i]->setChecked(
-            static_cast<std::uint32_t>(i) == currentField);
+    // By the id each action carries, not by its position: the two agree only
+    // while every field in the list is in the group, and a definition the
+    // open session could not install is listed without being one of them.
+    for (auto* action : m_variableGroup->actions()) {
+        action->setChecked(action->data().toUInt() == currentField);
     }
 }
 
@@ -1538,11 +1524,16 @@ void MainWindow::reloadCurrentDataset()
     if (m_playbackMode == PlaybackMode::Sequence) {
         // Mid-playback: reloading here would restart the frame under the user,
         // and every frame load reads the list for itself (buildFrameSpec), so
-        // the next frame picks the change up on its own. A plane sweep is not
-        // that -- it moves the slice position on the session already open and
-        // never reopens it -- so skipping the reload there would leave the
+        // the next frame picks the change up on its own -- but only if it is
+        // actually loaded. The frame after this one may already be prefetched,
+        // rendered against the list as it was, and goToFrame publishes such a
+        // frame instead of loading it; dropping it is what makes "the next
+        // frame reads the list" true. A plane sweep is not this case at all --
+        // it moves the slice position on the session already open and never
+        // reopens it -- so skipping the reload there would leave the
         // definition uninstalled for good, with the editor reporting that it
         // had been applied.
+        m_sequenceController->invalidatePrefetch();
         return;
     }
     if (m_sequenceController->hasSequence()) {
@@ -1555,9 +1546,10 @@ void MainWindow::reloadCurrentDataset()
     // Not openDataset: that ends the sequence, drops the zoom and closes the
     // line-plot, dataset and volume windows. This is the same reload a
     // sequence frame switch performs, on the frame already shown.
+    // No m_initialStopSource reset here: requestInitialSlice stops and
+    // replaces it on the way in, and the token the worker is given comes from
+    // that one.
     const auto generation = ++m_generation;
-    m_initialStopSource.request_stop();
-    m_initialStopSource = StopSource{};
     for (auto* state : allViewStates()) {
         state->stopSource.request_stop();
         ++state->sliceGeneration;

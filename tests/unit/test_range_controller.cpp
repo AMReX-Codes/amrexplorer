@@ -333,6 +333,36 @@ int main(int argc, char* argv[])
             "the field's own range did not come back with its name");
     }
 
+    // The empty name is not a field, so nothing may be filed under it: the
+    // memory is keyed by name now, and an unset name is what a controller has
+    // before a field is tracked.
+    {
+        QToolBar toolbar;
+        Observed observed;
+        RangeController controller;
+        observe(controller, observed);
+        controller.createToolbarWidgets(&toolbar);
+        controller.setControlsReady(true);
+        const auto widgets = widgetsOf(toolbar);
+        require(controller.trackedField().isEmpty(),
+            "a fresh controller already tracks a field");
+
+        // A switch away from nothing must not snapshot the widgets under the
+        // empty name.
+        selectMode(*widgets.mode, RangeMode::User);
+        widgets.minimum->setValue(1.0);
+        widgets.maximum->setValue(2.0);
+        controller.switchField(QStringLiteral("density"));
+
+        selectMode(*widgets.mode, RangeMode::User);
+        widgets.minimum->setValue(7.0);
+        widgets.maximum->setValue(8.0);
+        controller.switchField(QString());
+        require(controller.selection().userRange
+                != std::pair{1.0, 2.0},
+            "a range was filed under the empty name and handed back");
+    }
+
     std::cout << "range controller tests passed\n";
     return 0;
 }

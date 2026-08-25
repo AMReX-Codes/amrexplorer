@@ -380,6 +380,20 @@ int main(int argc, char** argv)
         require(notice->isVisible(),
             "the editor was not told the shared list had moved");
 
+        // A standing conflict, not a message about the last thing done here:
+        // adding a definition (or selecting another row, or a refused Apply)
+        // goes through the same clear as an error would, and must not take
+        // the warning away while the draft still overwrites the shared list.
+        auto* add =
+            peer->findChild<QPushButton*>(QStringLiteral("newExpressionButton"));
+        add->click();
+        require(notice->isVisible(),
+            "adding a definition cleared the peer-change notice");
+        peer->findChild<QPushButton*>(QStringLiteral("deleteExpressionButton"))
+            ->click();
+        require(notice->isVisible(),
+            "deleting a definition cleared the peer-change notice");
+
         // The kept edits are still the ones Apply commits, and committing
         // them ends the notice rather than leaving it standing.
         peer->findChild<QPushButton*>(

@@ -1017,16 +1017,17 @@ void MainWindow::requestInitialSlice(
     // file range (falling back to Visible when metadata statistics are
     // unavailable), linear scale, whole domain, midpoint positions.
     FrameSliceSpec spec = initialSpec.value_or(FrameSliceSpec{});
-    // Only where there is no spec to have decided already: an open with no
-    // spec has nothing else to carry the list. A spec built by buildFrameSpec
-    // has its own rule and must not be second-guessed here -- two rules for
-    // one field is how they drift.
     if (!initialSpec) {
-        spec.derivedFields = preparedSession
+        // An open with no spec has nothing else to carry the list; one built
+        // by buildFrameSpec has decided already and must not be
+        // second-guessed here, since two rules for one field is how they
+        // drift. A prepared session's field list is fixed before this window
+        // sees it, which is a property of the load rather than of the window,
+        // so it is asked here and the rest through the shared predicate.
+        spec.derivedFields
+            = preparedSession || !derivedFieldsReachNextLoad()
             ? std::vector<DerivedFieldDefinition>{}
             : m_derivedFields->definitions();
-    }
-    if (!initialSpec) {
         spec.palette = m_paletteController->palette();
         spec.displayMode = m_displayMode;
         spec.includeGridBoxes = m_boxesAction->isChecked();
@@ -1105,11 +1106,26 @@ void MainWindow::requestInitialSlice(
                     // the just-restored vector fields against it, and against
                     // the outgoing list an index that has gone out of range
                     // still looks valid. The sequence path shows the metadata
-                    // first for the same reason. The dock was filled from the
-                    // file's own metadata before this session existed, so it
-                    // lists neither the derived fields the session installed
-                    // nor, after a reload, the ones that have gone.
-                    refreshMetadataDisplay();
+                    // first for the same reason.
+                    //
+                    // Only when the session's fields are not the ones already
+                    // listed: the open path filled the dock from the file's
+                    // own metadata a moment ago, and rebuilding it costs a
+                    // copy of every level's box list and a tree item per box.
+                    // What it can miss is the derived fields the session
+                    // installed, and, after a reload, the ones that have gone.
+                    const auto& sessionFields = m_dataset->metadata().fields;
+                    const auto listed = m_openMetadata
+                        && std::equal(m_openMetadata->fields.begin(),
+                            m_openMetadata->fields.end(),
+                            sessionFields.begin(), sessionFields.end(),
+                            [](const FieldMetadata& shown,
+                                const FieldMetadata& session) {
+                                return shown.name == session.name;
+                            });
+                    if (!listed) {
+                        refreshMetadataDisplay();
+                    }
                     configureSliceControls();
                     if (restoredSpec) {
                         const QSignalBlocker fieldBlocker(m_fieldSelector);

@@ -19,6 +19,7 @@
 #include <QStandardItemModel>
 #include <QStringList>
 #include <QTimer>
+#include <QTreeWidget>
 
 #include <filesystem>
 #include <memory>
@@ -363,6 +364,22 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
                     finish(10);
                     return;
                 }
+                // And the Dataset Metadata dock, which the open path filled
+                // from the file's own metadata before this session installed
+                // anything -- so it is refreshed exactly when the session's
+                // fields are not the ones already listed.
+                auto* metadataTree = window.findChild<QTreeWidget*>(
+                    QStringLiteral("metadataTree"));
+                if (metadataTree == nullptr
+                    || metadataTree
+                           ->findItems(QStringLiteral("product"),
+                               Qt::MatchExactly | Qt::MatchRecursive)
+                           .isEmpty()) {
+                    qCritical("the derived field did not reach the metadata "
+                              "dock");
+                    finish(18);
+                    return;
+                }
                 // A definition this dataset cannot satisfy is accepted and
                 // shown greyed out rather than refused: the list is shared
                 // with windows that may well be able to satisfy it.
@@ -415,9 +432,11 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
                     finish(14);
                     return;
                 }
-                // The tooltip folds the layout back onto one line.
+                // The tooltip folds the layout back onto one line, and is
+                // rich text so that whatever the user wrote survives the
+                // escaping Qt would otherwise show as itself.
                 if (selector->itemData(product, Qt::ToolTipRole).toString()
-                    != QStringLiteral("density * temperature")) {
+                    != QStringLiteral("<qt>density * temperature</qt>")) {
                     qCritical("the derived field carries no expression: %s",
                         qPrintable(selector
                                 ->itemData(product, Qt::ToolTipRole)
@@ -540,25 +559,25 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
 // is open must reload the frame on screen *and* leave the sequence navigable,
 // with the definition surviving the next frame switch. A reload that went
 // through the ordinary open path would end the sequence instead.
-void armSequenceChecks(amrvis::qt::MainWindow& window,
-    QApplication& application, QStringList afterStep)
+void armSequenceChecks(
+    amrvis::qt::MainWindow& window, QApplication& application)
 {
     auto phase = std::make_shared<int>(0);
     auto frames = std::make_shared<int>(0);
+    // Bounds the wait for a prefetch in phase 4.
+    auto ticks = std::make_shared<int>(0);
+    // Both frames list the same fields, so the frame stepped to lists what
+    // this one does; frames that disagree are armFrameIdentityChecks.
     const QStringList expected{QStringLiteral("density"),
         QStringLiteral("temperature"), QStringLiteral("product")};
-    // What the frame stepped to should list: the same again when the frames
-    // match, and only its own fields when it cannot satisfy the definition.
-    if (afterStep.isEmpty()) {
-        afterStep = expected;
-    }
     QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed,
         &application, [frames](int) { ++*frames; });
 
     auto* timer = new QTimer(&window);
     timer->setInterval(25);
     QObject::connect(timer, &QTimer::timeout, &application,
-        [&window, &application, phase, frames, timer, expected, afterStep] {
+        [&window, &application, phase, frames, ticks, timer, expected] {
+            ++*ticks;
             const auto finish = [&application, timer](int code) {
                 timer->stop();
                 application.exit(code);
@@ -616,7 +635,7 @@ void armSequenceChecks(amrvis::qt::MainWindow& window,
                     return;
                 }
                 const auto names = fieldNames(window);
-                if (names != afterStep) {
+                if (names != expected) {
                     qCritical("the stepped-to frame lists: %s",
                         qPrintable(names.join(QStringLiteral(", "))));
                     finish(10);
@@ -637,6 +656,51 @@ void armSequenceChecks(amrvis::qt::MainWindow& window,
                     finish(12);
                     return;
                 }
+                *ticks = 0;
+                *phase = 4;
+                return;
+            }
+            if (*phase == 4) {
+                // Playback is the case where the reload stands aside and lets
+                // the next frame read the list for itself -- which is only
+                // true of a frame that is actually loaded. The one already in
+                // the prefetch slot was rendered against the list as it was.
+                if (!window.sequencePlayingForTest()) {
+                    window.toggleSequencePlaybackForTest();
+                    if (!window.sequencePlayingForTest()) {
+                        qCritical("sequence playback did not start");
+                        finish(14);
+                        return;
+                    }
+                    return;
+                }
+                if (!window.prefetchedSequenceFrameForTest()) {
+                    if (*ticks > 200) {
+                        qCritical("no frame was ever prefetched");
+                        finish(15);
+                        return;
+                    }
+                    return;
+                }
+                auto* editor =
+                    window.findChild<amrvis::qt::ExpressionEditorDialog*>();
+                if (editor == nullptr
+                    || !appendDefinition(*editor, QStringLiteral("late"),
+                        QStringLiteral("temperature + 1"))
+                    || !clickApply(*editor) || errorShown(*editor)) {
+                    qCritical("the editor refused the definition mid-playback");
+                    finish(16);
+                    return;
+                }
+                // Synchronously: apply commits, the store tells this window,
+                // and the reload it asks for is what drops the prefetch.
+                if (window.prefetchedSequenceFrameForTest()) {
+                    qCritical("the frame prefetched before the change "
+                              "survived it");
+                    finish(17);
+                    return;
+                }
+                window.toggleSequencePlaybackForTest();
                 finish(0);
             }
         });
@@ -950,7 +1014,7 @@ Outcome dispatchDerivedSequence(Context& context)
     if (option == "--derived-field-frames-smoke-test") {
         armFrameIdentityChecks(context.window, context.application);
     } else {
-        armSequenceChecks(context.window, context.application, {});
+        armSequenceChecks(context.window, context.application);
     }
     QTimer::singleShot(0, &context.window,
         [&window = context.window, frames] { window.openSequence(frames); });

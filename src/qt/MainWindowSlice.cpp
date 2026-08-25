@@ -83,33 +83,95 @@ void MainWindow::configureSliceControls()
     ensureVectorFieldDefaults();
 }
 
-QString MainWindow::expressionTooltip(const std::string& expression)
+QString MainWindow::escapedExpression(const std::string& expression)
 {
     // One line: an expression may be laid out over several, and a tooltip
     // showing the breaks would be as tall as the editor it was typed in.
-    // simplified() folds every run of whitespace into a single space.
-    //
-    // Escaped, because the expression is the user's own bytes and Qt reads a
-    // tooltip as rich text as soon as it might be one: ${a<b} would otherwise
-    // be taken for markup and shown with a piece missing.
+    // simplified() folds every run of whitespace into a single space. Escaped
+    // because it is the user's own bytes; richTooltip is what makes the
+    // escaping show through as the characters they stand for.
     return QString::fromStdString(expression).simplified().toHtmlEscaped();
 }
 
-void MainWindow::setFieldItemEnabled(int index, bool enabled)
+QString MainWindow::richTooltip(const QString& escaped)
+{
+    // Qt renders a tooltip as rich text only when it thinks it might be some:
+    // `&lt;` decides it, `&amp;` on its own does not, so escaped text is shown
+    // either as the user wrote it or with the escapes visible, depending on
+    // which characters they used. The wrapper settles it for every string.
+    return QStringLiteral("<qt>%1</qt>").arg(escaped);
+}
+
+bool MainWindow::addUnavailableFieldItem(
+    const QString& name, const QString& tooltip)
 {
     // Through the model, because a combo box has no per-item enable of its
     // own: an item that is not selectable is skipped by the keyboard and drawn
-    // greyed by the style.
+    // greyed by the style. Without one there is no way to add this row safely,
+    // so it is not added -- leaving a definition off a list says less than
+    // showing it greyed out, but far less than offering a broken selection.
     auto* model = qobject_cast<QStandardItemModel*>(m_fieldSelector->model());
     if (model == nullptr) {
-        return;
+        return false;
     }
-    if (auto* item = model->item(index); item != nullptr) {
-        item->setFlags(enabled
-                ? item->flags() | Qt::ItemIsSelectable | Qt::ItemIsEnabled
-                : item->flags()
-                    & ~(Qt::ItemIsSelectable | Qt::ItemIsEnabled));
+    const auto row = m_fieldSelector->count();
+    // No field id: nothing that reads item data can mistake it for one.
+    m_fieldSelector->addItem(name);
+    m_fieldSelector->setItemData(row, tooltip, Qt::ToolTipRole);
+    auto* item = model->item(row);
+    if (item == nullptr) {
+        m_fieldSelector->removeItem(row);
+        return false;
     }
+    item->setFlags(
+        item->flags() & ~(Qt::ItemIsSelectable | Qt::ItemIsEnabled));
+    return true;
+}
+
+std::vector<MainWindow::DerivedFieldRow> MainWindow::derivedFieldRows() const
+{
+    std::vector<DerivedFieldRow> rows;
+    if (!m_dataset) {
+        return rows;
+    }
+    const auto& fields = m_dataset->metadata().fields;
+    const auto stored = std::min(m_dataset->storedFieldCount(), fields.size());
+    const auto& definitions = m_derivedFields->definitions();
+    const auto skipped = m_dataset->skippedDerivedFields();
+    rows.reserve(definitions.size());
+    for (const auto& definition : definitions) {
+        DerivedFieldRow row;
+        row.name = QString::fromStdString(definition.name);
+        const auto expression = escapedExpression(definition.expression);
+        const auto installed = std::find_if(
+            fields.begin() + static_cast<std::ptrdiff_t>(stored), fields.end(),
+            [&definition](const FieldMetadata& field) {
+                return field.name == definition.name;
+            });
+        if (installed != fields.end()) {
+            row.field = static_cast<std::uint32_t>(
+                std::distance(fields.begin(), installed));
+            row.tooltip = richTooltip(expression);
+            rows.push_back(std::move(row));
+            continue;
+        }
+        // Not installed here, and saying why. The list is shared by every
+        // window, so a definition that means nothing here means something
+        // next door, and showing it as unavailable says so better than its
+        // absence does.
+        const auto reason = std::find_if(skipped.begin(), skipped.end(),
+            [&definition](const DerivedFieldSkip& entry) {
+                return entry.name == definition.name;
+            });
+        row.tooltip = richTooltip(reason != skipped.end()
+                ? tr("%1 -- unavailable here: %2")
+                      .arg(expression,
+                          QString::fromStdString(reason->reason)
+                              .toHtmlEscaped())
+                : tr("%1 -- unavailable for this dataset").arg(expression));
+        rows.push_back(std::move(row));
+    }
+    return rows;
 }
 
 void MainWindow::selectFieldItem(int index)
@@ -157,53 +219,32 @@ void MainWindow::populateFieldSelector()
             static_cast<unsigned int>(field));
     }
 
-    // Every definition the session carries, in the order it was written --
-    // including the ones this dataset cannot provide, which are listed greyed
-    // out rather than left out. The list is shared by every window, so a
-    // definition that means nothing here means something next door, and
-    // showing it as unavailable says so better than its absence does.
-    const auto& definitions = m_derivedFields->definitions();
-    if (definitions.empty()) {
+    const auto rows = derivedFieldRows();
+    if (rows.empty()) {
         return;
     }
     // The computed fields are a different kind of thing from the ones the
     // plotfile holds; the rule is worth showing rather than leaving to be
     // inferred from the order.
     m_fieldSelector->insertSeparator(m_fieldSelector->count());
-    const auto skipped = m_dataset->skippedDerivedFields();
-    for (const auto& definition : definitions) {
-        const auto name = QString::fromStdString(definition.name);
-        const auto installed = std::find_if(fields.begin() + static_cast<std::ptrdiff_t>(stored),
-            fields.end(), [&definition](const FieldMetadata& field) {
-                return field.name == definition.name;
-            });
-        const auto row = m_fieldSelector->count();
-        if (installed != fields.end()) {
-            m_fieldSelector->addItem(name,
-                static_cast<unsigned int>(
-                    std::distance(fields.begin(), installed)));
-            m_fieldSelector->setItemData(row,
-                expressionTooltip(definition.expression), Qt::ToolTipRole);
+    for (const auto& row : rows) {
+        if (!row.field) {
+            static_cast<void>(addUnavailableFieldItem(row.name, row.tooltip));
             continue;
         }
-        // Not installed here: shown, not selectable, and saying why. No field
-        // id either, so nothing that reads item data can mistake it for one.
-        m_fieldSelector->addItem(name);
-        const auto reason = std::find_if(skipped.begin(), skipped.end(),
-            [&definition](const DerivedFieldSkip& entry) {
-                return entry.name == definition.name;
-            });
-        m_fieldSelector->setItemData(row,
-            reason != skipped.end()
-                ? tr("%1 -- unavailable here: %2")
-                      .arg(expressionTooltip(definition.expression),
-                          QString::fromStdString(reason->reason)
-                              .toHtmlEscaped())
-                : tr("%1 -- unavailable for this dataset")
-                      .arg(expressionTooltip(definition.expression)),
-            Qt::ToolTipRole);
-        setFieldItemEnabled(row, false);
+        const auto index = m_fieldSelector->count();
+        m_fieldSelector->addItem(
+            row.name, static_cast<unsigned int>(*row.field));
+        m_fieldSelector->setItemData(index, row.tooltip, Qt::ToolTipRole);
     }
+}
+
+bool MainWindow::derivedFieldsReachNextLoad() const
+{
+    // A remote sequence fixes its field lists on the server, and a FAB
+    // drilled out of a MultiFab is what the editor is unavailable over -- for
+    // the same reason the reload cannot rebuild one.
+    return !m_remoteSequence && !m_fabNavigator->fabMode();
 }
 
 std::array<std::string, 3> MainWindow::vectorFieldNames() const
@@ -1864,16 +1905,10 @@ FrameSliceSpec MainWindow::buildFrameSpec()
 {
     FrameSliceSpec spec;
     // A viewer-wide setting, so it travels with every spec except where the
-    // load it is built for cannot install it: a remote sequence, whose
-    // sessions fix their field lists on the server, and a FAB drilled out of a
-    // MultiFab, where the editor is unavailable for the same reason the reload
-    // cannot rebuild one. Deliberately not asked of m_dataset: a sequence
-    // builds its first spec while the *outgoing* dataset is still installed
-    // (see prepareSequence), so frame 0 would load without the definitions and
-    // frame 1 would make them appear.
-    spec.derivedFields = m_remoteSequence || m_fabNavigator->fabMode()
-        ? std::vector<DerivedFieldDefinition>{}
-        : m_derivedFields->definitions();
+    // load it is built for cannot install it (derivedFieldsReachNextLoad).
+    spec.derivedFields = derivedFieldsReachNextLoad()
+        ? m_derivedFields->definitions()
+        : std::vector<DerivedFieldDefinition>{};
     spec.displayMode = m_displayMode;
     spec.palette = m_paletteController->palette();
     spec.contourCount = m_contourCount;

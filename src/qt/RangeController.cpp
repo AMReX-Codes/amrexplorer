@@ -151,7 +151,13 @@ void RangeController::switchField(const QString& field)
     if (field == m_trackedField) {
         return;
     }
-    commitFieldRange(m_trackedField);
+    // Nothing tracked yet -- before the first setTrackedField, or where a
+    // selection could not come to rest on a field -- so there is no field
+    // whose range this is. Committing would file the widgets' current state
+    // under the empty name and hand it back to whatever asked for it next.
+    if (!m_trackedField.isEmpty()) {
+        commitFieldRange(m_trackedField);
+    }
     m_trackedField = field;
     applyFieldRange(field);
 }

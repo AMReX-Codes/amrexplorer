@@ -2,6 +2,16 @@
 
 namespace amrvis::qt {
 
+void MainWindow::setInitialSliceLaunchedHookForTest(std::function<void()> hook)
+{
+    m_initialSliceLaunchedForTest = std::move(hook);
+}
+
+std::optional<int> MainWindow::prefetchedSequenceFrameForTest() const
+{
+    return m_sequenceController->prefetchedFrameForTest();
+}
+
 void MainWindow::requestVisibleSyncForTest()
 {
     syncVisibleRanges();

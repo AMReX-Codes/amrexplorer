@@ -60,6 +60,7 @@ struct DatasetMetadata;
 struct LineResult;
 namespace remote {
 class Connection;
+class RemoteDatasetSession;
 }
 enum class CompositionPolicy : std::uint8_t;
 }
@@ -150,6 +151,21 @@ public:
     // release build does not have is: the body cannot be inline here, where
     // AMREXPLORER_QT_TEST_ACCESS is not necessarily on.
     void setInitialSliceLaunchedHookForTest(std::function<void()> hook);
+    // Sends the next initial-slice completion down its failure arm, standing
+    // in for the reopen a server refuses or a connection that has gone. The
+    // one state a test cannot reach through the widgets, and the one the
+    // retry an unchanged Apply performs exists for.
+    void failNextInitialSliceForTest();
+    // Submits a slice for the active view the way an interaction does --
+    // synchronously, bumping the view's slice generation. Paired with the hook
+    // above it reproduces an interaction that lands while a reload is still
+    // replacing the session, which is the one ordering no arrival-side check
+    // can sort out on its own.
+    void requestActiveViewSliceForTest();
+    // Whether the raster on screen came from the session now installed. A
+    // reload leaves the outgoing session displayed while its replacement
+    // loads, so this is the invariant that says the two have converged.
+    [[nodiscard]] bool activeViewSliceMatchesSessionForTest() const;
     // The sequence frame waiting in the prefetch slot, if any.
     [[nodiscard]] std::optional<int> prefetchedSequenceFrameForTest() const;
     // The slot an idle frame-slider press-and-release lands in, which must not
@@ -515,6 +531,13 @@ private:
         std::uint32_t cachedVectorVField = 0;
         int cachedContourCount = 0;
         StopSource stopSource;
+        // The session epoch `plane` was produced under. A reload replaces the
+        // session while the outgoing one is still displayed, so this is what
+        // says whether the raster on screen belongs to the session now
+        // installed. Derived state rather than a debt flag on purpose: a
+        // pending re-slice can be discarded by the next reload clearing the
+        // debounce, and a comparison cannot be.
+        std::uint64_t planeSessionEpoch = 0;
         std::uint64_t sliceGeneration = 0;
         // Bumped every time `plane` (and its contour companions) is rewritten:
         // each showSlice apply and each dataset reset. The 3-D visible-range
@@ -576,7 +599,10 @@ private:
     // single dataset is reloaded straight through requestInitialSlice, whose
     // new generation both invalidates the in-flight work and gives the
     // replacement session a dataset id of its own.
-    void reloadCurrentDataset();
+    // Reopens the dataset on the list as it now stands. False when it stood
+    // aside without reloading -- mid-sequence playback, or nothing open --
+    // which is what reloadIfDefinitionsMoved's memo must not record as done.
+    bool reloadCurrentDataset();
     // The directory the last file dialog ended in, remembered across all of
     // them. The dialogs themselves stay separate -- one picks several
     // directories, one saves with a default suffix -- but this was copied into
@@ -621,6 +647,26 @@ private:
     // frame 1 would make them appear. A prepared session cannot take them
     // either, but that is a property of the load, not of the window, so
     // requestInitialSlice asks it there.
+    // Opens a remote session for one load and renders it. Shared by the
+    // sequence loader and the reload of a single remote dataset, so the
+    // connected() pre-check and -- the reason it exists -- the derived-field
+    // capability gate are written once. A peer that predates protocol 1.4 gets
+    // an open with no definitions rather than a refusal, so a session that
+    // cannot compute fields still shows the ones it stores.
+    // Opens a remote session for a load, sending only the definitions the peer
+    // can install. Not a refusal for an older peer: a list the user happens to
+    // have must not stop it from opening a plotfile, and the editor is greyed
+    // with the reason instead.
+    [[nodiscard]] static std::shared_ptr<remote::RemoteDatasetSession>
+    openRemoteSessionForLoad(
+        const std::shared_ptr<remote::Connection>& connection,
+        const std::string& remotePath,
+        const std::vector<DerivedFieldDefinition>& derivedFields,
+        StopToken cancellation);
+    [[nodiscard]] static InitialSliceResult loadRemoteFrame(
+        const std::shared_ptr<remote::Connection>& connection,
+        const std::string& remotePath, std::uint64_t connectionGeneration,
+        const FrameSliceSpec& spec, StopToken cancellation);
     [[nodiscard]] bool derivedFieldsReachNextLoad() const;
     // Whether the session on screen was opened with the list the editor now
     // holds. Asked of the session itself rather than inferred from when
@@ -791,7 +837,16 @@ private:
     // arrival carries -- at the 4096 output cap a ScalarPlane is around 117 MB
     // and the ImageBuffer around 67 MB -- and a const& forced this function to
     // deep-copy them again into the shared_ptr snapshots it publishes.
-    void showSlice(PlaneViewState& state, SliceDisplayResult display);
+    // sessionEpoch is the epoch the display was computed under, stamped onto
+    // the view. No default: every caller has to say which session produced
+    // what it is showing, which is the whole point of the stamp.
+    void showSlice(PlaneViewState& state, SliceDisplayResult display,
+        std::uint64_t sessionEpoch);
+    // Re-slices every current view whose raster came from a session that is no
+    // longer installed. Called wherever a load settles -- including when it
+    // fails, since a failed reload leaves the previous session installed and
+    // its own display untouched.
+    void resliceReplacedViews();
     void updateOverlay(PlaneViewState& state);
     void updateOverlays();
     void updateGridBoxes(PlaneViewState& state);
@@ -840,12 +895,29 @@ private:
     void scheduleSliceRequest(PlaneViewState& state, bool rasterDirty = true);
     void flushSliceRequests();
     void requestSlice(PlaneViewState& state, bool rasterDirty);
+    // How requestInitialSlice is to get its session: one that is already open,
+    // or a remote endpoint to reopen. Exactly one applies, which is why they
+    // travel together rather than as two parameters that must not both be set.
+    // Both isRemote() and responseBytes() are asked *before* the worker runs --
+    // they size the output rasters and arm the post-load resize coalescing --
+    // so the reopen case has to be able to answer them without a session.
+    struct SliceLoad {
+        // Already open: the initial remote open, which needed the session on
+        // the GUI thread for its metadata.
+        std::shared_ptr<DatasetSession> session;
+        // To be opened on the worker: the quiet reload of a remote dataset,
+        // which must not tear the window down the way a fresh open does.
+        std::optional<RemoteOpen> reopen;
+        [[nodiscard]] bool isRemote() const;
+        // The negotiated frame size, which bounds a remote raster.
+        [[nodiscard]] std::optional<std::uint32_t> responseBytes() const;
+    };
     void requestInitialSlice(const std::filesystem::path& path,
         std::uint64_t generation,
         std::optional<PlotfileMetadataResult> preparedMetadata = std::nullopt,
         std::filesystem::path dataRoot = {},
         std::optional<FrameSliceSpec> initialSpec = std::nullopt,
-        std::shared_ptr<DatasetSession> preparedSession = {});
+        SliceLoad load = {});
     // The scale the toolbar button and the View > Scale radio group report.
     // They are one state shown twice, so there is one setter: picking "4x" from
     // the toolbar used to leave the View menu unchecked, and neither reset when
@@ -965,12 +1037,47 @@ private:
     // Test-only: run just after an initial-slice load is launched; see
     // setInitialSliceLaunchedHookForTest.
     std::function<void()> m_initialSliceLaunchedForTest;
+    // Test-only: consumed by the next initial-slice completion, which then
+    // throws where a load that failed would have. See
+    // failNextInitialSliceForTest.
+    bool m_failNextInitialSliceForTest = false;
     // Test-only: superseded visible-range sync outcomes dropped by the
     // rerun guard. Sole writer is that drop, so the overlapping-sync test can
     // assert an exact count. The DiagnosticsModel's stale count carries the
     // same event for the user-facing diagnostics panel.
     std::uint64_t m_visibleSyncStaleSkips = 0;
 #endif
+    // Whether the connection a remote sequence was opened on can install
+    // derived fields. Captured there rather than asked of m_dataset, for the
+    // reason derivedFieldsReachNextLoad gives: frame 0's spec is built while
+    // the outgoing dataset is still installed.
+    bool m_remoteSequenceDerivedFields = false;
+    // Which session is installed. Bumped wherever m_dataset is replaced or
+    // cleared, and captured by a slice request at submission: an arrival whose
+    // stamp no longer matches was computed against a session that is gone, and
+    // the catalog, field list and colour bar on screen are the new one's.
+    //
+    // Note what this cannot do on its own. In the common ordering an
+    // interactive slice finishes *before* the reload installs, so its stamp
+    // still matches and it is rightly accepted -- it only goes stale a moment
+    // later. Acceptance is therefore only half the invariant; the other half is
+    // that a view whose display the reload skipped is re-sliced, so no view
+    // keeps a raster from a session that is no longer installed.
+    std::uint64_t m_sessionEpoch = 0;
+    // The list a reload has already been asked for, with the session epoch it
+    // was asked under. What bounds the reopens is no longer the memo itself:
+    // any install invalidates it, so the bound rests on no install ever leaving
+    // a mismatch. That holds because a session records the list it was asked
+    // for, and all three paths that filter the list before an open -- a pre-1.4
+    // connection, either !derivedFieldsReachNextLoad case, and a prepared
+    // session opened with the copied list -- make available() false, so this is
+    // never reached for them. The epoch is what keeps it from getting stuck: any
+    // install makes the memo stale by itself, so it cannot suppress a reload
+    // for a different dataset or one that a later session could satisfy. It is
+    // cleared outright when a reload stands aside or a load fails, neither of
+    // which installs anything.
+    std::optional<std::pair<std::vector<DerivedFieldDefinition>, std::uint64_t>>
+        m_reloadAskedFor;
     QTreeWidget* m_metadataTree = nullptr;
     QDockWidget* m_metadataDock = nullptr;
     QDockWidget* m_diagnosticsDock = nullptr;

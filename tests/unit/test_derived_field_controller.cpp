@@ -41,21 +41,48 @@ struct Fixture {
     // remote one) or for no dataset at all.
     bool datasetOpen = true;
     int reloads = 0;
+    // The list this window's session is showing. A reload installs whatever is
+    // committed, unless reloadFails stands in for the reopen a server refuses
+    // or a connection that has gone -- which leaves the list committed here
+    // and installed nowhere.
+    std::vector<DerivedFieldDefinition> installed;
+    bool reloadFails = false;
     // What the next chooseFile answers, and what it was asked for.
     QString chosenPath;
     std::optional<bool> lastChooseForSaving;
 
-    [[nodiscard]] DerivedFieldController::Hooks hooks()
+    [[nodiscard]] DerivedFieldController::Hooks hooks(
+        const DerivedFieldStore& store)
     {
         return DerivedFieldController::Hooks{
-            .available = [this] { return datasetOpen; },
-            .reload = [this] { ++reloads; },
+            .unavailableReason = [this]() -> QString {
+                return datasetOpen ? QString()
+                                   : QStringLiteral("no dataset here");
+            },
+            .reload = [this, &store] { reload(store); },
+            // As the host does: reopen only where the session is not already
+            // showing the list. That is what makes an unchanged Apply the
+            // retry for a reload that failed, and a no-op everywhere else.
+            .reloadIfMissing =
+                [this, &store] {
+                    if (installed != store.definitions()) {
+                        reload(store);
+                    }
+                },
             .chooseFile =
                 [this](QWidget*, bool forSaving) {
                     lastChooseForSaving = forSaving;
                     return chosenPath;
                 },
         };
+    }
+
+    void reload(const DerivedFieldStore& store)
+    {
+        ++reloads;
+        if (!reloadFails) {
+            installed = store.definitions();
+        }
     }
 };
 
@@ -72,7 +99,7 @@ int main(int argc, char** argv)
     {
         Fixture fixture;
         DerivedFieldStore store;
-        DerivedFieldController controller(fixture.hooks(), store);
+        DerivedFieldController controller(fixture.hooks(store), store);
 
         // A refusal changes nothing: not the committed list, and no reload.
         // What is refused is what is wrong whatever the data -- an expression
@@ -126,6 +153,35 @@ int main(int argc, char** argv)
             "clearing the list did not commit and reload");
     }
 
+    // A reload that fails leaves the list committed here and installed
+    // nowhere, and the store emits nothing for a list that has not moved -- so
+    // the Apply pressed again is the only thing left that can ask for it.
+    {
+        Fixture fixture;
+        DerivedFieldStore store;
+        DerivedFieldController controller(fixture.hooks(store), store);
+        const std::vector<DerivedFieldDefinition> list{{"twice", "2*density"}};
+
+        fixture.reloadFails = true;
+        require(!controller.apply(list).has_value(),
+            "a resolvable list was refused");
+        require(fixture.reloads == 1 && fixture.installed.empty(),
+            "a failed reload installed the list");
+
+        fixture.reloadFails = false;
+        require(!controller.apply(list).has_value(), "the retry was refused");
+        require(fixture.reloads == 2 && fixture.installed == list,
+            "an unchanged apply did not retry the reload that failed");
+
+        // And once it is installed, pressing Apply again asks for nothing:
+        // the ask goes to the one hook that drops it where the session
+        // already carries the list.
+        require(!controller.apply(list).has_value(),
+            "a redundant apply was refused");
+        require(fixture.reloads == 2,
+            "an unchanged apply reloaded a window already showing the list");
+    }
+
     // A list longer than a dataset can install is refused whole. Committing
     // it would install the first maximumDerivedFieldCount against every
     // dataset and skip the rest, so every window would list what it had
@@ -133,7 +189,7 @@ int main(int argc, char** argv)
     {
         Fixture fixture;
         DerivedFieldStore store;
-        DerivedFieldController controller(fixture.hooks(), store);
+        DerivedFieldController controller(fixture.hooks(store), store);
         std::vector<DerivedFieldDefinition> many;
         many.reserve(amrvis::maximumDerivedFieldCount + 1);
         for (std::size_t index = 0; index <= amrvis::maximumDerivedFieldCount;
@@ -156,7 +212,7 @@ int main(int argc, char** argv)
         Fixture fixture;
         fixture.datasetOpen = false;
         DerivedFieldStore store;
-        DerivedFieldController controller(fixture.hooks(), store);
+        DerivedFieldController controller(fixture.hooks(store), store);
         auto* parent = new QWidget;
         auto* action = controller.createAction(parent);
         require(action != nullptr && !action->isEnabled(),
@@ -279,7 +335,7 @@ int main(int argc, char** argv)
     {
         Fixture fixture;
         DerivedFieldStore store;
-        DerivedFieldController controller(fixture.hooks(), store);
+        DerivedFieldController controller(fixture.hooks(store), store);
         require(!controller.apply({{"speed", "density"}}).has_value(),
             "the starting list was refused");
 
@@ -393,8 +449,8 @@ int main(int argc, char** argv)
         Fixture first;
         Fixture second;
         DerivedFieldStore store;
-        DerivedFieldController one(first.hooks(), store);
-        DerivedFieldController two(second.hooks(), store);
+        DerivedFieldController one(first.hooks(store), store);
+        DerivedFieldController two(second.hooks(store), store);
         const std::vector<DerivedFieldDefinition> list{{"speed", "density"}};
         require(!one.apply(list).has_value(), "the list was refused");
         require(one.definitions() == list && two.definitions() == list,
@@ -420,8 +476,8 @@ int main(int argc, char** argv)
         Fixture first;
         Fixture second;
         DerivedFieldStore store;
-        DerivedFieldController one(first.hooks(), store);
-        DerivedFieldController two(second.hooks(), store);
+        DerivedFieldController one(first.hooks(store), store);
+        DerivedFieldController two(second.hooks(store), store);
 
         auto* parent = new QWidget;
         two.showEditor(parent);

@@ -153,7 +153,13 @@ std::vector<MainWindow::DerivedFieldRow> MainWindow::derivedFieldRows() const
             [&definition](const DerivedFieldSkip& entry) {
                 return entry.name == definition.name;
             });
-        row.tooltip = richTooltip(reason != skipped.end()
+        // An empty reason falls back to the wording that promises none: the
+        // decoder accepts one (an absent wire string decodes as empty), and
+        // "unavailable here: " with nothing after the colon tells the user a
+        // reason exists while showing it to them blank.
+        const auto haveReason
+            = reason != skipped.end() && !reason->reason.empty();
+        row.tooltip = richTooltip(haveReason
                 ? tr("%1 -- unavailable here: %2")
                       .arg(expression,
                           QString::fromStdString(reason->reason)
@@ -241,6 +247,20 @@ void MainWindow::reloadIfDefinitionsMoved()
         || openSessionHasCurrentDefinitions()) {
         return;
     }
+    // Once per list per session. This is asked on every frame a sequence
+    // displays, so without a memo a list the load cannot install would reopen
+    // the dataset on every event-loop turn until the session hit its dataset
+    // limit. Pairing the list with the session epoch is what keeps the memo
+    // from becoming a trap: installing anything at all makes it stale, so it
+    // can only ever suppress a retry that would be asking the same question of
+    // the same session. It also replaces the separate in-flight flag, which
+    // guarded a single event-loop turn rather than the reload.
+    if (m_reloadAskedFor
+        && m_reloadAskedFor->first == m_derivedFields->definitions()
+        && m_reloadAskedFor->second == m_sessionEpoch) {
+        return;
+    }
+    m_reloadAskedFor = {m_derivedFields->definitions(), m_sessionEpoch};
     // Not now: the frame path is called from inside the sequence controller's
     // own load completion, which sets m_inFlight and emits frameDisplayed
     // after this returns -- starting a load from here would have it clobber
@@ -250,16 +270,62 @@ void MainWindow::reloadIfDefinitionsMoved()
             || openSessionHasCurrentDefinitions()) {
             return;
         }
-        reloadCurrentDataset();
+        // Dropped again if the reload stood aside: mid-playback the frames
+        // carry the list themselves and setPlaybackMode asks once more when
+        // they stop, so recording a reload that never ran is what left the
+        // definition uninstalled with the editor reporting it applied.
+        if (!reloadCurrentDataset()) {
+            m_reloadAskedFor.reset();
+        }
     });
+}
+
+std::shared_ptr<remote::RemoteDatasetSession>
+MainWindow::openRemoteSessionForLoad(
+    const std::shared_ptr<remote::Connection>& connection,
+    const std::string& remotePath,
+    const std::vector<DerivedFieldDefinition>& derivedFields,
+    StopToken cancellation)
+{
+    return remote::RemoteDatasetSession::open(connection, remotePath,
+        initialCacheBudget(), cancellation,
+        connection && connection->supportsDerivedFields()
+            ? derivedFields
+            : std::vector<DerivedFieldDefinition>{});
+}
+
+InitialSliceResult MainWindow::loadRemoteFrame(
+    const std::shared_ptr<remote::Connection>& connection,
+    const std::string& remotePath, std::uint64_t connectionGeneration,
+    const FrameSliceSpec& spec, StopToken cancellation)
+{
+    // Foreground loads and prefetches share the session's connection, which
+    // multiplexes their requests. There is no reconnect: the connection lives
+    // as long as the ssh session, and a lost session is reported to the user
+    // rather than silently re-established -- said here, because "not
+    // connected" is the message a user can act on and a bare transact failure
+    // is not.
+    if (!connection || !connection->connected()) {
+        throw std::runtime_error("remote session is not connected: "
+            + (connection ? connection->disconnectReason()
+                          : std::string("no connection")));
+    }
+    auto session = openRemoteSessionForLoad(
+        connection, remotePath, spec.derivedFields, cancellation);
+    auto result = executeSessionFrameLoad(
+        std::move(session), spec, cancellation);
+    result.connectionGeneration = connectionGeneration;
+    return result;
 }
 
 bool MainWindow::derivedFieldsReachNextLoad() const
 {
-    // A remote sequence fixes its field lists on the server, and a FAB
-    // drilled out of a MultiFab is what the editor is unavailable over -- for
-    // the same reason the reload cannot rebuild one.
-    return !m_remoteSequence && !m_fabNavigator->fabMode();
+    // A remote sequence carries them only when the server it was opened on can
+    // install them (protocol 1.4); a FAB drilled out of a MultiFab is what the
+    // editor is unavailable over -- for the same reason the reload cannot
+    // rebuild one.
+    return (!m_remoteSequence || m_remoteSequenceDerivedFields)
+        && !m_fabNavigator->fabMode();
 }
 
 std::array<std::string, 3> MainWindow::vectorFieldNames() const
@@ -541,6 +607,10 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     state.stopSource = StopSource{};
     const auto cancellation = state.stopSource.get_token();
     const auto generation = m_generation;
+    // The session this request is about to be computed against. A reload leaves
+    // the outgoing one installed while its replacement loads, so this is what
+    // tells an arrival apart from the session that is current when it lands.
+    const auto sessionEpoch = m_sessionEpoch;
     const auto sliceGeneration = ++state.sliceGeneration;
     ++state.pendingRequests;
     m_diagnosticsModel->adjustActivity(1);
@@ -590,8 +660,8 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
 
     auto* watcher = new QFutureWatcher<SliceDisplayResult>(this);
     connect(watcher, &QFutureWatcher<SliceDisplayResult>::finished, this,
-        [this, watcher, dataset, generation, sliceGeneration, cancellation,
-         &state, rangeMode] {
+        [this, watcher, dataset, generation, sliceGeneration, sessionEpoch,
+         cancellation, &state, rangeMode] {
             --state.pendingRequests;
             m_diagnosticsModel->adjustActivity(-1);
             if (m_closing) {
@@ -603,8 +673,20 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                 // the future and copying out of it duplicates every plane in
                 // the arrival before showSlice has even seen it.
                 auto result = watcher->future().takeResult();
+                // The session too, by the epoch captured at submission
+                // rather than by comparing the pointer: `dataset == m_dataset`
+                // reads like a staleness test but is really a test of whether
+                // the reload's completion has run yet, since m_dataset is only
+                // swapped there. Both forms accept in the common ordering,
+                // where this slice finishes before the reload installs -- and
+                // it is right to, because that session is still the installed
+                // one. What makes the display consistent is the other half of
+                // the invariant: the reload re-slices the views whose display
+                // it skipped, so a raster stamped with a session that has since
+                // been replaced does not stay on screen.
                 if (generation == m_generation
-                    && sliceGeneration == state.sliceGeneration) {
+                    && sliceGeneration == state.sliceGeneration
+                    && sessionEpoch == m_sessionEpoch) {
                     // Cache the full-domain range whenever we get a non-zoomed
                     // Visible-range slice; reuse it for zoomed (subregion)
                     // slices so the color bar stays stable during pan and zoom.
@@ -643,7 +725,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     // than reading them back off a moved-from result.
                     const auto fallbackToLevel = result.cacheFallbackToLevel;
                     const auto fallbackFromLevel = result.cacheFallbackFromLevel;
-                    showSlice(state, std::move(result));
+                    showSlice(state, std::move(result), sessionEpoch);
                     // Cache the full-domain range. In 3-D the store defers to
                     // the (async) shared-range sync's completion so the union
                     // across all panels is captured; 2-D has no later sync
@@ -682,8 +764,14 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     m_diagnosticsModel->noteStaleResult();
                 }
             } catch (const std::exception& error) {
+                // The same three tests as the success arm: a slice the window
+                // has decided is not current must not raise an error either.
+                // A reopen that pushes the connection past a server limit, or
+                // a budget the outgoing session's cache cannot meet, would
+                // otherwise report a failure for work already superseded.
                 if (generation == m_generation
                     && sliceGeneration == state.sliceGeneration
+                    && sessionEpoch == m_sessionEpoch
                     && !cancellation.stop_requested()) {
                     reportBackgroundError(
                         tr("Cannot load slice: %1").arg(exceptionMessage(error)));
@@ -1054,7 +1142,8 @@ std::optional<QRectF> MainWindow::sphericalReframe(
         visible.width() * sx, visible.height() * sy);
 }
 
-void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
+void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
+    std::uint64_t sessionEpoch)
 {
     if (!display.rasterUnchanged) {
         if (!display.image.valid()) {
@@ -1114,6 +1203,13 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
             state.rasterGeometry = incomingGeometry;
         }
     }
+    // Stamped once the view is showing this session's pixels, not on the way
+    // in: ahead of the validity check above, a view that threw before adopting
+    // anything still counted as the installed session's, and
+    // resliceReplacedViews -- which the failure arm calls for exactly this --
+    // would never ask for it again. Anything below that throws has already put
+    // the raster on screen, so the stamp belongs here rather than at the end.
+    state.planeSessionEpoch = sessionEpoch;
     // Fresh immutable snapshots: replace the pointers, never mutate the
     // pointees a cached-planes refresh worker may still be reading. The cache
     // fast path already holds the plane by shared_ptr, so adopt it directly;
@@ -1197,6 +1293,18 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display)
     // scheduling call that fetched this plane ran while the previous one was
     // still displayed, and would have measured that.
     m_volumeController->regionChanged();
+}
+
+void MainWindow::resliceReplacedViews()
+{
+    if (!m_controlsReady || !m_dataset) {
+        return;
+    }
+    for (auto* state : currentViews()) {
+        if (state->planeSessionEpoch != m_sessionEpoch) {
+            scheduleSliceRequest(*state);
+        }
+    }
 }
 
 int MainWindow::slicesInFlight() const
@@ -1654,6 +1762,8 @@ void MainWindow::openRemoteSequence(
 
     prepareSequence(remotePaths.size());
     m_remoteSequence = true;
+    m_remoteSequenceDerivedFields
+        = connection && connection->supportsDerivedFields();
 
     std::vector<std::filesystem::path> frames;
     frames.reserve(remotePaths.size());
@@ -1668,16 +1778,8 @@ void MainWindow::openRemoteSequence(
                       generation = connectionGeneration](
                       const std::filesystem::path& path, DatasetId,
                       const FrameSliceSpec& spec, StopToken cancellation) {
-        if (!connection->connected()) {
-            throw std::runtime_error("remote session is not connected: "
-                + connection->disconnectReason());
-        }
-        auto session = remote::RemoteDatasetSession::open(
-            connection, path.string(), initialCacheBudget(), cancellation);
-        auto result = executeSessionFrameLoad(
-            std::move(session), spec, cancellation);
-        result.connectionGeneration = generation;
-        return result;
+        return loadRemoteFrame(
+            connection, path.string(), generation, spec, cancellation);
     };
     m_sequenceController->open(std::move(frames), std::move(loader));
 }
@@ -1761,6 +1863,7 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
     }
     const auto previousVectorFields = vectorFieldNames();
     m_dataset = result.dataset;
+    ++m_sessionEpoch;
     restoreVectorFields(previousVectorFields);
     m_particleController->setSamples(std::move(result.particles));
     m_particleController->configureForDataset(true);
@@ -1791,7 +1894,8 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
         throw std::runtime_error("frame slice count does not match the view set");
     }
     for (std::size_t index = 0; index < views.size(); ++index) {
-        showSlice(*views[index], std::move(result.displays[index]));
+        showSlice(*views[index], std::move(result.displays[index]),
+            m_sessionEpoch);
     }
     const auto cache = m_dataset->cacheMetrics();
     m_diagnosticsModel->setCacheMetrics(cache);

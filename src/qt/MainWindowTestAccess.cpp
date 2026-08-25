@@ -7,6 +7,32 @@ void MainWindow::setInitialSliceLaunchedHookForTest(std::function<void()> hook)
     m_initialSliceLaunchedForTest = std::move(hook);
 }
 
+void MainWindow::failNextInitialSliceForTest()
+{
+    m_failNextInitialSliceForTest = true;
+}
+
+void MainWindow::requestActiveViewSliceForTest()
+{
+    if (m_activeView != nullptr) {
+        requestSlice(*m_activeView, true);
+    }
+}
+
+bool MainWindow::activeViewSliceMatchesSessionForTest() const
+{
+    if (!m_dataset || m_activeView == nullptr
+        || !m_activeView->hasCachedRequest) {
+        return false;
+    }
+    // The id the displayed raster was queried under, against the id of the
+    // session now installed. A reload allocates a new id -- locally the load
+    // generation, remotely the server's per-connection counter -- so these
+    // disagree exactly when a view is still showing the outgoing session.
+    return m_activeView->cachedRequest.dataset.value
+        == m_dataset->id().value;
+}
+
 std::optional<int> MainWindow::prefetchedSequenceFrameForTest() const
 {
     return m_sequenceController->prefetchedFrameForTest();

@@ -160,8 +160,9 @@ void DerivedFieldController::adoptStoreChange()
     }
     // Including the window whose Apply made the change: one path installs the
     // list, whoever asked for it. A window that cannot take derived fields --
-    // a remote session, or a FAB -- has nothing to reload, and will not show
-    // them either way.
+    // a FAB, or a session whose peer predates 1.4 -- has nothing to reload,
+    // and will not show them either way. (A remote session on a 1.4 peer very
+    // much does reload; that is what this protocol version is for.)
     if (m_hooks.reload && available()) {
         m_hooks.reload();
     }
@@ -179,7 +180,10 @@ QAction* DerivedFieldController::createAction(QWidget* parent)
 
 void DerivedFieldController::refreshAvailability()
 {
-    const auto usable = available();
+    const auto reason = m_hooks.unavailableReason
+        ? m_hooks.unavailableReason()
+        : tr("Derived fields need a dataset.");
+    const auto usable = reason.isEmpty();
     if (m_action) {
         m_action->setEnabled(usable);
         // Never empty: the Variable menu shows tooltips (for the derived
@@ -187,7 +191,7 @@ void DerivedFieldController::refreshAvailability()
         // a tooltip repeating the entry's label.
         m_action->setToolTip(usable
                 ? tr("Define fields computed from the stored ones")
-                : tr("Derived fields need a local dataset."));
+                : reason);
     }
     // The editor stays open when the dataset does not. It edits the session's
     // list rather than the dataset's, and closing it would take with it a
@@ -203,9 +207,13 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
     // The same question the action's enablement asks, not a weaker one: the
     // editor is modeless, so the window can enter a state it is disabled for
     // (a FAB drill-down) while it is still open in front of the user.
-    if (!available()) {
-        return Refusal{tr("No dataset that can take derived fields is open."),
-            std::nullopt};
+    if (const auto reason = m_hooks.unavailableReason
+            ? m_hooks.unavailableReason()
+            : tr("Derived fields need a dataset.");
+        !reason.isEmpty()) {
+        // The same words the greyed action carries, so the editor and the menu
+        // give one answer rather than two.
+        return Refusal{reason, std::nullopt};
     }
 
     // Bounded here as well as at installation, because this is where an
@@ -264,8 +272,17 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
     }
 
     // set() is what reloads -- here and in every other window -- and does
-    // nothing at all when the list has not moved.
+    // nothing at all when the list has not moved. That last part is deliberate
+    // and tested ("an unchanged list reloaded a window"), so a list that has
+    // not moved is asked for again here instead, and only of this window: the
+    // reload that failed is the one the user is looking at, and the hook drops
+    // the ask where the session already carries the list, which is every
+    // window an unchanged Apply has nothing to do in.
+    const bool moved = definitions != m_store.definitions();
     m_store.set(std::move(definitions));
+    if (!moved && m_hooks.reloadIfMissing) {
+        m_hooks.reloadIfMissing();
+    }
     return std::nullopt;
 }
 

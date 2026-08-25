@@ -775,6 +775,10 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         state->cachedVectorUField = 0;
         state->cachedVectorVField = 0;
         state->cachedContourCount = 0;
+        // Cleared, not stale: there is no raster to converge, and the open
+        // about to run will stamp whatever it displays. Set after the bump
+        // below would be too late -- resliceReplacedViews could run first.
+        state->planeSessionEpoch = m_sessionEpoch + 1;
     }
     m_initialStopSource.request_stop();
     m_linePlotStopSource.request_stop();
@@ -790,6 +794,9 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     }
     m_activeView = nullptr;
     m_dataset.reset();
+    // Nothing is installed now, which is a change of session like any other:
+    // a slice still on a worker for the outgoing one must not be displayed.
+    ++m_sessionEpoch;
     // The dock's edge trigger is per dataset, not per session: an open is a new
     // context, so the next update re-asserts it. Without this the flags could
     // hold (false, true) straight across a 3-D -> 3-D open -- closeSequence
@@ -908,7 +915,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
                         requestInitialSlice(path, generation,
                             std::move(result.metadata), std::move(root),
                             std::move(initialSpec),
-                            std::move(result.session));
+                            SliceLoad{std::move(result.session), std::nullopt});
                     }
                 } else {
                     m_diagnosticsModel->noteStaleResult();
@@ -943,12 +950,15 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     watcher->setFuture(QtConcurrent::run(
         [path, preparedMetadata = std::move(preparedMetadata),
             cancellation = metadataCancellation, preserveFabSelector,
-            remoteOpen = std::move(remoteOpen)]() mutable {
+            remoteOpen = std::move(remoteOpen),
+            // Copied here, on the GUI thread: the store has no locking and any
+            // window's Apply mutates it, so reading it inside the worker would
+            // race.
+            derivedFields = m_derivedFields->definitions()]() mutable {
         OpenedDataset opened;
         if (remoteOpen) {
-            opened.session = remote::RemoteDatasetSession::open(
-                std::move(remoteOpen->connection), remoteOpen->remotePath,
-                initialCacheBudget(), cancellation);
+            opened.session = openRemoteSessionForLoad(remoteOpen->connection,
+                remoteOpen->remotePath, derivedFields, cancellation);
             opened.metadata.metadata
                 = std::make_shared<const DatasetMetadata>(
                     opened.session->metadata());
@@ -972,12 +982,32 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     }));
 }
 
+bool MainWindow::SliceLoad::isRemote() const
+{
+    return reopen.has_value()
+        || std::dynamic_pointer_cast<remote::RemoteDatasetSession>(session)
+            != nullptr;
+}
+
+std::optional<std::uint32_t> MainWindow::SliceLoad::responseBytes() const
+{
+    if (session) {
+        return session->maximumResponseBytes();
+    }
+    if (reopen && reopen->connection) {
+        // What the session would report once it exists: the frame size the
+        // connection negotiated.
+        return reopen->connection->serverInfo().maximumFrameBytes;
+    }
+    return std::nullopt;
+}
+
 void MainWindow::requestInitialSlice(
     const std::filesystem::path& path, std::uint64_t generation,
     std::optional<PlotfileMetadataResult> preparedMetadata,
     std::filesystem::path dataRoot,
     std::optional<FrameSliceSpec> initialSpec,
-    std::shared_ptr<DatasetSession> preparedSession)
+    SliceLoad load)
 {
     validateVectorMode();
     const auto& metadata = *m_openMetadata;
@@ -1028,7 +1058,7 @@ void MainWindow::requestInitialSlice(
         // sees it, which is a property of the load rather than of the window,
         // so it is asked here and the rest through the shared predicate.
         spec.derivedFields
-            = preparedSession || !derivedFieldsReachNextLoad()
+            = load.session || !derivedFieldsReachNextLoad()
             ? std::vector<DerivedFieldDefinition>{}
             : m_derivedFields->definitions();
         spec.palette = m_paletteController->palette();
@@ -1044,16 +1074,15 @@ void MainWindow::requestInitialSlice(
         spec.sphericalSupersample = m_sphericalSupersample;
         spec.sphericalDisplay = m_sphericalDisplay;
     }
-    const auto isRemote = std::dynamic_pointer_cast<
-        remote::RemoteDatasetSession>(preparedSession) != nullptr;
+    const auto isRemote = load.isRemote();
     if (spec.outputSizes.size() != views.size()) {
         spec.outputSizes.clear();
         spec.outputSizes.reserve(views.size());
         for (const auto* state : views) {
             auto outputSize = sliceOutputSize(*state, isRemote);
-            if (preparedSession) {
-                outputSize = frameBudgetBoundedOutputSize(outputSize,
-                    preparedSession->maximumResponseBytes());
+            if (const auto responseBytes = load.responseBytes()) {
+                outputSize
+                    = frameBudgetBoundedOutputSize(outputSize, responseBytes);
             }
             spec.outputSizes.push_back(outputSize);
         }
@@ -1081,9 +1110,71 @@ void MainWindow::requestInitialSlice(
             }
             try {
                 auto result = watcher->future().takeResult();
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+                // Before anything is installed, which is where a load that
+                // failed gives up: the session this one opened dies with
+                // `result` and the arm below finds the previous one still on
+                // screen. See failNextInitialSliceForTest.
+                if (std::exchange(m_failNextInitialSliceForTest, false)) {
+                    throw std::runtime_error("initial slice failed for test");
+                }
+#endif
                 if (generation == m_generation) {
                     const auto previousVectorFields = vectorFieldNames();
                     m_dataset = result.dataset;
+                    ++m_sessionEpoch;
+                    // Which views a newer request has already claimed. Worked
+                    // out before anything below restores control state,
+                    // because that restoration replays the field, level and
+                    // range this load was launched with -- and if the user
+                    // moved any of them while it ran, replaying the old values
+                    // silently reverts what they did, and the re-slice this
+                    // load owes those views then renders the reverted
+                    // selection. The controls are one per window, so once any
+                    // view has been superseded the user's current state has to
+                    // win for all of them.
+                    //
+                    // A request queued behind the debounce counts as much as
+                    // one already dispatched: an edit only starts that timer,
+                    // and sliceGeneration does not move until it flushes, so a
+                    // load completing inside the window between the two would
+                    // find nothing superseded and replay the spec over what
+                    // the user had just done -- and the flush that followed
+                    // would then render the replayed values. Every path that
+                    // launches a load empties the queue first, so anything in
+                    // it now was queued while this load ran.
+                    bool superseded
+                        = m_pendingAllViews || !m_pendingViews.empty();
+                    for (std::size_t index = 0;
+                        index < views.size() && !superseded; ++index) {
+                        superseded = views[index]->sliceGeneration
+                            != viewGenerations[index];
+                    }
+                    // By name, and before configureSliceControls below, which
+                    // repopulates the selector and calls selectFieldItem(0):
+                    // after that the user's choice is gone from the widget, and
+                    // the restore that follows would put back the field the
+                    // load was *launched* with. Ids renumber across a reload
+                    // when the derived tail changes, so the name is the only
+                    // stable handle.
+                    const auto supersededField = superseded
+                        ? m_fieldSelector->currentText()
+                        : QString{};
+                    // The level and the range are read here for the same
+                    // reason: configureSliceControls puts the level combo back
+                    // to its first row, and the spec restore below writes both
+                    // outright. The level travels as the combo's data rather
+                    // than its position, which is what the spec carries too --
+                    // the reloaded session need not offer the same rows.
+                    std::optional<int> supersededLevel;
+                    std::optional<RangeController::Selection> supersededRange;
+                    if (superseded) {
+                        if (m_levelSelector->currentIndex() >= 0) {
+                            supersededLevel
+                                = m_levelSelector->currentData().toInt();
+                        }
+                        supersededRange = m_range->selection();
+                    }
                     restoreVectorFields(previousVectorFields);
                     m_particleController->setSamples(
                         std::move(result.particles));
@@ -1165,6 +1256,68 @@ void MainWindow::requestInitialSlice(
                         configureSlicePositionControls();
                         syncMenuChecks();
                     }
+                    // The user moved the field while this load ran, so theirs
+                    // is the selection that stands -- otherwise the re-slice
+                    // this load owes their view renders the field they left.
+                    bool fieldRestored = false;
+                    if (!supersededField.isEmpty()) {
+                        const auto index
+                            = m_fieldSelector->findText(supersededField);
+                        // Only a row that is a field. A definition this
+                        // session skipped is listed under the same name,
+                        // greyed and carrying no id, and setCurrentIndex takes
+                        // one as readily as any other -- leaving the combo,
+                        // the Variable menu and the range on that name while
+                        // every reader of currentData() renders field 0. Where
+                        // the user's field did not survive the reload there is
+                        // nothing of theirs to restore, and the field the load
+                        // rendered stands.
+                        if (index >= 0
+                            && m_fieldSelector->itemData(index).isValid()) {
+                            const QSignalBlocker blocker(m_fieldSelector);
+                            m_fieldSelector->setCurrentIndex(index);
+                            m_range->setTrackedField(
+                                m_fieldSelector->currentText());
+                            syncVariableMenu();
+                            fieldRestored = true;
+                        }
+                    }
+                    if (!fieldRestored) {
+                        // A range belongs to the field it was set on, and the
+                        // memory is keyed by that field's name. Restoring it
+                        // over a field the user was not looking at would
+                        // render that field with their bounds and remember
+                        // them there.
+                        supersededRange.reset();
+                    }
+                    // The level and the range that same interaction moved, put
+                    // back after the field: the range widgets represent the
+                    // selected field, and its name is the key commitFieldRange
+                    // files them under. Blocked, as the spec restore above is
+                    // -- the re-slice these views are owed comes from
+                    // resliceReplacedViews below, and a signal from here would
+                    // queue a second one for every view.
+                    if (supersededLevel) {
+                        const auto index
+                            = m_levelSelector->findData(*supersededLevel);
+                        if (index >= 0) {
+                            const QSignalBlocker blocker(m_levelSelector);
+                            m_levelSelector->setCurrentIndex(index);
+                            configureSlicePositionControls();
+                            syncMenuChecks();
+                        }
+                    }
+                    if (supersededRange) {
+                        m_range->setSelection(*supersededRange);
+                        m_range->commitFieldRange(m_range->trackedField());
+                    }
+                    if (supersededLevel || supersededRange) {
+                        // A mode the restored field and level cannot offer
+                        // falls back here rather than staying selected and
+                        // unavailable, which is what the spec restore's own
+                        // call does for the values it put back.
+                        updateRangeModeAvailability();
+                    }
                     if (selectCacheFallbackLevel(
                             m_levelSelector, result.cacheFallbackToLevel)) {
                         configureSlicePositionControls();
@@ -1186,6 +1339,19 @@ void MainWindow::requestInitialSlice(
                     for (const auto& display : result.displays) {
                         requestedSizes.push_back(display.request.outputSize);
                     }
+                    // Views this load will not display, because a newer
+                    // request for them was submitted while it ran. Collected
+                    // rather than merely skipped: each is still showing a
+                    // raster produced by the session installed *before* this
+                    // one, while m_dataset, the field selector, the range
+                    // widgets and the colour bar have all just become the new
+                    // session's. Leaving them is the catalog-vs-pixels
+                    // mismatch -- after an edit that renumbers the derived
+                    // tail, values from the old expression under the new field
+                    // list -- and it is why an arrival-side check cannot close
+                    // this on its own: in the common ordering that newer
+                    // request finished before this completion ran and was
+                    // rightly accepted against the session then installed.
                     for (std::size_t index = 0; index < views.size(); ++index) {
                         if (views[index]->sliceGeneration
                             != viewGenerations[index]) {
@@ -1209,8 +1375,15 @@ void MainWindow::requestInitialSlice(
                                     result.displays[index].request.visibleRegion}
                                 : std::optional<RealBox>{};
                         }
-                        showSlice(*views[index], std::move(result.displays[index]));
+                        showSlice(*views[index],
+                            std::move(result.displays[index]), m_sessionEpoch);
                     }
+                    // Re-sliced against the session just installed. Driven
+                    // off each view's stamp rather than the list above, so a
+                    // debt survives the next reload clearing the debounce: if
+                    // that reload fails it re-checks the same stamps and the
+                    // view is asked again.
+                    resliceReplacedViews();
                     if (isRemote) {
                         // A resize during the initial worker cannot submit a
                         // slice yet because m_dataset is not published. Once
@@ -1251,9 +1424,36 @@ void MainWindow::requestInitialSlice(
                     // panels are still on the open's placeholder with nothing
                     // left in flight to replace it. The dataset name is known
                     // here, so say which one has no displayable slice.
-                    setAllViewPlaceholders(
-                        tr("Could not display %1")
-                            .arg(QString::fromStdString(m_datasetPath.string())));
+                    //
+                    // Only when nothing is installed, which is what tells an
+                    // open from a reload: a reload never resets m_dataset, so
+                    // the session on screen is still live and its rasters are
+                    // still what it produced. Wiping them because a reopen
+                    // failed -- a definition the server would not take, a
+                    // connection that went away -- would throw away a working
+                    // display over a change that simply did not happen.
+                    if (!m_dataset) {
+                        setAllViewPlaceholders(
+                            tr("Could not display %1")
+                                .arg(QString::fromStdString(
+                                    m_datasetPath.string())));
+                    }
+                    // A reload that started and then failed must not count as
+                    // one that happened: the list is still uninstalled, and
+                    // pressing Apply again cannot ask for it a second time
+                    // because DerivedFieldStore::set returns without emitting
+                    // for a list that has not moved. Left armed, the window
+                    // stayed on the older list for good while the editor
+                    // reported it applied. This cannot loop the way the memo
+                    // guards against: it runs when a load completes, not once
+                    // per event-loop turn.
+                    m_reloadAskedFor.reset();
+                    // The previous session is still installed and still fine,
+                    // so this does not wipe the display -- it asks any view
+                    // still showing an even older session's raster for one of
+                    // the installed session's. A reload dropped between the
+                    // debounce and this failure would otherwise be lost.
+                    resliceReplacedViews();
                     emit initialSliceFinished(false);
                 } else {
                     m_diagnosticsModel->noteStaleResult();
@@ -1266,10 +1466,17 @@ void MainWindow::requestInitialSlice(
         [path, generation, spec = std::move(spec), cancellation,
             preparedMetadata = std::move(preparedMetadata),
             dataRoot = std::move(dataRoot),
-            preparedSession = std::move(preparedSession)]() mutable {
-        if (preparedSession) {
+            load = std::move(load)]() mutable {
+        if (load.session) {
             return executeSessionFrameLoad(
-                std::move(preparedSession), spec, cancellation);
+                std::move(load.session), spec, cancellation);
+        }
+        if (load.reopen) {
+            // The quiet reopen of a remote dataset: same loader the sequence
+            // frames use, so the connected() pre-check and the derived-field
+            // capability gate are the ones written once.
+            return loadRemoteFrame(load.reopen->connection,
+                load.reopen->remotePath, 0, spec, cancellation);
         }
         return executeFrameLoad(path, DatasetId{generation}, spec,
             initialCacheBudget(), cancellation,

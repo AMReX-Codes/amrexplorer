@@ -492,8 +492,13 @@ Other notes:
   list, which is how a set of definitions is kept for another session. An
   import replaces what the editor is showing; nothing reaches the dataset until
   you select **Apply**.
-- Derived fields are computed where the data is read, so they are not
-  available for a dataset opened from a remote server.
+- Derived fields are computed where the data is read. For a dataset opened from
+  a remote server that means on the server: the definitions travel with the
+  open, the slices come back already computed, and everything else -- the line
+  plot, the Dataset window, volume rendering -- sees the computed field as it
+  sees a stored one. This needs a server new enough to carry them (protocol
+  1.4); against an older one the **Expression Editor** is greyed out and says
+  so, and the fields the plotfile stores are unaffected.
 
 ## Ranges, logarithms, and palettes
 

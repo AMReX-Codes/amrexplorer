@@ -70,12 +70,23 @@ class DerivedFieldController final : public QObject {
 
 public:
     struct Hooks {
-        // Whether a dataset that can take derived fields is open. Asked on
-        // every dataset load, so it answers from one pointer rather than by
-        // copying anything.
-        std::function<bool()> available;
+        // Empty while a dataset that can take derived fields is open, and
+        // otherwise why not, in the words the greyed action shows. A reason
+        // rather than a bool because there is more than one: no dataset, a FAB
+        // drilled out of a MultiFab, or a server too old for them -- and
+        // telling a remote user their dataset is not local would be a lie.
+        // Asked on every dataset load, so it answers without copying anything.
+        std::function<QString()> unavailableReason;
         // Reopen the open dataset with the committed definitions.
         std::function<void()> reload;
+        // Reopen it only if it is not already showing them. What an Apply that
+        // changed nothing asks for: a reload that failed leaves the list
+        // committed and uninstalled, and the store emits nothing to ask again
+        // with, so without this the only ways back are editing the list to
+        // something else and back, or reopening the dataset. A window whose
+        // session already carries the list does nothing here, which is what
+        // keeps a merely redundant Apply from reloading anything.
+        std::function<void()> reloadIfMissing;
         // A path to import from (forSaving false) or export to (true); empty
         // cancels. The host runs the file dialog, as it does for palettes.
         std::function<QString(QWidget* parent, bool forSaving)> chooseFile;
@@ -100,7 +111,8 @@ public:
     // window but not the session it was opening.
     [[nodiscard]] bool available() const
     {
-        return m_hooks.available && m_hooks.available();
+        return m_hooks.unavailableReason
+            && m_hooks.unavailableReason().isEmpty();
     }
 
     [[nodiscard]] const std::vector<DerivedFieldDefinition>& definitions()

@@ -618,6 +618,29 @@ int main(int argc, char* argv[])
         require(olderError.code == ErrorCode::UnsupportedProtocol,
             "a 1.3 peer derived-field open returned the wrong error");
 
+        // And the same answer for a list fromWire would refuse on its own
+        // merits: the version gate runs first, so a peer too old to send a
+        // list at all is told that, not how to shorten one it was never
+        // allowed to send.
+        {
+            OpenDatasetData overCap{std::filesystem::path(argv[1]).string(),
+                16ULL * 1024ULL * 1024ULL, {}};
+            for (std::size_t index = 0; index <= maximumDerivedFieldCount;
+                ++index) {
+                overCap.derivedFields.push_back(
+                    {"f" + std::to_string(index), "density"});
+            }
+            olderEnvelope = exchange(olderSocket, 4, codec::toWire(overCap),
+                olderInfo.maximumFrameBytes, 3);
+            require(codec::inspect(*olderEnvelope).payload
+                    == PayloadKind::ErrorResponse,
+                "a 1.3 peer over-cap derived-field open was not refused");
+            require(codec::fromWire(*olderEnvelope->payload.AsErrorResponse())
+                        .code
+                    == ErrorCode::UnsupportedProtocol,
+                "a 1.3 peer was told about the list instead of the version");
+        }
+
         // And the session survives it: an open without definitions still works.
         olderEnvelope = exchange(olderSocket, 3,
             codec::toWire(OpenDatasetData{

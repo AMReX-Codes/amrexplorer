@@ -3,6 +3,8 @@
 #include "DerivedFieldStore.hpp"
 #include "ExpressionEditorDialog.hpp"
 #include "MainWindow.hpp"
+
+#include <amrexplorer/remote/Server.hpp>
 #include "RangeController.hpp"
 
 #include <QAction>
@@ -23,6 +25,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -210,6 +213,441 @@ void armRangeMemoryChecks(
         });
     timer->start();
     QTimer::singleShot(30000, &application, [&application] { application.exit(13); });
+}
+
+// Arms the one ordering that reading this code kept missing: an interaction
+// that lands while a reload is still replacing the session. The reload skips
+// its own display for that view, because a newer request for it exists, and
+// the interaction's own raster came from the session being replaced -- so
+// unless something re-slices, the window keeps the outgoing session's pixels
+// while its catalog, field list and colour bar are the new session's. Exit 0
+// once the raster on screen and the installed session agree again.
+// `dispatch` decides how the injected interaction reaches the slice pipeline.
+// True submits for the view there and then, which is the ordering an
+// arrival-side check cannot sort out: the view is showing a raster the
+// outgoing session produced. False leaves the request queued behind the
+// debounce, as a real click does -- sliceGeneration has not moved when the
+// reload completes, so only the queue says the user has been here.
+void armReloadRaceChecks(amrvis::qt::MainWindow& window,
+    QApplication& application, bool dispatch)
+{
+    auto phase = std::make_shared<int>(0);
+    auto loads = std::make_shared<int>(0);
+    auto ticks = std::make_shared<int>(0);
+    // Fired once, on the reload's load rather than the opening one: the hook
+    // runs inside requestInitialSlice with the work already dispatched and the
+    // completion queued behind this call, which is the only moment a test can
+    // submit against the session on its way out.
+    auto injected = std::make_shared<bool>(false);
+    // What the injected interaction switches to. The reload's completion
+    // replays the field, level and range the load was launched with, so if it
+    // does that after the user has moved them, the change is reverted and the
+    // re-slice this load owes renders what they left. All three, because the
+    // controls are one set per window: an interaction that supersedes the
+    // reload can have moved any of them, and each is restored from the same
+    // launch-time spec. Empty for a control the dataset gave nothing to move
+    // to, which the checks below then skip.
+    auto chosenField = std::make_shared<QString>();
+    auto chosenLevel = std::make_shared<std::optional<int>>();
+    auto chosenRangeMode = std::make_shared<std::optional<int>>();
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [&application, loads](bool success) {
+            if (!success) {
+                application.exit(2);
+                return;
+            }
+            ++*loads;
+        });
+    window.setInitialSliceLaunchedHookForTest(
+        [&window, loads, injected, chosenField, chosenLevel, chosenRangeMode,
+            dispatch] {
+            if (*loads == 0 || *injected) {
+                return;
+            }
+            *injected = true;
+            // Move the controls, as a user reading a reloading window would,
+            // and then submit for them. Both matter: the submission is what
+            // supersedes the reload's display for this view, and the
+            // selections are what the completion must not roll back.
+            auto* selector = window.findChild<QComboBox*>(
+                QStringLiteral("fieldSelector"));
+            if (selector == nullptr || selector->count() < 2) {
+                return;
+            }
+            const auto next = selector->currentIndex() == 0 ? 1 : 0;
+            window.selectFieldItemForTest(next);
+            *chosenField = selector->currentText();
+            // Through the widgets, which is what a user's click reaches: the
+            // level combo carries its selection as item data (the position
+            // means nothing across a repopulate), and the range mode goes to
+            // Visible, the one mode no dataset can leave unavailable.
+            auto* levels = window.findChild<QComboBox*>(
+                QStringLiteral("levelSelector"));
+            if (levels != nullptr && levels->count() > 1) {
+                levels->setCurrentIndex(levels->currentIndex() == 0 ? 1 : 0);
+                *chosenLevel = levels->currentData().toInt();
+            }
+            auto* modes = window.findChild<QComboBox*>(
+                QStringLiteral("rangeModeSelector"));
+            if (modes != nullptr) {
+                const auto visible = modes->findData(
+                    static_cast<int>(amrvis::qt::RangeMode::Visible));
+                if (visible >= 0 && modes->currentIndex() != visible) {
+                    modes->setCurrentIndex(visible);
+                    *chosenRangeMode = modes->currentData().toInt();
+                }
+            }
+            if (dispatch) {
+                window.requestActiveViewSliceForTest();
+            }
+        });
+
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, loads, ticks, injected, chosenField,
+            chosenLevel, chosenRangeMode, timer] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            ++*ticks;
+            if (*ticks > 400) {
+                qCritical("the reload race scenario never settled");
+                finish(20);
+                return;
+            }
+            if (*loads == 0) {
+                return;
+            }
+            if (*phase == 0) {
+                // A definition every 2-D plotfile here can compute, so the
+                // reload it triggers succeeds and installs a new session. Set
+                // on the shared store, which is what an Apply in any window
+                // does and what makes every window reload.
+                amrvis::qt::DerivedFieldStore::session().set(
+                    {{"twice", "density * 2"}});
+                *phase = 1;
+                return;
+            }
+            if (*phase == 1) {
+                // Wait for the reload's own load to have finished, not just
+                // for the view queues to be quiet: slicesInFlightForTest sums
+                // per-view pendingRequests and does not count the initial-slice
+                // worker, so without the load count this tick can fire while
+                // the reload is still running -- and then the outgoing session
+                // is still installed and the comparison below is against
+                // itself, which passes whatever the code does. `loads` is 1
+                // after the open and 2 once the reload has installed.
+                if (!*injected || *loads < 2
+                    || window.slicesInFlightForTest() != 0
+                    || window.sliceRequestPendingForTest()) {
+                    return;
+                }
+                if (window.backgroundErrorCountForTest() != 0) {
+                    qCritical("the reload race reported an error");
+                    finish(22);
+                    return;
+                }
+                // The invariant: no view keeps a raster from a session that is
+                // no longer installed.
+                if (!window.activeViewSliceMatchesSessionForTest()) {
+                    qCritical("the displayed slice outlived its session");
+                    finish(23);
+                    return;
+                }
+                // And the interaction that superseded the reload was not
+                // quietly undone by the reload's own control restoration.
+                auto* selector = window.findChild<QComboBox*>(
+                    QStringLiteral("fieldSelector"));
+                if (selector == nullptr
+                    || (!chosenField->isEmpty()
+                        && selector->currentText() != *chosenField)) {
+                    qCritical("the reload reverted the field the user chose");
+                    finish(24);
+                    return;
+                }
+                auto* levels = window.findChild<QComboBox*>(
+                    QStringLiteral("levelSelector"));
+                if (chosenLevel->has_value()
+                    && (levels == nullptr
+                        || levels->currentData().toInt() != **chosenLevel)) {
+                    qCritical("the reload reverted the level the user chose");
+                    finish(25);
+                    return;
+                }
+                auto* modes = window.findChild<QComboBox*>(
+                    QStringLiteral("rangeModeSelector"));
+                if (chosenRangeMode->has_value()
+                    && (modes == nullptr
+                        || modes->currentData().toInt()
+                            != **chosenRangeMode)) {
+                    qCritical(
+                        "the reload reverted the range mode the user chose");
+                    finish(26);
+                    return;
+                }
+                finish(0);
+                return;
+            }
+        });
+    timer->start();
+}
+
+// Arms the skipped-definition race: the user is displaying a derived field
+// when an edit arrives that this dataset cannot resolve. The reload lists that
+// definition greyed out -- same name, no field id -- while a view superseded
+// meanwhile has the completion restore the user's field *by that name*. Exit 0
+// if what ends up selected is a field; a nonzero code names the step that
+// failed.
+void armSkippedFieldChecks(
+    amrvis::qt::MainWindow& window, QApplication& application)
+{
+    auto phase = std::make_shared<int>(0);
+    auto loads = std::make_shared<int>(0);
+    auto ticks = std::make_shared<int>(0);
+    auto armed = std::make_shared<bool>(false);
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [&application, loads](bool success) {
+            if (!success) {
+                application.exit(2);
+                return;
+            }
+            ++*loads;
+        });
+    window.setInitialSliceLaunchedHookForTest([&window, armed] {
+        if (!*armed) {
+            return;
+        }
+        *armed = false;
+        // Supersedes the reload's display for this view without touching the
+        // selection: the field the completion then restores is the one the
+        // user is on, which is the whole of what the restore is for.
+        window.requestActiveViewSliceForTest();
+    });
+
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, loads, ticks, armed, timer] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            ++*ticks;
+            if (*ticks > 400) {
+                qCritical("the skipped-definition scenario never settled");
+                finish(40);
+                return;
+            }
+            if (*loads == 0) {
+                return;
+            }
+            auto* selector = window.findChild<QComboBox*>(
+                QStringLiteral("fieldSelector"));
+            if (selector == nullptr) {
+                qCritical("the window has no field selector");
+                finish(41);
+                return;
+            }
+            const auto settled = [&window] {
+                return window.slicesInFlightForTest() == 0
+                    && !window.sliceRequestPendingForTest();
+            };
+            if (*phase == 0) {
+                amrvis::qt::DerivedFieldStore::session().set(
+                    {{"twice", "density * 2"}});
+                *phase = 1;
+                return;
+            }
+            if (*phase == 1) {
+                if (*loads < 2 || !settled()) {
+                    return;
+                }
+                const auto index = selector->findText(QStringLiteral("twice"));
+                if (index < 0 || !selector->itemData(index).isValid()) {
+                    qCritical("a definition this dataset can compute was not "
+                              "installed as a field");
+                    finish(42);
+                    return;
+                }
+                window.selectFieldItemForTest(index);
+                if (selector->currentText() != QStringLiteral("twice")) {
+                    qCritical("the derived field could not be selected");
+                    finish(42);
+                    return;
+                }
+                *phase = 2;
+                return;
+            }
+            if (*phase == 2) {
+                if (!settled()) {
+                    return;
+                }
+                // The same name, now reading a field this dataset does not
+                // have: the session skips it and the window lists it greyed.
+                *armed = true;
+                amrvis::qt::DerivedFieldStore::session().set(
+                    {{"twice", "nonesuch * 2"}});
+                *phase = 3;
+                return;
+            }
+            if (*phase == 3) {
+                if (*loads < 3 || !settled()) {
+                    return;
+                }
+                const auto index = selector->findText(QStringLiteral("twice"));
+                if (index < 0 || selector->itemData(index).isValid()) {
+                    qCritical("a definition this dataset cannot resolve is "
+                              "not listed greyed out");
+                    finish(43);
+                    return;
+                }
+                // The row carrying no id is exactly what setCurrentIndex will
+                // take and every reader of currentData() will call field 0.
+                if (!selector->currentData().isValid()) {
+                    qCritical("the reload selected a row that is not a field");
+                    finish(44);
+                    return;
+                }
+                finish(0);
+                return;
+            }
+        });
+    timer->start();
+}
+
+// Arms the retry scenario: a reload that fails leaves the list committed and
+// uninstalled, and the store emits nothing for a list that has not moved, so
+// the Apply the user presses again has to ask for the reload itself. Exit 0
+// once the definition the first Apply could not install is on the field list;
+// a nonzero code names the step that failed.
+void armReloadRetryChecks(
+    amrvis::qt::MainWindow& window, QApplication& application)
+{
+    auto phase = std::make_shared<int>(0);
+    auto loads = std::make_shared<int>(0);
+    auto failures = std::make_shared<int>(0);
+    auto ticks = std::make_shared<int>(0);
+    // The tick the retry was pressed on, so the wait for it to land is bounded
+    // by itself rather than by the scenario's own budget -- what the bug looks
+    // like is nothing happening, and it should say so in those words.
+    auto retryTick = std::make_shared<int>(0);
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [loads, failures](bool success) {
+            if (success) {
+                ++*loads;
+            } else {
+                ++*failures;
+            }
+        });
+
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, loads, failures, ticks, retryTick,
+            timer] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            ++*ticks;
+            if (*ticks > 400) {
+                qCritical("the reload retry scenario never settled");
+                finish(30);
+                return;
+            }
+            if (*loads == 0) {
+                return;
+            }
+            auto* dialog =
+                window.findChild<amrvis::qt::ExpressionEditorDialog*>();
+            if (*phase == 0) {
+                auto* action = window.findChild<QAction*>(
+                    QStringLiteral("expressionEditorAction"));
+                if (action == nullptr || !action->isEnabled()) {
+                    qCritical("the Expression Editor action is not available");
+                    finish(31);
+                    return;
+                }
+                action->trigger();
+                *phase = 1;
+                return;
+            }
+            if (*phase == 1) {
+                if (dialog == nullptr) {
+                    qCritical("the Expression Editor did not open");
+                    finish(32);
+                    return;
+                }
+                // The reload this Apply starts goes down its failure arm,
+                // which is what a server refusing the reopen -- or a
+                // connection that has gone -- leaves behind: the list
+                // committed, the previous session still installed, and the
+                // editor reporting a definition that never arrived.
+                window.failNextInitialSliceForTest();
+                if (!writeDefinition(*dialog, QStringLiteral("twice"),
+                        QStringLiteral("density * 2"))
+                    || !clickApply(*dialog)) {
+                    qCritical("the editor did not take the definition");
+                    finish(33);
+                    return;
+                }
+                if (errorShown(*dialog)) {
+                    qCritical("a definition this dataset can compute was "
+                              "refused");
+                    finish(33);
+                    return;
+                }
+                *phase = 2;
+                return;
+            }
+            if (*phase == 2) {
+                if (*failures == 0) {
+                    return;  // the reload is still running
+                }
+                if (fieldNames(window).contains(QStringLiteral("twice"))) {
+                    qCritical("a failed reload installed the definition");
+                    finish(34);
+                    return;
+                }
+                if (dialog == nullptr) {
+                    qCritical("the editor closed over a failed reload");
+                    finish(35);
+                    return;
+                }
+                // The same list a second time, which the store does not emit
+                // for. Nothing else in the window can ask for that reload
+                // again, so without the Apply doing it the definition stays
+                // uninstalled for good.
+                if (!clickApply(*dialog)) {
+                    qCritical("the editor has no Apply button");
+                    finish(35);
+                    return;
+                }
+                *retryTick = *ticks;
+                *phase = 3;
+                return;
+            }
+            if (*phase == 3) {
+                if (fieldNames(window).contains(QStringLiteral("twice"))) {
+                    if (window.slicesInFlightForTest() != 0
+                        || window.sliceRequestPendingForTest()) {
+                        return;
+                    }
+                    finish(0);
+                    return;
+                }
+                if (*ticks - *retryTick > 120) {
+                    qCritical("an unchanged Apply did not retry the reload "
+                              "that failed");
+                    finish(36);
+                    return;
+                }
+                return;
+            }
+        });
+    timer->start();
 }
 
 // Arms the scenario on `window`: exit 0 once a derived field has been
@@ -1035,6 +1473,178 @@ void armPlaybackChecks(amrvis::qt::MainWindow& window,
     QTimer::singleShot(30000, &application, [&application] { application.exit(13); });
 }
 
+// Arms the remote scenario. Everything the local one checks, but with the
+// session on the far side of the protocol: the editor is available over a
+// remote dataset (which it was not before 1.4), Apply reopens the dataset on
+// its own connection with the definitions, the computed field arrives as the
+// tail of the catalog and renders, and a definition the plotfile cannot
+// satisfy comes back greyed with the *server's* reason.
+void armRemoteDerivedChecks(
+    amrvis::qt::MainWindow& window, QApplication& application)
+{
+    auto phase = std::make_shared<int>(0);
+    auto loads = std::make_shared<int>(0);
+    auto ticks = std::make_shared<int>(0);
+    // The load count when the Apply settled, so the idle turns that follow can
+    // be told from the loads the Apply itself caused. Read on every tick it
+    // would compare against itself and never fail.
+    auto loadsAtSettle = std::make_shared<int>(0);
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [&application, loads](bool success) {
+            if (!success) {
+                application.exit(2);
+                return;
+            }
+            ++*loads;
+        });
+
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, loads, ticks, loadsAtSettle, timer] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            ++*ticks;
+            if (*loads == 0) {
+                return;  // the remote dataset is still opening
+            }
+            auto* selector = window.findChild<QComboBox*>(
+                QStringLiteral("fieldSelector"));
+            auto* action = window.findChild<QAction*>(
+                QStringLiteral("expressionEditorAction"));
+            if (selector == nullptr || action == nullptr) {
+                qCritical("the window is missing its field selector or action");
+                finish(3);
+                return;
+            }
+            auto* dialog =
+                window.findChild<amrvis::qt::ExpressionEditorDialog*>();
+            if (*phase == 0) {
+                if (fieldNames(window)
+                    != QStringList{QStringLiteral("density"),
+                        QStringLiteral("temperature")}) {
+                    qCritical("the remote dataset lists: %s",
+                        qPrintable(fieldNames(window).join(
+                            QStringLiteral(", "))));
+                    finish(4);
+                    return;
+                }
+                // The whole point of 1.4: over a remote session this used to
+                // be disabled, saying derived fields needed a local dataset.
+                if (!action->isEnabled()) {
+                    qCritical("the Expression Editor is unavailable over a "
+                              "remote dataset: %s",
+                        qPrintable(action->toolTip()));
+                    finish(5);
+                    return;
+                }
+                action->trigger();
+                *phase = 1;
+                return;
+            }
+            if (*phase == 1) {
+                if (dialog == nullptr
+                    || !writeDefinition(*dialog, QStringLiteral("product"),
+                        QStringLiteral("density * temperature"))
+                    || !appendDefinition(*dialog,
+                        QStringLiteral("elsewhere"),
+                        QStringLiteral("nonesuch * 2"))
+                    || !clickApply(*dialog) || errorShown(*dialog)) {
+                    qCritical("the editor refused the definitions");
+                    finish(6);
+                    return;
+                }
+                *ticks = 0;
+                *phase = 2;
+                return;
+            }
+            if (*phase == 2) {
+                // Apply reopens the remote dataset on its own connection.
+                if (!fieldNames(window).contains(QStringLiteral("product"))) {
+                    if (*ticks > 400) {
+                        qCritical("applying over a remote session never "
+                                  "reached the field list: %s",
+                            qPrintable(fieldNames(window).join(
+                                QStringLiteral(", "))));
+                        finish(7);
+                        return;
+                    }
+                    return;
+                }
+                // The one the plotfile cannot satisfy is listed, greyed, with
+                // the server's own reason on it.
+                const auto unavailable
+                    = selector->findText(QStringLiteral("elsewhere"));
+                if (unavailable < 0
+                    || selector->itemData(unavailable).isValid()) {
+                    qCritical("the unavailable definition is not listed, or "
+                              "is listed as a field");
+                    finish(8);
+                    return;
+                }
+                if (!selector->itemData(unavailable, Qt::ToolTipRole)
+                        .toString()
+                        .contains(QStringLiteral("unavailable"))) {
+                    qCritical("the dimmed entry does not say why");
+                    finish(9);
+                    return;
+                }
+                const auto product
+                    = selector->findText(QStringLiteral("product"));
+                selector->setCurrentIndex(product);
+                *ticks = 0;
+                *phase = 3;
+                return;
+            }
+            if (*phase == 3) {
+                if (window.sliceRequestPendingForTest()
+                    || window.slicesInFlightForTest() != 0) {
+                    if (*ticks > 400) {
+                        qCritical("the computed field never finished slicing");
+                        finish(10);
+                        return;
+                    }
+                    return;
+                }
+                const auto size = window.activeViewImageSizeForTest();
+                if (size[0] <= 0 || size[1] <= 0) {
+                    qCritical("the computed field rendered nothing");
+                    finish(11);
+                    return;
+                }
+                if (window.backgroundErrorCountForTest() != 0) {
+                    qCritical("the remote computed field reported an error");
+                    finish(12);
+                    return;
+                }
+                // And the reload settled: one Apply must not leave the window
+                // reopening the dataset for ever, which is what would happen
+                // if the session and the editor disagreed about the list.
+                *loadsAtSettle = *loads;
+                *ticks = 0;
+                *phase = 4;
+                return;
+            }
+            if (*phase == 4) {
+                // A few idle turns with nothing in flight: a reload loop shows
+                // up here as loads climbing without anything asking.
+                if (*ticks < 20) {
+                    return;
+                }
+                if (*loads != *loadsAtSettle) {
+                    qCritical("the window is still reopening the dataset");
+                    finish(13);
+                    return;
+                }
+                finish(0);
+            }
+        });
+    timer->start();
+    QTimer::singleShot(40000, &application, [&application] { application.exit(14); });
+}
+
 Outcome dispatchDerivedSequence(Context& context)
 {
     if (context.argc != 4) {
@@ -1076,8 +1686,30 @@ Outcome dispatchDerived(Context& context)
         armRangeMemoryChecks(window, application);
     } else if (option == "--derived-field-smoke-test") {
         armDerivedChecks(window, application);
+    } else if (option == "--derived-field-reload-race-smoke-test") {
+        armReloadRaceChecks(window, application, true);
+    } else if (option == "--derived-field-reload-debounce-smoke-test") {
+        armReloadRaceChecks(window, application, false);
+    } else if (option == "--derived-field-reload-retry-smoke-test") {
+        armReloadRetryChecks(window, application);
+    } else if (option == "--derived-field-skipped-race-smoke-test") {
+        armSkippedFieldChecks(window, application);
     } else if (option == "--derived-field-playback-smoke-test") {
         armPlaybackChecks(window, application, path);
+    } else if (option == "--remote-derived-field-smoke-test") {
+        // The in-process loopback server, as the remote theme starts one: the
+        // handshake takes milliseconds and runs on the GUI thread.
+        context.server = std::make_shared<amrvis::remote::Server>();
+        context.serverThread.emplace(
+            [server = context.server] { server->run(); });
+        armRemoteDerivedChecks(window, application);
+        QTimer::singleShot(0, &window,
+            [&window, remotePath = path.string(),
+                server = context.server] {
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(remotePath);
+            });
+        return {true, std::nullopt};
     } else {
         return {false, std::nullopt};
     }

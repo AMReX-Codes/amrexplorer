@@ -758,6 +758,14 @@ void validateSessionOpenedDerivedFields(
             "dataset catalog installs and skips more definitions than were "
             "requested");
     }
+    // Duplicate indices are deliberately NOT refused. definition_index is a
+    // flatbuffers scalar whose default of 0 is left out of the buffer, so a
+    // conforming 1.4 peer that never populates it sends every skip with index
+    // 0 -- and no client code reads the field, since the rows are matched to
+    // skips by name. Refusing here would run inside refusingInvalidResponses
+    // and fail the open outright, spending a fatal reaction on a field whose
+    // only wrong value is invisible. The bound below stays: an index past the
+    // request is a reply describing a definition that was never sent.
     for (const auto& skip : reply.skips) {
         if (skip.definitionIndex >= requested) {
             throw std::invalid_argument(

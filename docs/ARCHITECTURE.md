@@ -91,7 +91,9 @@ implementations, interchangeable to everything above them:
 
 - **`LocalDatasetSession`** — reads plotfiles in-process via `src/io` and the
   `SliceQuery`/`LineQuery` layer, backed by the block cache.
-- **`RemoteDatasetSession`** — forwards each request over the wire (`src/remote`)
+- **`RemoteDatasetSession`** — forwards each request over the wire (`src/remote`),
+  including the derived-field definitions an open carries (protocol 1.4), which
+  the server installs on its own `LocalDatasetSession`
   to a server that itself runs a `LocalDatasetSession`.
 
 The GUI opens one or the other and is otherwise agnostic to where the data lives.

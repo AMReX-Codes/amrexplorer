@@ -604,19 +604,22 @@ private:
         if (request == nullptr || request->path.empty()) {
             throw std::invalid_argument("dataset path is empty");
         }
-        // Decoded here, before the reservation below: this is what bounds the
-        // definition list a client sent (codec::fromWire), and an over-cap list
-        // should be refused before anything is reserved or allocated for it.
-        auto open = codec::fromWire(*request);
-        // Also before the reservation, so an early return need not know that
-        // bookkeeping. Not theatre: encode() stamps the envelope's version but
-        // filters no fields, so a 1.3-negotiated envelope can physically carry
-        // this vector -- and a client that read our Hello knows better, so this
-        // is answerable rather than fatal.
-        if (!open.derivedFields.empty() && m_selectedMinorVersion < 4) {
+        // Before the decode, so a peer too old to send a list at all is told
+        // that rather than what is wrong with the list: fromWire's bounds
+        // would otherwise answer an over-cap list from a 1.3 peer with advice
+        // about shortening one it was never allowed to send. Tested on the
+        // unpacked request for the same reason. Not theatre: encode() stamps
+        // the envelope's version but filters no fields, so a 1.3-negotiated
+        // envelope can physically carry this vector -- and a client that read
+        // our Hello knows better, so this is answerable rather than fatal.
+        if (!request->derived_fields.empty() && m_selectedMinorVersion < 4) {
             throw RemoteError(ErrorCode::UnsupportedProtocol,
                 "derived fields require protocol 1.4");
         }
+        // Decoded before the reservation below: this is what bounds the
+        // definition list a client sent (codec::fromWire), and an over-cap list
+        // should be refused before anything is reserved or allocated for it.
+        auto open = codec::fromWire(*request);
         {
             std::scoped_lock lock(m_stateMutex);
             if (m_stopping.load() || cancellation.stop_requested()) {

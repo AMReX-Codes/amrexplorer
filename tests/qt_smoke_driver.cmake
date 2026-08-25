@@ -6,6 +6,7 @@
 #   SOURCE        fixture source directory (e.g. tests/data/plotfile_2d)
 #   WORK          directory the materialized copies are written into
 #   MODE          slice | sequence | sequence-after-fab |
+#                 derived-field-reload-race |
 #                 remote-sequence-after-fab | missing-range |
 #                 non-finite | raw-fab |
 #                 multifab-fab | quit | quit-on-failure | window-close-pool |
@@ -67,6 +68,24 @@ elseif(MODE STREQUAL "derived-field")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --derived-field-smoke-test "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --field-range-memory-smoke-test
+        "${WORK}/plt")
+elseif(MODE STREQUAL "derived-field-reload-race")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --derived-field-reload-race-smoke-test
+        "${WORK}/plt")
+    # The same interaction left queued behind the slice debounce, which is what
+    # a click actually does: no slice generation has moved when the reload
+    # completes, so only the queue says the user has changed anything.
+    run_or_die("${AMREXPLORER_QT}" --derived-field-reload-debounce-smoke-test
+        "${WORK}/plt")
+    # And the way back from a reload that failed: the list is committed and
+    # uninstalled, and only the Apply pressed again can ask for it.
+    run_or_die("${AMREXPLORER_QT}" --derived-field-reload-retry-smoke-test
+        "${WORK}/plt")
+    # And the same race over a definition the reload cannot resolve: it is
+    # listed under the user's field name, greyed and carrying no id, which is
+    # what the restore must not select.
+    run_or_die("${AMREXPLORER_QT}" --derived-field-skipped-race-smoke-test
         "${WORK}/plt")
 elseif(MODE STREQUAL "derived-field-frames")
     # Two frames that do not list the same fields: the second drops the one a

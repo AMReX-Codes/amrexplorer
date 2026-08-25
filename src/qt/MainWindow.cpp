@@ -44,20 +44,53 @@ MainWindow::MainWindow(QWidget* parent)
     // buildFrameSpec is where the list reaches a dataset.
     m_derivedFields = new DerivedFieldController(
         DerivedFieldController::Hooks{
-            .available = [this] {
-                // Two questions, and both have to hold: whether the open
-                // session can take derived fields, and whether a load built
-                // now would carry them (derivedFieldsReachNextLoad). Not for a
-                // standalone FAB, drilled out of a MultiFab or opened straight
-                // from a file: applying reopens m_datasetPath, and what that
-                // entry describes -- a synthesised metadata, or one record of
-                // a multi-record file -- is not what re-reading the path
-                // produces.
-                return m_dataset && m_dataset->supportsDerivedFields()
-                    && !m_dataset->metadata().isFab
-                    && derivedFieldsReachNextLoad();
+            .unavailableReason = [this]() -> QString {
+                // Each answer names the thing the user would have to change.
+                // Not for a standalone FAB, drilled out of a MultiFab or opened
+                // straight from a file: applying reopens m_datasetPath, and
+                // what that entry describes -- a synthesised metadata, or one
+                // record of a multi-record file -- is not what re-reading the
+                // path produces.
+                if (!m_dataset) {
+                    return tr("Derived fields need an open dataset.");
+                }
+                // Asked before the shape of the next load, because
+                // derivedFieldsReachNextLoad() is also false for a remote
+                // sequence on a peer too old to install them -- and answering
+                // that with the FAB wording below tells the user their dataset
+                // is something it is not, which is the lie this reason exists
+                // to remove. The one case a user can act on is checked first.
+                if (!m_dataset->supportsDerivedFields()) {
+                    // A remote session says so in the words both layers share;
+                    // anything else cannot compute fields at all.
+                    return std::dynamic_pointer_cast<
+                               remote::RemoteDatasetSession>(m_dataset)
+                        ? tr(remote::derivedFieldsUnsupportedMessage)
+                        : tr("This dataset cannot compute fields.");
+                }
+                // Both FABs, not just the drilled one: a standalone FAB opened
+                // straight from a file reopens no better than one drilled out
+                // of a MultiFab.
+                if (m_dataset->metadata().isFab
+                    || m_fabNavigator->fabMode()) {
+                    return tr("Derived fields are not available for a FAB.");
+                }
+                if (!derivedFieldsReachNextLoad()) {
+                    // What is left once the two above are ruled out. Kept so
+                    // every state the availability hook calls unavailable has
+                    // a reason to show, rather than a greyed control saying
+                    // nothing.
+                    return tr("Derived fields are not available for this "
+                              "remote sequence.");
+                }
+                return {};
             },
             .reload = [this] { reloadCurrentDataset(); },
+            // Which asks nothing of a session that already carries the list,
+            // and remembers the ask it does make, so pressing Apply on an
+            // unchanged list repeatedly starts one reload rather than one
+            // each time.
+            .reloadIfMissing = [this] { reloadIfDefinitionsMoved(); },
             .chooseFile =
                 [this](QWidget*, bool forSaving) {
                     // Parented to the window, not to the editor that asked:
@@ -607,6 +640,17 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_sequenceController, &SequenceController::frameLoadFailed,
         this, [this](const QString& message) {
             statusBar()->showMessage(tr("Frame load failed"));
+            // Armed across the stop below and cleared after it. Stopping is
+            // where the frames' standing aside is made good -- setPlaybackMode
+            // asks for the reload once there is no next frame to read the list
+            // -- and asking from here would reopen the frame that just failed,
+            // against the same unreadable file or the same connection that has
+            // gone, for a second report of one failure. Cleared afterwards
+            // because a reload handed to the sequence and then failed installs
+            // nothing, so the memo must not remember it as asked: the epoch
+            // has not moved, and without the clear the next load could not ask
+            // either.
+            m_reloadAskedFor = {m_derivedFields->definitions(), m_sessionEpoch};
             // Stop playing. Playback wraps, so without this it comes back to
             // the same unreadable frame -- or the same disconnected server --
             // every cycle, raising a diagnostic each time. The user is left on
@@ -616,6 +660,7 @@ MainWindow::MainWindow(QWidget* parent)
             if (m_playbackMode == PlaybackMode::Sequence) {
                 setPlaybackMode(PlaybackMode::None);
             }
+            m_reloadAskedFor.reset();
             // During animation export the failure is reported by the export
             // handler; avoid a second dialog.
             const bool wasExporting = m_animationExporter->active();
@@ -1534,13 +1579,13 @@ QString MainWindow::chooseExpressionListPath(QWidget* parent, bool forSaving)
     return path;
 }
 
-void MainWindow::reloadCurrentDataset()
+bool MainWindow::reloadCurrentDataset()
 {
     // Not while closing: another window's Apply reaches every window, and a
     // worker started here would hold the I/O mutex against the quit. The
     // completion handler checks m_closing, but the read still runs.
-    if (m_closing || !m_dataset || m_datasetPath.empty()) {
-        return;
+    if (m_closing || !m_dataset || m_datasetPath.empty() || !m_openMetadata) {
+        return false;
     }
     if (m_playbackMode == PlaybackMode::Sequence) {
         // Mid-playback: reloading here would restart the frame under the user,
@@ -1555,14 +1600,17 @@ void MainWindow::reloadCurrentDataset()
         // definition uninstalled for good, with the editor reporting that it
         // had been applied.
         m_sequenceController->invalidatePrefetch();
-        return;
+        // Nothing was reloaded, which the caller has to know: a reload only
+        // asked for is not one that happened, and treating the two alike is
+        // how the definition would stay uninstalled for good.
+        return false;
     }
     if (m_sequenceController->hasSequence()) {
         // A prefetched frame was rendered against the previous field list.
         m_sequenceController->invalidatePrefetch();
         m_sequenceController->goToFrame(
             m_sequenceController->currentIndex(), true);
-        return;
+        return true;
     }
     // Not openDataset: that ends the sequence, drops the zoom and closes the
     // line-plot, dataset and volume windows. This is the same reload a
@@ -1592,6 +1640,20 @@ void MainWindow::reloadCurrentDataset()
     // replayed against the new session by the next unrelated request.
     m_pendingAllViews = false;
     m_pendingViews.clear();
+    // A remote dataset is reopened on *its own* connection, not on whatever
+    // the session controller currently holds: server dataset ids come from a
+    // counter per connection, so a reload over a newer connection would
+    // restart them at 1 and let a cached display range alias a renumbered
+    // field. A connection that has gone fails the reload cleanly instead,
+    // which is the honest outcome.
+    if (const auto remote
+        = std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)) {
+        requestInitialSlice(m_datasetPath, generation, std::nullopt, {},
+            buildFrameSpec(),
+            SliceLoad{{}, RemoteOpen{remote->connection(),
+                           remote->remotePath()}});
+        return true;
+    }
     // No prepared metadata and no data root: with none, the session derives
     // both from the path, which is what re-reading a plotfile means. A FAB
     // drilled out of a MultiFab cannot be reopened this way -- its metadata is
@@ -1600,6 +1662,7 @@ void MainWindow::reloadCurrentDataset()
     // availability hook).
     requestInitialSlice(
         m_datasetPath, generation, std::nullopt, {}, buildFrameSpec());
+    return true;
 }
 
 void MainWindow::refreshMetadataDisplay()

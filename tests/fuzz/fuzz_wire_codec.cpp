@@ -128,6 +128,48 @@ void checkConverted(
             fail("DatasetOpened converter accepted an inconsistent level");
         }
     }
+    // The 1.4 tail, checked like the request's definitions are. This compares
+    // the buffer against what fromWire made of it, so it is the decode that is
+    // pinned: one that dropped the count, or that transposed a skip's name and
+    // reason, would otherwise pass every iteration.
+    if (result.derivedFieldCount != wire.derived_field_count
+        || result.derivedFieldSkips.size() != wire.derived_field_skips.size()) {
+        fail("DatasetOpened derived fields did not convert faithfully");
+    }
+    for (std::size_t i = 0; i < result.derivedFieldSkips.size(); ++i) {
+        const auto& entry = wire.derived_field_skips[i];
+        const auto& skip = result.derivedFieldSkips[i];
+        if (!entry) {
+            fail("DatasetOpened derived-field skip did not convert "
+                 "faithfully");
+        }
+        // Equality unless the decoder was entitled to clamp. What survives a
+        // clamp is a shape, not a length: a prefix of what was sent followed
+        // by the marker. A bare length bound would be satisfied by an empty
+        // reason or a transposed field, which is what this check exists to
+        // catch; an exact length would reject the legitimate case, since the
+        // clamp backs off a partial UTF-8 sequence and lands under the bound.
+        // No length lower bound either -- an input of continuation bytes drives
+        // the backoff to zero, leaving just the marker.
+        auto clamped = [&] {
+            if (skip.reason.size() > amrvis::maximumExpressionBytes
+                || !skip.reason.ends_with("...")) {
+                return false;
+            }
+            const auto kept = std::string_view{skip.reason}.substr(
+                0, skip.reason.size() - 3);
+            return entry->reason.starts_with(kept);
+        };
+        const auto reasonKept
+            = entry->reason.size() <= amrvis::maximumExpressionBytes
+            ? skip.reason == entry->reason
+            : clamped();
+        if (skip.name != entry->name
+            || skip.definitionIndex != entry->definition_index || !reasonKept) {
+            fail("DatasetOpened derived-field skip did not convert "
+                 "faithfully");
+        }
+    }
 }
 
 void checkConverted(
@@ -604,6 +646,18 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         opened.level_range_available = {1, 0, 1, 1};
         opened.metadata_metrics = std::make_unique<fb::MetadataReadMetricsT>();
         opened.cache = std::make_unique<fb::CacheStateT>();
+        // Protocol 1.4, and non-default on purpose, for the same reason the
+        // request seed carries definitions: 0 and an empty vector are the
+        // schema defaults and are left out of the buffer, so a seed without
+        // them would be byte-identical to a pre-1.4 reply and would reach
+        // none of the reply-side bounds. One of the two fields is derived,
+        // and one skip so the vector is present for the mutator to grow.
+        opened.derived_field_count = 1;
+        auto skip = std::make_unique<fb::DerivedFieldSkipT>();
+        skip->definition_index = 1;
+        skip->name = "twice";
+        skip->reason = "no field or coordinate is named 'speed'";
+        opened.derived_field_skips.push_back(std::move(skip));
         add(std::move(opened));
     }
     {

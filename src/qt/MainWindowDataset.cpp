@@ -1024,15 +1024,15 @@ void MainWindow::requestInitialSlice(
     // file range (falling back to Visible when metadata statistics are
     // unavailable), linear scale, whole domain, midpoint positions.
     FrameSliceSpec spec = initialSpec.value_or(FrameSliceSpec{});
-    // Set whatever the spec came from: the derived-field list is a viewer-wide
-    // setting rather than per-frame state, and the specs that reach here
-    // without it are the ones that matter most -- a fresh open (which has no
-    // spec at all, so a list restored from settings would never be installed)
-    // and a FAB round-trip's default. A remote session is already open and
-    // installs none (see FrameSliceSpec::derivedFields).
-    spec.derivedFields = preparedSession
-        ? std::vector<DerivedFieldDefinition>{}
-        : m_derivedFields->definitions();
+    // Only where there is no spec to have decided already: a fresh open has
+    // none, so a list restored from settings would otherwise never be
+    // installed. A spec built by buildFrameSpec has its own rule and must not
+    // be second-guessed here -- two rules for one field is how they drift.
+    if (!initialSpec) {
+        spec.derivedFields = preparedSession
+            ? std::vector<DerivedFieldDefinition>{}
+            : m_derivedFields->definitions();
+    }
     if (!initialSpec) {
         spec.palette = m_paletteController->palette();
         spec.displayMode = m_displayMode;
@@ -1130,7 +1130,7 @@ void MainWindow::requestInitialSlice(
                         m_range->setSelection({restoredSpec->rangeMode,
                             restoredSpec->userRange, restoredSpec->logarithmic});
                         m_range->setTrackedField(
-                            m_fieldSelector->currentData().toUInt());
+                            m_fieldSelector->currentText());
                         m_range->commitFieldRange(m_range->trackedField());
                         // The menu was rebuilt by configureSliceControls
                         // above, while the combo still sat on field 0; it is

@@ -146,7 +146,7 @@ void RangeController::setNumberFormat(const QString& format)
     m_maximum->setNumberFormat(format);
 }
 
-void RangeController::switchField(std::uint32_t field)
+void RangeController::switchField(const QString& field)
 {
     if (field == m_trackedField) {
         return;
@@ -156,7 +156,7 @@ void RangeController::switchField(std::uint32_t field)
     applyFieldRange(field);
 }
 
-void RangeController::commitFieldRange(std::uint32_t field)
+void RangeController::commitFieldRange(const QString& field)
 {
     FieldRange range;
     range.mode = mode();
@@ -166,10 +166,10 @@ void RangeController::commitFieldRange(std::uint32_t field)
     m_fieldRanges[field] = std::move(range);
 }
 
-void RangeController::applyFieldRange(std::uint32_t field)
+void RangeController::applyFieldRange(const QString& field)
 {
-    const auto it = m_fieldRanges.find(field);
-    const auto range = it != m_fieldRanges.end() ? it->second : FieldRange{};
+    const auto it = m_fieldRanges.constFind(field);
+    const auto range = it != m_fieldRanges.constEnd() ? it.value() : FieldRange{};
     {
         const QSignalBlocker minBlocker(m_minimum);
         const QSignalBlocker maxBlocker(m_maximum);
@@ -185,7 +185,7 @@ void RangeController::applyFieldRange(std::uint32_t field)
 void RangeController::reset()
 {
     m_fieldRanges.clear();
-    m_trackedField = 0;
+    m_trackedField.clear();
     const QSignalBlocker minBlocker(m_minimum);
     const QSignalBlocker maxBlocker(m_maximum);
     setMode(RangeMode::File);
@@ -196,7 +196,7 @@ void RangeController::reset()
 }
 
 void RangeController::updateAvailability(
-    const Availability& availability, std::uint32_t field)
+    const Availability& availability, const QString& field)
 {
     auto* model = qobject_cast<QStandardItemModel*>(m_mode->model());
     if (model == nullptr) {

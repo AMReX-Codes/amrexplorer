@@ -124,9 +124,6 @@ public:
 
 signals:
     void statusMessage(const QString& message, int timeoutMs);
-    // The committed list changed. The host reloads through the hook rather
-    // than off this signal; this is for anything else that shows the list.
-    void definitionsChanged();
 
 private:
     Hooks m_hooks;

@@ -1321,7 +1321,9 @@ if(TARGET amrexplorer_qt)
             -DMODE=derived-field
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
-    set_tests_properties(qt_derived_field_smoke PROPERTIES TIMEOUT 60)
+    # Three application launches plus two fixture copies, each launch with a
+    # 30 s watchdog of its own: 60 s cannot tell a hang from a slow machine.
+    set_tests_properties(qt_derived_field_smoke PROPERTIES TIMEOUT 150)
 
     # Applying a definition while a plotfile sequence is open: the frame on
     # screen reloads with it and the sequence is still navigable afterwards,

@@ -33,10 +33,13 @@ MainWindow::MainWindow(QWidget* parent)
     m_derivedFields = new DerivedFieldController(
         DerivedFieldController::Hooks{
             .available = [this] {
-                // Not while a FAB drilled out of a MultiFab is displayed:
-                // applying reopens m_datasetPath, and that entry's metadata
-                // exists only as something the navigator synthesised.
+                // Not for a standalone FAB, drilled out of a MultiFab or
+                // opened straight from a file: applying reopens m_datasetPath,
+                // and what that entry describes -- a synthesised metadata, or
+                // one record of a multi-record file -- is not what re-reading
+                // the path produces.
                 return m_dataset && m_dataset->supportsDerivedFields()
+                    && !m_dataset->metadata().isFab
                     && !m_fabNavigator->fabMode();
             },
             .storedMetadata = [this]() -> std::optional<DatasetMetadata> {
@@ -55,8 +58,13 @@ MainWindow::MainWindow(QWidget* parent)
             .reload = [this] { reloadCurrentDataset(); },
             .settings = [] { return makeSettingsPtr(); },
             .chooseFile =
-                [this](QWidget* dialog, bool forSaving) {
-                    return chooseExpressionListPath(dialog, forSaving);
+                [this](QWidget*, bool forSaving) {
+                    // Parented to the window, not to the editor that asked:
+                    // the editor is WA_DeleteOnClose, and a dataset load
+                    // settling inside the file dialog's nested loop can close
+                    // it -- destroying the file dialog with it. loadPaletteFile
+                    // parents to the window for the same reason.
+                    return chooseExpressionListPath(this, forSaving);
                 },
         },
         this);
@@ -250,7 +258,7 @@ MainWindow::MainWindow(QWidget* parent)
             // animation blocks signals and preserves the index, so the range
             // stays constant across frames.
             if (m_controlsReady && index >= 0) {
-                m_range->switchField(m_fieldSelector->itemData(index).toUInt());
+                m_range->switchField(m_fieldSelector->itemText(index));
             }
             // A deferred full-domain range store (m_pendingRangeStore) is keyed
             // to the field/level/mode in effect when it was queued. Changing any

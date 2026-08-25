@@ -106,10 +106,6 @@ int main(int argc, char** argv)
         Fixture fixture;
         fixture.settingsPath = dir.filePath(QStringLiteral("apply.ini"));
         DerivedFieldController controller(fixture.hooks());
-        int changes = 0;
-        QObject::connect(&controller,
-            &DerivedFieldController::definitionsChanged, &application,
-            [&changes] { ++changes; });
 
         // A refusal changes nothing: not the committed list, not the settings,
         // and no reload.
@@ -120,7 +116,7 @@ int main(int argc, char** argv)
             "the refusal did not name the definition");
         require(refusal->message.contains(QStringLiteral("absent")),
             "the refusal does not say what was missing");
-        require(controller.definitions().empty() && changes == 0
+        require(controller.definitions().empty()
                 && fixture.reloads == 0,
             "a refused apply still changed the committed list");
         require(!QFile::exists(fixture.settingsPath),
@@ -134,7 +130,7 @@ int main(int argc, char** argv)
             {"twice", "2*speed"}};
         require(!controller.apply(good).has_value(),
             "a resolvable list was refused");
-        require(controller.definitions() == good && changes == 1
+        require(controller.definitions() == good
                 && fixture.reloads == 1,
             "an accepted apply did not commit and reload exactly once");
 

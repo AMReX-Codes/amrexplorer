@@ -126,7 +126,13 @@ void DerivedFieldController::refreshAvailability()
     // An editor left open over a dataset that has gone (or a remote one that
     // cannot take derived fields) would apply into nothing.
     if (!available && m_dialog) {
-        m_dialog->close();
+        // Cleared here rather than left to the deleteLater that close()
+        // schedules: until that is delivered the pointer is still set, and a
+        // showEditor before then would raise the dying dialog instead of
+        // opening one.
+        auto* dialog = m_dialog.data();
+        m_dialog = nullptr;
+        dialog->close();
     }
 }
 
@@ -156,7 +162,6 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
             save(*settings);
         }
     }
-    emit definitionsChanged();
     if (m_hooks.reload) {
         m_hooks.reload();
     }

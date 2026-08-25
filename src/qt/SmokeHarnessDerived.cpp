@@ -254,17 +254,27 @@ void armDerivedChecks(amrvis::qt::MainWindow& window, QApplication& application)
                     return;
                 }
                 // And the Variable menu, which is the same selection shown
-                // twice and has its own rebuild.
-                const auto actions = window.menuBar()->actions();
+                // twice and has its own rebuild. That menu alone: scanning
+                // every menu would pass on the name turning up anywhere at
+                // all, which is not what the failure below claims.
+                const QMenu* variableMenu = nullptr;
+                for (const auto* menuAction : window.menuBar()->actions()) {
+                    auto* menu = menuAction->menu();
+                    if (menu != nullptr
+                        && menuAction->text().remove(QLatin1Char('&'))
+                            == QStringLiteral("Variable")) {
+                        variableMenu = menu;
+                    }
+                }
+                if (variableMenu == nullptr) {
+                    qCritical("there is no Variable menu to look in");
+                    finish(10);
+                    return;
+                }
                 bool inVariableMenu = false;
-                for (const auto* menuAction : actions) {
-                    if (menuAction->menu() == nullptr) {
-                        continue;
-                    }
-                    for (const auto* entry : menuAction->menu()->actions()) {
-                        inVariableMenu = inVariableMenu
-                            || entry->text() == QStringLiteral("product");
-                    }
+                for (const auto* entry : variableMenu->actions()) {
+                    inVariableMenu = inVariableMenu
+                        || entry->text() == QStringLiteral("product");
                 }
                 if (!inVariableMenu) {
                     qCritical("the derived field did not reach the Variable "

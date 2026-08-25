@@ -49,7 +49,6 @@ public:
     // the definition it belongs to so the user is looking at what failed.
     void showError(
         const QString& message, std::optional<std::size_t> definitionIndex);
-    void clearError();
     // The row being edited, so a host that replaces the draft with an
     // equivalent list can leave the user where they were.
     [[nodiscard]] std::optional<std::size_t> selectedIndex() const;
@@ -62,6 +61,7 @@ signals:
     void exportRequested();
 
 private:
+    void clearError();
     void rebuildList(std::optional<std::size_t> select);
     void showSelected();
     void addDefinition();

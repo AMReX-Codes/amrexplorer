@@ -200,17 +200,21 @@ int main(int argc, char* argv[])
         controller.createToolbarWidgets(&toolbar);
         controller.setControlsReady(true);
         const auto widgets = widgetsOf(toolbar);
-        require(controller.trackedField() == 0, "tracked field does not start at 0");
+        // Nothing is tracked until a field is selected, which a name can say
+        // and a field id could not.
+        require(controller.trackedField().isEmpty(),
+            "a fresh controller already tracks a field");
+        controller.setTrackedField(QStringLiteral("f0"));
         selectMode(*widgets.mode, RangeMode::User);
         widgets.minimum->setValue(10.0);
         widgets.maximum->setValue(20.0);
-        controller.switchField(3);
-        require(controller.trackedField() == 3
+        controller.switchField(QStringLiteral("f3"));
+        require(controller.trackedField() == QStringLiteral("f3")
                 && controller.mode() == RangeMode::File
                 && !controller.selection().userRange
                 && !widgets.minimum->isEnabled(),
             "an unknown field did not load the default");
-        controller.switchField(3);
+        controller.switchField(QStringLiteral("f3"));
         require(controller.mode() == RangeMode::File,
             "switching to the same field changed something");
         // Field 3 gets its own User range, different from field 0's, so each
@@ -221,32 +225,32 @@ int main(int argc, char* argv[])
         widgets.minimum->setValue(-5.0);
         widgets.maximum->setValue(5.0);
         const auto edits = observed.userRange;
-        controller.switchField(0);
-        require(controller.trackedField() == 0
+        controller.switchField(QStringLiteral("f0"));
+        require(controller.trackedField() == QStringLiteral("f0")
                 && controller.mode() == RangeMode::User
                 && controller.selection().userRange == std::pair{10.0, 20.0}
                 && widgets.minimum->isEnabled(),
             "switching back did not restore the field's User range");
-        controller.switchField(3);
+        controller.switchField(QStringLiteral("f3"));
         require(controller.selection().userRange == std::pair{-5.0, 5.0},
             "the other field's snapshot was not kept");
         require(observed.userRange == edits && observed.mode == 2,
             "a field switch announced a change");
         controller.setSelection({RangeMode::Visible, std::nullopt, false});
-        controller.setTrackedField(7);
-        controller.commitFieldRange(7);
-        controller.switchField(0);
-        controller.switchField(7);
+        controller.setTrackedField(QStringLiteral("f7"));
+        controller.commitFieldRange(QStringLiteral("f7"));
+        controller.switchField(QStringLiteral("f0"));
+        controller.switchField(QStringLiteral("f7"));
         require(controller.mode() == RangeMode::Visible,
             "commit did not record the field's mode");
         controller.reset();
-        require(controller.trackedField() == 0
+        require(controller.trackedField().isEmpty()
                 && controller.mode() == RangeMode::File
                 && widgets.minimum->value() == 0.0
                 && widgets.maximum->value() == 1.0
                 && !widgets.minimum->isEnabled(),
             "reset did not restore the defaults");
-        controller.switchField(3);
+        controller.switchField(QStringLiteral("f3"));
         require(controller.mode() == RangeMode::File,
             "reset did not forget the fields");
     }
@@ -268,7 +272,7 @@ int main(int argc, char* argv[])
             return model->item(widgets.mode->findData(static_cast<int>(mode)));
         };
         selectMode(*widgets.mode, RangeMode::Level);
-        controller.updateAvailability({.file = true, .level = false}, 0);
+        controller.updateAvailability({.file = true, .level = false}, QStringLiteral("f0"));
         require(!item(RangeMode::Level)->isEnabled()
                 && !item(RangeMode::Level)->toolTip().isEmpty()
                 && item(RangeMode::File)->isEnabled()
@@ -282,21 +286,51 @@ int main(int argc, char* argv[])
         require(observed.mode == 1,
             "the fallback announced a mode change (only the user's Level pick "
             "should have)");
-        controller.switchField(1);
-        controller.switchField(0);
+        controller.switchField(QStringLiteral("f1"));
+        controller.switchField(QStringLiteral("f0"));
         require(controller.mode() == RangeMode::Visible,
             "the fallback was not recorded in the field's snapshot");
-        controller.updateAvailability({.file = true, .level = true}, 0);
+        controller.updateAvailability({.file = true, .level = true}, QStringLiteral("f0"));
         require(item(RangeMode::Level)->isEnabled()
                 && item(RangeMode::Level)->toolTip().isEmpty()
                 && controller.mode() == RangeMode::Visible
                 && observed.statuses.size() == 1,
             "restored availability changed the mode or re-announced");
         selectMode(*widgets.mode, RangeMode::User);
-        controller.updateAvailability({.file = false, .level = false}, 0);
+        controller.updateAvailability({.file = false, .level = false}, QStringLiteral("f0"));
         require(controller.mode() == RangeMode::User
                 && widgets.minimum->isEnabled(),
             "User was disturbed by metadata modes going away");
+    }
+
+    {
+        // A field's remembered range follows its name, not its position. The
+        // ids move whenever the field list does -- a sequence frame that lists
+        // fewer fields, or a derived definition that one frame cannot resolve
+        // and leaves out -- and keyed by id the memory handed the range of
+        // whichever field used to sit at that number.
+        QToolBar toolbar;
+        RangeController controller;
+        controller.createToolbarWidgets(&toolbar);
+        controller.setControlsReady(true);
+        const auto widgets = widgetsOf(toolbar);
+
+        controller.setTrackedField(QStringLiteral("speed"));
+        selectMode(*widgets.mode, RangeMode::User);
+        widgets.minimum->setValue(3.0);
+        widgets.maximum->setValue(4.0);
+        controller.commitFieldRange(QStringLiteral("speed"));
+
+        // Another field, then back -- as a reload that renumbered the list
+        // would leave things.
+        controller.switchField(QStringLiteral("drag"));
+        require(controller.mode() == RangeMode::File,
+            "an unseen field inherited a remembered range");
+        controller.switchField(QStringLiteral("speed"));
+        require(controller.mode() == RangeMode::User
+                && widgets.minimum->value() == 3.0
+                && widgets.maximum->value() == 4.0,
+            "the field's own range did not come back with its name");
     }
 
     std::cout << "range controller tests passed\n";

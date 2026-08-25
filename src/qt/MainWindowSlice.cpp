@@ -30,11 +30,6 @@ void populateLevelCombo(QComboBox* combo, int finestLevel)
 void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
 {
     m_controlsReady = true;
-    // Both configure paths (a single dataset and a sequence frame) come
-    // through here, so this is where the editor's availability is re-derived
-    // for the newly installed session. What that session could *not* install
-    // is reported once its slices are on screen -- showSlice clears the status
-    // bar, so a message from here would not survive the load that follows it.
     m_fieldSelector->setEnabled(true);
     m_levelSelector->setEnabled(true);
     m_range->setControlsReady(true);
@@ -108,16 +103,24 @@ void MainWindow::restoreVectorFields(const std::array<std::string, 3>& names)
     if (!m_dataset) {
         return;
     }
-    const auto& metadata = m_dataset->metadata();
+    const auto& fields = m_dataset->metadata().fields;
     std::array<int*, 3> selected{
         &m_vectorUField, &m_vectorVField, &m_vectorWField};
     for (std::size_t axis = 0; axis < names.size(); ++axis) {
         auto* field = selected[axis];
-        if (*field < 0) {
+        if (*field < 0 || names[axis].empty()) {
             continue;
         }
-        *field = static_cast<int>(resolveSpecField(metadata, names[axis],
-            static_cast<std::uint32_t>(*field)));
+        // Only where the name is actually here. Clamping an unresolved one
+        // into range instead would put all three on the same field *and* look
+        // valid to ensureVectorFieldDefaults, which then skips the re-detection
+        // that an out-of-range id is precisely the signal for.
+        for (std::size_t candidate = 0; candidate < fields.size(); ++candidate) {
+            if (fields[candidate].name == names[axis]) {
+                *field = static_cast<int>(candidate);
+                break;
+            }
+        }
     }
 }
 
@@ -1682,7 +1685,7 @@ void MainWindow::configureSequenceControls(
         // field list, so the widgets have to be told which field they now
         // represent or the next switch commits this frame's range onto
         // whatever field used to hold that id.
-        m_range->setTrackedField(m_fieldSelector->currentData().toUInt());
+        m_range->setTrackedField(m_fieldSelector->currentText());
         m_levelSelector->clear();
         populateLevelCombo(m_levelSelector, metadata.finestLevel);
         const auto levelIndex = m_levelSelector->findData(previousLevel);
@@ -1752,19 +1755,23 @@ void MainWindow::updateRangeModeAvailability()
             .level = m_dataset->rangeAvailable(RangeRequest{
                 field, maximumLevel, composition, RangeScope::Level}),
         },
-        field.value);
+        m_fieldSelector->currentText());
 }
 
 FrameSliceSpec MainWindow::buildFrameSpec()
 {
     FrameSliceSpec spec;
-    // The session a frame load opens installs these. A remote session cannot,
-    // and the list can be non-empty over one (restored from settings, or
-    // applied to a local dataset before connecting), so the spec carries them
-    // only where they can be honoured -- see FrameSliceSpec::derivedFields.
-    spec.derivedFields = m_dataset && m_dataset->supportsDerivedFields()
-        ? m_derivedFields->definitions()
-        : std::vector<DerivedFieldDefinition>{};
+    // A viewer-wide setting, so it travels with every spec except where the
+    // load it is built for cannot install it: a remote sequence, whose
+    // sessions fix their field lists on the server, and a FAB drilled out of a
+    // MultiFab, where the editor is unavailable for the same reason the reload
+    // cannot rebuild one. Deliberately not asked of m_dataset: a sequence
+    // builds its first spec while the *outgoing* dataset is still installed
+    // (see prepareSequence), so frame 0 would load without the definitions and
+    // frame 1 would make them appear.
+    spec.derivedFields = m_remoteSequence || m_fabNavigator->fabMode()
+        ? std::vector<DerivedFieldDefinition>{}
+        : m_derivedFields->definitions();
     spec.displayMode = m_displayMode;
     spec.palette = m_paletteController->palette();
     spec.contourCount = m_contourCount;

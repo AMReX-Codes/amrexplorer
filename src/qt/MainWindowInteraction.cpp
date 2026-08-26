@@ -237,16 +237,19 @@ void MainWindow::updateOverlay(PlaneViewState& state)
         // painter paths. Scene coordinates are continuous raster pixels
         // (pixel k's center at k + 0.5), hence the +0.5 on both axes; the
         // spherical mapping's sceneFromPlanePixel is likewise edge-based.
-        // Without the shift every contour draws half a display pixel up and
-        // left, poking out of the image at the left/top boundary and
-        // stopping half a pixel short at the right/bottom. Plane row 0 is
-        // the bottom row; the displayed image is mirrored vertically, so
-        // scene y runs opposite to plane y (see showSlice).
+        // Without the shift every contour lands half a display pixel off the
+        // cell centers, overflowing one boundary and stopping half a pixel
+        // short of the opposite one. The two paths miss in opposite vertical
+        // directions: Cartesian up and left, spherical down and left, because
+        // its row goes through sceneFromDisplay, where dropping the half-row
+        // *raises* scene y instead of lowering it. Plane row 0 is the bottom
+        // row; the displayed image is mirrored vertically, so scene y runs
+        // opposite to plane y (see showSlice).
         const auto contourColor = overlayColor();
         const bool spherical = displayIsSpherical();
         const auto mapping = planeMapping(state);
         const auto height = static_cast<double>(state.plane->height);
-        // Cartesian: plane pixel maps 1:1 to the scene (only the vertical flip).
+        // Cartesian: shift to the pixel center, then flip (scene y is top-down).
         // Spherical: re-project each (r, theta) plane pixel through the warp.
         const auto toScene = [&](const auto& point) -> QPointF {
             if (spherical) {

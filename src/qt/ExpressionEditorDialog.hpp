@@ -80,6 +80,10 @@ public:
     // refusal stays readable while they decide.
     void showError(const QString& message,
         std::optional<std::size_t> definitionIndex, bool offerAnyway = false);
+    // Takes a standing refusal and its offer down. The host calls it when the
+    // dataset the verdict was about is replaced; every change to the draft
+    // does it from in here, for the same reason.
+    void clearRefusal();
     // Confirms an accepted Apply in the same place a refusal appears. Said
     // here rather than in the status bar, which the reload this announces
     // clears as soon as its slices arrive.
@@ -137,7 +141,12 @@ public:
     // is the user asking. A refusal replaces it too -- the same sentence in
     // red and in amber says the advisory did not stop anything while it just
     // did.
-    void showResolutionWarning(const QString& message);
+    //
+    // `blocking` says the message is a fault Apply will refuse rather than a
+    // limit of the data. The two read differently on purpose -- the advisory
+    // is deliberately not the error's red -- so a syntax error must not wear
+    // the colour that promises nothing was stopped.
+    void showResolutionWarning(const QString& message, bool blocking = false);
 
 signals:
     // The draft is offered for validation; the host accepts it (setDraft, and
@@ -194,6 +203,13 @@ private:
     QPushButton* m_remove = nullptr;
     QPushButton* m_apply = nullptr;
     QPushButton* m_applyAnyway = nullptr;
+    // The draft revision the standing refusal was computed against, when one
+    // is standing. An offer to overrule a verdict means nothing once the draft
+    // has moved -- the verdict was about a list that no longer exists, and
+    // acting on it would commit rows nothing ever examined. Every change to
+    // the draft clears the refusal, and this is what makes that a guarantee
+    // rather than a promise kept at each site.
+    std::optional<std::uint64_t> m_refusalRevision;
     // Set while the widgets are being written from the draft, so the edit
     // signals do not write straight back into it.
     bool m_loading = false;

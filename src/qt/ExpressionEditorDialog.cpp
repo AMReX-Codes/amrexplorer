@@ -206,12 +206,21 @@ ExpressionEditorDialog::ExpressionEditorDialog(
             // straight onto an identifier the two lex as one unknown symbol,
             // which is the same silent corruption as inserting at the front.
             // A space is safe after anything, operators included.
-            const auto before = m_expression->toPlainText().left(
-                m_expression->textCursor().position());
+            const auto text = m_expression->toPlainText();
+            const auto at = m_expression->textCursor().position();
+            const auto before = text.left(at);
+            const auto after = text.mid(at);
+            auto written = asSymbol(item->text());
             if (!before.isEmpty() && !before.back().isSpace()) {
-                m_expression->insertPlainText(QStringLiteral(" "));
+                written.prepend(QLatin1Char(' '));
             }
-            m_expression->insertPlainText(asSymbol(item->text()));
+            // And on the right: dropped into the middle of an identifier the
+            // name would merge with its tail instead of its head, which is the
+            // same silent corruption facing the other way.
+            if (!after.isEmpty() && !after.front().isSpace()) {
+                written.append(QLatin1Char(' '));
+            }
+            m_expression->insertPlainText(written);
             m_expression->setFocus();
         });
     connect(add, &QPushButton::clicked, this, [this] { addDefinition(); });
@@ -227,6 +236,10 @@ ExpressionEditorDialog::ExpressionEditorDialog(
             return;
         }
         m_draft[*index].name = text.trimmed().toStdString();
+        // The refusal was about the draft as it stood; it is not about this
+        // one. Left up it would sit in red beside the advisory this edit is
+        // about to raise, and its offer would commit rows nothing examined.
+        clearError();
         ++m_draftRevision;
         m_list->item(static_cast<int>(*index))
             ->setText(displayName(m_draft[*index]));
@@ -241,6 +254,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
         }
         m_draft[*index].expression =
             m_expression->toPlainText().trimmed().toStdString();
+        clearError();
         ++m_draftRevision;
         emit draftEdited();
     });
@@ -249,8 +263,16 @@ ExpressionEditorDialog::ExpressionEditorDialog(
         emit applyRequested();
     });
     connect(m_applyAnyway, &QPushButton::clicked, this, [this] {
+        // Only for the draft the refusal was computed against. Every edit
+        // clears the refusal, so this should be unreachable -- it is the
+        // check that makes "should" into "cannot", because what it guards is
+        // committing rows the dataset was never asked about.
+        const auto offered = m_refusalRevision.has_value()
+            && *m_refusalRevision == m_draftRevision;
         clearError();
-        emit applyAnywayRequested();
+        if (offered) {
+            emit applyAnywayRequested();
+        }
     });
     // Explicitly: a QDialogButtonBox parented to a dialog does *not* have its
     // rejected() wired to that dialog's reject() -- probed, not assumed --
@@ -296,8 +318,20 @@ void ExpressionEditorDialog::setStoredFields(const QStringList& names)
     m_fieldsCaption->setVisible(any);
 }
 
-void ExpressionEditorDialog::showResolutionWarning(const QString& message)
+void ExpressionEditorDialog::clearRefusal()
 {
+    clearError();
+}
+
+void ExpressionEditorDialog::showResolutionWarning(
+    const QString& message, bool blocking)
+{
+    // Red for what Apply will refuse, amber for what only this dataset cannot
+    // do. Set with the text rather than once at construction, because the one
+    // label carries both and the colour is the whole of what tells them apart.
+    m_warning->setStyleSheet(blocking
+            ? QStringLiteral("QLabel { color: red; }")
+            : QStringLiteral("QLabel { color: #b8860b; }"));
     m_warning->setText(message);
     m_warning->setVisible(!message.isEmpty());
 }
@@ -312,6 +346,10 @@ void ExpressionEditorDialog::markDraftCommitted()
     // The draft's meaning moved even though its rows did not, and the
     // revision is what an asynchronous reader compares against.
     ++m_draftRevision;
+    // Nothing standing about the old reading survives it: the refusal, its
+    // offer, and the advisory were all about a draft that was the user's.
+    clearError();
+    showResolutionWarning({});
     m_notice->clear();
     m_notice->setVisible(false);
 }
@@ -332,14 +370,18 @@ void ExpressionEditorDialog::setCommitted(
 void ExpressionEditorDialog::showError(const QString& message,
     std::optional<std::size_t> definitionIndex, bool offerAnyway)
 {
-    m_applyAnyway->setVisible(offerAnyway);
-    m_applied->clear();
-    m_applied->setVisible(false);
+    // Before anything is shown: selecting a different row runs the selection
+    // handler, which clears the error box -- so a refusal set up first would
+    // be taken down again on its way in, and the offer with it.
     if (definitionIndex && *definitionIndex < m_draft.size()) {
         m_list->setCurrentRow(static_cast<int>(*definitionIndex));
     }
+    m_applied->clear();
+    m_applied->setVisible(false);
     m_error->setText(message);
     m_error->setVisible(true);
+    m_applyAnyway->setVisible(offerAnyway);
+    m_refusalRevision = m_draftRevision;
     // The refusal supersedes the advisory: they carry the same sentence when
     // Apply refuses what the warning was about, and showing it twice -- once
     // in red, once in amber -- says the advisory did not stop anything at the
@@ -376,6 +418,7 @@ void ExpressionEditorDialog::clearError()
     m_error->clear();
     m_error->setVisible(false);
     m_applyAnyway->setVisible(false);
+    m_refusalRevision.reset();
     m_applied->clear();
     m_applied->setVisible(false);
 }

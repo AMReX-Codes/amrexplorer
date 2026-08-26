@@ -12,6 +12,7 @@
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QTextCursor>
 #include <QTemporaryDir>
 #include <QTextDocument>
 
@@ -503,6 +504,52 @@ int main(int argc, char** argv)
                 == (QStringLiteral("density ") + written).toStdString(),
             "a field written in from the list did not land at the end, "
             "separated from what was there");
+
+        // A refusal that names a row other than the selected one still
+        // carries its offer: showError selects that row, and the selection
+        // handler clears the error box on its way past.
+        dialog->setCommitted({{"a", "density"}, {"b", "temperature"}});
+        list->setCurrentRow(0);
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        list->setCurrentRow(1);
+        source->setPlainText(QStringLiteral("temperature * 3"));
+        applyButton->click();
+        require(!error->text().isEmpty() && anyway->isVisible(),
+            "a refusal on an unselected row arrived without its offer");
+
+        // Editing after a refusal takes it down, so the advisory never paints
+        // under it -- and the offer cannot commit rows nothing examined.
+        source->setPlainText(QStringLiteral("nonesuch * 3"));
+        require(error->text().isEmpty() && !anyway->isVisible(),
+            "a refusal outlived the draft it was about");
+
+        // Nor does it survive the dataset it named being replaced.
+        applyButton->click();
+        require(!error->text().isEmpty(), "the edit was not refused");
+        controller.refreshAvailability();
+        require(error->text().isEmpty() && !anyway->isVisible(),
+            "a refusal about the previous dataset was left standing");
+
+        // A fault Apply will refuse is not painted in the colour that
+        // promises nothing was stopped.
+        dialog->setDraft({{"t", "density"}});
+        source->setPlainText(QStringLiteral("sqrt("));
+        waitFor([&] { return !warning->text().isEmpty(); });
+        require(warning->styleSheet().contains(QStringLiteral("red")),
+            "a fault Apply will refuse was shown as advice");
+
+        // A field written into the middle of a name is separated from both
+        // sides, not just the one behind the cursor.
+        dialog->setDraft({{"t", "density"}});
+        list->setCurrentRow(0);
+        {
+            auto cursor = source->textCursor();
+            cursor.setPosition(4);
+            source->setTextCursor(cursor);
+        }
+        emit storedFields->itemDoubleClicked(storedFields->item(1));
+        require(dialog->draft()[0].expression == "dens temperature ity",
+            "a field written in mid-name merged with the tail");
 
         // A row still being written is not complained about.
         dialog->setDraft({});

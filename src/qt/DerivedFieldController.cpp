@@ -212,6 +212,10 @@ void DerivedFieldController::refreshAvailability()
         // those out, and repeating it here would read as a correction being
         // demanded. Only what is being typed is measured against the data.
         m_dialog->showResolutionWarning({});
+        // And the refusal, which named the dataset that has just been
+        // replaced -- with an offer to overrule a verdict computed against
+        // data that is gone, where a plain Apply might now succeed.
+        m_dialog->clearRefusal();
         if (m_diagnostics) {
             m_diagnostics->stop();
         }
@@ -255,7 +259,7 @@ void DerivedFieldController::refreshDraftDiagnostics()
     // would send the user looking for a plotfile that has the field when what
     // they have is a typo.
     if (const auto fault = definitionFaultAt(draft, *index)) {
-        m_dialog->showResolutionWarning(fault->message);
+        m_dialog->showResolutionWarning(fault->message, true);
         return;
     }
     // A row *above* this one that cannot be installed makes any verdict below
@@ -282,7 +286,8 @@ void DerivedFieldController::refreshDraftDiagnostics()
     if (const auto fault = validateDerivedFieldGraph(upto)) {
         m_dialog->showResolutionWarning(fault->definitionIndex == *index
                 ? QString::fromStdString(fault->message)
-                : QString{});
+                : QString{},
+            true);
         return;
     }
     if (!m_hooks.resolveAgainstOpenDataset) {

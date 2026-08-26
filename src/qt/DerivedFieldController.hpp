@@ -156,6 +156,12 @@ public:
         // plotfile they are about to open is worth committing. Everything
         // else is wrong wherever it is installed and is not offered.
         bool confirmable = false;
+        // Whether it stops being true when another dataset opens -- which is
+        // not the same question. A refusal that derived fields need an open
+        // dataset, or are not available for a FAB, is about the data and must
+        // not outlive it, but there is nothing to overrule: no expression
+        // could have been written that this one would take.
+        bool dependsOnDataset = false;
     };
 
     // Checks the list and, if it holds, commits it to the store -- from which
@@ -199,6 +205,13 @@ private:
     // by m_diagnostics: it answers a keystroke, and resolving a list costs
     // time in its own length squared.
     void refreshDraftDiagnostics();
+    // What the editor compares to know whether anything it has said could
+    // have stopped being true: why derived fields are unavailable, if they
+    // are, and the shape of the dataset otherwise. Composed in one place
+    // because the editor opening and a session installing have to agree --
+    // two spellings of it made the first refresh after opening look like a
+    // change of dataset.
+    [[nodiscard]] QString datasetKey(const QString& reason) const;
     // What is wrong with a list whatever the data, which is what apply may
     // refuse outright and what the live warning must not blame a dataset for.
     [[nodiscard]] std::optional<Refusal> definitionFault(

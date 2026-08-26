@@ -444,9 +444,14 @@ int main(int argc, char** argv)
             list->setCurrentRow(1);
             source->setPlainText(wide + QStringLiteral(" + f0"));
             quiet();
+            require(!warning->text().isEmpty(),
+                "the fault of the list was never mentioned at all");
             require(!warning->text().contains(QStringLiteral("dataset")),
                 "a list fault in another row was reported as this dataset's "
                 "doing");
+            fixture.storedFields = QStringList{
+                QStringLiteral("density"), QStringLiteral("temperature")};
+            controller.refreshAvailability();
         }
 
         // Typing something and taking it back is not writing a definition, so
@@ -801,6 +806,20 @@ int main(int argc, char** argv)
             QStringLiteral("density"), QStringLiteral("temperature")};
         controller.refreshAvailability();
 
+        // A refusal that the data itself caused goes when the data does, even
+        // though there was never anything to overrule: nothing would say it
+        // again, and it names a state that has gone.
+        dialog->setDraft({{"twice", "density * 2"}});
+        fixture.datasetOpen = false;
+        controller.refreshAvailability();
+        applyButton->click();
+        require(!error->text().isEmpty() && !anyway->isVisible(),
+            "an editor with no dataset did not refuse");
+        fixture.datasetOpen = true;
+        controller.refreshAvailability();
+        require(error->text().isEmpty(),
+            "a refusal naming a state that has gone was left standing");
+
         // A row still being written is not complained about.
         dialog->setDraft({});
         add->click();
@@ -808,6 +827,45 @@ int main(int argc, char** argv)
         quiet();
         require(warning->text().isEmpty(),
             "a half-typed definition was complained about");
+        delete parent;
+    }
+
+    // The key the editor is opened with is the key it is refreshed against.
+    // Spelled two ways, the first session installed after the editor opened --
+    // any sequence frame, or the reload an Apply started -- read as a change of
+    // dataset and took down a verdict that was still true of it.
+    {
+        Fixture fixture;
+        DerivedFieldStore store;
+        DerivedFieldController controller(fixture.hooks(store), store);
+        auto* parent = new QWidget;
+        controller.showEditor(parent);
+        auto* dialog = parent->findChild<ExpressionEditorDialog*>();
+        require(dialog != nullptr, "the editor did not open");
+        auto* add = dialog->findChild<QPushButton*>(
+            QStringLiteral("newExpressionButton"));
+        auto* name =
+            dialog->findChild<QLineEdit*>(QStringLiteral("expressionName"));
+        auto* source = dialog->findChild<QPlainTextEdit*>(
+            QStringLiteral("expressionSource"));
+        auto* applyButton = dialog->findChild<QPushButton*>(
+            QStringLiteral("applyExpressionsButton"));
+        auto* error =
+            dialog->findChild<QLabel*>(QStringLiteral("expressionError"));
+        require(add != nullptr && name != nullptr && source != nullptr
+                && applyButton != nullptr && error != nullptr,
+            "the editor is missing a widget this block drives");
+
+        add->click();
+        name->setText(QStringLiteral("twice"));
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        applyButton->click();
+        require(!error->text().isEmpty(),
+            "a definition this dataset cannot provide was not refused");
+        controller.refreshAvailability();
+        require(!error->text().isEmpty(),
+            "the first session installed after the editor opened was mistaken "
+            "for a change of dataset");
         delete parent;
     }
 

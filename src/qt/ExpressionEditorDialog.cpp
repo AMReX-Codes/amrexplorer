@@ -397,7 +397,8 @@ void ExpressionEditorDialog::setCommitted(
 }
 
 void ExpressionEditorDialog::showError(const QString& message,
-    std::optional<std::size_t> definitionIndex, bool offerAnyway)
+    std::optional<std::size_t> definitionIndex, bool offerAnyway,
+    bool dependsOnDataset)
 {
     // Before anything is shown: selecting a different row runs the selection
     // handler, which clears the error box -- so a refusal set up first would
@@ -411,7 +412,7 @@ void ExpressionEditorDialog::showError(const QString& message,
     m_error->setVisible(true);
     m_applyAnyway->setVisible(offerAnyway);
     m_refusalRevision = m_draftRevision;
-    m_refusalAboutData = offerAnyway;
+    m_refusalAboutData = dependsOnDataset;
     // The refusal supersedes the advisory: they carry the same sentence when
     // Apply refuses what the warning was about, and showing it twice -- once
     // in red, once in amber -- says the advisory did not stop anything at the

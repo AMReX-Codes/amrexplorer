@@ -206,16 +206,10 @@ void DerivedFieldController::refreshAvailability()
         // the reload an Apply of its own started -- so what follows must cost
         // nothing when the dataset's vocabulary has not moved. Which it has
         // not, for either of those.
-        // The reason rides along with the shape. Every unavailable state
-        // renders the same empty shape -- no dataset, a FAB, a peer too old --
-        // so without it a refusal naming one of them survives the arrival of
-        // another, and the editor reports that derived fields need an open
-        // dataset while one is open.
         const auto moved = m_dialog->setStoredFields(
             m_hooks.storedFieldNames ? m_hooks.storedFieldNames()
                                      : QStringList{},
-            reason + QLatin1Char('\n')
-                + (m_hooks.datasetShape ? m_hooks.datasetShape() : QString{}));
+            datasetKey(reason));
         if (moved) {
             // Everything standing described a vocabulary that has gone: the
             // advisory, and the refusal whose "Apply anyway" would otherwise
@@ -241,6 +235,12 @@ void DerivedFieldController::refreshAvailability()
             }
         }
     }
+}
+
+QString DerivedFieldController::datasetKey(const QString& reason) const
+{
+    return reason + QLatin1Char('\n')
+        + (m_hooks.datasetShape ? m_hooks.datasetShape() : QString{});
 }
 
 void DerivedFieldController::refreshDraftDiagnostics()
@@ -483,7 +483,7 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
         !reason.isEmpty()) {
         // The same words the greyed action carries, so the editor and the menu
         // give one answer rather than two.
-        return Refusal{reason, std::nullopt};
+        return Refusal{reason, std::nullopt, false, true};
     }
 
     if (const auto fault = definitionFault(definitions)) {
@@ -500,7 +500,7 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
         std::sort(mustResolveHere.begin(), mustResolveHere.end());
         for (const auto index : mustResolveHere) {
             if (auto refusal = datasetRefusalFor(definitions, index, skipped)) {
-                return Refusal{*std::move(refusal), index, true};
+                return Refusal{*std::move(refusal), index, true, true};
             }
         }
     }
@@ -530,9 +530,13 @@ void DerivedFieldController::showEditor(QWidget* parent)
     auto* dialog =
         new ExpressionEditorDialog(m_store.definitions(), parent);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    // The same key refreshAvailability composes. Spelled differently here, the
+    // first session installed after the editor opened read as a change of
+    // dataset and took down a verdict that was still true of it.
     dialog->setStoredFields(
         m_hooks.storedFieldNames ? m_hooks.storedFieldNames() : QStringList{},
-        m_hooks.datasetShape ? m_hooks.datasetShape() : QString{});
+        datasetKey(m_hooks.unavailableReason ? m_hooks.unavailableReason()
+                                             : QString{}));
     // Owned by the dialog, so it goes when the dialog does and cannot fire
     // into a m_dialog that has been destroyed. Single-shot and restarted by
     // each edit: what the user wants is the verdict on what they have
@@ -580,7 +584,7 @@ void DerivedFieldController::showEditor(QWidget* parent)
         }
         if (const auto refusal = apply(dialog->draft(), std::move(written))) {
             dialog->showError(refusal->message, refusal->definitionIndex,
-                refusal->confirmable);
+                refusal->confirmable, refusal->dependsOnDataset);
             return;
         }
         // The draft is now the committed list, which is what later edits are

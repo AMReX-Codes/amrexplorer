@@ -78,8 +78,14 @@ public:
     // without it the editor would have no way to write one at all. Beside the
     // message rather than over a modal, so it interrupts nothing and the
     // refusal stays readable while they decide.
+    //
+    // `dependsOnDataset` says the verdict stops being true when another dataset
+    // opens, which is a different question from whether the user may overrule
+    // it: "derived fields are not available for a FAB" is about the data and
+    // must not outlive it, but there is nothing to overrule.
     void showError(const QString& message,
-        std::optional<std::size_t> definitionIndex, bool offerAnyway = false);
+        std::optional<std::size_t> definitionIndex, bool offerAnyway = false,
+        bool dependsOnDataset = false);
     // Takes down a standing refusal only if it was about the data -- the kind
     // showError was told the user may overrule. A fault in the definition is
     // true of every dataset, and nothing here would say it a second time.
@@ -236,9 +242,9 @@ private:
     // the draft clears the refusal, and this is what makes that a guarantee
     // rather than a promise kept at each site.
     std::optional<std::uint64_t> m_refusalRevision;
-    // Whether the standing refusal was one the user may overrule, which is
-    // also what makes it a verdict about the data rather than about the
-    // definition.
+    // Whether the standing refusal stops being true when another dataset
+    // opens. Not the same as overrulable: an availability refusal is about the
+    // data and offers nothing.
     bool m_refusalAboutData = false;
     // Set while the widgets are being written from the draft, so the edit
     // signals do not write straight back into it.

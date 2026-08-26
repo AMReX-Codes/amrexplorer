@@ -155,8 +155,11 @@ QLineF MainWindow::planeSegmentToScene(const PlaneViewState& state,
 {
     // Plane row 0 is the bottom row; the displayed image is mirrored
     // vertically, so scene y runs opposite to plane y (see showSlice).
-    const auto top = static_cast<double>(state.plane->height) - 1.0;
-    return QLineF(QPointF(x0, top - y0), QPointF(x1, top - y1));
+    // Glyph coordinates are continuous raster pixels -- a pixel center is at
+    // i + 0.5 (see generateVectorGlyphs) -- and so are scene coordinates, so
+    // the vertical flip is height - y and x passes through unchanged.
+    const auto height = static_cast<double>(state.plane->height);
+    return QLineF(QPointF(x0, height - y0), QPointF(x1, height - y1));
 }
 
 QColor MainWindow::overlayColor() const
@@ -229,21 +232,31 @@ void MainWindow::updateOverlay(PlaneViewState& state)
     try {
         // The polylines were extracted from the refined data-resolution
         // contour plane on the slice worker and are already in display-plane
-        // pixel space (see appendContours); this thread only converts them
-        // to painter paths. Plane row 0 is the bottom row; the displayed
-        // image is mirrored vertically, so scene y runs opposite to plane y
-        // (see showSlice).
+        // pixel-index space -- pixel k's center is coordinate k (see
+        // contourPolylinesForDisplay); this thread only converts them to
+        // painter paths. Scene coordinates are continuous raster pixels
+        // (pixel k's center at k + 0.5), hence the +0.5 on both axes; the
+        // spherical mapping's sceneFromPlanePixel is likewise edge-based.
+        // Without the shift every contour lands half a display pixel off the
+        // cell centers, overflowing one boundary and stopping half a pixel
+        // short of the opposite one. The two paths miss in opposite vertical
+        // directions: Cartesian up and left, spherical down and left, because
+        // its row goes through sceneFromDisplay, where dropping the half-row
+        // *raises* scene y instead of lowering it. Plane row 0 is the bottom
+        // row; the displayed image is mirrored vertically, so scene y runs
+        // opposite to plane y (see showSlice).
         const auto contourColor = overlayColor();
         const bool spherical = displayIsSpherical();
         const auto mapping = planeMapping(state);
-        const auto top = static_cast<double>(state.plane->height) - 1.0;
-        // Cartesian: plane pixel maps 1:1 to the scene (only the vertical flip).
+        const auto height = static_cast<double>(state.plane->height);
+        // Cartesian: shift to the pixel center, then flip (scene y is top-down).
         // Spherical: re-project each (r, theta) plane pixel through the warp.
         const auto toScene = [&](const auto& point) -> QPointF {
             if (spherical) {
-                return mapping.sceneFromPlanePixel(point[0], point[1]);
+                return mapping.sceneFromPlanePixel(
+                    point[0] + 0.5, point[1] + 0.5);
             }
-            return QPointF(point[0], top - point[1]);
+            return QPointF(point[0] + 0.5, height - (point[1] + 0.5));
         };
         std::map<double, QPainterPath> pathsByValue;
         for (const auto& polyline : state.contourPolylines) {

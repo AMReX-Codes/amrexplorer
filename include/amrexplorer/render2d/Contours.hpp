@@ -66,8 +66,12 @@ struct ContourPolyline {
 // plane, with the output mapped from contour-plane pixel space into
 // display-plane pixel space. The plane is at contour resolution (its samples
 // are the marching-squares grid; #56 removed supersampling), so sample center j
-// maps to display pixel ((j + 0.5) * display / plane) - 0.5 (cell-center to
-// cell-center; display-plane sample i sits at scene coordinate i).
+// maps to display pixel ((j + 0.5) * display / plane) - 0.5, cell-center to
+// cell-center. Output is in pixel-INDEX convention: display-plane sample i is
+// coordinate i, not the continuous coordinate of its center. A consumer drawing
+// into a continuous pixel space -- Qt scene units, where sample i spans
+// [i, i + 1] -- must add 0.5 per axis; see MainWindow::updateOverlay. The -0.5
+// above and that +0.5 cancel by design, so do not delete either one alone.
 [[nodiscard]] std::vector<ContourPolyline> contourPolylinesForDisplay(
     const ScalarPlane& plane,
     const std::vector<double>& values, int displayWidth, int displayHeight);

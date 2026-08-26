@@ -580,6 +580,50 @@ int main(int argc, char** argv)
                 && controller.definitions().size() == 2,
             "a definition was refused for the failure of the one it reads");
 
+        // A row that fails for reasons of its own *as well* is still the
+        // user's to answer for: naming a lost definition alongside a field
+        // that was never there must not buy it a pass. Both orders, because
+        // the first symbol scanned should not decide it.
+        dialog->setDraft({{"base", "nonesuch"}});
+        add->click();
+        name->setText(QStringLiteral("mixed"));
+        source->setPlainText(QStringLiteral("also_absent + base"));
+        applyButton->click();
+        require(!error->text().isEmpty(),
+            "a row failing on a missing field slipped through behind a lost "
+            "definition it also read");
+
+        dialog->setDraft({{"base", "nonesuch"}});
+        add->click();
+        name->setText(QStringLiteral("mixed"));
+        source->setPlainText(QStringLiteral("base + also_absent"));
+        applyButton->click();
+        require(!error->text().isEmpty(),
+            "the order the symbols are written in decided whether the row "
+            "was checked");
+
+        // And a chain of them is still inherited all the way down.
+        dialog->setDraft({{"base", "nonesuch"}, {"mid", "base * 2"}});
+        add->click();
+        name->setText(QStringLiteral("leaf"));
+        source->setPlainText(QStringLiteral("mid + 1"));
+        applyButton->click();
+        require(error->text().isEmpty()
+                && controller.definitions().size() == 3,
+            "a definition two rows below the lost one was blamed for it");
+
+        // A symbol that names an earlier lost definition *and* a stored field
+        // resolved to the stored one, so the earlier row is not the reason
+        // and the user's row is still theirs to answer for.
+        dialog->setDraft({{"density", "nonesuch"}});
+        add->click();
+        name->setText(QStringLiteral("b"));
+        source->setPlainText(QStringLiteral("density * absent"));
+        applyButton->click();
+        require(!error->text().isEmpty(),
+            "a name collision with a stored field passed a genuine failure "
+            "off as inherited");
+
         // A row still being written is not complained about.
         dialog->setDraft({});
         add->click();

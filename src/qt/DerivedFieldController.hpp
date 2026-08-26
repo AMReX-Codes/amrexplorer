@@ -200,15 +200,22 @@ private:
     // wrong question when the caller is asking about the definition someone is
     // typing: a broken row above it would otherwise leave that one's own
     // syntax error to be explained as something the dataset lacks.
-    // Whether this definition failed only because one written above it did:
-    // it reads a name this dataset could not provide a field for, so what it
-    // is missing is that definition's field and not anything in the data.
-    // Holding the user to it would refuse the row they wrote while naming a
-    // field they can see defined one line up, and commit the row that
+    // Whether this definition failed *only* because one written above it did.
+    // Holding the user to such a row would refuse what they wrote while naming
+    // a field they can see defined one line up, and commit the row that
     // actually broke it without comment.
-    [[nodiscard]] static bool failureIsInherited(
+    //
+    // Asked of the resolver rather than reasoned about here: the rows above
+    // that this dataset could not provide are made trivially resolvable and
+    // the prefix is resolved again. If this row comes back installable, those
+    // rows were the whole of its problem; if it still fails, the failure is
+    // its own and is the user's to answer for. Guessing from the symbol list
+    // cannot tell the two apart -- a row naming both a lost definition and a
+    // field that was never there reads as inherited and commits unchecked.
+    [[nodiscard]] bool failureIsInherited(
         const std::vector<DerivedFieldDefinition>& definitions,
-        std::size_t index, const std::vector<DerivedFieldSkip>& skipped);
+        std::size_t index,
+        const std::vector<DerivedFieldSkip>& skipped) const;
     [[nodiscard]] std::optional<Refusal> definitionFaultAt(
         const std::vector<DerivedFieldDefinition>& definitions,
         std::size_t index) const;

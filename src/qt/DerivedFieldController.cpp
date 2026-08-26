@@ -321,33 +321,48 @@ void DerivedFieldController::refreshDraftDiagnostics()
 
 bool DerivedFieldController::failureIsInherited(
     const std::vector<DerivedFieldDefinition>& definitions, std::size_t index,
-    const std::vector<DerivedFieldSkip>& skipped)
+    const std::vector<DerivedFieldSkip>& skipped) const
 {
-    if (index >= definitions.size()) {
+    if (index >= definitions.size() || !m_hooks.resolveAgainstOpenDataset) {
         return false;
     }
-    std::optional<CompiledExpression> expression;
-    try {
-        expression = CompiledExpression::compile(definitions[index].expression);
-    } catch (const ExpressionError&) {
-        // It does not parse, which is its own fault and reported as such.
-        return false;
-    }
-    for (const auto& symbol : expression->symbols()) {
-        for (std::size_t earlier = 0; earlier < index; ++earlier) {
-            if (definitions[earlier].name != symbol) {
-                continue;
-            }
-            const auto lost = std::find_if(skipped.begin(), skipped.end(),
-                [earlier](const DerivedFieldSkip& skip) {
-                    return skip.definitionIndex == earlier;
-                });
-            if (lost != skipped.end()) {
-                return true;
-            }
+    const auto lost = [&skipped](std::size_t row) {
+        return std::find_if(skipped.begin(), skipped.end(),
+                   [row](const DerivedFieldSkip& skip) {
+                       return skip.definitionIndex == row;
+                   })
+            != skipped.end();
+    };
+    // The rows above that this dataset could not provide, made into something
+    // it always can. A constant resolves wherever anything does, so what comes
+    // back is this row's standing with its dependencies restored and nothing
+    // else about the list changed.
+    std::vector<DerivedFieldDefinition> probe(
+        definitions.begin(), definitions.begin() + static_cast<std::ptrdiff_t>(index) + 1);
+    bool substituted = false;
+    for (std::size_t earlier = 0; earlier < index; ++earlier) {
+        if (lost(earlier)) {
+            probe[earlier].expression = "0";
+            substituted = true;
         }
     }
-    return false;
+    if (!substituted) {
+        // Nothing above it was lost, so nothing above it can be the reason.
+        return false;
+    }
+    // Still skipped with its dependencies made good: the fault is its own.
+    // A probe that somehow fails for a reason of its own leaves this false,
+    // which refuses the row -- the safe direction, since the alternative is
+    // committing a definition nothing checked.
+    return !lost(index)
+        || [&] {
+               const auto again = m_hooks.resolveAgainstOpenDataset(probe);
+               return std::find_if(again.begin(), again.end(),
+                          [index](const DerivedFieldSkip& skip) {
+                              return skip.definitionIndex == index;
+                          })
+                   == again.end();
+           }();
 }
 
 std::optional<DerivedFieldController::Refusal>

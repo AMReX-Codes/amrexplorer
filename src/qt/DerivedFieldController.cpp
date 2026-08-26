@@ -235,6 +235,14 @@ void DerivedFieldController::refreshDraftDiagnostics()
         return;
     }
     const auto& draft = m_dialog->draft();
+    // Nothing to say about a row still being written. An empty name or
+    // expression is not a verdict on anything, and saying so a quarter of a
+    // second after the first character is a complaint about the user not
+    // having finished a sentence. Apply asks for both, where it belongs.
+    if (draft[*index].name.empty() || draft[*index].expression.empty()) {
+        m_dialog->showResolutionWarning({});
+        return;
+    }
     // A fault in the definition first, and in its own words. It is wrong
     // wherever it is installed, so calling it unavailable *in this dataset*
     // would send the user looking for a plotfile that has the field when what
@@ -243,16 +251,33 @@ void DerivedFieldController::refreshDraftDiagnostics()
         m_dialog->showResolutionWarning(fault->message);
         return;
     }
+    // A row *above* this one that cannot be installed makes any verdict below
+    // it unreliable: installation is ordered, so this definition may read the
+    // ones before it, and what a dataset then makes of this row follows from
+    // that fault rather than from the data. Rows after it cannot affect it.
+    for (std::size_t earlier = 0; earlier < *index; ++earlier) {
+        if (definitionFaultAt(draft, earlier)) {
+            m_dialog->showResolutionWarning({});
+            return;
+        }
+    }
     // And the faults that belong to the list rather than to a row -- an
     // expression reading more fields than one evaluation may pin, a chain
     // deeper than it may recurse -- where they name this one. Safe over a
     // draft that does not compile: the check answers nullopt for that rather
     // than throwing, leaving the row's own fault above to have spoken first.
-    if (const auto fault = validateDerivedFieldGraph(draft)) {
-        // Only the first fault is reported, so one naming another row leaves
-        // this one's standing unknown -- and whatever the dataset would then
-        // say about it follows from that other fault rather than from the
-        // data. Nothing is the honest answer; Apply names the real one.
+    // The faults that belong to the list rather than to a row -- an expression
+    // reading more fields than one evaluation may pin, a chain deeper than it
+    // may recurse -- asked of the rows up to and including this one. Of the
+    // prefix and not the whole list, because the check reports only its first
+    // fault and gives up entirely on the first row that will not compile: a
+    // half-written row *below* this one would otherwise answer for it, and
+    // this row's own fault would reach the dataset wording it must never
+    // wear. Everything above is known installable by the loop just above, so
+    // a fault here is this row's.
+    const std::vector<DerivedFieldDefinition> upto(draft.begin(),
+        draft.begin() + static_cast<std::ptrdiff_t>(*index) + 1);
+    if (const auto fault = validateDerivedFieldGraph(upto)) {
         m_dialog->showResolutionWarning(fault->definitionIndex == *index
                 ? QString::fromStdString(fault->message)
                 : QString{});

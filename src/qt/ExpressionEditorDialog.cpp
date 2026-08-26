@@ -9,6 +9,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QTextCursor>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -205,7 +206,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
             return;
         }
         m_draft[*index].name = text.trimmed().toStdString();
-        m_handEdited[*index] = true;
+        markEdited(*index);
         ++m_draftRevision;
         m_list->item(static_cast<int>(*index))
             ->setText(displayName(m_draft[*index]));
@@ -220,7 +221,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
         }
         m_draft[*index].expression =
             m_expression->toPlainText().trimmed().toStdString();
-        m_handEdited[*index] = true;
+        markEdited(*index);
         ++m_draftRevision;
         emit draftEdited();
     });
@@ -378,6 +379,11 @@ void ExpressionEditorDialog::showSelected()
         m_name->setText(QString::fromStdString(m_draft[*index].name));
         m_expression->setPlainText(
             QString::fromStdString(m_draft[*index].expression));
+        // setPlainText parks the cursor at the start of the document, so a
+        // field written in from the list would go *before* what is already
+        // there -- silently, and reading as one unknown symbol. The end is
+        // where someone who just selected a row would carry on.
+        m_expression->moveCursor(QTextCursor::End);
     } else {
         m_name->clear();
         m_expression->clear();
@@ -416,6 +422,16 @@ void ExpressionEditorDialog::removeSelected()
     showResolutionWarning({});
     rebuildList(*index == 0 ? std::optional<std::size_t>{0}
                             : std::optional<std::size_t>{*index - 1});
+}
+
+void ExpressionEditorDialog::markEdited(std::size_t index)
+{
+    // Measured, not latched. A row typed into and then put back the way it was
+    // is not something the user is claiming about this dataset, and a latch
+    // would hold every later Apply to a definition they merely brushed
+    // against -- with nothing inside the editor able to clear it again.
+    m_handEdited[index] = index >= m_committed.size()
+        || m_draft[index] != m_committed[index];
 }
 
 bool ExpressionEditorDialog::handEdited(std::size_t index) const

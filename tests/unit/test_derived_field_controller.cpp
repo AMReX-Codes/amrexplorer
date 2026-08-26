@@ -423,6 +423,47 @@ int main(int argc, char** argv)
                 "a list fault in another row was reported as this dataset's "
                 "doing");
         }
+
+        // Typing something and taking it back is not writing a definition, so
+        // it must not hold every later Apply to a list carried from another
+        // plotfile -- there is nothing inside the editor that could clear it.
+        dialog->setDraft({{"carried", "absent * 2"}});
+        dialog->setCommitted({{"carried", "absent * 2"}});
+        source->setPlainText(QStringLiteral("absent * 2 "));
+        source->setPlainText(QStringLiteral("absent * 2"));
+        waitQuiet();
+        require(!dialog->handEdited(0),
+            "a definition typed into and put back was still counted as "
+            "written here");
+        applyButton->click();
+        require(error->text().isEmpty(),
+            "Apply was deadlocked by a definition the user only brushed "
+            "against");
+
+        // A field written in from the list lands where the user is typing,
+        // which for a row they just selected is the end of what is there.
+        fixture.storedFields = QStringList{
+            QStringLiteral("density"), QStringLiteral("temperature")};
+        controller.refreshAvailability();
+        dialog->setDraft({{"twice", "density"}});
+        list->setCurrentRow(0);
+        auto* storedFields =
+            dialog->findChild<QListWidget*>(QStringLiteral("storedFieldList"));
+        require(storedFields != nullptr && storedFields->count() > 1,
+            "the editor lists no stored fields to write in");
+        const auto written = storedFields->item(1)->text();
+        emit storedFields->itemDoubleClicked(storedFields->item(1));
+        require(dialog->draft()[0].expression
+                == (QStringLiteral("density") + written).toStdString(),
+            "a field written in from the list did not land at the end");
+
+        // A row still being written is not complained about.
+        dialog->setDraft({});
+        add->click();
+        name->setText(QStringLiteral("s"));
+        waitQuiet();
+        require(warning->text().isEmpty(),
+            "a half-typed definition was complained about");
         delete parent;
     }
 

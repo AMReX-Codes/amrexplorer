@@ -140,6 +140,9 @@ signals:
 
 private:
     void clearError();
+    // Records whether row `index` now differs from what was committed, which
+    // is what handEdited answers.
+    void markEdited(std::size_t index);
     void rebuildList(std::optional<std::size_t> select);
     void showSelected();
     void addDefinition();

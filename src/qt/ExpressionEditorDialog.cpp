@@ -307,8 +307,19 @@ void ExpressionEditorDialog::setDraft(
     showResolutionWarning({});
 }
 
-void ExpressionEditorDialog::setStoredFields(const QStringList& names)
+bool ExpressionEditorDialog::setStoredFields(
+    const QStringList& names, const QString& geometry)
 {
+    if (m_storedFieldsSet && names == m_storedFields
+        && geometry == m_storedGeometry) {
+        // Nothing an expression can resolve against has moved, so nothing the
+        // editor has already said about it needs revisiting -- and rebuilding
+        // the list would throw away where the user had scrolled to.
+        return false;
+    }
+    m_storedFields = names;
+    m_storedGeometry = geometry;
+    m_storedFieldsSet = true;
     m_fields->clear();
     m_fields->addItems(names);
     // Hidden rather than shown empty: an empty box beside the expression
@@ -317,6 +328,7 @@ void ExpressionEditorDialog::setStoredFields(const QStringList& names)
     const auto any = !names.isEmpty();
     m_fields->setVisible(any);
     m_fieldsCaption->setVisible(any);
+    return true;
 }
 
 void ExpressionEditorDialog::clearRefusal()

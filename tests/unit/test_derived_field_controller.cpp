@@ -97,6 +97,9 @@ struct Fixture {
     // which the editor shows no field list and no warning for.
     QStringList storedFields{
         QStringLiteral("density"), QStringLiteral("temperature")};
+    // The rest of the vocabulary: two datasets sharing every field name still
+    // differ here if one of them has no z to speak of.
+    QString geometry{QStringLiteral("2d+geo")};
 
     [[nodiscard]] DerivedFieldController::Hooks hooks(
         const DerivedFieldStore& store)
@@ -122,6 +125,7 @@ struct Fixture {
                     return chosenPath;
                 },
             .storedFieldNames = [this] { return storedFields; },
+            .datasetGeometry = [this] { return geometry; },
             // The real resolution against a dataset of those fields, so the
             // reasons the editor shows here are the ones a dataset gives.
             .resolveAgainstOpenDataset =
@@ -306,9 +310,15 @@ int main(int argc, char** argv)
                 && controller.definitions()[0].expression == "absent * 2",
             "the refused edit was committed anyway");
 
-        // And so is a dataset arriving that cannot provide what is already
-        // written: refreshAvailability drops the warning rather than raising
-        // one against a list the user has not touched.
+        // And a dataset arriving raises nothing about a definition the user
+        // has *not* touched -- carried here from another plotfile, which this
+        // one may well be unable to provide through nobody's fault. (A row
+        // they did write is a different matter and is answered again; that is
+        // covered below.) setDraft is what makes this list carried rather
+        // than written: it takes the baseline with it.
+        dialog->setDraft({{"stranger", "absent * 2"}});
+        require(!dialog->handEdited(0),
+            "a freshly imported definition counted as written here");
         fixture.storedFields = QStringList{QStringLiteral("other")};
         controller.refreshAvailability();
         quiet();
@@ -536,12 +546,23 @@ int main(int argc, char** argv)
         require(error->text().isEmpty() && !anyway->isVisible(),
             "a refusal outlived the draft it was about");
 
-        // Nor does it survive the dataset it named being replaced.
+        // Nor does it survive the dataset it named being replaced -- its
+        // "Apply anyway" would otherwise offer to overrule a verdict computed
+        // against data that is no longer open. A session installed *without*
+        // the vocabulary moving leaves it alone, because the verdict still
+        // describes what is open.
         applyButton->click();
         require(!error->text().isEmpty(), "the edit was not refused");
         controller.refreshAvailability();
+        require(!error->text().isEmpty() && anyway->isVisible(),
+            "an unchanged dataset took down a verdict still true of it");
+        fixture.storedFields = QStringList{QStringLiteral("elsewhere")};
+        controller.refreshAvailability();
         require(error->text().isEmpty() && !anyway->isVisible(),
             "a refusal about the previous dataset was left standing");
+        fixture.storedFields = QStringList{
+            QStringLiteral("density"), QStringLiteral("temperature")};
+        controller.refreshAvailability();
 
         // A fault Apply will refuse is not painted in the colour that
         // promises nothing was stopped.
@@ -686,6 +707,55 @@ int main(int argc, char** argv)
                 QStringLiteral("density"), QStringLiteral("temperature")};
             controller.refreshAvailability();
         }
+
+        // A session installed without the vocabulary moving -- a sequence
+        // frame, or the reload an Apply started -- leaves standing what the
+        // editor has already said, and does not rebuild the field list under
+        // the user's cursor.
+        dialog->setDraft({{"twice", "density * 2"}});
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        require(waitUntil([&] { return !warning->text().isEmpty(); }),
+            "the edited row did not warn");
+        {
+            auto* storedList = dialog->findChild<QListWidget*>(
+                QStringLiteral("storedFieldList"));
+            require(storedList != nullptr && storedList->count() == 2,
+                "the stored fields are not listed");
+            storedList->setCurrentRow(1);
+            controller.refreshAvailability();
+            require(!warning->text().isEmpty(),
+                "an unchanged dataset took down what the editor had said");
+            require(storedList->currentRow() == 1,
+                "an unchanged dataset rebuilt the field list under the user");
+        }
+
+        // A vocabulary that did move takes the verdict down -- and asks
+        // again, so the row the user wrote is answered against the data now
+        // open rather than left silent until their next keystroke. The new
+        // dataset cannot provide it either, so the answer coming back is what
+        // distinguishes a re-ask from a cancellation: without it the label
+        // simply stays empty.
+        require(dialog->handEdited(0),
+            "the row under test is not one the user wrote");
+        fixture.storedFields = QStringList{QStringLiteral("other"),
+            QStringLiteral("another")};
+        controller.refreshAvailability();
+        require(waitUntil([&] { return !warning->text().isEmpty(); }),
+            "the question was not asked again against the dataset now open");
+
+        // Geometry alone counts as a move, even with every name unchanged.
+        dialog->setDraft({{"twice", "density * 2"}});
+        source->setPlainText(QStringLiteral("absent * 2"));
+        require(waitUntil([&] { return !warning->text().isEmpty(); }),
+            "the edited row did not warn");
+        fixture.geometry = QStringLiteral("3d+geo");
+        controller.refreshAvailability();
+        require(waitUntil([&] { return warning->text().isEmpty(); }, 400),
+            "a dimensionality change was mistaken for the same dataset");
+        fixture.geometry = QStringLiteral("2d+geo");
+        fixture.storedFields = QStringList{
+            QStringLiteral("density"), QStringLiteral("temperature")};
+        controller.refreshAvailability();
 
         // A row still being written is not complained about.
         dialog->setDraft({});

@@ -125,6 +125,18 @@ MainWindow::MainWindow(QWidget* parent)
                     }
                     return names;
                 },
+            .datasetGeometry =
+                [this] {
+                    if (!m_dataset || !m_derivedFields->available()) {
+                        return QString{};
+                    }
+                    const auto& metadata = m_dataset->metadata();
+                    return QStringLiteral("%1d%2")
+                        .arg(metadata.dimension)
+                        .arg(metadata.hasPhysicalGeometry
+                                ? QStringLiteral("+geo")
+                                : QString{});
+                },
             .resolveAgainstOpenDataset =
                 [this](const std::vector<DerivedFieldDefinition>& definitions) {
                     std::vector<DerivedFieldSkip> skipped;

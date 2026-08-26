@@ -126,7 +126,18 @@ public:
     // expression so they need not be hunted for in the Variable menu. Double
     // -clicking one writes it into the expression at the cursor. Empty hides
     // the list, which is what no open dataset looks like.
-    void setStoredFields(const QStringList& names);
+    //
+    // `geometry` is the rest of what decides whether an expression resolves --
+    // the dimension, and whether there is physical geometry for x, y and z to
+    // mean anything. Together with the names it is the dataset's whole
+    // vocabulary, and the return says whether that moved since the last call.
+    //
+    // The host asks on every installed session, which includes every frame of
+    // a sequence and the reload its own Apply started. Answering false there
+    // is what lets it leave the field list alone -- so a scroll position
+    // survives an Apply -- and leave standing what it has already said, since
+    // two datasets with one vocabulary resolve every definition alike.
+    bool setStoredFields(const QStringList& names, const QString& geometry);
     // Why the open dataset could not provide the definition the user is
     // *writing*, as the host's resolution of the draft reports it. An empty
     // message clears it.
@@ -136,11 +147,14 @@ public:
     // definition that means nothing here is still committed -- and shown
     // greyed in the field list -- rather than blocked. That is also why it is
     // cleared and never recomputed when the selection moves, when a list is
-    // imported, when a definition is deleted, or when a dataset opens: only a
-    // definition being typed is measured against the data, because only then
-    // is the user asking. A refusal replaces it too -- the same sentence in
-    // red and in amber says the advisory did not stop anything while it just
-    // did.
+    // imported, or when a definition is deleted: only a definition being typed
+    // is measured against the data, because only then is the user asking. A
+    // refusal replaces it too -- the same sentence in red and in amber says
+    // the advisory did not stop anything while it just did.
+    //
+    // A dataset opening clears it as well, but there it *is* recomputed: what
+    // was said described a vocabulary that has gone, and the row is still one
+    // the user wrote, so the answer is owed again against the data now open.
     //
     // `blocking` says the message is a fault Apply will refuse rather than a
     // limit of the data. The two read differently on purpose -- the advisory
@@ -186,6 +200,13 @@ private:
     // there is nothing to list.
     QListWidget* m_fields = nullptr;
     QLabel* m_fieldsCaption = nullptr;
+    // The vocabulary the field list was last built from. Held here rather than
+    // by the host because the host skips this call entirely while the editor
+    // is closed, and would then compare against something the dialog on screen
+    // never saw.
+    QStringList m_storedFields;
+    QString m_storedGeometry;
+    bool m_storedFieldsSet = false;
     QLineEdit* m_name = nullptr;
     QPlainTextEdit* m_expression = nullptr;
     QLabel* m_error = nullptr;

@@ -97,6 +97,11 @@ public:
         // for the editor to list beside the expression being written. Empty
         // with no dataset open.
         std::function<QStringList()> storedFieldNames;
+        // The rest of what decides whether an expression resolves, besides
+        // the field names: the dimension, and whether there is physical
+        // geometry for x, y and z to mean anything. Any short rendering will
+        // do -- it is only ever compared with itself.
+        std::function<QString()> datasetGeometry;
         // Resolves `definitions` against the open dataset the way opening it
         // would (DerivedFieldPolicy::Skip) and answers with what could not be
         // installed and why. The host does it because only it holds the

@@ -202,23 +202,31 @@ void DerivedFieldController::refreshAvailability()
     // load. Apply refuses meanwhile, saying why, and starts working again by
     // itself when a dataset it can install into arrives.
     if (m_dialog) {
-        // The fields on offer are this dataset's, so they follow it.
-        m_dialog->setStoredFields(
+        // Asked on every installed session -- every frame of a sequence, and
+        // the reload an Apply of its own started -- so what follows must cost
+        // nothing when the dataset's vocabulary has not moved. Which it has
+        // not, for either of those.
+        const auto moved = m_dialog->setStoredFields(
             m_hooks.storedFieldNames ? m_hooks.storedFieldNames()
-                                     : QStringList{});
-        // The warning is dropped rather than recomputed against the new
-        // dataset. A session may open a plotfile of an entirely different
-        // shape, which makes definitions written for the last one
-        // unresolvable through no fault of the user's; the field list greys
-        // those out, and repeating it here would read as a correction being
-        // demanded. Only what is being typed is measured against the data.
-        m_dialog->showResolutionWarning({});
-        // And the refusal, which named the dataset that has just been
-        // replaced -- with an offer to overrule a verdict computed against
-        // data that is gone, where a plain Apply might now succeed.
-        m_dialog->clearRefusal();
-        if (m_diagnostics) {
-            m_diagnostics->stop();
+                                     : QStringList{},
+            m_hooks.datasetGeometry ? m_hooks.datasetGeometry() : QString{});
+        if (moved) {
+            // Everything standing described a vocabulary that has gone: the
+            // advisory, and the refusal whose "Apply anyway" would otherwise
+            // offer to overrule a verdict computed against data that is not
+            // open any more.
+            m_dialog->showResolutionWarning({});
+            m_dialog->clearRefusal();
+            // And the answer is owed again. Re-armed rather than left to the
+            // next keystroke, because a File > Open passes through a moment
+            // with no dataset at all: a diagnostic armed before it would fire
+            // during that gap, resolve against nothing, and take itself down,
+            // leaving a row the user wrote with nothing said about it.
+            if (m_diagnostics != nullptr) {
+                m_diagnosticsRow = m_dialog->selectedIndex();
+                m_diagnosticsRevision = m_dialog->draftRevision();
+                m_diagnostics->start();
+            }
         }
     }
 }
@@ -511,7 +519,8 @@ void DerivedFieldController::showEditor(QWidget* parent)
         new ExpressionEditorDialog(m_store.definitions(), parent);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setStoredFields(
-        m_hooks.storedFieldNames ? m_hooks.storedFieldNames() : QStringList{});
+        m_hooks.storedFieldNames ? m_hooks.storedFieldNames() : QStringList{},
+        m_hooks.datasetGeometry ? m_hooks.datasetGeometry() : QString{});
     // Owned by the dialog, so it goes when the dialog does and cannot fire
     // into a m_dialog that has been destroyed. Single-shot and restarted by
     // each edit: what the user wants is the verdict on what they have

@@ -637,6 +637,30 @@ int main(int argc, char** argv)
             "a name collision with a stored field passed a genuine failure "
             "off as inherited");
 
+        // The baseline tracks the draft through deletions at either end, so
+        // "did the user write this row" keeps answering about the row it is
+        // asked about and not about whatever used to sit at that number.
+        dialog->setCommitted({{"a", "density"}, {"b", "temperature"},
+            {"c", "density + 1"}});
+        require(!dialog->handEdited(0) && !dialog->handEdited(1)
+                && !dialog->handEdited(2),
+            "a freshly committed list counted as written here");
+        list->setCurrentRow(0);
+        remove->click();
+        require(dialog->draft().size() == 2 && !dialog->handEdited(0)
+                && !dialog->handEdited(1),
+            "deleting the first row made a survivor look written here");
+        list->setCurrentRow(1);
+        remove->click();
+        require(dialog->draft().size() == 1 && !dialog->handEdited(0),
+            "deleting the last row made the survivor look written here");
+        source->setPlainText(QStringLiteral("temperature * 4"));
+        require(dialog->handEdited(0),
+            "an edit after deletions did not count as written here");
+        remove->click();
+        require(dialog->draft().empty() && !dialog->handEdited(0),
+            "an empty draft still answered about a row");
+
         // A row still being written is not complained about.
         dialog->setDraft({});
         add->click();

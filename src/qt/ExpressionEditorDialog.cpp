@@ -9,6 +9,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QtGlobal>
 #include <QTextCursor>
 #include <QVBoxLayout>
 
@@ -492,8 +493,12 @@ void ExpressionEditorDialog::removeSelected()
     }
     clearError();
     m_draft.erase(m_draft.begin() + static_cast<std::ptrdiff_t>(*index));
-    m_baseline.erase(
-        m_baseline.begin() + static_cast<std::ptrdiff_t>(*index));
+    // In step with the draft, which handEdited asserts and depends on.
+    Q_ASSERT(*index < m_baseline.size());
+    if (*index < m_baseline.size()) {
+        m_baseline.erase(
+            m_baseline.begin() + static_cast<std::ptrdiff_t>(*index));
+    }
     ++m_draftRevision;
     // Deleting the last definition leaves nothing selected, and rebuildList
     // reaches that by writing -1 over a current row the clear() already set
@@ -506,13 +511,23 @@ void ExpressionEditorDialog::removeSelected()
 
 bool ExpressionEditorDialog::handEdited(std::size_t index) const
 {
+    // The baseline moves with the draft at every mutation, which is what makes
+    // this a comparison rather than a flag to be kept in step.
+    Q_ASSERT(m_baseline.size() == m_draft.size());
     if (index >= m_draft.size()) {
         return false;
     }
-    // Computed rather than remembered: there is no flag to fall out of step
-    // with the rows, and putting a definition back the way it arrived takes
-    // the claim back with it.
-    return index >= m_baseline.size() || m_draft[index] != m_baseline[index];
+    // Were they ever to diverge, this would be reading a baseline that
+    // describes some other row -- and the wrong answer in *that* direction is
+    // the one that matters: "not written here" drops the definition from the
+    // ones Apply holds to the open dataset, and commits unchecked what the
+    // user typed. So a divergence answers "written here", which only ever
+    // costs an extra check. The release build has no assertion to catch it,
+    // which is exactly why the fallback errs rather than indexing anyway.
+    if (m_baseline.size() != m_draft.size()) {
+        return true;
+    }
+    return m_draft[index] != m_baseline[index];
 }
 
 std::optional<std::size_t> ExpressionEditorDialog::selectedIndex() const

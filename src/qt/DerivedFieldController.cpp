@@ -248,10 +248,14 @@ void DerivedFieldController::refreshDraftDiagnostics()
     // deeper than it may recurse -- where they name this one. Safe over a
     // draft that does not compile: the check answers nullopt for that rather
     // than throwing, leaving the row's own fault above to have spoken first.
-    if (const auto fault = validateDerivedFieldGraph(draft);
-        fault && fault->definitionIndex == *index) {
-        m_dialog->showResolutionWarning(
-            QString::fromStdString(fault->message));
+    if (const auto fault = validateDerivedFieldGraph(draft)) {
+        // Only the first fault is reported, so one naming another row leaves
+        // this one's standing unknown -- and whatever the dataset would then
+        // say about it follows from that other fault rather than from the
+        // data. Nothing is the honest answer; Apply names the real one.
+        m_dialog->showResolutionWarning(fault->definitionIndex == *index
+                ? QString::fromStdString(fault->message)
+                : QString{});
         return;
     }
     if (!m_hooks.resolveAgainstOpenDataset) {
@@ -454,6 +458,14 @@ void DerivedFieldController::showEditor(QWidget* parent)
     });
     connect(dialog, &ExpressionEditorDialog::applyRequested, dialog,
         [this, dialog] {
+            // Whatever the debounce was about, Apply has overtaken it: left
+            // armed, a refusal within the 250 ms would be joined a moment
+            // later by the advisory it just replaced, in amber beside the red.
+            // A commit clears it by moving the draft on; a refusal moves
+            // nothing, so it is stopped here for both.
+            if (m_diagnostics != nullptr) {
+                m_diagnostics->stop();
+            }
             // The rows the user has typed into, which are the ones Apply
             // holds to this dataset.
             std::vector<std::size_t> handEdited;

@@ -388,6 +388,41 @@ int main(int argc, char** argv)
         waitQuiet();
         require(warning->text().isEmpty(),
             "a diagnostic queued for a deleted row landed on its successor");
+
+        // Apply overtakes a diagnostic still in flight: clicking it inside the
+        // debounce must not have the advisory reappear beside the refusal a
+        // moment later. Deliberately without waiting -- waiting is what lets
+        // the timer fire first and hides this.
+        dialog->setDraft({{"twice", "density * 2"}});
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        applyButton->click();
+        waitQuiet();
+        require(!error->text().isEmpty() && warning->text().isEmpty(),
+            "a diagnostic in flight when Apply was refused came back beside "
+            "the refusal");
+
+        // A fault that belongs to the list and names a *different* row says
+        // nothing about this one: reporting what the dataset then makes of it
+        // would blame the data for a consequence of that other fault.
+        {
+            QStringList many;
+            QStringList terms;
+            for (int field = 0; field <= 16; ++field) {
+                many.append(QStringLiteral("f%1").arg(field));
+                terms.append(QStringLiteral("f%1").arg(field));
+            }
+            fixture.storedFields = many;
+            controller.refreshAvailability();
+            const auto wide = terms.join(QStringLiteral(" + "));
+            dialog->setDraft({{"a", wide.toStdString()},
+                {"b", wide.toStdString()}});
+            list->setCurrentRow(1);
+            source->setPlainText(wide + QStringLiteral(" + f0"));
+            waitQuiet();
+            require(!warning->text().contains(QStringLiteral("dataset")),
+                "a list fault in another row was reported as this dataset's "
+                "doing");
+        }
         delete parent;
     }
 

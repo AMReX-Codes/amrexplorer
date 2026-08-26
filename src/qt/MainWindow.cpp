@@ -125,17 +125,28 @@ MainWindow::MainWindow(QWidget* parent)
                     }
                     return names;
                 },
-            .datasetGeometry =
+            .datasetShape =
                 [this] {
                     if (!m_dataset || !m_derivedFields->available()) {
                         return QString{};
                     }
                     const auto& metadata = m_dataset->metadata();
-                    return QStringLiteral("%1d%2")
+                    // The centerings as well as the geometry: two plotfiles
+                    // can share every field name and still resolve an
+                    // expression differently, because installation refuses one
+                    // that mixes them (DerivedField.cpp, "is not centered like
+                    // the other fields the expression reads").
+                    QString shape = QStringLiteral("%1d%2:")
                         .arg(metadata.dimension)
                         .arg(metadata.hasPhysicalGeometry
                                 ? QStringLiteral("+geo")
                                 : QString{});
+                    const auto stored = storedFieldCount();
+                    for (std::size_t field = 0; field < stored; ++field) {
+                        shape += QString::number(
+                            static_cast<int>(metadata.fields[field].centering));
+                    }
+                    return shape;
                 },
             .resolveAgainstOpenDataset =
                 [this](const std::vector<DerivedFieldDefinition>& definitions) {

@@ -80,10 +80,11 @@ public:
     // refusal stays readable while they decide.
     void showError(const QString& message,
         std::optional<std::size_t> definitionIndex, bool offerAnyway = false);
-    // Takes a standing refusal and its offer down. The host calls it when the
-    // dataset the verdict was about is replaced; every change to the draft
-    // does it from in here, for the same reason.
-    void clearRefusal();
+    // Takes down a standing refusal only if it was about the data -- the kind
+    // showError was told the user may overrule. A fault in the definition is
+    // true of every dataset, and nothing here would say it a second time.
+    // What the host calls when the dataset a verdict was about is replaced.
+    void clearDataRefusal();
     // Confirms an accepted Apply in the same place a refusal appears. Said
     // here rather than in the status bar, which the reload this announces
     // clears as soon as its slices arrive.
@@ -179,6 +180,10 @@ signals:
 
 private:
     void clearError();
+    // Takes any standing refusal and its offer down, whatever it was about.
+    // Every change to the draft does this: the verdict was about a list that
+    // has moved.
+    void clearRefusal();
     void rebuildList(std::optional<std::size_t> select);
     void showSelected();
     void addDefinition();
@@ -231,6 +236,10 @@ private:
     // the draft clears the refusal, and this is what makes that a guarantee
     // rather than a promise kept at each site.
     std::optional<std::uint64_t> m_refusalRevision;
+    // Whether the standing refusal was one the user may overrule, which is
+    // also what makes it a verdict about the data rather than about the
+    // definition.
+    bool m_refusalAboutData = false;
     // Set while the widgets are being written from the draft, so the edit
     // signals do not write straight back into it.
     bool m_loading = false;

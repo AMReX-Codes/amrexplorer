@@ -206,17 +206,29 @@ void DerivedFieldController::refreshAvailability()
         // the reload an Apply of its own started -- so what follows must cost
         // nothing when the dataset's vocabulary has not moved. Which it has
         // not, for either of those.
+        // The reason rides along with the shape. Every unavailable state
+        // renders the same empty shape -- no dataset, a FAB, a peer too old --
+        // so without it a refusal naming one of them survives the arrival of
+        // another, and the editor reports that derived fields need an open
+        // dataset while one is open.
         const auto moved = m_dialog->setStoredFields(
             m_hooks.storedFieldNames ? m_hooks.storedFieldNames()
                                      : QStringList{},
-            m_hooks.datasetGeometry ? m_hooks.datasetGeometry() : QString{});
+            reason + QLatin1Char('\n')
+                + (m_hooks.datasetShape ? m_hooks.datasetShape() : QString{}));
         if (moved) {
             // Everything standing described a vocabulary that has gone: the
             // advisory, and the refusal whose "Apply anyway" would otherwise
             // offer to overrule a verdict computed against data that is not
             // open any more.
             m_dialog->showResolutionWarning({});
-            m_dialog->clearRefusal();
+            // Only a verdict about the data. A fault in the definition itself
+            // is still true whatever is open, and nothing would say it again:
+            // the advisory speaks only about the selected row, and says
+            // nothing at all about one still being written -- so wiping "a
+            // derived field needs a name" leaves a clean-looking editor whose
+            // Apply still refuses.
+            m_dialog->clearDataRefusal();
             // And the answer is owed again. Re-armed rather than left to the
             // next keystroke, because a File > Open passes through a moment
             // with no dataset at all: a diagnostic armed before it would fire
@@ -520,7 +532,7 @@ void DerivedFieldController::showEditor(QWidget* parent)
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setStoredFields(
         m_hooks.storedFieldNames ? m_hooks.storedFieldNames() : QStringList{},
-        m_hooks.datasetGeometry ? m_hooks.datasetGeometry() : QString{});
+        m_hooks.datasetShape ? m_hooks.datasetShape() : QString{});
     // Owned by the dialog, so it goes when the dialog does and cannot fire
     // into a m_dialog that has been destroyed. Single-shot and restarted by
     // each edit: what the user wants is the verdict on what they have

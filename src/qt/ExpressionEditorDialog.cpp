@@ -331,8 +331,16 @@ bool ExpressionEditorDialog::setStoredFields(
     return true;
 }
 
+void ExpressionEditorDialog::clearDataRefusal()
+{
+    if (m_refusalAboutData) {
+        clearRefusal();
+    }
+}
+
 void ExpressionEditorDialog::clearRefusal()
 {
+    m_refusalAboutData = false;
     m_error->clear();
     m_error->setVisible(false);
     m_applyAnyway->setVisible(false);
@@ -403,6 +411,7 @@ void ExpressionEditorDialog::showError(const QString& message,
     m_error->setVisible(true);
     m_applyAnyway->setVisible(offerAnyway);
     m_refusalRevision = m_draftRevision;
+    m_refusalAboutData = offerAnyway;
     // The refusal supersedes the advisory: they carry the same sentence when
     // Apply refuses what the warning was about, and showing it twice -- once
     // in red, once in amber -- says the advisory did not stop anything at the

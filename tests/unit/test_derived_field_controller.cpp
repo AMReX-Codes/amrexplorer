@@ -97,9 +97,10 @@ struct Fixture {
     // which the editor shows no field list and no warning for.
     QStringList storedFields{
         QStringLiteral("density"), QStringLiteral("temperature")};
-    // The rest of the vocabulary: two datasets sharing every field name still
-    // differ here if one of them has no z to speak of.
-    QString geometry{QStringLiteral("2d+geo")};
+    // The rest of what decides resolution: two datasets sharing every field
+    // name still differ here if one has no z to speak of, or centres a field
+    // differently.
+    QString shape{QStringLiteral("2d+geo:00")};
 
     [[nodiscard]] DerivedFieldController::Hooks hooks(
         const DerivedFieldStore& store)
@@ -125,7 +126,7 @@ struct Fixture {
                     return chosenPath;
                 },
             .storedFieldNames = [this] { return storedFields; },
-            .datasetGeometry = [this] { return geometry; },
+            .datasetShape = [this] { return shape; },
             // The real resolution against a dataset of those fields, so the
             // reasons the editor shows here are the ones a dataset gives.
             .resolveAgainstOpenDataset =
@@ -748,11 +749,54 @@ int main(int argc, char** argv)
         source->setPlainText(QStringLiteral("absent * 2"));
         require(waitUntil([&] { return !warning->text().isEmpty(); }),
             "the edited row did not warn");
-        fixture.geometry = QStringLiteral("3d+geo");
+        fixture.shape = QStringLiteral("3d+geo:00");
         controller.refreshAvailability();
         require(waitUntil([&] { return warning->text().isEmpty(); }, 400),
-            "a dimensionality change was mistaken for the same dataset");
-        fixture.geometry = QStringLiteral("2d+geo");
+            "a change of shape was mistaken for the same dataset");
+        fixture.shape = QStringLiteral("2d+geo:00");
+        fixture.storedFields = QStringList{
+            QStringLiteral("density"), QStringLiteral("temperature")};
+        controller.refreshAvailability();
+
+        // A shape that moved with every name unchanged still counts: a field
+        // centred differently makes an expression that mixes centerings stop
+        // resolving, so a verdict about the old one has to go.
+        dialog->setDraft({{"twice", "density * 2"}});
+        source->setPlainText(QStringLiteral("absent * 2"));
+        require(waitUntil([&] { return !warning->text().isEmpty(); }),
+            "the edited row did not warn");
+        fixture.shape = QStringLiteral("2d+geo:01");
+        controller.refreshAvailability();
+        require(waitUntil([&] { return !warning->text().isEmpty(); }),
+            "a centering change was mistaken for the same dataset");
+        fixture.shape = QStringLiteral("2d+geo:00");
+        controller.refreshAvailability();
+
+        // Losing the dataset counts too, though every unavailable state has
+        // the same empty shape: without the reason in the key, a refusal
+        // naming one of them survives the arrival of another.
+        dialog->setDraft({{"twice", "nonesuch * 2"}});
+        source->setPlainText(QStringLiteral("nonesuch * 3"));
+        applyButton->click();
+        require(!error->text().isEmpty(), "the edit was not refused");
+        fixture.datasetOpen = false;
+        controller.refreshAvailability();
+        require(error->text().isEmpty(),
+            "a verdict about the data survived the data going away");
+        fixture.datasetOpen = true;
+        controller.refreshAvailability();
+
+        // But a fault in the definition itself is true whatever is open, and
+        // nothing here would say it again -- so it stays put.
+        dialog->setDraft({{"", "density"}});
+        applyButton->click();
+        require(!error->text().isEmpty() && !anyway->isVisible(),
+            "an unnamed definition was not refused");
+        fixture.storedFields = QStringList{QStringLiteral("elsewhere")};
+        controller.refreshAvailability();
+        require(!error->text().isEmpty(),
+            "a fault of the definition was wiped by a dataset arriving, "
+            "leaving an editor whose Apply still refuses");
         fixture.storedFields = QStringList{
             QStringLiteral("density"), QStringLiteral("temperature")};
         controller.refreshAvailability();

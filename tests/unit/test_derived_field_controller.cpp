@@ -661,6 +661,32 @@ int main(int argc, char** argv)
         require(dialog->draft().empty() && !dialog->handEdited(0),
             "an empty draft still answered about a row");
 
+        // A fault of the list that names a row *above* this one is still said
+        // out loud: Apply will refuse it, and staying silent because it
+        // belongs to another row leaves the advisory quiet about the thing
+        // that is about to stop the user.
+        {
+            QStringList many;
+            QStringList terms;
+            for (int field = 0; field <= 16; ++field) {
+                many.append(QStringLiteral("f%1").arg(field));
+                terms.append(QStringLiteral("f%1").arg(field));
+            }
+            fixture.storedFields = many;
+            controller.refreshAvailability();
+            dialog->setDraft({{"wide", terms.join(QStringLiteral(" + ")).toStdString()},
+                {"narrow", "f0"}});
+            list->setCurrentRow(1);
+            source->setPlainText(QStringLiteral("f0 + 1"));
+            require(waitUntil([&] { return !warning->text().isEmpty(); }),
+                "a list fault in the row above was never mentioned");
+            require(!warning->text().contains(QStringLiteral("dataset")),
+                "a fault of the list was blamed on the data");
+            fixture.storedFields = QStringList{
+                QStringLiteral("density"), QStringLiteral("temperature")};
+            controller.refreshAvailability();
+        }
+
         // A row still being written is not complained about.
         dialog->setDraft({});
         add->click();

@@ -17,6 +17,7 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <span>
 #include <utility>
 
 namespace amrvis::qt {
@@ -281,13 +282,14 @@ void DerivedFieldController::refreshDraftDiagnostics()
     // this row's own fault would reach the dataset wording it must never
     // wear. Everything above is known installable by the loop just above, so
     // a fault here is this row's.
-    const std::vector<DerivedFieldDefinition> upto(draft.begin(),
-        draft.begin() + static_cast<std::ptrdiff_t>(*index) + 1);
-    if (const auto fault = validateDerivedFieldGraph(upto)) {
-        m_dialog->showResolutionWarning(fault->definitionIndex == *index
-                ? QString::fromStdString(fault->message)
-                : QString{},
-            true);
+    if (const auto fault = validateDerivedFieldGraph(
+            std::span(draft).first(*index + 1))) {
+        // Whichever row it names. It is a fault of the list, so the wording
+        // does not blame the data, and Apply will refuse it -- saying nothing
+        // because it belongs to a row above would leave the advisory silent
+        // about something that is about to stop the user.
+        m_dialog->showResolutionWarning(
+            QString::fromStdString(fault->message), true);
         return;
     }
     if (!m_hooks.resolveAgainstOpenDataset) {

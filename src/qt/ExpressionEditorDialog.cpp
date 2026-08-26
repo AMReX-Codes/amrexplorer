@@ -332,10 +332,15 @@ void ExpressionEditorDialog::showResolutionWarning(
 {
     // Red for what Apply will refuse, amber for what only this dataset cannot
     // do. Set with the text rather than once at construction, because the one
-    // label carries both and the colour is the whole of what tells them apart.
-    m_warning->setStyleSheet(blocking
-            ? QStringLiteral("QLabel { color: red; }")
-            : QStringLiteral("QLabel { color: #b8860b; }"));
+    // label carries both and the colour is the whole of what tells them apart
+    // -- but only when there is text, since setStyleSheet reinstalls the
+    // style and repolishes the widget even for an identical string, and most
+    // calls here only clear the label.
+    if (!message.isEmpty()) {
+        m_warning->setStyleSheet(blocking
+                ? QStringLiteral("QLabel { color: red; }")
+                : QStringLiteral("QLabel { color: #b8860b; }"));
+    }
     m_warning->setText(message);
     m_warning->setVisible(!message.isEmpty());
 }

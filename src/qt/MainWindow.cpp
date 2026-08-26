@@ -136,17 +136,31 @@ MainWindow::MainWindow(QWidget* parent)
                     if (!m_dataset || !m_derivedFields->available()) {
                         return skipped;
                     }
-                    // The session's metadata with the derived tail cut back
-                    // off: installDerivedFields appends what it resolves, so
-                    // handing it a list that already holds the last
-                    // installation's fields would resolve every definition
-                    // against itself. The whole metadata is copied rather
-                    // than a made-up subset of it, so this asks the question
-                    // exactly as opening the dataset asks it -- the box lists
-                    // ride along, which the debounce is what pays for.
-                    auto metadata = m_dataset->metadata();
+                    // Only what installDerivedFields consults, which is
+                    // exhaustively: `fields` (and of those only `.name` and
+                    // `.centering`), `hasPhysicalGeometry` and `dimension`
+                    // -- see src/core/DerivedField.cpp. The whole metadata
+                    // used to be copied so this asked the question exactly as
+                    // an open asks it, but that copies every level's box list
+                    // on every pause in typing and again on every Apply.
+                    //
+                    // If that function ever grows a fourth dependency it has
+                    // to be added here too: until it is, the editor's verdict
+                    // silently stops matching what an open actually installs.
+                    // That tripwire is the price of not copying the hierarchy.
+                    //
+                    // The derived tail is cut off because installDerivedFields
+                    // appends what it resolves -- handing it a list that
+                    // already holds the last installation's fields would
+                    // resolve every definition against itself.
+                    const auto& open = m_dataset->metadata();
                     const auto stored = storedFieldCount();
-                    metadata.fields.resize(stored);
+                    DatasetMetadata metadata;
+                    metadata.dimension = open.dimension;
+                    metadata.hasPhysicalGeometry = open.hasPhysicalGeometry;
+                    metadata.fields.assign(open.fields.begin(),
+                        open.fields.begin()
+                            + static_cast<std::ptrdiff_t>(stored));
                     try {
                         return installDerivedFields(metadata, definitions,
                             DerivedFieldPolicy::Skip)

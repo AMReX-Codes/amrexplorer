@@ -633,6 +633,12 @@ private:
     // The session's definitions as rows to list, in the order they were
     // written. The field selector and the Variable menu are the same list
     // shown twice, and the comment saying so kept them in step by hand.
+    // Where the stored fields end and the derived tail begins, clamped to what
+    // the metadata actually holds. Five places used to decide this
+    // independently -- the field selector, the Variable menu, the derived rows,
+    // and both editor hooks -- and the clamp is what guards a session whose
+    // count outruns the field list it carries.
+    [[nodiscard]] std::size_t storedFieldCount() const;
     [[nodiscard]] std::vector<DerivedFieldRow> derivedFieldRows() const;
     // Adds a listed-but-unchoosable row to the field selector. False when the
     // combo's model is not one whose item flags can be set, in which case no

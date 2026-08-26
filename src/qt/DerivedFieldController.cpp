@@ -298,25 +298,29 @@ void DerivedFieldController::refreshDraftDiagnostics()
     // written above it, so what this one resolves to depends on them, and one
     // of them failing is why this one cannot be had either.
     const auto skipped = m_hooks.resolveAgainstOpenDataset(draft);
+    const auto refusal = datasetRefusalFor(draft, *index, skipped);
+    m_dialog->showResolutionWarning(refusal.value_or(QString{}));
+}
+
+std::optional<QString> DerivedFieldController::datasetRefusalFor(
+    const std::vector<DerivedFieldDefinition>& definitions, std::size_t index,
+    const std::vector<DerivedFieldSkip>& skipped) const
+{
     const auto entry = std::find_if(skipped.begin(), skipped.end(),
         [index](const DerivedFieldSkip& skip) {
-            return skip.definitionIndex == *index;
+            return skip.definitionIndex == index;
         });
     if (entry == skipped.end()
-        || failureIsInherited(draft, *index, skipped)) {
-        // Inherited failures say nothing here for the same reason apply does
-        // not refuse them: the row above is what this dataset could not
-        // provide, and it is shown greyed out in the field list saying so.
-        m_dialog->showResolutionWarning({});
-        return;
+        || failureIsInherited(definitions, index, skipped)) {
+        return std::nullopt;
     }
-    // An empty reason takes the wording that promises none: a skip decoded
-    // off the wire may carry one, and "...: " with nothing after the colon
-    // tells the user a reason exists while showing it to them blank.
-    m_dialog->showResolutionWarning(entry->reason.empty()
-            ? tr("This dataset cannot provide this field.")
-            : tr("Unavailable in this dataset: %1")
-                  .arg(QString::fromStdString(entry->reason)));
+    // An empty reason takes the wording that promises none: a skip decoded off
+    // the wire may carry one, and "...: " with nothing after the colon tells
+    // the user a reason exists while showing it to them blank.
+    return entry->reason.empty()
+        ? tr("This dataset cannot provide this field.")
+        : tr("Unavailable in this dataset: %1")
+              .arg(QString::fromStdString(entry->reason));
 }
 
 bool DerivedFieldController::failureIsInherited(
@@ -473,19 +477,9 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
         const auto skipped = m_hooks.resolveAgainstOpenDataset(definitions);
         std::sort(mustResolveHere.begin(), mustResolveHere.end());
         for (const auto index : mustResolveHere) {
-            const auto entry = std::find_if(skipped.begin(), skipped.end(),
-                [index](const DerivedFieldSkip& skip) {
-                    return skip.definitionIndex == index;
-                });
-            if (entry == skipped.end()
-                || failureIsInherited(definitions, index, skipped)) {
-                continue;
+            if (auto refusal = datasetRefusalFor(definitions, index, skipped)) {
+                return Refusal{*std::move(refusal), index, true};
             }
-            return Refusal{entry->reason.empty()
-                    ? tr("This dataset cannot provide this field.")
-                    : tr("Unavailable in this dataset: %1")
-                          .arg(QString::fromStdString(entry->reason)),
-                index, true};
         }
     }
 

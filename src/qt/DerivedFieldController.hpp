@@ -212,6 +212,16 @@ private:
     // its own and is the user's to answer for. Guessing from the symbol list
     // cannot tell the two apart -- a row naming both a lost definition and a
     // field that was never there reads as inherited and commits unchecked.
+    // Why this dataset cannot provide `definitions[index]`, or nothing where it
+    // can -- or where the failure belongs to a row above it, which
+    // failureIsInherited answers. One place because the advisory and the
+    // refusal must carry the same sentence: showError takes the advisory down
+    // on the strength of them matching, and two copies of the wording is how
+    // that quietly stops being true.
+    [[nodiscard]] std::optional<QString> datasetRefusalFor(
+        const std::vector<DerivedFieldDefinition>& definitions,
+        std::size_t index,
+        const std::vector<DerivedFieldSkip>& skipped) const;
     [[nodiscard]] bool failureIsInherited(
         const std::vector<DerivedFieldDefinition>& definitions,
         std::size_t index,

@@ -112,6 +112,15 @@ bool MainWindow::addUnavailableFieldItem(
     return true;
 }
 
+std::size_t MainWindow::storedFieldCount() const
+{
+    if (!m_dataset) {
+        return 0;
+    }
+    return std::min(
+        m_dataset->storedFieldCount(), m_dataset->metadata().fields.size());
+}
+
 std::vector<MainWindow::DerivedFieldRow> MainWindow::derivedFieldRows() const
 {
     std::vector<DerivedFieldRow> rows;
@@ -125,7 +134,7 @@ std::vector<MainWindow::DerivedFieldRow> MainWindow::derivedFieldRows() const
         return rows;
     }
     const auto& fields = m_dataset->metadata().fields;
-    const auto stored = std::min(m_dataset->storedFieldCount(), fields.size());
+    const auto stored = storedFieldCount();
     const auto& definitions = m_derivedFields->definitions();
     const auto skipped = m_dataset->skippedDerivedFields();
     rows.reserve(definitions.size());
@@ -209,7 +218,7 @@ void MainWindow::populateFieldSelector(const std::vector<DerivedFieldRow>& rows)
         return;
     }
     const auto& fields = m_dataset->metadata().fields;
-    const auto stored = std::min(m_dataset->storedFieldCount(), fields.size());
+    const auto stored = storedFieldCount();
     for (std::size_t field = 0; field < stored; ++field) {
         m_fieldSelector->addItem(QString::fromStdString(fields[field].name),
             static_cast<unsigned int>(field));

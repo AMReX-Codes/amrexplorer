@@ -117,8 +117,7 @@ MainWindow::MainWindow(QWidget* parent)
                     // editor is for writing, and offering it back as material
                     // would suggest a definition may read one written below
                     // it, which installation does not allow.
-                    const auto stored = std::min(
-                        m_dataset->storedFieldCount(), fields.size());
+                    const auto stored = storedFieldCount();
                     names.reserve(static_cast<qsizetype>(stored));
                     for (std::size_t field = 0; field < stored; ++field) {
                         names.append(
@@ -146,8 +145,7 @@ MainWindow::MainWindow(QWidget* parent)
                     // exactly as opening the dataset asks it -- the box lists
                     // ride along, which the debounce is what pays for.
                     auto metadata = m_dataset->metadata();
-                    const auto stored = std::min(
-                        m_dataset->storedFieldCount(), metadata.fields.size());
+                    const auto stored = storedFieldCount();
                     metadata.fields.resize(stored);
                     try {
                         return installDerivedFields(metadata, definitions,
@@ -1512,8 +1510,7 @@ void MainWindow::rebuildVariableMenu(const std::vector<DerivedFieldRow>& rows)
     const auto& metadata = m_dataset->metadata();
     const auto currentField = m_fieldSelector->currentIndex() >= 0
         ? m_fieldSelector->currentData().toUInt() : 0;
-    const auto stored =
-        std::min(m_dataset->storedFieldCount(), metadata.fields.size());
+    const auto stored = storedFieldCount();
     const auto addField = [this, currentField](
                               const QString& name, std::size_t field) {
         auto* action = m_variableMenu->addAction(name);

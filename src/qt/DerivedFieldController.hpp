@@ -200,6 +200,15 @@ private:
     // wrong question when the caller is asking about the definition someone is
     // typing: a broken row above it would otherwise leave that one's own
     // syntax error to be explained as something the dataset lacks.
+    // Whether this definition failed only because one written above it did:
+    // it reads a name this dataset could not provide a field for, so what it
+    // is missing is that definition's field and not anything in the data.
+    // Holding the user to it would refuse the row they wrote while naming a
+    // field they can see defined one line up, and commit the row that
+    // actually broke it without comment.
+    [[nodiscard]] static bool failureIsInherited(
+        const std::vector<DerivedFieldDefinition>& definitions,
+        std::size_t index, const std::vector<DerivedFieldSkip>& skipped);
     [[nodiscard]] std::optional<Refusal> definitionFaultAt(
         const std::vector<DerivedFieldDefinition>& definitions,
         std::size_t index) const;

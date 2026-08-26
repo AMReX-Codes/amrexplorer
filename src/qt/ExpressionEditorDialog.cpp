@@ -320,7 +320,10 @@ void ExpressionEditorDialog::setStoredFields(const QStringList& names)
 
 void ExpressionEditorDialog::clearRefusal()
 {
-    clearError();
+    m_error->clear();
+    m_error->setVisible(false);
+    m_applyAnyway->setVisible(false);
+    m_refusalRevision.reset();
 }
 
 void ExpressionEditorDialog::showResolutionWarning(
@@ -415,10 +418,13 @@ void ExpressionEditorDialog::clearError()
     // definition or pressing Apply all come through here, and any of them
     // taking the warning away would leave a draft that still overwrites the
     // shared list with nothing on screen saying so. setCommitted ends it.
-    m_error->clear();
-    m_error->setVisible(false);
-    m_applyAnyway->setVisible(false);
-    m_refusalRevision.reset();
+    clearRefusal();
+    // And the confirmation, which every caller of this one wants gone: they
+    // are the acts that make "Applied 3 derived fields." describe something
+    // the user has since moved on from. clearRefusal is the narrower door,
+    // for a host taking down a verdict without touching what was applied --
+    // the reload an Apply starts comes back through here, and this label
+    // exists because the status bar could not survive it either.
     m_applied->clear();
     m_applied->setVisible(false);
 }

@@ -551,6 +551,35 @@ int main(int argc, char** argv)
         require(dialog->draft()[0].expression == "dens temperature ity",
             "a field written in mid-name merged with the tail");
 
+        // The confirmation survives the reload the Apply itself started: that
+        // load comes back through refreshAvailability, which is where a
+        // verdict about the outgoing dataset is taken down.
+        dialog->setDraft({{"fine", "density * 2"}});
+        applyButton->click();
+        auto* applied =
+            dialog->findChild<QLabel*>(QStringLiteral("expressionApplied"));
+        require(applied != nullptr && !applied->text().isEmpty(),
+            "Apply did not confirm what it applied");
+        controller.refreshAvailability();
+        require(!applied->text().isEmpty(),
+            "the reload the Apply started wiped its own confirmation");
+
+        // A definition that fails only because one written above it could not
+        // be provided is not the user's row to answer for: refusing it would
+        // name a field they can see defined one line up, while the row that
+        // actually broke it committed without comment.
+        dialog->setDraft({{"base", "nonesuch"}});
+        add->click();
+        name->setText(QStringLiteral("twice"));
+        source->setPlainText(QStringLiteral("base * 2"));
+        waitQuiet();
+        require(warning->text().isEmpty(),
+            "a definition was blamed for the failure of the one it reads");
+        applyButton->click();
+        require(error->text().isEmpty()
+                && controller.definitions().size() == 2,
+            "a definition was refused for the failure of the one it reads");
+
         // A row still being written is not complained about.
         dialog->setDraft({});
         add->click();

@@ -302,7 +302,11 @@ void DerivedFieldController::refreshDraftDiagnostics()
         [index](const DerivedFieldSkip& skip) {
             return skip.definitionIndex == *index;
         });
-    if (entry == skipped.end()) {
+    if (entry == skipped.end()
+        || failureIsInherited(draft, *index, skipped)) {
+        // Inherited failures say nothing here for the same reason apply does
+        // not refuse them: the row above is what this dataset could not
+        // provide, and it is shown greyed out in the field list saying so.
         m_dialog->showResolutionWarning({});
         return;
     }
@@ -313,6 +317,37 @@ void DerivedFieldController::refreshDraftDiagnostics()
             ? tr("This dataset cannot provide this field.")
             : tr("Unavailable in this dataset: %1")
                   .arg(QString::fromStdString(entry->reason)));
+}
+
+bool DerivedFieldController::failureIsInherited(
+    const std::vector<DerivedFieldDefinition>& definitions, std::size_t index,
+    const std::vector<DerivedFieldSkip>& skipped)
+{
+    if (index >= definitions.size()) {
+        return false;
+    }
+    std::optional<CompiledExpression> expression;
+    try {
+        expression = CompiledExpression::compile(definitions[index].expression);
+    } catch (const ExpressionError&) {
+        // It does not parse, which is its own fault and reported as such.
+        return false;
+    }
+    for (const auto& symbol : expression->symbols()) {
+        for (std::size_t earlier = 0; earlier < index; ++earlier) {
+            if (definitions[earlier].name != symbol) {
+                continue;
+            }
+            const auto lost = std::find_if(skipped.begin(), skipped.end(),
+                [earlier](const DerivedFieldSkip& skip) {
+                    return skip.definitionIndex == earlier;
+                });
+            if (lost != skipped.end()) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 std::optional<DerivedFieldController::Refusal>
@@ -427,7 +462,8 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
                 [index](const DerivedFieldSkip& skip) {
                     return skip.definitionIndex == index;
                 });
-            if (entry == skipped.end()) {
+            if (entry == skipped.end()
+                || failureIsInherited(definitions, index, skipped)) {
                 continue;
             }
             return Refusal{entry->reason.empty()

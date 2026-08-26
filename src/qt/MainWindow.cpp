@@ -100,6 +100,102 @@ MainWindow::MainWindow(QWidget* parent)
                     // parents to the window for the same reason.
                     return chooseExpressionListPath(this, forSaving);
                 },
+            .storedFieldNames =
+                [this] {
+                    QStringList names;
+                    // The same gate derivedFieldRows applies, not a weaker
+                    // one: where no definition can be installed at all -- a
+                    // FAB, a peer that predates 1.4 -- offering the fields as
+                    // material tells the user they may write against them,
+                    // and the refusal then comes from somewhere else
+                    // entirely. available() is that one question, asked once.
+                    if (!m_dataset || !m_derivedFields->available()) {
+                        return names;
+                    }
+                    const auto& fields = m_dataset->metadata().fields;
+                    // The stored ones alone. The derived tail is what the
+                    // editor is for writing, and offering it back as material
+                    // would suggest a definition may read one written below
+                    // it, which installation does not allow.
+                    const auto stored = storedFieldCount();
+                    names.reserve(static_cast<qsizetype>(stored));
+                    for (std::size_t field = 0; field < stored; ++field) {
+                        names.append(
+                            QString::fromStdString(fields[field].name));
+                    }
+                    return names;
+                },
+            .datasetShape =
+                [this] {
+                    if (!m_dataset || !m_derivedFields->available()) {
+                        return QString{};
+                    }
+                    const auto& metadata = m_dataset->metadata();
+                    // The centerings as well as the geometry: two plotfiles
+                    // can share every field name and still resolve an
+                    // expression differently, because installation refuses one
+                    // that mixes them (DerivedField.cpp, "is not centered like
+                    // the other fields the expression reads").
+                    QString shape = QStringLiteral("%1d%2:")
+                        .arg(metadata.dimension)
+                        .arg(metadata.hasPhysicalGeometry
+                                ? QStringLiteral("+geo")
+                                : QString{});
+                    const auto stored = storedFieldCount();
+                    for (std::size_t field = 0; field < stored; ++field) {
+                        shape += QString::number(
+                            static_cast<int>(metadata.fields[field].centering));
+                    }
+                    return shape;
+                },
+            .resolveAgainstOpenDataset =
+                [this](const std::vector<DerivedFieldDefinition>& definitions) {
+                    std::vector<DerivedFieldSkip> skipped;
+                    // As above. Answering here would be worse than saying
+                    // nothing: a remote session on an old peer reports every
+                    // field as stored, so every definition resolves and the
+                    // editor would report that it works -- right up until
+                    // Apply refuses it for a reason of its own.
+                    if (!m_dataset || !m_derivedFields->available()) {
+                        return skipped;
+                    }
+                    // Only what installDerivedFields consults, which is
+                    // exhaustively: `fields` (and of those only `.name` and
+                    // `.centering`), `hasPhysicalGeometry` and `dimension`
+                    // -- see src/core/DerivedField.cpp. The whole metadata
+                    // used to be copied so this asked the question exactly as
+                    // an open asks it, but that copies every level's box list
+                    // on every pause in typing and again on every Apply.
+                    //
+                    // If that function ever grows a fourth dependency it has
+                    // to be added here too: until it is, the editor's verdict
+                    // silently stops matching what an open actually installs.
+                    // That tripwire is the price of not copying the hierarchy.
+                    //
+                    // The derived tail is cut off because installDerivedFields
+                    // appends what it resolves -- handing it a list that
+                    // already holds the last installation's fields would
+                    // resolve every definition against itself.
+                    const auto& open = m_dataset->metadata();
+                    const auto stored = storedFieldCount();
+                    DatasetMetadata metadata;
+                    metadata.dimension = open.dimension;
+                    metadata.hasPhysicalGeometry = open.hasPhysicalGeometry;
+                    metadata.fields.assign(open.fields.begin(),
+                        open.fields.begin()
+                            + static_cast<std::ptrdiff_t>(stored));
+                    try {
+                        return installDerivedFields(metadata, definitions,
+                            DerivedFieldPolicy::Skip)
+                            .skipped;
+                    } catch (const std::exception&) {
+                        // Skip resolves every definition it can and records
+                        // the rest, so nothing here should throw -- but this
+                        // runs while the user types, and a diagnostic is not
+                        // worth taking the editor down for.
+                        return skipped;
+                    }
+                },
         },
         DerivedFieldStore::session(), this);
     connect(m_derivedFields, &DerivedFieldController::statusMessage, this,
@@ -1451,8 +1547,7 @@ void MainWindow::rebuildVariableMenu(const std::vector<DerivedFieldRow>& rows)
     const auto& metadata = m_dataset->metadata();
     const auto currentField = m_fieldSelector->currentIndex() >= 0
         ? m_fieldSelector->currentData().toUInt() : 0;
-    const auto stored =
-        std::min(m_dataset->storedFieldCount(), metadata.fields.size());
+    const auto stored = storedFieldCount();
     const auto addField = [this, currentField](
                               const QString& name, std::size_t field) {
         auto* action = m_variableMenu->addAction(name);

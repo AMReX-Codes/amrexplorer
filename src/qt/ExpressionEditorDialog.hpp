@@ -4,8 +4,10 @@
 
 #include <QDialog>
 #include <QString>
+#include <QStringList>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -27,6 +29,12 @@ namespace amrvis::qt {
 //
 // Names are kept as typed. An empty one is shown as "(unnamed)" in the list
 // and refused by the host, which is where every rule about a definition lives.
+//
+// It shows two things about the open dataset without knowing anything about
+// it: the stored field names an expression may use (setStoredFields) and,
+// while a definition is being written, why this dataset could not provide it
+// (showResolutionWarning). Both are handed in by the host, which resolves the
+// draft as it changes -- draftEdited says when that is.
 class ExpressionEditorDialog final : public QDialog {
     Q_OBJECT
 
@@ -63,8 +71,26 @@ public:
 
     // Reports a refusal in place rather than over a second dialog, and selects
     // the definition it belongs to so the user is looking at what failed.
-    void showError(
-        const QString& message, std::optional<std::size_t> definitionIndex);
+    //
+    // `offerAnyway` puts an "Apply anyway" button beside it, for a refusal the
+    // user is entitled to overrule: a definition this dataset cannot provide
+    // is still worth committing for the plotfile they are about to open, and
+    // without it the editor would have no way to write one at all. Beside the
+    // message rather than over a modal, so it interrupts nothing and the
+    // refusal stays readable while they decide.
+    //
+    // `dependsOnDataset` says the verdict stops being true when another dataset
+    // opens, which is a different question from whether the user may overrule
+    // it: "derived fields are not available for a FAB" is about the data and
+    // must not outlive it, but there is nothing to overrule.
+    void showError(const QString& message,
+        std::optional<std::size_t> definitionIndex, bool offerAnyway = false,
+        bool dependsOnDataset = false);
+    // Takes down a standing refusal only if it was about the data -- the kind
+    // showError was told the user may overrule. A fault in the definition is
+    // true of every dataset, and nothing here would say it a second time.
+    // What the host calls when the dataset a verdict was about is replaced.
+    void clearDataRefusal();
     // Confirms an accepted Apply in the same place a refusal appears. Said
     // here rather than in the status bar, which the reload this announces
     // clears as soon as its slices arrive.
@@ -76,15 +102,94 @@ public:
     // equivalent list can leave the user where they were.
     [[nodiscard]] std::optional<std::size_t> selectedIndex() const;
 
+    // Whether this definition differs from what it was when the draft was
+    // last replaced -- by a commit, or by an import.
+    //
+    // This is what separates a definition the user is writing from one they
+    // are merely carrying: a list written for another plotfile, or imported
+    // whole, holds definitions this dataset may be unable to provide through
+    // no fault of anyone's, and those are committed and greyed out. One being
+    // written is a different claim -- that it works on the data in front of
+    // them -- and the host holds it to that.
+    //
+    // Measured against a baseline kept per row, not against the committed list
+    // by position: a row deleted above this one, or a list imported over it,
+    // moves what any given index means, and comparing across that both locks
+    // the user out of a list they only brushed against and lets a definition
+    // they typed from scratch pass as carried.
+    [[nodiscard]] bool handEdited(std::size_t index) const;
+
+    // Bumped by every change to the draft: a keystroke, a row added or
+    // deleted, a list imported or committed. A host that answers a question
+    // about the draft asynchronously captures this when it asks and compares
+    // it when it answers -- a row index alone is not an identity, because
+    // deleting a row slides its successor into the same number.
+    [[nodiscard]] std::uint64_t draftRevision() const noexcept
+    {
+        return m_draftRevision;
+    }
+
+    // The fields the open dataset stores, in its own order, listed beside the
+    // expression so they need not be hunted for in the Variable menu. Double
+    // -clicking one writes it into the expression at the cursor. Empty hides
+    // the list, which is what no open dataset looks like.
+    //
+    // `geometry` is the rest of what decides whether an expression resolves --
+    // the dimension, and whether there is physical geometry for x, y and z to
+    // mean anything. Together with the names it is the dataset's whole
+    // vocabulary, and the return says whether that moved since the last call.
+    //
+    // The host asks on every installed session, which includes every frame of
+    // a sequence and the reload its own Apply started. Answering false there
+    // is what lets it leave the field list alone -- so a scroll position
+    // survives an Apply -- and leave standing what it has already said, since
+    // two datasets with one vocabulary resolve every definition alike.
+    bool setStoredFields(const QStringList& names, const QString& geometry);
+    // Why the open dataset could not provide the definition the user is
+    // *writing*, as the host's resolution of the draft reports it. An empty
+    // message clears it.
+    //
+    // Advisory, not a refusal: the list is shared by windows showing different
+    // data, and a session may open a plotfile of another shape entirely, so a
+    // definition that means nothing here is still committed -- and shown
+    // greyed in the field list -- rather than blocked. That is also why it is
+    // cleared and never recomputed when the selection moves, when a list is
+    // imported, or when a definition is deleted: only a definition being typed
+    // is measured against the data, because only then is the user asking. A
+    // refusal replaces it too -- the same sentence in red and in amber says
+    // the advisory did not stop anything while it just did.
+    //
+    // A dataset opening clears it as well, but there it *is* recomputed: what
+    // was said described a vocabulary that has gone, and the row is still one
+    // the user wrote, so the answer is owed again against the data now open.
+    //
+    // `blocking` says the message is a fault Apply will refuse rather than a
+    // limit of the data. The two read differently on purpose -- the advisory
+    // is deliberately not the error's red -- so a syntax error must not wear
+    // the colour that promises nothing was stopped.
+    void showResolutionWarning(const QString& message, bool blocking = false);
+
 signals:
     // The draft is offered for validation; the host accepts it (setDraft, and
     // usually accept()) or refuses it (showError).
     void applyRequested();
     void importRequested();
     void exportRequested();
+    // The user typed into the selected definition's name or expression. What
+    // the host resolves on to answer with showResolutionWarning. Only hand
+    // editing: an import, a row change and a dataset opening all clear the
+    // warning instead, for the reason given there.
+    void draftEdited();
+    // "Apply anyway" was pressed on a refusal that offered it: the same draft
+    // is to be committed without being held to the open dataset.
+    void applyAnywayRequested();
 
 private:
     void clearError();
+    // Takes any standing refusal and its offer down, whatever it was about.
+    // Every change to the draft does this: the verdict was about a list that
+    // has moved.
+    void clearRefusal();
     void rebuildList(std::optional<std::size_t> select);
     void showSelected();
     void addDefinition();
@@ -95,7 +200,24 @@ private:
     // edit unapplied: compared rather than flagged, so typing something and
     // taking it back leaves nothing to protect.
     std::vector<DerivedFieldDefinition> m_committed;
+    // What each draft row was when the draft was last replaced, one entry per
+    // row and moved with them. handEdited is the comparison against this: a
+    // row added since has an empty baseline, so anything written into it
+    // counts, and a row put back the way it arrived stops counting.
+    std::vector<DerivedFieldDefinition> m_baseline;
+    std::uint64_t m_draftRevision = 0;
     QListWidget* m_list = nullptr;
+    // The stored fields, and the caption over them: both hidden together when
+    // there is nothing to list.
+    QListWidget* m_fields = nullptr;
+    QLabel* m_fieldsCaption = nullptr;
+    // The vocabulary the field list was last built from. Held here rather than
+    // by the host because the host skips this call entirely while the editor
+    // is closed, and would then compare against something the dialog on screen
+    // never saw.
+    QStringList m_storedFields;
+    QString m_storedGeometry;
+    bool m_storedFieldsSet = false;
     QLineEdit* m_name = nullptr;
     QPlainTextEdit* m_expression = nullptr;
     QLabel* m_error = nullptr;
@@ -106,8 +228,24 @@ private:
     // list that moved elsewhere. Its own widget for the same reason m_applied
     // is one.
     QLabel* m_notice = nullptr;
+    // What this dataset cannot make of the definition being edited. Standing
+    // rather than momentary -- it describes the draft, not the last thing
+    // done -- so clearError leaves it alone, as it does the notice.
+    QLabel* m_warning = nullptr;
     QPushButton* m_remove = nullptr;
     QPushButton* m_apply = nullptr;
+    QPushButton* m_applyAnyway = nullptr;
+    // The draft revision the standing refusal was computed against, when one
+    // is standing. An offer to overrule a verdict means nothing once the draft
+    // has moved -- the verdict was about a list that no longer exists, and
+    // acting on it would commit rows nothing ever examined. Every change to
+    // the draft clears the refusal, and this is what makes that a guarantee
+    // rather than a promise kept at each site.
+    std::optional<std::uint64_t> m_refusalRevision;
+    // Whether the standing refusal stops being true when another dataset
+    // opens. Not the same as overrulable: an availability refusal is about the
+    // data and offers nothing.
+    bool m_refusalAboutData = false;
     // Set while the widgets are being written from the draft, so the edit
     // signals do not write straight back into it.
     bool m_loading = false;

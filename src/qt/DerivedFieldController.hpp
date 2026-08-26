@@ -7,8 +7,10 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <functional>
 #include <optional>
@@ -16,6 +18,7 @@
 
 class QAction;
 class QByteArray;
+class QTimer;
 class QWidget;
 
 namespace amrvis::qt {
@@ -90,6 +93,28 @@ public:
         // A path to import from (forSaving false) or export to (true); empty
         // cancels. The host runs the file dialog, as it does for palettes.
         std::function<QString(QWidget* parent, bool forSaving)> chooseFile;
+        // The names of the fields the open dataset stores, in its own order,
+        // for the editor to list beside the expression being written. Empty
+        // with no dataset open.
+        std::function<QStringList()> storedFieldNames;
+        // The rest of what decides whether an expression resolves, besides the
+        // field names: the dimension and whether there is physical geometry
+        // (so x, y and z mean something), and each stored field's centering,
+        // since an expression may not mix centerings. Any short rendering will
+        // do -- it is only ever compared with itself. Everything installation
+        // consults has to be in here, or the editor keeps saying things about
+        // a dataset that has been replaced.
+        std::function<QString()> datasetShape;
+        // Resolves `definitions` against the open dataset the way opening it
+        // would (DerivedFieldPolicy::Skip) and answers with what could not be
+        // installed and why. The host does it because only it holds the
+        // dataset; this is asked again whenever the draft changes, so it must
+        // not be expensive enough to be felt while typing. Empty where every
+        // definition resolves, and where there is no dataset to resolve
+        // against -- the editor has nothing to say about either.
+        std::function<std::vector<DerivedFieldSkip>(
+            const std::vector<DerivedFieldDefinition>&)>
+            resolveAgainstOpenDataset;
     };
 
     // `store` outlives the controller: the session's own, or a test's. Every
@@ -125,6 +150,18 @@ public:
         QString message;
         // The definition the refusal belongs to, when it is about one.
         std::optional<std::size_t> definitionIndex;
+        // Whether the user may overrule it. True only for "this dataset
+        // cannot provide it", which is a fact about the data rather than
+        // about the definition: the list is shared, and one written for the
+        // plotfile they are about to open is worth committing. Everything
+        // else is wrong wherever it is installed and is not offered.
+        bool confirmable = false;
+        // Whether it stops being true when another dataset opens -- which is
+        // not the same question. A refusal that derived fields need an open
+        // dataset, or are not available for a FAB, is about the data and must
+        // not outlive it, but there is nothing to overrule: no expression
+        // could have been written that this one would take.
+        bool dependsOnDataset = false;
     };
 
     // Checks the list and, if it holds, commits it to the store -- from which
@@ -138,8 +175,18 @@ public:
     // business -- one list is shared by windows showing different data, so a
     // definition simply does not apply in some of them, and is shown greyed
     // out there rather than refused everywhere.
+    //
+    // `mustResolveHere` names the definitions the caller vouches for as the
+    // user's own writing -- what the editor has been typed into. Those are
+    // additionally required to resolve against the open dataset, because
+    // writing one is a claim that it works on the data in front of you.
+    // Everything else is committed whether this dataset can provide it or
+    // not: a list carried from another plotfile, or imported whole, is not
+    // that claim, and greying it out in the field list is the whole of what
+    // should happen to it.
     [[nodiscard]] std::optional<Refusal> apply(
-        std::vector<DerivedFieldDefinition> definitions);
+        std::vector<DerivedFieldDefinition> definitions,
+        std::vector<std::size_t> mustResolveHere = {});
 
     // Opens the editor (or raises it if it is already open) on the committed
     // list. Modeless: the reload an Apply triggers is an ordinary dataset load,
@@ -153,11 +200,71 @@ private:
     // Re-reads the store: refreshes an open editor, and asks the host to
     // reload so the change reaches this window's field list too.
     void adoptStoreChange();
+    // Resolves the open editor's draft against the open dataset and tells it
+    // what this dataset cannot make of the definition being typed. Debounced
+    // by m_diagnostics: it answers a keystroke, and resolving a list costs
+    // time in its own length squared.
+    void refreshDraftDiagnostics();
+    // What the editor compares to know whether anything it has said could
+    // have stopped being true: why derived fields are unavailable, if they
+    // are, and the shape of the dataset otherwise. Composed in one place
+    // because the editor opening and a session installing have to agree --
+    // two spellings of it made the first refresh after opening look like a
+    // change of dataset.
+    [[nodiscard]] QString datasetKey(const QString& reason) const;
+    // What is wrong with a list whatever the data, which is what apply may
+    // refuse outright and what the live warning must not blame a dataset for.
+    [[nodiscard]] std::optional<Refusal> definitionFault(
+        const std::vector<DerivedFieldDefinition>& definitions) const;
+    // The same, for one row in the context of the rows before it. definitionFault
+    // answers for the list and so reports only its first fault, which is the
+    // wrong question when the caller is asking about the definition someone is
+    // typing: a broken row above it would otherwise leave that one's own
+    // syntax error to be explained as something the dataset lacks.
+    // Whether this definition failed *only* because one written above it did.
+    // Holding the user to such a row would refuse what they wrote while naming
+    // a field they can see defined one line up, and commit the row that
+    // actually broke it without comment.
+    //
+    // Asked of the resolver rather than reasoned about here: the rows above
+    // that this dataset could not provide are made trivially resolvable and
+    // the prefix is resolved again. If this row comes back installable, those
+    // rows were the whole of its problem; if it still fails, the failure is
+    // its own and is the user's to answer for. Guessing from the symbol list
+    // cannot tell the two apart -- a row naming both a lost definition and a
+    // field that was never there reads as inherited and commits unchecked.
+    // Why this dataset cannot provide `definitions[index]`, or nothing where it
+    // can -- or where the failure belongs to a row above it, which
+    // failureIsInherited answers. One place because the advisory and the
+    // refusal must carry the same sentence: showError takes the advisory down
+    // on the strength of them matching, and two copies of the wording is how
+    // that quietly stops being true.
+    [[nodiscard]] std::optional<QString> datasetRefusalFor(
+        const std::vector<DerivedFieldDefinition>& definitions,
+        std::size_t index,
+        const std::vector<DerivedFieldSkip>& skipped) const;
+    [[nodiscard]] bool failureIsInherited(
+        const std::vector<DerivedFieldDefinition>& definitions,
+        std::size_t index,
+        const std::vector<DerivedFieldSkip>& skipped) const;
+    [[nodiscard]] std::optional<Refusal> definitionFaultAt(
+        const std::vector<DerivedFieldDefinition>& definitions,
+        std::size_t index) const;
 
     Hooks m_hooks;
     DerivedFieldStore& m_store;
     QPointer<QAction> m_action;
     QPointer<ExpressionEditorDialog> m_dialog;
+    QTimer* m_diagnostics = nullptr;
+    // The row the pending diagnostic was armed for, and the draft it was armed
+    // against. A timer that outlives the edit it belongs to -- the selection
+    // moved, an import replaced the draft, a row above was deleted -- would
+    // otherwise answer about a definition the user never touched, which is the
+    // one thing the warning must never do. The revision is what makes the row
+    // number an identity: deleting a row slides its successor into it, and a
+    // successor that had been edited too passes every other guard.
+    std::optional<std::size_t> m_diagnosticsRow;
+    std::uint64_t m_diagnosticsRevision = 0;
 };
 
 } // namespace amrvis::qt

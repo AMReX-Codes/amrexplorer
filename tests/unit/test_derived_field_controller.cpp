@@ -3,14 +3,19 @@
 #include "ExpressionEditorDialog.hpp"
 
 #include <QApplication>
+#include <QEventLoop>
+#include <QCoreApplication>
 #include <QDialog>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QTextCursor>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QTextDocument>
 
 #include <cstdlib>
@@ -27,6 +32,44 @@ using amrvis::DerivedFieldSkip;
 using amrvis::qt::DerivedFieldController;
 using amrvis::qt::DerivedFieldStore;
 using amrvis::qt::ExpressionEditorDialog;
+
+// The debounce the controller arms its diagnostics on. The tests wait against
+// this rather than against numbers of their own, so raising it cannot quietly
+// turn an assertion that nothing fired into one that fired late.
+constexpr int kDiagnosticsDebounceMs = 250;
+
+// Runs the event loop for a fixed span without spinning: a single-shot timer
+// quits it, so the process idles instead of burning a core on processEvents.
+void pump(int milliseconds)
+{
+    QEventLoop loop;
+    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
+// Long enough for a diagnostic to have fired and been seen not to. Used for the
+// assertions that something must *not* appear, which is why it is a fixed span
+// rather than a poll: there is no event to wait for.
+void quiet()
+{
+    pump(kDiagnosticsDebounceMs * 3);
+}
+
+// Runs until `predicate` holds, or gives up. Returns as soon as it holds, so a
+// passing test costs the debounce rather than the ceiling.
+template <typename Predicate>
+bool waitUntil(Predicate predicate, int ceilingMs = 2000)
+{
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (!predicate()) {
+        if (elapsed.elapsed() >= ceilingMs) {
+            return false;
+        }
+        pump(10);
+    }
+    return true;
+}
 
 void require(bool condition, const char* message)
 {
@@ -50,6 +93,14 @@ struct Fixture {
     // What the next chooseFile answers, and what it was asked for.
     QString chosenPath;
     std::optional<bool> lastChooseForSaving;
+    // The fields the open dataset stores. Empty stands for no dataset open,
+    // which the editor shows no field list and no warning for.
+    QStringList storedFields{
+        QStringLiteral("density"), QStringLiteral("temperature")};
+    // The rest of what decides resolution: two datasets sharing every field
+    // name still differ here if one has no z to speak of, or centres a field
+    // differently.
+    QString shape{QStringLiteral("2d+geo:00")};
 
     [[nodiscard]] DerivedFieldController::Hooks hooks(
         const DerivedFieldStore& store)
@@ -73,6 +124,27 @@ struct Fixture {
                 [this](QWidget*, bool forSaving) {
                     lastChooseForSaving = forSaving;
                     return chosenPath;
+                },
+            .storedFieldNames = [this] { return storedFields; },
+            .datasetShape = [this] { return shape; },
+            // The real resolution against a dataset of those fields, so the
+            // reasons the editor shows here are the ones a dataset gives.
+            .resolveAgainstOpenDataset =
+                [this](const std::vector<DerivedFieldDefinition>& definitions) {
+                    std::vector<DerivedFieldSkip> skipped;
+                    if (storedFields.isEmpty()) {
+                        return skipped;
+                    }
+                    amrvis::DatasetMetadata metadata;
+                    metadata.dimension = 2;
+                    for (const auto& name : storedFields) {
+                        amrvis::FieldMetadata field;
+                        field.name = name.toStdString();
+                        metadata.fields.push_back(std::move(field));
+                    }
+                    return amrvis::installDerivedFields(metadata, definitions,
+                        amrvis::DerivedFieldPolicy::Skip)
+                        .skipped;
                 },
         };
     }
@@ -151,6 +223,650 @@ int main(int argc, char** argv)
         require(controller.definitions().empty()
                 && fixture.reloads == before + 1,
             "clearing the list did not commit and reload");
+    }
+
+    // The editor lists the dataset's stored fields, and measures a definition
+    // against that dataset as it is *typed* -- and only then. A plotfile of
+    // another shape opening under a list written for the last one is not the
+    // user's error to correct, so nothing but an edit asks the question.
+    {
+        Fixture fixture;
+        DerivedFieldStore store;
+        DerivedFieldController controller(fixture.hooks(store), store);
+        require(!controller.apply({{"twice", "density * 2"}}).has_value(),
+            "a resolvable definition was refused");
+
+        auto* parent = new QWidget;
+        controller.showEditor(parent);
+        auto* dialog = parent->findChild<ExpressionEditorDialog*>();
+        require(dialog != nullptr, "the editor did not open");
+
+        auto* fields =
+            dialog->findChild<QListWidget*>(QStringLiteral("storedFieldList"));
+        require(fields != nullptr && fields->count() == 2
+                && fields->item(0)->text() == QStringLiteral("density")
+                && fields->item(1)->text() == QStringLiteral("temperature"),
+            "the editor does not list the dataset's stored fields");
+
+        auto* warning =
+            dialog->findChild<QLabel*>(QStringLiteral("expressionWarning"));
+        auto* source = dialog->findChild<QPlainTextEdit*>(
+            QStringLiteral("expressionSource"));
+        require(warning != nullptr && source != nullptr,
+            "the editor is missing its expression box or warning");
+        require(warning->text().isEmpty(),
+            "a definition this dataset can provide warned about itself");
+
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        quiet();
+        require(!warning->text().isEmpty(),
+            "a hand-written expression naming no field of this dataset said "
+            "nothing");
+        // Named as the dataset's limitation rather than as a mistake, and
+        // still committable: the list is shared with windows and plotfiles
+        // that may have the field.
+        require(!controller.apply(dialog->draft()).has_value(),
+            "a definition this dataset cannot provide was refused");
+
+        source->setPlainText(QStringLiteral("density * 3"));
+        quiet();
+        require(warning->text().isEmpty(),
+            "the warning outlived the expression it was about");
+
+        // What the user did not type is left alone. An import replaces every
+        // row at once and is tolerated whole; the field list greys out what
+        // this dataset cannot provide.
+        dialog->setDraft({{"stranger", "absent * 2"}});
+        quiet();
+        require(warning->text().isEmpty(),
+            "an imported definition was complained about");
+
+        // And Apply takes it: it was never a claim about this dataset, so it
+        // is committed and greyed out in the field list, as a list carried
+        // from another plotfile is.
+        auto* applyButton = dialog->findChild<QPushButton*>(
+            QStringLiteral("applyExpressionsButton"));
+        auto* error =
+            dialog->findChild<QLabel*>(QStringLiteral("expressionError"));
+        require(applyButton != nullptr && error != nullptr,
+            "the editor is missing its Apply button or error label");
+        applyButton->click();
+        require(controller.definitions().size() == 1
+                && controller.definitions()[0].name == "stranger"
+                && error->text().isEmpty(),
+            "an imported definition this dataset cannot provide was refused");
+
+        // Typed here, the same kind of definition is held to the data in
+        // front of the user, and Apply says so rather than committing it to
+        // be discovered greyed out later.
+        source->setPlainText(QStringLiteral("absent * 3"));
+        quiet();
+        require(!warning->text().isEmpty(),
+            "the edited definition did not warn");
+        applyButton->click();
+        require(!error->text().isEmpty(),
+            "a hand-written definition this dataset cannot provide was "
+            "accepted");
+        require(controller.definitions().size() == 1
+                && controller.definitions()[0].expression == "absent * 2",
+            "the refused edit was committed anyway");
+
+        // And a dataset arriving raises nothing about a definition the user
+        // has *not* touched -- carried here from another plotfile, which this
+        // one may well be unable to provide through nobody's fault. (A row
+        // they did write is a different matter and is answered again; that is
+        // covered below.) setDraft is what makes this list carried rather
+        // than written: it takes the baseline with it.
+        dialog->setDraft({{"stranger", "absent * 2"}});
+        require(!dialog->handEdited(0),
+            "a freshly imported definition counted as written here");
+        fixture.storedFields = QStringList{QStringLiteral("other")};
+        controller.refreshAvailability();
+        quiet();
+        require(warning->text().isEmpty(),
+            "opening another dataset raised a warning about an untouched "
+            "definition");
+        require(fields->count() == 1
+                && fields->item(0)->text() == QStringLiteral("other"),
+            "the field list did not follow the dataset");
+        delete parent;
+    }
+
+    // The warning belongs to the row being written: not to the first thing
+    // wrong in the list, and not to whatever slides into that row's number
+    // afterwards. A refusal replaces it, and a deletion takes it away.
+    {
+        Fixture fixture;
+        DerivedFieldStore store;
+        DerivedFieldController controller(fixture.hooks(store), store);
+        auto* parent = new QWidget;
+        controller.showEditor(parent);
+        auto* dialog = parent->findChild<ExpressionEditorDialog*>();
+        require(dialog != nullptr, "the editor did not open");
+        auto* warning =
+            dialog->findChild<QLabel*>(QStringLiteral("expressionWarning"));
+        auto* error =
+            dialog->findChild<QLabel*>(QStringLiteral("expressionError"));
+        auto* source = dialog->findChild<QPlainTextEdit*>(
+            QStringLiteral("expressionSource"));
+        auto* name =
+            dialog->findChild<QLineEdit*>(QStringLiteral("expressionName"));
+        auto* add = dialog->findChild<QPushButton*>(
+            QStringLiteral("newExpressionButton"));
+        auto* remove = dialog->findChild<QPushButton*>(
+            QStringLiteral("deleteExpressionButton"));
+        auto* applyButton = dialog->findChild<QPushButton*>(
+            QStringLiteral("applyExpressionsButton"));
+        require(warning != nullptr && error != nullptr && source != nullptr
+                && name != nullptr && add != nullptr && remove != nullptr
+                && applyButton != nullptr,
+            "the editor is missing a widget this block drives");
+
+        // Row 0 is left unnamed, which is a fault of its own and the first in
+        // the list; row 1 is where the user is typing. The warning must be
+        // about row 1's syntax, not about the data.
+        add->click();
+        source->setPlainText(QStringLiteral("density"));
+        add->click();
+        name->setText(QStringLiteral("bad"));
+        source->setPlainText(QStringLiteral("sqrt("));
+        waitUntil([&] { return !warning->text().isEmpty(); });
+        require(!warning->text().isEmpty()
+                && !warning->text().contains(QStringLiteral("dataset")),
+            "a syntax error in the row being written was blamed on the "
+            "dataset");
+
+        // A refusal supersedes the advisory rather than standing beside it.
+        dialog->setDraft({{"twice", "density * 2"}});
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        waitUntil([&] { return !warning->text().isEmpty(); });
+        require(!warning->text().isEmpty(), "the edited row did not warn");
+        applyButton->click();
+        require(!error->text().isEmpty() && warning->text().isEmpty(),
+            "a refusal left the same sentence showing twice");
+
+        // Deleting the only definition takes the warning with it: nothing is
+        // selected afterwards, so no row change would.
+        dialog->setDraft({{"twice", "nonesuch * 2"}});
+        source->setPlainText(QStringLiteral("nonesuch * 3"));
+        waitUntil([&] { return !warning->text().isEmpty(); });
+        require(!warning->text().isEmpty(), "the edited row did not warn");
+        remove->click();
+        require(warning->text().isEmpty(),
+            "deleting the definition left its warning on screen");
+
+        // And a diagnostic queued for a row that is then deleted must not land
+        // on whatever takes its number -- here a row that was edited too, so
+        // every other guard passes.
+        dialog->setDraft({{"first", "density"}, {"second", "density"}});
+        auto* list =
+            dialog->findChild<QListWidget*>(QStringLiteral("expressionList"));
+        require(list != nullptr, "the editor has no definition list");
+        // The successor is edited *and* unresolvable, so a diagnostic that
+        // landed on it would have something to say -- which is what makes
+        // this a test rather than a coincidence.
+        list->setCurrentRow(1);
+        source->setPlainText(QStringLiteral("absent * 2"));
+        list->setCurrentRow(0);
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        remove->click();
+        quiet();
+        require(warning->text().isEmpty(),
+            "a diagnostic queued for a deleted row landed on its successor");
+
+        // Apply overtakes a diagnostic still in flight: clicking it inside the
+        // debounce must not have the advisory reappear beside the refusal a
+        // moment later. Deliberately without waiting -- waiting is what lets
+        // the timer fire first and hides this.
+        dialog->setDraft({{"twice", "density * 2"}});
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        applyButton->click();
+        quiet();
+        require(!error->text().isEmpty() && warning->text().isEmpty(),
+            "a diagnostic in flight when Apply was refused came back beside "
+            "the refusal");
+
+        // A fault that belongs to the list and names a *different* row says
+        // nothing about this one: reporting what the dataset then makes of it
+        // would blame the data for a consequence of that other fault.
+        {
+            QStringList many;
+            QStringList terms;
+            for (int field = 0; field <= 16; ++field) {
+                many.append(QStringLiteral("f%1").arg(field));
+                terms.append(QStringLiteral("f%1").arg(field));
+            }
+            fixture.storedFields = many;
+            controller.refreshAvailability();
+            const auto wide = terms.join(QStringLiteral(" + "));
+            dialog->setDraft({{"a", wide.toStdString()},
+                {"b", wide.toStdString()}});
+            list->setCurrentRow(1);
+            source->setPlainText(wide + QStringLiteral(" + f0"));
+            quiet();
+            require(!warning->text().isEmpty(),
+                "the fault of the list was never mentioned at all");
+            require(!warning->text().contains(QStringLiteral("dataset")),
+                "a list fault in another row was reported as this dataset's "
+                "doing");
+            fixture.storedFields = QStringList{
+                QStringLiteral("density"), QStringLiteral("temperature")};
+            controller.refreshAvailability();
+        }
+
+        // Typing something and taking it back is not writing a definition, so
+        // it must not hold every later Apply to a list carried from another
+        // plotfile -- there is nothing inside the editor that could clear it.
+        dialog->setCommitted({{"carried", "absent * 2"}});
+        source->setPlainText(QStringLiteral("absent * 3"));
+        require(dialog->handEdited(0), "an edit did not count as one");
+        // Let the warning actually appear, so the revert has something to
+        // take back: without this the second edit merely restarts the timer
+        // and nothing was ever on screen.
+        waitUntil([&] { return !warning->text().isEmpty(); });
+        require(!warning->text().isEmpty(), "the edit did not warn");
+        source->setPlainText(QStringLiteral("absent * 2"));
+        quiet();
+        require(!dialog->handEdited(0),
+            "a definition typed into and put back was still counted as "
+            "written here");
+        require(warning->text().isEmpty(),
+            "the warning outlived the edit it was about");
+        applyButton->click();
+        require(error->text().isEmpty(),
+            "Apply was deadlocked by a definition the user only brushed "
+            "against");
+
+        // The same, for a list that arrived by import rather than by commit:
+        // its rows are measured against what was imported, not against a
+        // committed list they were never part of.
+        dialog->setDraft({{"imported", "absent * 4"}});
+        source->setPlainText(QStringLiteral("absent * 5"));
+        source->setPlainText(QStringLiteral("absent * 4"));
+        require(!dialog->handEdited(0),
+            "an imported definition put back was counted as written here");
+        applyButton->click();
+        require(error->text().isEmpty(),
+            "Apply was deadlocked by an imported definition");
+
+        // And a row typed from scratch is held to the dataset even when it
+        // happens to match what used to sit at that index.
+        dialog->setCommitted({{"a", "density"}, {"ghost", "absent * 2"}});
+        list->setCurrentRow(1);
+        remove->click();
+        add->click();
+        name->setText(QStringLiteral("ghost"));
+        source->setPlainText(QStringLiteral("absent * 2"));
+        require(dialog->handEdited(1),
+            "a definition typed from scratch passed as one carried here");
+        applyButton->click();
+        require(!error->text().isEmpty(),
+            "a hand-written definition this dataset cannot provide slipped "
+            "through");
+
+        // Which the user may overrule: the refusal offers it, and taking the
+        // offer commits the same draft.
+        auto* anyway = dialog->findChild<QPushButton*>(
+            QStringLiteral("applyAnywayButton"));
+        require(anyway != nullptr && anyway->isVisible(),
+            "the refusal did not offer to commit anyway");
+        anyway->click();
+        require(error->text().isEmpty()
+                && controller.definitions().size() == 2
+                && controller.definitions()[1].name == "ghost",
+            "Apply anyway did not commit the definition");
+
+        // A field written in from the list lands where the user is typing,
+        // which for a row they just selected is the end of what is there.
+        fixture.storedFields = QStringList{
+            QStringLiteral("density"), QStringLiteral("temperature")};
+        controller.refreshAvailability();
+        dialog->setDraft({{"twice", "density"}});
+        list->setCurrentRow(0);
+        auto* storedFields =
+            dialog->findChild<QListWidget*>(QStringLiteral("storedFieldList"));
+        require(storedFields != nullptr && storedFields->count() > 1,
+            "the editor lists no stored fields to write in");
+        const auto written = storedFields->item(1)->text();
+        emit storedFields->itemDoubleClicked(storedFields->item(1));
+        require(dialog->draft()[0].expression
+                == (QStringLiteral("density ") + written).toStdString(),
+            "a field written in from the list did not land at the end, "
+            "separated from what was there");
+
+        // A refusal that names a row other than the selected one still
+        // carries its offer: showError selects that row, and the selection
+        // handler clears the error box on its way past.
+        dialog->setCommitted({{"a", "density"}, {"b", "temperature"}});
+        list->setCurrentRow(0);
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        list->setCurrentRow(1);
+        source->setPlainText(QStringLiteral("temperature * 3"));
+        applyButton->click();
+        require(!error->text().isEmpty() && anyway->isVisible(),
+            "a refusal on an unselected row arrived without its offer");
+
+        // Editing after a refusal takes it down, so the advisory never paints
+        // under it -- and the offer cannot commit rows nothing examined.
+        source->setPlainText(QStringLiteral("nonesuch * 3"));
+        require(error->text().isEmpty() && !anyway->isVisible(),
+            "a refusal outlived the draft it was about");
+
+        // Nor does it survive the dataset it named being replaced -- its
+        // "Apply anyway" would otherwise offer to overrule a verdict computed
+        // against data that is no longer open. A session installed *without*
+        // the vocabulary moving leaves it alone, because the verdict still
+        // describes what is open.
+        applyButton->click();
+        require(!error->text().isEmpty(), "the edit was not refused");
+        controller.refreshAvailability();
+        require(!error->text().isEmpty() && anyway->isVisible(),
+            "an unchanged dataset took down a verdict still true of it");
+        fixture.storedFields = QStringList{QStringLiteral("elsewhere")};
+        controller.refreshAvailability();
+        require(error->text().isEmpty() && !anyway->isVisible(),
+            "a refusal about the previous dataset was left standing");
+        fixture.storedFields = QStringList{
+            QStringLiteral("density"), QStringLiteral("temperature")};
+        controller.refreshAvailability();
+
+        // A fault Apply will refuse is not painted in the colour that
+        // promises nothing was stopped.
+        dialog->setDraft({{"t", "density"}});
+        source->setPlainText(QStringLiteral("sqrt("));
+        waitUntil([&] { return !warning->text().isEmpty(); });
+        require(warning->styleSheet().contains(QStringLiteral("red")),
+            "a fault Apply will refuse was shown as advice");
+
+        // A field written into the middle of a name is separated from both
+        // sides, not just the one behind the cursor.
+        dialog->setDraft({{"t", "density"}});
+        list->setCurrentRow(0);
+        {
+            auto cursor = source->textCursor();
+            cursor.setPosition(4);
+            source->setTextCursor(cursor);
+        }
+        emit storedFields->itemDoubleClicked(storedFields->item(1));
+        require(dialog->draft()[0].expression == "dens temperature ity",
+            "a field written in mid-name merged with the tail");
+
+        // The confirmation survives the reload the Apply itself started: that
+        // load comes back through refreshAvailability, which is where a
+        // verdict about the outgoing dataset is taken down.
+        dialog->setDraft({{"fine", "density * 2"}});
+        applyButton->click();
+        auto* applied =
+            dialog->findChild<QLabel*>(QStringLiteral("expressionApplied"));
+        require(applied != nullptr && !applied->text().isEmpty(),
+            "Apply did not confirm what it applied");
+        controller.refreshAvailability();
+        require(!applied->text().isEmpty(),
+            "the reload the Apply started wiped its own confirmation");
+
+        // A definition that fails only because one written above it could not
+        // be provided is not the user's row to answer for: refusing it would
+        // name a field they can see defined one line up, while the row that
+        // actually broke it committed without comment.
+        dialog->setDraft({{"base", "nonesuch"}});
+        add->click();
+        name->setText(QStringLiteral("twice"));
+        source->setPlainText(QStringLiteral("base * 2"));
+        quiet();
+        require(warning->text().isEmpty(),
+            "a definition was blamed for the failure of the one it reads");
+        applyButton->click();
+        require(error->text().isEmpty()
+                && controller.definitions().size() == 2,
+            "a definition was refused for the failure of the one it reads");
+
+        // A row that fails for reasons of its own *as well* is still the
+        // user's to answer for: naming a lost definition alongside a field
+        // that was never there must not buy it a pass. Both orders, because
+        // the first symbol scanned should not decide it.
+        dialog->setDraft({{"base", "nonesuch"}});
+        add->click();
+        name->setText(QStringLiteral("mixed"));
+        source->setPlainText(QStringLiteral("also_absent + base"));
+        applyButton->click();
+        require(!error->text().isEmpty(),
+            "a row failing on a missing field slipped through behind a lost "
+            "definition it also read");
+
+        dialog->setDraft({{"base", "nonesuch"}});
+        add->click();
+        name->setText(QStringLiteral("mixed"));
+        source->setPlainText(QStringLiteral("base + also_absent"));
+        applyButton->click();
+        require(!error->text().isEmpty(),
+            "the order the symbols are written in decided whether the row "
+            "was checked");
+
+        // And a chain of them is still inherited all the way down.
+        dialog->setDraft({{"base", "nonesuch"}, {"mid", "base * 2"}});
+        add->click();
+        name->setText(QStringLiteral("leaf"));
+        source->setPlainText(QStringLiteral("mid + 1"));
+        applyButton->click();
+        require(error->text().isEmpty()
+                && controller.definitions().size() == 3,
+            "a definition two rows below the lost one was blamed for it");
+
+        // A symbol that names an earlier lost definition *and* a stored field
+        // resolved to the stored one, so the earlier row is not the reason
+        // and the user's row is still theirs to answer for.
+        dialog->setDraft({{"density", "nonesuch"}});
+        add->click();
+        name->setText(QStringLiteral("b"));
+        source->setPlainText(QStringLiteral("density * absent"));
+        applyButton->click();
+        require(!error->text().isEmpty(),
+            "a name collision with a stored field passed a genuine failure "
+            "off as inherited");
+
+        // The baseline tracks the draft through deletions at either end, so
+        // "did the user write this row" keeps answering about the row it is
+        // asked about and not about whatever used to sit at that number.
+        dialog->setCommitted({{"a", "density"}, {"b", "temperature"},
+            {"c", "density + 1"}});
+        require(!dialog->handEdited(0) && !dialog->handEdited(1)
+                && !dialog->handEdited(2),
+            "a freshly committed list counted as written here");
+        list->setCurrentRow(0);
+        remove->click();
+        require(dialog->draft().size() == 2 && !dialog->handEdited(0)
+                && !dialog->handEdited(1),
+            "deleting the first row made a survivor look written here");
+        list->setCurrentRow(1);
+        remove->click();
+        require(dialog->draft().size() == 1 && !dialog->handEdited(0),
+            "deleting the last row made the survivor look written here");
+        source->setPlainText(QStringLiteral("temperature * 4"));
+        require(dialog->handEdited(0),
+            "an edit after deletions did not count as written here");
+        remove->click();
+        require(dialog->draft().empty() && !dialog->handEdited(0),
+            "an empty draft still answered about a row");
+
+        // A fault of the list that names a row *above* this one is still said
+        // out loud: Apply will refuse it, and staying silent because it
+        // belongs to another row leaves the advisory quiet about the thing
+        // that is about to stop the user.
+        {
+            QStringList many;
+            QStringList terms;
+            for (int field = 0; field <= 16; ++field) {
+                many.append(QStringLiteral("f%1").arg(field));
+                terms.append(QStringLiteral("f%1").arg(field));
+            }
+            fixture.storedFields = many;
+            controller.refreshAvailability();
+            dialog->setDraft({{"wide", terms.join(QStringLiteral(" + ")).toStdString()},
+                {"narrow", "f0"}});
+            list->setCurrentRow(1);
+            source->setPlainText(QStringLiteral("f0 + 1"));
+            require(waitUntil([&] { return !warning->text().isEmpty(); }),
+                "a list fault in the row above was never mentioned");
+            require(!warning->text().contains(QStringLiteral("dataset")),
+                "a fault of the list was blamed on the data");
+            fixture.storedFields = QStringList{
+                QStringLiteral("density"), QStringLiteral("temperature")};
+            controller.refreshAvailability();
+        }
+
+        // A session installed without the vocabulary moving -- a sequence
+        // frame, or the reload an Apply started -- leaves standing what the
+        // editor has already said, and does not rebuild the field list under
+        // the user's cursor.
+        dialog->setDraft({{"twice", "density * 2"}});
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        require(waitUntil([&] { return !warning->text().isEmpty(); }),
+            "the edited row did not warn");
+        {
+            auto* storedList = dialog->findChild<QListWidget*>(
+                QStringLiteral("storedFieldList"));
+            require(storedList != nullptr && storedList->count() == 2,
+                "the stored fields are not listed");
+            storedList->setCurrentRow(1);
+            controller.refreshAvailability();
+            require(!warning->text().isEmpty(),
+                "an unchanged dataset took down what the editor had said");
+            require(storedList->currentRow() == 1,
+                "an unchanged dataset rebuilt the field list under the user");
+        }
+
+        // A vocabulary that did move takes the verdict down -- and asks
+        // again, so the row the user wrote is answered against the data now
+        // open rather than left silent until their next keystroke. The new
+        // dataset cannot provide it either, so the answer coming back is what
+        // distinguishes a re-ask from a cancellation: without it the label
+        // simply stays empty.
+        require(dialog->handEdited(0),
+            "the row under test is not one the user wrote");
+        fixture.storedFields = QStringList{QStringLiteral("other"),
+            QStringLiteral("another")};
+        controller.refreshAvailability();
+        require(waitUntil([&] { return !warning->text().isEmpty(); }),
+            "the question was not asked again against the dataset now open");
+
+        // Geometry alone counts as a move, even with every name unchanged.
+        dialog->setDraft({{"twice", "density * 2"}});
+        source->setPlainText(QStringLiteral("absent * 2"));
+        require(waitUntil([&] { return !warning->text().isEmpty(); }),
+            "the edited row did not warn");
+        fixture.shape = QStringLiteral("3d+geo:00");
+        controller.refreshAvailability();
+        require(waitUntil([&] { return warning->text().isEmpty(); }, 400),
+            "a change of shape was mistaken for the same dataset");
+        fixture.shape = QStringLiteral("2d+geo:00");
+        fixture.storedFields = QStringList{
+            QStringLiteral("density"), QStringLiteral("temperature")};
+        controller.refreshAvailability();
+
+        // A shape that moved with every name unchanged still counts: a field
+        // centred differently makes an expression that mixes centerings stop
+        // resolving, so a verdict about the old one has to go.
+        dialog->setDraft({{"twice", "density * 2"}});
+        source->setPlainText(QStringLiteral("absent * 2"));
+        require(waitUntil([&] { return !warning->text().isEmpty(); }),
+            "the edited row did not warn");
+        fixture.shape = QStringLiteral("2d+geo:01");
+        controller.refreshAvailability();
+        require(waitUntil([&] { return !warning->text().isEmpty(); }),
+            "a centering change was mistaken for the same dataset");
+        fixture.shape = QStringLiteral("2d+geo:00");
+        controller.refreshAvailability();
+
+        // Losing the dataset counts too, though every unavailable state has
+        // the same empty shape: without the reason in the key, a refusal
+        // naming one of them survives the arrival of another.
+        dialog->setDraft({{"twice", "nonesuch * 2"}});
+        source->setPlainText(QStringLiteral("nonesuch * 3"));
+        applyButton->click();
+        require(!error->text().isEmpty(), "the edit was not refused");
+        fixture.datasetOpen = false;
+        controller.refreshAvailability();
+        require(error->text().isEmpty(),
+            "a verdict about the data survived the data going away");
+        fixture.datasetOpen = true;
+        controller.refreshAvailability();
+
+        // But a fault in the definition itself is true whatever is open, and
+        // nothing here would say it again -- so it stays put.
+        dialog->setDraft({{"", "density"}});
+        applyButton->click();
+        require(!error->text().isEmpty() && !anyway->isVisible(),
+            "an unnamed definition was not refused");
+        fixture.storedFields = QStringList{QStringLiteral("elsewhere")};
+        controller.refreshAvailability();
+        require(!error->text().isEmpty(),
+            "a fault of the definition was wiped by a dataset arriving, "
+            "leaving an editor whose Apply still refuses");
+        fixture.storedFields = QStringList{
+            QStringLiteral("density"), QStringLiteral("temperature")};
+        controller.refreshAvailability();
+
+        // A refusal that the data itself caused goes when the data does, even
+        // though there was never anything to overrule: nothing would say it
+        // again, and it names a state that has gone.
+        dialog->setDraft({{"twice", "density * 2"}});
+        fixture.datasetOpen = false;
+        controller.refreshAvailability();
+        applyButton->click();
+        require(!error->text().isEmpty() && !anyway->isVisible(),
+            "an editor with no dataset did not refuse");
+        fixture.datasetOpen = true;
+        controller.refreshAvailability();
+        require(error->text().isEmpty(),
+            "a refusal naming a state that has gone was left standing");
+
+        // A row still being written is not complained about.
+        dialog->setDraft({});
+        add->click();
+        name->setText(QStringLiteral("s"));
+        quiet();
+        require(warning->text().isEmpty(),
+            "a half-typed definition was complained about");
+        delete parent;
+    }
+
+    // The key the editor is opened with is the key it is refreshed against.
+    // Spelled two ways, the first session installed after the editor opened --
+    // any sequence frame, or the reload an Apply started -- read as a change of
+    // dataset and took down a verdict that was still true of it.
+    {
+        Fixture fixture;
+        DerivedFieldStore store;
+        DerivedFieldController controller(fixture.hooks(store), store);
+        auto* parent = new QWidget;
+        controller.showEditor(parent);
+        auto* dialog = parent->findChild<ExpressionEditorDialog*>();
+        require(dialog != nullptr, "the editor did not open");
+        auto* add = dialog->findChild<QPushButton*>(
+            QStringLiteral("newExpressionButton"));
+        auto* name =
+            dialog->findChild<QLineEdit*>(QStringLiteral("expressionName"));
+        auto* source = dialog->findChild<QPlainTextEdit*>(
+            QStringLiteral("expressionSource"));
+        auto* applyButton = dialog->findChild<QPushButton*>(
+            QStringLiteral("applyExpressionsButton"));
+        auto* error =
+            dialog->findChild<QLabel*>(QStringLiteral("expressionError"));
+        require(add != nullptr && name != nullptr && source != nullptr
+                && applyButton != nullptr && error != nullptr,
+            "the editor is missing a widget this block drives");
+
+        add->click();
+        name->setText(QStringLiteral("twice"));
+        source->setPlainText(QStringLiteral("nonesuch * 2"));
+        applyButton->click();
+        require(!error->text().isEmpty(),
+            "a definition this dataset cannot provide was not refused");
+        controller.refreshAvailability();
+        require(!error->text().isEmpty(),
+            "the first session installed after the editor opened was mistaken "
+            "for a change of dataset");
+        delete parent;
     }
 
     // A reload that fails leaves the list committed here and installed

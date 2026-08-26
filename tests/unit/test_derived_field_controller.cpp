@@ -3,6 +3,7 @@
 #include "ExpressionEditorDialog.hpp"
 
 #include <QApplication>
+#include <QEventLoop>
 #include <QCoreApplication>
 #include <QDialog>
 #include <QElapsedTimer>
@@ -14,6 +15,7 @@
 #include <QPushButton>
 #include <QTextCursor>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QTextDocument>
 
 #include <cstdlib>
@@ -30,6 +32,44 @@ using amrvis::DerivedFieldSkip;
 using amrvis::qt::DerivedFieldController;
 using amrvis::qt::DerivedFieldStore;
 using amrvis::qt::ExpressionEditorDialog;
+
+// The debounce the controller arms its diagnostics on. The tests wait against
+// this rather than against numbers of their own, so raising it cannot quietly
+// turn an assertion that nothing fired into one that fired late.
+constexpr int kDiagnosticsDebounceMs = 250;
+
+// Runs the event loop for a fixed span without spinning: a single-shot timer
+// quits it, so the process idles instead of burning a core on processEvents.
+void pump(int milliseconds)
+{
+    QEventLoop loop;
+    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
+// Long enough for a diagnostic to have fired and been seen not to. Used for the
+// assertions that something must *not* appear, which is why it is a fixed span
+// rather than a poll: there is no event to wait for.
+void quiet()
+{
+    pump(kDiagnosticsDebounceMs * 3);
+}
+
+// Runs until `predicate` holds, or gives up. Returns as soon as it holds, so a
+// passing test costs the debounce rather than the ceiling.
+template <typename Predicate>
+bool waitUntil(Predicate predicate, int ceilingMs = 2000)
+{
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (!predicate()) {
+        if (elapsed.elapsed() >= ceilingMs) {
+            return false;
+        }
+        pump(10);
+    }
+    return true;
+}
 
 void require(bool condition, const char* message)
 {
@@ -212,18 +252,8 @@ int main(int argc, char** argv)
         require(warning->text().isEmpty(),
             "a definition this dataset can provide warned about itself");
 
-        // Past the diagnostics debounce, which is what makes this the verdict
-        // on what was typed rather than one per keystroke.
-        const auto settle = [] {
-            QElapsedTimer timer;
-            timer.start();
-            while (timer.elapsed() < 600) {
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-            }
-        };
-
         source->setPlainText(QStringLiteral("nonesuch * 2"));
-        settle();
+        quiet();
         require(!warning->text().isEmpty(),
             "a hand-written expression naming no field of this dataset said "
             "nothing");
@@ -234,7 +264,7 @@ int main(int argc, char** argv)
             "a definition this dataset cannot provide was refused");
 
         source->setPlainText(QStringLiteral("density * 3"));
-        settle();
+        quiet();
         require(warning->text().isEmpty(),
             "the warning outlived the expression it was about");
 
@@ -242,7 +272,7 @@ int main(int argc, char** argv)
         // row at once and is tolerated whole; the field list greys out what
         // this dataset cannot provide.
         dialog->setDraft({{"stranger", "absent * 2"}});
-        settle();
+        quiet();
         require(warning->text().isEmpty(),
             "an imported definition was complained about");
 
@@ -265,7 +295,7 @@ int main(int argc, char** argv)
         // front of the user, and Apply says so rather than committing it to
         // be discovered greyed out later.
         source->setPlainText(QStringLiteral("absent * 3"));
-        settle();
+        quiet();
         require(!warning->text().isEmpty(),
             "the edited definition did not warn");
         applyButton->click();
@@ -281,7 +311,7 @@ int main(int argc, char** argv)
         // one against a list the user has not touched.
         fixture.storedFields = QStringList{QStringLiteral("other")};
         controller.refreshAvailability();
-        settle();
+        quiet();
         require(warning->text().isEmpty(),
             "opening another dataset raised a warning about an untouched "
             "definition");
@@ -321,23 +351,6 @@ int main(int argc, char** argv)
                 && applyButton != nullptr,
             "the editor is missing a widget this block drives");
 
-        // Runs the loop until the diagnostic has had its say, or long enough
-        // to be sure it never will.
-        const auto waitFor = [](auto predicate) {
-            QElapsedTimer timer;
-            timer.start();
-            while (timer.elapsed() < 2000 && !predicate()) {
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-            }
-        };
-        const auto waitQuiet = [] {
-            QElapsedTimer timer;
-            timer.start();
-            while (timer.elapsed() < 700) {
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-            }
-        };
-
         // Row 0 is left unnamed, which is a fault of its own and the first in
         // the list; row 1 is where the user is typing. The warning must be
         // about row 1's syntax, not about the data.
@@ -346,7 +359,7 @@ int main(int argc, char** argv)
         add->click();
         name->setText(QStringLiteral("bad"));
         source->setPlainText(QStringLiteral("sqrt("));
-        waitFor([&] { return !warning->text().isEmpty(); });
+        waitUntil([&] { return !warning->text().isEmpty(); });
         require(!warning->text().isEmpty()
                 && !warning->text().contains(QStringLiteral("dataset")),
             "a syntax error in the row being written was blamed on the "
@@ -355,7 +368,7 @@ int main(int argc, char** argv)
         // A refusal supersedes the advisory rather than standing beside it.
         dialog->setDraft({{"twice", "density * 2"}});
         source->setPlainText(QStringLiteral("nonesuch * 2"));
-        waitFor([&] { return !warning->text().isEmpty(); });
+        waitUntil([&] { return !warning->text().isEmpty(); });
         require(!warning->text().isEmpty(), "the edited row did not warn");
         applyButton->click();
         require(!error->text().isEmpty() && warning->text().isEmpty(),
@@ -365,7 +378,7 @@ int main(int argc, char** argv)
         // selected afterwards, so no row change would.
         dialog->setDraft({{"twice", "nonesuch * 2"}});
         source->setPlainText(QStringLiteral("nonesuch * 3"));
-        waitFor([&] { return !warning->text().isEmpty(); });
+        waitUntil([&] { return !warning->text().isEmpty(); });
         require(!warning->text().isEmpty(), "the edited row did not warn");
         remove->click();
         require(warning->text().isEmpty(),
@@ -386,7 +399,7 @@ int main(int argc, char** argv)
         list->setCurrentRow(0);
         source->setPlainText(QStringLiteral("nonesuch * 2"));
         remove->click();
-        waitQuiet();
+        quiet();
         require(warning->text().isEmpty(),
             "a diagnostic queued for a deleted row landed on its successor");
 
@@ -397,7 +410,7 @@ int main(int argc, char** argv)
         dialog->setDraft({{"twice", "density * 2"}});
         source->setPlainText(QStringLiteral("nonesuch * 2"));
         applyButton->click();
-        waitQuiet();
+        quiet();
         require(!error->text().isEmpty() && warning->text().isEmpty(),
             "a diagnostic in flight when Apply was refused came back beside "
             "the refusal");
@@ -419,7 +432,7 @@ int main(int argc, char** argv)
                 {"b", wide.toStdString()}});
             list->setCurrentRow(1);
             source->setPlainText(wide + QStringLiteral(" + f0"));
-            waitQuiet();
+            quiet();
             require(!warning->text().contains(QStringLiteral("dataset")),
                 "a list fault in another row was reported as this dataset's "
                 "doing");
@@ -434,10 +447,10 @@ int main(int argc, char** argv)
         // Let the warning actually appear, so the revert has something to
         // take back: without this the second edit merely restarts the timer
         // and nothing was ever on screen.
-        waitFor([&] { return !warning->text().isEmpty(); });
+        waitUntil([&] { return !warning->text().isEmpty(); });
         require(!warning->text().isEmpty(), "the edit did not warn");
         source->setPlainText(QStringLiteral("absent * 2"));
-        waitQuiet();
+        quiet();
         require(!dialog->handEdited(0),
             "a definition typed into and put back was still counted as "
             "written here");
@@ -534,7 +547,7 @@ int main(int argc, char** argv)
         // promises nothing was stopped.
         dialog->setDraft({{"t", "density"}});
         source->setPlainText(QStringLiteral("sqrt("));
-        waitFor([&] { return !warning->text().isEmpty(); });
+        waitUntil([&] { return !warning->text().isEmpty(); });
         require(warning->styleSheet().contains(QStringLiteral("red")),
             "a fault Apply will refuse was shown as advice");
 
@@ -572,7 +585,7 @@ int main(int argc, char** argv)
         add->click();
         name->setText(QStringLiteral("twice"));
         source->setPlainText(QStringLiteral("base * 2"));
-        waitQuiet();
+        quiet();
         require(warning->text().isEmpty(),
             "a definition was blamed for the failure of the one it reads");
         applyButton->click();
@@ -628,7 +641,7 @@ int main(int argc, char** argv)
         dialog->setDraft({});
         add->click();
         name->setText(QStringLiteral("s"));
-        waitQuiet();
+        quiet();
         require(warning->text().isEmpty(),
             "a half-typed definition was complained about");
         delete parent;

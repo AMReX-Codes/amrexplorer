@@ -230,8 +230,15 @@ void DerivedFieldController::refreshDraftDiagnostics()
     // touched -- and the one thing the warning must not do is complain about
     // a definition they merely carried here.
     if (!index || m_diagnosticsRow != index
-        || m_diagnosticsRevision != m_dialog->draftRevision()
-        || !m_dialog->handEdited(*index)) {
+        || m_diagnosticsRevision != m_dialog->draftRevision()) {
+        // Stale: it belongs to a moment that has passed, and whatever is on
+        // screen now was put there by that moment's own answer.
+        return;
+    }
+    if (!m_dialog->handEdited(*index)) {
+        // Put back the way it arrived while this was in flight. There is no
+        // claim left to answer, so the answer to the old one goes too.
+        m_dialog->showResolutionWarning({});
         return;
     }
     const auto& draft = m_dialog->draft();
@@ -261,11 +268,6 @@ void DerivedFieldController::refreshDraftDiagnostics()
             return;
         }
     }
-    // And the faults that belong to the list rather than to a row -- an
-    // expression reading more fields than one evaluation may pin, a chain
-    // deeper than it may recurse -- where they name this one. Safe over a
-    // draft that does not compile: the check answers nullopt for that rather
-    // than throwing, leaving the row's own fault above to have spoken first.
     // The faults that belong to the list rather than to a row -- an expression
     // reading more fields than one evaluation may pin, a chain deeper than it
     // may recurse -- asked of the rows up to and including this one. Of the
@@ -364,7 +366,6 @@ DerivedFieldController::definitionFault(
             std::nullopt};
     }
 
-
     // Checked without reference to any dataset: whether a definition applies
     // *here* is decided when a dataset installs it, and shown by greying the
     // field out. One list is shared by windows showing different data, so only
@@ -428,7 +429,7 @@ std::optional<DerivedFieldController::Refusal> DerivedFieldController::apply(
                     ? tr("This dataset cannot provide this field.")
                     : tr("Unavailable in this dataset: %1")
                           .arg(QString::fromStdString(entry->reason)),
-                index};
+                index, true};
         }
     }
 
@@ -481,44 +482,48 @@ void DerivedFieldController::showEditor(QWidget* parent)
     connect(dialog, &QObject::destroyed, this, [this] {
         m_diagnostics = nullptr;
     });
-    connect(dialog, &ExpressionEditorDialog::applyRequested, dialog,
-        [this, dialog] {
-            // Whatever the debounce was about, Apply has overtaken it: left
-            // armed, a refusal within the 250 ms would be joined a moment
-            // later by the advisory it just replaced, in amber beside the red.
-            // A commit clears it by moving the draft on; a refusal moves
-            // nothing, so it is stopped here for both.
-            if (m_diagnostics != nullptr) {
-                m_diagnostics->stop();
-            }
-            // The rows the user has typed into, which are the ones Apply
-            // holds to this dataset.
-            std::vector<std::size_t> handEdited;
+    // One path for both buttons: Apply holds what the user wrote to the open
+    // dataset, "Apply anyway" commits the same draft without that. Everything
+    // after the check is identical, and it is the part that must not drift.
+    const auto commit = [this, dialog](bool holdToDataset) {
+        // Whatever the debounce was about, this has overtaken it: left armed,
+        // a refusal within the 250 ms would be joined a moment later by the
+        // advisory it just replaced, in amber beside the red. A commit clears
+        // it by moving the draft on; a refusal moves nothing, so it is
+        // stopped here for both.
+        if (m_diagnostics != nullptr) {
+            m_diagnostics->stop();
+        }
+        // The rows the user has written, which are the ones Apply holds to
+        // this dataset. Empty when they have chosen to commit regardless.
+        std::vector<std::size_t> written;
+        if (holdToDataset) {
             for (std::size_t index = 0; index < dialog->draft().size();
                 ++index) {
                 if (dialog->handEdited(index)) {
-                    handEdited.push_back(index);
+                    written.push_back(index);
                 }
             }
-            const auto refusal =
-                apply(dialog->draft(), std::move(handEdited));
-            if (refusal) {
-                dialog->showError(
-                    refusal->message, refusal->definitionIndex);
-                return;
-            }
-            // The draft is now the committed list, which is what later
-            // edits are measured against -- and what a change arriving from
-            // another window may replace without asking. Same content, so
-            // nothing on screen moves but the row the user was editing, which
-            // is kept.
-            dialog->setCommitted(
-                m_store.definitions(), dialog->selectedIndex());
-            // Not a status message: apply() has already started the reload,
-            // and showSlice clears the status bar when its slices land. The
-            // editor is in front of the user anyway, so it says so itself.
-            dialog->showApplied(m_store.definitions().size());
-        });
+        }
+        if (const auto refusal = apply(dialog->draft(), std::move(written))) {
+            dialog->showError(refusal->message, refusal->definitionIndex,
+                refusal->confirmable);
+            return;
+        }
+        // The draft is now the committed list, which is what later edits are
+        // measured against -- and what a change arriving from another window
+        // may replace without asking. Same content, so nothing on screen moves
+        // but the row the user was editing, which is kept.
+        dialog->setCommitted(m_store.definitions(), dialog->selectedIndex());
+        // Not a status message: apply() has already started the reload, and
+        // showSlice clears the status bar when its slices land. The editor is
+        // in front of the user anyway, so it says so itself.
+        dialog->showApplied(m_store.definitions().size());
+    };
+    connect(dialog, &ExpressionEditorDialog::applyRequested, dialog,
+        [commit] { commit(true); });
+    connect(dialog, &ExpressionEditorDialog::applyAnywayRequested, dialog,
+        [commit] { commit(false); });
     connect(dialog, &ExpressionEditorDialog::importRequested, dialog,
         [this, dialog] {
             if (!m_hooks.chooseFile) {

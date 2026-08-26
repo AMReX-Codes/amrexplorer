@@ -142,6 +142,12 @@ public:
         QString message;
         // The definition the refusal belongs to, when it is about one.
         std::optional<std::size_t> definitionIndex;
+        // Whether the user may overrule it. True only for "this dataset
+        // cannot provide it", which is a fact about the data rather than
+        // about the definition: the list is shared, and one written for the
+        // plotfile they are about to open is worth committing. Everything
+        // else is wrong wherever it is installed and is not offered.
+        bool confirmable = false;
     };
 
     // Checks the list and, if it holds, commits it to the store -- from which

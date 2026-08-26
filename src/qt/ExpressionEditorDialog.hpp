@@ -71,8 +71,15 @@ public:
 
     // Reports a refusal in place rather than over a second dialog, and selects
     // the definition it belongs to so the user is looking at what failed.
-    void showError(
-        const QString& message, std::optional<std::size_t> definitionIndex);
+    //
+    // `offerAnyway` puts an "Apply anyway" button beside it, for a refusal the
+    // user is entitled to overrule: a definition this dataset cannot provide
+    // is still worth committing for the plotfile they are about to open, and
+    // without it the editor would have no way to write one at all. Beside the
+    // message rather than over a modal, so it interrupts nothing and the
+    // refusal stays readable while they decide.
+    void showError(const QString& message,
+        std::optional<std::size_t> definitionIndex, bool offerAnyway = false);
     // Confirms an accepted Apply in the same place a refusal appears. Said
     // here rather than in the status bar, which the reload this announces
     // clears as soon as its slices arrive.
@@ -84,8 +91,8 @@ public:
     // equivalent list can leave the user where they were.
     [[nodiscard]] std::optional<std::size_t> selectedIndex() const;
 
-    // Whether the user has typed into this definition's name or expression
-    // since the draft was last replaced -- by a commit, or by an import.
+    // Whether this definition differs from what it was when the draft was
+    // last replaced -- by a commit, or by an import.
     //
     // This is what separates a definition the user is writing from one they
     // are merely carrying: a list written for another plotfile, or imported
@@ -93,6 +100,12 @@ public:
     // no fault of anyone's, and those are committed and greyed out. One being
     // written is a different claim -- that it works on the data in front of
     // them -- and the host holds it to that.
+    //
+    // Measured against a baseline kept per row, not against the committed list
+    // by position: a row deleted above this one, or a list imported over it,
+    // moves what any given index means, and comparing across that both locks
+    // the user out of a list they only brushed against and lets a definition
+    // they typed from scratch pass as carried.
     [[nodiscard]] bool handEdited(std::size_t index) const;
 
     // Bumped by every change to the draft: a keystroke, a row added or
@@ -137,12 +150,12 @@ signals:
     // editing: an import, a row change and a dataset opening all clear the
     // warning instead, for the reason given there.
     void draftEdited();
+    // "Apply anyway" was pressed on a refusal that offered it: the same draft
+    // is to be committed without being held to the open dataset.
+    void applyAnywayRequested();
 
 private:
     void clearError();
-    // Records whether row `index` now differs from what was committed, which
-    // is what handEdited answers.
-    void markEdited(std::size_t index);
     void rebuildList(std::optional<std::size_t> select);
     void showSelected();
     void addDefinition();
@@ -153,11 +166,11 @@ private:
     // edit unapplied: compared rather than flagged, so typing something and
     // taking it back leaves nothing to protect.
     std::vector<DerivedFieldDefinition> m_committed;
-    // One flag per draft row: has the user typed into it. Kept beside m_draft
-    // rather than derived from m_committed, because "differs from what was
-    // committed" is also true of every row of an imported list, which is the
-    // case this has to tell apart. Cleared whenever the draft is replaced.
-    std::vector<bool> m_handEdited;
+    // What each draft row was when the draft was last replaced, one entry per
+    // row and moved with them. handEdited is the comparison against this: a
+    // row added since has an empty baseline, so anything written into it
+    // counts, and a row put back the way it arrived stops counting.
+    std::vector<DerivedFieldDefinition> m_baseline;
     std::uint64_t m_draftRevision = 0;
     QListWidget* m_list = nullptr;
     // The stored fields, and the caption over them: both hidden together when
@@ -180,6 +193,7 @@ private:
     QLabel* m_warning = nullptr;
     QPushButton* m_remove = nullptr;
     QPushButton* m_apply = nullptr;
+    QPushButton* m_applyAnyway = nullptr;
     // Set while the widgets are being written from the draft, so the edit
     // signals do not write straight back into it.
     bool m_loading = false;

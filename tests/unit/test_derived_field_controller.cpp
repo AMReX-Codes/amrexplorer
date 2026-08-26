@@ -427,18 +427,64 @@ int main(int argc, char** argv)
         // Typing something and taking it back is not writing a definition, so
         // it must not hold every later Apply to a list carried from another
         // plotfile -- there is nothing inside the editor that could clear it.
-        dialog->setDraft({{"carried", "absent * 2"}});
         dialog->setCommitted({{"carried", "absent * 2"}});
-        source->setPlainText(QStringLiteral("absent * 2 "));
+        source->setPlainText(QStringLiteral("absent * 3"));
+        require(dialog->handEdited(0), "an edit did not count as one");
+        // Let the warning actually appear, so the revert has something to
+        // take back: without this the second edit merely restarts the timer
+        // and nothing was ever on screen.
+        waitFor([&] { return !warning->text().isEmpty(); });
+        require(!warning->text().isEmpty(), "the edit did not warn");
         source->setPlainText(QStringLiteral("absent * 2"));
         waitQuiet();
         require(!dialog->handEdited(0),
             "a definition typed into and put back was still counted as "
             "written here");
+        require(warning->text().isEmpty(),
+            "the warning outlived the edit it was about");
         applyButton->click();
         require(error->text().isEmpty(),
             "Apply was deadlocked by a definition the user only brushed "
             "against");
+
+        // The same, for a list that arrived by import rather than by commit:
+        // its rows are measured against what was imported, not against a
+        // committed list they were never part of.
+        dialog->setDraft({{"imported", "absent * 4"}});
+        source->setPlainText(QStringLiteral("absent * 5"));
+        source->setPlainText(QStringLiteral("absent * 4"));
+        require(!dialog->handEdited(0),
+            "an imported definition put back was counted as written here");
+        applyButton->click();
+        require(error->text().isEmpty(),
+            "Apply was deadlocked by an imported definition");
+
+        // And a row typed from scratch is held to the dataset even when it
+        // happens to match what used to sit at that index.
+        dialog->setCommitted({{"a", "density"}, {"ghost", "absent * 2"}});
+        list->setCurrentRow(1);
+        remove->click();
+        add->click();
+        name->setText(QStringLiteral("ghost"));
+        source->setPlainText(QStringLiteral("absent * 2"));
+        require(dialog->handEdited(1),
+            "a definition typed from scratch passed as one carried here");
+        applyButton->click();
+        require(!error->text().isEmpty(),
+            "a hand-written definition this dataset cannot provide slipped "
+            "through");
+
+        // Which the user may overrule: the refusal offers it, and taking the
+        // offer commits the same draft.
+        auto* anyway = dialog->findChild<QPushButton*>(
+            QStringLiteral("applyAnywayButton"));
+        require(anyway != nullptr && anyway->isVisible(),
+            "the refusal did not offer to commit anyway");
+        anyway->click();
+        require(error->text().isEmpty()
+                && controller.definitions().size() == 2
+                && controller.definitions()[1].name == "ghost",
+            "Apply anyway did not commit the definition");
 
         // A field written in from the list lands where the user is typing,
         // which for a row they just selected is the end of what is there.
@@ -454,8 +500,9 @@ int main(int argc, char** argv)
         const auto written = storedFields->item(1)->text();
         emit storedFields->itemDoubleClicked(storedFields->item(1));
         require(dialog->draft()[0].expression
-                == (QStringLiteral("density") + written).toStdString(),
-            "a field written in from the list did not land at the end");
+                == (QStringLiteral("density ") + written).toStdString(),
+            "a field written in from the list did not land at the end, "
+            "separated from what was there");
 
         // A row still being written is not complained about.
         dialog->setDraft({});

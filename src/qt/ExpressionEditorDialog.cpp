@@ -50,7 +50,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     : QDialog(parent)
     , m_draft(std::move(definitions))
     , m_committed(m_draft)
-    , m_handEdited(m_draft.size(), false)
+    , m_baseline(m_draft)
 {
     setObjectName(QStringLiteral("expressionEditor"));
     setWindowTitle(tr("Expression Editor"));
@@ -100,6 +100,10 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     m_error->setTextFormat(Qt::PlainText);
     // As SetContoursDialog styles its own warning.
     m_error->setStyleSheet(QStringLiteral("QLabel { color: red; }"));
+
+    m_applyAnyway = new QPushButton(tr("Apply &anyway"), this);
+    m_applyAnyway->setObjectName(QStringLiteral("applyAnywayButton"));
+    m_applyAnyway->setVisible(false);
 
     m_applied = new QLabel(this);
     m_applied->setObjectName(QStringLiteral("expressionApplied"));
@@ -155,6 +159,14 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     editor->addLayout(form);
     editor->addWidget(help);
     editor->addWidget(m_error);
+    {
+        // Left-aligned under the refusal it belongs to, rather than stretched
+        // across the column as a label would be.
+        auto* row = new QHBoxLayout;
+        row->addWidget(m_applyAnyway);
+        row->addStretch(1);
+        editor->addLayout(row);
+    }
     editor->addWidget(m_warning);
     editor->addWidget(m_applied);
     editor->addWidget(m_notice);
@@ -190,6 +202,15 @@ ExpressionEditorDialog::ExpressionEditorDialog(
             // Into the expression at the cursor, and leave the focus there:
             // the point of the list is to save typing a name, not to take the
             // user out of what they were writing.
+            // Separated from whatever the cursor sits after: written
+            // straight onto an identifier the two lex as one unknown symbol,
+            // which is the same silent corruption as inserting at the front.
+            // A space is safe after anything, operators included.
+            const auto before = m_expression->toPlainText().left(
+                m_expression->textCursor().position());
+            if (!before.isEmpty() && !before.back().isSpace()) {
+                m_expression->insertPlainText(QStringLiteral(" "));
+            }
             m_expression->insertPlainText(asSymbol(item->text()));
             m_expression->setFocus();
         });
@@ -206,7 +227,6 @@ ExpressionEditorDialog::ExpressionEditorDialog(
             return;
         }
         m_draft[*index].name = text.trimmed().toStdString();
-        markEdited(*index);
         ++m_draftRevision;
         m_list->item(static_cast<int>(*index))
             ->setText(displayName(m_draft[*index]));
@@ -221,13 +241,16 @@ ExpressionEditorDialog::ExpressionEditorDialog(
         }
         m_draft[*index].expression =
             m_expression->toPlainText().trimmed().toStdString();
-        markEdited(*index);
         ++m_draftRevision;
         emit draftEdited();
     });
     connect(m_apply, &QPushButton::clicked, this, [this] {
         clearError();
         emit applyRequested();
+    });
+    connect(m_applyAnyway, &QPushButton::clicked, this, [this] {
+        clearError();
+        emit applyAnywayRequested();
     });
     // Explicitly: a QDialogButtonBox parented to a dialog does *not* have its
     // rejected() wired to that dialog's reject() -- probed, not assumed --
@@ -246,9 +269,10 @@ void ExpressionEditorDialog::setDraft(
     std::optional<std::size_t> select)
 {
     m_draft = std::move(definitions);
-    // None of it is the user's writing: an import is carried, and a commit is
-    // already answered for.
-    m_handEdited.assign(m_draft.size(), false);
+    // None of it is the user's writing yet: an import is carried, and a commit
+    // is already answered for. Whatever they change from here is measured
+    // against this.
+    m_baseline = m_draft;
     ++m_draftRevision;
     clearError();
     rebuildList(select);
@@ -284,7 +308,10 @@ void ExpressionEditorDialog::markDraftCommitted()
     // As setDraft does for the path that replaces the rows: what was the
     // user's own writing has been answered for, and holding it to this
     // dataset a second time would refuse a list that is already installed.
-    m_handEdited.assign(m_draft.size(), false);
+    m_baseline = m_draft;
+    // The draft's meaning moved even though its rows did not, and the
+    // revision is what an asynchronous reader compares against.
+    ++m_draftRevision;
     m_notice->clear();
     m_notice->setVisible(false);
 }
@@ -302,9 +329,10 @@ void ExpressionEditorDialog::setCommitted(
     m_notice->setVisible(false);
 }
 
-void ExpressionEditorDialog::showError(
-    const QString& message, std::optional<std::size_t> definitionIndex)
+void ExpressionEditorDialog::showError(const QString& message,
+    std::optional<std::size_t> definitionIndex, bool offerAnyway)
 {
+    m_applyAnyway->setVisible(offerAnyway);
     m_applied->clear();
     m_applied->setVisible(false);
     if (definitionIndex && *definitionIndex < m_draft.size()) {
@@ -347,6 +375,7 @@ void ExpressionEditorDialog::clearError()
     // shared list with nothing on screen saying so. setCommitted ends it.
     m_error->clear();
     m_error->setVisible(false);
+    m_applyAnyway->setVisible(false);
     m_applied->clear();
     m_applied->setVisible(false);
 }
@@ -398,7 +427,9 @@ void ExpressionEditorDialog::addDefinition()
 {
     clearError();
     m_draft.push_back({});
-    m_handEdited.push_back(false);
+    // Nothing to carry: a row that did not arrive from anywhere is the user's
+    // the moment they write in it.
+    m_baseline.push_back({});
     ++m_draftRevision;
     rebuildList(m_draft.size() - 1);
     m_name->setFocus();
@@ -412,8 +443,8 @@ void ExpressionEditorDialog::removeSelected()
     }
     clearError();
     m_draft.erase(m_draft.begin() + static_cast<std::ptrdiff_t>(*index));
-    m_handEdited.erase(
-        m_handEdited.begin() + static_cast<std::ptrdiff_t>(*index));
+    m_baseline.erase(
+        m_baseline.begin() + static_cast<std::ptrdiff_t>(*index));
     ++m_draftRevision;
     // Deleting the last definition leaves nothing selected, and rebuildList
     // reaches that by writing -1 over a current row the clear() already set
@@ -424,19 +455,15 @@ void ExpressionEditorDialog::removeSelected()
                             : std::optional<std::size_t>{*index - 1});
 }
 
-void ExpressionEditorDialog::markEdited(std::size_t index)
-{
-    // Measured, not latched. A row typed into and then put back the way it was
-    // is not something the user is claiming about this dataset, and a latch
-    // would hold every later Apply to a definition they merely brushed
-    // against -- with nothing inside the editor able to clear it again.
-    m_handEdited[index] = index >= m_committed.size()
-        || m_draft[index] != m_committed[index];
-}
-
 bool ExpressionEditorDialog::handEdited(std::size_t index) const
 {
-    return index < m_handEdited.size() && m_handEdited[index];
+    if (index >= m_draft.size()) {
+        return false;
+    }
+    // Computed rather than remembered: there is no flag to fall out of step
+    // with the rows, and putting a definition back the way it arrived takes
+    // the claim back with it.
+    return index >= m_baseline.size() || m_draft[index] != m_baseline[index];
 }
 
 std::optional<std::size_t> ExpressionEditorDialog::selectedIndex() const

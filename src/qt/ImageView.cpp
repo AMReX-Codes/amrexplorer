@@ -130,6 +130,7 @@ void ImageView::setImage(
     m_pathItems.clear();
     m_pointItems.clear();
     m_pointOverlayColors.clear();
+    m_pointOverlayPointCount = 0;
     m_crosshairVerticalItem = nullptr;
     m_crosshairHorizontalItem = nullptr;
     m_cellHighlightItem = nullptr;
@@ -303,6 +304,7 @@ void ImageView::setPointOverlays(const std::vector<PointOverlay>& overlays)
     }
     m_pointItems.clear();
     m_pointOverlayColors.clear();
+    m_pointOverlayPointCount = 0;
     if (!hasImage()) {
         return;
     }
@@ -318,12 +320,18 @@ void ImageView::setPointOverlays(const std::vector<PointOverlay>& overlays)
         item->setZValue(3.0);
         m_pointItems.push_back(item);
         m_pointOverlayColors.push_back(overlay.color);
+        m_pointOverlayPointCount += overlay.points.size();
     }
 }
 
 std::size_t ImageView::pointOverlayCount() const noexcept
 {
     return m_pointItems.size();
+}
+
+std::size_t ImageView::pointOverlayPointCount() const noexcept
+{
+    return m_pointOverlayPointCount;
 }
 
 const std::vector<QColor>& ImageView::pointOverlayColors() const noexcept

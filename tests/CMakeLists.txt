@@ -1416,6 +1416,20 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(
         qt_particle_visible_range_smoke_3d PROPERTIES TIMEOUT 30)
+    # Turning the slice-cell filter on thins the drawn points without
+    # reloading the samples, and unticking it restores the projection.
+    add_test(
+        NAME qt_particle_slice_cells_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_particle_slice_cells"
+            -DMODE=particle-slice-cells
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(
+        qt_particle_slice_cells_smoke_3d PROPERTIES TIMEOUT 30)
     # The particles dialog is modeless: it must not block the main window, one
     # instance is reused, and Apply draws without closing it.
     add_test(

@@ -561,24 +561,34 @@ each:
 - **Color** picks the point color. Each species starts with a distinct default.
 - **Alpha** sets opacity from 0 to 100 percent.
 
-Below the species list are three settings that apply to all of them:
+Below the species list are the settings that apply to all of them:
 
 - **Visible subset** is the percentage of particles drawn, from 0.01 to 100.
 - **Sampling seed** chooses *which* particles the subset contains. Change it to
   look at a different sample of the same size.
 - **Point size** is the drawn diameter in pixels, from 1 to 12.
+- **Only particles in cells the slice crosses** narrows each panel to the
+  particles lying inside the cells that panel is showing. 3-D data only.
 
 The same particles stay selected as you step through the frames of a sequence,
 and for a given seed a lower percentage thins the same set of particles rather
 than replacing it.
 
 For 3-D data, particles are projected onto each of the three orthogonal slice
-panels. The projection is through the whole volume: a panel shows every selected
-particle, not only those near that slice plane.
+panels. By default the projection is through the whole volume: a panel shows
+every selected particle, not only those near that slice plane. That reads well
+on a sparse dataset and turns into a wash of points on a dense one, which is
+what the **Only particles in cells the slice crosses** box is for. Ticked, a
+particle is drawn only where it falls inside the cell the plane cuts, so each
+panel shows one cell's thickness of particles and follows the plane as you move
+it. The thickness is the cell actually drawn at that point, so a region shown at
+a coarse level keeps its thicker cell rather than losing particles to a finer
+level's spacing; where a panel shows no data it shows no particles either.
 
 Particle settings are not saved between sessions. Species selection, colors,
-subset percentage, seed, and point size all reset when a new dataset or sequence
-is opened; they carry across the frames of an open sequence.
+subset percentage, seed, point size, and the slice-cell filter all reset when a
+new dataset or sequence is opened; they carry across the frames of an open
+sequence.
 
 ## 2-D spherical coordinates
 

@@ -48,6 +48,10 @@ public:
         double fraction = 1.0;
         std::uint64_t seed = 0;
         int pointSize = defaultPointSize;
+        // Draw only the particles lying inside the cell each slice plane
+        // cuts, instead of projecting the whole volume onto it. 3-D only:
+        // in 2-D the slice is the domain, so it would filter nothing.
+        bool sliceCellsOnly = false;
         std::unordered_map<std::string, QColor> colors;
     };
 
@@ -81,12 +85,13 @@ public:
     // The dialog's and the tests' entry point: installs the selection. A
     // change to the sampled identities (species, fraction, seed) emits
     // sampleSelectionChanged for the host to act on; a cosmetic change (point
-    // size) only emits overlaysChanged.
+    // size, the slice-cell filter) only emits overlaysChanged.
     void applySelection(std::vector<std::string> species, double fraction,
-        int pointSize, std::uint64_t seed);
+        int pointSize, std::uint64_t seed, bool sliceCellsOnly);
     void setColor(const std::string& species, const QColor& color);
     // Reinstalls what a restored frame spec carries (species, fraction, seed,
-    // initialised), leaving colours and point size alone.
+    // initialised), leaving the display settings -- colours, point size, the
+    // slice-cell filter -- alone.
     void restoreSelection(std::vector<std::string> species, double fraction,
         std::uint64_t seed, bool selectionInitialized);
     // Drops every setting back to its default: the shared reset for the two

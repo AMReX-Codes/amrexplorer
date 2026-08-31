@@ -164,6 +164,9 @@ public:
         return m_gridItems.size();
     }
     [[nodiscard]] std::size_t pointOverlayCount() const noexcept;
+    // The points across those batches: a filter that thins a batch without
+    // emptying it leaves pointOverlayCount unchanged.
+    [[nodiscard]] std::size_t pointOverlayPointCount() const noexcept;
     [[nodiscard]] const std::vector<QColor>& pointOverlayColors() const noexcept;
     // Renders the scene (base image plus grid boxes and any other overlays)
     // to a fresh QImage for export. scaleFactor multiplies the raster's native
@@ -273,6 +276,7 @@ private:
     std::vector<QGraphicsPathItem*> m_pathItems;
     std::vector<QGraphicsItem*> m_pointItems;
     std::vector<QColor> m_pointOverlayColors;
+    std::size_t m_pointOverlayPointCount = 0;
     std::optional<QLineF> m_crosshairVertical;
     std::optional<QLineF> m_crosshairHorizontal;
     QColor m_crosshairVerticalColor;

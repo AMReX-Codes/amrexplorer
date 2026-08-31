@@ -14,7 +14,7 @@
 #                 export-quit |
 #                 contour-sync | raster-zoom | rubber-zoom-sync |
 #                 particle-visible-range | particle-dialog |
-#                 particle-settings-reset |
+#                 particle-settings-reset | particle-slice-cells |
 #                 rubber-zoom-local | rubber-overzoom | pan-zoom |
 #                 range-cache | fab-zoom | cache-budget |
 #                 fixed-scale-1 | fixed-scale-4 | sequence-transform-preserve |
@@ -277,6 +277,10 @@ elseif(MODE STREQUAL "particle-dialog")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
     run_or_die("${AMREXPLORER_QT}" --particle-dialog-smoke-test
         "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "particle-slice-cells")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --particle-slice-cells-smoke-test
+        "${WORK}/plt")
 elseif(MODE STREQUAL "particle-settings-reset")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")

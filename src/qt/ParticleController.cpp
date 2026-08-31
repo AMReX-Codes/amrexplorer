@@ -91,7 +91,7 @@ QColor ParticleController::colorFor(const std::string& species) const
 }
 
 void ParticleController::applySelection(std::vector<std::string> species,
-    double fraction, int pointSize, std::uint64_t seed)
+    double fraction, int pointSize, std::uint64_t seed, bool sliceCellsOnly)
 {
     const bool sampleChanged = !m_settings.selectionInitialized
         || species != m_settings.species || fraction != m_settings.fraction
@@ -100,11 +100,12 @@ void ParticleController::applySelection(std::vector<std::string> species,
     m_settings.fraction = fraction;
     m_settings.seed = seed;
     m_settings.pointSize = pointSize;
+    m_settings.sliceCellsOnly = sliceCellsOnly;
     m_settings.selectionInitialized = true;
     if (!sampleChanged) {
-        // Colour, alpha and point size only affect the installed point
-        // batches; do not reread particle files when the sampled identities
-        // are unchanged.
+        // Colour, alpha, point size and the slice-cell filter only affect the
+        // installed point batches; do not reread particle files when the
+        // sampled identities are unchanged.
         emit overlaysChanged();
         return;
     }
@@ -425,7 +426,22 @@ void ParticleController::showDialog(QWidget* parent)
     sizeRow->addStretch(1);
     layout->addLayout(sizeRow);
 
+    // 3-D only: in 2-D the slice is the whole domain, so every particle is
+    // already in a cell the plane crosses and the filter would do nothing.
+    QCheckBox* sliceCellsOnly = nullptr;
     if (dataset->metadata().dimension == 3) {
+        sliceCellsOnly = new QCheckBox(
+            tr("Only particles in cells the slice crosses"), dialog);
+        // Named, unlike the species rows: those are found by type and order,
+        // and an unnamed extra check box would join that list.
+        sliceCellsOnly->setObjectName(
+            QStringLiteral("particlesSliceCellsOnly"));
+        sliceCellsOnly->setChecked(m_settings.sliceCellsOnly);
+        sliceCellsOnly->setToolTip(
+            tr("Draw a particle only where it lies inside the cell the slice "
+               "plane cuts. Unticked, every particle is projected onto the "
+               "plane through the whole volume."));
+        layout->addWidget(sliceCellsOnly);
         layout->addWidget(new QLabel(
             tr("In 3-D, points are projected onto each orthogonal view."),
             dialog));
@@ -437,8 +453,8 @@ void ParticleController::showDialog(QWidget* parent)
     // Context is this controller: the connection cannot outlive the object
     // the lambda acts on, and it goes with the dialog's buttons anyway.
     connect(buttons, &QDialogButtonBox::clicked, this,
-        [this, dialog, buttons, speciesControls, fraction, seed, pointSize](
-            QAbstractButton* button) {
+        [this, dialog, buttons, speciesControls, fraction, seed, pointSize,
+            sliceCellsOnly](QAbstractButton* button) {
             const auto role = buttons->buttonRole(button);
             if (role == QDialogButtonBox::RejectRole) {
                 dialog->reject();
@@ -468,8 +484,12 @@ void ParticleController::showDialog(QWidget* parent)
                     static_cast<float>(controls.alpha->value()) / 100.0F);
                 m_settings.colors[controls.name] = applied;
             }
+            // No check box below three dimensions; keep what is stored so
+            // the filter is not silently cleared by a 2-D dataset's dialog.
             applySelection(std::move(selectedSpecies),
-                fraction->value() / 100.0, pointSize->value(), seedValue);
+                fraction->value() / 100.0, pointSize->value(), seedValue,
+                sliceCellsOnly != nullptr ? sliceCellsOnly->isChecked()
+                                          : m_settings.sliceCellsOnly);
             if (role == QDialogButtonBox::AcceptRole) {
                 dialog->accept();
             }

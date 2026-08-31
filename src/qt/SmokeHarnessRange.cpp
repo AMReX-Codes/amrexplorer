@@ -691,10 +691,12 @@ Outcome dispatchRange(Context& context)
         const auto choose = [&window, chosenColor] {
             window.setParticleSelectionForTest({"Tracer"}, 0.0005, 37);
             window.setParticlePointSizeForTest(9);
+            window.setParticleSliceCellsOnlyForTest(true);
             window.setParticleColorForTest("Tracer", chosenColor);
             return window.particleSeedForTest() == 37
                 && window.particleFractionForTest() == 0.0005
                 && window.particlePointSizeForTest() == 9
+                && window.particleSliceCellsOnlyForTest()
                 && window.particleColorForTest("Tracer") == chosenColor;
         };
         const auto wasReset = [&window, chosenColor, defaultPointSize](
@@ -702,15 +704,17 @@ Outcome dispatchRange(Context& context)
             if (window.particleSeedForTest() == 0
                 && window.particleFractionForTest() == 1.0
                 && window.particlePointSizeForTest() == *defaultPointSize
+                && !window.particleSliceCellsOnlyForTest()
                 && window.particleColorForTest("Tracer") != chosenColor) {
                 return true;
             }
             qCritical("%s inherited particle settings: seed %llu, subset %g, "
-                      "point size %d, colour %s",
+                      "point size %d, slice cells only %d, colour %s",
                 what,
                 static_cast<unsigned long long>(window.particleSeedForTest()),
                 window.particleFractionForTest(),
                 window.particlePointSizeForTest(),
+                static_cast<int>(window.particleSliceCellsOnlyForTest()),
                 qUtf8Printable(
                     window.particleColorForTest("Tracer").name(QColor::HexArgb)));
             return false;
@@ -770,6 +774,71 @@ Outcome dispatchRange(Context& context)
             [&application] { application.exit(3); });
         QTimer::singleShot(0, &window, [&window, first] {
             window.openDataset(first);
+        });
+    } else if (argc == 3
+        && std::string_view(argv[1])
+            == "--particle-slice-cells-smoke-test") {
+        // The end-to-end probe for the slice-cell filter. The unit tests pin
+        // the geometry and the signal routing separately; only this says the
+        // window really builds the slabs for the plane on show and hands them
+        // to the projection. Turning it on must thin the drawn points and
+        // leave the loaded samples alone -- it filters the drawing, it does
+        // not resample -- and unticking it must restore the projection.
+        const std::filesystem::path path(argv[2]);
+        auto* poll = new QTimer(&window);
+        poll->setInterval(10);
+        auto attempts = std::make_shared<int>(0);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, poll](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                window.setParticleSelectionForTest({"Tracer"}, 1.0, 37);
+                poll->start();
+            });
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, &application, poll, attempts] {
+                if (++*attempts > 500) {
+                    application.exit(1);
+                    return;
+                }
+                if (window.particleLoadingForTest()
+                    || window.particleSampleCountForTest() == 0
+                    || window.particleOverlayPointCountForTest() == 0) {
+                    return;
+                }
+                poll->stop();
+                const auto samples = window.particleSampleCountForTest();
+                const auto projected = window.particleOverlayPointCountForTest();
+                window.setParticleSliceCellsOnlyForTest(true);
+                const auto filtered = window.particleOverlayPointCountForTest();
+                if (filtered == 0 || filtered >= projected) {
+                    qCritical("the slice-cell filter drew %llu of %llu points",
+                        static_cast<unsigned long long>(filtered),
+                        static_cast<unsigned long long>(projected));
+                    application.exit(1);
+                    return;
+                }
+                if (window.particleSampleCountForTest() != samples) {
+                    qCritical("the slice-cell filter reloaded the samples");
+                    application.exit(1);
+                    return;
+                }
+                window.setParticleSliceCellsOnlyForTest(false);
+                if (window.particleOverlayPointCountForTest() != projected) {
+                    qCritical("unticking the filter did not restore the "
+                              "projection through the volume");
+                    application.exit(1);
+                    return;
+                }
+                window.close();
+                application.exit(0);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window, [&window, path] {
+            window.openDataset(path);
         });
     } else if (argc == 4
         && std::string_view(argv[1]) == "--range-cache-smoke-test") {

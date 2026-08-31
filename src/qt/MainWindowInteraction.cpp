@@ -304,6 +304,16 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
     const bool spherical = displayIsSpherical();
     const auto mapping = planeMapping(state);
     const auto planeHeight = static_cast<double>(state.plane->height);
+    // The cells this plane cuts, when the filter is on. Taken from the
+    // request that produced the plane on show, not m_slicePosition3d, which
+    // has already moved ahead whenever a slice is in flight: the overlay
+    // belongs to the raster under it. Empty means project through the volume.
+    std::vector<SliceCellSlab> levelSlabs;
+    if (m_particleController->settings().sliceCellsOnly
+        && state.hasCachedRequest) {
+        levelSlabs = sliceCellSlabs(m_dataset->metadata(), state.normal,
+            state.cachedRequest.physicalPosition);
+    }
     const auto& samples = m_particleController->samples();
     overlays.reserve(samples.size());
     for (const auto& sample : samples) {
@@ -313,7 +323,7 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
             = static_cast<float>(m_particleController->settings().pointSize);
         const auto projected = projectParticlePoints(
             sample.points, *state.plane,
-            m_dataset->metadata().dimension, state.normal);
+            m_dataset->metadata().dimension, state.normal, levelSlabs);
         overlay.points.reserve(projected.size());
         for (const auto& point : projected) {
             if (spherical) {

@@ -41,6 +41,42 @@ amrvis::ScalarPlane plane(int width, int height, amrvis::Real3 lower,
     return result;
 }
 
+amrvis::LevelMetadata level(int index, double cellSize, int upperIndex)
+{
+    amrvis::LevelMetadata result;
+    result.level = index;
+    result.domain.lower = {{0, 0, 0}};
+    result.domain.upper = {{upperIndex, upperIndex, upperIndex}};
+    result.cellSize = {{cellSize, cellSize, cellSize}};
+    return result;
+}
+
+// A unit-origin 3-D hierarchy over [0, 8) with dx = 1 on level 0 and dx = 1/2
+// on level 1, so a plane cuts a cell twice as thick in the coarse regions.
+amrvis::DatasetMetadata twoLevelMetadata()
+{
+    amrvis::DatasetMetadata metadata;
+    metadata.dimension = 3;
+    metadata.finestLevel = 1;
+    metadata.levels = {level(0, 1.0, 7), level(1, 0.5, 15)};
+    return metadata;
+}
+
+// An XY raster over x, y in [0, 10) whose left half was supplied by level 0
+// and right half by level 1 -- the composition the filter has to respect.
+amrvis::ScalarPlane splitLevelPlane(int width, int height)
+{
+    auto result = plane(width, height, {{0.0, 0.0, 0.0}}, {{10.0, 10.0, 8.0}});
+    result.sourceLevel.reserve(
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+    for (int row = 0; row < height; ++row) {
+        for (int column = 0; column < width; ++column) {
+            result.sourceLevel.push_back(column < width / 2 ? 0 : 1);
+        }
+    }
+    return result;
+}
+
 } // namespace
 
 int main()
@@ -126,6 +162,83 @@ int main()
             amrvis::projectParticlePoints(std::vector{point(0.5, 0.5)}, valid, 3, 3)
                 .empty(),
             "invalid 3-D normal accepted a particle projection");
+    }
+
+    // sliceCellSlabs: the cell each level puts around the slice position.
+    {
+        const auto metadata = twoLevelMetadata();
+        const auto slabs = amrvis::sliceCellSlabs(metadata, 2, 4.25);
+        require(slabs.size() == 2, "a slab per level was not produced");
+        require(nearlyEqual(slabs[0].lower, 4.0)
+                    && nearlyEqual(slabs[0].upper, 5.0),
+                "the coarse slab is not the cell containing the position");
+        require(nearlyEqual(slabs[1].lower, 4.0)
+                    && nearlyEqual(slabs[1].upper, 4.5),
+                "the fine slab is not the cell containing the position");
+        require(nearlyEqual(slabs[1].upper - slabs[1].lower,
+                            0.5 * (slabs[0].upper - slabs[0].lower)),
+                "refining the level did not halve the slab");
+
+        // A 2-D dataset has no normal to filter on.
+        auto flat = metadata;
+        flat.dimension = 2;
+        require(amrvis::sliceCellSlabs(flat, 2, 4.25).empty(),
+                "a 2-D dataset produced slabs");
+        require(amrvis::sliceCellSlabs(metadata, 3, 4.25).empty(),
+                "an out-of-range normal produced slabs");
+    }
+
+    // The decisive case: two particles the same distance from the plane, one
+    // over a coarse pixel and one over a fine one. The coarse cell still holds
+    // its particle; the fine cell does not reach that far. A filter that used
+    // one thickness for the whole raster would keep or drop both.
+    {
+        const auto metadata = twoLevelMetadata();
+        const auto slabs = amrvis::sliceCellSlabs(metadata, 2, 4.25);
+        const auto display = splitLevelPlane(10, 4);
+        const std::vector coarse{point(2.5, 5.0, 4.75)};
+        const std::vector fine{point(7.5, 5.0, 4.75)};
+        require(amrvis::projectParticlePoints(coarse, display, 3, 2, slabs)
+                    .size() == 1,
+                "a particle inside the coarse cell the plane cuts was dropped");
+        require(amrvis::projectParticlePoints(fine, display, 3, 2, slabs)
+                    .empty(),
+                "a particle outside the fine cell the plane cuts was drawn");
+        // Both are still drawn when nothing is filtered, and land where the
+        // unfiltered projection puts them.
+        const auto unfiltered =
+            amrvis::projectParticlePoints(fine, display, 3, 2);
+        require(unfiltered.size() == 1 && nearlyEqual(unfiltered[0].x, 7.5)
+                    && nearlyEqual(unfiltered[0].y, 2.0),
+                "the default no longer projects through the volume");
+        const auto kept =
+            amrvis::projectParticlePoints(coarse, display, 3, 2, slabs);
+        require(nearlyEqual(kept[0].x, 2.5) && nearlyEqual(kept[0].y, 2.0),
+                "filtering moved the point it kept");
+
+        // Half-open on the normal, the rule the slice uses for its own cell.
+        require(amrvis::projectParticlePoints(
+                    std::vector{point(2.5, 5.0, 4.0)}, display, 3, 2, slabs)
+                    .size() == 1,
+                "the cell's lower face was excluded");
+        require(amrvis::projectParticlePoints(
+                    std::vector{point(2.5, 5.0, 5.0)}, display, 3, 2, slabs)
+                    .empty(),
+                "the cell's upper face was included");
+
+        // No data drawn at a pixel means no cell there to be in.
+        auto uncovered = display;
+        uncovered.sourceLevel.assign(uncovered.sourceLevel.size(), -1);
+        require(amrvis::projectParticlePoints(coarse, uncovered, 3, 2, slabs)
+                    .empty(),
+                "a particle over an uncovered pixel was drawn");
+
+        // A plane whose sourceLevel does not match its raster cannot answer.
+        auto mismatched = display;
+        mismatched.sourceLevel.pop_back();
+        require(amrvis::projectParticlePoints(coarse, mismatched, 3, 2, slabs)
+                    .empty(),
+                "a plane with no usable source levels was filtered anyway");
     }
 
     return 0;

@@ -594,10 +594,7 @@ void MainWindow::showDatasetWindow()
         if (m_datasetWindow == window) {
             m_datasetWindow = nullptr;
         }
-        for (auto* state : currentViews()) {
-            state->datasetCell.reset();
-            state->view->setCellHighlight(std::nullopt);
-        }
+        clearDatasetCellHighlights();
     });
     connect(window, &DatasetWindow::extractionFailed, this,
         &MainWindow::reportBackgroundError);
@@ -614,10 +611,23 @@ void MainWindow::showDatasetWindow()
 
 void MainWindow::closeDatasetWindow()
 {
+    // Now, not when the window's deferred destroyed arrives: a dataset
+    // replacement gets back to the event loop -- where that deletion runs --
+    // with m_viewDimension already zeroed, and the marked cell has to be gone
+    // before the incoming dataset's first showSlice can draw it.
+    clearDatasetCellHighlights();
     auto* window = m_datasetWindow;
     m_datasetWindow = nullptr;
     if (window != nullptr) {
         window->close();
+    }
+}
+
+void MainWindow::clearDatasetCellHighlights()
+{
+    for (auto* state : allViewStates()) {
+        state->datasetCell.reset();
+        state->view->setCellHighlight(std::nullopt);
     }
 }
 

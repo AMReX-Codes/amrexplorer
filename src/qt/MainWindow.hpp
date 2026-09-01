@@ -730,6 +730,11 @@ private:
     void ensureVectorFieldDefaults();
     void showDatasetWindow();
     void closeDatasetWindow();
+    // Drops every view's marked cell and the outline drawn from it. Over
+    // allViewStates(), not currentViews(): the latter is empty mid-teardown,
+    // because openDatasetImpl zeroes m_viewDimension before it closes the
+    // window, and a cell left behind there is redrawn over the next dataset.
+    void clearDatasetCellHighlights();
     void refreshDatasetWindow();
     // Pushes the active view's palette and display range -- the pair the color
     // bar is drawn from -- to an open Dataset window, so its numbers keep the

@@ -432,8 +432,12 @@ void ParticleController::showDialog(QWidget* parent)
     if (dataset->metadata().dimension == 3) {
         sliceCellsOnly = new QCheckBox(
             tr("Only particles in cells the slice crosses"), dialog);
-        // Named, unlike the species rows: those are found by type and order,
-        // and an unnamed extra check box would join that list.
+        // Named so a test can ask for this box by name. The name does not
+        // keep it out of a bare findChildren<QCheckBox*>(), which matches
+        // every object name; what keeps the species rows findable by type
+        // and order is that this box exists in 3-D alone and is added after
+        // their grid. A 3-D test that indexes that list has to account for
+        // it.
         sliceCellsOnly->setObjectName(
             QStringLiteral("particlesSliceCellsOnly"));
         sliceCellsOnly->setChecked(m_settings.sliceCellsOnly);

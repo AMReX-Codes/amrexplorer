@@ -271,6 +271,14 @@ Choose **View > Dataset...** or press **Ctrl+D** to inspect raw values for
 the visible physical region. Values are grouped by AMR level. Clicking a
 value highlights the corresponding sample in the main view.
 
+Each value is drawn in the color the color bar gives it, so a number and the
+pixel it stands for share one color; values past either end of the range take
+that end's color, and a value the range cannot map -- a NaN, or a non-positive
+value with **Log** ticked -- is drawn in magenta, as it is in the image. The
+colors follow the palette and range as you change them, while the values
+themselves stay as read until **Refresh**. Samples no grid covers at a level
+are left blank on a darker background.
+
 The Dataset and line-plot windows close with their **Close** button or with
 Ctrl+W (Cmd+W on macOS), the same key that closes the main and volume windows.
 

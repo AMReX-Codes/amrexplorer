@@ -1545,6 +1545,10 @@ void MainWindow::syncVisibleRanges()
                         m_activeView->displayLogarithmic);
                     m_colorBar->setFieldRange(label, globalMin, globalMax);
                     m_range->showDisplayRange(globalMin, globalMax);
+                    // The panel loop above wrote this range into every applied
+                    // panel's state, the active one included, so the Dataset
+                    // window reads the same numbers the bar just took.
+                    syncDatasetWindowColors();
                 }
                 // The deferred full-domain range store (see the slice-arrival
                 // completion): the union is only known here. This block runs

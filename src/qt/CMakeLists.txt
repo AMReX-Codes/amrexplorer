@@ -8,6 +8,7 @@ add_executable(amrexplorer_qt
     ColorBarWidget.cpp
     ColorBarWidget.hpp
     CurrentRowBulletDelegate.hpp
+    DatasetColoring.hpp
     DatasetExtract.hpp
     DatasetWindow.cpp
     DatasetWindow.hpp

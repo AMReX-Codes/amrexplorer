@@ -625,6 +625,20 @@ if(TARGET amrexplorer_qt)
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_derived_field_controller>")
 
+    add_executable(test_dataset_colors unit/test_dataset_colors.cpp)
+    target_include_directories(test_dataset_colors
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_dataset_colors
+        PRIVATE
+            amrexplorer::render2d
+            amrexplorer::warnings
+            Qt6::Core
+            Qt6::Gui
+    )
+    # Only QColor and the renderer, no widgets, so this one needs no QPA
+    # platform.
+    add_test(NAME dataset_colors COMMAND test_dataset_colors)
+
     add_executable(test_palette_controller
         unit/test_palette_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/PaletteController.cpp"

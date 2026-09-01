@@ -589,6 +589,7 @@ void MainWindow::showDatasetWindow()
     auto* window = new DatasetWindow(*request);
     window->setNumberFormat(m_numberFormat);
     m_datasetWindow = window;
+    syncDatasetWindowColors();
     connect(window, &QObject::destroyed, this, [this, window] {
         if (m_datasetWindow == window) {
             m_datasetWindow = nullptr;
@@ -617,6 +618,20 @@ void MainWindow::closeDatasetWindow()
     if (window != nullptr) {
         window->close();
     }
+}
+
+void MainWindow::syncDatasetWindowColors()
+{
+    if (m_datasetWindow == nullptr || m_activeView == nullptr) {
+        return;
+    }
+    // The active view's display range, which is what the color bar is set from
+    // (syncActiveViewColorControls) -- read from the same place rather than
+    // passed in, so the two cannot be given different numbers.
+    m_datasetWindow->setColoring(
+        makeDatasetColoring(m_paletteController->palette(),
+            m_activeView->displayMinimum, m_activeView->displayMaximum,
+            m_activeView->displayLogarithmic));
 }
 
 void MainWindow::refreshDatasetWindow()

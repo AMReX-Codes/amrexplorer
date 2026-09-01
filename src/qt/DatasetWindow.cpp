@@ -4,6 +4,7 @@
 #include "CloseWindowAction.hpp"
 #include "NumberFormat.hpp"
 #include "QtErrorText.hpp"
+#include "Theme.hpp"
 
 #include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
@@ -15,6 +16,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QModelIndex>
+#include <QPalette>
 #include <QPushButton>
 #include <QTabWidget>
 #include <QTableView>
@@ -66,10 +68,11 @@ int datasetPageMaximumExtent(const DatasetSession& dataset)
 // (destroying every model) before or while the backing m_levels changes.
 class LevelTableModel final : public QAbstractTableModel {
 public:
-    LevelTableModel(const DatasetLevelExtract& extract, QString format,
-        QObject* parent)
+    LevelTableModel(const DatasetLevelExtract& extract,
+        const DatasetColoring& coloring, QString format, QObject* parent)
         : QAbstractTableModel(parent)
         , m_extract(extract)
+        , m_coloring(coloring)
         , m_format(std::move(format))
     {
     }
@@ -102,9 +105,20 @@ public:
             return covered
                 ? QVariant(static_cast<int>(Qt::AlignRight | Qt::AlignVCenter))
                 : QVariant();
+        case Qt::ForegroundRole:
+            // The color the color bar gives this value, which is the color the
+            // image draws the sample in.
+            return covered
+                ? QVariant(datasetValueColor(m_coloring,
+                      static_cast<double>(m_extract.values[offset])))
+                : QVariant();
         case Qt::BackgroundRole:
-            // Cells no grid covers at this level are shaded, as before.
-            return covered ? QVariant() : QVariant(QColor(Qt::darkGray));
+            // Cells no grid covers at this level are shaded, as before -- in
+            // the renderer's own no-data color now that the covered cells sit
+            // on the viewport background, which the old dark gray matched
+            // almost exactly.
+            return covered
+                ? QVariant() : QVariant(datasetUncoveredBackground());
         default:
             return {};
         }
@@ -134,6 +148,9 @@ private:
     }
 
     const DatasetLevelExtract& m_extract;
+    // Held by reference like the extract above, and on the same terms: it is a
+    // member of the owning DatasetWindow, which outlives every model it builds.
+    const DatasetColoring& m_coloring;
     QString m_format;
 };
 
@@ -197,6 +214,23 @@ void DatasetWindow::setNumberFormat(QString format)
     // compared to re-reading the dataset.
     if (!m_levels.empty()) {
         populateTabs();
+    }
+}
+
+void DatasetWindow::setColoring(DatasetColoring coloring)
+{
+    m_coloring = std::move(coloring);
+    // Not populateTabs: the models read the coloring by reference and it has
+    // just moved under them, so all that is owed is a repaint. Rebuilding the
+    // tabs would throw away the current tab and every scroll position, and the
+    // palette can change under an open window at any time.
+    //
+    // A repaint is enough because the views hold nothing: QTableView asks the
+    // model for each visible cell as it paints it.
+    for (int page = 0; page < m_tabs->count(); ++page) {
+        if (auto* table = m_tabs->widget(page)->findChild<QTableView*>()) {
+            table->viewport()->update();
+        }
     }
 }
 
@@ -312,7 +346,16 @@ void DatasetWindow::populateTabs()
         // visible cells, so a full-domain table no longer freezes the GUI.
         auto* table = new QTableView(page);
         table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        auto* model = new LevelTableModel(extract, m_numberFormat, table);
+        // The values are drawn in their color-bar colors, so the cells they sit
+        // on are the viewport's background rather than the theme's -- which is
+        // white under a light theme, where the bright end of viridis, plasma or
+        // blackbody would be all but invisible. Through the view's palette so
+        // the empty area past the last row and column matches the cells.
+        auto viewPalette = table->palette();
+        viewPalette.setColor(QPalette::Base, viewportBackground());
+        table->setPalette(viewPalette);
+        auto* model
+            = new LevelTableModel(extract, m_coloring, m_numberFormat, table);
         table->setModel(model);
         auto* pageLayout = new QVBoxLayout(page);
         pageLayout->addWidget(info);

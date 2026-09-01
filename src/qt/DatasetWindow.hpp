@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DatasetColoring.hpp"
 #include "DatasetExtract.hpp"
 
 #include <amrexplorer/core/Geometry.hpp>
@@ -37,9 +38,10 @@ struct DatasetRequest {
 // (the legacy Dataset window): one tab per AMR level (for standalone
 // MultiFabs and FABs, which have no AMR hierarchy, the single tab is named
 // after the format instead) with the i/j sample indices as headers and the
-// level min/max above the table; clicking a value
-// highlights the corresponding sample in the image. Reads run off the GUI
-// thread and are cancelled on close or refresh.
+// level min/max above the table; each value is drawn in its color-bar color
+// (see DatasetColoring) and clicking one highlights the corresponding sample
+// in the image. Reads run off the GUI thread and are cancelled on close or
+// refresh.
 class DatasetWindow final : public QWidget {
     Q_OBJECT
 
@@ -53,6 +55,12 @@ public:
     // Applies the printf-style readout format, re-rendering the already
     // loaded values (no re-read) when the tabs are populated.
     void setNumberFormat(QString format);
+    // The palette and display range the values are drawn in -- the active
+    // view's, so the table agrees with the image and the color bar. Repaints
+    // the loaded values in place; the values themselves are untouched, so a
+    // palette or range change recolors the window without a re-read and
+    // without disturbing the current tab or scroll position.
+    void setColoring(DatasetColoring coloring);
 
 signals:
     // Physical bounds of the clicked sample at its level's resolution (2-D
@@ -81,6 +89,7 @@ private:
 
     DatasetRequest m_request;
     QString m_numberFormat;
+    DatasetColoring m_coloring;
     QLabel* m_status = nullptr;
     QTabWidget* m_tabs = nullptr;
     std::vector<LevelData> m_levels;

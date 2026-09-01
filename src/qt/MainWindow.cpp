@@ -1033,6 +1033,7 @@ void MainWindow::syncActiveViewColorControls(const PlaneViewState& state)
     if (m_range->mode() != RangeMode::User) {
         m_range->showDisplayRange(state.displayMinimum, state.displayMaximum);
     }
+    syncDatasetWindowColors();
 }
 
 std::array<int, 2> MainWindow::displayAxes(int normal) const
@@ -1776,6 +1777,7 @@ void MainWindow::refreshMetadataDisplay()
 void MainWindow::refreshPaletteDisplay()
 {
     m_colorBar->setPalette(&m_paletteController->palette());
+    syncDatasetWindowColors();
     scheduleSliceRequest();
     updateGridBoxes();
     updateOverlays();

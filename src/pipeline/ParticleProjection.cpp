@@ -19,22 +19,29 @@ std::vector<SliceCellSlab> sliceCellSlabs(
     const auto axis = static_cast<std::size_t>(normalAxis);
     slabs.reserve(metadata.levels.size());
     for (const auto& level : metadata.levels) {
-        // An empty slab (lower == upper) for a level whose index range does
-        // not reach this position: sampleIndex throws rather than return a
-        // meaningless index, and nothing drawn from such a level can hold a
-        // particle anyway.
+        // An empty slab (lower == upper) says the plane cuts no cell at this
+        // level. Two ways to get one, and neither is sampleIndex returning a
+        // sentinel: it throws only for a non-finite or int-range-exceeding
+        // coordinate, and for a position off the end of a level it returns an
+        // extrapolated index that sampleBounds would turn into a cell that is
+        // not there. So the index is range-checked against the level's own
+        // domain as well.
         SliceCellSlab slab;
         try {
             const auto index = sampleIndex(level, normalAxis, slicePosition);
-            // The level's own domain box collapsed to that one index on the
-            // normal, so it carries the level's centering and sampleBounds
-            // places nodal and cell-centered levels alike.
-            auto cell = level.domain;
-            cell.lower[axis] = index;
-            cell.upper[axis] = index;
-            const auto bounds = sampleBounds(level, cell, metadata.dimension);
-            slab.lower = bounds.lower[axis];
-            slab.upper = bounds.upper[axis];
+            if (index >= level.domain.lower[axis]
+                && index <= level.domain.upper[axis]) {
+                // The level's own domain box collapsed to that one index on
+                // the normal, so it carries the level's centering and
+                // sampleBounds places nodal and cell-centered levels alike.
+                auto cell = level.domain;
+                cell.lower[axis] = index;
+                cell.upper[axis] = index;
+                const auto bounds
+                    = sampleBounds(level, cell, metadata.dimension);
+                slab.lower = bounds.lower[axis];
+                slab.upper = bounds.upper[axis];
+            }
         } catch (const std::out_of_range&) {
             // The default empty slab stands: sampleIndex is the only call
             // above that throws, and it throws before slab is touched.

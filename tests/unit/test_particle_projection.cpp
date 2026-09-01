@@ -211,6 +211,27 @@ int main()
                 "a 2-D dataset produced slabs");
         require(amrvis::sliceCellSlabs(metadata, 3, 4.25).empty(),
                 "an out-of-range normal produced slabs");
+
+        // A position off the end of every level: sampleIndex extrapolates an
+        // index rather than throwing, so the slabs are only empty because the
+        // index is checked against the level's own domain. The levels span
+        // z in [0, 8).
+        for (const auto& off : amrvis::sliceCellSlabs(metadata, 2, 12.5)) {
+            require(!(off.lower < off.upper),
+                    "a position past the domain produced a cell to keep "
+                    "particles in");
+        }
+        for (const auto& below : amrvis::sliceCellSlabs(metadata, 2, -1.5)) {
+            require(!(below.lower < below.upper),
+                    "a position below the domain produced a cell to keep "
+                    "particles in");
+        }
+        // The last cell is still a cell: the check is a domain test, not an
+        // off-by-one that eats the top of the range.
+        const auto top = amrvis::sliceCellSlabs(metadata, 2, 7.5);
+        require(top.size() == 2 && nearlyEqual(top[0].lower, 7.0)
+                    && nearlyEqual(top[0].upper, 8.0),
+                "the level's last cell was rejected as out of domain");
     }
 
     // The decisive case: two particles the same distance from the plane, one

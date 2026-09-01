@@ -519,6 +519,7 @@ void ImageView::setPlaceholder(const QString& text)
     m_overlayItems.clear();
     m_pathItems.clear();
     m_pointItems.clear();
+    m_pointOverlayPointCount = 0;
     m_crosshairVertical.reset();
     m_crosshairHorizontal.reset();
     m_crosshairVerticalItem = nullptr;

@@ -813,15 +813,22 @@ Outcome dispatchRange(Context& context)
                 const auto projected = window.particleOverlayPointCountForTest();
                 window.setParticleSliceCellsOnlyForTest(true);
                 const auto filtered = window.particleOverlayPointCountForTest();
+                // Before the count: a reload clears the samples and redraws
+                // synchronously, so it would reach the branch below as a
+                // plain "drew nothing" and report the wrong cause.
+                if (window.particleSampleCountForTest() != samples) {
+                    qCritical("the slice-cell filter reloaded the samples: "
+                              "%llu, was %llu",
+                        static_cast<unsigned long long>(
+                            window.particleSampleCountForTest()),
+                        static_cast<unsigned long long>(samples));
+                    application.exit(1);
+                    return;
+                }
                 if (filtered == 0 || filtered >= projected) {
                     qCritical("the slice-cell filter drew %llu of %llu points",
                         static_cast<unsigned long long>(filtered),
                         static_cast<unsigned long long>(projected));
-                    application.exit(1);
-                    return;
-                }
-                if (window.particleSampleCountForTest() != samples) {
-                    qCritical("the slice-cell filter reloaded the samples");
                     application.exit(1);
                     return;
                 }

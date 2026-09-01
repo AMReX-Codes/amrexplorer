@@ -308,9 +308,16 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
     // request that produced the plane on show, not m_slicePosition3d, which
     // has already moved ahead whenever a slice is in flight: the overlay
     // belongs to the raster under it. Empty means project through the volume.
+    //
+    // That request has to name the installed dataset, too. A frame switch
+    // assigns m_dataset before it shows the frame's planes, so a frame that
+    // then fails leaves the raster and its levels owned by different
+    // datasets -- and this reads sourceLevel from the one and cellSize from
+    // the other. Same test the raster path uses (see ownerChanged).
     std::vector<SliceCellSlab> levelSlabs;
     if (m_particleController->settings().sliceCellsOnly
-        && state.hasCachedRequest) {
+        && state.hasCachedRequest
+        && state.cachedRequest.dataset == m_dataset->id()) {
         levelSlabs = sliceCellSlabs(m_dataset->metadata(), state.normal,
             state.cachedRequest.physicalPosition);
     }

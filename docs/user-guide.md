@@ -269,7 +269,11 @@ for plotfiles and integer indices for standalone FABs and MultiFabs.
 
 Choose **View > Dataset...** or press **Ctrl+D** to inspect raw values for
 the visible physical region. Values are grouped by AMR level. Clicking a
-value highlights the corresponding sample in the main view.
+value highlights the corresponding sample in the main view, and dragging
+across a block of values highlights the region they cover. Only values a grid
+covers at that level count, so selecting a whole level's table marks just the
+part of the view that level provides. One level's tab holds the selection at a
+time; selecting on another clears it.
 
 Each value is drawn in the color the color bar gives it, so a number and the
 pixel it stands for share one color; values past either end of the range take

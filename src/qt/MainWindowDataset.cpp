@@ -594,9 +594,7 @@ void MainWindow::showDatasetWindow()
         if (m_datasetWindow == window) {
             m_datasetWindow = nullptr;
         }
-        for (auto* state : currentViews()) {
-            state->view->setCellHighlight(std::nullopt);
-        }
+        clearDatasetCellHighlights();
     });
     connect(window, &DatasetWindow::extractionFailed, this,
         &MainWindow::reportBackgroundError);
@@ -613,10 +611,23 @@ void MainWindow::showDatasetWindow()
 
 void MainWindow::closeDatasetWindow()
 {
+    // Now, not when the window's deferred destroyed arrives: a dataset
+    // replacement gets back to the event loop -- where that deletion runs --
+    // with m_viewDimension already zeroed, and the marked cell has to be gone
+    // before the incoming dataset's first showSlice can draw it.
+    clearDatasetCellHighlights();
     auto* window = m_datasetWindow;
     m_datasetWindow = nullptr;
     if (window != nullptr) {
         window->close();
+    }
+}
+
+void MainWindow::clearDatasetCellHighlights()
+{
+    for (auto* state : allViewStates()) {
+        state->datasetCell.reset();
+        state->view->setCellHighlight(std::nullopt);
     }
 }
 
@@ -652,11 +663,34 @@ void MainWindow::datasetCellActivated(const RealBox& physicalCell)
     if (m_activeView == nullptr) {
         return;
     }
-    const auto& plane = *m_activeView->plane;
+    m_activeView->datasetCell = physicalCell;
+    applyDatasetCellHighlight(*m_activeView);
+}
+
+void MainWindow::applyDatasetCellHighlight(PlaneViewState& state)
+{
+    if (!state.datasetCell) {
+        return;
+    }
+    const auto& physicalCell = *state.datasetCell;
+    const auto& plane = *state.plane;
     if (plane.width <= 0 || plane.height <= 0) {
         return;
     }
-    const auto axes = displayAxes(m_activeView->normal);
+    // In 3-D the marked cell sits on one slice, and the projection below reads
+    // only the two displayed axes: without this the outline would come back
+    // unchanged after the plane moved off the cell it marks. Measured against
+    // the displayed raster's own position, not m_slicePosition3d, which has
+    // already moved ahead whenever a slice is in flight (see updateOverlay).
+    if (m_dataset && m_dataset->metadata().dimension == 3
+        && state.hasCachedRequest
+        && !datasetCellOnDisplayedSlice(physicalCell,
+            state.cachedRequest.normalDirection,
+            state.cachedRequest.physicalPosition)) {
+        state.view->setCellHighlight(std::nullopt);
+        return;
+    }
+    const auto axes = displayAxes(state.normal);
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);
     if (displayIsSpherical()) {
@@ -665,16 +699,16 @@ void MainWindow::datasetCellActivated(const RealBox& physicalCell)
         const double r1 = physicalCell.upper[xAxis];
         const double t0 = physicalCell.lower[yAxis];
         const double t1 = physicalCell.upper[yAxis];
-        const auto mapping = planeMapping(*m_activeView);
+        const auto mapping = planeMapping(state);
         const bool valid = r1 > r0 && t1 > t0;
         // Branch on the view state's mode, matching the mapping (see
         // updateGridBoxes).
-        if (m_activeView->sphericalDisplay == SphericalDisplay::RZ) {
+        if (state.sphericalDisplay == SphericalDisplay::RZ) {
             std::optional<QPainterPath> highlight;
             if (valid) {
                 highlight = sphericalSectorPath(mapping, r0, r1, t0, t1);
             }
-            m_activeView->view->setCellHighlightPath(highlight);
+            state.view->setCellHighlightPath(highlight);
         } else {
             std::optional<QRectF> highlight;
             if (valid) {
@@ -685,7 +719,7 @@ void MainWindow::datasetCellActivated(const RealBox& physicalCell)
                     highlight = rect;
                 }
             }
-            m_activeView->view->setCellHighlight(highlight);
+            state.view->setCellHighlight(highlight);
         }
         return;
     }
@@ -711,7 +745,7 @@ void MainWindow::datasetCellActivated(const RealBox& physicalCell)
     if (!rectangle.isEmpty()) {
         highlight = rectangle;
     }
-    m_activeView->view->setCellHighlight(highlight);
+    state.view->setCellHighlight(highlight);
 }
 
 void MainWindow::openDataset(

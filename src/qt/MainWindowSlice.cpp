@@ -1286,6 +1286,10 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     updateParticleOverlay(state);
     // This view's region may have changed; refresh every view's guides.
     updateCrosshairs();
+    // The Dataset window's marked cell, on the same footing as the overlays
+    // above: setImage cleared it, and no selection signal is coming to ask for
+    // it again (see applyDatasetCellHighlight).
+    applyDatasetCellHighlight(state);
 
     // setImage demotes Custom to Fit when the coordinator returns Refit -- a
     // spherical r-theta to R-Z switch does it -- so the raster funnel has to

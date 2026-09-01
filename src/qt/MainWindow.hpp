@@ -525,6 +525,13 @@ private:
         bool displayLogarithmic = false;
         std::vector<VectorSegment> vectorSegments;
         std::vector<SliceGridBox> gridBoxes;
+        // The Dataset window cell this view is marking, held so showSlice can
+        // put the red outline back after setImage clears the scene -- the same
+        // reason it rebuilds the grid boxes, overlays and crosshairs. Asking
+        // the Dataset table for it again is not an option: the selection that
+        // produced it is still up, and Qt emits no selectionChanged for a cell
+        // that is already selected, so nothing would report it.
+        std::optional<RealBox> datasetCell;
         // Cache key of the slice that produced the planes above: a UI change
         // that leaves every key field untouched (palette/log/range/contour
         // count) is satisfied from the cached planes instead of querying
@@ -723,12 +730,21 @@ private:
     void ensureVectorFieldDefaults();
     void showDatasetWindow();
     void closeDatasetWindow();
+    // Drops every view's marked cell and the outline drawn from it. Over
+    // allViewStates(), not currentViews(): the latter is empty mid-teardown,
+    // because openDatasetImpl zeroes m_viewDimension before it closes the
+    // window, and a cell left behind there is redrawn over the next dataset.
+    void clearDatasetCellHighlights();
     void refreshDatasetWindow();
     // Pushes the active view's palette and display range -- the pair the color
     // bar is drawn from -- to an open Dataset window, so its numbers keep the
     // colors the bar is showing. Called from every place that moves either.
     void syncDatasetWindowColors();
     void datasetCellActivated(const RealBox& physicalCell);
+    // Draws state.datasetCell as the view's cell highlight, or clears it when
+    // the cell falls outside the raster. Called both when the selection moves
+    // and after a redraw replaces the image.
+    void applyDatasetCellHighlight(PlaneViewState& state);
     [[nodiscard]] std::optional<DatasetRequest> buildDatasetRequest() const;
     void showUserGuide();
     void showKeyboardMouseReference();

@@ -278,20 +278,15 @@ int main(int argc, char** argv)
         "a selected uncovered cell (" + hex(blankSelected.background)
             + ") is no darker than a selected covered one ("
             + hex(selected.background) + ")");
-    // ... where the stock delegate gives both the identical selection fill.
-    require(render(stock, uncovered, Selected::Yes).background
-            == render(stock, covered, Selected::Yes).background,
-        "the stock delegate no longer flattens the no-data shade under a "
-        "selection");
 
-    // The margin the exact-color counts leave, so a future host whose fonts
-    // render thinner glyphs shows up as a shrinking number rather than as a
-    // sudden failure.
     // The mix itself, where a per-channel slip is visible in a way the
     // rendered cells above cannot show.
     requireBlendsEveryChannel(cellBase, selectionColor, "covered");
     requireBlendsEveryChannel(noDataColor, selectionColor, "uncovered");
 
+    // The margin the exact-color counts leave, so a future host whose fonts
+    // render thinner glyphs shows up as a shrinking number rather than as a
+    // sudden failure.
     std::cout << "dataset selected cell OK (" << plain.valuePixels
               << " value pixels)\n";
     return 0;

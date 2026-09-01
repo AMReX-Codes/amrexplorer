@@ -2,6 +2,7 @@
 
 #include "DatasetColoring.hpp"
 #include "DatasetExtract.hpp"
+#include "DatasetSelection.hpp"
 
 #include <amrexplorer/core/Geometry.hpp>
 #include <amrexplorer/core/Request.hpp>
@@ -14,10 +15,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 class QCloseEvent;
 class QLabel;
+class QTableView;
 class QTabWidget;
 
 namespace amrvis::qt {
@@ -39,9 +42,9 @@ struct DatasetRequest {
 // MultiFabs and FABs, which have no AMR hierarchy, the single tab is named
 // after the format instead) with the i/j sample indices as headers and the
 // level min/max above the table; each value is drawn in its color-bar color
-// (see DatasetColoring) and clicking one highlights the corresponding sample
-// in the image. Reads run off the GUI thread and are cancelled on close or
-// refresh.
+// (see DatasetColoring), and selecting values -- one click, or a drag across
+// a block -- highlights the samples they stand for in the image. Reads run
+// off the GUI thread and are cancelled on close or refresh.
 class DatasetWindow final : public QWidget {
     Q_OBJECT
 
@@ -63,8 +66,9 @@ public:
     void setColoring(DatasetColoring coloring);
 
 signals:
-    // Physical bounds of the clicked sample at its level's resolution (2-D
-    // leaves axis 2 zeroed).
+    // Physical bounds of the selected samples at their level's resolution (one
+    // cell for a click, the bounding box of a dragged block; 2-D leaves axis 2
+    // zeroed).
     void cellActivated(const amrvis::RealBox& physicalCell);
     // The Refresh button; the owner rebuilds the request from app state.
     void refreshRequested();
@@ -85,7 +89,13 @@ private:
         const DatasetRequest& request, StopToken cancellation);
     void startLoad();
     void populateTabs();
-    void cellClicked(std::size_t levelEntry, int row, int column);
+    // A table's selection became non-empty: the other levels' tables give up
+    // theirs (one selection at a time, so the highlight always names the level
+    // whose tab it was made on) and the image marks what this one holds.
+    void selectionChanged(std::size_t levelEntry, const QTableView& table);
+    void clearOtherSelections(const QTableView& keep);
+    void cellsSelected(
+        std::size_t levelEntry, std::span<const CellRange> ranges);
 
     DatasetRequest m_request;
     QString m_numberFormat;

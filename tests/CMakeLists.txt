@@ -639,6 +639,17 @@ if(TARGET amrexplorer_qt)
     # platform.
     add_test(NAME dataset_colors COMMAND test_dataset_colors)
 
+    add_executable(test_dataset_selection unit/test_dataset_selection.cpp)
+    target_include_directories(test_dataset_selection
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_dataset_selection
+        PRIVATE
+            amrexplorer::core
+            amrexplorer::warnings
+    )
+    # Plain index arithmetic over a DatasetPage: no Qt, no QPA platform.
+    add_test(NAME dataset_selection COMMAND test_dataset_selection)
+
     add_executable(test_palette_controller
         unit/test_palette_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/PaletteController.cpp"

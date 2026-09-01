@@ -10,6 +10,7 @@ add_executable(amrexplorer_qt
     CurrentRowBulletDelegate.hpp
     DatasetColoring.hpp
     DatasetExtract.hpp
+    DatasetSelection.hpp
     DatasetWindow.cpp
     DatasetWindow.hpp
     DerivedFieldController.cpp

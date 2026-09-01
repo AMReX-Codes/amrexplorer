@@ -14,6 +14,8 @@
 #include <QColor>
 #include <QFutureWatcher>
 #include <QHBoxLayout>
+#include <QItemSelection>
+#include <QItemSelectionModel>
 #include <QLabel>
 #include <QModelIndex>
 #include <QPalette>
@@ -29,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <span>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -371,28 +374,61 @@ void DatasetWindow::populateTabs()
             label += tr(" (truncated)");
         }
         m_tabs->addTab(page, label);
-        connect(table, &QTableView::clicked, this,
-            [this, entry](const QModelIndex& index) {
-                cellClicked(entry, index.row(), index.column());
-            });
+        // Driven off the selection rather than QTableView::clicked, which
+        // fires only when the press and the release land on the same cell and
+        // so says nothing about a drag. One handler then covers the click, the
+        // drag and the keyboard (shift-arrow) alike, because each of them is
+        // just a selection.
+        connect(table->selectionModel(),
+            &QItemSelectionModel::selectionChanged, this,
+            [this, entry, table] { selectionChanged(entry, *table); });
     }
 }
 
-void DatasetWindow::cellClicked(std::size_t levelEntry, int row, int column)
+void DatasetWindow::selectionChanged(
+    std::size_t levelEntry, const QTableView& table)
+{
+    const auto* selection = table.selectionModel();
+    if (selection == nullptr || !selection->hasSelection()) {
+        // Nothing selected here, so there is nothing to mark -- and this is
+        // also what the tables cleared below report, which is what keeps
+        // clearOtherSelections from coming back round through their handlers.
+        // A cleared selection leaves the last highlight up, as a click on an
+        // uncovered cell always has.
+        return;
+    }
+    clearOtherSelections(table);
+    const auto selected = selection->selection();
+    std::vector<CellRange> ranges;
+    ranges.reserve(static_cast<std::size_t>(selected.size()));
+    for (const auto& range : selected) {
+        ranges.push_back(CellRange{range.top(), range.left(), range.bottom(),
+            range.right()});
+    }
+    cellsSelected(levelEntry, ranges);
+}
+
+void DatasetWindow::clearOtherSelections(const QTableView& keep)
+{
+    for (int page = 0; page < m_tabs->count(); ++page) {
+        auto* table = m_tabs->widget(page)->findChild<QTableView*>();
+        if (table == nullptr || table == &keep
+            || table->selectionModel() == nullptr) {
+            continue;
+        }
+        table->clearSelection();
+    }
+}
+
+void DatasetWindow::cellsSelected(
+    std::size_t levelEntry, std::span<const CellRange> ranges)
 {
     if (levelEntry >= m_levels.size() || !m_request.dataset) {
         return;
     }
     const auto& levelData = m_levels[levelEntry];
-    const auto& extract = levelData.extract;
-    if (column < 0 || column >= extract.nx || row < 0 || row >= extract.ny) {
-        return;
-    }
-    const auto j = extract.upper[1] - row;
-    const auto offset = static_cast<std::size_t>(column)
-        + static_cast<std::size_t>(extract.nx) * static_cast<std::size_t>(
-            static_cast<std::int64_t>(j) - extract.lower[1]);
-    if (extract.covered[offset] == 0) {
+    const auto bounds = coveredSelectionBounds(levelData.extract, ranges);
+    if (!bounds) {
         return;
     }
 
@@ -400,21 +436,22 @@ void DatasetWindow::cellClicked(std::size_t levelEntry, int row, int column)
     const auto& level = metadata.levels[static_cast<std::size_t>(levelData.level)];
     const auto axes = slicePlaneAxes(
         metadata.dimension, m_request.normalAxis);
-    // The sample's physical bin at this level's resolution. On nodal axes
-    // this is centered on the node rather than shifted to the next cell.
-    const std::array<int, 2> sample{extract.lower[0] + column, j};
-    auto pointBox = level.domain;
+    // The samples' physical bins at this level's resolution. On nodal axes
+    // these are centered on the nodes rather than shifted to the next cell.
+    const std::array<int, 2> low{bounds->iLow, bounds->jLow};
+    const std::array<int, 2> high{bounds->iHigh, bounds->jHigh};
+    auto sampleBox = level.domain;
     for (std::size_t entry = 0; entry < 2; ++entry) {
         const auto axis = static_cast<std::size_t>(axes[entry]);
-        pointBox.lower[axis] = sample[entry];
-        pointBox.upper[axis] = sample[entry];
+        sampleBox.lower[axis] = low[entry];
+        sampleBox.upper[axis] = high[entry];
     }
     if (metadata.dimension == 3) {
         const auto normal = static_cast<std::size_t>(m_request.normalAxis);
-        pointBox.lower[normal] = extract.sliceIndex;
-        pointBox.upper[normal] = extract.sliceIndex;
+        sampleBox.lower[normal] = levelData.extract.sliceIndex;
+        sampleBox.upper[normal] = levelData.extract.sliceIndex;
     }
-    emit cellActivated(sampleBounds(level, pointBox, metadata.dimension));
+    emit cellActivated(sampleBounds(level, sampleBox, metadata.dimension));
 }
 
 } // namespace amrvis::qt

@@ -90,9 +90,11 @@ struct SelectedSampleBox {
 // marker with it rather than redraw it, unchanged, over a sample that is no
 // longer on screen.
 //
-// Inclusive at both faces: a plane sitting exactly on a boundary cuts the
-// cells either side of it, and keeping the marker up there is the reading that
-// matches what the user sees.
+// Half-open, [lower, upper), because that is the ownership the raster under
+// the marker was built with: sampleIndex floors, so a plane landing exactly on
+// a cell's upper face renders the *next* sample, and a marker left on this one
+// would sit over a cell that is no longer displayed. The lower face does
+// belong here, so only that end is inclusive.
 [[nodiscard]] inline bool datasetCellOnDisplayedSlice(
     const RealBox& cell, int normal, double position) noexcept
 {
@@ -100,7 +102,7 @@ struct SelectedSampleBox {
         return false;
     }
     const auto axis = static_cast<std::size_t>(normal);
-    return position >= cell.lower[axis] && position <= cell.upper[axis];
+    return position >= cell.lower[axis] && position < cell.upper[axis];
 }
 
 } // namespace amrvis::qt

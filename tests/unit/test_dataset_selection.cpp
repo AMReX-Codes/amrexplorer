@@ -122,12 +122,14 @@ int main()
         "a plane moved one cell up kept the marker");
     require(!amrvis::qt::datasetCellOnDisplayedSlice(cell, normalZ, 1.75),
         "a plane moved one cell down kept the marker");
-    // Both faces count: a plane sitting exactly on a boundary cuts the cells
-    // either side of it.
+    // The faces are half-open, matching the ownership sampleIndex floors into:
+    // the lower one is this cell's, the upper one already belongs to the
+    // sample the raster draws there instead.
     require(amrvis::qt::datasetCellOnDisplayedSlice(cell, normalZ, 2.0),
         "a plane on the cell's lower face lost its marker");
-    require(amrvis::qt::datasetCellOnDisplayedSlice(cell, normalZ, 2.5),
-        "a plane on the cell's upper face lost its marker");
+    require(!amrvis::qt::datasetCellOnDisplayedSlice(cell, normalZ, 2.5),
+        "a plane on the cell's upper face kept the marker, though the raster "
+        "there shows the next sample");
     // The other axes read their own bounds, not z's.
     require(amrvis::qt::datasetCellOnDisplayedSlice(cell, 0, 0.5),
         "an x-normal plane inside the cell lost its marker");

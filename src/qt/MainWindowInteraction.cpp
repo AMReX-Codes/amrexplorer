@@ -316,10 +316,22 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
     // the other. Same test the raster path uses (see ownerChanged).
     std::vector<SliceCellSlab> levelSlabs;
     if (m_particleController->settings().sliceCellsOnly
-        && state.hasCachedRequest
-        && state.cachedRequest.dataset == m_dataset->id()) {
-        levelSlabs = sliceCellSlabs(m_dataset->metadata(), state.normal,
-            state.cachedRequest.physicalPosition);
+        && m_dataset->metadata().dimension == 3) {
+        if (state.hasCachedRequest
+            && state.cachedRequest.dataset == m_dataset->id()) {
+            levelSlabs = sliceCellSlabs(m_dataset->metadata(), state.normal,
+                state.cachedRequest.physicalPosition);
+        }
+        if (levelSlabs.empty()) {
+            // Filter on, nothing trustworthy to filter with. An empty vector
+            // reads as "no filtering" to the projector, so falling through
+            // here would draw the whole volume -- the one picture the ticked
+            // box exists to avoid. Draw nothing instead, which is what the
+            // projector itself does when a plane's sourceLevel does not
+            // match its raster.
+            state.view->setPointOverlays(overlays);
+            return;
+        }
     }
     const auto& samples = m_particleController->samples();
     overlays.reserve(samples.size());

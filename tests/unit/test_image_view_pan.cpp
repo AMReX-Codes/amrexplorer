@@ -248,7 +248,9 @@ void arrowKeysRequestPanOnlyWhenFocusedWithAnImage()
 // them. setImage and setPointOverlays do; setPlaceholder is the third one,
 // and a stale tally there outlives the scene it counted -- the particle
 // overlay accessors then answer for a view that is showing "Loading...".
-void tearingDownTheSceneForgetsThePointOverlays()
+// The tally only: m_pointOverlayColors has the same gap in setPlaceholder,
+// which predates this and is not fixed here.
+void tearingDownTheSceneForgetsThePointTally()
 {
     amrvis::qt::ImageView view;
     view.setImage(solidImage(16, 16));
@@ -286,6 +288,6 @@ int main(int argc, char* argv[])
     scrollBarPanFollowsContentDelta();
     fullyVisibleSceneIgnoresPan();
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();
-    tearingDownTheSceneForgetsThePointOverlays();
+    tearingDownTheSceneForgetsThePointTally();
     return 0;
 }

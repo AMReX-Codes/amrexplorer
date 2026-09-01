@@ -101,17 +101,21 @@ projectParticlePoints(std::span<const ParticlePoint> particles,
             continue;
         }
         if (filtering) {
-            // The pixel this point falls in. The row counts the way
+            // The pixel this point falls in, and the inverse of the
+            // sampleCentre the query binned that pixel with: the extent is
+            // divided last there and has to be here too, or a coordinate a
+            // ULP from a pixel edge lands on the other side of it -- across
+            // a level jump, that is the wrong slab. The row counts the way
             // sourceLevel is written -- increasing physical y -- not the way
             // the emitted scene y is flipped. The inclusive clip above lands
             // the upper edge exactly on width/height, hence the clamp.
             const auto column = std::clamp(
-                static_cast<int>(
-                    std::floor((x - region.lower[xAxis]) / xExtent * plane.width)),
+                static_cast<int>(std::floor(
+                    (x - region.lower[xAxis]) * plane.width / xExtent)),
                 0, plane.width - 1);
             const auto row = std::clamp(
-                static_cast<int>(
-                    std::floor((y - region.lower[yAxis]) / yExtent * plane.height)),
+                static_cast<int>(std::floor(
+                    (y - region.lower[yAxis]) * plane.height / yExtent)),
                 0, plane.height - 1);
             const auto level = plane.sourceLevel[static_cast<std::size_t>(column)
                 + static_cast<std::size_t>(plane.width)

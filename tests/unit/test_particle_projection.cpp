@@ -234,6 +234,55 @@ int main()
                 "the level's last cell was rejected as out of domain");
     }
 
+    // 2-D has no normal to filter on -- slicePlaneAxes returns {0, 1}
+    // whatever normalDirection is, so honouring slabs here would test an
+    // in-plane coordinate against them. The particle's y sits outside the
+    // coarse slab, so a projector that filtered in 2-D would drop it.
+    {
+        const auto metadata = twoLevelMetadata();
+        const auto slabs = amrvis::sliceCellSlabs(metadata, 2, 4.25);
+        const auto display = splitLevelPlane(10, 4);
+        require(!slabs.empty(), "the fixture produced no slabs to hand in");
+        const auto projected = amrvis::projectParticlePoints(
+            std::vector{point(2.5, 5.0)}, display, 2, 1, slabs);
+        require(projected.size() == 1,
+                "a 2-D projection filtered against slabs it has no normal for");
+    }
+
+    // The pixel index is the inverse of the sampleCentre the query binned
+    // that pixel with, and sampleCentre divides the extent last on purpose.
+    // Pre-dividing rounds the step down, and for this region, width and
+    // coordinate it lands one column short -- 23 rather than 24. Column 24 is
+    // the first supplied by the finer level here, so the two spellings
+    // disagree about which cell thickness the particle is tested against, and
+    // therefore about whether it is drawn at all. Hex literals so the doubles
+    // are exact rather than reparsed from decimal.
+    {
+        const auto metadata = twoLevelMetadata();
+        const auto slabs = amrvis::sliceCellSlabs(metadata, 2, 4.25);
+        constexpr double lower = -0x1.11a39d91d4d80p+2;
+        constexpr double upper = 0x1.57e4070faa688p+9;
+        constexpr double edge = 0x1.8aae266666954p+3;
+        constexpr int width = 1000;
+        constexpr int height = 4;
+        auto display = plane(width, height, {{lower, 0.0, 0.0}},
+            {{upper, 10.0, 8.0}});
+        display.sourceLevel.reserve(
+            static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+        for (int row = 0; row < height; ++row) {
+            for (int column = 0; column < width; ++column) {
+                display.sourceLevel.push_back(column < 24 ? 0 : 1);
+            }
+        }
+        // Inside the coarse cell [4, 5), outside the fine cell [4, 4.5): kept
+        // if the lookup lands on column 23, dropped if it lands on 24.
+        require(amrvis::projectParticlePoints(
+                    std::vector{point(edge, 5.0, 4.75)}, display, 3, 2, slabs)
+                    .empty(),
+                "the pixel lookup pre-divided the extent and read the "
+                "neighbouring column's level");
+    }
+
     // The decisive case: two particles the same distance from the plane, one
     // over a coarse pixel and one over a fine one. The coarse cell still holds
     // its particle; the fine cell does not reach that far. A filter that used

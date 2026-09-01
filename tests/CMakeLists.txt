@@ -650,6 +650,22 @@ if(TARGET amrexplorer_qt)
     # Plain index arithmetic over a DatasetPage: no Qt, no QPA platform.
     add_test(NAME dataset_selection COMMAND test_dataset_selection)
 
+    add_executable(test_dataset_selected_cell
+        unit/test_dataset_selected_cell.cpp)
+    target_include_directories(test_dataset_selected_cell
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_dataset_selected_cell
+        PRIVATE
+            amrexplorer::warnings
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Widgets
+    )
+    # Paints through the real style, so it needs a QPA platform.
+    add_test(NAME dataset_selected_cell
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_dataset_selected_cell>")
+
     add_executable(test_palette_controller
         unit/test_palette_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/PaletteController.cpp"

@@ -2,6 +2,7 @@
 
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
 #include "CloseWindowAction.hpp"
+#include "DatasetValueDelegate.hpp"
 #include "NumberFormat.hpp"
 #include "QtErrorText.hpp"
 #include "Theme.hpp"
@@ -357,6 +358,11 @@ void DatasetWindow::populateTabs()
         auto viewPalette = table->palette();
         viewPalette.setColor(QPalette::Base, viewportBackground());
         table->setPalette(viewPalette);
+        // Keeps a selected cell's value color and no-data shade, which the
+        // default delegate would paint over with the theme's selection colors
+        // (see DatasetValueDelegate) -- and a selection here is meant to stay
+        // up while the user reads the image it marks.
+        table->setItemDelegate(new DatasetValueDelegate(table));
         auto* model
             = new LevelTableModel(extract, m_coloring, m_numberFormat, table);
         table->setModel(model);

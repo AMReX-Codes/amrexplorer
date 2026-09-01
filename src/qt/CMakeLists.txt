@@ -11,6 +11,7 @@ add_executable(amrexplorer_qt
     DatasetColoring.hpp
     DatasetExtract.hpp
     DatasetSelection.hpp
+    DatasetValueDelegate.hpp
     DatasetWindow.cpp
     DatasetWindow.hpp
     DerivedFieldController.cpp

@@ -724,6 +724,10 @@ private:
     void showDatasetWindow();
     void closeDatasetWindow();
     void refreshDatasetWindow();
+    // Pushes the active view's palette and display range -- the pair the color
+    // bar is drawn from -- to an open Dataset window, so its numbers keep the
+    // colors the bar is showing. Called from every place that moves either.
+    void syncDatasetWindowColors();
     void datasetCellActivated(const RealBox& physicalCell);
     [[nodiscard]] std::optional<DatasetRequest> buildDatasetRequest() const;
     void showUserGuide();

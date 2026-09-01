@@ -595,6 +595,7 @@ void MainWindow::showDatasetWindow()
             m_datasetWindow = nullptr;
         }
         for (auto* state : currentViews()) {
+            state->datasetCell.reset();
             state->view->setCellHighlight(std::nullopt);
         }
     });
@@ -652,11 +653,21 @@ void MainWindow::datasetCellActivated(const RealBox& physicalCell)
     if (m_activeView == nullptr) {
         return;
     }
-    const auto& plane = *m_activeView->plane;
+    m_activeView->datasetCell = physicalCell;
+    applyDatasetCellHighlight(*m_activeView);
+}
+
+void MainWindow::applyDatasetCellHighlight(PlaneViewState& state)
+{
+    if (!state.datasetCell) {
+        return;
+    }
+    const auto& physicalCell = *state.datasetCell;
+    const auto& plane = *state.plane;
     if (plane.width <= 0 || plane.height <= 0) {
         return;
     }
-    const auto axes = displayAxes(m_activeView->normal);
+    const auto axes = displayAxes(state.normal);
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);
     if (displayIsSpherical()) {
@@ -665,16 +676,16 @@ void MainWindow::datasetCellActivated(const RealBox& physicalCell)
         const double r1 = physicalCell.upper[xAxis];
         const double t0 = physicalCell.lower[yAxis];
         const double t1 = physicalCell.upper[yAxis];
-        const auto mapping = planeMapping(*m_activeView);
+        const auto mapping = planeMapping(state);
         const bool valid = r1 > r0 && t1 > t0;
         // Branch on the view state's mode, matching the mapping (see
         // updateGridBoxes).
-        if (m_activeView->sphericalDisplay == SphericalDisplay::RZ) {
+        if (state.sphericalDisplay == SphericalDisplay::RZ) {
             std::optional<QPainterPath> highlight;
             if (valid) {
                 highlight = sphericalSectorPath(mapping, r0, r1, t0, t1);
             }
-            m_activeView->view->setCellHighlightPath(highlight);
+            state.view->setCellHighlightPath(highlight);
         } else {
             std::optional<QRectF> highlight;
             if (valid) {
@@ -685,7 +696,7 @@ void MainWindow::datasetCellActivated(const RealBox& physicalCell)
                     highlight = rect;
                 }
             }
-            m_activeView->view->setCellHighlight(highlight);
+            state.view->setCellHighlight(highlight);
         }
         return;
     }
@@ -711,7 +722,7 @@ void MainWindow::datasetCellActivated(const RealBox& physicalCell)
     if (!rectangle.isEmpty()) {
         highlight = rectangle;
     }
-    m_activeView->view->setCellHighlight(highlight);
+    state.view->setCellHighlight(highlight);
 }
 
 void MainWindow::openDataset(

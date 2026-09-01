@@ -677,6 +677,19 @@ void MainWindow::applyDatasetCellHighlight(PlaneViewState& state)
     if (plane.width <= 0 || plane.height <= 0) {
         return;
     }
+    // In 3-D the marked cell sits on one slice, and the projection below reads
+    // only the two displayed axes: without this the outline would come back
+    // unchanged after the plane moved off the cell it marks. Measured against
+    // the displayed raster's own position, not m_slicePosition3d, which has
+    // already moved ahead whenever a slice is in flight (see updateOverlay).
+    if (m_dataset && m_dataset->metadata().dimension == 3
+        && state.hasCachedRequest
+        && !datasetCellOnDisplayedSlice(physicalCell,
+            state.cachedRequest.normalDirection,
+            state.cachedRequest.physicalPosition)) {
+        state.view->setCellHighlight(std::nullopt);
+        return;
+    }
     const auto axes = displayAxes(state.normal);
     const auto xAxis = static_cast<std::size_t>(axes[0]);
     const auto yAxis = static_cast<std::size_t>(axes[1]);

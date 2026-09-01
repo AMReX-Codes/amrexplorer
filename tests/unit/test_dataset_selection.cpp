@@ -3,6 +3,10 @@
 // arithmetic it has to get right is the row/j flip (row 0 is the highest j)
 // and the coverage skip, so the page below is deliberately offset from the
 // origin and holes are punched in it.
+//
+// Also datasetCellOnDisplayedSlice, which decides whether a marked cell is
+// still on the plane being shown. Without it a 3-D slice move redraws the old
+// outline at the same in-plane position on a plane the cell is not on.
 
 #include "DatasetSelection.hpp"
 
@@ -107,6 +111,32 @@ int main()
     require(!amrvis::qt::coveredSelectionBounds(amrvis::DatasetPage{},
                 std::vector<amrvis::qt::CellRange>{{0, 0, 0, 0}}).has_value(),
         "an empty page produced bounds");
+
+    // A marked cell spanning z in [2.0, 2.5): the one sample the plane it was
+    // taken from cuts. Only a plane inside that span may keep the marker.
+    const amrvis::RealBox cell{{0.0, 0.0, 2.0}, {1.0, 1.0, 2.5}};
+    constexpr int normalZ = 2;
+    require(amrvis::qt::datasetCellOnDisplayedSlice(cell, normalZ, 2.25),
+        "the plane that cuts the cell lost its marker");
+    require(!amrvis::qt::datasetCellOnDisplayedSlice(cell, normalZ, 2.75),
+        "a plane moved one cell up kept the marker");
+    require(!amrvis::qt::datasetCellOnDisplayedSlice(cell, normalZ, 1.75),
+        "a plane moved one cell down kept the marker");
+    // Both faces count: a plane sitting exactly on a boundary cuts the cells
+    // either side of it.
+    require(amrvis::qt::datasetCellOnDisplayedSlice(cell, normalZ, 2.0),
+        "a plane on the cell's lower face lost its marker");
+    require(amrvis::qt::datasetCellOnDisplayedSlice(cell, normalZ, 2.5),
+        "a plane on the cell's upper face lost its marker");
+    // The other axes read their own bounds, not z's.
+    require(amrvis::qt::datasetCellOnDisplayedSlice(cell, 0, 0.5),
+        "an x-normal plane inside the cell lost its marker");
+    require(!amrvis::qt::datasetCellOnDisplayedSlice(cell, 0, 2.25),
+        "an x-normal plane read the cell's z bounds");
+    // A normal outside 0..2 is nobody's axis; marking nothing is the safe
+    // reading, since the alternative indexes past the box.
+    require(!amrvis::qt::datasetCellOnDisplayedSlice(cell, 3, 2.25),
+        "an out-of-range normal was accepted");
 
     std::cout << "dataset selection OK\n";
     return 0;

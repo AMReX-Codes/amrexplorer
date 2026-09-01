@@ -5,6 +5,7 @@
 // types) so the index arithmetic -- which flips rows against j and has to skip
 // the samples no grid covers -- can be tested on a synthetic page.
 
+#include <amrexplorer/core/Geometry.hpp>
 #include <amrexplorer/data/DatasetPage.hpp>
 
 #include <algorithm>
@@ -79,6 +80,27 @@ struct SelectedSampleBox {
     return SelectedSampleBox{page.lower[0] + minColumn,
         page.lower[0] + maxColumn, page.upper[1] - maxRow,
         page.upper[1] - minRow};
+}
+
+// Whether the plane cutting `normal` at `position` still passes through a
+// marked cell -- the 3-D question the in-plane projection cannot answer. The
+// cell carries its own slice's physical bounds (cellsSelected collapses the
+// normal axis to the sample it was taken from, and sampleBounds gives that one
+// index a full cell's extent), so moving the plane off it has to take the
+// marker with it rather than redraw it, unchanged, over a sample that is no
+// longer on screen.
+//
+// Inclusive at both faces: a plane sitting exactly on a boundary cuts the
+// cells either side of it, and keeping the marker up there is the reading that
+// matches what the user sees.
+[[nodiscard]] inline bool datasetCellOnDisplayedSlice(
+    const RealBox& cell, int normal, double position) noexcept
+{
+    if (normal < 0 || normal > 2) {
+        return false;
+    }
+    const auto axis = static_cast<std::size_t>(normal);
+    return position >= cell.lower[axis] && position <= cell.upper[axis];
 }
 
 } // namespace amrvis::qt

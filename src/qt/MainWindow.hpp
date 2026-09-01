@@ -436,6 +436,8 @@ public:
     [[nodiscard]] double particleFractionForTest() const noexcept;
     void setParticlePointSizeForTest(int pointSize);
     [[nodiscard]] int particlePointSizeForTest() const noexcept;
+    void setParticleSliceCellsOnlyForTest(bool sliceCellsOnly);
+    [[nodiscard]] bool particleSliceCellsOnlyForTest() const noexcept;
     // Invalid when the species has no stored color, which is what a reset
     // leaves behind until the next dataset re-seeds the defaults.
     [[nodiscard]] QColor particleColorForTest(const std::string& species) const;
@@ -444,7 +446,10 @@ public:
     [[nodiscard]] bool particleOverlaysUseColorForTest(
         const QColor& color);
     [[nodiscard]] std::size_t particleSampleCountForTest() const;
+    // Point batches (one per drawn species) and the points in them: the
+    // slice-cell filter thins the batches without emptying them.
     [[nodiscard]] std::size_t particleOverlayCountForTest();
+    [[nodiscard]] std::size_t particleOverlayPointCountForTest();
     [[nodiscard]] bool particleLoadingForTest() const noexcept;
     [[nodiscard]] bool particleLoadingUiActiveForTest() const;
     [[nodiscard]] bool particleLoadingUiSettledForTest() const;

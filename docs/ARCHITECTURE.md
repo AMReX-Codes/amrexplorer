@@ -62,7 +62,7 @@ the window, wired to it in one of two ways:
 | `SequenceController` | the plotfile sequence: frame list, prefetch, frame switches and their generations | `test_sequence_controller` |
 | `AnimationExporter` | the animation-export state machine (frames → images/MP4) | via the export smoke tests |
 | `PaletteController` | palette choice, reversal, custom `.pal` files, the Palette menu and selector, persistence | `test_palette_controller` |
-| `ParticleController` | particle species/fraction/seed/colours, the sample load, the Particles dialog, action and progress bar | `test_particle_controller` |
+| `ParticleController` | particle species/fraction/seed/colours, the slice-cell filter, the sample load, the Particles dialog, action and progress bar | `test_particle_controller` |
 | `DiagnosticsModel` | the Diagnostics dock: request/stale counters, read and cache metrics, probe and error histories | `test_diagnostics_model` |
 | `FabNavigator` | standalone FAB / MultiFab navigation: the selector dock, drill-down and return, the async header reads | `test_fab_navigator` |
 | `RemoteSessionController` | the ssh-launched server session and its connection, the Open Remote dialog (`RemoteOpenDialog`), the remote browser (`RemoteFileDialog`), per-destination settings | `test_remote_session_controller`, `test_remote_open_dialog`, `test_remote_file_dialog` |

@@ -826,8 +826,9 @@ std::uint64_t MainWindow::cacheResidentBytesForTest() const
 void MainWindow::setParticleSelectionForTest(
     std::vector<std::string> species, double fraction, std::uint64_t seed)
 {
+    const auto settings = m_particleController->settings();
     m_particleController->applySelection(std::move(species), fraction,
-        m_particleController->settings().pointSize, seed);
+        settings.pointSize, seed, settings.sliceCellsOnly);
 }
 
 std::uint64_t MainWindow::particleSeedForTest() const noexcept
@@ -847,13 +848,28 @@ void MainWindow::setParticlePointSizeForTest(int pointSize)
     // today -- but not if that parameter ever became a const reference,
     // which would alias the very vector the move overwrites.
     const auto settings = m_particleController->settings();
-    m_particleController->applySelection(
-        settings.species, settings.fraction, pointSize, settings.seed);
+    m_particleController->applySelection(settings.species, settings.fraction,
+        pointSize, settings.seed, settings.sliceCellsOnly);
 }
 
 int MainWindow::particlePointSizeForTest() const noexcept
 {
     return m_particleController->settings().pointSize;
+}
+
+void MainWindow::setParticleSliceCellsOnlyForTest(bool sliceCellsOnly)
+{
+    // The same copy-first hardening as the point size above: the by-value
+    // species parameter is copied before the body moves into
+    // m_settings.species.
+    const auto settings = m_particleController->settings();
+    m_particleController->applySelection(settings.species, settings.fraction,
+        settings.pointSize, settings.seed, sliceCellsOnly);
+}
+
+bool MainWindow::particleSliceCellsOnlyForTest() const noexcept
+{
+    return m_particleController->settings().sliceCellsOnly;
 }
 
 QColor MainWindow::particleColorForTest(const std::string& species) const
@@ -897,6 +913,15 @@ std::size_t MainWindow::particleOverlayCountForTest()
     std::size_t count = 0;
     for (const auto* state : currentViews()) {
         count += state->view->pointOverlayCount();
+    }
+    return count;
+}
+
+std::size_t MainWindow::particleOverlayPointCountForTest()
+{
+    std::size_t count = 0;
+    for (const auto* state : currentViews()) {
+        count += state->view->pointOverlayPointCount();
     }
     return count;
 }

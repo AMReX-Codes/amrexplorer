@@ -304,6 +304,35 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
     const bool spherical = displayIsSpherical();
     const auto mapping = planeMapping(state);
     const auto planeHeight = static_cast<double>(state.plane->height);
+    // The cells this plane cuts, when the filter is on. Taken from the
+    // request that produced the plane on show, not m_slicePosition3d, which
+    // has already moved ahead whenever a slice is in flight: the overlay
+    // belongs to the raster under it. Empty means project through the volume.
+    //
+    // That request has to name the installed dataset, too. A frame switch
+    // assigns m_dataset before it shows the frame's planes, so a frame that
+    // then fails leaves the raster and its levels owned by different
+    // datasets -- and this reads sourceLevel from the one and cellSize from
+    // the other. Same test the raster path uses (see ownerChanged).
+    std::vector<SliceCellSlab> levelSlabs;
+    if (m_particleController->settings().sliceCellsOnly
+        && m_dataset->metadata().dimension == 3) {
+        if (state.hasCachedRequest
+            && state.cachedRequest.dataset == m_dataset->id()) {
+            levelSlabs = sliceCellSlabs(m_dataset->metadata(), state.normal,
+                state.cachedRequest.physicalPosition);
+        }
+        if (levelSlabs.empty()) {
+            // Filter on, nothing trustworthy to filter with. An empty vector
+            // reads as "no filtering" to the projector, so falling through
+            // here would draw the whole volume -- the one picture the ticked
+            // box exists to avoid. Draw nothing instead, which is what the
+            // projector itself does when a plane's sourceLevel does not
+            // match its raster.
+            state.view->setPointOverlays(overlays);
+            return;
+        }
+    }
     const auto& samples = m_particleController->samples();
     overlays.reserve(samples.size());
     for (const auto& sample : samples) {
@@ -313,7 +342,7 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
             = static_cast<float>(m_particleController->settings().pointSize);
         const auto projected = projectParticlePoints(
             sample.points, *state.plane,
-            m_dataset->metadata().dimension, state.normal);
+            m_dataset->metadata().dimension, state.normal, levelSlabs);
         overlay.points.reserve(projected.size());
         for (const auto& point : projected) {
             if (spherical) {

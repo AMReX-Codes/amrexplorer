@@ -37,7 +37,9 @@ void require(bool condition, const char* message)
 // after an optional delay so a load can be cancelled or superseded in flight.
 class FakeSession final : public amrvis::DatasetSession {
 public:
-    FakeSession()
+    // The particles dialog offers the slice-cell filter only in 3-D, where a
+    // slice has a normal to filter on; both dimensions need covering.
+    explicit FakeSession(int dimension = 2)
     {
         amrvis::ParticleSpeciesMetadata electrons;
         electrons.name = "electrons";
@@ -46,7 +48,7 @@ public:
         ions.name = "ions";
         ions.particleCount = 20;
         m_species = {electrons, ions};
-        m_metadata.dimension = 2;
+        m_metadata.dimension = dimension;
     }
 
     std::size_t pointsPerSpecies = 3;
@@ -296,24 +298,25 @@ int main(int argc, char** argv)
     }
 
     // applySelection: identity changes (species, fraction, seed, first
-    // application) ask the host to reload; a point-size change alone only
-    // redraws. setColor redraws. clearSelection/resetSettings/restoreSelection
-    // shape the settings as the dataset transitions need.
+    // application) ask the host to reload; a point-size or slice-cell-filter
+    // change alone only redraws. setColor redraws.
+    // clearSelection/resetSettings/restoreSelection shape the settings as the
+    // dataset transitions need.
     {
         Observed observed;
         ParticleController controller(hooks());
         observe(controller, observed);
         // The very first application reloads even when it changes nothing
         // else: the defaults, applied, are still a selection to sample.
-        controller.applySelection({}, 1.0, 3, 0);
+        controller.applySelection({}, 1.0, 3, 0, false);
         require(observed.selection == 1 && observed.overlays == 0,
             "the first application of the defaults did not ask for a reload");
-        controller.applySelection({}, 1.0, 3, 0);
+        controller.applySelection({}, 1.0, 3, 0, false);
         require(observed.selection == 1 && observed.overlays == 1,
             "re-applying the defaults reloaded");
         controller.clearSelection();
         observed = Observed{};
-        controller.applySelection({"ions"}, 0.5, 4, 7);
+        controller.applySelection({"ions"}, 0.5, 4, 7, true);
         require(observed.selection == 1 && observed.overlays == 0,
             "the first selection did not ask for a reload");
         require(controller.settings().selectionInitialized
@@ -321,19 +324,31 @@ int main(int argc, char** argv)
                     == std::vector<std::string>{"ions"}
                 && controller.settings().fraction == 0.5
                 && controller.settings().seed == 7
-                && controller.settings().pointSize == 4,
+                && controller.settings().pointSize == 4
+                && controller.settings().sliceCellsOnly,
             "applySelection did not install the selection");
-        controller.applySelection({"ions"}, 0.5, 9, 7);
+        // Point size and the filter change together, to distinct values, so
+        // a swap of the two trailing arguments cannot pass: 9 is not a bool
+        // and false is not 9.
+        controller.applySelection({"ions"}, 0.5, 9, 7, false);
         require(observed.selection == 1 && observed.overlays == 1,
             "a point-size change reloaded instead of redrawing");
-        controller.applySelection({"ions"}, 0.25, 9, 7);
+        require(controller.settings().pointSize == 9
+                && !controller.settings().sliceCellsOnly,
+            "the cosmetic arguments did not land where they belong");
+        controller.applySelection({"ions"}, 0.5, 9, 7, true);
+        require(observed.selection == 1 && observed.overlays == 2,
+            "a slice-cell-filter change reloaded instead of redrawing");
+        require(controller.settings().sliceCellsOnly,
+            "the slice-cell filter did not install");
+        controller.applySelection({"ions"}, 0.25, 9, 7, true);
         require(observed.selection == 2, "a fraction change did not reload");
-        controller.applySelection({"ions"}, 0.25, 9, 8);
+        controller.applySelection({"ions"}, 0.25, 9, 8, true);
         require(observed.selection == 3, "a seed change did not reload");
-        controller.applySelection({"ions", "electrons"}, 0.25, 9, 8);
+        controller.applySelection({"ions", "electrons"}, 0.25, 9, 8, true);
         require(observed.selection == 4, "a species change did not reload");
         controller.setColor("ions", QColor(Qt::blue));
-        require(observed.overlays == 2 && observed.selection == 4,
+        require(observed.overlays == 3 && observed.selection == 4,
             "setColor did not redraw, or reloaded");
         controller.clearSelection();
         require(!controller.settings().selectionInitialized
@@ -347,11 +362,13 @@ int main(int argc, char** argv)
                     == std::vector<std::string>{"electrons"}
                 && controller.settings().fraction == 0.75
                 && controller.settings().seed == 3
-                && controller.settings().pointSize == 9,
+                && controller.settings().pointSize == 9
+                && controller.settings().sliceCellsOnly,
             "restoreSelection did not reinstall the spec's fields only");
         controller.resetSettings();
         require(controller.settings().colors.empty()
                 && controller.settings().pointSize == 3
+                && !controller.settings().sliceCellsOnly
                 && controller.settings().fraction == 1.0,
             "resetSettings left something behind");
     }
@@ -594,6 +611,12 @@ int main(int argc, char** argv)
         require(checks.size() == 2 && !checks[0]->isChecked()
                 && checks[1]->isChecked(),
             "the species rows do not reflect the selection");
+        // 2-D: the slice is the domain, so the filter would do nothing and
+        // the check box is not offered -- which is also what keeps the
+        // species rows above findable by type and order.
+        require(dialog->findChild<QCheckBox*>(
+                    QStringLiteral("particlesSliceCellsOnly")) == nullptr,
+            "the slice-cell check box was offered for 2-D data");
         controller.showDialog(&host);
         require(host.findChildren<QDialog*>(QStringLiteral("particlesDialog"))
                     .size() == 1,
@@ -627,6 +650,51 @@ int main(int argc, char** argv)
         require(host.findChild<QDialog*>(QStringLiteral("particlesDialog"))
                     == nullptr,
             "closeDialog did not close the dialog");
+    }
+
+    // The 3-D dialog offers the slice-cell filter, shows what is stored, and
+    // Apply routes it through applySelection as a redraw rather than a
+    // reload: the samples it filters are already loaded.
+    {
+        auto volume = std::make_shared<FakeSession>(3);
+        current = volume;
+        Observed observed;
+        ParticleController controller(hooks());
+        controller.configureForDataset(false);
+        controller.restoreSelection({"ions"}, 0.5, 3, true);
+        observe(controller, observed);
+        QWidget host;
+        controller.showDialog(&host);
+        auto* dialog = host.findChild<QDialog*>(QStringLiteral("particlesDialog"));
+        require(dialog != nullptr, "the dialog was not shown");
+        auto* filter = dialog->findChild<QCheckBox*>(
+            QStringLiteral("particlesSliceCellsOnly"));
+        require(filter != nullptr,
+            "the slice-cell check box was not offered for 3-D data");
+        require(!filter->isChecked(),
+            "the check box did not start from the stored setting");
+        filter->setChecked(true);
+        auto* buttons = dialog->findChild<QDialogButtonBox*>(
+            QStringLiteral("particlesDialogButtons"));
+        require(buttons != nullptr, "no button box");
+        buttons->button(QDialogButtonBox::Apply)->click();
+        require(controller.settings().sliceCellsOnly,
+            "Apply did not route the slice-cell filter");
+        require(observed.overlays == 1 && observed.selection == 0,
+            "the slice-cell filter reloaded instead of redrawing");
+        // Reopened, the box shows what was applied.
+        controller.closeDialog();
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        controller.showDialog(&host);
+        dialog = host.findChild<QDialog*>(QStringLiteral("particlesDialog"));
+        require(dialog != nullptr, "the dialog did not reopen");
+        filter = dialog->findChild<QCheckBox*>(
+            QStringLiteral("particlesSliceCellsOnly"));
+        require(filter != nullptr && filter->isChecked(),
+            "the reopened check box did not show the applied setting");
+        controller.closeDialog();
+        current = session;
     }
 
     std::cout << "particle controller tests passed\n";

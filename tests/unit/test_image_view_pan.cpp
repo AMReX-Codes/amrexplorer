@@ -244,6 +244,42 @@ void arrowKeysRequestPanOnlyWhenFocusedWithAnImage()
         "Ctrl with the keypad flag must not be claimed as a pan");
 }
 
+// Every teardown that drops the point items has to drop their tally with
+// them. setImage and setPointOverlays do; setPlaceholder is the third one,
+// and a stale tally there outlives the scene it counted -- the particle
+// overlay accessors then answer for a view that is showing "Loading...".
+// The tally only: m_pointOverlayColors has the same gap in setPlaceholder,
+// which predates this and is not fixed here.
+void tearingDownTheSceneForgetsThePointTally()
+{
+    amrvis::qt::ImageView view;
+    view.setImage(solidImage(16, 16));
+    amrvis::qt::PointOverlay overlay;
+    overlay.points = {{1.0, 1.0}, {2.0, 2.0}, {3.0, 3.0}};
+    overlay.color = Qt::red;
+    overlay.size = 2.0F;
+    view.setPointOverlays({overlay});
+    require(view.pointOverlayCount() == 1 && view.pointOverlayPointCount() == 3,
+        "the point overlay was not installed");
+
+    view.setPlaceholder(QStringLiteral("Loading dataset..."));
+    require(view.pointOverlayCount() == 0,
+        "the placeholder left the point items behind");
+    require(view.pointOverlayPointCount() == 0,
+        "the placeholder left the point tally behind");
+
+    // The other two teardowns, so the three cannot drift apart.
+    view.setImage(solidImage(16, 16));
+    view.setPointOverlays({overlay});
+    view.setImage(solidImage(16, 16));
+    require(view.pointOverlayPointCount() == 0,
+        "a new image left the point tally behind");
+    view.setPointOverlays({overlay});
+    view.setPointOverlays({});
+    require(view.pointOverlayPointCount() == 0,
+        "replacing the overlays left the point tally behind");
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -252,5 +288,6 @@ int main(int argc, char* argv[])
     scrollBarPanFollowsContentDelta();
     fullyVisibleSceneIgnoresPan();
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();
+    tearingDownTheSceneForgetsThePointTally();
     return 0;
 }

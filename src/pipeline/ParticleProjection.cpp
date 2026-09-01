@@ -109,14 +109,21 @@ projectParticlePoints(std::span<const ParticlePoint> particles,
             // sourceLevel is written -- increasing physical y -- not the way
             // the emitted scene y is flipped. The inclusive clip above lands
             // the upper edge exactly on width/height, hence the clamp.
-            const auto column = std::clamp(
-                static_cast<int>(std::floor(
-                    (x - region.lower[xAxis]) * plane.width / xExtent)),
-                0, plane.width - 1);
-            const auto row = std::clamp(
-                static_cast<int>(std::floor(
-                    (y - region.lower[yAxis]) * plane.height / yExtent)),
-                0, plane.height - 1);
+            // Clamped as a double, before the cast. Multiplying first
+            // is what keeps the binning exact, but it also overflows to
+            // infinity for a region whose extent approaches the double
+            // range -- and casting that to int is undefined, where clamping
+            // it lands on the last column the way any coordinate at the
+            // upper edge should. Non-negative throughout (x >= lower), so
+            // truncation is the floor.
+            const auto scaled
+                = (x - region.lower[xAxis]) * plane.width / xExtent;
+            const auto column = static_cast<int>(std::clamp(
+                scaled, 0.0, static_cast<double>(plane.width - 1)));
+            const auto scaledRow
+                = (y - region.lower[yAxis]) * plane.height / yExtent;
+            const auto row = static_cast<int>(std::clamp(
+                scaledRow, 0.0, static_cast<double>(plane.height - 1)));
             const auto level = plane.sourceLevel[static_cast<std::size_t>(column)
                 + static_cast<std::size_t>(plane.width)
                     * static_cast<std::size_t>(row)];

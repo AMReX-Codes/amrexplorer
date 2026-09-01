@@ -283,6 +283,37 @@ int main()
                 "neighbouring column's level");
     }
 
+    // A region whose extent approaches the double range: (x - lower) *
+    // width overflows to infinity, and casting that to int is undefined.
+    // Clamping before the cast puts the particle at the upper edge on the
+    // last column, which is where the raster drew it.
+    {
+        const auto metadata = twoLevelMetadata();
+        const auto slabs = amrvis::sliceCellSlabs(metadata, 2, 4.25);
+        constexpr int width = 1000;
+        constexpr int height = 4;
+        constexpr double extent = 1.0e308;
+        auto display = plane(width, height, {{0.0, 0.0, 0.0}},
+            {{extent, 10.0, 8.0}});
+        // Only the last column comes from the finer level, so binning there
+        // rather than anywhere else decides the answer.
+        display.sourceLevel.assign(
+            static_cast<std::size_t>(width) * static_cast<std::size_t>(height),
+            0);
+        for (int row = 0; row < height; ++row) {
+            display.sourceLevel[static_cast<std::size_t>(width - 1)
+                + static_cast<std::size_t>(width)
+                    * static_cast<std::size_t>(row)]
+                = 1;
+        }
+        // Inside the coarse cell [4, 5), outside the fine cell [4, 4.5).
+        require(amrvis::projectParticlePoints(
+                    std::vector{point(extent, 5.0, 4.75)}, display, 3, 2, slabs)
+                    .empty(),
+                "a region near the double range did not bin the upper edge "
+                "onto the last column");
+    }
+
     // The decisive case: two particles the same distance from the plane, one
     // over a coarse pixel and one over a fine one. The coarse cell still holds
     // its particle; the fine cell does not reach that far. A filter that used

@@ -77,6 +77,31 @@ amrvis::ScalarPlane splitLevelPlane(int width, int height)
     return result;
 }
 
+// sourceLevel varying by row *and* column, on a non-square raster: the
+// quadrants pin the row mapping, the column mapping, and their pairing at
+// once. Rows count the way a slice query writes them -- increasing physical y
+// -- while the emitted scene y is flipped, so a lookup that reused the
+// flipped value would read the wrong half.
+//
+//   y high |  uncovered  |  level 0   |
+//   y low  |  level 0    |  level 1   |
+//            x low          x high
+amrvis::ScalarPlane quadrantLevelPlane(int width, int height)
+{
+    auto result = plane(width, height, {{0.0, 0.0, 0.0}}, {{10.0, 10.0, 8.0}});
+    result.sourceLevel.reserve(
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+    for (int row = 0; row < height; ++row) {
+        for (int column = 0; column < width; ++column) {
+            const bool lowY = row < height / 2;
+            const bool lowX = column < width / 2;
+            result.sourceLevel.push_back(
+                lowY ? (lowX ? 0 : 1) : (lowX ? -1 : 0));
+        }
+    }
+    return result;
+}
+
 } // namespace
 
 int main()
@@ -239,6 +264,86 @@ int main()
         require(amrvis::projectParticlePoints(coarse, mismatched, 3, 2, slabs)
                     .empty(),
                 "a plane with no usable source levels was filtered anyway");
+    }
+
+    // The row mapping, and its pairing with the column mapping. Four
+    // particles the same distance from the plane, one per quadrant: only the
+    // two over a level-0 pixel survive, and which two says the rows were read
+    // in the direction a slice query writes them.
+    {
+        const auto metadata = twoLevelMetadata();
+        const auto slabs = amrvis::sliceCellSlabs(metadata, 2, 4.25);
+        const auto display = quadrantLevelPlane(8, 4);
+        // Inside the coarse cell [4, 5), outside the fine cell [4, 4.5).
+        const auto atLowYLowX = point(1.25, 1.25, 4.75);    // level 0
+        const auto atLowYHighX = point(8.75, 1.25, 4.75);   // level 1
+        const auto atHighYLowX = point(1.25, 8.75, 4.75);   // uncovered
+        const auto atHighYHighX = point(8.75, 8.75, 4.75);  // level 0
+        const auto kept = amrvis::projectParticlePoints(
+            std::vector{atLowYLowX, atLowYHighX, atHighYLowX, atHighYHighX},
+            display, 3, 2, slabs);
+        require(kept.size() == 2,
+                "the quadrant pattern did not keep exactly the level-0 pair");
+        // Scene y is flipped, so low physical y is the *larger* scene y.
+        require(nearlyEqual(kept[0].x, 1.0) && nearlyEqual(kept[0].y, 3.5),
+                "the low-y level-0 particle was not the one kept");
+        require(nearlyEqual(kept[1].x, 7.0) && nearlyEqual(kept[1].y, 0.5),
+                "the high-y level-0 particle was not the one kept");
+        // Each rejected quadrant on its own, so a failure names the pixel
+        // that misread rather than only the pair count.
+        require(amrvis::projectParticlePoints(
+                    std::vector{atLowYHighX}, display, 3, 2, slabs)
+                    .empty(),
+                "the low-y fine quadrant kept a particle outside its cell");
+        require(amrvis::projectParticlePoints(
+                    std::vector{atHighYLowX}, display, 3, 2, slabs)
+                    .empty(),
+                "the high-y uncovered quadrant drew a particle");
+    }
+
+    // A particle exactly on the face between two cells belongs to the upper
+    // one, at every level -- so it is drawn from exactly one cell per level,
+    // never from both and never from none. The plane standing at the
+    // particle's own coordinate is always one that draws it, which is what
+    // makes "never from none" hold whatever the refinement.
+    {
+        const auto metadata = twoLevelMetadata();
+        const auto display = splitLevelPlane(10, 4);
+        const std::vector onFace{point(2.5, 5.0, 4.5)};      // level-0 pixel
+        const std::vector onFineFace{point(7.5, 5.0, 4.5)};  // level-1 pixel
+
+        // Level 0, dx = 1: 4.5 is interior to cell 4, so the cell below is 3
+        // and only cell 4 holds the particle.
+        require(amrvis::projectParticlePoints(onFace, display, 3, 2,
+                    amrvis::sliceCellSlabs(metadata, 2, 3.5))
+                    .empty(),
+                "the coarse cell below the particle drew it");
+        require(amrvis::projectParticlePoints(onFace, display, 3, 2,
+                    amrvis::sliceCellSlabs(metadata, 2, 4.25))
+                    .size() == 1,
+                "the coarse cell containing the particle did not draw it");
+
+        // Level 1, dx = 1/2: 4.5 is exactly the face between cells 8 and 9.
+        // The upper cell takes it; the lower one does not.
+        require(amrvis::projectParticlePoints(onFineFace, display, 3, 2,
+                    amrvis::sliceCellSlabs(metadata, 2, 4.25))
+                    .empty(),
+                "the fine cell below the face drew the particle");
+        require(amrvis::projectParticlePoints(onFineFace, display, 3, 2,
+                    amrvis::sliceCellSlabs(metadata, 2, 4.75))
+                    .size() == 1,
+                "the fine cell above the face did not draw the particle");
+
+        // The general form: a plane at the particle's own coordinate draws it
+        // whichever level supplies the pixel, because sampleIndex puts the
+        // plane and the particle in the same cell by construction.
+        for (const auto& probe : {onFace, onFineFace}) {
+            const auto own = amrvis::sliceCellSlabs(
+                metadata, 2, probe.front().position[2]);
+            require(amrvis::projectParticlePoints(probe, display, 3, 2, own)
+                        .size() == 1,
+                    "a particle was invisible from its own coordinate");
+        }
     }
 
     return 0;

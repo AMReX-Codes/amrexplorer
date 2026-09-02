@@ -2,12 +2,16 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QAbstractItemView>
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
+#include <QImage>
 #include <QMenu>
+#include <QPainter>
 #include <QSettings>
+#include <QStyleOptionViewItem>
 #include <QTemporaryDir>
 
 #include <cstdlib>
@@ -96,6 +100,47 @@ int main(int argc, char** argv)
         require(samePalette(controller.palette(),
                     amrvis::builtinPalette(amrvis::BuiltinPalette::Rainbow)),
             "the initial palette is not Rainbow");
+
+        // The Field and Palette selectors share this popup delegate. A combo
+        // separator must remain a visible rule even when the platform palette
+        // gives Mid (Qt's usual separator colour) the popup background colour.
+        // Checking only the separator item's presence missed that visual
+        // failure in the Field selector.
+        auto separator = -1;
+        for (auto row = 0; row < selector->count(); ++row) {
+            if (selector
+                    ->itemData(row, Qt::AccessibleDescriptionRole)
+                    .toString()
+                == QStringLiteral("separator")) {
+                separator = row;
+                break;
+            }
+        }
+        require(separator >= 0, "the selector has no separator row");
+        const QColor background(Qt::white);
+        QImage image(160, 9, QImage::Format_ARGB32_Premultiplied);
+        image.fill(background);
+        QStyleOptionViewItem option;
+        option.rect = image.rect();
+        option.widget = selector->view();
+        option.palette = selector->palette();
+        option.palette.setColor(QPalette::Base, background);
+        option.palette.setColor(QPalette::Window, background);
+        option.palette.setColor(QPalette::AlternateBase, background);
+        option.palette.setColor(QPalette::Mid, background);
+        option.palette.setColor(QPalette::Text, Qt::black);
+        {
+            QPainter painter(&image);
+            selector->view()->itemDelegate()->paint(&painter, option,
+                selector->model()->index(separator, 0));
+        }
+        auto contrastingPixels = 0;
+        const auto y = image.rect().center().y();
+        for (auto x = 8; x < image.width() - 8; ++x) {
+            contrastingPixels += image.pixelColor(x, y) != background ? 1 : 0;
+        }
+        require(contrastingPixels > image.width() / 2,
+            "the selector separator is not visibly painted");
     }
 
     // Selecting a builtin: state, palette, both widgets, one signal. The

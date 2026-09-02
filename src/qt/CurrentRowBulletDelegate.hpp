@@ -37,7 +37,14 @@ public:
                     QStyle::PE_PanelItemViewItem, &sepOpt, painter, sepOpt.widget);
             }
             painter->save();
-            painter->setPen(option.palette.color(QPalette::Mid));
+            // Mid is allowed to equal the popup background in a platform
+            // palette, which makes a separator painted with it disappear.
+            // Text is the palette colour required to contrast with that
+            // background; translucency turns it into a quiet divider while
+            // preserving that contrast on both light and dark themes.
+            auto separatorColor = option.palette.color(QPalette::Text);
+            separatorColor.setAlpha(kSeparatorAlpha);
+            painter->setPen(separatorColor);
             const int y = option.rect.center().y();
             painter->drawLine(option.rect.left() + kSeparatorMargin, y,
                 option.rect.right() - kSeparatorMargin, y);
@@ -103,6 +110,7 @@ private:
     static constexpr int kRowVerticalPadding = 6;
     static constexpr int kSeparatorHeight = 9;
     static constexpr int kSeparatorMargin = 4;
+    static constexpr int kSeparatorAlpha = 96;
     QPointer<QComboBox> m_combo;
 };
 

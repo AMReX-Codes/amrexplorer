@@ -455,6 +455,9 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
         // plane axes. Every edge retains the exact fused and separately-rounded
         // values a peer can derive; the search band locates either value, while
         // matchesCoordinates prevents the band itself from admitting a third.
+        // The clip is also what keeps an accepted box inside the window, so no
+        // separate window test is needed below: every alternative a box can
+        // match is already confined to it.
         struct ExpectedLevel {
             int level = 0;
             std::vector<ExpectedBox> boxes;
@@ -547,17 +550,6 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
             }
             requirePlaneRegion(box.physicalRegion, metadata.dimension,
                 query.normalDirection, "slice result grid box");
-            for (const auto axis : planeAxes(
-                     metadata.dimension, query.normalDirection)) {
-                const auto entry = static_cast<std::size_t>(axis);
-                if (box.physicalRegion.lower[entry]
-                        < query.visibleRegion.lower[entry]
-                    || box.physicalRegion.upper[entry]
-                        > query.visibleRegion.upper[entry]) {
-                    throw std::invalid_argument(
-                        "slice result grid box escapes the visible region");
-                }
-            }
             if (metadata.dimension == 3) {
                 const auto normal
                     = static_cast<std::size_t>(query.normalDirection);

@@ -64,10 +64,13 @@ RealBox sampleBounds(
     for (int axis = 0; axis < dimension; ++axis) {
         const auto i = static_cast<std::size_t>(axis);
         const auto nodalHalf = isNodal(box, axis) ? 0.5 : 0.0;
-        // This geometry crosses the remote boundary. Spell out the fused
-        // evaluation so a client and server built by different compilers do
-        // not disagree according to whether either compiler contracted a
-        // multiply followed by an add.
+        // This geometry crosses the remote boundary, so the compiler must
+        // not be the one that picks it: contraction is on by default and
+        // happens wherever the target has an fma instruction, which makes the
+        // value a property of the build rather than of the catalog. Pin the
+        // fused form as the canonical evaluation. Peers built before this pin
+        // still derive the separately-rounded value, which is why
+        // SessionValidation accepts that one as well.
         result.lower[i] = std::fma(
             static_cast<double>(box.lower[i]) - nodalHalf,
             level.cellSize[i], level.indexOrigin[i]);

@@ -430,23 +430,25 @@ int main()
         // This geometry has no fused/unfused disagreement: its origin, indices
         // and cell size are all exact. An arbitrary ulp nudge is therefore not
         // an alternate evaluation of the catalog box and must not be admitted.
+        // Nudge inward so the box stays within the window and across the slice:
+        // the catalog match is then the only check left to reject it, which is
+        // what the named reason confirms.
         auto perturbed = sliceResult(region);
         auto nudged = catalogBox;
-        for (auto* const corner : {&nudged.lower, &nudged.upper}) {
-            for (std::size_t axis = 0;
-                axis < static_cast<std::size_t>(metadata.dimension);
-                ++axis) {
-                auto& component = (*corner)[axis];
-                for (int step = 0; step < 2; ++step) {
-                    component = std::nextafter(component,
-                        std::numeric_limits<double>::infinity());
-                }
+        for (std::size_t axis = 0;
+            axis < static_cast<std::size_t>(metadata.dimension); ++axis) {
+            for (int step = 0; step < 2; ++step) {
+                nudged.lower[axis] = std::nextafter(nudged.lower[axis],
+                    std::numeric_limits<double>::infinity());
+                nudged.upper[axis] = std::nextafter(nudged.upper[axis],
+                    -std::numeric_limits<double>::infinity());
             }
         }
         perturbed.gridBoxes.push_back({1, nudged});
-        requireRejected([&] {
+        requireRejectedWith([&] {
             validateSessionViewResult(metadata, view, perturbed);
-        }, "an underived ulp-nudged grid box was accepted");
+        }, "matches no box",
+            "an underived ulp-nudged grid box was accepted");
 
         if (dimension == 3) {
             // All three axes are compared, so the normal extent has to be the
@@ -527,9 +529,10 @@ int main()
         }
     }
 
-    // Coordinate magnitude must not turn the rounding allowance into whole
-    // cells. At 1e16 the spacing between doubles is 2, so the uncapped
-    // 16*epsilon*scale tolerance accepted this one-cell translation.
+    // Coordinate magnitude must not buy an answer any slack. At 1e16 the
+    // spacing between doubles is 2, a whole cell here, so this one-cell
+    // translation is exactly what an allowance scaled to the coordinate would
+    // have admitted.
     {
         auto metadata = dataset(2);
         constexpr double origin = 1.0e16;
@@ -561,8 +564,8 @@ int main()
     }
 
     // A catalog box merely touching the viewport is clipped to zero width and
-    // SliceQuery drops it. It cannot authorize a positive sliver whose edges
-    // happen to lie inside a broad coordinate-scale tolerance.
+    // SliceQuery drops it. It cannot authorize a positive sliver one ulp wide
+    // at the same edge.
     {
         auto metadata = dataset(2);
         constexpr double origin = 1.0e13;
@@ -592,10 +595,11 @@ int main()
             "a positive sliver derived from a zero-width clip was accepted");
     }
 
-    // Above the old quarter-cell cap threshold, a legal int-index edge can
-    // differ by one coordinate ulp between fused and separately-rounded
-    // evaluation. Both exact outcomes remain legitimate even when that ulp is
-    // wider than one quarter of a cell.
+    // A cell small beside its coordinate puts the fused and separately-rounded
+    // evaluations of a legal int-index edge more than a quarter of a cell
+    // apart. Both are still exact evaluations of the same catalog box, so both
+    // have to be accepted -- which is why the accepted set is the two
+    // alternatives and not an interval scaled to the cell.
     {
         auto metadata = dataset(2);
         metadata.finestLevel = 0;
@@ -618,7 +622,7 @@ int main()
         require(unfused.lower[0] != fused.lower[0]
                 && std::fabs(unfused.lower[0] - fused.lower[0])
                     > 0.25 * cellSize,
-            "the capped-regime fused/unfused fixture is vacuous");
+            "the wide-ulp fused/unfused fixture is vacuous");
         auto request = sliceRequest(2);
         request.maximumLevel = 0;
         request.visibleRegion = metadata.physicalDomain;
@@ -629,13 +633,14 @@ int main()
             answer.gridBoxes.push_back({0, box});
             requireAccepted([&] {
                 validateSessionViewResult(metadata, view, answer);
-            }, "a capped-regime fused/unfused grid box was rejected");
+            }, "a wide-ulp fused/unfused grid box was rejected");
         }
     }
 
     // Per-level identity is part of the result. A fine box one eighth of a
-    // coarse cell inside the coarse box is valid under its own tag, but the old
-    // quarter-cell aperture also accepted it when falsely tagged coarse.
+    // coarse cell inside the coarse box is valid under its own tag and matches
+    // nothing under the coarse one, so the level an answer names is the level
+    // it has to be matched against.
     {
         auto metadata = dataset(2);
         constexpr double origin = 1.0e14;
@@ -670,7 +675,9 @@ int main()
         }, "matches no box", "fine geometry falsely tagged coarse was accepted");
     }
 
-    // A far level-domain edge must not grant slack to a catalog box near zero.
+    // The search band comes from the catalog boxes' own fused/unfused width and
+    // from nothing else, so a level whose domain runs out to index 1e9 grants
+    // no slack at all to a box sitting at the origin.
     {
         auto metadata = dataset(2);
         metadata.finestLevel = 0;
@@ -698,13 +705,13 @@ int main()
         requireRejectedWith([&] {
             validateSessionViewResult(metadata, view, answer);
         }, "matches no box",
-            "a near-origin box used the far domain edge as tolerance");
+            "a near-origin box used the far domain edge as slack");
     }
 
     // A slab decomposition gives many boxes the same first coordinate. The
-    // full-key search must still reach every later y group, including mixed
-    // fused/unfused edges, without falling back to a linear scan from the first
-    // shared x edge for each answer.
+    // search descends coordinate by coordinate, so every later y group has to
+    // stay reachable behind that shared x edge, including boxes whose edges mix
+    // fused and separately-rounded evaluation.
     {
         auto metadata = dataset(2);
         constexpr double origin = -4.57724532306911e22;

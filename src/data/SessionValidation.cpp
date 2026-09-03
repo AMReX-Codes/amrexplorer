@@ -76,6 +76,58 @@ void requireSourceLevels(const std::vector<std::int16_t>& levels,
     }
 }
 
+bool withinTolerance(double left, double right, double tolerance) noexcept
+{
+    return left == right || std::fabs(left - right) <= tolerance;
+}
+
+// The expected boxes are sorted as lower[0..2], upper[0..2]. Recursively
+// narrow that lexicographic range one coordinate at a time instead of scanning
+// every box with the same x edge. A tolerance below half a cell leaves at most
+// one grid coordinate on either side of the answer; clipping can add the
+// viewport edge as one more exact value, so the search stays narrowly branched.
+double boxCoordinate(const RealBox& box, std::size_t coordinate) noexcept
+{
+    return coordinate < 3 ? box.lower[coordinate]
+                          : box.upper[coordinate - 3];
+}
+
+using BoxIterator = std::vector<RealBox>::const_iterator;
+
+bool matchesExpectedBox(BoxIterator first, BoxIterator last,
+    const RealBox& answer, const std::array<double, 3>& tolerance,
+    std::size_t coordinate = 0)
+{
+    const auto target = boxCoordinate(answer, coordinate);
+    const auto allowed = tolerance[coordinate % 3];
+    // Within this range all preceding coordinates are equal, so this
+    // coordinate is ordered. Skip values strictly below its tolerance band
+    // without forming target-allowed, which could overflow at a finite edge.
+    auto candidate = std::lower_bound(first, last, target,
+        [coordinate, allowed](const RealBox& box, double value) {
+            const auto entry = boxCoordinate(box, coordinate);
+            return entry < value
+                && !withinTolerance(entry, value, allowed);
+        });
+    while (candidate != last) {
+        const auto value = boxCoordinate(*candidate, coordinate);
+        if (!withinTolerance(value, target, allowed)) {
+            break;
+        }
+        const auto groupEnd = std::upper_bound(candidate, last, value,
+            [coordinate](double entry, const RealBox& box) {
+                return entry < boxCoordinate(box, coordinate);
+            });
+        if (coordinate == 5
+            || matchesExpectedBox(candidate, groupEnd, answer, tolerance,
+                coordinate + 1)) {
+            return true;
+        }
+        candidate = groupEnd;
+    }
+    return false;
+}
+
 } // namespace
 
 void validateSessionViewRequest(const DatasetMetadata& metadata,
@@ -364,23 +416,30 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
         }
         // Expected boxes per level, built once and reused: each catalog box of
         // that level, in physical space, clipped to the visible region on the
-        // plane axes -- exactly the geometry the query derives. The
+        // plane axes -- the geometry the query derives, up to the last-ulp
+        // rounding the match below tolerates rather than trusts. The
         // slice-intersection and non-degeneracy filters it also applies are
         // deliberately *not* mirrored, so this stays a superset: it can only
         // reject a box that corresponds to no catalog box at all, never one the
         // query legitimately chose to keep or drop.
-        std::vector<std::pair<int, std::vector<RealBox>>> expectedByLevel;
-        const auto expectedFor = [&](int level) -> const std::vector<RealBox>& {
+        struct ExpectedLevel {
+            int level = 0;
+            std::vector<RealBox> boxes;
+            std::array<double, 3> axisTolerance{};
+        };
+        std::vector<ExpectedLevel> expectedByLevel;
+        const auto expectedFor = [&](int level) -> const ExpectedLevel& {
             const auto known = std::find_if(expectedByLevel.begin(),
                 expectedByLevel.end(),
-                [level](const auto& entry) { return entry.first == level; });
+                [level](const auto& entry) { return entry.level == level; });
             if (known != expectedByLevel.end()) {
-                return known->second;
+                return *known;
             }
-            std::vector<RealBox> boxes;
+            ExpectedLevel built;
+            built.level = level;
             const auto& source
                 = metadata.levels[static_cast<std::size_t>(level)];
-            boxes.reserve(source.boxes.size());
+            built.boxes.reserve(source.boxes.size());
             for (const auto& indexBox : source.boxes) {
                 auto physical
                     = sampleBounds(source, indexBox, metadata.dimension);
@@ -392,16 +451,35 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
                     physical.upper[entry] = std::min(physical.upper[entry],
                         query.visibleRegion.upper[entry]);
                 }
-                boxes.push_back(physical);
+                built.boxes.push_back(physical);
             }
-            std::sort(boxes.begin(), boxes.end(),
+            std::sort(built.boxes.begin(), built.boxes.end(),
                 [](const RealBox& left, const RealBox& right) {
                     return left.lower.values < right.lower.values
                         || (left.lower.values == right.lower.values
                             && left.upper.values < right.upper.values);
                 });
-            expectedByLevel.emplace_back(level, std::move(boxes));
-            return expectedByLevel.back().second;
+            const auto bounds
+                = sampleBounds(source, source.domain, metadata.dimension);
+            for (int axis = 0; axis < metadata.dimension; ++axis) {
+                const auto entry = static_cast<std::size_t>(axis);
+                const auto scale = std::max(
+                    {std::fabs(bounds.lower[entry]),
+                        std::fabs(bounds.upper[entry]),
+                        std::fabs(source.indexOrigin[entry])});
+                // The server and client can evaluate
+                // origin + index*cellSize with different contraction and
+                // last-ulp rounding. Scale the allowance to those arithmetic
+                // terms, but never let it approach a distinct cell boundary:
+                // past that point a physical coordinate cannot prove which
+                // catalog box the peer named.
+                const auto rounding = 16.0
+                    * std::numeric_limits<double>::epsilon() * scale;
+                built.axisTolerance[entry] = std::min(
+                    rounding, 0.25 * source.cellSize[entry]);
+            }
+            expectedByLevel.push_back(std::move(built));
+            return expectedByLevel.back();
         };
         for (const auto& box : slice->gridBoxes) {
             // A grid box, unlike a sample, always comes from a real level:
@@ -416,15 +494,9 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
             requirePlaneRegion(box.physicalRegion, metadata.dimension,
                 query.normalDirection, "slice result grid box");
             const auto& expected = expectedFor(box.level);
-            const auto found = std::lower_bound(expected.begin(),
-                expected.end(), box.physicalRegion,
-                [](const RealBox& left, const RealBox& right) {
-                    return left.lower.values < right.lower.values
-                        || (left.lower.values == right.lower.values
-                            && left.upper.values < right.upper.values);
-                });
-            if (found == expected.end()
-                || !(*found == box.physicalRegion)) {
+            if (!matchesExpectedBox(expected.boxes.begin(),
+                    expected.boxes.end(), box.physicalRegion,
+                    expected.axisTolerance)) {
                 throw std::invalid_argument(
                     "slice result grid box matches no box in the catalog");
             }

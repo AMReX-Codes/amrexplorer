@@ -378,6 +378,51 @@ int main()
             validateSessionViewResult(metadata, view, invented);
         }, "a grid box matching no catalog box was accepted");
 
+        // The overlay a good peer sends: each catalog box of the level, in
+        // physical space and clipped to the window -- here the level's one
+        // box covers the window exactly. sampleBounds leaves the axis past
+        // the dimension at zero, the way the peer's own arithmetic does.
+        const auto& source = metadata.levels.back();
+        auto catalogBox = sampleBounds(
+            source, source.boxes.front(), metadata.dimension);
+        for (const auto axis :
+            planeAxes(metadata.dimension, request.normalDirection)) {
+            const auto entry = static_cast<std::size_t>(axis);
+            catalogBox.lower[entry] = std::max(catalogBox.lower[entry],
+                request.visibleRegion.lower[entry]);
+            catalogBox.upper[entry] = std::min(catalogBox.upper[entry],
+                request.visibleRegion.upper[entry]);
+        }
+        auto overlay = sliceResult(region);
+        overlay.gridBoxes.push_back({1, catalogBox});
+        requireAccepted([&] {
+            validateSessionViewResult(metadata, view, overlay);
+        }, "a grid box over the catalog box was rejected");
+
+        // The bounds are recomputed on this side of the wire, and the two
+        // evaluations may round differently -- a fused multiply-add on the
+        // producer moves a bound by its last ulp (#223). Agreement is a
+        // tolerance, not a bitwise match. Only the dimension's own axes are
+        // perturbed: the axes past it are zero filler on both sides, not
+        // arithmetic, and cannot disagree.
+        auto perturbed = sliceResult(region);
+        auto nudged = catalogBox;
+        for (auto* const corner : {&nudged.lower, &nudged.upper}) {
+            for (std::size_t axis = 0;
+                axis < static_cast<std::size_t>(metadata.dimension);
+                ++axis) {
+                auto& component = (*corner)[axis];
+                for (int step = 0; step < 2; ++step) {
+                    component = std::nextafter(component,
+                        std::numeric_limits<double>::infinity());
+                }
+            }
+        }
+        perturbed.gridBoxes.push_back({1, nudged});
+        requireAccepted([&] {
+            validateSessionViewResult(metadata, view, perturbed);
+        }, "a grid box off by ulps from the catalog box was rejected");
+
         if (dimension == 3) {
             // All three axes are compared, so the normal extent has to be the
             // catalog box's own rather than anything plausible.
@@ -395,6 +440,108 @@ int main()
         requireRejected([&] {
             validateSessionViewResult(metadata, view, lineResult(0));
         }, "a line result answered a slice request");
+    }
+
+    // The reported failure used coordinates around 1e22. Exercise the scale
+    // that makes independently contracted multiply-adds disagree, rather than
+    // proving the tolerance only around the fixture's small integers.
+    {
+        auto metadata = dataset(2);
+        constexpr double origin = -4.57724532306911e22;
+        constexpr double cellSize = 7.132980051857025e18;
+        for (auto& level : metadata.levels) {
+            level.domain = IntBox{Int3{{5000, 5000, 0}},
+                Int3{{6000, 6000, 0}}, Int3{{0, 0, 0}}};
+            level.boxes = {level.domain};
+            level.indexOrigin = Real3{{origin, origin, 0.0}};
+            level.cellSize = Real3{{cellSize, cellSize, 1.0}};
+        }
+        metadata.physicalDomain = sampleBounds(
+            metadata.levels.front(), metadata.levels.front().domain, 2);
+        auto request = sliceRequest(2);
+        request.visibleRegion = metadata.physicalDomain;
+        const ViewDataRequest view = request;
+        auto answer = sliceResult(request.visibleRegion);
+        auto box = sampleBounds(
+            metadata.levels.back(), metadata.levels.back().boxes.front(), 2);
+        for (auto* const corner : {&box.lower, &box.upper}) {
+            for (std::size_t axis = 0; axis < 2; ++axis) {
+                for (int step = 0; step < 2; ++step) {
+                    (*corner)[axis] = std::nextafter((*corner)[axis],
+                        std::numeric_limits<double>::infinity());
+                }
+            }
+        }
+        answer.gridBoxes.push_back({1, box});
+        requireAccepted([&] {
+            validateSessionViewResult(metadata, view, answer);
+        }, "large-coordinate last-ulp box rounding was rejected");
+    }
+
+    // Coordinate magnitude must not turn the rounding allowance into whole
+    // cells. At 1e16 the spacing between doubles is 2, so the uncapped
+    // 16*epsilon*scale tolerance accepted this one-cell translation.
+    {
+        auto metadata = dataset(2);
+        constexpr double origin = 1.0e16;
+        constexpr double cellSize = 2.0;
+        for (auto& level : metadata.levels) {
+            level.indexOrigin = Real3{{origin, origin, 0.0}};
+            level.cellSize = Real3{{cellSize, cellSize, 1.0}};
+        }
+        metadata.physicalDomain = sampleBounds(
+            metadata.levels.front(), metadata.levels.front().domain, 2);
+        auto request = sliceRequest(2);
+        request.visibleRegion = metadata.physicalDomain;
+        const ViewDataRequest view = request;
+        auto answer = sliceResult(request.visibleRegion);
+        auto shifted = metadata.physicalDomain;
+        for (std::size_t axis = 0; axis < 2; ++axis) {
+            shifted.lower[axis] += cellSize;
+            shifted.upper[axis] += cellSize;
+        }
+        answer.gridBoxes.push_back({1, shifted});
+        requireRejectedWith([&] {
+            validateSessionViewResult(metadata, view, answer);
+        }, "matches no box",
+            "a whole-cell-shifted box at large coordinates was accepted");
+    }
+
+    // A slab decomposition gives many boxes the same first coordinate. The
+    // full-key search must still reach every later y group without falling
+    // back to a linear scan from the first shared x edge for each answer.
+    {
+        auto metadata = dataset(2);
+        for (auto& level : metadata.levels) {
+            level.domain = IntBox{Int3{{0, 0, 0}},
+                Int3{{0, 63, 0}}, Int3{{0, 0, 0}}};
+            level.boxes.clear();
+            for (int y = 0; y < 64; ++y) {
+                level.boxes.push_back(IntBox{Int3{{0, y, 0}},
+                    Int3{{0, y, 0}}, Int3{{0, 0, 0}}});
+            }
+        }
+        metadata.physicalDomain = sampleBounds(
+            metadata.levels.front(), metadata.levels.front().domain, 2);
+        auto request = sliceRequest(2);
+        request.visibleRegion = metadata.physicalDomain;
+        const ViewDataRequest view = request;
+        auto answer = sliceResult(request.visibleRegion);
+        for (const auto& indexBox : metadata.levels.back().boxes) {
+            auto box = sampleBounds(metadata.levels.back(), indexBox, 2);
+            for (auto* const corner : {&box.lower, &box.upper}) {
+                for (std::size_t axis = 0; axis < 2; ++axis) {
+                    for (int step = 0; step < 2; ++step) {
+                        (*corner)[axis] = std::nextafter((*corner)[axis],
+                            std::numeric_limits<double>::infinity());
+                    }
+                }
+            }
+            answer.gridBoxes.push_back({1, box});
+        }
+        requireAccepted([&] {
+            validateSessionViewResult(metadata, view, answer);
+        }, "a later grid box sharing the first coordinate was rejected");
     }
 
     // Line results.

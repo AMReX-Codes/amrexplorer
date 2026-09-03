@@ -3,6 +3,7 @@
 #include <amrexplorer/core/Geometry.hpp>
 #include <amrexplorer/core/OrthoProjection.hpp>
 #include <amrexplorer/core/Request.hpp>
+#include <amrexplorer/core/ValueMapping.hpp>
 
 #include <array>
 #include <cstddef>
@@ -35,7 +36,20 @@ struct VolumeRange {
     double minimum = 0.0;
     double maximum = 1.0;
     bool logarithmic = false;
-    friend bool operator==(const VolumeRange&, const VolumeRange&) = default;
+    ColorScaleConfig scale;
+    constexpr VolumeRange() = default;
+    constexpr VolumeRange(double minimumValue, double maximumValue,
+        bool useLogarithmic, ColorScaleConfig scaleConfig = {})
+        : minimum(minimumValue), maximum(maximumValue),
+          logarithmic(useLogarithmic), scale(scaleConfig)
+    {
+    }
+    friend bool operator==(const VolumeRange& lhs, const VolumeRange& rhs)
+    {
+        return lhs.minimum == rhs.minimum && lhs.maximum == rhs.maximum
+            && effectiveColorScale(lhs.logarithmic, lhs.scale)
+                == effectiveColorScale(rhs.logarithmic, rhs.scale);
+    }
 };
 
 inline constexpr int maxVolumeOutputDimension = 4096;
@@ -107,6 +121,7 @@ struct VolumeRenderRequest {
     // ignored when `range` is set: the range carries its own mapping.
     std::optional<VolumeRange> range;
     bool logarithmic = false;
+    ColorScaleConfig scale;
     VolumeTransferFunction transfer;
     // Ray samples per voxel along the ray (the step is the mean distance a
     // view ray spends crossing one voxel divided by this).

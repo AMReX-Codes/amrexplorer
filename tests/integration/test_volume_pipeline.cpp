@@ -597,6 +597,14 @@ int main()
         require(user && !user->logarithmic && user->minimum == -3.0
                 && user->maximum == 5.0,
             "a non-positive User range did not fall back to linear");
+        const auto symlog = amrvis::resolveVolumeRange(dataset, field, 1,
+            amrvis::CompositionPolicy::FinestAvailable, amrvis::RangeMode::User,
+            std::pair{-3.0, 5.0},
+            {amrvis::ColorScale::SymLogarithmic, 0.25});
+        require(symlog && !symlog->logarithmic
+                && symlog->scale.scale == amrvis::ColorScale::SymLogarithmic
+                && symlog->scale.linearThreshold == 0.25,
+            "a symmetric-log User range did not preserve its mapping");
         const auto degenerate = amrvis::resolveVolumeRange(dataset, field, 1,
             amrvis::CompositionPolicy::FinestAvailable, amrvis::RangeMode::User,
             std::pair{2.0, 2.0}, false);

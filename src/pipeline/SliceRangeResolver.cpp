@@ -162,19 +162,35 @@ ResolvedRange resolveDisplayRange(
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const ScalarPlane& plane, StopToken cancellation)
 {
-    if (logarithmic) {
+    return resolveDisplayRange(dataset, field, maximumLevel, composition,
+        rangeMode, userRange,
+        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0},
+        plane, cancellation);
+}
+
+ResolvedRange resolveDisplayRange(
+    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
+    int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
+    const std::optional<std::pair<double, double>>& userRange,
+    ColorScaleConfig scale, const ScalarPlane& plane, StopToken cancellation)
+{
+    if (scale.scale == ColorScale::Logarithmic) {
         try {
             const auto [minimum, maximum] = resolveRange(dataset, field,
                 maximumLevel, composition, rangeMode, userRange, true, plane,
                 cancellation);
-            return {minimum, maximum, true};
+            return {minimum, maximum, true, scale};
         } catch (const LogarithmicRangeError&) {
             // Log is not viable for this range; fall back to linear below.
         }
     }
     const auto [minimum, maximum] = resolveRange(dataset, field, maximumLevel,
         composition, rangeMode, userRange, false, plane, cancellation);
-    return {minimum, maximum, false};
+    if (scale.scale == ColorScale::SymLogarithmic
+        && resolveValueRange(minimum, maximum, scale)) {
+        return {minimum, maximum, false, scale};
+    }
+    return {minimum, maximum, false, {ColorScale::Linear, scale.linearThreshold}};
 }
 
 } // namespace amrvis

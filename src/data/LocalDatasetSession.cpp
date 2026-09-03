@@ -52,6 +52,13 @@ std::optional<ValueRange> compositeMetadataRange(const DatasetMetadata& metadata
 VolumeRange visibleVolumeRange(const VolumeGrid& grid, bool logarithmic,
     StopToken cancellation)
 {
+    return visibleVolumeRange(grid,
+        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0}, cancellation);
+}
+
+VolumeRange visibleVolumeRange(const VolumeGrid& grid, ColorScaleConfig scale,
+    StopToken cancellation)
+{
     // One scan, and over every finite value rather than the positive ones.
     // Asking volumeGridRange for the positive extrema first would answer
     // "logarithmic is fine" for any field that merely *contains* positive
@@ -63,19 +70,21 @@ VolumeRange visibleVolumeRange(const VolumeGrid& grid, bool logarithmic,
     if (!extrema) {
         // Nothing finite to show. A logarithmic request still wants a
         // logarithmic axis, so the neutral range keeps the mapping.
-        return logarithmic ? VolumeRange{1.0, 10.0, true}
-                           : VolumeRange{0.0, 1.0, false};
+        return scale.scale == ColorScale::Logarithmic
+            ? VolumeRange{1.0, 10.0, true, scale}
+            : VolumeRange{0.0, 1.0, false, scale};
     }
-    if (logarithmic && extrema->first > 0.0) {
+    if (scale.scale == ColorScale::Logarithmic && extrema->first > 0.0) {
         const auto [minimum, maximum]
             = paddedIfDegenerate(extrema->first, extrema->second, true);
         if (minimum > 0.0 && minimum < maximum) {
-            return {minimum, maximum, true};
+            return {minimum, maximum, true, scale};
         }
     }
     const auto [minimum, maximum]
         = paddedIfDegenerate(extrema->first, extrema->second, false);
-    return {minimum, maximum, false};
+    if (scale.scale == ColorScale::Logarithmic) scale.scale = ColorScale::Linear;
+    return {minimum, maximum, false, scale};
 }
 
 std::size_t VolumeGridKeyHash::operator()(const VolumeGridKey& key) const noexcept
@@ -414,7 +423,8 @@ VolumeFrame LocalDatasetSession::renderVolume(const VolumeRenderRequest& request
         // answer from the same grid, so publishing last-writer-wins costs
         // nothing but a duplicated scan in a case that needs two misses on
         // one key at once.
-        const auto want = std::pair{key, request.logarithmic};
+        const auto requestedScale = effectiveColorScale(request.logarithmic, request.scale);
+        const auto want = std::pair{key, requestedScale};
         std::optional<VolumeRange> memo;
         {
             const std::scoped_lock lock(m_mutex);
@@ -423,7 +433,7 @@ VolumeFrame LocalDatasetSession::renderVolume(const VolumeRenderRequest& request
             }
         }
         if (!memo) {
-            memo = visibleVolumeRange(*grid, request.logarithmic, cancellation);
+            memo = visibleVolumeRange(*grid, requestedScale, cancellation);
             const std::scoped_lock lock(m_mutex);
             m_visibleRange = *memo;
             m_visibleRangeFor = want;

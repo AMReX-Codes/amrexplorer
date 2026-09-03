@@ -837,6 +837,12 @@ private:
             throw RemoteError(ErrorCode::UnsupportedProtocol,
                 "smooth volume sampling requires protocol 1.3");
         }
+        const auto usesSymLog = request.scale.scale == ColorScale::SymLogarithmic
+            || (request.range && request.range->scale.scale == ColorScale::SymLogarithmic);
+        if (usesSymLog && m_selectedMinorVersion < 5) {
+            throw RemoteError(ErrorCode::UnsupportedProtocol,
+                "symmetric-log volume scaling requires protocol 1.5");
+        }
         validateVolumeBound(request);
         // The server's own voxel cap applies on top of the client's budget.
         request.maximumVoxels = std::min<std::uint64_t>(

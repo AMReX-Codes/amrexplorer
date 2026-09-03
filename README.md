@@ -25,7 +25,7 @@ FAB and MultiFab data.
 - Plotfile-sequence and plane-sweep animation
 - Remote plotfiles and sequences: the client runs its server on the remote
   machine through ssh, no ports or tunnels involved
-- Multiple palettes, logarithmic and user-defined ranges, and PNG/FITS/MP4 export
+- Multiple palettes, logarithmic/symmetric-log and user-defined ranges, and PNG/FITS/MP4 export
 
 ## Documentation
 

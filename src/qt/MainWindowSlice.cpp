@@ -576,7 +576,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     if (rangeMode == RangeMode::User) {
         userRange = selection.userRange;
     }
-    const auto logarithmic = selection.logarithmic;
+    const auto scale = selection.scale;
     const auto palette = m_paletteController->palette();
     const auto displayMode = m_displayMode;
     // Each 3-D panel uses a different pair of vector components:
@@ -645,24 +645,24 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             displayPlane = state.plane,
             contourPlane = state.contourPlane,
             vectors = state.vectorSegments,
-            rangeMode, userRange, logarithmic, palette, displayMode,
+            rangeMode, userRange, scale, palette, displayMode,
             vectorUField, vectorVField, contourCount, rasterDirty,
             cancellation]() mutable {
             return refreshCachedSlice(dataset, request, std::move(displayPlane),
                 *contourPlane, std::move(vectors), rangeMode, userRange,
-                logarithmic, palette, displayMode, vectorUField, vectorVField,
+                scale, palette, displayMode, vectorUField, vectorVField,
                 contourCount, rasterDirty, cancellation);
         });
     } else {
         future = QtConcurrent::run(
-            [dataset, request, rangeMode, userRange, logarithmic, palette,
+            [dataset, request, rangeMode, userRange, scale, palette,
                 cancellation, displayMode, vectorUField, vectorVField,
                 contourCount]() mutable {
             // The pipeline owns the whole non-cached slice worker, including
             // the cache-pressure level fallback (see
             // cache-budget-exceeded-hard-fails-after-load).
             return executeSliceWithFallback(dataset, request, rangeMode,
-                userRange, logarithmic, palette, displayMode, vectorUField,
+                userRange, scale, palette, displayMode, vectorUField,
                 vectorVField, contourCount, cancellation);
         });
     }
@@ -1249,6 +1249,7 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     state.displayMinimum = display.minimum;
     state.displayMaximum = display.maximum;
     state.displayLogarithmic = display.logarithmic;
+    state.displayScale = display.scale;
     state.vectorSegments = std::move(display.vectors);
     if (display.slice.gridBoxesIncluded) {
         state.gridBoxes = std::move(display.slice.gridBoxes);
@@ -1516,6 +1517,7 @@ void MainWindow::syncVisibleRanges()
                     // panel's stored flag, and thus the color bar below, in
                     // agreement with the raster the sync just rendered.
                     state->displayLogarithmic = outcome.sync->logarithmic;
+                    state->displayScale = outcome.sync->scale;
                     if (update.contoursRecomputed) {
                         state->contourPolylines
                             = std::move(update.contourPolylines);
@@ -1543,10 +1545,12 @@ void MainWindow::syncVisibleRanges()
                 }
                 if (activeApplied && m_activeView->plane->width > 0) {
                     const auto fieldName = m_fieldSelector->currentText();
-                    const auto label = m_activeView->displayLogarithmic
-                        ? fieldName + tr(" (log)") : fieldName;
-                    m_colorBar->setLogarithmic(
-                        m_activeView->displayLogarithmic);
+                    const auto suffix = m_activeView->displayScale.scale
+                            == ColorScale::Logarithmic ? tr(" (log)")
+                        : m_activeView->displayScale.scale
+                            == ColorScale::SymLogarithmic ? tr(" (symlog)") : QString();
+                    const auto label = fieldName + suffix;
+                    m_colorBar->setScale(m_activeView->displayScale);
                     m_colorBar->setFieldRange(label, globalMin, globalMax);
                     m_range->showDisplayRange(globalMin, globalMax);
                     // The panel loop above wrote this range into every applied
@@ -1605,7 +1609,7 @@ void MainWindow::syncVisibleRanges()
     m_diagnosticsModel->adjustActivity(1);
     try {
         watcher->setFuture(QtConcurrent::run([cachedRange, snapshots,
-            logarithmic = m_range->logarithmic(),
+            scale = m_range->colorScale(),
             contourMode = isContourMode(m_displayMode),
             contourCount = m_contourCount, palette = m_paletteController->palette()] {
 #ifdef AMREXPLORER_QT_TEST_ACCESS
@@ -1623,7 +1627,7 @@ void MainWindow::syncVisibleRanges()
             }
             SyncOutcome outcome;
             outcome.sync = DisplayCoordinator::renderPanelsToSharedRange(
-                cachedRange, inputs, logarithmic, contourMode, contourCount,
+                cachedRange, inputs, scale, contourMode, contourCount,
                 palette);
             if (outcome.sync) {
                 for (std::size_t index = 0; index < inputs.size(); ++index) {
@@ -2060,6 +2064,7 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     {
         const auto selection = m_range->selection();
         spec.logarithmic = selection.logarithmic;
+        spec.scale = selection.scale;
         spec.rangeMode = selection.mode;
         spec.userRange = selection.userRange;
     }

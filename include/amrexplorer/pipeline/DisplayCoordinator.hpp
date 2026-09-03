@@ -112,6 +112,7 @@ public:
         // rejects a non-positive log minimum). Callers apply it to every panel
         // and to the shared color bar so all three agree with the raster.
         bool logarithmic = false;
+        ColorScaleConfig scale;
         std::vector<PanelSyncUpdate> panels;  // parallel to the input span
     };
 
@@ -126,6 +127,10 @@ public:
         const RangeKey& key, std::span<const PanelSyncInput> panels,
         bool logarithmic, bool contourMode, int contourCount,
         const Palette& palette) const;
+    [[nodiscard]] std::optional<SharedRangeSync> syncPanelsToSharedRange(
+        const RangeKey& key, std::span<const PanelSyncInput> panels,
+        ColorScaleConfig scale, bool contourMode, int contourCount,
+        const Palette& palette) const;
 
     // The pure, coordinator-state-free half of syncPanelsToSharedRange: takes
     // the already-resolved cached range (or nullopt to fall back to the
@@ -138,6 +143,10 @@ public:
     renderPanelsToSharedRange(
         std::optional<std::pair<double, double>> sharedRange,
         std::span<const PanelSyncInput> panels, bool logarithmic,
+        bool contourMode, int contourCount, const Palette& palette);
+    [[nodiscard]] static std::optional<SharedRangeSync> renderPanelsToSharedRange(
+        std::optional<std::pair<double, double>> sharedRange,
+        std::span<const PanelSyncInput> panels, ColorScaleConfig scale,
         bool contourMode, int contourCount, const Palette& palette);
 
     // True when the two planes map pixels to physical units at different

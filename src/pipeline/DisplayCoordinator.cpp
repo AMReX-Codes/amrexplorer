@@ -75,6 +75,9 @@ void DisplayCoordinator::realignArrivalToRange(SliceDisplayResult& result,
     std::pair<double, double> range, const Palette& palette,
     bool realignRasterAndContours)
 {
+    if (result.logarithmic && result.scale.scale == ColorScale::Linear) {
+        result.scale.scale = ColorScale::Logarithmic;
+    }
     result.minimum = range.first;
     result.maximum = range.second;
     // The reused full-domain range is a superset of this arrival's own range,
@@ -83,6 +86,9 @@ void DisplayCoordinator::realignArrivalToRange(SliceDisplayResult& result,
     // degrade to linear otherwise so renderScalarPlane does not reject the
     // non-positive minimum (see shared-log-range-render-throw-fails-load).
     result.logarithmic = result.logarithmic && range.first > 0.0;
+    if (result.scale.scale == ColorScale::Logarithmic && !result.logarithmic) {
+        result.scale.scale = ColorScale::Linear;
+    }
     if (!realignRasterAndContours) {
         return;
     }
@@ -91,7 +97,7 @@ void DisplayCoordinator::realignArrivalToRange(SliceDisplayResult& result,
             ScalarRenderSettings{
                 .minimum = result.minimum,
                 .maximum = result.maximum,
-                .logarithmic = result.logarithmic,
+                .scale = result.scale,
                 .palette = &palette
             });
     }
@@ -104,14 +110,36 @@ DisplayCoordinator::syncPanelsToSharedRange(
     bool logarithmic, bool contourMode, int contourCount,
     const Palette& palette) const
 {
+    return syncPanelsToSharedRange(key, panels,
+        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0},
+        contourMode, contourCount, palette);
+}
+
+std::optional<DisplayCoordinator::SharedRangeSync>
+DisplayCoordinator::syncPanelsToSharedRange(
+    const RangeKey& key, std::span<const PanelSyncInput> panels,
+    ColorScaleConfig scale, bool contourMode, int contourCount,
+    const Palette& palette) const
+{
     return renderPanelsToSharedRange(cachedFullDomainRange(key), panels,
-        logarithmic, contourMode, contourCount, palette);
+        scale, contourMode, contourCount, palette);
 }
 
 std::optional<DisplayCoordinator::SharedRangeSync>
 DisplayCoordinator::renderPanelsToSharedRange(
     std::optional<std::pair<double, double>> sharedRange,
     std::span<const PanelSyncInput> panels, bool logarithmic,
+    bool contourMode, int contourCount, const Palette& palette)
+{
+    return renderPanelsToSharedRange(std::move(sharedRange), panels,
+        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0},
+        contourMode, contourCount, palette);
+}
+
+std::optional<DisplayCoordinator::SharedRangeSync>
+DisplayCoordinator::renderPanelsToSharedRange(
+    std::optional<std::pair<double, double>> sharedRange,
+    std::span<const PanelSyncInput> panels, ColorScaleConfig scale,
     bool contourMode, int contourCount, const Palette& palette)
 {
     auto shared = std::move(sharedRange);
@@ -121,7 +149,7 @@ DisplayCoordinator::renderPanelsToSharedRange(
         for (const auto& panel : panels) {
             planes.push_back(panel.plane);
         }
-        shared = sharedVisibleRange(planes, logarithmic);
+        shared = sharedVisibleRange(planes, scale.scale == ColorScale::Logarithmic);
     }
     if (!shared) {
         return std::nullopt;
@@ -134,7 +162,11 @@ DisplayCoordinator::renderPanelsToSharedRange(
     // union that crosses zero, and renderScalarPlane rejects a non-positive
     // log minimum -- which threw and failed the whole load
     // (see shared-log-range-render-throw-fails-load).
-    sync.logarithmic = logarithmic && sync.range.first > 0.0;
+    sync.scale = scale;
+    if (sync.scale.scale == ColorScale::Logarithmic && !(sync.range.first > 0.0)) {
+        sync.scale.scale = ColorScale::Linear;
+    }
+    sync.logarithmic = sync.scale.scale == ColorScale::Logarithmic;
     sync.panels.resize(panels.size());
     for (std::size_t index = 0; index < panels.size(); ++index) {
         const auto& panel = panels[index];
@@ -150,14 +182,14 @@ DisplayCoordinator::renderPanelsToSharedRange(
             && panel.contourPlane->height > 0) {
             update.contourPolylines = recomputeContourPolylines(
                 *panel.contourPlane,
-                sync.range.first, sync.range.second, sync.logarithmic,
+                sync.range.first, sync.range.second, sync.scale,
                 contourCount, panel.outputSize[0], panel.outputSize[1]);
             update.contoursRecomputed = true;
         }
         update.image = renderScalarPlane(*panel.plane, ScalarRenderSettings{
             .minimum = sync.range.first,
             .maximum = sync.range.second,
-            .logarithmic = sync.logarithmic,
+            .scale = sync.scale,
             .palette = &palette
         });
     }

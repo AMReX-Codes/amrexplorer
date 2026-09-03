@@ -4,6 +4,7 @@
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/Statistics.hpp>
+#include <amrexplorer/core/ValueMapping.hpp>
 #include <amrexplorer/data/DatasetSession.hpp>
 
 #include <memory>
@@ -27,6 +28,7 @@ struct ResolvedRange {
     double minimum;
     double maximum;
     bool logarithmic;
+    ColorScaleConfig scale;
 };
 
 // paddedIfDegenerate, once declared here, now lives in core/Statistics.hpp
@@ -68,6 +70,12 @@ struct ResolvedRange {
     int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const ScalarPlane& plane, StopToken cancellation = {});
+[[nodiscard]] ResolvedRange resolveDisplayRange(
+    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
+    int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
+    const std::optional<std::pair<double, double>>& userRange,
+    ColorScaleConfig scale, const ScalarPlane& plane,
+    StopToken cancellation = {});
 
 // Like resolveRange, but if a logarithmic scale is requested and the range is
 // not strictly positive it falls back to a linear range and reports

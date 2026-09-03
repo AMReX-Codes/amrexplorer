@@ -132,8 +132,9 @@ bool clipToBox(const Ray& ray, const SlabAxes& axes, const RealBox& box,
 std::optional<int> transferEntryFor(double value, const VolumeRange& range,
     int entryCount) noexcept
 {
+    const auto scale = effectiveColorScale(range.logarithmic, range.scale);
     const auto resolved = resolveValueRange(
-        range.minimum, range.maximum, range.logarithmic);
+        range.minimum, range.maximum, scale);
     if (entryCount < 1 || !resolved || !mappableValue(value, *resolved)) {
         return std::nullopt;
     }
@@ -232,7 +233,8 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
         }
     }
     const auto mapping = resolveValueRange(
-        settings.range.minimum, settings.range.maximum, settings.range.logarithmic);
+        settings.range.minimum, settings.range.maximum,
+        effectiveColorScale(settings.range.logarithmic, settings.range.scale));
     if (!mapping) {
         throw std::invalid_argument("volume range must be finite with a finite span, ordered, and positive when logarithmic");
     }

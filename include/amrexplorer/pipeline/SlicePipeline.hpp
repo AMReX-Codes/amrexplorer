@@ -77,6 +77,7 @@ struct SliceDisplayResult {
     double minimum = 0.0;
     double maximum = 1.0;
     bool logarithmic = false;
+    ColorScaleConfig scale;
     DisplayMode mode = DisplayMode::Raster;
     std::uint32_t vectorUField = 0;
     std::uint32_t vectorVField = 0;
@@ -143,6 +144,7 @@ struct FrameSliceSpec {
     RangeMode rangeMode = RangeMode::File;
     std::optional<std::pair<double, double>> userRange;
     bool logarithmic = false;
+    ColorScaleConfig scale;
     Palette palette;
     std::uint32_t vectorUField = 0;
     std::uint32_t vectorVField = 0;
@@ -268,6 +270,10 @@ inline constexpr int maxSliceOutputDimension = maxViewOutputDimension;
     RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, StopToken cancellation);
+[[nodiscard]] SliceDisplayResult executeSlice(
+    const std::shared_ptr<DatasetSession>& dataset, const SliceRequest& request,
+    RangeMode rangeMode, const std::optional<std::pair<double, double>>& userRange,
+    ColorScaleConfig scale, const Palette& palette, StopToken cancellation);
 
 // Vector mode queries the U- and V-component planes independently and
 // derives arrow glyphs from them. Both slices share the raster request's
@@ -291,6 +297,12 @@ void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField, int contourCount,
     StopToken cancellation);
+[[nodiscard]] SliceDisplayResult executeSliceWithFallback(
+    const std::shared_ptr<DatasetSession>& dataset, SliceRequest request,
+    RangeMode rangeMode, const std::optional<std::pair<double, double>>& userRange,
+    ColorScaleConfig scale, const Palette& palette, DisplayMode displayMode,
+    std::uint32_t vectorUField, std::uint32_t vectorVField, int contourCount,
+    StopToken cancellation);
 
 // Extracts contour polylines for the request at data resolution and maps
 // them to display-plane pixel space; caches the contour plane on the result so
@@ -298,6 +310,10 @@ void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
 void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request, int contourCount, double minimum,
     double maximum, bool logarithmic, StopToken cancellation,
+    SliceDisplayResult& result);
+void appendContours(const std::shared_ptr<DatasetSession>& dataset,
+    const SliceRequest& request, int contourCount, double minimum,
+    double maximum, ColorScaleConfig scale, StopToken cancellation,
     SliceDisplayResult& result);
 
 // Re-render-from-cache: only palette/log/range/contour-count cosmetics
@@ -317,6 +333,14 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField,
     int contourCount, bool rasterDirty, StopToken cancellation = {});
+[[nodiscard]] SliceDisplayResult refreshCachedSlice(
+    const std::shared_ptr<DatasetSession>& dataset, const SliceRequest& request,
+    std::shared_ptr<const ScalarPlane> displayPlanePtr,
+    ScalarPlane contourPlane, std::vector<VectorSegment> vectors,
+    RangeMode rangeMode, const std::optional<std::pair<double, double>>& userRange,
+    ColorScaleConfig scale, const Palette& palette, DisplayMode displayMode,
+    std::uint32_t vectorUField, std::uint32_t vectorVField,
+    int contourCount, bool rasterDirty, StopToken cancellation = {});
 
 // Re-extract contour polylines from an already-populated contour plane after
 // the display range is replaced downstream of appendContours/refreshCachedSlice
@@ -329,6 +353,9 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     const ScalarPlane& plane, double minimum,
     double maximum, bool logarithmic, int contourCount,
     int displayWidth, int displayHeight);
+[[nodiscard]] std::vector<ContourPolyline> recomputeContourPolylines(
+    const ScalarPlane& plane, double minimum, double maximum,
+    ColorScaleConfig scale, int contourCount, int displayWidth, int displayHeight);
 
 // SliceDisplayResult overload: regenerate the polylines to match the result's
 // current (possibly replaced) minimum/maximum. No-op outside contour modes.

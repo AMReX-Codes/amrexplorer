@@ -136,6 +136,20 @@ SamplingPolicy fromWireSampling(fb::SamplingPolicy value)
     }
 }
 
+fb::ColorScale toWireColorScale(ColorScale value)
+{
+    return static_cast<fb::ColorScale>(static_cast<std::uint8_t>(value));
+}
+
+ColorScale fromWireColorScale(fb::ColorScale value)
+{
+    const auto raw = static_cast<std::uint8_t>(value);
+    if (raw > static_cast<std::uint8_t>(ColorScale::SymLogarithmic)) {
+        throw std::invalid_argument("unknown wire color scale");
+    }
+    return static_cast<ColorScale>(raw);
+}
+
 fb::CompositionPolicy toWireComposition(CompositionPolicy value)
 {
     switch (value) {
@@ -1064,6 +1078,14 @@ fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value)
     wire.maximum = value.range ? value.range->maximum : 0.0;
     wire.range_logarithmic = value.range ? value.range->logarithmic : false;
     wire.visible_logarithmic = value.logarithmic;
+    const auto rangeScale = value.range
+        ? effectiveColorScale(value.range->logarithmic, value.range->scale)
+        : ColorScaleConfig{};
+    const auto visibleScale = effectiveColorScale(value.logarithmic, value.scale);
+    wire.range_scale = toWireColorScale(rangeScale.scale);
+    wire.visible_scale = toWireColorScale(visibleScale.scale);
+    wire.range_linear_threshold = rangeScale.linearThreshold;
+    wire.visible_linear_threshold = visibleScale.linearThreshold;
     wire.transfer_colors = value.transfer.colors;
     wire.transfer_opacities = value.transfer.opacities;
     wire.samples_per_voxel = value.samplesPerVoxel;
@@ -1099,10 +1121,21 @@ VolumeRenderRequest fromWire(const fb::RenderedFrameRequestT& value)
     result.camera = {value.azimuth, value.elevation, value.zoom};
     result.outputSize = {value.width, value.height};
     if (value.has_range) {
-        result.range = VolumeRange{
-            value.minimum, value.maximum, value.range_logarithmic};
+        auto scale = ColorScaleConfig{fromWireColorScale(value.range_scale),
+            value.range_linear_threshold};
+        if (scale.scale == ColorScale::Linear && value.range_logarithmic)
+            scale.scale = ColorScale::Logarithmic;
+        result.range = VolumeRange{value.minimum, value.maximum,
+            scale.scale == ColorScale::Logarithmic,
+            scale.scale == ColorScale::SymLogarithmic ? scale : ColorScaleConfig{}};
     }
-    result.logarithmic = value.visible_logarithmic;
+    auto visibleScale = ColorScaleConfig{fromWireColorScale(value.visible_scale),
+        value.visible_linear_threshold};
+    if (visibleScale.scale == ColorScale::Linear && value.visible_logarithmic)
+        visibleScale.scale = ColorScale::Logarithmic;
+    result.logarithmic = visibleScale.scale == ColorScale::Logarithmic;
+    result.scale = visibleScale.scale == ColorScale::SymLogarithmic
+        ? visibleScale : ColorScaleConfig{};
     result.transfer.colors = value.transfer_colors;
     result.transfer.opacities = value.transfer_opacities;
     result.samplesPerVoxel = value.samples_per_voxel;
@@ -1124,6 +1157,10 @@ fb::RenderedFrameResponseT toWire(
     wire.used_minimum = value.usedRange.minimum;
     wire.used_maximum = value.usedRange.maximum;
     wire.used_logarithmic = value.usedRange.logarithmic;
+    const auto usedScale = effectiveColorScale(
+        value.usedRange.logarithmic, value.usedRange.scale);
+    wire.used_scale = toWireColorScale(usedScale.scale);
+    wire.used_linear_threshold = usedScale.linearThreshold;
     wire.grid_dims.assign(value.metrics.gridDims.begin(), value.metrics.gridDims.end());
     wire.covered_voxels = value.metrics.coveredVoxels;
     wire.sampled_maximum_level = value.metrics.sampledMaximumLevel;
@@ -1160,7 +1197,13 @@ VolumeFrame fromWire(const fb::RenderedFrameResponseT& value)
     result.width = value.width;
     result.height = value.height;
     result.pixels = value.pixels;
-    result.usedRange = {value.used_minimum, value.used_maximum, value.used_logarithmic};
+    auto usedScale = ColorScaleConfig{fromWireColorScale(value.used_scale),
+        value.used_linear_threshold};
+    if (usedScale.scale == ColorScale::Linear && value.used_logarithmic)
+        usedScale.scale = ColorScale::Logarithmic;
+    result.usedRange = {value.used_minimum, value.used_maximum,
+        usedScale.scale == ColorScale::Logarithmic,
+        usedScale.scale == ColorScale::SymLogarithmic ? usedScale : ColorScaleConfig{}};
     result.metrics.gridDims = {value.grid_dims[0], value.grid_dims[1], value.grid_dims[2]};
     result.metrics.coveredVoxels = value.covered_voxels;
     result.metrics.sampledMaximumLevel = value.sampled_maximum_level;

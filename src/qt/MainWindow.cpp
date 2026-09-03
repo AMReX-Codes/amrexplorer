@@ -1025,11 +1025,13 @@ void MainWindow::setActiveView(PlaneViewState& state)
 void MainWindow::syncActiveViewColorControls(const PlaneViewState& state)
 {
     // The color scale and range boxes track the active view.
-    m_colorBar->setLogarithmic(state.displayLogarithmic);
-    m_colorBar->setFieldRange(state.displayLogarithmic
-        ? state.fieldName + tr(" (log)") : state.fieldName,
+    m_colorBar->setScale(state.displayScale);
+    const auto suffix = state.displayScale.scale == ColorScale::Logarithmic
+        ? tr(" (log)") : state.displayScale.scale == ColorScale::SymLogarithmic
+            ? tr(" (symlog)") : QString();
+    m_colorBar->setFieldRange(state.fieldName + suffix,
         state.displayMinimum, state.displayMaximum);
-    m_range->showLogarithmic(state.displayLogarithmic);
+    m_range->showColorScale(state.displayScale);
     if (m_range->mode() != RangeMode::User) {
         m_range->showDisplayRange(state.displayMinimum, state.displayMaximum);
     }

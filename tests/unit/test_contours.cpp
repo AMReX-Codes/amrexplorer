@@ -494,5 +494,9 @@ int main()
         }
     }
 
+    const auto symlog = amrvis::contourValues(-100.0, 100.0, 5,
+        {amrvis::ColorScale::SymLogarithmic, 1.0});
+    require(symlog.size() == 5 && std::abs(symlog[2]) < 1.0e-14,
+        "symmetric-log contours did not retain zero");
     return 0;
 }

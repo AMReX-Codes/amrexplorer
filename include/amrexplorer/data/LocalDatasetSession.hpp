@@ -47,6 +47,8 @@ struct VolumeGridKeyHash {
 // ReadCancelled when the token stops.
 [[nodiscard]] VolumeRange visibleVolumeRange(
     const VolumeGrid& grid, bool logarithmic, StopToken cancellation = {});
+[[nodiscard]] VolumeRange visibleVolumeRange(
+    const VolumeGrid& grid, ColorScaleConfig scale, StopToken cancellation = {});
 
 class LocalDatasetSession final : public DatasetSession {
 public:
@@ -170,7 +172,7 @@ private:
     // and asks the same question of it -- would otherwise rescan the whole
     // grid before each cast. One entry is enough: the interactive case is the
     // same key and mapping frame after frame.
-    std::optional<std::pair<VolumeGridKey, bool>> m_visibleRangeFor;
+    std::optional<std::pair<VolumeGridKey, ColorScaleConfig>> m_visibleRangeFor;
     VolumeRange m_visibleRange;
 };
 

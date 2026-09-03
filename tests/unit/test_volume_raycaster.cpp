@@ -397,6 +397,12 @@ int main()
                 && !amrvis::transferEntryFor(0.0, logarithmic, 253).has_value()
                 && !amrvis::transferEntryFor(-3.0, logarithmic, 253).has_value(),
             "the logarithmic mapping is wrong");
+        const amrvis::VolumeRange symlog{-100.0, 100.0, false,
+            {amrvis::ColorScale::SymLogarithmic, 1.0}};
+        require(amrvis::transferEntryFor(0.0, symlog, 253) == 126
+                && amrvis::transferEntryFor(-100.0, symlog, 253) == 0
+                && amrvis::transferEntryFor(100.0, symlog, 253) == 252,
+            "the symmetric-log mapping is wrong");
         require(!amrvis::transferEntryFor(
                     std::numeric_limits<double>::quiet_NaN(), linear, 253).has_value()
                 && !amrvis::transferEntryFor(

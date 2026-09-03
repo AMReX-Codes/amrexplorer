@@ -55,6 +55,8 @@ struct Widgets {
     amrvis::qt::ScientificDoubleSpinBox* minimum = nullptr;
     amrvis::qt::ScientificDoubleSpinBox* maximum = nullptr;
     QCheckBox* logarithmic = nullptr;
+    QCheckBox* symlog = nullptr;
+    amrvis::qt::ScientificDoubleSpinBox* linearThreshold = nullptr;
 };
 
 Widgets widgetsOf(QToolBar& toolbar)
@@ -64,13 +66,16 @@ Widgets widgetsOf(QToolBar& toolbar)
     // ScientificDoubleSpinBox has no Q_OBJECT; find the QDoubleSpinBoxes and
     // downcast (there are exactly the two).
     const auto boxes = toolbar.findChildren<QDoubleSpinBox*>();
-    if (boxes.size() == 2) {
+    if (boxes.size() >= 2) {
         widgets.minimum
             = dynamic_cast<amrvis::qt::ScientificDoubleSpinBox*>(boxes[0]);
         widgets.maximum
             = dynamic_cast<amrvis::qt::ScientificDoubleSpinBox*>(boxes[1]);
     }
     widgets.logarithmic = toolbar.findChild<QCheckBox*>();
+    widgets.symlog = toolbar.findChild<QCheckBox*>(QStringLiteral("symmetricLogarithmicScale"));
+    widgets.linearThreshold = dynamic_cast<amrvis::qt::ScientificDoubleSpinBox*>(
+        toolbar.findChild<QDoubleSpinBox*>(QStringLiteral("symlogLinearThreshold")));
     return widgets;
 }
 
@@ -98,7 +103,8 @@ int main(int argc, char* argv[])
         controller.createToolbarWidgets(&toolbar);
         const auto widgets = widgetsOf(toolbar);
         require(widgets.mode != nullptr && widgets.minimum != nullptr
-                && widgets.maximum != nullptr && widgets.logarithmic != nullptr,
+                && widgets.maximum != nullptr && widgets.logarithmic != nullptr
+                && widgets.symlog != nullptr && widgets.linearThreshold != nullptr,
             "the toolbar widgets were not created");
         require(widgets.mode->objectName() == QStringLiteral("rangeModeSelector")
                 && widgets.mode->count() == 4,
@@ -133,6 +139,14 @@ int main(int argc, char* argv[])
         require(observed.logarithmic == 1 && controller.logarithmic()
                 && controller.selection().logarithmic,
             "Log was not announced");
+        widgets.symlog->setChecked(true);
+        require(widgets.linearThreshold->value() == 0.01,
+            "Symlog did not choose a range-relative initial threshold");
+        widgets.linearThreshold->setValue(0.25);
+        require(controller.colorScale().scale == amrvis::ColorScale::SymLogarithmic
+                && controller.colorScale().linearThreshold == 0.25
+                && !widgets.logarithmic->isChecked(),
+            "Symlog was not selected exclusively with its threshold");
         selectMode(*widgets.mode, RangeMode::Visible);
         require(observed.mode == 2 && !widgets.minimum->isEnabled()
                 && !controller.selection().userRange,
@@ -141,8 +155,34 @@ int main(int argc, char* argv[])
         require(!widgets.mode->isEnabled() && !widgets.logarithmic->isEnabled(),
             "un-readiness left the controls enabled");
         require(observed.mode == 2 && observed.userRange == 1
-                && observed.logarithmic == 1,
+                && observed.logarithmic == 3,
             "readiness changes announced something");
+    }
+
+    // Symlog's first threshold is relative to the field's displayed scale,
+    // and an explicit edit is restored when returning to that field.
+    {
+        QToolBar toolbar;
+        RangeController controller;
+        controller.createToolbarWidgets(&toolbar);
+        controller.setControlsReady(true);
+        controller.setTrackedField(QStringLiteral("density"));
+        const auto widgets = widgetsOf(toolbar);
+        controller.showDisplayRange(-3.0e-8, 7.0e-8);
+        widgets.symlog->setChecked(true);
+        require(widgets.linearThreshold->value() == 1.0e-10,
+            "a sub-unit field kept the fixed Symlog threshold");
+        widgets.linearThreshold->setValue(2.0e-11);
+
+        controller.switchField(QStringLiteral("temperature"));
+        controller.showDisplayRange(-3000.0, 8000.0);
+        widgets.symlog->setChecked(false);
+        widgets.symlog->setChecked(true);
+        require(widgets.linearThreshold->value() == 10.0,
+            "a newly selected field did not get its own Symlog threshold");
+        controller.switchField(QStringLiteral("density"));
+        require(widgets.linearThreshold->value() == 2.0e-11,
+            "a field's edited Symlog threshold was not restored");
     }
 
     // Blocked writes: setSelection, showDisplayRange, showLogarithmic emit

@@ -99,7 +99,8 @@ void MainWindow::configureContourSyncForTest(
     m_slicePosition3d = slicePositions;
     // Set range/log through the controller (requestSlice reads it) without
     // signals, so only the single scheduleSliceRequest below re-slices.
-    m_range->setSelection({RangeMode::Visible, std::nullopt, logarithmic});
+    m_range->setSelection({RangeMode::Visible, std::nullopt, logarithmic,
+        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0}});
     m_displayMode = DisplayMode::RasterContours;
     m_contourCount = count;
     scheduleSliceRequest(false);
@@ -131,8 +132,8 @@ void MainWindow::enableVisibleRasterForTest()
     if (!m_dataset) {
         return;
     }
-    m_range->setSelection(
-        {RangeMode::Visible, std::nullopt, m_range->logarithmic()});
+    m_range->setSelection({RangeMode::Visible, std::nullopt,
+        m_range->logarithmic(), m_range->colorScale()});
     m_displayMode = DisplayMode::Raster;
     scheduleSliceRequest(false);
 }

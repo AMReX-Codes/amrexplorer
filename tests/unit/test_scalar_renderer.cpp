@@ -299,5 +299,18 @@ int main()
             "the range midpoint did not get the midpoint slot");
     }
 
+    {
+        const amrvis::ColorScaleConfig scale{amrvis::ColorScale::SymLogarithmic, 1.0};
+        const auto range = amrvis::resolveValueRange(-100.0, 100.0, scale);
+        require(range.has_value(), "a valid symmetric-log range was rejected");
+        require(amrvis::valueSlot(0.0, *range, 253) == 126,
+            "zero did not map to the palette midpoint");
+        for (const double value : {-100.0, -1.0, 0.0, 1.0, 100.0}) {
+            const auto roundTrip = amrvis::inverseTransformedValue(
+                amrvis::transformedValue(value, scale), scale);
+            require(std::abs(roundTrip - value) <= 1.0e-12 * std::max(1.0, std::abs(value)),
+                "the symmetric-log transform did not invert");
+        }
+    }
     return 0;
 }

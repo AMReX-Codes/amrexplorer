@@ -523,6 +523,7 @@ private:
         double displayMinimum = 0.0;
         double displayMaximum = 1.0;
         bool displayLogarithmic = false;
+        ColorScaleConfig displayScale;
         std::vector<VectorSegment> vectorSegments;
         std::vector<SliceGridBox> gridBoxes;
         // The Dataset window cell this view is marking, held so showSlice can

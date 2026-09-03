@@ -563,7 +563,7 @@ void VolumeController::startRender()
     // combo reads "Level 0 only" while the plane came from a finest-available
     // request, so it never matches again.
     const VolumeRangeChoice rangeChoice{rangeSelection.mode,
-        rangeSelection.userRange, rangeSelection.logarithmic};
+        rangeSelection.userRange, rangeSelection.logarithmic, rangeSelection.scale};
     watcher->setFuture(QtConcurrent::run(
         [dataset, request = std::move(request), rangeChoice,
             cancellation]() mutable {
@@ -601,7 +601,8 @@ QString VolumeController::describe(
         .arg(result.request.maximumLevel)
         .arg(range.minimum)
         .arg(range.maximum)
-        .arg(range.logarithmic ? tr(" log") : QString())
+        .arg(range.scale.scale == ColorScale::SymLogarithmic ? tr(" symlog")
+            : range.logarithmic ? tr(" log") : QString())
         .arg(frame.metrics.gridDims[0])
         .arg(frame.metrics.gridDims[1])
         .arg(frame.metrics.gridDims[2])

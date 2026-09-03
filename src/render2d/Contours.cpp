@@ -18,6 +18,13 @@ namespace amrvis {
 std::vector<double> contourValues(
     double minimum, double maximum, int count, bool logarithmic)
 {
+    return contourValues(minimum, maximum, count,
+        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0});
+}
+
+std::vector<double> contourValues(double minimum, double maximum, int count,
+    ColorScaleConfig scale)
+{
     if (count < 1) {
         throw std::invalid_argument("contour count must be positive");
     }
@@ -29,18 +36,27 @@ std::vector<double> contourValues(
         throw std::invalid_argument(
             "contour range must be finite with a finite span");
     }
-    if (logarithmic && !(minimum > 0.0)) {
+    if (scale.scale == ColorScale::Logarithmic && !(minimum > 0.0)) {
         throw std::invalid_argument("logarithmic contour range must be positive");
     }
+    if (scale.scale == ColorScale::SymLogarithmic
+        && !(scale.linearThreshold > 0.0 && std::isfinite(scale.linearThreshold))) {
+        throw std::invalid_argument(
+            "symmetric-log contour threshold must be finite and positive");
+    }
     std::vector<double> values(static_cast<std::size_t>(count));
-    const double rangeMinimum = logarithmic ? std::log(minimum) : minimum;
-    const double rangeMaximum = logarithmic ? std::log(maximum) : maximum;
+    const double rangeMinimum = transformedValue(minimum, scale);
+    const double rangeMaximum = transformedValue(maximum, scale);
     const double span = rangeMaximum - rangeMinimum;
+    if (!(span > 0.0) || !std::isfinite(span)) {
+        throw std::invalid_argument(
+            "contour range is too narrow after applying its color scale");
+    }
     for (int i = 0; i < count; ++i) {
         const auto value = rangeMinimum
             + (0.5 + static_cast<double>(i)) / count * span;
         values[static_cast<std::size_t>(i)] =
-            logarithmic ? std::exp(value) : value;
+            inverseTransformedValue(value, scale);
     }
     return values;
 }

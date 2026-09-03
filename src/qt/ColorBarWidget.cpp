@@ -26,18 +26,26 @@ constexpr int labelCount = 8;
 
 // Value at a given label fraction (0 = top = max, 1 = bottom = min), honoring
 // log spacing so the labels match the drawn gradient.
-double tickValue(double minimum, double maximum, bool logarithmic, double fraction)
+double tickValue(double minimum, double maximum, ColorScaleConfig scale,
+    double fraction)
 {
-    return logarithmic
-        ? minimum * std::pow(maximum / minimum, 1.0 - fraction)
-        : maximum + fraction * (minimum - maximum);
+    if (scale.scale == ColorScale::Linear) {
+        return maximum + fraction * (minimum - maximum);
+    }
+    if (scale.scale == ColorScale::Logarithmic) {
+        return minimum * std::pow(maximum / minimum, 1.0 - fraction);
+    }
+    const auto range = resolveValueRange(minimum, maximum, scale);
+    if (!range) return maximum + fraction * (minimum - maximum);
+    return inverseTransformedValue(
+        range->minimum + (1.0 - fraction) * range->span, scale);
 }
 
 // Pixel width of the widest tick label for the format/range. Because it
 // measures the actual formatted strings, exponent forms (from %e / %g) are
 // included at their full width.
 int maxTickLabelWidth(const QFontMetrics& fm, double minimum, double maximum,
-    bool logarithmic, const QString& format)
+    ColorScaleConfig scale, const QString& format)
 {
     int maxWidth = 0;
     for (int label = 0; label < labelCount; ++label) {
@@ -45,7 +53,7 @@ int maxTickLabelWidth(const QFontMetrics& fm, double minimum, double maximum,
             / static_cast<double>(labelCount - 1);
         maxWidth = std::max(maxWidth,
             fm.horizontalAdvance(formatNumber(
-                tickValue(minimum, maximum, logarithmic, fraction), format)));
+                tickValue(minimum, maximum, scale, fraction), format)));
     }
     return maxWidth;
 }
@@ -89,7 +97,12 @@ void ColorBarWidget::setNumberFormat(QString format)
 
 void ColorBarWidget::setLogarithmic(bool logarithmic)
 {
-    m_logarithmic = logarithmic;
+    setScale({logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0});
+}
+
+void ColorBarWidget::setScale(ColorScaleConfig scale)
+{
+    m_scale = scale;
     applyPreferredWidth();
     update();
 }
@@ -151,7 +164,7 @@ void ColorBarWidget::paintBar(QPainter* painter, const QRect& target) const
         // In log mode the labels must be geometrically spaced to match the
         // gradient: the color at vertical position `fraction` (from the top)
         // corresponds to min*(max/min)^(1-fraction).
-        const auto value = tickValue(m_minimum, m_maximum, m_logarithmic, fraction);
+        const auto value = tickValue(m_minimum, m_maximum, m_scale, fraction);
         const auto center = bar.top()
             + static_cast<int>(std::lround(fraction * static_cast<double>(rows)));
         const auto top = std::clamp(center - labelHeight / 2, bar.top(),
@@ -176,7 +189,7 @@ int ColorBarWidget::preferredWidth() const
     int labelWidth = 0;
     if (m_hasRange) {
         labelWidth = maxTickLabelWidth(
-            fm, m_minimum, m_maximum, m_logarithmic, m_numberFormat);
+            fm, m_minimum, m_maximum, m_scale, m_numberFormat);
     }
     // The default %g format tops out at 13 characters (e.g. "-1.23456e-308"),
     // so reserving that width keeps the panel stable across ranges while still

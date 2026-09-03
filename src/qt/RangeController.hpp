@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
+#include <amrexplorer/core/ValueMapping.hpp>
 
 #include <QHash>
 #include <QObject>
@@ -35,6 +36,15 @@ public:
         // The User min/max, present when mode is User.
         std::optional<std::pair<double, double>> userRange;
         bool logarithmic = false;
+        ColorScaleConfig scale;
+        Selection() = default;
+        Selection(RangeMode selectedMode,
+            std::optional<std::pair<double, double>> selectedUserRange,
+            bool useLogarithmic, ColorScaleConfig scaleConfig = {})
+            : mode(selectedMode), userRange(std::move(selectedUserRange)),
+              logarithmic(useLogarithmic), scale(scaleConfig)
+        {
+        }
     };
     // Which metadata-backed modes the current field/level can offer.
     struct Availability {
@@ -52,6 +62,7 @@ public:
     [[nodiscard]] Selection selection() const;
     [[nodiscard]] RangeMode mode() const;
     [[nodiscard]] bool logarithmic() const;
+    [[nodiscard]] ColorScaleConfig colorScale() const;
 
     // Blocked writes: none of these emits a change signal.
     // The whole selection, as a restore does; the min/max are written only
@@ -62,6 +73,7 @@ public:
     // a User range must be left alone).
     void showDisplayRange(double minimum, double maximum);
     void showLogarithmic(bool logarithmic);
+    void showColorScale(ColorScaleConfig scale);
     // Whether a dataset is open: mode and Log enabled iff ready, min/max iff
     // ready and the mode is User.
     void setControlsReady(bool ready);
@@ -95,8 +107,8 @@ public:
         const Availability& availability, const QString& field);
 
 signals:
-    // A user's edit of the mode, of a User bound, or of Log. Blocked writes
-    // emit none of these.
+    // A user's edit of the mode, of a User bound, or of the color scale.
+    // Blocked writes emit none of these.
     void modeChanged();
     void userRangeChanged();
     void logarithmicChanged();
@@ -116,8 +128,11 @@ private:
     ScientificDoubleSpinBox* m_minimum = nullptr;
     ScientificDoubleSpinBox* m_maximum = nullptr;
     QCheckBox* m_logarithmic = nullptr;
+    QCheckBox* m_symmetricLogarithmic = nullptr;
+    ScientificDoubleSpinBox* m_linearThreshold = nullptr;
     bool m_controlsReady = false;
     QHash<QString, FieldRange> m_fieldRanges;
+    QHash<QString, double> m_symlogThresholds;
     QString m_trackedField;
 };
 

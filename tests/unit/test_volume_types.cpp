@@ -130,6 +130,10 @@ int main()
         require(rejected(request), "a NaN range was accepted");
         request.range = amrvis::VolumeRange{-1.0, 2.0, true};
         require(rejected(request), "a non-positive logarithmic range was accepted");
+        request.range = amrvis::VolumeRange{-1.0, 2.0, false,
+            {amrvis::ColorScale::SymLogarithmic, 0.0}};
+        require(rejected(request),
+            "a symmetric-log range with a zero threshold was accepted");
         request.range = amrvis::VolumeRange{
             -std::numeric_limits<double>::max(),
             std::numeric_limits<double>::max(), false};

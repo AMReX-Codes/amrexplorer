@@ -301,6 +301,10 @@ public:
     {
         return m_selectedMinorVersion >= 4;
     }
+    [[nodiscard]] bool supportsSymmetricLogScale() const noexcept
+    {
+        return m_selectedMinorVersion >= 5;
+    }
 
     VolumeFrame renderVolume(
         const VolumeRenderRequest& request, StopToken cancellation)
@@ -327,6 +331,11 @@ public:
         if (request.sampling == SamplingPolicy::Linear
             && !supportsVolumeSampling()) {
             throw std::runtime_error(volumeSamplingUnsupportedMessage);
+        }
+        const auto usesSymLog = request.scale.scale == ColorScale::SymLogarithmic
+            || (request.range && request.range->scale.scale == ColorScale::SymLogarithmic);
+        if (usesSymLog && !supportsSymmetricLogScale()) {
+            throw std::runtime_error(symmetricLogUnsupportedMessage);
         }
         // Indefinite: the first render of a field samples the plotfile,
         // which can outlast the request timeout; the token still cancels it.
@@ -821,6 +830,10 @@ bool Connection::supportsVolumeSampling() const noexcept
 bool Connection::supportsDerivedFields() const noexcept
 {
     return m_impl->supportsDerivedFields();
+}
+bool Connection::supportsSymmetricLogScale() const noexcept
+{
+    return m_impl->supportsSymmetricLogScale();
 }
 
 VolumeFrame Connection::renderVolume(

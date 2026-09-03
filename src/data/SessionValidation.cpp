@@ -336,9 +336,11 @@ void validateSessionVolumeResult(const DatasetMetadata& metadata,
             "volume frame pixel storage does not match its size");
     }
     const auto& used = frame.usedRange;
+    const auto usedScale = effectiveColorScale(used.logarithmic, used.scale);
     if (!std::isfinite(used.minimum) || !std::isfinite(used.maximum)
         || !(used.minimum < used.maximum)
-        || (used.logarithmic && !(used.minimum > 0.0))) {
+        || (usedScale.scale == ColorScale::Logarithmic && !(used.minimum > 0.0))
+        || !resolveValueRange(used.minimum, used.maximum, usedScale)) {
         throw std::invalid_argument("volume frame reports an unusable range");
     }
     if (request.range && !(used == *request.range)) {

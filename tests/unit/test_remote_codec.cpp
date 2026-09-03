@@ -662,6 +662,17 @@ int main()
     volume.logarithmic = true;
     require(codec::fromWire(codec::toWire(volume)) == volume,
         "a volume request without a range did not round-trip");
+    volume.logarithmic = false;
+    volume.scale = {ColorScale::SymLogarithmic, 0.25};
+    {
+        const auto symlogWire = codec::toWire(volume);
+        require(symlogWire.visible_scale
+                    == amrexplorer::wire::ColorScale::SymLogarithmic
+                && symlogWire.visible_linear_threshold == 0.25,
+            "a symmetric-log Visible mapping was not encoded on the wire");
+        require(codec::fromWire(symlogWire) == volume,
+            "a symmetric-log volume request did not round-trip");
+    }
     auto volumeWire = codec::toWire(volume);
     volumeWire.transfer_opacities.pop_back();
     requireRejected([&] { static_cast<void>(codec::fromWire(volumeWire)); },
@@ -704,6 +715,10 @@ int main()
     frame.cacheFallbackToLevel = 0;
     require(codec::fromWire(codec::toWire(frame, CacheMetrics{})) == frame,
         "a rendered frame did not round-trip");
+    frame.usedRange = {-4.0, 4.0, false,
+        {ColorScale::SymLogarithmic, 0.5}};
+    require(codec::fromWire(codec::toWire(frame, CacheMetrics{})) == frame,
+        "a symmetric-log rendered range did not round-trip");
     // A response that never set the two fallback levels: they default to the
     // no-fallback sentinel, so it decodes as "no fallback" rather than as a
     // fallback from level 0 to level 0 -- which validateSessionVolumeResult

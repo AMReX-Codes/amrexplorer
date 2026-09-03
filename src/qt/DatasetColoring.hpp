@@ -36,6 +36,14 @@ struct DatasetColoring {
         palette, resolveValueRange(minimum, maximum, logarithmic)};
 }
 
+[[nodiscard]] inline DatasetColoring makeDatasetColoring(
+    const Palette& palette, double minimum, double maximum,
+    ColorScaleConfig scale)
+{
+    return DatasetColoring{
+        palette, resolveValueRange(minimum, maximum, scale)};
+}
+
 // What a value is drawn in. Mapped through ValueMapping, exactly as
 // renderScalarPlane maps the same value, so the two cannot drift apart at the
 // truncation ties valueSlot documents. Values outside the range take the end

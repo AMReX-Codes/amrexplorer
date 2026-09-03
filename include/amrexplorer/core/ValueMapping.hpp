@@ -1,9 +1,26 @@
 #pragma once
 
 #include <cmath>
+#include <cstdint>
 #include <optional>
 
 namespace amrvis {
+
+enum class ColorScale : std::uint8_t { Linear, Logarithmic, SymLogarithmic };
+
+struct ColorScaleConfig {
+    ColorScale scale = ColorScale::Linear;
+    double linearThreshold = 1.0;
+    friend bool operator==(const ColorScaleConfig&,
+        const ColorScaleConfig&) = default;
+};
+
+[[nodiscard]] constexpr ColorScaleConfig effectiveColorScale(
+    bool logarithmic, ColorScaleConfig scale) noexcept
+{
+    return logarithmic
+        ? ColorScaleConfig{ColorScale::Logarithmic, 1.0} : scale;
+}
 
 // Mapping a field value to a slot of a colour lookup -- a palette slot for a
 // slice, a transfer-function entry for a volume. Both renderers map through
@@ -23,16 +40,51 @@ namespace amrvis {
 // only place std::log of the bounds happens: it sets errno, so a compiler
 // cannot hoist it out of a pixel or sample loop on its own.
 struct ResolvedValueRange {
-    double minimum = 0.0;   // already logarithmic when `logarithmic`
+    double minimum = 0.0;   // already transformed by `scale`
     double span = 1.0;      // maximum - minimum, in the same terms
-    bool logarithmic = false;
+    ColorScaleConfig scale;
+    constexpr ResolvedValueRange() = default;
+    constexpr ResolvedValueRange(double minimumIn, double spanIn,
+        bool logarithmic)
+        : minimum(minimumIn), span(spanIn),
+          scale{logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0}
+    {}
 };
+
+inline constexpr double symmetricLogLinearScale = 10.0 / 9.0;
+
+[[nodiscard]] inline double transformedValue(
+    double value, const ColorScaleConfig& config) noexcept
+{
+    if (config.scale == ColorScale::Logarithmic) return std::log(value);
+    if (config.scale != ColorScale::SymLogarithmic) return value;
+    const auto magnitude = std::abs(value);
+    if (magnitude <= config.linearThreshold) {
+        return value * symmetricLogLinearScale;
+    }
+    return std::copysign(config.linearThreshold
+            * (symmetricLogLinearScale
+                + std::log10(magnitude / config.linearThreshold)), value);
+}
+
+[[nodiscard]] inline double inverseTransformedValue(
+    double value, const ColorScaleConfig& config) noexcept
+{
+    if (config.scale == ColorScale::Logarithmic) return std::exp(value);
+    if (config.scale != ColorScale::SymLogarithmic) return value;
+    const auto limit = config.linearThreshold * symmetricLogLinearScale;
+    const auto magnitude = std::abs(value);
+    if (magnitude <= limit) return value / symmetricLogLinearScale;
+    return std::copysign(config.linearThreshold
+            * std::pow(10.0, magnitude / config.linearThreshold
+                    - symmetricLogLinearScale), value);
+}
 
 // nullopt for a range no value can be mapped through: a non-finite bound, an
 // empty or unordered span, a span so wide it is infinite (every value would
 // land in slot 0), or a logarithmic range reaching to zero.
 [[nodiscard]] inline std::optional<ResolvedValueRange> resolveValueRange(
-    double minimum, double maximum, bool logarithmic) noexcept
+    double minimum, double maximum, ColorScaleConfig scale = {}) noexcept
 {
     // Both bounds are tested for positivity, not just the minimum: this is
     // noexcept and public, so an unordered logarithmic range reaches it, and
@@ -40,13 +92,17 @@ struct ResolvedValueRange {
     // span test below would reject the range anyway -- but not before a build
     // running with feenableexcept(FE_INVALID) had taken SIGFPE.
     if (!std::isfinite(minimum) || !std::isfinite(maximum)
-        || (logarithmic && !(minimum > 0.0 && maximum > 0.0))) {
+        || (scale.scale == ColorScale::Logarithmic
+            && !(minimum > 0.0 && maximum > 0.0))
+        || (scale.scale == ColorScale::SymLogarithmic
+            && !(scale.linearThreshold > 0.0
+                && std::isfinite(scale.linearThreshold)))) {
         return std::nullopt;
     }
     ResolvedValueRange resolved;
-    resolved.logarithmic = logarithmic;
-    resolved.minimum = logarithmic ? std::log(minimum) : minimum;
-    const auto top = logarithmic ? std::log(maximum) : maximum;
+    resolved.scale = scale;
+    resolved.minimum = transformedValue(minimum, scale);
+    const auto top = transformedValue(maximum, scale);
     resolved.span = top - resolved.minimum;
     if (!(resolved.span > 0.0) || !std::isfinite(resolved.span)) {
         return std::nullopt;
@@ -54,12 +110,20 @@ struct ResolvedValueRange {
     return resolved;
 }
 
+[[nodiscard]] inline std::optional<ResolvedValueRange> resolveValueRange(
+    double minimum, double maximum, bool logarithmic) noexcept
+{
+    return resolveValueRange(minimum, maximum,
+        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0});
+}
+
 // Whether the range can map this value at all: non-finite values, and
 // non-positive ones under a logarithmic range, have no slot.
 [[nodiscard]] inline bool mappableValue(
     double value, const ResolvedValueRange& range) noexcept
 {
-    return std::isfinite(value) && !(range.logarithmic && !(value > 0.0));
+    return std::isfinite(value)
+        && !(range.scale.scale == ColorScale::Logarithmic && !(value > 0.0));
 }
 
 // The slot, for a value mappableValue accepts and a slotCount of at least 1.
@@ -84,7 +148,7 @@ struct ResolvedValueRange {
 [[nodiscard]] inline int valueSlot(double value, const ResolvedValueRange& range,
     int slotCount) noexcept
 {
-    const auto mapped = range.logarithmic ? std::log(value) : value;
+    const auto mapped = transformedValue(value, range.scale);
     const auto normalized = (mapped - range.minimum) / range.span;
     if (!(normalized > 0.0)) {
         return 0;

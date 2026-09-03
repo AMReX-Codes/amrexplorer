@@ -1,5 +1,4 @@
 #include "ImageView.hpp"
-#include "ScaleBar.hpp"
 
 #include "Theme.hpp"
 
@@ -431,143 +430,73 @@ void ImageView::setAxisIndicator(const QString& horizontal,
     }
 }
 
-void ImageView::setScaleBarPhysicalWidth(double widthCm)
-{
-    m_scaleBarCmPerImagePixel = hasImage() && widthCm > 0.0
-            && std::isfinite(widthCm) && m_image.width() > 0
-        ? widthCm / static_cast<double>(m_image.width())
-        : 0.0;
-    if (viewport() != nullptr) {
-        viewport()->update();
-    }
-}
-
 void ImageView::drawForeground(QPainter* painter, const QRectF& /*rect*/)
 {
-    if (!hasImage()) {
+    if (!hasImage() || (m_indicatorH.isEmpty() && m_indicatorV.isEmpty())) {
         return;
     }
 
     painter->save();
     painter->resetTransform();
 
+    constexpr int armLen = 26;
+    constexpr int headLen = 6;
+    constexpr int headHalf = 3;
+    constexpr int margin = 8;
+    const QColor fg(255, 255, 255, 200);
+
     const auto* vp = viewport();
     if (vp == nullptr) {
         painter->restore();
         return;
     }
-    constexpr int margin = 8;
-    const QColor foreground(255, 255, 255, 230);
-    const QColor outline(0, 0, 0, 190);
+    const int vh = vp->height();
+
+    const QPoint origin(margin, vh - margin);
+    const QPoint vTip(origin.x(), origin.y() - armLen);
+    const QPoint hTip(origin.x() + armLen, origin.y());
+
+    QPen pen(fg);
+    pen.setWidth(2);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter->setPen(pen);
+    painter->setBrush(fg);
     painter->setRenderHint(QPainter::Antialiasing);
 
-    if (!m_indicatorH.isEmpty() || !m_indicatorV.isEmpty()) {
-        constexpr int armLen = 26;
-        constexpr int headLen = 6;
-        constexpr int headHalf = 3;
-        const QPoint origin(margin, vp->height() - margin);
-        const QPoint vTip(origin.x(), origin.y() - armLen);
-        const QPoint hTip(origin.x() + armLen, origin.y());
+    painter->drawLine(origin, vTip);
+    QPolygon vHead;
+    vHead << QPoint(vTip.x(), vTip.y())
+          << QPoint(vTip.x() - headHalf, vTip.y() + headLen)
+          << QPoint(vTip.x() + headHalf, vTip.y() + headLen);
+    painter->drawPolygon(vHead);
 
-        QPen pen(foreground);
-        pen.setWidth(2);
-        pen.setCapStyle(Qt::RoundCap);
-        pen.setJoinStyle(Qt::RoundJoin);
-        painter->setPen(pen);
-        painter->setBrush(foreground);
+    painter->drawLine(origin, hTip);
+    QPolygon hHead;
+    hHead << QPoint(hTip.x(), hTip.y())
+          << QPoint(hTip.x() - headLen, hTip.y() - headHalf)
+          << QPoint(hTip.x() - headLen, hTip.y() + headHalf);
+    painter->drawPolygon(hHead);
 
-        painter->drawLine(origin, vTip);
-        QPolygon vHead;
-        vHead << QPoint(vTip.x(), vTip.y())
-              << QPoint(vTip.x() - headHalf, vTip.y() + headLen)
-              << QPoint(vTip.x() + headHalf, vTip.y() + headLen);
-        painter->drawPolygon(vHead);
+    QFont font;
+    font.setPointSize(11);
+    font.setBold(true);
+    painter->setFont(font);
+    painter->setPen(fg);
 
-        painter->drawLine(origin, hTip);
-        QPolygon hHead;
-        hHead << QPoint(hTip.x(), hTip.y())
-              << QPoint(hTip.x() - headLen, hTip.y() - headHalf)
-              << QPoint(hTip.x() - headLen, hTip.y() + headHalf);
-        painter->drawPolygon(hHead);
-
-        QFont font;
-        font.setPointSize(11);
-        font.setBold(true);
-        painter->setFont(font);
-        painter->setPen(foreground);
-
-        if (!m_indicatorH.isEmpty()) {
-            const auto fm = painter->fontMetrics();
-            const QRectF rect(hTip.x() + 4,
-                hTip.y() - fm.height() / 2.0, 40, fm.height());
-            painter->drawText(rect, Qt::AlignLeft | Qt::AlignVCenter,
-                m_indicatorH);
-        }
-        if (!m_indicatorV.isEmpty()) {
-            const auto fm = painter->fontMetrics();
-            const QRectF rect(vTip.x() - 20,
-                vTip.y() - headLen - fm.height() - 2, 40, fm.height());
-            painter->drawText(rect, Qt::AlignHCenter | Qt::AlignVCenter,
-                m_indicatorV);
-        }
+    if (!m_indicatorH.isEmpty()) {
+        const auto fm = painter->fontMetrics();
+        const QRectF rect(hTip.x() + 4,
+            hTip.y() - fm.height() / 2.0, 40, fm.height());
+        painter->drawText(rect, Qt::AlignLeft | Qt::AlignVCenter,
+            m_indicatorH);
     }
-
-    if (m_scaleBarCmPerImagePixel > 0.0 && m_item != nullptr) {
-        const auto itemToViewport = m_item->deviceTransform(viewportTransform());
-        const auto imageBounds = itemToViewport.mapRect(m_item->boundingRect())
-                                     .intersected(QRectF(vp->rect()));
-        const auto p0 = itemToViewport.map(QPointF(0.0, 0.0));
-        const auto p1 = itemToViewport.map(QPointF(1.0, 0.0));
-        const double pixelsPerImagePixel = QLineF(p0, p1).length();
-        if (imageBounds.width() >= 40.0 && imageBounds.height() >= 36.0
-            && pixelsPerImagePixel > 0.0
-            && std::isfinite(pixelsPerImagePixel)) {
-            const double cmPerViewportPixel
-                = m_scaleBarCmPerImagePixel / pixelsPerImagePixel;
-            const double maximumPixels = imageBounds.width() * 0.25;
-            const auto bar = chooseScaleBar(
-                imageBounds.width() * cmPerViewportPixel,
-                maximumPixels * cmPerViewportPixel, maximumPixels);
-            if (bar) {
-                constexpr double inset = 12.0;
-                constexpr double tickHalfHeight = 4.0;
-                const double right = imageBounds.right() - inset;
-                const double left = right - bar->lengthPixels;
-                const double y = imageBounds.bottom() - inset;
-                const QLineF horizontal(left, y, right, y);
-                const QLineF leftTick(left, y - tickHalfHeight,
-                    left, y + tickHalfHeight);
-                const QLineF rightTick(right, y - tickHalfHeight,
-                    right, y + tickHalfHeight);
-
-                QPen halo(outline);
-                halo.setWidth(5);
-                halo.setCapStyle(Qt::FlatCap);
-                painter->setPen(halo);
-                painter->drawLines({horizontal, leftTick, rightTick});
-                QPen line(foreground);
-                line.setWidth(2);
-                line.setCapStyle(Qt::FlatCap);
-                painter->setPen(line);
-                painter->drawLines({horizontal, leftTick, rightTick});
-
-                QFont font = painter->font();
-                font.setPointSize(10);
-                font.setBold(true);
-                painter->setFont(font);
-                const QString label = QString::fromStdString(bar->label);
-                const auto fm = painter->fontMetrics();
-                const QRectF textRect(left - 20.0,
-                    y - tickHalfHeight - fm.height() - 2.0,
-                    bar->lengthPixels + 40.0, fm.height());
-                painter->setPen(outline);
-                painter->drawText(textRect.translated(1.0, 1.0),
-                    Qt::AlignHCenter | Qt::AlignVCenter, label);
-                painter->setPen(foreground);
-                painter->drawText(textRect,
-                    Qt::AlignHCenter | Qt::AlignVCenter, label);
-            }
-        }
+    if (!m_indicatorV.isEmpty()) {
+        const auto fm = painter->fontMetrics();
+        const QRectF rect(vTip.x() - 20,
+            vTip.y() - headLen - fm.height() - 2, 40, fm.height());
+        painter->drawText(rect, Qt::AlignHCenter | Qt::AlignVCenter,
+            m_indicatorV);
     }
 
     painter->restore();
@@ -602,7 +531,6 @@ void ImageView::setPlaceholder(const QString& text)
     m_image = {};
     m_logicalSize = {};
     m_placement.reset();
-    m_scaleBarCmPerImagePixel = 0.0;
     m_placeholderText = text;
     setBackgroundBrush(palette().window());
     auto* label = m_scene->addText(text);

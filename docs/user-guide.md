@@ -189,9 +189,6 @@ The main controls are:
    3-D panels.
 4. **Range, Log, and Palette** control the mapping from values to colors.
 5. **Slice panels** display the XY, XZ, and YZ planes for a 3-D dataset.
-   A lower-right scale bar treats plotfile coordinates as centimetres and
-   automatically labels the current view in cm, AU, pc, or kpc. It is omitted
-   when the horizontal coordinate is an angle (the spherical theta-r view).
 6. **Isometric view** shows the domain, grid boxes, and current slice planes;
    **View > Volume Rendering...** opens the same view with the field
    ray-cast into it.

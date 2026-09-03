@@ -1241,20 +1241,6 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     state.coordinateSystem = display.coordinateSystem;
     state.sphericalDisplay = display.sphericalDisplay;
     state.displayRegion = display.displayRegion;
-    // AMReX plotfile coordinates are conventionally centimetres in the
-    // astrophysical datasets this annotation targets. Theta-r puts an angle
-    // on the horizontal axis, so a horizontal physical-length bar would be a
-    // lie in that one spherical layout; omit it there.
-    double horizontalWidthCm = 0.0;
-    if (!(displayIsSpherical()
-            && state.sphericalDisplay == SphericalDisplay::ThetaR)) {
-        const auto horizontalAxis = displayIsSpherical()
-            ? std::size_t{0}
-            : static_cast<std::size_t>(displayAxes(state.normal)[0]);
-        horizontalWidthCm = state.displayRegion.upper[horizontalAxis]
-            - state.displayRegion.lower[horizontalAxis];
-    }
-    state.view->setScaleBarPhysicalWidth(horizontalWidthCm);
     state.contourPlane
         = std::make_shared<const ScalarPlane>(std::move(display.contourPlane));
     state.contourPolylines = std::move(display.contourPolylines);

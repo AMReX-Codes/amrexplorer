@@ -56,7 +56,6 @@ add_executable(amrexplorer_qt
     RemoteOpenDialog.hpp
     RemoteSessionController.cpp
     RemoteSessionController.hpp
-    ScaleBar.hpp
     ScientificDoubleSpinBox.cpp
     ScientificDoubleSpinBox.hpp
     SshConnectArguments.hpp

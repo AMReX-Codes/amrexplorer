@@ -131,6 +131,34 @@ amrvis::LineQueryResult lineResult(int axis)
     return result;
 }
 
+double unfusedMultiplyAdd(double left, double right, double addend)
+{
+    volatile double product = left * right;
+    return addend + product;
+}
+
+amrvis::RealBox evaluatedBounds(const amrvis::LevelMetadata& level,
+    const amrvis::IntBox& box, int dimension, bool fused)
+{
+    amrvis::RealBox result;
+    for (int axis = 0; axis < dimension; ++axis) {
+        const auto entry = static_cast<std::size_t>(axis);
+        const auto nodalHalf = amrvis::isNodal(box, axis) ? 0.5 : 0.0;
+        const auto evaluate = [&](double factor) {
+            return fused
+                ? std::fma(factor, level.cellSize[entry],
+                    level.indexOrigin[entry])
+                : unfusedMultiplyAdd(factor, level.cellSize[entry],
+                    level.indexOrigin[entry]);
+        };
+        result.lower[entry]
+            = evaluate(static_cast<double>(box.lower[entry]) - nodalHalf);
+        result.upper[entry] = evaluate(
+            static_cast<double>(box.upper[entry]) + 1.0 - nodalHalf);
+    }
+    return result;
+}
+
 amrvis::DatasetPageRequest pageRequest(int dimension)
 {
     amrvis::DatasetPageRequest request;
@@ -399,12 +427,9 @@ int main()
             validateSessionViewResult(metadata, view, overlay);
         }, "a grid box over the catalog box was rejected");
 
-        // The bounds are recomputed on this side of the wire, and the two
-        // evaluations may round differently -- a fused multiply-add on the
-        // producer moves a bound by its last ulp (#223). Agreement is a
-        // tolerance, not a bitwise match. Only the dimension's own axes are
-        // perturbed: the axes past it are zero filler on both sides, not
-        // arithmetic, and cannot disagree.
+        // This geometry has no fused/unfused disagreement: its origin, indices
+        // and cell size are all exact. An arbitrary ulp nudge is therefore not
+        // an alternate evaluation of the catalog box and must not be admitted.
         auto perturbed = sliceResult(region);
         auto nudged = catalogBox;
         for (auto* const corner : {&nudged.lower, &nudged.upper}) {
@@ -419,9 +444,9 @@ int main()
             }
         }
         perturbed.gridBoxes.push_back({1, nudged});
-        requireAccepted([&] {
+        requireRejected([&] {
             validateSessionViewResult(metadata, view, perturbed);
-        }, "a grid box off by ulps from the catalog box was rejected");
+        }, "an underived ulp-nudged grid box was accepted");
 
         if (dimension == 3) {
             // All three axes are compared, so the normal extent has to be the
@@ -434,6 +459,16 @@ int main()
             requireRejected([&] {
                 validateSessionViewResult(metadata, view, stretched);
             }, "a grid box with an invented normal extent was accepted");
+
+            auto offSliceRequest = request;
+            offSliceRequest.physicalPosition = 99.0;
+            const ViewDataRequest offSliceView = offSliceRequest;
+            auto offSlice = sliceResult(region);
+            offSlice.gridBoxes.push_back({1, catalogBox});
+            requireRejectedWith([&] {
+                validateSessionViewResult(metadata, offSliceView, offSlice);
+            }, "misses the requested slice",
+                "a catalog box away from the requested slice was accepted");
         }
 
         // A line answer to a slice request is not an answer at all.
@@ -442,9 +477,9 @@ int main()
         }, "a line result answered a slice request");
     }
 
-    // The reported failure used coordinates around 1e22. Exercise the scale
-    // that makes independently contracted multiply-adds disagree, rather than
-    // proving the tolerance only around the fixture's small integers.
+    // The reported failure used coordinates around 1e22. Exercise actual fused
+    // and separately-rounded evaluations, including independent edge choices,
+    // rather than standing in for them with an arbitrary ulp translation.
     {
         auto metadata = dataset(2);
         constexpr double origin = -4.57724532306911e22;
@@ -460,22 +495,36 @@ int main()
             metadata.levels.front(), metadata.levels.front().domain, 2);
         auto request = sliceRequest(2);
         request.visibleRegion = metadata.physicalDomain;
-        const ViewDataRequest view = request;
-        auto answer = sliceResult(request.visibleRegion);
-        auto box = sampleBounds(
-            metadata.levels.back(), metadata.levels.back().boxes.front(), 2);
-        for (auto* const corner : {&box.lower, &box.upper}) {
-            for (std::size_t axis = 0; axis < 2; ++axis) {
-                for (int step = 0; step < 2; ++step) {
-                    (*corner)[axis] = std::nextafter((*corner)[axis],
-                        std::numeric_limits<double>::infinity());
-                }
-            }
+        for (std::size_t axis = 0; axis < 2; ++axis) {
+            request.visibleRegion.lower[axis] -= cellSize;
+            request.visibleRegion.upper[axis] += cellSize;
         }
-        answer.gridBoxes.push_back({1, box});
-        requireAccepted([&] {
-            validateSessionViewResult(metadata, view, answer);
-        }, "large-coordinate last-ulp box rounding was rejected");
+        const ViewDataRequest view = request;
+        const auto& level = metadata.levels.back();
+        const auto& indexBox = level.boxes.front();
+        const auto unfused = evaluatedBounds(level, indexBox, 2, false);
+        const auto fused = evaluatedBounds(level, indexBox, 2, true);
+        require(unfused != fused,
+            "the large-coordinate fused/unfused fixture is vacuous");
+        require(sampleBounds(level, indexBox, 2) == fused,
+            "sampleBounds did not use the canonical fused evaluation");
+        auto mixed = unfused;
+        mixed.lower[0] = fused.lower[0];
+        mixed.upper[1] = fused.upper[1];
+        auto inward = unfused;
+        for (std::size_t axis = 0; axis < 2; ++axis) {
+            inward.lower[axis]
+                = std::max(unfused.lower[axis], fused.lower[axis]);
+            inward.upper[axis]
+                = std::min(unfused.upper[axis], fused.upper[axis]);
+        }
+        for (const auto& box : {unfused, fused, mixed, inward}) {
+            auto answer = sliceResult(request.visibleRegion);
+            answer.gridBoxes.push_back({1, box});
+            requireAccepted([&] {
+                validateSessionViewResult(metadata, view, answer);
+            }, "a legitimate fused/unfused grid-box edge was rejected");
+        }
     }
 
     // Coordinate magnitude must not turn the rounding allowance into whole
@@ -493,6 +542,10 @@ int main()
             metadata.levels.front(), metadata.levels.front().domain, 2);
         auto request = sliceRequest(2);
         request.visibleRegion = metadata.physicalDomain;
+        for (std::size_t axis = 0; axis < 2; ++axis) {
+            request.visibleRegion.lower[axis] -= cellSize;
+            request.visibleRegion.upper[axis] += cellSize;
+        }
         const ViewDataRequest view = request;
         auto answer = sliceResult(request.visibleRegion);
         auto shifted = metadata.physicalDomain;
@@ -507,38 +560,190 @@ int main()
             "a whole-cell-shifted box at large coordinates was accepted");
     }
 
-    // A slab decomposition gives many boxes the same first coordinate. The
-    // full-key search must still reach every later y group without falling
-    // back to a linear scan from the first shared x edge for each answer.
+    // A catalog box merely touching the viewport is clipped to zero width and
+    // SliceQuery drops it. It cannot authorize a positive sliver whose edges
+    // happen to lie inside a broad coordinate-scale tolerance.
     {
         auto metadata = dataset(2);
+        constexpr double origin = 1.0e13;
         for (auto& level : metadata.levels) {
-            level.domain = IntBox{Int3{{0, 0, 0}},
-                Int3{{0, 63, 0}}, Int3{{0, 0, 0}}};
+            level.domain = IntBox{Int3{{0, 0, 0}}, Int3{{1, 1, 0}},
+                Int3{{0, 0, 0}}};
+            level.boxes = {IntBox{Int3{{0, 0, 0}}, Int3{{0, 0, 0}},
+                Int3{{0, 0, 0}}}};
+            level.indexOrigin = Real3{{origin, origin, 0.0}};
+            level.cellSize = Real3{{1.0, 1.0, 1.0}};
+        }
+        metadata.physicalDomain = sampleBounds(
+            metadata.levels.front(), metadata.levels.front().domain, 2);
+        auto request = sliceRequest(2);
+        request.visibleRegion = RealBox{Real3{{origin + 1.0, origin, 0.0}},
+            Real3{{origin + 2.0, origin + 1.0, 0.0}}};
+        const ViewDataRequest view = request;
+        auto answer = sliceResult(request.visibleRegion);
+        auto sliver = RealBox{Real3{{origin + 1.0, origin, 0.0}},
+            Real3{{std::nextafter(origin + 1.0,
+                       std::numeric_limits<double>::infinity()),
+                origin + 1.0, 0.0}}};
+        answer.gridBoxes.push_back({1, sliver});
+        requireRejectedWith([&] {
+            validateSessionViewResult(metadata, view, answer);
+        }, "matches no box",
+            "a positive sliver derived from a zero-width clip was accepted");
+    }
+
+    // Above the old quarter-cell cap threshold, a legal int-index edge can
+    // differ by one coordinate ulp between fused and separately-rounded
+    // evaluation. Both exact outcomes remain legitimate even when that ulp is
+    // wider than one quarter of a cell.
+    {
+        auto metadata = dataset(2);
+        metadata.finestLevel = 0;
+        metadata.levels.resize(1);
+        auto& level = metadata.levels.front();
+        constexpr double origin = 1.0e8;
+        constexpr double cellSize = 2.9224442392587661e-8;
+        constexpr int gridIndex = 1671731333;
+        level.level = 0;
+        level.domain = IntBox{Int3{{0, 0, 0}},
+            Int3{{2000000000, 2000000000, 0}}, Int3{{0, 0, 0}}};
+        level.boxes = {IntBox{Int3{{gridIndex, gridIndex, 0}},
+            Int3{{gridIndex, gridIndex, 0}}, Int3{{0, 0, 0}}}};
+        level.indexOrigin = Real3{{origin, origin, 0.0}};
+        level.cellSize = Real3{{cellSize, cellSize, 1.0}};
+        metadata.physicalDomain = sampleBounds(level, level.domain, 2);
+        const auto unfused = evaluatedBounds(level, level.boxes.front(), 2,
+            false);
+        const auto fused = evaluatedBounds(level, level.boxes.front(), 2, true);
+        require(unfused.lower[0] != fused.lower[0]
+                && std::fabs(unfused.lower[0] - fused.lower[0])
+                    > 0.25 * cellSize,
+            "the capped-regime fused/unfused fixture is vacuous");
+        auto request = sliceRequest(2);
+        request.maximumLevel = 0;
+        request.visibleRegion = metadata.physicalDomain;
+        const ViewDataRequest view = request;
+        for (const auto& box : {unfused, fused}) {
+            auto answer = sliceResult(request.visibleRegion);
+            answer.plane.sourceLevel = {0, 0, -1, 0};
+            answer.gridBoxes.push_back({0, box});
+            requireAccepted([&] {
+                validateSessionViewResult(metadata, view, answer);
+            }, "a capped-regime fused/unfused grid box was rejected");
+        }
+    }
+
+    // Per-level identity is part of the result. A fine box one eighth of a
+    // coarse cell inside the coarse box is valid under its own tag, but the old
+    // quarter-cell aperture also accepted it when falsely tagged coarse.
+    {
+        auto metadata = dataset(2);
+        constexpr double origin = 1.0e14;
+        auto& coarse = metadata.levels[0];
+        coarse.domain = IntBox{Int3{{0, 0, 0}}, Int3{{15, 15, 0}},
+            Int3{{0, 0, 0}}};
+        coarse.boxes = {IntBox{Int3{{0, 0, 0}}, Int3{{7, 7, 0}},
+            Int3{{0, 0, 0}}}};
+        coarse.indexOrigin = Real3{{origin, origin, 0.0}};
+        coarse.cellSize = Real3{{1.0, 1.0, 1.0}};
+        auto& fine = metadata.levels[1];
+        fine.domain = IntBox{Int3{{0, 0, 0}}, Int3{{127, 127, 0}},
+            Int3{{0, 0, 0}}};
+        fine.boxes = {IntBox{Int3{{1, 1, 0}}, Int3{{63, 63, 0}},
+            Int3{{0, 0, 0}}}};
+        fine.indexOrigin = Real3{{origin, origin, 0.0}};
+        fine.cellSize = Real3{{0.125, 0.125, 1.0}};
+        metadata.physicalDomain = sampleBounds(coarse, coarse.domain, 2);
+        auto request = sliceRequest(2);
+        request.visibleRegion = metadata.physicalDomain;
+        const ViewDataRequest view = request;
+        const auto fineBox = sampleBounds(fine, fine.boxes.front(), 2);
+        auto correct = sliceResult(request.visibleRegion);
+        correct.gridBoxes.push_back({1, fineBox});
+        requireAccepted([&] {
+            validateSessionViewResult(metadata, view, correct);
+        }, "a fine grid box with its correct level was rejected");
+        auto mistagged = sliceResult(request.visibleRegion);
+        mistagged.gridBoxes.push_back({0, fineBox});
+        requireRejectedWith([&] {
+            validateSessionViewResult(metadata, view, mistagged);
+        }, "matches no box", "fine geometry falsely tagged coarse was accepted");
+    }
+
+    // A far level-domain edge must not grant slack to a catalog box near zero.
+    {
+        auto metadata = dataset(2);
+        metadata.finestLevel = 0;
+        metadata.levels.resize(1);
+        auto& level = metadata.levels.front();
+        level.level = 0;
+        level.domain = IntBox{Int3{{0, 0, 0}},
+            Int3{{1000000000, 1000000000, 0}}, Int3{{0, 0, 0}}};
+        level.boxes = {IntBox{Int3{{0, 0, 0}}, Int3{{0, 0, 0}},
+            Int3{{0, 0, 0}}}};
+        metadata.physicalDomain = sampleBounds(level, level.domain, 2);
+        auto request = sliceRequest(2);
+        request.maximumLevel = 0;
+        request.visibleRegion
+            = RealBox{Real3{{0.0, 0.0, 0.0}}, Real3{{2.0, 2.0, 0.0}}};
+        const ViewDataRequest view = request;
+        auto shifted = sampleBounds(level, level.boxes.front(), 2);
+        for (std::size_t axis = 0; axis < 2; ++axis) {
+            shifted.lower[axis] += 1.0e-6;
+            shifted.upper[axis] += 1.0e-6;
+        }
+        auto answer = sliceResult(request.visibleRegion);
+        answer.plane.sourceLevel = {0, 0, -1, 0};
+        answer.gridBoxes.push_back({0, shifted});
+        requireRejectedWith([&] {
+            validateSessionViewResult(metadata, view, answer);
+        }, "matches no box",
+            "a near-origin box used the far domain edge as tolerance");
+    }
+
+    // A slab decomposition gives many boxes the same first coordinate. The
+    // full-key search must still reach every later y group, including mixed
+    // fused/unfused edges, without falling back to a linear scan from the first
+    // shared x edge for each answer.
+    {
+        auto metadata = dataset(2);
+        constexpr double origin = -4.57724532306911e22;
+        constexpr double cellSize = 7.132980051857025e18;
+        for (auto& level : metadata.levels) {
+            level.domain = IntBox{Int3{{5000, 5000, 0}},
+                Int3{{5000, 5063, 0}}, Int3{{0, 0, 0}}};
             level.boxes.clear();
             for (int y = 0; y < 64; ++y) {
-                level.boxes.push_back(IntBox{Int3{{0, y, 0}},
-                    Int3{{0, y, 0}}, Int3{{0, 0, 0}}});
+                level.boxes.push_back(IntBox{Int3{{5000, 5000 + y, 0}},
+                    Int3{{5000, 5000 + y, 0}}, Int3{{0, 0, 0}}});
             }
+            level.indexOrigin = Real3{{origin, origin, 0.0}};
+            level.cellSize = Real3{{cellSize, cellSize, 1.0}};
         }
         metadata.physicalDomain = sampleBounds(
             metadata.levels.front(), metadata.levels.front().domain, 2);
         auto request = sliceRequest(2);
         request.visibleRegion = metadata.physicalDomain;
+        for (std::size_t axis = 0; axis < 2; ++axis) {
+            request.visibleRegion.lower[axis] -= cellSize;
+            request.visibleRegion.upper[axis] += cellSize;
+        }
         const ViewDataRequest view = request;
         auto answer = sliceResult(request.visibleRegion);
+        auto sawDisagreement = false;
         for (const auto& indexBox : metadata.levels.back().boxes) {
-            auto box = sampleBounds(metadata.levels.back(), indexBox, 2);
-            for (auto* const corner : {&box.lower, &box.upper}) {
-                for (std::size_t axis = 0; axis < 2; ++axis) {
-                    for (int step = 0; step < 2; ++step) {
-                        (*corner)[axis] = std::nextafter((*corner)[axis],
-                            std::numeric_limits<double>::infinity());
-                    }
-                }
-            }
+            const auto unfused = evaluatedBounds(
+                metadata.levels.back(), indexBox, 2, false);
+            const auto fused = evaluatedBounds(
+                metadata.levels.back(), indexBox, 2, true);
+            sawDisagreement = sawDisagreement || unfused != fused;
+            auto box = unfused;
+            box.lower[0] = fused.lower[0];
+            box.upper[1] = fused.upper[1];
             answer.gridBoxes.push_back({1, box});
         }
+        require(sawDisagreement,
+            "the slab fused/unfused fixture is vacuous");
         requireAccepted([&] {
             validateSessionViewResult(metadata, view, answer);
         }, "a later grid box sharing the first coordinate was rejected");

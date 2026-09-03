@@ -64,12 +64,16 @@ RealBox sampleBounds(
     for (int axis = 0; axis < dimension; ++axis) {
         const auto i = static_cast<std::size_t>(axis);
         const auto nodalHalf = isNodal(box, axis) ? 0.5 : 0.0;
-        result.lower[i] = level.indexOrigin[i]
-            + (static_cast<double>(box.lower[i]) - nodalHalf)
-                * level.cellSize[i];
-        result.upper[i] = level.indexOrigin[i]
-            + (static_cast<double>(box.upper[i]) + 1.0 - nodalHalf)
-                * level.cellSize[i];
+        // This geometry crosses the remote boundary. Spell out the fused
+        // evaluation so a client and server built by different compilers do
+        // not disagree according to whether either compiler contracted a
+        // multiply followed by an add.
+        result.lower[i] = std::fma(
+            static_cast<double>(box.lower[i]) - nodalHalf,
+            level.cellSize[i], level.indexOrigin[i]);
+        result.upper[i] = std::fma(
+            static_cast<double>(box.upper[i]) + 1.0 - nodalHalf,
+            level.cellSize[i], level.indexOrigin[i]);
     }
     return result;
 }

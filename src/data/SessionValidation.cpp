@@ -76,6 +76,94 @@ void requireSourceLevels(const std::vector<std::int16_t>& levels,
     }
 }
 
+bool withinSearchBand(double left, double right, double width) noexcept
+{
+    return left == right || std::fabs(left - right) <= width;
+}
+
+double boxCoordinate(const RealBox& box, std::size_t coordinate) noexcept
+{
+    return coordinate < 3 ? box.lower[coordinate]
+                          : box.upper[coordinate - 3];
+}
+
+// Older peers evaluated sampleBounds as an expression one compiler could
+// contract and another could execute as a rounded multiply followed by an add.
+// Current peers use explicit fma, so these are the canonical and legacy values
+// a compatible peer can derive from the catalog. Keep them as exact
+// alternatives instead of widening the comparison into a numeric interval:
+// the latter either becomes smaller than one ulp at extreme offsets or large
+// enough to admit geometry no query produced.
+double unfusedMultiplyAdd(double left, double right, double addend) noexcept
+{
+    volatile double product = left * right;
+    return addend + product;
+}
+
+struct ExpectedBox {
+    RealBox key;
+    std::array<std::array<double, 2>, 6> coordinates{};
+};
+
+double boxCoordinate(const ExpectedBox& box, std::size_t coordinate) noexcept
+{
+    return boxCoordinate(box.key, coordinate);
+}
+
+bool matchesCoordinates(const ExpectedBox& expected,
+    const RealBox& answer) noexcept
+{
+    for (std::size_t coordinate = 0; coordinate < 6; ++coordinate) {
+        const auto value = boxCoordinate(answer, coordinate);
+        if (value != expected.coordinates[coordinate][0]
+            && value != expected.coordinates[coordinate][1]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+using BoxIterator = std::vector<ExpectedBox>::const_iterator;
+
+bool matchesExpectedBox(BoxIterator first, BoxIterator last,
+    const RealBox& answer, const std::array<double, 6>& searchBand,
+    std::size_t coordinate = 0)
+{
+    const auto target = boxCoordinate(answer, coordinate);
+    const auto allowed = searchBand[coordinate];
+    // Within this range all preceding coordinates are equal, so this
+    // coordinate is ordered. Skip values strictly below its search band
+    // without forming target-allowed, which could overflow at a finite edge.
+    auto candidate = std::lower_bound(first, last, target,
+        [coordinate, allowed](const ExpectedBox& box, double value) {
+            const auto entry = boxCoordinate(box, coordinate);
+            return entry < value
+                && !withinSearchBand(entry, value, allowed);
+        });
+    while (candidate != last) {
+        const auto value = boxCoordinate(*candidate, coordinate);
+        if (!withinSearchBand(value, target, allowed)) {
+            break;
+        }
+        const auto groupEnd = std::upper_bound(candidate, last, value,
+            [coordinate](double entry, const ExpectedBox& box) {
+                return entry < boxCoordinate(box, coordinate);
+            });
+        if (coordinate == 5) {
+            if (std::any_of(candidate, groupEnd, [&](const auto& expected) {
+                    return matchesCoordinates(expected, answer);
+                })) {
+                return true;
+            }
+        } else if (matchesExpectedBox(candidate, groupEnd, answer, searchBand,
+                       coordinate + 1)) {
+            return true;
+        }
+        candidate = groupEnd;
+    }
+    return false;
+}
+
 } // namespace
 
 void validateSessionViewRequest(const DatasetMetadata& metadata,
@@ -364,44 +452,91 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
         }
         // Expected boxes per level, built once and reused: each catalog box of
         // that level, in physical space, clipped to the visible region on the
-        // plane axes -- exactly the geometry the query derives. The
-        // slice-intersection and non-degeneracy filters it also applies are
-        // deliberately *not* mirrored, so this stays a superset: it can only
-        // reject a box that corresponds to no catalog box at all, never one the
-        // query legitimately chose to keep or drop.
-        std::vector<std::pair<int, std::vector<RealBox>>> expectedByLevel;
-        const auto expectedFor = [&](int level) -> const std::vector<RealBox>& {
+        // plane axes. Every edge retains the exact fused and separately-rounded
+        // values a peer can derive; the search band locates either value, while
+        // matchesCoordinates prevents the band itself from admitting a third.
+        // The clip is also what keeps an accepted box inside the window, so no
+        // separate window test is needed below: every alternative a box can
+        // match is already confined to it.
+        struct ExpectedLevel {
+            int level = 0;
+            std::vector<ExpectedBox> boxes;
+            std::array<double, 6> searchBand{};
+        };
+        std::vector<ExpectedLevel> expectedByLevel;
+        const auto expectedFor = [&](int level) -> const ExpectedLevel& {
             const auto known = std::find_if(expectedByLevel.begin(),
                 expectedByLevel.end(),
-                [level](const auto& entry) { return entry.first == level; });
+                [level](const auto& entry) { return entry.level == level; });
             if (known != expectedByLevel.end()) {
-                return known->second;
+                return *known;
             }
-            std::vector<RealBox> boxes;
+            ExpectedLevel built;
+            built.level = level;
             const auto& source
                 = metadata.levels[static_cast<std::size_t>(level)];
-            boxes.reserve(source.boxes.size());
+            built.boxes.reserve(source.boxes.size());
             for (const auto& indexBox : source.boxes) {
-                auto physical
-                    = sampleBounds(source, indexBox, metadata.dimension);
+                ExpectedBox expected;
+                for (int axis = 0; axis < metadata.dimension; ++axis) {
+                    const auto entry = static_cast<std::size_t>(axis);
+                    const auto nodalHalf
+                        = isNodal(indexBox, axis) ? 0.5 : 0.0;
+                    const std::array<double, 2> factors{
+                        static_cast<double>(indexBox.lower[entry]) - nodalHalf,
+                        static_cast<double>(indexBox.upper[entry]) + 1.0
+                            - nodalHalf};
+                    for (std::size_t side = 0; side < 2; ++side) {
+                        const auto coordinate = entry + side * 3;
+                        expected.coordinates[coordinate] = {
+                            unfusedMultiplyAdd(factors[side],
+                                source.cellSize[entry],
+                                source.indexOrigin[entry]),
+                            std::fma(factors[side], source.cellSize[entry],
+                                source.indexOrigin[entry])};
+                    }
+                }
                 for (const auto axis : planeAxes(
                          metadata.dimension, query.normalDirection)) {
                     const auto entry = static_cast<std::size_t>(axis);
-                    physical.lower[entry] = std::max(physical.lower[entry],
-                        query.visibleRegion.lower[entry]);
-                    physical.upper[entry] = std::min(physical.upper[entry],
-                        query.visibleRegion.upper[entry]);
+                    for (auto& value : expected.coordinates[entry]) {
+                        value = std::max(
+                            value, query.visibleRegion.lower[entry]);
+                    }
+                    for (auto& value : expected.coordinates[entry + 3]) {
+                        value = std::min(
+                            value, query.visibleRegion.upper[entry]);
+                    }
                 }
-                boxes.push_back(physical);
+                for (std::size_t coordinate = 0; coordinate < 6;
+                    ++coordinate) {
+                    const auto& values = expected.coordinates[coordinate];
+                    // Only a finite alternative can survive result validation;
+                    // use it as the searchable key if the unfused product
+                    // overflowed but the fused operation did not.
+                    const auto key = std::isfinite(values[0])
+                        ? values[0] : values[1];
+                    if (coordinate < 3) {
+                        expected.key.lower[coordinate] = key;
+                    } else {
+                        expected.key.upper[coordinate - 3] = key;
+                    }
+                    const auto width = std::fabs(values[0] - values[1]);
+                    if (std::isfinite(width)) {
+                        built.searchBand[coordinate]
+                            = std::max(built.searchBand[coordinate], width);
+                    }
+                }
+                built.boxes.push_back(std::move(expected));
             }
-            std::sort(boxes.begin(), boxes.end(),
-                [](const RealBox& left, const RealBox& right) {
-                    return left.lower.values < right.lower.values
-                        || (left.lower.values == right.lower.values
-                            && left.upper.values < right.upper.values);
+            std::sort(built.boxes.begin(), built.boxes.end(),
+                [](const ExpectedBox& left, const ExpectedBox& right) {
+                    return left.key.lower.values < right.key.lower.values
+                        || (left.key.lower.values == right.key.lower.values
+                            && left.key.upper.values < right.key.upper.values);
                 });
-            expectedByLevel.emplace_back(level, std::move(boxes));
-            return expectedByLevel.back().second;
+            expectedByLevel.push_back(std::move(built));
+            return expectedByLevel.back();
         };
         for (const auto& box : slice->gridBoxes) {
             // A grid box, unlike a sample, always comes from a real level:
@@ -415,16 +550,21 @@ void validateSessionViewResult(const DatasetMetadata& metadata,
             }
             requirePlaneRegion(box.physicalRegion, metadata.dimension,
                 query.normalDirection, "slice result grid box");
+            if (metadata.dimension == 3) {
+                const auto normal
+                    = static_cast<std::size_t>(query.normalDirection);
+                if (!(query.physicalPosition
+                            >= box.physicalRegion.lower[normal]
+                        && query.physicalPosition
+                            < box.physicalRegion.upper[normal])) {
+                    throw std::invalid_argument(
+                        "slice result grid box misses the requested slice");
+                }
+            }
             const auto& expected = expectedFor(box.level);
-            const auto found = std::lower_bound(expected.begin(),
-                expected.end(), box.physicalRegion,
-                [](const RealBox& left, const RealBox& right) {
-                    return left.lower.values < right.lower.values
-                        || (left.lower.values == right.lower.values
-                            && left.upper.values < right.upper.values);
-                });
-            if (found == expected.end()
-                || !(*found == box.physicalRegion)) {
+            if (!matchesExpectedBox(expected.boxes.begin(),
+                    expected.boxes.end(), box.physicalRegion,
+                    expected.searchBand)) {
                 throw std::invalid_argument(
                     "slice result grid box matches no box in the catalog");
             }

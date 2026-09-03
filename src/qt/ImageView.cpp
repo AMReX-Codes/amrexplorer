@@ -91,6 +91,68 @@ private:
     qreal m_size = 3.0;
 };
 
+void paintScaleBar(QPainter* painter, const QRectF& imageBounds,
+    double cmPerImagePixel, double pixelsPerImagePixel)
+{
+    if (!(cmPerImagePixel > 0.0) || imageBounds.width() < 40.0
+        || imageBounds.height() < 36.0 || !(pixelsPerImagePixel > 0.0)
+        || !std::isfinite(pixelsPerImagePixel)) {
+        return;
+    }
+
+    const double cmPerOutputPixel = cmPerImagePixel / pixelsPerImagePixel;
+    const double maximumPixels = imageBounds.width() * 0.25;
+    const auto bar = chooseScaleBar(imageBounds.width() * cmPerOutputPixel,
+        maximumPixels * cmPerOutputPixel, maximumPixels);
+    if (!bar) {
+        return;
+    }
+
+    constexpr double inset = 12.0;
+    constexpr double tickHalfHeight = 4.0;
+    const double right = imageBounds.right() - inset;
+    const double left = right - bar->lengthPixels;
+    const double y = imageBounds.bottom() - inset;
+    const QLineF horizontal(left, y, right, y);
+    const QLineF leftTick(
+        left, y - tickHalfHeight, left, y + tickHalfHeight);
+    const QLineF rightTick(
+        right, y - tickHalfHeight, right, y + tickHalfHeight);
+    const QColor foreground(255, 255, 255, 230);
+    const QColor outline(0, 0, 0, 190);
+
+    painter->save();
+    painter->resetTransform();
+    painter->setRenderHint(QPainter::Antialiasing);
+    QPen halo(outline);
+    halo.setWidth(5);
+    halo.setCapStyle(Qt::FlatCap);
+    painter->setPen(halo);
+    painter->drawLines({horizontal, leftTick, rightTick});
+    QPen line(foreground);
+    line.setWidth(2);
+    line.setCapStyle(Qt::FlatCap);
+    painter->setPen(line);
+    painter->drawLines({horizontal, leftTick, rightTick});
+
+    QFont font = painter->font();
+    font.setPointSize(10);
+    font.setBold(true);
+    painter->setFont(font);
+    const QString label = QString::fromStdString(bar->label);
+    const auto fm = painter->fontMetrics();
+    const QRectF textRect(left - 20.0,
+        y - tickHalfHeight - fm.height() - 2.0,
+        bar->lengthPixels + 40.0, fm.height());
+    painter->setPen(outline);
+    painter->drawText(textRect.translated(1.0, 1.0),
+        Qt::AlignHCenter | Qt::AlignVCenter, label);
+    painter->setPen(foreground);
+    painter->drawText(textRect,
+        Qt::AlignHCenter | Qt::AlignVCenter, label);
+    painter->restore();
+}
+
 } // namespace
 
 ImageView::ImageView(QWidget* parent)
@@ -458,7 +520,6 @@ void ImageView::drawForeground(QPainter* painter, const QRectF& /*rect*/)
     }
     constexpr int margin = 8;
     const QColor foreground(255, 255, 255, 230);
-    const QColor outline(0, 0, 0, 190);
     painter->setRenderHint(QPainter::Antialiasing);
 
     if (!m_indicatorH.isEmpty() || !m_indicatorV.isEmpty()) {
@@ -519,55 +580,8 @@ void ImageView::drawForeground(QPainter* painter, const QRectF& /*rect*/)
         const auto p0 = itemToViewport.map(QPointF(0.0, 0.0));
         const auto p1 = itemToViewport.map(QPointF(1.0, 0.0));
         const double pixelsPerImagePixel = QLineF(p0, p1).length();
-        if (imageBounds.width() >= 40.0 && imageBounds.height() >= 36.0
-            && pixelsPerImagePixel > 0.0
-            && std::isfinite(pixelsPerImagePixel)) {
-            const double cmPerViewportPixel
-                = m_scaleBarCmPerImagePixel / pixelsPerImagePixel;
-            const double maximumPixels = imageBounds.width() * 0.25;
-            const auto bar = chooseScaleBar(
-                imageBounds.width() * cmPerViewportPixel,
-                maximumPixels * cmPerViewportPixel, maximumPixels);
-            if (bar) {
-                constexpr double inset = 12.0;
-                constexpr double tickHalfHeight = 4.0;
-                const double right = imageBounds.right() - inset;
-                const double left = right - bar->lengthPixels;
-                const double y = imageBounds.bottom() - inset;
-                const QLineF horizontal(left, y, right, y);
-                const QLineF leftTick(left, y - tickHalfHeight,
-                    left, y + tickHalfHeight);
-                const QLineF rightTick(right, y - tickHalfHeight,
-                    right, y + tickHalfHeight);
-
-                QPen halo(outline);
-                halo.setWidth(5);
-                halo.setCapStyle(Qt::FlatCap);
-                painter->setPen(halo);
-                painter->drawLines({horizontal, leftTick, rightTick});
-                QPen line(foreground);
-                line.setWidth(2);
-                line.setCapStyle(Qt::FlatCap);
-                painter->setPen(line);
-                painter->drawLines({horizontal, leftTick, rightTick});
-
-                QFont font = painter->font();
-                font.setPointSize(10);
-                font.setBold(true);
-                painter->setFont(font);
-                const QString label = QString::fromStdString(bar->label);
-                const auto fm = painter->fontMetrics();
-                const QRectF textRect(left - 20.0,
-                    y - tickHalfHeight - fm.height() - 2.0,
-                    bar->lengthPixels + 40.0, fm.height());
-                painter->setPen(outline);
-                painter->drawText(textRect.translated(1.0, 1.0),
-                    Qt::AlignHCenter | Qt::AlignVCenter, label);
-                painter->setPen(foreground);
-                painter->drawText(textRect,
-                    Qt::AlignHCenter | Qt::AlignVCenter, label);
-            }
-        }
+        paintScaleBar(painter, imageBounds, m_scaleBarCmPerImagePixel,
+            pixelsPerImagePixel);
     }
 
     painter->restore();
@@ -665,6 +679,9 @@ QImage ImageView::composedImage(qreal scaleFactor) const
     // the item sits at its cell offset, and the export must follow it.
     m_scene->render(&painter, QRectF(0.0, 0.0, outWidth, outHeight),
         m_item->sceneBoundingRect());
+    paintScaleBar(&painter, QRectF(0.0, 0.0, outWidth, outHeight),
+        m_scaleBarCmPerImagePixel,
+        static_cast<double>(outWidth) / static_cast<double>(baseWidth));
     if (m_lineGuide != nullptr) {
         m_lineGuide->setVisible(guideVisible);
     }

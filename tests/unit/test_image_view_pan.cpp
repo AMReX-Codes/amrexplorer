@@ -84,6 +84,28 @@ void scaleBarIsPaintedOverTheSlice()
         "setting a physical width did not paint a visible scale bar");
 }
 
+void scaleBarIsPaintedIntoExportedComposition()
+{
+    amrvis::qt::ImageView view;
+    view.setImage(solidImage(400, 300));
+    const QImage withoutBar = view.composedImage();
+
+    constexpr double pc = 3.0856775814913673e18;
+    view.setScaleBarPhysicalWidth(4.0 * pc);
+    const QImage withBar = view.composedImage();
+
+    require(withBar.size() == withoutBar.size(),
+        "painting the scale bar changed the export size");
+    int changed = 0;
+    for (int y = 0; y < withBar.height(); ++y) {
+        for (int x = withBar.width() / 2; x < withBar.width(); ++x) {
+            changed += withBar.pixel(x, y) != withoutBar.pixel(x, y) ? 1 : 0;
+        }
+    }
+    require(changed > 50,
+        "the exported composition omitted the visible scale bar");
+}
+
 // A scene larger than the viewport pans by its scroll bars, and the delta says
 // how far the *content* moves: content travelling +x backs the bar off by the
 // same amount. MainWindow's arrow-key step and its drag handler both hand
@@ -342,6 +364,7 @@ int main(int argc, char* argv[])
     QApplication application(argc, argv);
     scaleBarUsesNaturalAstrophysicalUnits();
     scaleBarIsPaintedOverTheSlice();
+    scaleBarIsPaintedIntoExportedComposition();
     scrollBarPanFollowsContentDelta();
     fullyVisibleSceneIgnoresPan();
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();

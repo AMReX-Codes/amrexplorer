@@ -803,6 +803,11 @@ QImage MainWindow::activeViewViewportImageForTest() const
     return m_activeView->view->viewport()->grab().toImage();
 }
 
+bool MainWindow::activeViewHasScaleBarForTest() const
+{
+    return m_activeView != nullptr && m_activeView->view->hasScaleBar();
+}
+
 bool MainWindow::activeViewFitsWindowForTest() const
 {
     return m_activeView != nullptr && m_activeView->view->hasImage()

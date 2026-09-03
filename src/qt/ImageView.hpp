@@ -130,6 +130,10 @@ public:
     // raster. Plotfile coordinates are interpreted as centimetres. A
     // non-positive or non-finite width clears the bar.
     void setScaleBarPhysicalWidth(double widthCm);
+    [[nodiscard]] bool hasScaleBar() const noexcept
+    {
+        return m_scaleBarCmPerImagePixel > 0.0;
+    }
     // Cosmetic red rectangle marking the cell picked in the dataset window;
     // std::nullopt clears it, and setImage/setPlaceholder drop it too. It
     // layers at z 4, above the overlay segments.

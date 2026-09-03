@@ -1246,7 +1246,8 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     // on the horizontal axis, so a horizontal physical-length bar would be a
     // lie in that one spherical layout; omit it there.
     double horizontalWidthCm = 0.0;
-    if (!(displayIsSpherical()
+    if (m_dataset->metadata().hasPhysicalGeometry
+        && !(displayIsSpherical()
             && state.sphericalDisplay == SphericalDisplay::ThetaR)) {
         const auto horizontalAxis = displayIsSpherical()
             ? std::size_t{0}

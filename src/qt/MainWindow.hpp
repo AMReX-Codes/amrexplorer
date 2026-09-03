@@ -419,6 +419,7 @@ public:
     [[nodiscard]] std::array<int, 2> activeViewImageSizeForTest() const;
     [[nodiscard]] std::array<int, 2> activeViewViewportSizeForTest() const;
     [[nodiscard]] QImage activeViewViewportImageForTest() const;
+    [[nodiscard]] bool activeViewHasScaleBarForTest() const;
     [[nodiscard]] bool activeViewFitsWindowForTest() const;
 
     // Test-only: shrink the open dataset's cache budget to force cache-pressure

@@ -142,7 +142,7 @@ void MainWindow::restoreSettings()
     if (m_scaleBarAction != nullptr) {
         const QSignalBlocker scaleBarBlocker(m_scaleBarAction);
         m_scaleBarVisible = settings.value(
-            QStringLiteral("overlay/scaleBar"), true).toBool();
+            QStringLiteral("overlay/scaleBar"), false).toBool();
         m_scaleBarAction->setChecked(m_scaleBarVisible);
     }
     {

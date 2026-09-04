@@ -1160,7 +1160,7 @@ private:
     // The saved preference is separate from the action's checked state:
     // anisotropic datasets force the action off without erasing what the user
     // selected for datasets on which a physical scale bar is meaningful.
-    bool m_scaleBarVisible = true;
+    bool m_scaleBarVisible = false;
     // Empty means the plotfile coordinate unit is unknown. Otherwise this is
     // one of ScaleBar.hpp's stable length-unit ids (cm, AU, pc, ...).
     QString m_lengthUnitId;

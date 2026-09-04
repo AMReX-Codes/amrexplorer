@@ -1,4 +1,5 @@
 #include "ImageView.hpp"
+#include "ScaleBar.hpp"
 
 #include <QApplication>
 #include <QImage>
@@ -27,6 +28,87 @@ QImage solidImage(int width, int height)
     QImage image(width, height, QImage::Format_RGB32);
     image.fill(Qt::black);
     return image;
+}
+
+void scaleBarUsesNativeOrExplicitUnits()
+{
+    constexpr double au = 1.495978707e13;
+    constexpr double pc = 3.0856775814913673e18;
+
+    const auto native = amrvis::qt::chooseScaleBar(8.0, 2.4, 120.0);
+    require(native && native->label == "2.000e+00 code units",
+        "an unset unit did not preserve the native scale in scientific notation");
+
+    const auto centimetres = amrvis::qt::chooseScaleBar(8.0e12, 2.4e12,
+        120.0, amrvis::qt::LengthUnit::Centimetre);
+    require(centimetres && centimetres->label == "2e+07 km",
+        "an explicit centimetre scale did not convert to a natural unit");
+
+    const auto astronomical = amrvis::qt::chooseScaleBar(8.0 * au,
+        2.4 * au, 120.0, amrvis::qt::LengthUnit::Centimetre);
+    require(astronomical && astronomical->label == "2 AU",
+        "an AU-scale view did not use AU");
+
+    const auto parsecs = amrvis::qt::chooseScaleBar(1.0 * pc,
+        0.26 * pc, 130.0, amrvis::qt::LengthUnit::Centimetre);
+    require(parsecs && parsecs->label == "0.2 pc",
+        "a parsec-scale view did not use pc");
+
+    const auto kiloparsecs = amrvis::qt::chooseScaleBar(4.0e3 * pc,
+        1.2e3 * pc, 120.0, amrvis::qt::LengthUnit::Centimetre);
+    require(kiloparsecs && kiloparsecs->label == "1 kpc",
+        "a kiloparsec-scale view did not use kpc");
+
+    require(!amrvis::qt::chooseScaleBar(0.0, 1.0, 100.0),
+        "a zero-width view produced a scale bar");
+}
+
+void scaleBarIsPaintedOverTheSlice()
+{
+    amrvis::qt::ImageView view;
+    view.resize(400, 300);
+    view.show();
+    view.setImage(solidImage(400, 300));
+    QApplication::processEvents();
+    const QImage withoutBar = view.viewport()->grab().toImage();
+
+    constexpr double pc = 3.0856775814913673e18;
+    view.setScaleBarWidth(4.0 * pc, amrvis::qt::LengthUnit::Centimetre);
+    QApplication::processEvents();
+    const QImage withBar = view.viewport()->grab().toImage();
+
+    require(withBar.size() == withoutBar.size(),
+        "painting the scale bar changed the viewport size");
+    int changed = 0;
+    for (int y = 0; y < withBar.height(); ++y) {
+        for (int x = withBar.width() / 2; x < withBar.width(); ++x) {
+            changed += withBar.pixel(x, y) != withoutBar.pixel(x, y) ? 1 : 0;
+        }
+    }
+    require(changed > 50,
+        "setting a physical width did not paint a visible scale bar");
+}
+
+void scaleBarIsPaintedIntoExportedComposition()
+{
+    amrvis::qt::ImageView view;
+    view.setImage(solidImage(400, 300));
+    const QImage withoutBar = view.composedImage();
+
+    constexpr double pc = 3.0856775814913673e18;
+    view.setScaleBarWidth(4.0 * pc, amrvis::qt::LengthUnit::Centimetre);
+    const QImage withBar = view.composedImage();
+
+    require(withBar.size() == withoutBar.size(),
+        "painting the scale bar changed the export size");
+    int changed = 0;
+    for (int y = 0; y < withBar.height(); ++y) {
+        for (int x = withBar.width() / 2; x < withBar.width(); ++x) {
+            changed += withBar.pixel(x, y) != withoutBar.pixel(x, y) ? 1 : 0;
+        }
+    }
+    require(changed > 50,
+        "the exported composition omitted the visible scale bar");
 }
 
 // A scene larger than the viewport pans by its scroll bars, and the delta says
@@ -285,6 +367,9 @@ void tearingDownTheSceneForgetsThePointTally()
 int main(int argc, char* argv[])
 {
     QApplication application(argc, argv);
+    scaleBarUsesNativeOrExplicitUnits();
+    scaleBarIsPaintedOverTheSlice();
+    scaleBarIsPaintedIntoExportedComposition();
     scrollBarPanFollowsContentDelta();
     fullyVisibleSceneIgnoresPan();
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();

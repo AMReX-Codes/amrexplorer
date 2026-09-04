@@ -1364,6 +1364,19 @@ void MainWindow::createMenus()
         }
         saveSettings();  // overlay/boxes
     });
+    m_scaleBarAction = new QAction(tr("Scale Bar"), this);
+    m_scaleBarAction->setCheckable(true);
+    m_scaleBarAction->setChecked(m_scaleBarVisible);
+    m_scaleBarAction->setEnabled(false);
+    connect(m_scaleBarAction, &QAction::toggled, this, [this](bool visible) {
+        m_scaleBarVisible = visible;
+        updateScaleBars();
+        saveSettings();  // overlay/scaleBar
+    });
+    auto* lengthUnitsAction = new QAction(tr("Length &Units..."), this);
+    lengthUnitsAction->setObjectName(QStringLiteral("lengthUnitsAction"));
+    connect(lengthUnitsAction, &QAction::triggered,
+        this, [this] { showLengthUnitsDialog(); });
     m_slicePlanesAction = new QAction(tr("Sl&ice Planes"), this);
     m_slicePlanesAction->setCheckable(true);
     m_slicePlanesAction->setEnabled(false);
@@ -1399,6 +1412,8 @@ void MainWindow::createMenus()
     viewMenu->addMenu(scaleMenu);
     viewMenu->addMenu(m_levelMenu);
     viewMenu->addAction(m_boxesAction);
+    viewMenu->addAction(m_scaleBarAction);
+    viewMenu->addAction(lengthUnitsAction);
     viewMenu->addAction(m_slicePlanesAction);
     viewMenu->addAction(m_volumeController->createAction(this));
     viewMenu->addMenu(paletteMenu);

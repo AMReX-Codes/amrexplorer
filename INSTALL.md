@@ -1,6 +1,6 @@
 # Installing AMReXplorer
 
-Build from source. Tested on Ubuntu 24.04 and 26.04, and on macOS.
+Build from source. Tested on Ubuntu 24.04 and 26.04, on macOS, and on WSL.
 
 The build produces two programs:
 
@@ -45,9 +45,14 @@ brew install cmake ninja qt
 
 ### Windows
 
-Windows is covered only in continuous integration: MSVC 2022 with Qt 6.8, using
+The recommended path for Windows is to use WSL2 with an Ubuntu distribution.
+This has been tested by the developers on a Windows 11 machine. The documentation
+for installing WSL2 on Windows with the default Ubuntu distribution is [here](https://learn.microsoft.com/en-us/windows/wsl/install).
+After installing WSL2, the Linux (Ubuntu) instructions can be used unmodified.
+
+Native Windows is covered only in continuous integration: MSVC 2022 with Qt 6.8, using
 the `windows` preset. None of the developers uses Windows or has tested a build
-on one, so there is no guidance here for it.
+on one, so there is no guidance here for it. Using WSL2 instead is strongly recommended.
 
 ### Optional
 

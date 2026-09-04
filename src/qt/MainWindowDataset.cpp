@@ -145,12 +145,6 @@ void MainWindow::restoreSettings()
             QStringLiteral("overlay/scaleBar"), false).toBool();
         m_scaleBarAction->setChecked(m_scaleBarVisible);
     }
-    {
-        const auto stored = settings.value(
-            QStringLiteral("scaleBar/lengthUnit")).toString();
-        m_lengthUnitId = lengthUnitFromId(stored.toStdString())
-            ? stored : QString{};
-    }
     if (m_sphericalSupersampleGroup != nullptr) {
         const auto stored = settings.value(
             QStringLiteral("spherical/supersample"), m_sphericalSupersample).toInt();
@@ -204,7 +198,7 @@ void MainWindow::saveSettings()
         m_boxesAction->isChecked());
     settings.setValue(QStringLiteral("overlay/scaleBar"),
         m_scaleBarVisible);
-    settings.setValue(QStringLiteral("scaleBar/lengthUnit"), m_lengthUnitId);
+    settings.remove(QStringLiteral("scaleBar/lengthUnit"));
     settings.setValue(QStringLiteral("spherical/supersample"),
         m_sphericalSupersample);
     settings.setValue(QStringLiteral("spherical/display"),
@@ -811,6 +805,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     setPlaybackMode(PlaybackMode::None);
     closeSequence();
     resetRangeState();
+    resetLengthUnit();
     // The new dataset arrives fitted -- setPlaceholder below puts every view
     // back to Fit -- so the scale report has to come back with it. Without
     // this the toolbar kept claiming the previous dataset's "4x" over a fitted
@@ -888,10 +883,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     // The particles dialog lists this dataset's species; the next one has its
     // own. (A sequence frame switch keeps it open -- the species are the same.)
     m_particleController->closeDialog();
-    // The Number Format and Length Units dialogs are deliberately *not* closed
-    // here. Unlike the contours dialog above, their settings are dataset-
-    // independent and persisted, so closing them on every open would only
-    // discard a selection the user had not yet applied.
+    // Number Format is dataset-independent and persisted, so its dialog stays
+    // open without discarding a selection the user had not yet applied.
     m_datasetPath = path;
     m_diagnosticsModel->resetDatasetMetrics();
     m_fieldSelector->setEnabled(false);

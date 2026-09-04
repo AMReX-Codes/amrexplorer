@@ -1766,6 +1766,7 @@ void MainWindow::prepareSequence(std::size_t frameCount)
     setPlaybackMode(PlaybackMode::None);
     closeSequence();
     resetRangeState();
+    resetLengthUnit();
     m_fabNavigator->reset();
     m_particleController->cancel();
     m_particleController->clearSamples();

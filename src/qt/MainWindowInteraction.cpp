@@ -182,7 +182,16 @@ void MainWindow::applyLengthUnit(const QString& unitId)
     }
     m_lengthUnitId = normalized;
     updateScaleBars();
-    saveSettings();
+}
+
+void MainWindow::resetLengthUnit()
+{
+    // Coordinate units belong to this dataset, including any unapplied choice.
+    if (m_lengthUnitsDialog != nullptr) {
+        m_lengthUnitsDialog->reject();
+    }
+    m_lengthUnitId.clear();
+    updateScaleBars();
 }
 
 void MainWindow::validateVectorMode()

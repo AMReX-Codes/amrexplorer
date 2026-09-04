@@ -889,6 +889,7 @@ private:
     void updateGridBoxes();
     void updateScaleBar(PlaneViewState& state);
     void updateScaleBars();
+    void resetLengthUnit();
     void updateCrosshairs(PlaneViewState& state);
     void updateCrosshairs();
     [[nodiscard]] QLineF planeSegmentToScene(const PlaneViewState& state,

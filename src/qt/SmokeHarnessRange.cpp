@@ -153,7 +153,8 @@ Outcome dispatchRange(Context& context)
         const auto expectedScaleBarVisible = makeSettings().value(
             QStringLiteral("overlay/scaleBar"), false).toBool();
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-            &application, [&window, &application, expectedScaleBarVisible](bool success) {
+            &application, [&window, &application, expectedScaleBarVisible,
+                              path, reopened = false](bool success) mutable {
                 const auto initialVisibilityMatches =
                     window.activeViewHasScaleBarForTest() == expectedScaleBarVisible;
                 const auto actionEnabled =
@@ -168,6 +169,21 @@ Outcome dispatchRange(Context& context)
                     QStringLiteral("lengthUnitsCombo"));
                 const auto unitsUnsetByDefault = lengthUnitsCombo != nullptr
                     && lengthUnitsCombo->currentData().toString().isEmpty();
+                if (success && unitsUnsetByDefault && !reopened) {
+                    auto* dialog = qobject_cast<QDialog*>(lengthUnitsCombo->window());
+                    auto* buttons = dialog->findChild<QDialogButtonBox*>();
+                    lengthUnitsCombo->setCurrentIndex(
+                        lengthUnitsCombo->findData(QStringLiteral("pc")));
+                    buttons->button(QDialogButtonBox::Apply)->click();
+                    // Keep an unapplied choice in the open dialog as well.
+                    lengthUnitsCombo->setCurrentIndex(
+                        lengthUnitsCombo->findData(QStringLiteral("kpc")));
+                    reopened = true;
+                    QTimer::singleShot(0, &window, [&window, path] {
+                        window.openDataset(path);
+                    });
+                    return;
+                }
                 if (auto* dialog = qobject_cast<QDialog*>(
                         lengthUnitsCombo == nullptr ? nullptr
                                                     : lengthUnitsCombo->window())) {

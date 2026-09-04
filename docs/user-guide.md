@@ -561,7 +561,9 @@ length unit, so AMReXplorer leaves it unset by default and displays native
 coordinate values in scientific notation. Choose **View > Length Units...** to
 identify the unit used by the plotfile; AMReXplorer can then label the bar in a
 natural physical unit. This setting changes only the annotation, not dataset
-coordinates or geometry.
+coordinates or geometry. The selection resets to unset whenever you open a new
+dataset or sequence, and is not saved between app sessions. Stepping through
+frames within a sequence keeps the selection.
 
 Choose **View > Contours...** to select one of three display modes:
 

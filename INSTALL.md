@@ -48,7 +48,7 @@ brew install cmake ninja qt
 The recommended path for Windows is to use WSL2 with an Ubuntu distribution.
 This has been tested by the developers on a Windows 11 machine. The documentation
 for installing WSL2 on Windows with the default Ubuntu distribution is [here](https://learn.microsoft.com/en-us/windows/wsl/install).
-After installing WSL2, the Linux (Ubuntu) instructions be used unmodified.
+After installing WSL2, the Linux (Ubuntu) instructions can be used unmodified.
 
 Native Windows is covered only in continuous integration: MSVC 2022 with Qt 6.8, using
 the `windows` preset. None of the developers uses Windows or has tested a build

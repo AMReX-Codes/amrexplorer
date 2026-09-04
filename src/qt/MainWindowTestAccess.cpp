@@ -198,6 +198,7 @@ bool MainWindow::activeViewRasterMatchesDisplayRangeForTest()
     const auto reference = renderScalarPlane(*state.plane, ScalarRenderSettings{
         .minimum = state.displayMinimum,
         .maximum = state.displayMaximum,
+        .scale = state.displayScale,
         .logarithmic = state.displayLogarithmic,
         .palette = &m_paletteController->palette()
     });

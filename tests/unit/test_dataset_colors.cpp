@@ -54,6 +54,7 @@ void requireAgreesWithRenderer(const std::string& what,
         amrvis::ScalarRenderSettings{
             .minimum = minimum,
             .maximum = maximum,
+            .scale = {},
             .logarithmic = logarithmic,
             .palette = &palette
         });

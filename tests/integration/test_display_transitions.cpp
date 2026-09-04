@@ -211,6 +211,7 @@ void requireDisplayInvariants(const amrvis::DatasetMetadata& metadata,
             amrvis::ScalarRenderSettings{
                 .minimum = d.minimum,
                 .maximum = d.maximum,
+                .scale = d.scale,
                 .logarithmic = d.logarithmic,
                 .palette = &palette
             });

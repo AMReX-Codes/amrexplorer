@@ -92,18 +92,21 @@ private:
 };
 
 void paintScaleBar(QPainter* painter, const QRectF& imageBounds,
-    double cmPerImagePixel, double pixelsPerImagePixel)
+    double codeUnitsPerImagePixel, double pixelsPerImagePixel,
+    std::optional<LengthUnit> lengthUnit)
 {
-    if (!(cmPerImagePixel > 0.0) || imageBounds.width() < 40.0
+    if (!(codeUnitsPerImagePixel > 0.0) || imageBounds.width() < 40.0
         || imageBounds.height() < 36.0 || !(pixelsPerImagePixel > 0.0)
         || !std::isfinite(pixelsPerImagePixel)) {
         return;
     }
 
-    const double cmPerOutputPixel = cmPerImagePixel / pixelsPerImagePixel;
+    const double codeUnitsPerOutputPixel
+        = codeUnitsPerImagePixel / pixelsPerImagePixel;
     const double maximumPixels = imageBounds.width() * 0.25;
-    const auto bar = chooseScaleBar(imageBounds.width() * cmPerOutputPixel,
-        maximumPixels * cmPerOutputPixel, maximumPixels);
+    const auto bar = chooseScaleBar(
+        imageBounds.width() * codeUnitsPerOutputPixel,
+        maximumPixels * codeUnitsPerOutputPixel, maximumPixels, lengthUnit);
     if (!bar) {
         return;
     }
@@ -493,12 +496,14 @@ void ImageView::setAxisIndicator(const QString& horizontal,
     }
 }
 
-void ImageView::setScaleBarPhysicalWidth(double widthCm)
+void ImageView::setScaleBarWidth(double widthCodeUnits,
+    std::optional<LengthUnit> lengthUnit)
 {
-    m_scaleBarCmPerImagePixel = hasImage() && widthCm > 0.0
-            && std::isfinite(widthCm) && m_image.width() > 0
-        ? widthCm / static_cast<double>(m_image.width())
+    m_scaleBarCodeUnitsPerImagePixel = hasImage() && widthCodeUnits > 0.0
+            && std::isfinite(widthCodeUnits) && m_image.width() > 0
+        ? widthCodeUnits / static_cast<double>(m_image.width())
         : 0.0;
+    m_scaleBarLengthUnit = lengthUnit;
     if (viewport() != nullptr) {
         viewport()->update();
     }
@@ -573,15 +578,16 @@ void ImageView::drawForeground(QPainter* painter, const QRectF& /*rect*/)
         }
     }
 
-    if (m_scaleBarCmPerImagePixel > 0.0 && m_item != nullptr) {
+    if (m_scaleBarCodeUnitsPerImagePixel > 0.0 && m_item != nullptr) {
         const auto itemToViewport = m_item->deviceTransform(viewportTransform());
         const auto imageBounds = itemToViewport.mapRect(m_item->boundingRect())
                                      .intersected(QRectF(vp->rect()));
         const auto p0 = itemToViewport.map(QPointF(0.0, 0.0));
         const auto p1 = itemToViewport.map(QPointF(1.0, 0.0));
         const double pixelsPerImagePixel = QLineF(p0, p1).length();
-        paintScaleBar(painter, imageBounds, m_scaleBarCmPerImagePixel,
-            pixelsPerImagePixel);
+        paintScaleBar(painter, imageBounds,
+            m_scaleBarCodeUnitsPerImagePixel, pixelsPerImagePixel,
+            m_scaleBarLengthUnit);
     }
 
     painter->restore();
@@ -616,7 +622,8 @@ void ImageView::setPlaceholder(const QString& text)
     m_image = {};
     m_logicalSize = {};
     m_placement.reset();
-    m_scaleBarCmPerImagePixel = 0.0;
+    m_scaleBarCodeUnitsPerImagePixel = 0.0;
+    m_scaleBarLengthUnit.reset();
     m_placeholderText = text;
     setBackgroundBrush(palette().window());
     auto* label = m_scene->addText(text);
@@ -680,8 +687,9 @@ QImage ImageView::composedImage(qreal scaleFactor) const
     m_scene->render(&painter, QRectF(0.0, 0.0, outWidth, outHeight),
         m_item->sceneBoundingRect());
     paintScaleBar(&painter, QRectF(0.0, 0.0, outWidth, outHeight),
-        m_scaleBarCmPerImagePixel,
-        static_cast<double>(outWidth) / static_cast<double>(baseWidth));
+        m_scaleBarCodeUnitsPerImagePixel,
+        static_cast<double>(outWidth) / static_cast<double>(baseWidth),
+        m_scaleBarLengthUnit);
     if (m_lineGuide != nullptr) {
         m_lineGuide->setVisible(guideVisible);
     }

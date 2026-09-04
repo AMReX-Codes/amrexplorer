@@ -151,8 +151,32 @@ Outcome dispatchRange(Context& context)
         const std::filesystem::path path(argv[2]);
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
             &application, [&window, &application](bool success) {
-                const auto valid = success
-                    && rangeSelectorMatches(window, true);
+                const auto initiallyVisible =
+                    window.activeViewHasScaleBarForTest();
+                const auto actionEnabled =
+                    window.scaleBarActionEnabledForTest();
+                auto* lengthUnitsAction = window.findChild<QAction*>(
+                    QStringLiteral("lengthUnitsAction"));
+                if (lengthUnitsAction != nullptr) {
+                    lengthUnitsAction->trigger();
+                    QApplication::processEvents();
+                }
+                auto* lengthUnits = window.findChild<QComboBox*>(
+                    QStringLiteral("lengthUnitsCombo"));
+                const auto unitsUnsetByDefault = lengthUnits != nullptr
+                    && lengthUnits->currentData().toString().isEmpty();
+                if (auto* dialog = qobject_cast<QDialog*>(
+                        lengthUnits == nullptr ? nullptr
+                                               : lengthUnits->window())) {
+                    dialog->reject();
+                }
+                window.setScaleBarVisibleForTest(false);
+                const auto hidden = !window.activeViewHasScaleBarForTest();
+                window.setScaleBarVisibleForTest(true);
+                const auto restored = window.activeViewHasScaleBarForTest();
+                const auto valid = success && rangeSelectorMatches(window, true)
+                    && actionEnabled && unitsUnsetByDefault && initiallyVisible
+                    && hidden && restored;
                 application.exit(valid ? 0 : 1);
         });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });

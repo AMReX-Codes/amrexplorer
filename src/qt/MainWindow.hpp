@@ -419,6 +419,8 @@ public:
     [[nodiscard]] std::array<int, 2> activeViewImageSizeForTest() const;
     [[nodiscard]] std::array<int, 2> activeViewViewportSizeForTest() const;
     [[nodiscard]] QImage activeViewViewportImageForTest() const;
+    void setScaleBarVisibleForTest(bool visible);
+    [[nodiscard]] bool scaleBarActionEnabledForTest() const;
     [[nodiscard]] bool activeViewHasScaleBarForTest() const;
     [[nodiscard]] bool activeViewFitsWindowForTest() const;
 
@@ -727,6 +729,8 @@ private:
         int wField, int contourColor);
     void showNumberFormatDialog();
     void applyNumberFormat(const QString& format);
+    void showLengthUnitsDialog();
+    void applyLengthUnit(const QString& unitId);
     void validateVectorMode();
     void ensureVectorFieldDefaults();
     void showDatasetWindow();
@@ -883,6 +887,8 @@ private:
     void updateOverlays();
     void updateGridBoxes(PlaneViewState& state);
     void updateGridBoxes();
+    void updateScaleBar(PlaneViewState& state);
+    void updateScaleBars();
     void updateCrosshairs(PlaneViewState& state);
     void updateCrosshairs();
     [[nodiscard]] QLineF planeSegmentToScene(const PlaneViewState& state,
@@ -1034,6 +1040,7 @@ private:
     DatasetWindow* m_datasetWindow = nullptr;
     SetContoursDialog* m_contoursDialog = nullptr;
     QDialog* m_numberFormatDialog = nullptr;
+    QDialog* m_lengthUnitsDialog = nullptr;
     UserGuideDialog* m_userGuideDialog = nullptr;
     QComboBox* m_fieldSelector = nullptr;
     QComboBox* m_levelSelector = nullptr;
@@ -1149,6 +1156,14 @@ private:
     // Window-owned so rebuildVariableMenu's clear() does not delete it.
     QAction* m_expressionEditorAction = nullptr;
     QAction* m_boxesAction = nullptr;
+    QAction* m_scaleBarAction = nullptr;
+    // The saved preference is separate from the action's checked state:
+    // anisotropic datasets force the action off without erasing what the user
+    // selected for datasets on which a physical scale bar is meaningful.
+    bool m_scaleBarVisible = true;
+    // Empty means the plotfile coordinate unit is unknown. Otherwise this is
+    // one of ScaleBar.hpp's stable length-unit ids (cm, AU, pc, ...).
+    QString m_lengthUnitId;
     QAction* m_slicePlanesAction = nullptr;
     QAction* m_resetZoomAction = nullptr;
     QAction* m_syncRubberBandZoomAction = nullptr;

@@ -27,6 +27,19 @@ void populateLevelCombo(QComboBox* combo, int finestLevel)
     }
 }
 
+bool hasIsotropicCellSizes(const DatasetMetadata& metadata)
+{
+    for (const auto& level : metadata.levels) {
+        for (int axis = 1; axis < metadata.dimension; ++axis) {
+            if (level.cellSize[static_cast<std::size_t>(axis)]
+                != level.cellSize[0]) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
@@ -36,6 +49,13 @@ void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
     m_levelSelector->setEnabled(true);
     m_range->setControlsReady(true);
     m_boxesAction->setEnabled(true);
+    const bool scaleBarAvailable = metadata.hasPhysicalGeometry
+        && hasIsotropicCellSizes(metadata);
+    {
+        const QSignalBlocker blocker(m_scaleBarAction);
+        m_scaleBarAction->setChecked(scaleBarAvailable && m_scaleBarVisible);
+    }
+    m_scaleBarAction->setEnabled(scaleBarAvailable);
     m_slicePlanesAction->setEnabled(metadata.dimension == 3);
     rebuildLevelMenu();
     m_levelMenu->setEnabled(true);
@@ -917,6 +937,31 @@ void MainWindow::updateGridBoxes()
     }
 }
 
+void MainWindow::updateScaleBar(PlaneViewState& state)
+{
+    double horizontalWidthCodeUnits = 0.0;
+    if (m_scaleBarAction->isEnabled() && m_scaleBarAction->isChecked()
+        && m_dataset && state.view->hasImage()
+        && m_dataset->metadata().hasPhysicalGeometry
+        && !(displayIsSpherical()
+            && state.sphericalDisplay == SphericalDisplay::ThetaR)) {
+        const auto horizontalAxis = displayIsSpherical()
+            ? std::size_t{0}
+            : static_cast<std::size_t>(displayAxes(state.normal)[0]);
+        horizontalWidthCodeUnits = state.displayRegion.upper[horizontalAxis]
+            - state.displayRegion.lower[horizontalAxis];
+    }
+    state.view->setScaleBarWidth(horizontalWidthCodeUnits,
+        lengthUnitFromId(m_lengthUnitId.toStdString()));
+}
+
+void MainWindow::updateScaleBars()
+{
+    for (auto* state : currentViews()) {
+        updateScaleBar(*state);
+    }
+}
+
 void MainWindow::updateCrosshairs(PlaneViewState& state)
 {
     std::optional<QLineF> vertical;
@@ -1241,21 +1286,11 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     state.coordinateSystem = display.coordinateSystem;
     state.sphericalDisplay = display.sphericalDisplay;
     state.displayRegion = display.displayRegion;
-    // AMReX plotfile coordinates are conventionally centimetres in the
-    // astrophysical datasets this annotation targets. Theta-r puts an angle
-    // on the horizontal axis, so a horizontal physical-length bar would be a
-    // lie in that one spherical layout; omit it there.
-    double horizontalWidthCm = 0.0;
-    if (m_dataset->metadata().hasPhysicalGeometry
-        && !(displayIsSpherical()
-            && state.sphericalDisplay == SphericalDisplay::ThetaR)) {
-        const auto horizontalAxis = displayIsSpherical()
-            ? std::size_t{0}
-            : static_cast<std::size_t>(displayAxes(state.normal)[0]);
-        horizontalWidthCm = state.displayRegion.upper[horizontalAxis]
-            - state.displayRegion.lower[horizontalAxis];
-    }
-    state.view->setScaleBarPhysicalWidth(horizontalWidthCm);
+    // The plotfile does not declare a length unit. The selected interpretation
+    // is applied only while formatting the annotation; this width stays in
+    // native coordinates. Theta-r puts an angle on the horizontal axis, so a
+    // horizontal length bar would be a lie in that spherical layout.
+    updateScaleBar(state);
     state.contourPlane
         = std::make_shared<const ScalarPlane>(std::move(display.contourPlane));
     state.contourPolylines = std::move(display.contourPolylines);

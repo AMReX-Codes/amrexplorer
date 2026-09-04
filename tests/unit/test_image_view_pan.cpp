@@ -30,27 +30,32 @@ QImage solidImage(int width, int height)
     return image;
 }
 
-void scaleBarUsesNaturalAstrophysicalUnits()
+void scaleBarUsesNativeOrExplicitUnits()
 {
     constexpr double au = 1.495978707e13;
     constexpr double pc = 3.0856775814913673e18;
 
-    const auto centimetres = amrvis::qt::chooseScaleBar(8.0e12, 2.4e12, 120.0);
-    require(centimetres && centimetres->label == "2e+12 cm",
-        "a sub-AU view did not use centimetres");
+    const auto native = amrvis::qt::chooseScaleBar(8.0, 2.4, 120.0);
+    require(native && native->label == "2.000e+00 code units",
+        "an unset unit did not preserve the native scale in scientific notation");
+
+    const auto centimetres = amrvis::qt::chooseScaleBar(8.0e12, 2.4e12,
+        120.0, amrvis::qt::LengthUnit::Centimetre);
+    require(centimetres && centimetres->label == "2e+07 km",
+        "an explicit centimetre scale did not convert to a natural unit");
 
     const auto astronomical = amrvis::qt::chooseScaleBar(8.0 * au,
-        2.4 * au, 120.0);
+        2.4 * au, 120.0, amrvis::qt::LengthUnit::Centimetre);
     require(astronomical && astronomical->label == "2 AU",
         "an AU-scale view did not use AU");
 
     const auto parsecs = amrvis::qt::chooseScaleBar(1.0 * pc,
-        0.26 * pc, 130.0);
+        0.26 * pc, 130.0, amrvis::qt::LengthUnit::Centimetre);
     require(parsecs && parsecs->label == "0.2 pc",
         "a parsec-scale view did not use pc");
 
     const auto kiloparsecs = amrvis::qt::chooseScaleBar(4.0e3 * pc,
-        1.2e3 * pc, 120.0);
+        1.2e3 * pc, 120.0, amrvis::qt::LengthUnit::Centimetre);
     require(kiloparsecs && kiloparsecs->label == "1 kpc",
         "a kiloparsec-scale view did not use kpc");
 
@@ -68,7 +73,7 @@ void scaleBarIsPaintedOverTheSlice()
     const QImage withoutBar = view.viewport()->grab().toImage();
 
     constexpr double pc = 3.0856775814913673e18;
-    view.setScaleBarPhysicalWidth(4.0 * pc);
+    view.setScaleBarWidth(4.0 * pc, amrvis::qt::LengthUnit::Centimetre);
     QApplication::processEvents();
     const QImage withBar = view.viewport()->grab().toImage();
 
@@ -91,7 +96,7 @@ void scaleBarIsPaintedIntoExportedComposition()
     const QImage withoutBar = view.composedImage();
 
     constexpr double pc = 3.0856775814913673e18;
-    view.setScaleBarPhysicalWidth(4.0 * pc);
+    view.setScaleBarWidth(4.0 * pc, amrvis::qt::LengthUnit::Centimetre);
     const QImage withBar = view.composedImage();
 
     require(withBar.size() == withoutBar.size(),
@@ -362,7 +367,7 @@ void tearingDownTheSceneForgetsThePointTally()
 int main(int argc, char* argv[])
 {
     QApplication application(argc, argv);
-    scaleBarUsesNaturalAstrophysicalUnits();
+    scaleBarUsesNativeOrExplicitUnits();
     scaleBarIsPaintedOverTheSlice();
     scaleBarIsPaintedIntoExportedComposition();
     scrollBarPanFollowsContentDelta();

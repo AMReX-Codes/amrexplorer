@@ -109,6 +109,82 @@ void MainWindow::applyNumberFormat(const QString& format)
     saveSettings();
 }
 
+void MainWindow::showLengthUnitsDialog()
+{
+    if (m_lengthUnitsDialog != nullptr) {
+        m_lengthUnitsDialog->raise();
+        m_lengthUnitsDialog->activateWindow();
+        return;
+    }
+    auto* dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(tr("Length Units"));
+    dialog->setWindowFlags(Qt::Window);
+
+    auto* explanation = new QLabel(tr(
+        "Select the unit used by plotfile coordinates. Leave it unset to "
+        "display native code-unit lengths."), dialog);
+    explanation->setWordWrap(true);
+    auto* units = new QComboBox(dialog);
+    units->setObjectName(QStringLiteral("lengthUnitsCombo"));
+    units->addItem(tr("Native code units (unset)"), QString{});
+    for (const auto& candidate : lengthUnits) {
+        QString label;
+        switch (candidate.unit) {
+        case LengthUnit::Centimetre: label = tr("Centimetres (cm)"); break;
+        case LengthUnit::Metre: label = tr("Metres (m)"); break;
+        case LengthUnit::Kilometre: label = tr("Kilometres (km)"); break;
+        case LengthUnit::AstronomicalUnit:
+            label = tr("Astronomical units (AU)");
+            break;
+        case LengthUnit::Parsec: label = tr("Parsecs (pc)"); break;
+        case LengthUnit::Kiloparsec: label = tr("Kiloparsecs (kpc)"); break;
+        case LengthUnit::Megaparsec: label = tr("Megaparsecs (Mpc)"); break;
+        }
+        units->addItem(label, QString::fromStdString(std::string(candidate.id)));
+    }
+    const auto selected = units->findData(m_lengthUnitId);
+    units->setCurrentIndex(selected >= 0 ? selected : 0);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok
+        | QDialogButtonBox::Apply | QDialogButtonBox::Cancel, dialog);
+    auto* layout = new QVBoxLayout(dialog);
+    layout->addWidget(explanation);
+    layout->addWidget(units);
+    layout->addWidget(buttons);
+
+    connect(buttons, &QDialogButtonBox::clicked, dialog,
+        [this, dialog, units, buttons](QAbstractButton* button) {
+            const auto role = buttons->buttonRole(button);
+            if (role == QDialogButtonBox::AcceptRole
+                || role == QDialogButtonBox::ApplyRole) {
+                applyLengthUnit(units->currentData().toString());
+                if (role == QDialogButtonBox::AcceptRole) {
+                    dialog->accept();
+                }
+            } else if (role == QDialogButtonBox::RejectRole) {
+                dialog->reject();
+            }
+        });
+    connect(dialog, &QDialog::finished, this, [this] {
+        m_lengthUnitsDialog = nullptr;
+    });
+    m_lengthUnitsDialog = dialog;
+    dialog->show();
+}
+
+void MainWindow::applyLengthUnit(const QString& unitId)
+{
+    const auto normalized = lengthUnitFromId(unitId.toStdString())
+        ? unitId : QString{};
+    if (m_lengthUnitId == normalized) {
+        return;
+    }
+    m_lengthUnitId = normalized;
+    updateScaleBars();
+    saveSettings();
+}
+
 void MainWindow::validateVectorMode()
 {
     if (m_displayMode != DisplayMode::VelocityVectors) {
@@ -1589,6 +1665,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
     if (m_numberFormatDialog != nullptr) {
         auto* dialog = m_numberFormatDialog;
         m_numberFormatDialog = nullptr;
+        dialog->close();
+    }
+    if (m_lengthUnitsDialog != nullptr) {
+        auto* dialog = m_lengthUnitsDialog;
+        m_lengthUnitsDialog = nullptr;
         dialog->close();
     }
     if (m_userGuideDialog != nullptr) {

@@ -453,6 +453,12 @@ Outcome dispatchRemote(Context& context)
                     application.exit(1);
                     return;
                 }
+                if (window.scaleBarActionEnabledForTest()
+                    || window.activeViewHasScaleBarForTest()) {
+                    qCritical("the scale bar was available for anisotropic cells");
+                    application.exit(1);
+                    return;
+                }
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
                     &application, [&window, &application, phase] {

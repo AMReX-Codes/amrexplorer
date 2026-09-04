@@ -364,6 +364,16 @@ void MainWindow::setGridBoxesVisibleForTest(bool visible)
     m_boxesAction->setChecked(visible);
 }
 
+void MainWindow::setScaleBarVisibleForTest(bool visible)
+{
+    m_scaleBarAction->setChecked(visible);
+}
+
+bool MainWindow::scaleBarActionEnabledForTest() const
+{
+    return m_scaleBarAction->isEnabled();
+}
+
 std::size_t MainWindow::activeViewGridBoxCountForTest() const
 {
     return m_activeView == nullptr

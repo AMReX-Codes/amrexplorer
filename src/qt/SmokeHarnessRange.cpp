@@ -161,13 +161,13 @@ Outcome dispatchRange(Context& context)
                     lengthUnitsAction->trigger();
                     QApplication::processEvents();
                 }
-                auto* lengthUnits = window.findChild<QComboBox*>(
+                auto* lengthUnitsCombo = window.findChild<QComboBox*>(
                     QStringLiteral("lengthUnitsCombo"));
-                const auto unitsUnsetByDefault = lengthUnits != nullptr
-                    && lengthUnits->currentData().toString().isEmpty();
+                const auto unitsUnsetByDefault = lengthUnitsCombo != nullptr
+                    && lengthUnitsCombo->currentData().toString().isEmpty();
                 if (auto* dialog = qobject_cast<QDialog*>(
-                        lengthUnits == nullptr ? nullptr
-                                               : lengthUnits->window())) {
+                        lengthUnitsCombo == nullptr ? nullptr
+                                                    : lengthUnitsCombo->window())) {
                     dialog->reject();
                 }
                 window.setScaleBarVisibleForTest(false);

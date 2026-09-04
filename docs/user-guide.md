@@ -189,9 +189,12 @@ The main controls are:
    3-D panels.
 4. **Range, Log, and Palette** control the mapping from values to colors.
 5. **Slice panels** display the XY, XZ, and YZ planes for a 3-D dataset.
-   A lower-right scale bar treats plotfile coordinates as centimetres and
-   automatically labels the current view in cm, AU, pc, or kpc. It is omitted
-   when the horizontal coordinate is an angle (the spherical theta-r view).
+   A lower-right scale bar uses native plotfile coordinates by default and
+   labels them as code units in scientific notation. Use **View > Length
+   Units...** to identify the plotfile coordinate unit, or **View > Scale Bar**
+   to show or hide the annotation. It is omitted when the horizontal coordinate
+   is an angle (the spherical theta-r view), and the option is disabled when
+   cell sizes are anisotropic.
 6. **Isometric view** shows the domain, grid boxes, and current slice planes;
    **View > Volume Rendering...** opens the same view with the field
    ray-cast into it.
@@ -551,6 +554,14 @@ between palettes.
 ## Grid boxes, contours, and vectors
 
 Press **B** or choose **View > Boxes** to show AMR grid boundaries.
+
+Choose **View > Scale Bar** to show or hide the length annotation. The option
+is unavailable when cell sizes are anisotropic. Plotfiles do not declare their
+length unit, so AMReXplorer leaves it unset by default and displays native
+coordinate values in scientific notation. Choose **View > Length Units...** to
+identify the unit used by the plotfile; AMReXplorer can then label the bar in a
+natural physical unit. This setting changes only the annotation, not dataset
+coordinates or geometry.
 
 Choose **View > Contours...** to select one of three display modes:
 

@@ -11,8 +11,6 @@ namespace amrvis {
 
 namespace {
 
-constexpr double minimumMaxSpeed = 1.0e-8;
-constexpr double minimumArrowLength = 1.0e-6;
 constexpr double headBack = 0.25;
 constexpr double headSide = 0.125;
 
@@ -64,7 +62,7 @@ std::vector<VectorSegment> generateVectorGlyphs(
     const double maxSpeed = std::sqrt(maxSpeedSquared);
 
     std::vector<VectorSegment> segments;
-    if (!(maxSpeed >= minimumMaxSpeed)) {
+    if (!(maxSpeed > 0.0)) {
         return segments;
     }
 
@@ -88,11 +86,11 @@ std::vector<VectorSegment> generateVectorGlyphs(
             if (!std::isfinite(u) || !std::isfinite(v)) {
                 continue;
             }
-            const double a = arrowMax * (u / maxSpeed);
-            const double b = arrowMax * (v / maxSpeed);
-            if (std::hypot(a, b) < minimumArrowLength) {
+            if (!(std::hypot(u, v) > 0.0)) {
                 continue;
             }
+            const double a = arrowMax * (u / maxSpeed);
+            const double b = arrowMax * (v / maxSpeed);
             const auto baseX = static_cast<float>(i) + 0.5F;
             const auto baseY = static_cast<float>(j) + 0.5F;
             const auto tipX = static_cast<float>(baseX + a);
@@ -162,20 +160,18 @@ std::vector<VectorSegment> generateSphericalRZVectorGlyphs(
         }
         maxSpeed = std::max(maxSpeed, std::hypot(u, v));
     }
-    if (!(maxSpeed >= minimumMaxSpeed)) {
+    if (!(maxSpeed > 0.0)) {
         return segments;
     }
 
     // Decimation runs over the logical grid exactly like the Cartesian
     // generator; the arrow length scale is physical, derived from the display
     // extent so the fastest arrow spans the same on-screen fraction as in the
-    // logical layouts. The near-zero cutoff scales with it (the Cartesian
-    // constant is in pixel units, meaningless for physical coordinates).
+    // logical layouts.
     const int longestSide = std::max(uComponent.width, uComponent.height);
     const int stride = std::max(1,
         static_cast<int>(static_cast<double>(longestSide) / count));
     const double arrowMax = 1.25 * displaySpan / count;
-    const double minimumLength = minimumArrowLength * arrowMax;
 
     for (int j = 0; j < uComponent.height; j += stride) {
         for (int i = 0; i < uComponent.width; i += stride) {
@@ -198,11 +194,11 @@ std::vector<VectorSegment> generateSphericalRZVectorGlyphs(
             // e_theta = (cos, -sin).
             const double displayR = u * sinTheta + v * cosTheta;
             const double displayZ = u * cosTheta - v * sinTheta;
-            const double a = arrowMax * (displayR / maxSpeed);
-            const double b = arrowMax * (displayZ / maxSpeed);
-            if (std::hypot(a, b) < minimumLength) {
+            if (!(std::hypot(displayR, displayZ) > 0.0)) {
                 continue;
             }
+            const double a = arrowMax * (displayR / maxSpeed);
+            const double b = arrowMax * (displayZ / maxSpeed);
             const auto anchor = sphericalToDisplay(r, theta);
             const auto baseX = static_cast<float>(anchor[0]);
             const auto baseY = static_cast<float>(anchor[1]);

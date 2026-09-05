@@ -8,10 +8,27 @@
 #include <QStandardItemModel>
 #include <QToolBar>
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <utility>
 
 namespace amrvis::qt {
+namespace {
+
+double defaultSymmetricLogThreshold(double minimum, double maximum) noexcept
+{
+    const auto magnitude = std::max(std::abs(minimum), std::abs(maximum));
+    if (!(magnitude > 0.0) || !std::isfinite(magnitude)) {
+        return 1.0;
+    }
+    const auto threshold = std::pow(
+        10.0, std::floor(std::log10(magnitude)) - 2.0);
+    return threshold > 0.0 && std::isfinite(threshold)
+        ? threshold : std::numeric_limits<double>::min();
+}
+
+} // namespace
 
 RangeController::RangeController(QObject* parent)
     : QObject(parent)
@@ -43,9 +60,25 @@ void RangeController::createToolbarWidgets(QToolBar* toolbar)
     // per-group separators on the Slice Controls toolbar.
     toolbar->addSeparator();
     m_logarithmic = new QCheckBox(tr("Log"), toolbar);
+    m_logarithmic->setObjectName(QStringLiteral("logarithmicScale"));
     toolbar->addWidget(m_logarithmic);
+    m_symmetricLogarithmic = new QCheckBox(tr("Symlog"), toolbar);
+    m_symmetricLogarithmic->setObjectName(
+        QStringLiteral("symmetricLogarithmicScale"));
+    toolbar->addWidget(m_symmetricLogarithmic);
+    m_linearThreshold = new ScientificDoubleSpinBox(toolbar);
+    m_linearThreshold->setObjectName(QStringLiteral("symlogLinearThreshold"));
+    m_linearThreshold->setPrefix(tr("linthresh "));
+    m_linearThreshold->setRange(std::numeric_limits<double>::min(),
+        std::numeric_limits<double>::max());
+    m_linearThreshold->setValue(1.0);
+    m_linearThreshold->setMinimumWidth(140);
+    toolbar->addWidget(m_linearThreshold);
+    m_linearThreshold->setVisible(false);
     m_mode->setEnabled(false);
     m_logarithmic->setEnabled(false);
+    m_symmetricLogarithmic->setEnabled(false);
+    m_linearThreshold->setEnabled(false);
 
     connect(m_mode, qOverload<int>(&QComboBox::currentIndexChanged), this,
         [this](int) {
@@ -64,8 +97,50 @@ void RangeController::createToolbarWidgets(QToolBar* toolbar)
                 emit userRangeChanged();
             }
         });
-    connect(m_logarithmic, &QCheckBox::toggled, this,
-        [this](bool) { emit logarithmicChanged(); });
+    connect(m_logarithmic, &QCheckBox::toggled, this, [this](bool checked) {
+        if (checked) {
+            const QSignalBlocker blocker(m_symmetricLogarithmic);
+            m_symmetricLogarithmic->setChecked(false);
+        }
+        m_linearThreshold->setVisible(
+            m_symmetricLogarithmic->isChecked());
+        m_linearThreshold->setEnabled(
+            m_controlsReady && m_symmetricLogarithmic->isChecked());
+        emit logarithmicChanged();
+    });
+    connect(m_symmetricLogarithmic, &QCheckBox::toggled, this,
+        [this](bool checked) {
+            if (checked) {
+                const QSignalBlocker blocker(m_logarithmic);
+                m_logarithmic->setChecked(false);
+                auto threshold = defaultSymmetricLogThreshold(
+                    m_minimum->value(), m_maximum->value());
+                if (!m_trackedField.isEmpty()) {
+                    const auto saved
+                        = m_symlogThresholds.constFind(m_trackedField);
+                    if (saved != m_symlogThresholds.constEnd()) {
+                        threshold = saved.value();
+                    } else {
+                        m_symlogThresholds.insert(m_trackedField, threshold);
+                    }
+                }
+                const QSignalBlocker thresholdBlocker(m_linearThreshold);
+                m_linearThreshold->setValue(threshold);
+            }
+            m_linearThreshold->setVisible(checked);
+            m_linearThreshold->setEnabled(m_controlsReady && checked);
+            emit logarithmicChanged();
+        });
+    connect(m_linearThreshold, qOverload<double>(&QDoubleSpinBox::valueChanged),
+        this, [this](double) {
+            if (m_symmetricLogarithmic->isChecked()) {
+                if (!m_trackedField.isEmpty()) {
+                    m_symlogThresholds.insert(
+                        m_trackedField, m_linearThreshold->value());
+                }
+                emit logarithmicChanged();
+            }
+        });
 }
 
 RangeController::Selection RangeController::selection() const
@@ -75,7 +150,7 @@ RangeController::Selection RangeController::selection() const
     if (selection.mode == RangeMode::User) {
         selection.userRange = std::pair{m_minimum->value(), m_maximum->value()};
     }
-    selection.logarithmic = logarithmic();
+    selection.scale = colorScale();
     return selection;
 }
 
@@ -84,9 +159,14 @@ RangeMode RangeController::mode() const
     return static_cast<RangeMode>(m_mode->currentData().toInt());
 }
 
-bool RangeController::logarithmic() const
+ColorScaleConfig RangeController::colorScale() const
 {
-    return m_logarithmic->isChecked();
+    if (m_symmetricLogarithmic->isChecked()) {
+        return {ColorScale::SymLogarithmic, m_linearThreshold->value()};
+    }
+    return {
+        m_logarithmic->isChecked() ? ColorScale::Logarithmic : ColorScale::Linear,
+        m_linearThreshold->value()};
 }
 
 void RangeController::setMode(RangeMode mode)
@@ -107,29 +187,57 @@ void RangeController::setSelection(const Selection& selection)
     const QSignalBlocker minBlocker(m_minimum);
     const QSignalBlocker maxBlocker(m_maximum);
     const QSignalBlocker logBlocker(m_logarithmic);
+    const QSignalBlocker symlogBlocker(m_symmetricLogarithmic);
+    const QSignalBlocker thresholdBlocker(m_linearThreshold);
     setMode(selection.mode);
-    m_logarithmic->setChecked(selection.logarithmic);
+    const auto scale = selection.scale;
+    m_logarithmic->setChecked(scale.scale == ColorScale::Logarithmic);
+    m_symmetricLogarithmic->setChecked(scale.scale == ColorScale::SymLogarithmic);
+    m_linearThreshold->setValue(scale.linearThreshold);
+    m_linearThreshold->setVisible(scale.scale == ColorScale::SymLogarithmic);
+    if (scale.scale == ColorScale::SymLogarithmic && !m_trackedField.isEmpty()) {
+        m_symlogThresholds.insert(m_trackedField, m_linearThreshold->value());
+        m_pendingThresholdInitialization = false;
+    }
     if (selection.userRange) {
         m_minimum->setValue(selection.userRange->first);
         m_maximum->setValue(selection.userRange->second);
     }
     updateUserRangeEnabled();
+    m_linearThreshold->setEnabled(
+        m_controlsReady && m_symmetricLogarithmic->isChecked());
 }
 
-void RangeController::showDisplayRange(double minimum, double maximum)
+bool RangeController::showDisplayRange(double minimum, double maximum)
 {
     const QSignalBlocker minBlocker(m_minimum);
     const QSignalBlocker maxBlocker(m_maximum);
     m_minimum->setValue(minimum);
     m_maximum->setValue(maximum);
+    if (m_pendingThresholdInitialization && m_symmetricLogarithmic->isChecked()
+        && !m_trackedField.isEmpty()
+        && !m_symlogThresholds.contains(m_trackedField)) {
+        const auto threshold = defaultSymmetricLogThreshold(minimum, maximum);
+        const QSignalBlocker blocker(m_linearThreshold);
+        m_linearThreshold->setValue(threshold);
+        m_symlogThresholds.insert(m_trackedField, threshold);
+        m_pendingThresholdInitialization = false;
+        return true;
+    }
+    return false;
 }
 
-void RangeController::showLogarithmic(bool logarithmic)
+void RangeController::showColorScale(ColorScaleConfig scale)
 {
-    if (m_logarithmic->isChecked() != logarithmic) {
-        const QSignalBlocker blocker(m_logarithmic);
-        m_logarithmic->setChecked(logarithmic);
-    }
+    const QSignalBlocker logarithmicBlocker(m_logarithmic);
+    const QSignalBlocker symlogBlocker(m_symmetricLogarithmic);
+    const QSignalBlocker thresholdBlocker(m_linearThreshold);
+    m_logarithmic->setChecked(scale.scale == ColorScale::Logarithmic);
+    m_symmetricLogarithmic->setChecked(scale.scale == ColorScale::SymLogarithmic);
+    m_linearThreshold->setValue(scale.linearThreshold);
+    m_linearThreshold->setVisible(scale.scale == ColorScale::SymLogarithmic);
+    m_linearThreshold->setEnabled(
+        m_controlsReady && scale.scale == ColorScale::SymLogarithmic);
 }
 
 void RangeController::setControlsReady(bool ready)
@@ -137,6 +245,8 @@ void RangeController::setControlsReady(bool ready)
     m_controlsReady = ready;
     m_mode->setEnabled(ready);
     m_logarithmic->setEnabled(ready);
+    m_symmetricLogarithmic->setEnabled(ready);
+    m_linearThreshold->setEnabled(ready && m_symmetricLogarithmic->isChecked());
     updateUserRangeEnabled();
 }
 
@@ -144,6 +254,7 @@ void RangeController::setNumberFormat(const QString& format)
 {
     m_minimum->setNumberFormat(format);
     m_maximum->setNumberFormat(format);
+    m_linearThreshold->setNumberFormat(format);
 }
 
 void RangeController::switchField(const QString& field)
@@ -192,12 +303,24 @@ void RangeController::applyFieldRange(const QString& field)
             m_maximum->setValue(range.userRange->second);
         }
     }
+    if (const auto threshold = m_symlogThresholds.constFind(field);
+        threshold != m_symlogThresholds.constEnd()) {
+        const QSignalBlocker blocker(m_linearThreshold);
+        m_linearThreshold->setValue(threshold.value());
+    }
+    m_pendingThresholdInitialization = m_symmetricLogarithmic->isChecked()
+        && !m_symlogThresholds.contains(field);
+    if (m_pendingThresholdInitialization && range.userRange) {
+        showDisplayRange(range.userRange->first, range.userRange->second);
+    }
     updateUserRangeEnabled();
 }
 
 void RangeController::reset()
 {
     m_fieldRanges.clear();
+    m_symlogThresholds.clear();
+    m_pendingThresholdInitialization = false;
     m_trackedField.clear();
     const QSignalBlocker minBlocker(m_minimum);
     const QSignalBlocker maxBlocker(m_maximum);

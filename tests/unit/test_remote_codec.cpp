@@ -616,13 +616,23 @@ int main()
     volume.region = RealBox{Real3{{0.0, -1.0, 2.0}}, Real3{{1.0, 1.0, 3.0}}};
     volume.camera = {0.7, -0.2, 2.5};
     volume.outputSize = {320, 200};
-    volume.range = VolumeRange{0.5, 4.0, true};
+    volume.range = VolumeRange{0.5, 4.0, {amrvis::ColorScale::Logarithmic}};
     volume.transfer.colors = {0x0000FFU, 0x00FF00U, 0xFF0000U};
     volume.transfer.opacities = {0.0F, 0.5F, 1.0F};
     volume.samplesPerVoxel = 4;
     volume.maximumVoxels = 1 << 20;
     require(codec::fromWire(codec::toWire(volume)) == volume,
         "a volume request with a range did not round-trip");
+    {
+        auto linear = volume;
+        linear.range = VolumeRange{0.5, 4.0, {ColorScale::Linear, 0.01}};
+        require(codec::fromWire(codec::toWire(linear)).range == linear.range,
+            "an inactive Symlog threshold changed the remote linear range");
+        const VolumeRange symlog{0.5, 4.0, {ColorScale::SymLogarithmic, 0.01}};
+        const VolumeRange differentThreshold{0.5, 4.0, {ColorScale::SymLogarithmic, 1.0}};
+        require(symlog != differentThreshold && symlog != *linear.range,
+            "volume range equality ignored an active scale setting");
+    }
     // The value on the wire, not just that it survives a round trip. Two
     // transposed mappings are inverses of each other, so every round-trip
     // check in the suite passes while a peer on the other side of a real
@@ -651,17 +661,34 @@ int main()
             "range_logarithmic alone");
         auto visible = volume;
         visible.range.reset();
-        visible.logarithmic = true;
+        visible.scale = {amrvis::ColorScale::Logarithmic};
         const auto withoutRange = codec::toWire(visible);
         require(!withoutRange.has_range && withoutRange.visible_logarithmic
                 && !withoutRange.range_logarithmic,
             "a request's Visible logarithmic mapping did not set "
             "visible_logarithmic alone");
+        auto legacyVisible = withoutRange;
+        legacyVisible.visible_scale = amrexplorer::wire::ColorScale::Linear;
+        require(codec::fromWire(legacyVisible).scale.scale == ColorScale::Logarithmic,
+                "a legacy Visible logarithmic request was decoded as linear");
+        auto legacyRange = withRange;
+        legacyRange.range_scale = amrexplorer::wire::ColorScale::Linear;
+        require(codec::fromWire(legacyRange).range == volume.range,
+                "a legacy explicit logarithmic range was decoded as linear");
     }
     volume.range.reset();
-    volume.logarithmic = true;
+    volume.scale = {amrvis::ColorScale::Logarithmic};
     require(codec::fromWire(codec::toWire(volume)) == volume,
         "a volume request without a range did not round-trip");
+    volume.scale = {ColorScale::SymLogarithmic, 0.25};
+    {
+        const auto symlogWire = codec::toWire(volume);
+        require(symlogWire.visible_scale == amrexplorer::wire::ColorScale::SymLogarithmic &&
+                    symlogWire.visible_linear_threshold == 0.25 && !symlogWire.visible_logarithmic,
+                "a symmetric-log Visible mapping was not encoded on the wire");
+        require(codec::fromWire(symlogWire) == volume,
+            "a symmetric-log volume request did not round-trip");
+    }
     auto volumeWire = codec::toWire(volume);
     volumeWire.transfer_opacities.pop_back();
     requireRejected([&] { static_cast<void>(codec::fromWire(volumeWire)); },
@@ -689,7 +716,7 @@ int main()
     frame.width = 3;
     frame.height = 2;
     frame.pixels = {0xFF000000U, 0x80112233U, 0U, 0xFFFFFFFFU, 0x01020304U, 0x7F7F7F7FU};
-    frame.usedRange = {0.5, 4.0, true};
+    frame.usedRange = {0.5, 4.0, {amrvis::ColorScale::Logarithmic}};
     frame.metrics.gridDims = {8, 4, 2};
     frame.metrics.coveredVoxels = 60;
     frame.metrics.sampledMaximumLevel = 1;
@@ -704,6 +731,17 @@ int main()
     frame.cacheFallbackToLevel = 0;
     require(codec::fromWire(codec::toWire(frame, CacheMetrics{})) == frame,
         "a rendered frame did not round-trip");
+    {
+        auto legacyFrame = codec::toWire(frame, CacheMetrics{});
+        require(legacyFrame.used_logarithmic,
+                "a logarithmic frame did not set its legacy wire flag");
+        legacyFrame.used_scale = amrexplorer::wire::ColorScale::Linear;
+        require(codec::fromWire(legacyFrame).usedRange == frame.usedRange,
+                "a legacy logarithmic frame was decoded as linear");
+    }
+    frame.usedRange = {-4.0, 4.0, {ColorScale::SymLogarithmic, 0.5}};
+    require(codec::fromWire(codec::toWire(frame, CacheMetrics{})) == frame,
+        "a symmetric-log rendered range did not round-trip");
     // A response that never set the two fallback levels: they default to the
     // no-fallback sentinel, so it decodes as "no fallback" rather than as a
     // fallback from level 0 to level 0 -- which validateSessionVolumeResult

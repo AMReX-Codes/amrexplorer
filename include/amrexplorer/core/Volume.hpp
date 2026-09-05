@@ -3,6 +3,7 @@
 #include <amrexplorer/core/Geometry.hpp>
 #include <amrexplorer/core/OrthoProjection.hpp>
 #include <amrexplorer/core/Request.hpp>
+#include <amrexplorer/core/ValueMapping.hpp>
 
 #include <array>
 #include <cstddef>
@@ -30,12 +31,24 @@ struct VolumeTransferFunction {
         const VolumeTransferFunction&) = default;
 };
 
-// The value range the transfer function spans, linear or logarithmic.
+// The value range and color scale the transfer function spans.
 struct VolumeRange {
     double minimum = 0.0;
     double maximum = 1.0;
-    bool logarithmic = false;
-    friend bool operator==(const VolumeRange&, const VolumeRange&) = default;
+    ColorScaleConfig scale;
+    constexpr VolumeRange() = default;
+    constexpr VolumeRange(double minimumValue, double maximumValue,
+                          ColorScaleConfig scaleConfig = {})
+        : minimum(minimumValue), maximum(maximumValue), scale(scaleConfig) {}
+    friend bool operator==(const VolumeRange& lhs, const VolumeRange& rhs)
+    {
+        const auto left = lhs.scale;
+        const auto right = rhs.scale;
+        return lhs.minimum == rhs.minimum && lhs.maximum == rhs.maximum
+            && left.scale == right.scale
+            && (left.scale != ColorScale::SymLogarithmic
+                || left.linearThreshold == right.linearThreshold);
+    }
 };
 
 inline constexpr int maxVolumeOutputDimension = 4096;
@@ -102,11 +115,11 @@ struct VolumeRenderRequest {
     std::array<int, 2> outputSize{0, 0};   // width, height in pixels
     // The range the colours span; nullopt asks the renderer to use the
     // sampled grid's finite extrema (the "Visible" range) and report them
-    // back, with `logarithmic` as the requested mapping (falling back to
-    // linear when the data is not strictly positive). `logarithmic` is
-    // ignored when `range` is set: the range carries its own mapping.
+    // back, with `scale` as the requested mapping (logarithmic falls back to
+    // linear when the data is not strictly positive). `scale` is ignored
+    // when `range` is set: the range carries its own mapping.
     std::optional<VolumeRange> range;
-    bool logarithmic = false;
+    ColorScaleConfig scale;
     VolumeTransferFunction transfer;
     // Ray samples per voxel along the ray (the step is the mean distance a
     // view ray spends crossing one voxel divided by this).

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
+#include <amrexplorer/core/ValueMapping.hpp>
 
 #include <QHash>
 #include <QObject>
@@ -34,7 +35,12 @@ public:
         RangeMode mode = RangeMode::File;
         // The User min/max, present when mode is User.
         std::optional<std::pair<double, double>> userRange;
-        bool logarithmic = false;
+        ColorScaleConfig scale;
+        Selection() = default;
+        Selection(RangeMode selectedMode,
+                  std::optional<std::pair<double, double>> selectedUserRange,
+                  ColorScaleConfig scaleConfig = {})
+            : mode(selectedMode), userRange(std::move(selectedUserRange)), scale(scaleConfig) {}
     };
     // Which metadata-backed modes the current field/level can offer.
     struct Availability {
@@ -51,17 +57,20 @@ public:
 
     [[nodiscard]] Selection selection() const;
     [[nodiscard]] RangeMode mode() const;
-    [[nodiscard]] bool logarithmic() const;
+    [[nodiscard]] ColorScaleConfig colorScale() const;
 
     // Blocked writes: none of these emits a change signal.
     // The whole selection, as a restore does; the min/max are written only
-    // when a User range is given.
+    // when a User range is given. Set the tracked field first so an explicit
+    // Symlog threshold is remembered for the restored field.
     void setSelection(const Selection& selection);
     // The active view's display range and log flag, mirrored into the boxes
     // and checkbox (the min/max unconditionally: the caller decides whether
     // a User range must be left alone).
-    void showDisplayRange(double minimum, double maximum);
-    void showLogarithmic(bool logarithmic);
+    // Returns true when a newly selected field initializes its Symlog
+    // threshold; the host must recolor using the updated selection.
+    bool showDisplayRange(double minimum, double maximum);
+    void showColorScale(ColorScaleConfig scale);
     // Whether a dataset is open: mode and Log enabled iff ready, min/max iff
     // ready and the mode is User.
     void setControlsReady(bool ready);
@@ -86,7 +95,10 @@ public:
     {
         return m_trackedField;
     }
-    void setTrackedField(const QString& field) { m_trackedField = field; }
+    void setTrackedField(const QString& field) {
+        m_trackedField = field;
+        m_pendingThresholdInitialization = !field.isEmpty() && !m_symlogThresholds.contains(field);
+    }
     // Enables or disables the File and Level entries for what `field` at the
     // current level can offer. A selected mode that became unavailable falls
     // back to Visible (recorded in the field's snapshot) with a status
@@ -95,8 +107,8 @@ public:
         const Availability& availability, const QString& field);
 
 signals:
-    // A user's edit of the mode, of a User bound, or of Log. Blocked writes
-    // emit none of these.
+    // A user's edit of the mode, of a User bound, or of the color scale.
+    // Blocked writes emit none of these.
     void modeChanged();
     void userRangeChanged();
     void logarithmicChanged();
@@ -116,8 +128,12 @@ private:
     ScientificDoubleSpinBox* m_minimum = nullptr;
     ScientificDoubleSpinBox* m_maximum = nullptr;
     QCheckBox* m_logarithmic = nullptr;
+    QCheckBox* m_symmetricLogarithmic = nullptr;
+    ScientificDoubleSpinBox* m_linearThreshold = nullptr;
     bool m_controlsReady = false;
+    bool m_pendingThresholdInitialization = false;
     QHash<QString, FieldRange> m_fieldRanges;
+    QHash<QString, double> m_symlogThresholds;
     QString m_trackedField;
 };
 

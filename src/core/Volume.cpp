@@ -117,15 +117,16 @@ std::vector<std::string> validateVolumeRenderRequest(
     }
     if (request.range) {
         const auto& range = *request.range;
+        const auto scale = range.scale;
         if (!std::isfinite(range.minimum) || !std::isfinite(range.maximum)
             || !(range.minimum < range.maximum)
             || !std::isfinite(range.maximum - range.minimum)) {
             errors.emplace_back(
                 "range must be finite with minimum < maximum and a finite span");
-        } else if (range.logarithmic && !(range.minimum > 0.0)) {
+        } else if (scale.scale == ColorScale::Logarithmic && !(range.minimum > 0.0)) {
             errors.emplace_back("a logarithmic range must be strictly positive");
         } else if (!resolveValueRange(
-                       range.minimum, range.maximum, range.logarithmic)) {
+                       range.minimum, range.maximum, scale)) {
             // The renderers map through resolveValueRange, so whatever it
             // cannot resolve has to be refused here too -- otherwise a
             // request a session or a server has already declared valid throws
@@ -133,7 +134,14 @@ std::vector<std::string> validateVolumeRenderRequest(
             // rejected request. The case the tests above miss is a
             // logarithmic range whose bounds share a logarithm.
             errors.emplace_back(
-                "a logarithmic range must span more than one representable logarithm");
+                "a range must span more than one representable scaled value");
+        }
+    } else {
+        const auto scale = request.scale;
+        if (scale.scale == ColorScale::SymLogarithmic
+            && !(scale.linearThreshold > 0.0 && std::isfinite(scale.linearThreshold))) {
+            errors.emplace_back(
+                "a symmetric-log linear threshold must be finite and positive");
         }
     }
     for (const auto& error : validateVolumeTransferFunction(request.transfer)) {

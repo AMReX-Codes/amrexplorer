@@ -44,6 +44,7 @@ std::array<std::uint8_t, 3> sampleViridis(double normalized) noexcept
 ImageBuffer renderScalarPlane(
     const ScalarPlane& plane, const ScalarRenderSettings& settings)
 {
+    const auto scale = settings.scale;
     // Check order is pinned by the unit test: positive extent, then the
     // stride representation, then the shared storage-match rule (extent is
     // already vetted here, so AllowEmpty cannot actually pass an empty plane).
@@ -63,23 +64,32 @@ ImageBuffer renderScalarPlane(
         throw std::invalid_argument(
             "scalar render range must be finite with a finite span");
     }
-    if (settings.logarithmic && !(settings.minimum > 0.0)) {
+    if (scale.scale == ColorScale::Logarithmic && !(settings.minimum > 0.0)) {
         throw std::invalid_argument("logarithmic scalar range must be positive");
+    }
+    if (scale.scale == ColorScale::SymLogarithmic
+        && !(scale.linearThreshold > 0.0 && std::isfinite(scale.linearThreshold))) {
+        throw std::invalid_argument(
+            "symmetric-log scalar threshold must be finite and positive");
     }
 
     // The checks above name the three ways a range is refused; this resolves
     // the mapping itself, shared with the volume ray caster so a value takes
     // the same slot in a slice and in a volume of the same field.
     const auto range = resolveValueRange(
-        settings.minimum, settings.maximum, settings.logarithmic);
+        settings.minimum, settings.maximum, scale);
     if (!range) {
         // Everything the checks above cover has already thrown, so the only
         // way to arrive here is a logarithmic range so narrow that both
         // bounds share a logarithm -- [1e300, nextafter(1e300)] differ by a
         // relative 1e-16, far under an ulp of log(1e300). The span the slots
         // would be spread over is zero, so there is no mapping to make.
+        if (scale.scale == ColorScale::Logarithmic) {
+            throw std::invalid_argument(
+                "logarithmic scalar range is too narrow: its bounds have the same logarithm");
+        }
         throw std::invalid_argument(
-            "logarithmic scalar range is too narrow: its bounds have the same logarithm");
+            "scalar range is too narrow after applying its color scale");
     }
 
     ImageBuffer image;

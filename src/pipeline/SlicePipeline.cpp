@@ -290,26 +290,25 @@ void applyDisplayCoordinates(
 } // namespace
 
 SliceDisplayResult executeSlice(const std::shared_ptr<DatasetSession>& dataset,
-    const SliceRequest& request,
-    RangeMode rangeMode,
+    const SliceRequest& request, RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const Palette& palette, StopToken cancellation)
+    ColorScaleConfig scale, const Palette& palette, StopToken cancellation)
 {
     SliceDisplayResult result;
     result.request = request;
     result.slice = requestSlice(*dataset, request, cancellation);
     const auto range = resolveDisplayRange(dataset, request.field,
         request.maximumLevel, request.composition, rangeMode, userRange,
-        logarithmic, result.displayPlane(), cancellation);
+        scale, result.displayPlane(), cancellation);
     result.minimum = range.minimum;
     result.maximum = range.maximum;
-    result.logarithmic = range.logarithmic;
+    result.scale = range.scale;
     result.fieldName = dataset->metadata().fields[request.field.value].name;
     result.image = renderScalarPlane(result.displayPlane(),
         ScalarRenderSettings{
             .minimum = range.minimum,
             .maximum = range.maximum,
-            .logarithmic = range.logarithmic,
+            .scale = range.scale,
             .palette = &palette
         });
     applyDisplayCoordinates(dataset->metadata(), result);
@@ -349,9 +348,8 @@ void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
 
 SliceDisplayResult executeSliceWithFallback(
     const std::shared_ptr<DatasetSession>& dataset, SliceRequest request,
-    RangeMode rangeMode,
-    const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const Palette& palette, DisplayMode displayMode,
+    RangeMode rangeMode, const std::optional<std::pair<double, double>>& userRange,
+    ColorScaleConfig scale, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField, int contourCount,
     StopToken cancellation)
 {
@@ -362,14 +360,14 @@ SliceDisplayResult executeSliceWithFallback(
     for (;;) {
         try {
             auto result = executeSlice(dataset, request, rangeMode,
-                userRange, logarithmic, palette, cancellation);
+                userRange, scale, palette, cancellation);
             result.mode = displayMode;
             result.vectorUField = vectorUField;
             result.vectorVField = vectorVField;
             result.contourCount = contourCount;
             if (isContourMode(displayMode)) {
                 appendContours(dataset, request, contourCount,
-                    result.minimum, result.maximum, result.logarithmic,
+                    result.minimum, result.maximum, result.scale,
                     cancellation, result);
             }
             if (displayMode == DisplayMode::VelocityVectors) {
@@ -416,7 +414,7 @@ SliceDisplayResult executeSliceWithFallback(
 // this cheap extraction (see refreshCachedSlice).
 void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request, int contourCount, double minimum, double maximum,
-    bool logarithmic, StopToken cancellation, SliceDisplayResult& result)
+    ColorScaleConfig scale, StopToken cancellation, SliceDisplayResult& result)
 {
     const auto& metadata = dataset->metadata();
     const auto level = std::min(request.maximumLevel, metadata.finestLevel);
@@ -455,19 +453,17 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     // No supersampling (#56 removed it): the linear plane is already at contour
     // resolution, so contours are extracted from contourPlane directly.
     const auto values = contourValues(
-        minimum, maximum, contourCount, logarithmic);
+        minimum, maximum, contourCount, scale);
     result.contourPolylines = contourPolylinesForDisplay(
         result.contourPlane, values, displayWidth, displayHeight);
 }
 
 SliceDisplayResult refreshCachedSlice(
-    const std::shared_ptr<DatasetSession>& dataset,
-    const SliceRequest& request,
+    const std::shared_ptr<DatasetSession>& dataset, const SliceRequest& request,
     std::shared_ptr<const ScalarPlane> displayPlanePtr,
     ScalarPlane contourPlane, std::vector<VectorSegment> vectors,
-    RangeMode rangeMode,
-    const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const Palette& palette, DisplayMode displayMode,
+    RangeMode rangeMode, const std::optional<std::pair<double, double>>& userRange,
+    ColorScaleConfig scale, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField,
     int contourCount, bool rasterDirty, StopToken cancellation)
 {
@@ -492,10 +488,10 @@ SliceDisplayResult refreshCachedSlice(
     const auto& plane = *result.reusedPlane;
     const auto range = resolveDisplayRange(dataset, request.field,
         request.maximumLevel, request.composition, rangeMode, userRange,
-        logarithmic, plane, cancellation);
+        scale, plane, cancellation);
     result.minimum = range.minimum;
     result.maximum = range.maximum;
-    result.logarithmic = range.logarithmic;
+    result.scale = range.scale;
     result.fieldName = dataset->metadata().fields[request.field.value].name;
     result.rasterUnchanged = !rasterDirty;
     if (rasterDirty) {
@@ -503,14 +499,14 @@ SliceDisplayResult refreshCachedSlice(
             ScalarRenderSettings{
                 .minimum = range.minimum,
                 .maximum = range.maximum,
-                .logarithmic = range.logarithmic,
+                .scale = range.scale,
                 .palette = &palette
             });
     }
     if (isContourMode(displayMode)) {
         result.contourPlane = std::move(contourPlane);
         const auto values = contourValues(
-            range.minimum, range.maximum, contourCount, range.logarithmic);
+            range.minimum, range.maximum, contourCount, range.scale);
         result.contourPolylines = contourPolylinesForDisplay(
             result.contourPlane, values,
             request.outputSize[0], request.outputSize[1]);
@@ -523,17 +519,17 @@ SliceDisplayResult refreshCachedSlice(
 }
 
 std::vector<ContourPolyline> recomputeContourPolylines(
-    const ScalarPlane& plane, double minimum,
-    double maximum, bool logarithmic, int contourCount,
-    int displayWidth, int displayHeight)
+    const ScalarPlane& plane, double minimum, double maximum,
+    ColorScaleConfig scale, int contourCount, int displayWidth, int displayHeight)
 {
     if (plane.width <= 0 || plane.height <= 0 || contourCount < 1
-        || !(minimum < maximum) || (logarithmic && !(minimum > 0.0))) {
+        || !(minimum < maximum)
+        || (scale.scale == ColorScale::Logarithmic && !(minimum > 0.0))) {
         return {};
     }
     try {
         const auto values = contourValues(
-            minimum, maximum, contourCount, logarithmic);
+            minimum, maximum, contourCount, scale);
         return contourPolylinesForDisplay(
             plane, values, displayWidth, displayHeight);
     } catch (const std::exception&) {
@@ -548,7 +544,7 @@ void recomputeContourPolylines(SliceDisplayResult& result)
     }
     result.contourPolylines = recomputeContourPolylines(
         result.contourPlane, result.minimum,
-        result.maximum, result.logarithmic, result.contourCount,
+        result.maximum, result.scale, result.contourCount,
         result.request.outputSize[0], result.request.outputSize[1]);
 }
 
@@ -643,6 +639,7 @@ InitialSliceResult executeSessionFrameLoad(
         try {
             result.displays.clear();
             result.displays.reserve(normals.size());
+            const auto frameScale = spec.scale;
             for (std::size_t entry = 0; entry < normals.size(); ++entry) {
                 const auto normal = normals[entry];
                 SliceRequest request;
@@ -696,12 +693,12 @@ InitialSliceResult executeSessionFrameLoad(
                     request.physicalPosition = positions[static_cast<std::size_t>(normal)];
                 }
                 auto display = executeSlice(result.dataset, request, rangeMode,
-                    spec.userRange, spec.logarithmic, spec.palette, cancellation);
+                    spec.userRange, frameScale, spec.palette, cancellation);
                 display.mode = spec.displayMode;
                 display.contourCount = spec.contourCount;
                 if (isContourMode(spec.displayMode)) {
                     appendContours(result.dataset, request, spec.contourCount,
-                        display.minimum, display.maximum, display.logarithmic,
+                        display.minimum, display.maximum, display.scale,
                         cancellation, display);
                 }
                 if (spec.displayMode == DisplayMode::VelocityVectors) {
@@ -732,30 +729,32 @@ InitialSliceResult executeSessionFrameLoad(
                     &result.displays[0].displayPlane(),
                     &result.displays[1].displayPlane(),
                     &result.displays[2].displayPlane()};
-                const auto shared = DisplayCoordinator::sharedVisibleRange(
-                    planes, spec.logarithmic);
+                const auto shared = DisplayCoordinator::sharedVisibleRange(planes, frameScale);
                 // No finite samples anywhere: fall back to a neutral range so
                 // the frame still renders.
                 const auto [globalMin, globalMax] = shared.value_or(
-                    spec.logarithmic ? std::pair{1.0, 10.0}
+                    frameScale.scale == ColorScale::Logarithmic ? std::pair{1.0, 10.0}
                                      : std::pair{0.0, 1.0});
-                // One log flag for all three panels: log only when the shared
+                // One color scale for all three panels: log only when the shared
                 // minimum is positive, matching how a single panel degrades to
                 // linear. A per-panel flag kept an all-positive plane
                 // logarithmic against a union that crosses zero, and
                 // renderScalarPlane rejects a non-positive log minimum -- which
                 // failed the whole frame load
                 // (see shared-log-range-render-throw-fails-load).
-                const bool sharedLog = spec.logarithmic && globalMin > 0.0;
+                auto sharedScale = frameScale;
+                if (sharedScale.scale == ColorScale::Logarithmic && !(globalMin > 0.0)) {
+                    sharedScale.scale = ColorScale::Linear;
+                }
                 for (auto& d : result.displays) {
                     d.minimum = globalMin;
                     d.maximum = globalMax;
-                    d.logarithmic = sharedLog;
+                    d.scale = sharedScale;
                     d.image = renderScalarPlane(d.displayPlane(),
                         ScalarRenderSettings{
                             .minimum = globalMin,
                             .maximum = globalMax,
-                            .logarithmic = sharedLog,
+                            .scale = sharedScale,
                             .palette = &spec.palette
                         });
                     // Contours were extracted per view before the shared range

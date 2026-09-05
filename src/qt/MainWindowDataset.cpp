@@ -162,8 +162,13 @@ void MainWindow::restoreSettings()
 
     m_themeController->restore(settings);
 
-    m_range->showLogarithmic(
-        settings.value(QStringLiteral("range/logarithmic"), false).toBool());
+    const auto savedScale = settings.value(QStringLiteral("range/scale"),
+        settings.value(QStringLiteral("range/logarithmic"), false).toBool()
+            ? QStringLiteral("log") : QStringLiteral("linear")).toString();
+    const auto scale = savedScale == QStringLiteral("symlog") ? ColorScale::SymLogarithmic
+        : savedScale == QStringLiteral("log") ? ColorScale::Logarithmic : ColorScale::Linear;
+    m_range->showColorScale({scale,
+        settings.value(QStringLiteral("range/symlogLinearThreshold"), 1.0).toDouble()});
     {
         // A stored format that no longer validates falls back to the default.
         const auto format = settings.value(QStringLiteral("numberFormat"),
@@ -231,7 +236,11 @@ void MainWindow::saveSettings()
     // Range mode is deliberately not persisted: the correct default (File)
     // depends on the dataset and restoring a different mode from a previous
     // session would produce unexpected color bars.
-    settings.setValue(QStringLiteral("range/logarithmic"), m_range->logarithmic());
+    const auto scale = m_range->colorScale();
+    settings.setValue(QStringLiteral("range/scale"),
+        scale.scale == ColorScale::SymLogarithmic ? QStringLiteral("symlog")
+        : scale.scale == ColorScale::Logarithmic ? QStringLiteral("log") : QStringLiteral("linear"));
+    settings.setValue(QStringLiteral("range/symlogLinearThreshold"), scale.linearThreshold);
     m_paletteController->save(settings);
     m_themeController->save(settings);
     settings.setValue(QStringLiteral("numberFormat"), m_numberFormat);
@@ -524,9 +533,11 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
     ColorBarWidget colorBar;
     colorBar.setPalette(&m_paletteController->palette());
     colorBar.setNumberFormat(options.numberFormat);
-    colorBar.setLogarithmic(state->displayLogarithmic);
-    colorBar.setFieldRange(state->fieldName +
-                               (state->displayLogarithmic ? tr(" (log)") : QString()),
+    colorBar.setScale(state->displayScale);
+    const auto suffix = state->displayScale.scale == ColorScale::Logarithmic
+        ? tr(" (log)") : state->displayScale.scale == ColorScale::SymLogarithmic
+            ? tr(" (symlog)") : QString();
+    colorBar.setFieldRange(state->fieldName + suffix,
                            state->displayMinimum, state->displayMaximum);
     ExportLayout localLayout;
     auto& layout = frozenLayout != nullptr ? *frozenLayout : localLayout;
@@ -704,7 +715,7 @@ void MainWindow::syncDatasetWindowColors()
     m_datasetWindow->setColoring(
         makeDatasetColoring(m_paletteController->palette(),
             m_activeView->displayMinimum, m_activeView->displayMaximum,
-            m_activeView->displayLogarithmic));
+            m_activeView->displayScale));
 }
 
 void MainWindow::refreshDatasetWindow()
@@ -1346,10 +1357,10 @@ void MainWindow::requestInitialSlice(
                         if (levelIndex >= 0) {
                             m_levelSelector->setCurrentIndex(levelIndex);
                         }
-                        m_range->setSelection({restoredSpec->rangeMode,
-                            restoredSpec->userRange, restoredSpec->logarithmic});
                         m_range->setTrackedField(
                             m_fieldSelector->currentText());
+                        m_range->setSelection({restoredSpec->rangeMode, restoredSpec->userRange,
+                                               restoredSpec->scale});
                         m_range->commitFieldRange(m_range->trackedField());
                         // The menu was rebuilt by configureSliceControls
                         // above, while the combo still sat on field 0; it is

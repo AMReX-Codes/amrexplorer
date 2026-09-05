@@ -30,10 +30,11 @@ struct DatasetColoring {
 };
 
 [[nodiscard]] inline DatasetColoring makeDatasetColoring(
-    const Palette& palette, double minimum, double maximum, bool logarithmic)
+    const Palette& palette, double minimum, double maximum,
+    ColorScaleConfig scale)
 {
     return DatasetColoring{
-        palette, resolveValueRange(minimum, maximum, logarithmic)};
+        palette, resolveValueRange(minimum, maximum, scale)};
 }
 
 // What a value is drawn in. Mapped through ValueMapping, exactly as

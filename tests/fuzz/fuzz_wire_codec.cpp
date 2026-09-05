@@ -793,7 +793,7 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         request.region.upper = {{1.0, 2.0, 3.0}};
         request.camera = {0.5, -0.25, 1.5};
         request.outputSize = {64, 48};
-        request.range = amrvis::VolumeRange{0.5, 2.0, true};
+        request.range = amrvis::VolumeRange{0.5, 2.0, {amrvis::ColorScale::Logarithmic}};
         // Not the *wire* default: Nearest is the schema's zero, which
         // flatbuffers omits from the buffer entirely, so a seed carrying it
         // would be byte-identical to a pre-1.3 request and would exercise
@@ -808,7 +808,7 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         frame.width = 2;
         frame.height = 2;
         frame.pixels = {0xFF102030U, 0x80402010U, 0U, 0xFFFFFFFFU};
-        frame.usedRange = {0.5, 2.0, true};
+        frame.usedRange = {0.5, 2.0, {amrvis::ColorScale::Logarithmic}};
         frame.metrics.gridDims = {4, 4, 4};
         frame.metrics.coveredVoxels = 60;
         frame.metrics.sampledMaximumLevel = 1;

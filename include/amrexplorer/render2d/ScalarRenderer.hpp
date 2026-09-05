@@ -1,4 +1,5 @@
 #pragma once
+#include <amrexplorer/core/ValueMapping.hpp>
 
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/render2d/ImageBuffer.hpp>
@@ -12,7 +13,7 @@ namespace amrvis {
 struct ScalarRenderSettings {
     double minimum = 0.0;
     double maximum = 1.0;
-    bool logarithmic = false;
+    ColorScaleConfig scale;
     std::uint32_t invalidColor = 0xFF303030U;
     std::uint32_t nanColor = 0xFFFF00FFU;
     // When null, the built-in legacy rainbow palette is used.
@@ -24,4 +25,3 @@ struct ScalarRenderSettings {
     const ScalarPlane& plane, const ScalarRenderSettings& settings);
 
 } // namespace amrvis
-

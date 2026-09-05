@@ -342,12 +342,12 @@ void compare(const Options& options, const std::string& token)
                 auto remoteRequest = localRequest;
                 remoteRequest.dataset = remote->id();
 
-                const auto localResult = amrvis::executeSlice(local,
-                    localRequest, amrvis::RangeMode::File, std::nullopt,
-                    false, palette, {});
-                const auto remoteResult = amrvis::executeSlice(remote,
-                    remoteRequest, amrvis::RangeMode::File, std::nullopt,
-                    false, palette, {});
+                const auto localResult =
+                    amrvis::executeSlice(local, localRequest, amrvis::RangeMode::File, std::nullopt,
+                                         {amrvis::ColorScale::Linear}, palette, {});
+                const auto remoteResult =
+                    amrvis::executeSlice(remote, remoteRequest, amrvis::RangeMode::File,
+                                         std::nullopt, {amrvis::ColorScale::Linear}, palette, {});
                 const auto difference = planeDifference(
                     localResult.slice.plane, remoteResult.slice.plane);
                 if (!difference.empty()) {
@@ -356,9 +356,9 @@ void compare(const Options& options, const std::string& token)
                         + std::to_string(normal) + ", "
                         + std::string(state.name) + ": " + difference);
                 }
-                if (localResult.minimum != remoteResult.minimum
-                    || localResult.maximum != remoteResult.maximum
-                    || localResult.logarithmic != remoteResult.logarithmic) {
+                if (localResult.minimum != remoteResult.minimum ||
+                    localResult.maximum != remoteResult.maximum ||
+                    localResult.scale != remoteResult.scale) {
                     throw std::runtime_error("field '"
                         + local->metadata().fields[field].name + "', normal "
                         + std::to_string(normal) + ", "

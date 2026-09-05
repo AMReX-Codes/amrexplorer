@@ -101,7 +101,7 @@ struct OpacityRamp {
     const std::shared_ptr<DatasetSession>& dataset, FieldId field,
     int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, StopToken cancellation = {});
+    ColorScaleConfig scale, StopToken cancellation = {});
 
 // How the range is resolved, for the fallback path below, which resolves it
 // afresh for whatever level each attempt is about to render.
@@ -126,7 +126,12 @@ struct OpacityRamp {
 struct VolumeRangeChoice {
     RangeMode mode = RangeMode::Visible;
     std::optional<std::pair<double, double>> userRange;
-    bool logarithmic = false;
+    ColorScaleConfig scale;
+    VolumeRangeChoice() = default;
+    VolumeRangeChoice(RangeMode selectedMode,
+                      std::optional<std::pair<double, double>> selectedUserRange,
+                      ColorScaleConfig scaleConfig = {})
+        : mode(selectedMode), userRange(std::move(selectedUserRange)), scale(scaleConfig) {}
 };
 
 // The bytes a rendered frame of this size costs on the wire, and the size

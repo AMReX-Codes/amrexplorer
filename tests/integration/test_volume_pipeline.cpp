@@ -580,38 +580,46 @@ int main()
         // File statistics: [1, 2]; Level 1 (finest available) also [1, 2];
         // User range as given, padded when degenerate; log downgrades on a
         // non-positive range; Visible leaves it to the renderer.
-        const auto file = amrvis::resolveVolumeRange(dataset, field, 1,
-            amrvis::CompositionPolicy::FinestAvailable, amrvis::RangeMode::File,
-            std::nullopt, false);
-        require(file && file->minimum == 1.0 && file->maximum == 2.0
-                && !file->logarithmic,
-            "the File range is not the metadata's");
-        const auto logFile = amrvis::resolveVolumeRange(dataset, field, 1,
-            amrvis::CompositionPolicy::FinestAvailable, amrvis::RangeMode::File,
-            std::nullopt, true);
-        require(logFile && logFile->logarithmic && logFile->minimum == 1.0,
-            "a positive File range did not stay logarithmic");
-        const auto user = amrvis::resolveVolumeRange(dataset, field, 1,
+        const auto file = amrvis::resolveVolumeRange(
+            dataset, field, 1, amrvis::CompositionPolicy::FinestAvailable, amrvis::RangeMode::File,
+            std::nullopt, {amrvis::ColorScale::Linear});
+        require(file && file->minimum == 1.0 && file->maximum == 2.0 &&
+                    file->scale.scale != amrvis::ColorScale::Logarithmic,
+                "the File range is not the metadata's");
+        const auto logFile = amrvis::resolveVolumeRange(
+            dataset, field, 1, amrvis::CompositionPolicy::FinestAvailable, amrvis::RangeMode::File,
+            std::nullopt, {amrvis::ColorScale::Logarithmic});
+        require(logFile && (logFile->scale.scale == amrvis::ColorScale::Logarithmic) &&
+                    logFile->minimum == 1.0,
+                "a positive File range did not stay logarithmic");
+        const auto user = amrvis::resolveVolumeRange(
+            dataset, field, 1, amrvis::CompositionPolicy::FinestAvailable, amrvis::RangeMode::User,
+            std::pair{-3.0, 5.0}, {amrvis::ColorScale::Logarithmic});
+        require(user && user->scale.scale != amrvis::ColorScale::Logarithmic &&
+                    user->minimum == -3.0 && user->maximum == 5.0,
+                "a non-positive User range did not fall back to linear");
+        const auto symlog = amrvis::resolveVolumeRange(dataset, field, 1,
             amrvis::CompositionPolicy::FinestAvailable, amrvis::RangeMode::User,
-            std::pair{-3.0, 5.0}, true);
-        require(user && !user->logarithmic && user->minimum == -3.0
-                && user->maximum == 5.0,
-            "a non-positive User range did not fall back to linear");
-        const auto degenerate = amrvis::resolveVolumeRange(dataset, field, 1,
-            amrvis::CompositionPolicy::FinestAvailable, amrvis::RangeMode::User,
-            std::pair{2.0, 2.0}, false);
+            std::pair{-3.0, 5.0},
+            {amrvis::ColorScale::SymLogarithmic, 0.25});
+        require(symlog && symlog->scale.scale != amrvis::ColorScale::Logarithmic &&
+                    symlog->scale.scale == amrvis::ColorScale::SymLogarithmic &&
+                    symlog->scale.linearThreshold == 0.25,
+                "a symmetric-log User range did not preserve its mapping");
+        const auto degenerate = amrvis::resolveVolumeRange(
+            dataset, field, 1, amrvis::CompositionPolicy::FinestAvailable, amrvis::RangeMode::User,
+            std::pair{2.0, 2.0}, {amrvis::ColorScale::Linear});
         require(degenerate && degenerate->minimum < 2.0 && degenerate->maximum > 2.0,
             "a degenerate User range was not padded");
         {
             const auto huge = 1.0e300;
             std::string narrow;
             try {
-                static_cast<void>(amrvis::resolveVolumeRange(dataset, field, 1,
-                    amrvis::CompositionPolicy::FinestAvailable,
+                static_cast<void>(amrvis::resolveVolumeRange(
+                    dataset, field, 1, amrvis::CompositionPolicy::FinestAvailable,
                     amrvis::RangeMode::User,
-                    std::pair{huge, std::nextafter(huge,
-                        std::numeric_limits<double>::infinity())},
-                    true));
+                    std::pair{huge, std::nextafter(huge, std::numeric_limits<double>::infinity())},
+                    {amrvis::ColorScale::Logarithmic}));
             } catch (const std::runtime_error& error) {
                 narrow = error.what();
             }
@@ -619,11 +627,11 @@ int main()
                     && narrow.find("logarithm") != std::string::npos,
                 "a logarithmic range too narrow to map was handed to the renderer");
         }
-        require(!amrvis::resolveVolumeRange(dataset, field, 1,
-                    amrvis::CompositionPolicy::FinestAvailable,
-                    amrvis::RangeMode::Visible, std::nullopt, false)
-                    .has_value(),
-            "the Visible range was resolved on the client");
+        require(!amrvis::resolveVolumeRange(
+                     dataset, field, 1, amrvis::CompositionPolicy::FinestAvailable,
+                     amrvis::RangeMode::Visible, std::nullopt, {amrvis::ColorScale::Linear})
+                     .has_value(),
+                "the Visible range was resolved on the client");
 
         // Render: an oblique view of a domain that is 2.0 in its fine
         // block and 1.0 in the coarse remainder, opaque above the middle.
@@ -634,7 +642,7 @@ int main()
         request.region = amrvis::datasetSampleBounds(session->metadata());
         request.camera = {0.6, 0.4, 1.0};
         request.outputSize = {64, 48};
-        request.range = amrvis::VolumeRange{1.0, 2.0, false};
+        request.range = amrvis::VolumeRange{1.0, 2.0, {amrvis::ColorScale::Linear}};
         request.transfer = amrvis::makeVolumeTransferFunction(
             amrvis::builtinPalette(amrvis::BuiltinPalette::Rainbow),
             amrvis::OpacityRamp{0.5, 1.0, 1.0, false, {}});
@@ -668,23 +676,21 @@ int main()
         auto visible = request;
         visible.range.reset();
         const auto resolved = amrvis::executeVolumeRenderWithFallback(dataset, visible);
-        require(resolved.frame.usedRange.minimum < 2.0
-                && resolved.frame.usedRange.maximum > 2.0
-                && resolved.frame.usedRange.maximum - resolved.frame.usedRange.minimum
-                    < 1.0e-4
-                && !resolved.frame.usedRange.logarithmic
-                && resolved.frame.metrics.gridFromCache,
-            "the Visible range was not resolved from the sampled grid");
-        visible.logarithmic = true;
+        require(resolved.frame.usedRange.minimum < 2.0 && resolved.frame.usedRange.maximum > 2.0 &&
+                    resolved.frame.usedRange.maximum - resolved.frame.usedRange.minimum < 1.0e-4 &&
+                    resolved.frame.usedRange.scale.scale != amrvis::ColorScale::Logarithmic &&
+                    resolved.frame.metrics.gridFromCache,
+                "the Visible range was not resolved from the sampled grid");
+        visible.scale = {amrvis::ColorScale::Logarithmic};
         const auto resolvedLog = amrvis::executeVolumeRenderWithFallback(dataset, visible);
-        require(resolvedLog.frame.usedRange.logarithmic
-                && resolvedLog.frame.usedRange.minimum > 0.0
-                && resolvedLog.frame.usedRange.minimum < 2.0
-                && resolvedLog.frame.usedRange.maximum > 2.0,
-            "a positive Visible range did not go logarithmic when asked");
+        require((resolvedLog.frame.usedRange.scale.scale == amrvis::ColorScale::Logarithmic) &&
+                    resolvedLog.frame.usedRange.minimum > 0.0 &&
+                    resolvedLog.frame.usedRange.minimum < 2.0 &&
+                    resolvedLog.frame.usedRange.maximum > 2.0,
+                "a positive Visible range did not go logarithmic when asked");
         // A Visible render at level 0 sees only the coarse 1.0.
         auto coarseVisible = visible;
-        coarseVisible.logarithmic = false;
+        coarseVisible.scale = {amrvis::ColorScale::Linear};
         coarseVisible.maximumLevel = 0;
         const auto coarseResolved
             = amrvis::executeVolumeRenderWithFallback(dataset, coarseVisible);
@@ -777,7 +783,7 @@ int main()
         request.camera = amrvis::orthoPresetXY;
         request.outputSize = {32, 32};
         // Range [0, 1]: the coarse 1.0 maps to the opaque top entry.
-        request.range = amrvis::VolumeRange{0.0, 1.0, false};
+        request.range = amrvis::VolumeRange{0.0, 1.0, {amrvis::ColorScale::Linear}};
         request.transfer.colors = {0x0U, 0xFFFFFFU};
         request.transfer.opacities = {0.0F, 1.0F};
         request.maximumVoxels = 4096;
@@ -794,17 +800,17 @@ int main()
         // alone, so a Level range resolved once up front would colour a
         // level-0 render with level-1's numbers.
         {
-            const auto levelWide = amrvis::resolveVolumeRange(dataset,
-                request.field, 1, request.composition, amrvis::RangeMode::Level,
-                std::nullopt, false);
+            const auto levelWide = amrvis::resolveVolumeRange(
+                dataset, request.field, 1, request.composition, amrvis::RangeMode::Level,
+                std::nullopt, {amrvis::ColorScale::Linear});
             require(levelWide && levelWide->maximum > 1.5,
                 "the level-1 range is not the wider one");
             auto tracking = request;
             tracking.range.reset();
             const auto followed = amrvis::executeVolumeRenderWithFallback(
                 dataset, tracking,
-                amrvis::VolumeRangeChoice{amrvis::RangeMode::Level,
-                    std::nullopt, false});
+                amrvis::VolumeRangeChoice{
+                    amrvis::RangeMode::Level, std::nullopt, {amrvis::ColorScale::Linear}});
             require(followed.request.maximumLevel == 0
                     && followed.frame.usedRange.maximum < 1.5,
                 "the range did not follow the fallback to level 0");
@@ -836,8 +842,8 @@ int main()
             tracked.range.reset();
             const auto followed = amrvis::executeVolumeRenderWithFallback(
                 wrapped, tracked,
-                amrvis::VolumeRangeChoice{amrvis::RangeMode::Level,
-                    std::nullopt, false});
+                amrvis::VolumeRangeChoice{
+                    amrvis::RangeMode::Level, std::nullopt, {amrvis::ColorScale::Linear}});
             require(followed.request.maximumLevel == 0
                     && followed.frame.cacheFallbackFromLevel == 1
                     && followed.frame.cacheFallbackToLevel == 0,
@@ -858,8 +864,8 @@ int main()
             byFile.range.reset();
             const auto fileRange = amrvis::executeVolumeRenderWithFallback(
                 wrapped, byFile,
-                amrvis::VolumeRangeChoice{amrvis::RangeMode::File,
-                    std::nullopt, false});
+                amrvis::VolumeRangeChoice{
+                    amrvis::RangeMode::File, std::nullopt, {amrvis::ColorScale::Linear}});
             require(!fileRange.frame.metrics.gridFromCache,
                 "a File range was repeated even though it ignores the level");
         }

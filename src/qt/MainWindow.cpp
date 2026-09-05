@@ -779,7 +779,8 @@ MainWindow::MainWindow(QWidget* parent)
     // exporter owns the whole export state machine; this window supplies
     // frame rendering and navigation, and restores its UI on finished().
     m_animationExporter = new AnimationExporter(
-        [this](bool includeColorBar, qreal scale) {
+        [this](const ExportOptions& options, qreal scale,
+               std::map<QString, ExportLayout>& layouts) {
             std::vector<std::pair<QString, QImage>> frames;
             if (m_viewDimension == 3) {
                 constexpr std::array<const char*, 3> suffixes{
@@ -790,18 +791,19 @@ MainWindow::MainWindow(QWidget* parent)
                     if (panelView == nullptr || !panelView->hasImage()) {
                         continue;
                     }
-                    frames.emplace_back(QString::fromLatin1(suffixes[idx]),
-                        composeExportFrame(panelView, includeColorBar, scale));
+                    const auto suffix = QString::fromLatin1(suffixes[idx]);
+                    frames.emplace_back(
+                        suffix, composeExportFrame(panelView, options, scale, &layouts[suffix]));
                 }
             } else {
-                frames.emplace_back(QString(), composeExportFrame(
-                    m_activeView != nullptr ? m_activeView->view : nullptr,
-                    includeColorBar, scale));
+                frames.emplace_back(
+                    QString(),
+                    composeExportFrame(m_activeView != nullptr ? m_activeView->view : nullptr,
+                                       options, scale, &layouts[QString()]));
             }
             return frames;
         },
-        [this](int index) { goToSequenceFrame(index); },
-        this);
+        [this](int index) { goToSequenceFrame(index); }, this);
     connect(m_animationExporter, &AnimationExporter::encodingStarted,
         this, &MainWindow::exportEncodingStarted);
     connect(m_animationExporter, &AnimationExporter::finished, this,

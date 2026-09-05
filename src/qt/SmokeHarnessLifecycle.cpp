@@ -4,6 +4,8 @@
 
 #include <QAction>
 #include <QComboBox>
+#include <QDir>
+#include <QFileInfo>
 #include <QKeySequence>
 #include <QRunnable>
 #include <QThreadPool>
@@ -357,8 +359,53 @@ Outcome dispatchLifecycle(Context& context)
         QTimer::singleShot(15000, &application,
             [&application] { application.exit(1); });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
-    } else if (argc == 4
-        && std::string_view(argv[1]) == "--export-quit-smoke-test") {
+    } else if (argc == 4 && std::string_view(argv[1]) == "--export-axes-smoke-test") {
+        const std::filesystem::path first(argv[2]);
+        const std::filesystem::path second(argv[3]);
+        const QString directory = QString::fromStdString(first.parent_path().string());
+        // Test the actual PNG export, independent of installed encoders.
+        qputenv("PATH", QByteArray());
+        auto started = std::make_shared<bool>(false);
+        QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameDisplayed, &application,
+                         [&window, directory, started](int index) {
+                             if (index == 0 && !*started) {
+                                 *started = true;
+                                 window.startAnimationExportForTest(directory + "/axes.png", true,
+                                                                    true, true);
+                             }
+                         });
+        auto* poll = new QTimer(&application);
+        QObject::connect(poll, &QTimer::timeout, &application,
+                         [&window, &application, directory, poll] {
+                             const auto firstFrames =
+                                 QDir(directory).entryList({"axes*_00000.png"}, QDir::Files);
+                             if (firstFrames.isEmpty())
+                                 return;
+                             for (const auto& name : firstFrames) {
+                                 auto nextName = name;
+                                 nextName.replace("_00000.png", "_00001.png");
+                                 if (!QFileInfo::exists(directory + "/" + nextName))
+                                     return;
+                             }
+                             bool valid = firstFrames.size() == 1 || firstFrames.size() == 3;
+                             for (const auto& name : firstFrames) {
+                                 auto nextName = name;
+                                 nextName.replace("_00000.png", "_00001.png");
+                                 const QImage firstImage(directory + "/" + name);
+                                 const QImage nextImage(directory + "/" + nextName);
+                                 valid = valid && !firstImage.isNull() && firstImage == nextImage &&
+                                         firstImage.pixelColor(0, 0).alpha() == 0 &&
+                                         firstImage.dotsPerMeterX() > 0;
+                             }
+                             poll->stop();
+                             window.close();
+                             application.exit(valid ? 0 : 1);
+                         });
+        poll->start(10);
+        QTimer::singleShot(15000, &application, [&application] { application.exit(1); });
+        QTimer::singleShot(0, &window,
+                           [&window, first, second] { window.openSequence({first, second}); });
+    } else if (argc == 4 && std::string_view(argv[1]) == "--export-quit-smoke-test") {
         // Open a two-frame sequence, start an animation export (bypassing the
         // interactive color-bar/save dialogs), and quit the instant FFmpeg
         // encoding begins. With a hung stand-in ffmpeg on PATH the encoder
@@ -386,8 +433,7 @@ Outcome dispatchLifecycle(Context& context)
         QTimer::singleShot(0, &window, [&window, first, second] {
             window.openSequence({first, second});
         });
-    }
-    else {
+    } else {
         return {false, std::nullopt};
     }
     return {true, std::nullopt};

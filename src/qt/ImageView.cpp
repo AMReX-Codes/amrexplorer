@@ -92,10 +92,9 @@ private:
     qreal m_size = 3.0;
 };
 
-void paintScaleBar(QPainter* painter, const QRectF& imageBounds,
-    double codeUnitsPerImagePixel, double pixelsPerImagePixel,
-    std::optional<LengthUnit> lengthUnit)
-{
+void paintScaleBar(QPainter* painter, const QRectF& imageBounds, double codeUnitsPerImagePixel,
+                   double pixelsPerImagePixel, std::optional<LengthUnit> lengthUnit,
+                   const QFont* exportFont = nullptr) {
     if (!(codeUnitsPerImagePixel > 0.0) || imageBounds.width() < 40.0
         || imageBounds.height() < 36.0 || !(pixelsPerImagePixel > 0.0)
         || !std::isfinite(pixelsPerImagePixel)) {
@@ -112,8 +111,9 @@ void paintScaleBar(QPainter* painter, const QRectF& imageBounds,
         return;
     }
 
-    constexpr double inset = 12.0;
-    constexpr double tickHalfHeight = 4.0;
+    const double annotationScale = exportFont != nullptr ? exportFont->pixelSize() / 14.0 : 1.0;
+    const double inset = 12.0 * annotationScale;
+    const double tickHalfHeight = 4.0 * annotationScale;
     const double right = imageBounds.right() - inset;
     const double left = right - bar->lengthPixels;
     const double y = imageBounds.bottom() - inset;
@@ -129,18 +129,20 @@ void paintScaleBar(QPainter* painter, const QRectF& imageBounds,
     painter->resetTransform();
     painter->setRenderHint(QPainter::Antialiasing);
     QPen halo(outline);
-    halo.setWidth(5);
+    halo.setWidthF(5.0 * annotationScale);
     halo.setCapStyle(Qt::FlatCap);
     painter->setPen(halo);
     painter->drawLines({horizontal, leftTick, rightTick});
     QPen line(foreground);
-    line.setWidth(2);
+    line.setWidthF(2.0 * annotationScale);
     line.setCapStyle(Qt::FlatCap);
     painter->setPen(line);
     painter->drawLines({horizontal, leftTick, rightTick});
 
-    QFont font = painter->font();
-    font.setPointSize(10);
+    QFont font = exportFont != nullptr ? *exportFont : painter->font();
+    if (exportFont == nullptr) {
+        font.setPointSize(10);
+    }
     font.setBold(true);
     painter->setFont(font);
     const QString label = QString::fromStdString(bar->label);
@@ -645,8 +647,7 @@ const QImage& ImageView::image() const noexcept
     return m_image;
 }
 
-QImage ImageView::composedImage(qreal scaleFactor) const
-{
+QSize ImageView::composedImageSize(qreal scaleFactor) const {
     if (m_image.isNull()) {
         return {};
     }
@@ -662,7 +663,23 @@ QImage ImageView::composedImage(qreal scaleFactor) const
         static_cast<int>(std::round(baseWidth * effective)));
     const auto outHeight = std::max(1,
         static_cast<int>(std::round(baseHeight * effective)));
+    return {outWidth, outHeight};
+}
+
+QImage ImageView::composedImage(qreal scaleFactor) const {
+    return composedImage(composedImageSize(scaleFactor));
+}
+
+QImage ImageView::composedImage(QSize outputSize, const QFont* exportFont) const {
+    if (m_image.isNull() || outputSize.isEmpty()) {
+        return {};
+    }
+    const int outWidth = outputSize.width();
+    const int outHeight = outputSize.height();
     QImage out(outWidth, outHeight, QImage::Format_ARGB32_Premultiplied);
+    if (out.isNull()) {
+        return {};
+    }
     out.fill(Qt::transparent);
     QPainter painter(&out);
     // Smooth upscaling of the raster plus crisp vector overlays (grid boxes,
@@ -685,12 +702,11 @@ QImage ImageView::composedImage(qreal scaleFactor) const
     }
     // The raster's scene footprint, not the image rect: on a virtual canvas
     // the item sits at its cell offset, and the export must follow it.
-    m_scene->render(&painter, QRectF(0.0, 0.0, outWidth, outHeight),
-        m_item->sceneBoundingRect());
-    paintScaleBar(&painter, QRectF(0.0, 0.0, outWidth, outHeight),
-        m_scaleBarCodeUnitsPerImagePixel,
-        static_cast<double>(outWidth) / static_cast<double>(baseWidth),
-        m_scaleBarLengthUnit);
+    m_scene->render(&painter, QRectF(0.0, 0.0, outWidth, outHeight), m_item->sceneBoundingRect(),
+                    Qt::IgnoreAspectRatio);
+    paintScaleBar(&painter, QRectF(0.0, 0.0, outWidth, outHeight), m_scaleBarCodeUnitsPerImagePixel,
+                  static_cast<double>(outWidth) / static_cast<double>(m_image.width()),
+                  m_scaleBarLengthUnit, exportFont);
     if (m_lineGuide != nullptr) {
         m_lineGuide->setVisible(guideVisible);
     }

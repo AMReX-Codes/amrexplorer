@@ -107,14 +107,26 @@ void ColorBarWidget::applyPreferredWidth()
     setFixedWidth(std::max(panelWidth, preferredWidth()));
 }
 
-void ColorBarWidget::paintBar(QPainter* painter, const QRect& target) const
-{
+void ColorBarWidget::paintBar(QPainter* painter, const QRect& target, bool transparentBackground,
+                              bool boundedLabels) const {
     painter->save();
     painter->translate(target.topLeft());
     const int w = target.width();
     const int h = target.height();
-    painter->fillRect(0, 0, w, h, viewportBackground());
-    painter->setPen(Qt::white);
+    if (!transparentBackground) {
+        painter->fillRect(0, 0, w, h, viewportBackground());
+    }
+    const QColor foreground = transparentBackground ? Qt::black : Qt::white;
+    painter->setPen(foreground);
+    const int labelHeight = painter->fontMetrics().height();
+    const int paintMargin =
+        boundedLabels ? std::min(std::max(margin, labelHeight / 4), std::max(0, (h - 1) / 2))
+                      : margin;
+    const int paintTitleHeight =
+        boundedLabels ? (h >= 3 * labelHeight + 2 * paintMargin ? labelHeight + paintMargin : 0)
+                      : titleHeight;
+    const int paintBarWidth = boundedLabels ? std::max(barWidth, labelHeight) : barWidth;
+    const int paintLabelGap = boundedLabels ? std::max(margin, labelHeight / 4) : labelGap;
 
     if (!m_hasRange) {
         painter->drawText(QRect(margin, margin, w - 2 * margin, h - 2 * margin),
@@ -123,12 +135,12 @@ void ColorBarWidget::paintBar(QPainter* painter, const QRect& target) const
         return;
     }
 
-    const QRect bar(margin, margin + titleHeight, barWidth,
-        std::max(1, h - 2 * margin - titleHeight));
+    const QRect bar(paintMargin, paintMargin + paintTitleHeight, paintBarWidth,
+                    std::max(1, h - 2 * paintMargin - paintTitleHeight));
     const auto title = painter->fontMetrics().elidedText(
         m_fieldName, Qt::ElideRight, w - 2 * margin);
-    painter->drawText(QRect(margin, margin, w - 2 * margin, titleHeight),
-        Qt::AlignLeft | Qt::AlignVCenter, title);
+    painter->drawText(QRect(paintMargin, paintMargin, w - 2 * paintMargin, paintTitleHeight),
+                      Qt::AlignLeft | Qt::AlignVCenter, title);
 
     const auto& palette = m_palette != nullptr
         ? *m_palette : builtinPalette(BuiltinPalette::Rainbow);
@@ -140,14 +152,15 @@ void ColorBarWidget::paintBar(QPainter* painter, const QRect& target) const
         painter->drawLine(bar.left(), bar.top() + row,
             bar.left() + bar.width() - 1, bar.top() + row);
     }
-    painter->setPen(Qt::white);
+    painter->setPen(foreground);
     painter->drawRect(bar.adjusted(0, 0, -1, -1));
 
-    const auto labelHeight = painter->fontMetrics().height();
-    const auto labelLeft = bar.left() + bar.width() + labelGap;
-    for (int label = 0; label < labelCount; ++label) {
-        const auto fraction = static_cast<double>(label)
-            / static_cast<double>(labelCount - 1);
+    const auto labelLeft = bar.left() + bar.width() + paintLabelGap;
+    const int count =
+        boundedLabels ? std::clamp(bar.height() / (labelHeight + 4), 0, labelCount) : labelCount;
+    for (int label = 0; label < count; ++label) {
+        const auto fraction =
+            static_cast<double>(label) / static_cast<double>(std::max(1, count - 1));
         // In log mode the labels must be geometrically spaced to match the
         // gradient: the color at vertical position `fraction` (from the top)
         // corresponds to min*(max/min)^(1-fraction).
@@ -156,9 +169,16 @@ void ColorBarWidget::paintBar(QPainter* painter, const QRect& target) const
             + static_cast<int>(std::lround(fraction * static_cast<double>(rows)));
         const auto top = std::clamp(center - labelHeight / 2, bar.top(),
             std::max(bar.top(), bar.top() + bar.height() - labelHeight));
-        painter->drawText(QRect(labelLeft, top, w - labelLeft - margin,
-                labelHeight), Qt::AlignLeft | Qt::AlignVCenter,
-            formatNumber(value, m_numberFormat));
+        auto text = formatNumber(value, m_numberFormat);
+        if (boundedLabels) {
+            for (int precision = 6; precision >= 1 && painter->fontMetrics().horizontalAdvance(
+                                                          text) > w - labelLeft - paintMargin;
+                 --precision) {
+                text = QString::number(value, 'g', precision);
+            }
+        }
+        painter->drawText(QRect(labelLeft, top, w - labelLeft - paintMargin, labelHeight),
+                          Qt::AlignLeft | Qt::AlignVCenter, text);
     }
     painter->restore();
 }
@@ -168,6 +188,11 @@ void ColorBarWidget::paintEvent(QPaintEvent* event)
     QWidget::paintEvent(event);
     QPainter painter(this);
     paintBar(&painter, rect());
+}
+
+int ColorBarWidget::exportWidth(const QFontMetrics& metrics, int labelWidth) {
+    return std::max(panelWidth, labelWidth + std::max(barWidth, metrics.height()) +
+                                    3 * std::max(margin, metrics.height() / 4));
 }
 
 int ColorBarWidget::preferredWidth() const

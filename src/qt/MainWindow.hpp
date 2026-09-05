@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DatasetWindow.hpp"
+#include "ExportFrame.hpp"
 #include "ImageView.hpp"
 #include "NumberFormat.hpp"
 #include "SetContoursDialog.hpp"
@@ -127,7 +128,8 @@ public:
     // Starts an animation export without the interactive color-bar/save
     // dialogs, writing frames and MP4s under path's directory. Test-only entry
     // used by the export-quit smoke test to reach the encoder deterministically.
-    void startAnimationExportForTest(const QString& path, bool includeColorBar);
+    void startAnimationExportForTest(const QString& path, bool includeColorBar,
+                                     bool includeAxes = false, bool transparentBackground = false);
     // Test-only sequence probes: whether the Animation dock is on screen, and
     // whether sequence playback is still running. A frame refresh must not
     // reassert the first, and a failed frame must clear the second.
@@ -591,9 +593,12 @@ private:
     // are known (from the dialogs, or from the test hook): freezes the export
     // zoom, starts the AnimationExporter (which owns the export state machine),
     // and kicks off frame 0.
-    void beginAnimationExport(const QString& path, bool includeColorBar);
-    [[nodiscard]] QImage composeExportFrame(const ImageView* view,
-        bool includeColorBar, qreal scaleFactor) const;
+    void beginAnimationExport(const QString& path, const ExportOptions& options);
+    [[nodiscard]] ExportOptions exportOptions(bool includeColorBar, bool includeAxes,
+                                              bool transparentBackground = false) const;
+    [[nodiscard]] QImage composeExportFrame(const ImageView* view, const ExportOptions& options,
+                                            qreal scaleFactor,
+                                            ExportLayout* frozenLayout = nullptr) const;
     void createMenus();
     void rebuildLevelMenu();
     // One row of the derived part of a field list.

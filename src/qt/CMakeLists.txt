@@ -22,6 +22,8 @@ add_executable(amrexplorer_qt
     DiagnosticsModel.hpp
     ExpressionEditorDialog.cpp
     ExpressionEditorDialog.hpp
+    ExportFrame.cpp
+    ExportFrame.hpp
     FabNavigator.cpp
     FabNavigator.hpp
     FabSelectorDock.cpp

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ExportFrame.hpp"
+
 #include <QFuture>
 #include <QImage>
 #include <QObject>
@@ -7,6 +9,7 @@
 
 #include <atomic>
 #include <functional>
+#include <map>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -29,40 +32,40 @@ class AnimationExporter final : public QObject {
     Q_OBJECT
 
 public:
-    // Renders the current frame for export: one (fileSuffix, image) pair per
-    // panel ("" for the single 2-D view, "_yz"/"_xz"/"_xy" in 3-D). A null
-    // image aborts the export; an absent panel is simply skipped.
-    using FrameRenderer = std::function<
-        std::vector<std::pair<QString, QImage>>(bool includeColorBar,
-            qreal scale)>;
-    // Navigates the sequence to the given frame (the host's
-    // goToSequenceFrame); the next sequenceFrameDisplayed continues the loop.
-    using AdvanceFrame = std::function<void(int index)>;
+  // Renders the current frame for export: one (fileSuffix, image) pair per
+  // panel ("" for the single 2-D view, "_yz"/"_xz"/"_xy" in 3-D). A null
+  // image or an absent panel aborts the export. Layouts are initialized by
+  // the renderer on frame 0 and then reused; exceptions explain failures.
+  using FrameRenderer = std::function<std::vector<std::pair<QString, QImage>>(
+      const ExportOptions& options, qreal scale, std::map<QString, ExportLayout>& layouts)>;
+  // Navigates the sequence to the given frame (the host's
+  // goToSequenceFrame); the next sequenceFrameDisplayed continues the loop.
+  using AdvanceFrame = std::function<void(int index)>;
 
-    AnimationExporter(FrameRenderer renderFrames, AdvanceFrame advanceFrame,
-        QObject* parent = nullptr);
+  AnimationExporter(FrameRenderer renderFrames, AdvanceFrame advanceFrame,
+                    QObject* parent = nullptr);
 
-    // Starts an export writing <stem><suffix>_<index>.png next to `path`
-    // (whose directory and basename become the output location and stem) and
-    // one <stem><suffix>.mp4 per panel suffix. panelSuffixes is frozen for
-    // the whole export. Returns false when an export is already running or
-    // there is nothing to export. The caller is expected to navigate to
-    // frame 0 afterwards (mirroring the pre-extraction flow).
-    [[nodiscard]] bool begin(const QString& path, bool includeColorBar,
-        int totalFrames, int restoreIndex, qreal scale,
-        std::vector<QString> panelSuffixes, QWidget* dialogParent);
+  // Starts an export writing <stem><suffix>_<index>.png next to `path`
+  // (whose directory and basename become the output location and stem) and
+  // one <stem><suffix>.mp4 per panel suffix. panelSuffixes is frozen for
+  // the whole export. Returns false when an export is already running or
+  // there is nothing to export. The caller is expected to navigate to
+  // frame 0 afterwards (mirroring the pre-extraction flow).
+  [[nodiscard]] bool begin(const QString& path, const ExportOptions& options, int totalFrames,
+                           int restoreIndex, qreal scale, std::vector<QString> panelSuffixes,
+                           QWidget* dialogParent);
 
-    [[nodiscard]] bool active() const noexcept { return m_active; }
+  [[nodiscard]] bool active() const noexcept { return m_active; }
 
-    // Application shutdown: dismiss the progress dialog and signal the
-    // encoder workers to terminate their FFmpeg processes.
-    void cancelForShutdown();
+  // Application shutdown: dismiss the progress dialog and signal the
+  // encoder workers to terminate their FFmpeg processes.
+  void cancelForShutdown();
 
-    // Forwarded sequence events: a rendered frame continues the loop; a
-    // failed frame aborts the export (the host suppresses its own error
-    // dialog while an export is active — endExport reports instead).
-    void onFrameDisplayed(int index);
-    void onFrameFailed();
+  // Forwarded sequence events: a rendered frame continues the loop; a
+  // failed frame aborts the export (the host suppresses its own error
+  // dialog while an export is active — endExport reports instead).
+  void onFrameDisplayed(int index);
+  void onFrameFailed();
 
 signals:
     // Frames are written; the FFmpeg workers are about to run. The
@@ -88,7 +91,9 @@ private:
     bool m_active = false;
     bool m_canceled = false;
     bool m_framesDone = false;
-    bool m_includeColorBar = false;
+    ExportOptions m_options;
+    std::map<QString, ExportLayout> m_layouts;
+    int m_nextFrame = 0;
     bool m_hasFfmpeg = false;
     // Launched off the GUI thread at begin() (probing ffmpeg can block up to
     // ~4 s); consumed at finalize, by which point rendering has usually

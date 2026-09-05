@@ -1,9 +1,54 @@
 #include "MainWindowInternal.hpp"
 #include "WidgetImageExport.hpp"
 
+#include <QCheckBox>
+#include <QDialogButtonBox>
+#include <QVBoxLayout>
+#include <stdexcept>
+
 namespace amrvis::qt {
 
 namespace {
+
+struct ExportChoices {
+    bool colorBar;
+    bool axes;
+    bool transparent;
+};
+
+std::optional<ExportChoices> chooseExportOptions(QWidget* parent) {
+    auto settings = makeSettings();
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QObject::tr("Export options"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* colorBar = new QCheckBox(QObject::tr("Include color bar"), &dialog);
+    auto* axes = new QCheckBox(QObject::tr("Include axes, labels, and ticks"), &dialog);
+    colorBar->setObjectName(QStringLiteral("exportColorBar"));
+    axes->setObjectName(QStringLiteral("exportAxes"));
+    colorBar->setChecked(settings.value(QStringLiteral("export/colorBar"), true).toBool());
+    axes->setChecked(settings.value(QStringLiteral("export/axes"), false).toBool());
+    layout->addWidget(colorBar);
+    layout->addWidget(axes);
+    auto* background = new QComboBox(&dialog);
+    background->setObjectName(QStringLiteral("exportBackground"));
+    background->addItem(QObject::tr("White background"), false);
+    background->addItem(QObject::tr("Transparent background (PNG)"), true);
+    background->setCurrentIndex(
+        settings.value(QStringLiteral("export/transparent"), false).toBool() ? 1 : 0);
+    layout->addWidget(background);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) {
+        return std::nullopt;
+    }
+    settings.setValue(QStringLiteral("export/colorBar"), colorBar->isChecked());
+    settings.setValue(QStringLiteral("export/axes"), axes->isChecked());
+    settings.setValue(QStringLiteral("export/transparent"), background->currentData().toBool());
+    return ExportChoices{colorBar->isChecked(), axes->isChecked(),
+                         background->currentData().toBool()};
+}
 
 // The result of a dataset open worker: the metadata plus, when the caller did
 // not ask to preserve the existing selector, the FAB selector contents built
@@ -391,20 +436,11 @@ void MainWindow::exportImage()
         return;
     }
 
-    QMessageBox choice(this);
-    choice.setIcon(QMessageBox::Question);
-    choice.setWindowTitle(tr("Export Image"));
-    choice.setText(tr("Include the color bar in the exported image?"));
-    auto* withBar = choice.addButton(tr("&With color bar"),
-        QMessageBox::AcceptRole);
-    auto* withoutBar = choice.addButton(tr("With&out color bar"),
-        QMessageBox::AcceptRole);
-    choice.addButton(QMessageBox::Cancel);
-    choice.exec();
-    if (choice.clickedButton() != withBar && choice.clickedButton() != withoutBar) {
+    const auto choices = chooseExportOptions(this);
+    if (!choices) {
         return;
     }
-    const bool includeColorBar = choice.clickedButton() == withBar;
+    const auto options = exportOptions(choices->colorBar, choices->axes, choices->transparent);
 
     if (m_viewDimension == 3) {
         // Export all three panels: foo_xy.png, foo_xz.png, foo_yz.png. Which
@@ -432,8 +468,7 @@ void MainWindow::exportImage()
         for (const auto& [panelView, outPath] : outputs) {
             const qreal scale = std::max(1.0,
                 panelView->transform().m11());
-            const QImage composite = composeExportFrame(
-                panelView, includeColorBar, scale);
+            const QImage composite = composeExportFrame(panelView, options, scale);
             if (composite.isNull() || !composite.save(outPath, "PNG")) {
                 QMessageBox::critical(this, tr("Cannot export image"),
                     tr("Could not write %1.").arg(outPath));
@@ -444,8 +479,7 @@ void MainWindow::exportImage()
             return;
         }
         const qreal exportScale = std::max(1.0, view->transform().m11());
-        const QImage composite = composeExportFrame(
-            view, includeColorBar, exportScale);
+        const QImage composite = composeExportFrame(view, options, exportScale);
         if (composite.isNull()) {
             QMessageBox::critical(this, tr("Cannot export image"),
                 tr("The image could not be composited."));
@@ -458,29 +492,56 @@ void MainWindow::exportImage()
     }
 }
 
-QImage MainWindow::composeExportFrame(const ImageView* view,
-    bool includeColorBar, qreal scaleFactor) const
-{
-    if (view == nullptr) {
+ExportOptions MainWindow::exportOptions(bool includeColorBar, bool includeAxes,
+                                        bool transparentBackground) const {
+    ExportOptions options;
+    options.includeColorBar = includeColorBar;
+    options.includeAxes = includeAxes;
+    options.transparentBackground = transparentBackground;
+    options.font = QFont(QStringLiteral("Sans Serif"));
+    options.font.setStyleHint(QFont::SansSerif);
+    options.numberFormat = m_numberFormat;
+    options.lengthUnit = m_lengthUnitId;
+    return options;
+}
+
+QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions& options,
+                                      qreal scaleFactor, ExportLayout* frozenLayout) const {
+    if (view == nullptr || !view->hasImage()) {
         return {};
     }
-    const QImage scalar = view->composedImage(scaleFactor);
-    if (scalar.isNull() || !includeColorBar) {
-        return scalar;
+    const PlaneViewState* state = &m_view2d;
+    for (const auto& candidate : m_planeViews) {
+        if (candidate.view == view) {
+            state = &candidate;
+            break;
+        }
     }
-    constexpr int gap = 8;
-    const int barWidth = m_colorBar->preferredWidth();
-    QImage composite(QSize(scalar.width() + gap + barWidth, scalar.height()),
-        QImage::Format_ARGB32_Premultiplied);
-    {
-        QPainter painter(&composite);
-        painter.setFont(m_colorBar->font());
-        painter.fillRect(composite.rect(), viewportBackground());
-        painter.drawImage(0, 0, scalar);
-        m_colorBar->paintBar(&painter,
-            QRect(scalar.width() + gap, 0, barWidth, composite.height()));
+    ExportLayout localLayout;
+    auto& layout = frozenLayout != nullptr ? *frozenLayout : localLayout;
+    if (layout.dataRect.isEmpty()) {
+        layout = makeExportLayout(view->composedImageSize(scaleFactor), options);
+    } else if (!exportAspectMatches(view->image().size(), layout)) {
+        throw std::runtime_error(
+            tr("The aspect ratio of panel %1 changed. "
+               "Export stopped to preserve the fixed image rectangle without stretching.")
+                .arg(state->label)
+                .toStdString());
     }
-    return composite;
+    const auto axes =
+        exportAxes(state->displayRegion, m_viewDimension, state->normal, state->coordinateSystem,
+                   state->sphericalDisplay, m_dataset && m_dataset->metadata().hasPhysicalGeometry,
+                   options.lengthUnit);
+    ColorBarWidget colorBar;
+    colorBar.setFont(layout.font);
+    colorBar.setPalette(&m_paletteController->palette());
+    colorBar.setNumberFormat(options.numberFormat);
+    colorBar.setLogarithmic(state->displayLogarithmic);
+    colorBar.setFieldRange(state->fieldName +
+                               (state->displayLogarithmic ? tr(" (log)") : QString()),
+                           state->displayMinimum, state->displayMaximum);
+    return composeExportImage(view->composedImage(layout.dataRect.size(), &layout.font), axes,
+                              options, layout, &colorBar);
 }
 
 void MainWindow::exportAnimation()
@@ -500,19 +561,10 @@ void MainWindow::exportAnimation()
         return;
     }
 
-    // Color-bar choice (same options as single-image export); applies to all.
-    QMessageBox choice(this);
-    choice.setIcon(QMessageBox::Question);
-    choice.setWindowTitle(tr("Export Animation"));
-    choice.setText(tr("Include the color bar in every frame?"));
-    auto* withBar = choice.addButton(tr("&With color bar"), QMessageBox::AcceptRole);
-    auto* withoutBar = choice.addButton(tr("With&out color bar"), QMessageBox::AcceptRole);
-    choice.addButton(QMessageBox::Cancel);
-    choice.exec();
-    if (choice.clickedButton() != withBar && choice.clickedButton() != withoutBar) {
+    const auto choices = chooseExportOptions(this);
+    if (!choices) {
         return;
     }
-    const bool includeColorBar = choice.clickedButton() == withBar;
 
     // The chosen file's directory and basename (minus extension) become the
     // output location and the PNG/MP4 stem, e.g. "runs/anim.png" ->
@@ -525,21 +577,18 @@ void MainWindow::exportAnimation()
     if (path.isEmpty()) {
         return;
     }
-    beginAnimationExport(path, includeColorBar);
+    beginAnimationExport(path,
+                         exportOptions(choices->colorBar, choices->axes, choices->transparent));
 }
 
-void MainWindow::beginAnimationExport(const QString& path, bool includeColorBar)
-{
+void MainWindow::beginAnimationExport(const QString& path, const ExportOptions& options) {
     auto* view = m_activeView != nullptr ? m_activeView->view : nullptr;
     if (view == nullptr || !view->hasImage()
         || !m_sequenceController->hasSequence()) {
         return;
     }
-    // Freeze the export zoom from the current view so every frame renders at the
-    // same dimensions even if a frame's image size changes and refits the view.
-    // In 3-D this single scale is shared by all three panels, so a panel whose
-    // fitted zoom differs from the active view exports at the active view's
-    // scale -- constant across frames, which is the goal.
+    // Freeze zoom and styling now; each panel's pixel layout is established
+    // by frame 0 and retained for the complete animation.
     const auto scale = std::max(1.0, view->transform().m11());
     std::vector<QString> suffixes;
     if (m_viewDimension == 3) {
@@ -548,10 +597,9 @@ void MainWindow::beginAnimationExport(const QString& path, bool includeColorBar)
     } else {
         suffixes = {QString()};
     }
-    if (!m_animationExporter->begin(path, includeColorBar,
-            m_sequenceController->frameCount(),
-            m_sequenceController->currentIndex(), scale,
-            std::move(suffixes), this)) {
+    if (!m_animationExporter->begin(path, options, m_sequenceController->frameCount(),
+                                    m_sequenceController->currentIndex(), scale,
+                                    std::move(suffixes), this)) {
         return;
     }
 

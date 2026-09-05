@@ -111,6 +111,27 @@ void scaleBarIsPaintedIntoExportedComposition()
         "the exported composition omitted the visible scale bar");
 }
 
+void fixedExportSizePreservesLandmarks() {
+    amrvis::qt::ImageView view;
+    QImage first(400, 300, QImage::Format_RGB32);
+    first.fill(Qt::blue);
+    {
+        QPainter painter(&first);
+        painter.fillRect(100, 75, 40, 30, Qt::yellow);
+    }
+    view.setImage(first);
+    const auto before = view.composedImage(QSize(600, 450));
+    view.setImage(first.scaled(800, 600));
+    const auto after = view.composedImage(QSize(600, 450));
+    require(before.size() == after.size(), "fixed export size followed the source resolution");
+    require(before.pixelColor(170, 125) == QColor(Qt::yellow) &&
+                after.pixelColor(170, 125) == QColor(Qt::yellow) &&
+                before.pixelColor(140, 100) == QColor(Qt::blue) &&
+                after.pixelColor(140, 100) == QColor(Qt::blue),
+            "a source-resolution change moved an exported landmark");
+    require(view.composedImage(QSize()).isNull(), "empty export dimensions were accepted");
+}
+
 // A scene larger than the viewport pans by its scroll bars, and the delta says
 // how far the *content* moves: content travelling +x backs the bar off by the
 // same amount. MainWindow's arrow-key step and its drag handler both hand
@@ -370,6 +391,7 @@ int main(int argc, char* argv[])
     scaleBarUsesNativeOrExplicitUnits();
     scaleBarIsPaintedOverTheSlice();
     scaleBarIsPaintedIntoExportedComposition();
+    fixedExportSizePreservesLandmarks();
     scrollBarPanFollowsContentDelta();
     fullyVisibleSceneIgnoresPan();
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();

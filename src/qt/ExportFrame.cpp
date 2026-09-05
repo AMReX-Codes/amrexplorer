@@ -115,7 +115,9 @@ std::vector<ExportTick> exportTicks(const ExportAxis& axis, int pixelLength, int
     return ticks;
 }
 
-ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options) {
+ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
+                              const std::array<ExportAxis, 2>& axes, const ColorBarWidget* colorBar,
+                              bool reserveLabelGrowth) {
     ExportLayout layout;
     if (rasterSize.isEmpty()) {
         return layout;
@@ -132,19 +134,71 @@ ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options) {
         for (const QChar character : QStringLiteral("0123456789.e+-")) {
             glyphWidth = std::max(glyphWidth, fm.horizontalAdvance(character));
         }
-        layout.labelWidth = 16 * glyphWidth;
+        const int maximumLabelWidth = 16 * glyphWidth;
+        // Movies keep room for compact scientific notation, not sixteen
+        // widest-case glyphs. Stills only need the labels they actually draw.
+        const int growthWidth = reserveLabelGrowth
+                                    ? std::max(fm.horizontalAdvance(QStringLiteral("-9e-308")),
+                                               fm.horizontalAdvance(QStringLiteral("-9e+308")))
+                                    : 0;
+        layout.labelWidth = growthWidth;
+        for (double endpoint : {axes[0].minimum, axes[0].maximum}) {
+            layout.labelWidth = std::max(
+                layout.labelWidth, fm.horizontalAdvance(exportNumber(endpoint, options.numberFormat,
+                                                                     fm, maximumLabelWidth)));
+        }
+        layout.verticalLabelWidth = growthWidth;
+        int xOverhang = 0;
+        for (std::size_t axis = 0; axis < axes.size(); ++axis) {
+            const int length = axis == 0 ? rasterSize.width() : rasterSize.height();
+            const int spacing =
+                axis == 0
+                    ? std::max(fm.horizontalAdvance(exportNumber(
+                                   axes[0].minimum, options.numberFormat, fm, maximumLabelWidth)),
+                               fm.horizontalAdvance(exportNumber(
+                                   axes[0].maximum, options.numberFormat, fm, maximumLabelWidth))) +
+                          2 * fm.horizontalAdvance(QChar('0')) + 12
+                    : fm.height() + 8;
+            for (const auto& tick : exportTicks(axes[axis], length, spacing, options.numberFormat,
+                                                fm, maximumLabelWidth)) {
+                const int width = fm.horizontalAdvance(tick.label);
+                if (axis == 0) {
+                    layout.labelWidth = std::max(layout.labelWidth, width);
+                    xOverhang = std::max(xOverhang, width / 2 + 1);
+                } else {
+                    layout.verticalLabelWidth = std::max(layout.verticalLabelWidth, width);
+                }
+            }
+        }
+        // Non-finite/degenerate ranges may have no ticks.
+        layout.labelWidth = std::max(1, layout.labelWidth);
+        layout.verticalLabelWidth = std::max(1, layout.verticalLabelWidth);
+        if (reserveLabelGrowth) {
+            xOverhang = std::max(xOverhang, layout.labelWidth / 2 + 1);
+        }
         const int tickLength = std::max(4, fontPixels / 4);
+        const int gap = std::max(4, fm.height() / 4);
         const int left =
-            options.includeAxes ? layout.labelWidth + fm.height() + tickLength + 20 : 0;
-        const int top = options.includeAxes ? fm.height() / 2 + 8 : 0;
-        const int bottom = options.includeAxes ? 2 * fm.height() + tickLength + 20 : 0;
-        const int right = options.includeAxes ? layout.labelWidth / 2 + 8 : 0;
+            options.includeAxes
+                ? std::max(layout.verticalLabelWidth + fm.height() + tickLength + 3 * gap,
+                           xOverhang + gap)
+                : 0;
+        const int top = options.includeAxes ? fm.height() / 2 + gap : 0;
+        const int bottom = options.includeAxes ? 2 * fm.height() + tickLength + 3 * gap : 0;
+        const int right = options.includeAxes ? xOverhang + gap : 0;
         layout.dataRect = QRect(QPoint(left, top), rasterSize);
         int width = left + rasterSize.width() + right;
         if (options.includeColorBar) {
-            const int barWidth = ColorBarWidget::exportWidth(fm, layout.labelWidth);
-            layout.colorBarRect = QRect(width + 8, top, barWidth, rasterSize.height());
-            width += 8 + barWidth;
+            const int labels =
+                colorBar != nullptr
+                    ? colorBar->exportLabelWidth(fm, maximumLabelWidth, rasterSize.height())
+                    : growthWidth;
+            const int barWidth = ColorBarWidget::exportWidth(fm, std::max(labels, growthWidth));
+            // The color scale is beside the data, above the x tick labels.
+            // Their endpoint overhang must not become an inter-panel gutter.
+            layout.colorBarRect =
+                QRect(left + rasterSize.width() + gap, top, barWidth, rasterSize.height());
+            width = std::max(width, layout.colorBarRect.right() + 1);
         }
         layout.canvasSize = QSize(width, top + rasterSize.height() + bottom);
         const int nextFontPixels =
@@ -203,6 +257,7 @@ QImage composeExportImage(const QImage& raster, const std::array<ExportAxis, 2>&
     const int x0 = rect.left() - 1;
     const int y0 = rect.bottom() + 1;
     const int tickLength = std::max(4, layout.font.pixelSize() / 4);
+    const int gap = std::max(4, fm.height() / 4);
     painter.drawLine(x0, rect.top(), x0, y0);
     painter.drawLine(x0, y0, rect.right(), y0);
     const int xLabelSpacing =
@@ -215,23 +270,24 @@ QImage composeExportImage(const QImage& raster, const std::array<ExportAxis, 2>&
                                         fm, layout.labelWidth)) {
         const double x = rect.left() + tick.fraction * (rect.width() - 1);
         painter.drawLine(QPointF(x, y0), QPointF(x, y0 + tickLength));
-        painter.drawText(QRectF(x - layout.labelWidth / 2.0, y0 + tickLength + 2, layout.labelWidth,
-                                fm.height()),
+        painter.drawText(QRectF(x - layout.labelWidth / 2.0, y0 + tickLength + gap,
+                                layout.labelWidth, fm.height()),
                          Qt::AlignHCenter | Qt::AlignTop, tick.label);
     }
     for (const auto& tick : exportTicks(axes[1], rect.height(), fm.height() + 8,
-                                        options.numberFormat, fm, layout.labelWidth)) {
+                                        options.numberFormat, fm, layout.verticalLabelWidth)) {
         const double y = rect.bottom() - tick.fraction * (rect.height() - 1);
         painter.drawLine(QPointF(x0 - tickLength, y), QPointF(x0, y));
-        painter.drawText(QRectF(x0 - tickLength - 4 - layout.labelWidth, y - fm.height() / 2.0,
-                                layout.labelWidth, fm.height()),
+        painter.drawText(QRectF(x0 - tickLength - gap - layout.verticalLabelWidth,
+                                y - fm.height() / 2.0, layout.verticalLabelWidth, fm.height()),
                          Qt::AlignRight | Qt::AlignVCenter, tick.label);
     }
     painter.drawText(
-        QRect(rect.left(), y0 + tickLength + fm.height() + 8, rect.width(), fm.height()),
+        QRect(rect.left(), y0 + tickLength + fm.height() + 2 * gap, rect.width(), fm.height()),
         Qt::AlignCenter, axes[0].label);
     painter.save();
-    painter.translate(8, rect.center().y());
+    painter.translate(x0 - tickLength - 2 * gap - layout.verticalLabelWidth - fm.height(),
+                      rect.center().y());
     painter.rotate(-90);
     painter.drawText(QRect(-rect.height() / 2, 0, rect.height(), fm.height()), Qt::AlignCenter,
                      axes[1].label);

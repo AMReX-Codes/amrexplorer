@@ -24,6 +24,15 @@ constexpr int barWidth = 24;
 constexpr int labelGap = 6;
 constexpr int labelCount = 8;
 
+QString boundedNumber(double value, const QString& format, const QFontMetrics& metrics, int width) {
+    auto text = formatNumber(value, format);
+    for (int precision = 6; precision >= 1 && metrics.horizontalAdvance(text) > width;
+         --precision) {
+        text = QString::number(value, 'g', precision);
+    }
+    return text;
+}
+
 // Value at a given label fraction (0 = top = max, 1 = bottom = min), honoring
 // log spacing so the labels match the drawn gradient.
 double tickValue(double minimum, double maximum, bool logarithmic, double fraction)
@@ -137,8 +146,8 @@ void ColorBarWidget::paintBar(QPainter* painter, const QRect& target, bool trans
 
     const QRect bar(paintMargin, paintMargin + paintTitleHeight, paintBarWidth,
                     std::max(1, h - 2 * paintMargin - paintTitleHeight));
-    const auto title = painter->fontMetrics().elidedText(
-        m_fieldName, Qt::ElideRight, w - 2 * margin);
+    const auto title =
+        painter->fontMetrics().elidedText(m_fieldName, Qt::ElideRight, w - 2 * paintMargin);
     painter->drawText(QRect(paintMargin, paintMargin, w - 2 * paintMargin, paintTitleHeight),
                       Qt::AlignLeft | Qt::AlignVCenter, title);
 
@@ -169,14 +178,10 @@ void ColorBarWidget::paintBar(QPainter* painter, const QRect& target, bool trans
             + static_cast<int>(std::lround(fraction * static_cast<double>(rows)));
         const auto top = std::clamp(center - labelHeight / 2, bar.top(),
             std::max(bar.top(), bar.top() + bar.height() - labelHeight));
-        auto text = formatNumber(value, m_numberFormat);
-        if (boundedLabels) {
-            for (int precision = 6; precision >= 1 && painter->fontMetrics().horizontalAdvance(
-                                                          text) > w - labelLeft - paintMargin;
-                 --precision) {
-                text = QString::number(value, 'g', precision);
-            }
-        }
+        const auto text = boundedLabels
+                              ? boundedNumber(value, m_numberFormat, painter->fontMetrics(),
+                                              w - labelLeft - paintMargin)
+                              : formatNumber(value, m_numberFormat);
         painter->drawText(QRect(labelLeft, top, w - labelLeft - paintMargin, labelHeight),
                           Qt::AlignLeft | Qt::AlignVCenter, text);
     }
@@ -191,8 +196,31 @@ void ColorBarWidget::paintEvent(QPaintEvent* event)
 }
 
 int ColorBarWidget::exportWidth(const QFontMetrics& metrics, int labelWidth) {
-    return std::max(panelWidth, labelWidth + std::max(barWidth, metrics.height()) +
-                                    3 * std::max(margin, metrics.height() / 4));
+    return labelWidth + std::max(barWidth, metrics.height()) +
+           3 * std::max(margin, metrics.height() / 4);
+}
+
+int ColorBarWidget::exportLabelWidth(const QFontMetrics& metrics, int maximumWidth,
+                                     int height) const {
+    int width = 0;
+    const int labelHeight = metrics.height();
+    const int paintMargin =
+        std::min(std::max(margin, labelHeight / 4), std::max(0, (height - 1) / 2));
+    const int paintTitleHeight =
+        height >= 3 * labelHeight + 2 * paintMargin ? labelHeight + paintMargin : 0;
+    const int barHeight = std::max(1, height - 2 * paintMargin - paintTitleHeight);
+    const int count = std::clamp(barHeight / (labelHeight + 4), 0, labelCount);
+    for (int label = 0; label < count; ++label) {
+        const double fraction = static_cast<double>(label) / std::max(1, count - 1);
+        width = std::max(width, metrics.horizontalAdvance(boundedNumber(
+                                    tickValue(m_minimum, m_maximum, m_logarithmic, fraction),
+                                    m_numberFormat, metrics, maximumWidth)));
+    }
+    // Keep short field names intact without allowing long expressions to
+    // dictate the width of the entire figure (paintBar elides those).
+    const int titleWidth = std::min(maximumWidth, metrics.horizontalAdvance(m_fieldName));
+    return std::max(width, titleWidth - std::max(barWidth, metrics.height()) -
+                               std::max(margin, metrics.height() / 4));
 }
 
 int ColorBarWidget::preferredWidth() const

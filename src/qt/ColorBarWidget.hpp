@@ -37,6 +37,8 @@ public:
     // the same format and range.
     [[nodiscard]] int preferredWidth() const;
     [[nodiscard]] static int exportWidth(const QFontMetrics& metrics, int labelWidth);
+    [[nodiscard]] int exportLabelWidth(const QFontMetrics& metrics, int maximumWidth,
+                                       int height) const;
 
   protected:
     void paintEvent(QPaintEvent* event) override;

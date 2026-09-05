@@ -32,13 +32,26 @@ namespace {
 class CrispRectItem : public QGraphicsRectItem {
 public:
     using QGraphicsRectItem::QGraphicsRectItem;
+    bool omitOuterEdges = false;
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option,
         QWidget* widget = nullptr) override
     {
+        painter->save();
+        if (omitOuterEdges && parentItem() != nullptr) {
+            // A cosmetic grid stroke on the outer data boundary paints the
+            // first pixel row/column white, looking like a gap beside export
+            // axes. Clip only grid ink there, not the raster or other overlays.
+            const auto transform = painter->worldTransform();
+            const QRectF deviceBounds = transform.mapRect(parentItem()->boundingRect());
+            painter->setClipRect(
+                transform.inverted().mapRect(deviceBounds.adjusted(1.0, 1.0, -1.0, -1.0)),
+                Qt::IntersectClip);
+        }
         const auto antialiasing = painter->testRenderHint(QPainter::Antialiasing);
         painter->setRenderHint(QPainter::Antialiasing, false);
         QGraphicsRectItem::paint(painter, option, widget);
         painter->setRenderHint(QPainter::Antialiasing, antialiasing);
+        painter->restore();
     }
 };
 
@@ -670,7 +683,8 @@ QImage ImageView::composedImage(qreal scaleFactor) const {
     return composedImage(composedImageSize(scaleFactor));
 }
 
-QImage ImageView::composedImage(QSize outputSize, const QFont* exportFont) const {
+QImage ImageView::composedImage(QSize outputSize, const QFont* exportFont,
+                                bool omitOuterGridEdges) const {
     if (m_image.isNull() || outputSize.isEmpty()) {
         return {};
     }
@@ -702,8 +716,18 @@ QImage ImageView::composedImage(QSize outputSize, const QFont* exportFont) const
     }
     // The raster's scene footprint, not the image rect: on a virtual canvas
     // the item sits at its cell offset, and the export must follow it.
+    for (auto* item : m_gridItems) {
+        if (auto* rectangle = dynamic_cast<CrispRectItem*>(item)) {
+            rectangle->omitOuterEdges = omitOuterGridEdges;
+        }
+    }
     m_scene->render(&painter, QRectF(0.0, 0.0, outWidth, outHeight), m_item->sceneBoundingRect(),
                     Qt::IgnoreAspectRatio);
+    for (auto* item : m_gridItems) {
+        if (auto* rectangle = dynamic_cast<CrispRectItem*>(item)) {
+            rectangle->omitOuterEdges = false;
+        }
+    }
     paintScaleBar(&painter, QRectF(0.0, 0.0, outWidth, outHeight), m_scaleBarCodeUnitsPerImagePixel,
                   static_cast<double>(outWidth) / static_cast<double>(m_image.width()),
                   m_scaleBarLengthUnit, exportFont);

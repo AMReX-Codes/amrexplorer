@@ -121,6 +121,17 @@ void fixedExportSizePreservesLandmarks() {
     }
     view.setImage(first);
     const auto before = view.composedImage(QSize(600, 450));
+    for (const auto size : {QSize(600, 450), QSize(2400, 1800)}) {
+        const auto image = view.composedImage(size);
+        for (int y = 0; y < image.height(); ++y) {
+            require(image.pixelColor(0, y) == QColor(Qt::blue),
+                    "export introduced a gap at the left raster edge");
+        }
+        for (int x = 0; x < image.width(); ++x) {
+            require(image.pixelColor(x, 0) == QColor(Qt::blue),
+                    "export introduced a gap at the top raster edge");
+        }
+    }
     view.setImage(first.scaled(800, 600));
     const auto after = view.composedImage(QSize(600, 450));
     require(before.size() == after.size(), "fixed export size followed the source resolution");
@@ -130,6 +141,37 @@ void fixedExportSizePreservesLandmarks() {
                 after.pixelColor(140, 100) == QColor(Qt::blue),
             "a source-resolution change moved an exported landmark");
     require(view.composedImage(QSize()).isNull(), "empty export dimensions were accepted");
+
+    QImage coarse(17, 31, QImage::Format_RGB32);
+    coarse.fill(Qt::blue);
+    view.setImage(coarse);
+    view.setGridBoxes(
+        {{QRectF(0, 0, 17, 31), Qt::white, {}}, {QRectF(4, 6, 7, 12), Qt::white, {}}});
+    for (const bool placed : {false, true}) {
+        if (placed) {
+            view.setVirtualCanvas(amrvis::qt::ImageView::VirtualPlacement{
+                QRectF(3.25, 7.5, 8.5, 15.5), QSizeF(128, 256)});
+        }
+        for (const auto size : {QSize(270, 540), QSize(541, 541), QSize(1082, 1082)}) {
+            const auto original = view.composedImage(size);
+            require(original.pixelColor(0, 0) == QColor(Qt::white),
+                    "white boundary-grid strip reproducer did not exercise the original gap");
+            const auto image = view.composedImage(size, nullptr, true);
+            for (int y = 0; y < image.height(); ++y) {
+                require(image.pixelColor(0, y) == QColor(Qt::blue),
+                        "coarse/placed raster left an export strip on the left");
+            }
+            for (int x = 0; x < image.width(); ++x) {
+                require(image.pixelColor(x, 0) == QColor(Qt::blue),
+                        "coarse/placed raster left an export strip at the top");
+            }
+            const auto interior = QRect(2, 2, size.width() - 4, size.height() - 4);
+            require(image.copy(interior) == original.copy(interior),
+                    "suppressing outer grid strokes changed interior data or grid lines");
+            require(view.composedImage(size) == original,
+                    "export failed to restore normal grid rendering");
+        }
+    }
 }
 
 // A scene larger than the viewport pans by its scroll bars, and the delta says

@@ -39,6 +39,7 @@ struct ExportLayout {
     QRect colorBarRect;
     QFont font;
     int labelWidth = 0;
+    int verticalLabelWidth = 0;
     int dotsPerMeter = 0;
 };
 
@@ -50,7 +51,12 @@ exportAxes(const RealBox& displayRegion, int dimension, int normal, int coordina
 [[nodiscard]] std::vector<ExportTick> exportTicks(const ExportAxis& axis, int pixelLength,
                                                   int labelSpacing, const QString& format,
                                                   const QFontMetrics& metrics, int labelWidth);
-[[nodiscard]] ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options);
+// Measure the first frame's labels. Movies reserve a small additional budget
+// for changing magnitudes; stills can disable it for the tightest margins.
+[[nodiscard]] ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
+                                            const std::array<ExportAxis, 2>& axes = {},
+                                            const ColorBarWidget* colorBar = nullptr,
+                                            bool reserveLabelGrowth = true);
 [[nodiscard]] bool exportAspectMatches(QSize rasterSize, const ExportLayout& layout);
 [[nodiscard]] QImage composeExportImage(const QImage& raster, const std::array<ExportAxis, 2>& axes,
                                         const ExportOptions& options, const ExportLayout& layout,

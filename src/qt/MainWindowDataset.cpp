@@ -517,10 +517,22 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
             break;
         }
     }
+    const auto axes =
+        exportAxes(state->displayRegion, m_viewDimension, state->normal, state->coordinateSystem,
+                   state->sphericalDisplay, m_dataset && m_dataset->metadata().hasPhysicalGeometry,
+                   options.lengthUnit);
+    ColorBarWidget colorBar;
+    colorBar.setPalette(&m_paletteController->palette());
+    colorBar.setNumberFormat(options.numberFormat);
+    colorBar.setLogarithmic(state->displayLogarithmic);
+    colorBar.setFieldRange(state->fieldName +
+                               (state->displayLogarithmic ? tr(" (log)") : QString()),
+                           state->displayMinimum, state->displayMaximum);
     ExportLayout localLayout;
     auto& layout = frozenLayout != nullptr ? *frozenLayout : localLayout;
     if (layout.dataRect.isEmpty()) {
-        layout = makeExportLayout(view->composedImageSize(scaleFactor), options);
+        layout = makeExportLayout(view->composedImageSize(scaleFactor), options, axes, &colorBar,
+                                  frozenLayout != nullptr);
     } else if (!exportAspectMatches(view->image().size(), layout)) {
         throw std::runtime_error(
             tr("The aspect ratio of panel %1 changed. "
@@ -528,20 +540,10 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
                 .arg(state->label)
                 .toStdString());
     }
-    const auto axes =
-        exportAxes(state->displayRegion, m_viewDimension, state->normal, state->coordinateSystem,
-                   state->sphericalDisplay, m_dataset && m_dataset->metadata().hasPhysicalGeometry,
-                   options.lengthUnit);
-    ColorBarWidget colorBar;
     colorBar.setFont(layout.font);
-    colorBar.setPalette(&m_paletteController->palette());
-    colorBar.setNumberFormat(options.numberFormat);
-    colorBar.setLogarithmic(state->displayLogarithmic);
-    colorBar.setFieldRange(state->fieldName +
-                               (state->displayLogarithmic ? tr(" (log)") : QString()),
-                           state->displayMinimum, state->displayMaximum);
-    return composeExportImage(view->composedImage(layout.dataRect.size(), &layout.font), axes,
-                              options, layout, &colorBar);
+    return composeExportImage(
+        view->composedImage(layout.dataRect.size(), &layout.font, options.includeAxes), axes,
+        options, layout, &colorBar);
 }
 
 void MainWindow::exportAnimation()

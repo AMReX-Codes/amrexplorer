@@ -388,14 +388,31 @@ Outcome dispatchLifecycle(Context& context)
                                      return;
                              }
                              bool valid = firstFrames.size() == 1 || firstFrames.size() == 3;
+                             if (!valid) {
+                                 qWarning("Export produced %lld panels, expected one or three",
+                                          static_cast<long long>(firstFrames.size()));
+                             }
                              for (const auto& name : firstFrames) {
                                  auto nextName = name;
                                  nextName.replace("_00000.png", "_00001.png");
                                  const QImage firstImage(directory + "/" + name);
                                  const QImage nextImage(directory + "/" + nextName);
-                                 valid = valid && !firstImage.isNull() && firstImage == nextImage &&
-                                         firstImage.pixelColor(0, 0).alpha() == 0 &&
-                                         firstImage.dotsPerMeterX() > 0;
+                                 const bool samePixels = firstImage == nextImage;
+                                 const bool panelValid = !firstImage.isNull() && samePixels &&
+                                                         firstImage.pixelColor(0, 0).alpha() == 0 &&
+                                                         firstImage.dotsPerMeterX() > 0;
+                                 if (!panelValid) {
+                                     qWarning(
+                                         "Export mismatch (%s, Qt %s): sizes %dx%d / %dx%d, "
+                                         "equal=%d, alpha=%d, dpm=%d / %d",
+                                         qPrintable(name), qVersion(), firstImage.width(),
+                                         firstImage.height(), nextImage.width(), nextImage.height(),
+                                         samePixels,
+                                         firstImage.isNull() ? -1
+                                                             : firstImage.pixelColor(0, 0).alpha(),
+                                         firstImage.dotsPerMeterX(), nextImage.dotsPerMeterX());
+                                 }
+                                 valid = valid && panelValid;
                              }
                              poll->stop();
                              window.close();

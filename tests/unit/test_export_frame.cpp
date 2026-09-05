@@ -99,10 +99,36 @@ int main(int argc, char** argv) {
                 "a numeric label overflowed its frozen budget");
     }
     const QFontMetrics fm(layout.font);
+    ExportOptions compactOptions;
+    compactOptions.includeAxes = true;
+    compactOptions.font = options.font;
+    ColorBarWidget compactBar;
+    compactBar.setNumberFormat("%g");
+    compactBar.setFieldRange("density", 0.0, 7.0);
+    const auto compact = makeExportLayout(raster.size(), compactOptions, xy, &compactBar, false);
+    const QFontMetrics compactMetrics(compact.font);
+    const int compactGap = std::max(4, compactMetrics.height() / 4);
+    require(compact.colorBarRect.left() - compact.dataRect.right() - 1 == compactGap,
+            "x-axis label overhang added a color-bar gutter");
+    require(compact.canvasSize.width() == compact.colorBarRect.right() + 1,
+            "extra margin remains beyond the color bar");
+    require(compact.verticalLabelWidth <= compactMetrics.horizontalAdvance("8"),
+            "still export reserved unused scientific-notation space beside the y axis");
+    require(compact.dataRect.left() < 5 * compactMetrics.height(),
+            "vertical title is separated from short tick labels by a wide empty margin");
+    require(ColorBarWidget::exportWidth(compactMetrics, compactMetrics.horizontalAdvance("7")) <
+                ColorBarWidget::panelWidth,
+            "export inherited the on-screen color bar minimum width");
+    const auto movie = makeExportLayout(raster.size(), compactOptions, xy, &compactBar, true);
+    const QFontMetrics movieMetrics(movie.font);
+    for (const auto& label : {QStringLiteral("-9e-308"), QStringLiteral("-9e+308")}) {
+        require(movie.verticalLabelWidth >= movieMetrics.horizontalAdvance(label),
+                "compact movie layout cannot fit scientific notation");
+    }
     const auto ticks = exportTicks({"y", -2.0, 2.0}, 400, 40, "%g", fm, layout.labelWidth);
     require(ticks.size() >= 3 && ticks.front().fraction == 0.0 && ticks.back().fraction == 1.0,
             "axis endpoints do not map bottom-to-top");
-    for (const auto bounds : {std::pair{-1e308, 1e308}, std::pair{0.0, 1e-320}}) {
+    for (const auto& bounds : {std::pair{-1e308, 1e308}, std::pair{0.0, 1e-320}}) {
         const auto extreme =
             exportTicks({"x", bounds.first, bounds.second}, 400, 100, "%g", fm, layout.labelWidth);
         require(!extreme.empty(), "extreme finite bounds lost every tick");
@@ -132,7 +158,8 @@ int main(int argc, char** argv) {
     require(composeExportImage(raster, xy, options, plain, nullptr) == raster,
             "unannotated export changed the raster");
     if (argc == 2) {
-        require(first.save(QString::fromLocal8Bit(argv[1])), "could not save preview");
+        const auto preview = composeExportImage(raster, xy, compactOptions, compact, &compactBar);
+        require(preview.save(QString::fromLocal8Bit(argv[1])), "could not save preview");
     }
     std::cout << "export frame tests passed\n";
 }

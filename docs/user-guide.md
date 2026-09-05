@@ -670,6 +670,9 @@ invalid samples are written as NaN. A 2-D export creates one image. A 3-D
 export creates separate `_xy`, `_xz`, and `_yz` images. Both formats reflect
 the current zoomed data region; only PNG includes visible overlays and the
 optional color scale and axes.
+Still-image margins fit the displayed tick labels. With axes enabled, grid-box
+strokes along the outer raster edge are omitted so they do not appear as white
+gaps; interior grid lines and the data extent are unchanged.
 
 Export annotations use a skin-independent sans-serif font, sized for approximately
 11-point text at a seven-inch figure width. PNG print-resolution metadata records
@@ -686,7 +689,9 @@ orthogonal plane.
 
 Each animation panel keeps its first exported frame's image rectangle, margins,
 font size, and output dimensions for the entire sequence. Tick values may change
-with the displayed coordinates without moving the image. Resolution changes with
+with the displayed coordinates without moving the image. A compact allowance for
+scientific notation accommodates changing labels without oversized margins.
+Resolution changes with
 the same aspect ratio are supported; an aspect-ratio change stops export with an
 explanation rather than stretching the data. Already-written PNGs are retained
 after a failure. The numbered PNGs honor the chosen background; MP4s composite

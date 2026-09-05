@@ -1249,6 +1249,38 @@ int main()
                             "a requested Visible logarithmic response was rejected");
             requireAccepted([&] { validateSessionVolumeResult(metadata, logarithmic, frame); },
                             "a Visible logarithmic request could not fall back to linear");
+            auto symlog = request;
+            symlog.scale = {ColorScale::SymLogarithmic, 0.01};
+            auto symlogFrame = frame;
+            symlogFrame.usedRange = {-1.0, 1.0, symlog.scale};
+            requireAccepted([&] {
+                validateSessionVolumeResult(metadata, symlog, symlogFrame);
+            }, "a requested Visible symlog response was rejected");
+            for (const auto& other : {request, logarithmic}) {
+                requireRejectedWith([&] {
+                    validateSessionVolumeResult(metadata, other, symlogFrame);
+                }, "not requested", "an unrequested Visible symlog response was accepted");
+            }
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, symlog, frame);
+            }, "not requested", "a Visible symlog request fell back to linear");
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, symlog, bad);
+            }, "not requested", "a Visible symlog request accepted a logarithmic response");
+            symlogFrame.usedRange.scale.linearThreshold = 0.1;
+            requireRejectedWith([&] {
+                validateSessionVolumeResult(metadata, symlog, symlogFrame);
+            }, "not requested", "a Visible symlog response changed the requested threshold");
+            for (auto inactiveThreshold : {request, logarithmic}) {
+                inactiveThreshold.scale.linearThreshold = 0.01;
+                requireAccepted([&] {
+                    validateSessionVolumeResult(metadata, inactiveThreshold, frame);
+                }, "an inactive threshold caused a valid Visible linear response to be rejected");
+            }
+            logarithmic.scale.linearThreshold = 0.01;
+            requireAccepted([&] {
+                validateSessionVolumeResult(metadata, logarithmic, bad);
+            }, "an inactive threshold caused a valid Visible logarithmic response to be rejected");
             auto ranged = request;
             ranged.range = VolumeRange{0.25, 0.75, {amrvis::ColorScale::Linear}};
             requireRejectedWith([&] {

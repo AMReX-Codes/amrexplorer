@@ -347,10 +347,17 @@ void validateSessionVolumeResult(const DatasetMetadata& metadata,
         throw std::invalid_argument(
             "volume frame did not use the requested range");
     }
-    if (!request.range && used.scale.scale == ColorScale::Logarithmic &&
-        request.scale.scale != ColorScale::Logarithmic) {
-        throw std::invalid_argument(
-            "volume frame used a logarithmic range that was not requested");
+    if (!request.range) {
+        const bool sameScale = usedScale.scale == request.scale.scale
+            && (usedScale.scale != ColorScale::SymLogarithmic
+                || usedScale.linearThreshold == request.scale.linearThreshold);
+        // Visible logarithmic ranges may fall back when the data is not positive.
+        const bool linearFallback = request.scale.scale == ColorScale::Logarithmic
+            && usedScale.scale == ColorScale::Linear;
+        if (!sameScale && !linearFallback) {
+            throw std::invalid_argument(
+                "volume frame used a scale configuration that was not requested");
+        }
     }
     const auto& metrics = frame.metrics;
     for (const auto extent : metrics.gridDims) {

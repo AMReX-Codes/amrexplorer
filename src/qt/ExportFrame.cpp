@@ -123,9 +123,9 @@ ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
         return layout;
     }
     layout.font = options.font;
-    // 11-point text at an intended figure width of 7 inches. Solve for the
-    // margins as well: sizing text from the raster alone makes it too small
-    // once the axes and color scale occupy part of the published figure.
+    // 11-point text at a seven-inch reference width, including annotations.
+    // Use the raster's longer side so a narrow portrait slice gets the same
+    // readable text as a square slice of comparable height.
     int fontPixels = 12;
     for (int iteration = 0; iteration < 24; ++iteration) {
         layout.font.setPixelSize(fontPixels);
@@ -201,8 +201,10 @@ ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
             width = std::max(width, layout.colorBarRect.right() + 1);
         }
         layout.canvasSize = QSize(width, top + rasterSize.height() + bottom);
+        const int referenceWidth =
+            std::max(rasterSize.width(), rasterSize.height()) + width - rasterSize.width();
         const int nextFontPixels =
-            std::max(12, static_cast<int>(std::lround(width * 11.0 / (72.0 * 7.0))));
+            std::max(12, static_cast<int>(std::lround(referenceWidth * 11.0 / (72.0 * 7.0))));
         if (nextFontPixels == fontPixels) {
             break;
         }

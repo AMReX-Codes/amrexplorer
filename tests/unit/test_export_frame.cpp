@@ -120,6 +120,28 @@ int main(int argc, char** argv) {
                 ColorBarWidget::panelWidth,
             "export inherited the on-screen color bar minimum width");
     const auto movie = makeExportLayout(raster.size(), compactOptions, xy, &compactBar, true);
+    const RealBox tallDomain{Real3{{0.0, 0.0, 0.0}}, Real3{{0.5, 0.5, 1.0}}};
+    for (const bool animation : {false, true}) {
+        const auto squareAxes = exportAxes(tallDomain, 3, 2, 0, SphericalDisplay::RZ, true, {});
+        const auto square =
+            makeExportLayout(QSize(540, 540), compactOptions, squareAxes, &compactBar, animation);
+        require(square.font.pixelSize() ==
+                    std::max(12, static_cast<int>(
+                                     std::lround(square.canvasSize.width() * 11.0 / (72.0 * 7.0)))),
+                "square XY export font sizing changed");
+        for (int normal : {0, 1}) {
+            const auto tallAxes =
+                exportAxes(tallDomain, 3, normal, 0, SphericalDisplay::RZ, true, {});
+            const auto tall =
+                makeExportLayout(QSize(270, 540), compactOptions, tallAxes, &compactBar, animation);
+            require(tall.font.pixelSize() == square.font.pixelSize(),
+                    "narrow XZ/YZ export shrank labels relative to XY");
+            require(tall.dataRect.size() == QSize(270, 540),
+                    "enlarging portrait labels resized the data");
+            require(tall.dotsPerMeter == square.dotsPerMeter,
+                    "portrait and square exports use different print scales");
+        }
+    }
     const QFontMetrics movieMetrics(movie.font);
     for (const auto& label : {QStringLiteral("-9e-308"), QStringLiteral("-9e+308")}) {
         require(movie.verticalLabelWidth >= movieMetrics.horizontalAdvance(label),

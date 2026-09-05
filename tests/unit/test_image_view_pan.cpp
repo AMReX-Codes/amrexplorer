@@ -111,6 +111,31 @@ void scaleBarIsPaintedIntoExportedComposition()
         "the exported composition omitted the visible scale bar");
 }
 
+void sliceGuidesStayOnScreenButOutOfExports() {
+    amrvis::qt::ImageView view;
+    view.resize(450, 350);
+    view.show();
+    view.setImage(solidImage(400, 300));
+    view.setGridBoxes({{QRectF(30, 30, 100, 100), Qt::yellow, {}}});
+    QApplication::processEvents();
+    const auto displayWithoutGuides = view.viewport()->grab().toImage();
+    const auto nativeExport = view.composedImage();
+    const auto scaledExport = view.composedImage(QSize(800, 600));
+
+    view.setCrosshairs(QLineF(200, 0, 200, 300), QLineF(0, 150, 400, 150), Qt::red, Qt::cyan);
+    QApplication::processEvents();
+    const auto displayWithGuides = view.viewport()->grab().toImage();
+    require(displayWithGuides != displayWithoutGuides,
+            "slice-guide test did not paint visible guides in the display window");
+    require(view.composedImage() == nativeExport,
+            "slice-position guides appeared in the image export");
+    require(view.composedImage(QSize(800, 600)) == scaledExport,
+            "slice-position guides appeared in the fixed-size animation frame");
+    QApplication::processEvents();
+    require(view.viewport()->grab().toImage() == displayWithGuides,
+            "export did not restore the on-screen slice-position guides");
+}
+
 void fixedExportSizePreservesLandmarks() {
     amrvis::qt::ImageView view;
     QImage first(400, 300, QImage::Format_RGB32);
@@ -433,6 +458,7 @@ int main(int argc, char* argv[])
     scaleBarUsesNativeOrExplicitUnits();
     scaleBarIsPaintedOverTheSlice();
     scaleBarIsPaintedIntoExportedComposition();
+    sliceGuidesStayOnScreenButOutOfExports();
     fixedExportSizePreservesLandmarks();
     scrollBarPanFollowsContentDelta();
     fullyVisibleSceneIgnoresPan();

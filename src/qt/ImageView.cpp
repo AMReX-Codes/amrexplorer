@@ -19,6 +19,7 @@
 #include <QPen>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace amrvis::qt {
@@ -702,17 +703,15 @@ QImage ImageView::composedImage(QSize outputSize, const QFont* exportFont,
     painter.setRenderHint(QPainter::Antialiasing, true);
     // Render the whole scene (pixmap + grid boxes + overlays) from the image's
     // own pixel rect, so the export matches the on-screen composition, scaled.
-    // Transient interaction overlays (line-plot guide, cell highlight) must not
-    // be baked into the export, so hide them for this render and restore them.
-    const bool guideVisible =
-        m_lineGuide != nullptr && m_lineGuide->isVisible();
-    const bool cellVisible =
-        m_cellHighlightItem != nullptr && m_cellHighlightItem->isVisible();
-    if (m_lineGuide != nullptr) {
-        m_lineGuide->setVisible(false);
-    }
-    if (m_cellHighlightItem != nullptr) {
-        m_cellHighlightItem->setVisible(false);
+    // Navigation and interaction guides belong only in the display windows.
+    const std::array<QGraphicsItem*, 4> displayGuides{
+        m_lineGuide, m_cellHighlightItem, m_crosshairVerticalItem, m_crosshairHorizontalItem};
+    std::array<bool, 4> guideVisibility{};
+    for (std::size_t i = 0; i < displayGuides.size(); ++i) {
+        if (auto* item = displayGuides[i]) {
+            guideVisibility[i] = item->isVisible();
+            item->setVisible(false);
+        }
     }
     // The raster's scene footprint, not the image rect: on a virtual canvas
     // the item sits at its cell offset, and the export must follow it.
@@ -731,11 +730,10 @@ QImage ImageView::composedImage(QSize outputSize, const QFont* exportFont,
     paintScaleBar(&painter, QRectF(0.0, 0.0, outWidth, outHeight), m_scaleBarCodeUnitsPerImagePixel,
                   static_cast<double>(outWidth) / static_cast<double>(m_image.width()),
                   m_scaleBarLengthUnit, exportFont);
-    if (m_lineGuide != nullptr) {
-        m_lineGuide->setVisible(guideVisible);
-    }
-    if (m_cellHighlightItem != nullptr) {
-        m_cellHighlightItem->setVisible(cellVisible);
+    for (std::size_t i = 0; i < displayGuides.size(); ++i) {
+        if (auto* item = displayGuides[i]) {
+            item->setVisible(guideVisibility[i]);
+        }
     }
     return out;
 }

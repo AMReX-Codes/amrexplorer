@@ -17,6 +17,7 @@
 #include <optional>
 #include <vector>
 
+class QEvent;
 class QGraphicsLineItem;
 class QGraphicsItem;
 class QGraphicsPathItem;
@@ -259,6 +260,9 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    // Repaints the placeholder in the new skin's colours; it is drawn from
+    // palette roles, but a QGraphicsTextItem holds the colour it was given.
+    void changeEvent(QEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void drawForeground(QPainter* painter, const QRectF& rect) override;

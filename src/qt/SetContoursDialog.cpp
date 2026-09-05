@@ -1,9 +1,12 @@
 #include "SetContoursDialog.hpp"
 
+#include "Theme.hpp"
+
 #include <QAbstractButton>
 #include <QButtonGroup>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QEvent>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -141,14 +144,14 @@ SetContoursDialog::SetContoursDialog(const std::vector<std::string>& fieldNames,
         }
         vectorLayout->addRow(tr("W field:"), m_wField);
     }
-    auto* vectorWarning = new QLabel(
+    m_vectorWarning = new QLabel(
         tr("U and V fields must be different"), m_vectorBox);
-    vectorWarning->setStyleSheet("QLabel { color: red; }");
-    vectorWarning->setVisible(false);
-    vectorLayout->addRow(vectorWarning);
-    const auto checkVectorFields = [this, vectorWarning] {
+    updateWarningColor();
+    m_vectorWarning->setVisible(false);
+    vectorLayout->addRow(m_vectorWarning);
+    const auto checkVectorFields = [this] {
         const bool conflict = m_uField->currentIndex() == m_vField->currentIndex();
-        vectorWarning->setVisible(conflict);
+        m_vectorWarning->setVisible(conflict);
     };
     connect(m_uField, qOverload<int>(&QComboBox::currentIndexChanged),
         this, [checkVectorFields](int) { checkVectorFields(); });
@@ -159,14 +162,14 @@ SetContoursDialog::SetContoursDialog(const std::vector<std::string>& fieldNames,
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok
         | QDialogButtonBox::Apply | QDialogButtonBox::Cancel, this);
     connect(buttons, &QDialogButtonBox::clicked, this,
-        [this, buttons, vectorWarning](QAbstractButton* button) {
+        [this, buttons](QAbstractButton* button) {
             const auto role = buttons->buttonRole(button);
             if (role == QDialogButtonBox::AcceptRole
                 || role == QDialogButtonBox::ApplyRole) {
                 if (m_uField->currentIndex() == m_vField->currentIndex()
                     && m_mode == DisplayMode::VelocityVectors
                     && m_uField->count() > 1) {
-                    vectorWarning->setVisible(true);
+                    m_vectorWarning->setVisible(true);
                     return;
                 }
                 emit applied();
@@ -187,6 +190,26 @@ SetContoursDialog::SetContoursDialog(const std::vector<std::string>& fieldNames,
     const auto [uField, vField, wField] = detectVectorFields(fieldNames);
     setMode(DisplayMode::Raster);
     setVectorFields(uField, vField, wField);
+}
+
+void SetContoursDialog::changeEvent(QEvent* event)
+{
+    QDialog::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange) {
+        updateWarningColor();
+    }
+}
+
+void SetContoursDialog::updateWarningColor()
+{
+    if (m_vectorWarning == nullptr) {
+        return;
+    }
+    const auto style = QStringLiteral("QLabel { color: %1; }")
+                           .arg(errorTextColor().name());
+    if (m_vectorWarning->styleSheet() != style) {
+        m_vectorWarning->setStyleSheet(style);
+    }
 }
 
 void SetContoursDialog::setMode(DisplayMode mode)

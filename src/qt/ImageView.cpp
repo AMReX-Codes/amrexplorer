@@ -3,6 +3,7 @@
 
 #include "Theme.hpp"
 
+#include <QEvent>
 #include <QGraphicsLineItem>
 #include <QGraphicsItem>
 #include <QGraphicsPathItem>
@@ -928,6 +929,18 @@ void ImageView::resizeEvent(QResizeEvent* event)
     // A resize changes how much of the raster is on screen even when nothing
     // moved, and in Fit mode fitImage above has just changed the transform.
     emit viewportMoved();
+}
+
+void ImageView::changeEvent(QEvent* event)
+{
+    QGraphicsView::changeEvent(event);
+    // The placeholder is drawn from palette roles, but both the background
+    // brush and the text item's colour are copies taken when it was set, so a
+    // skin changed while a placeholder is up would leave it in the old one.
+    // A view showing a raster keeps the fixed viewport background instead.
+    if (event->type() == QEvent::PaletteChange && !m_placeholderText.isEmpty()) {
+        setPlaceholder(m_placeholderText);
+    }
 }
 
 void ImageView::scrollContentsBy(int dx, int dy)

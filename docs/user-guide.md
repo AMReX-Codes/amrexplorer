@@ -685,8 +685,16 @@ The **View** menu controls these optional panels:
 - **FAB Selector** lists raw FAB records or the FABs belonging to an open
   standalone MultiFab.
 
-Window geometry, logarithmic mapping, palette, number format, and animation
-speed persist across sessions.
+**View > Skin** chooses the application's appearance. **System** (the default)
+keeps whatever the desktop provides; **Light** and **Dark** apply
+AMReXplorer's own; and **Blue**, **Green** and **Maroon** are Dark in a tint,
+Blue being the application icon's own colors. The change takes effect at once
+and applies to every open window. The image viewports and the color scale keep
+their neutral gray under every skin, so a colormap looks the same whichever
+one you pick.
+
+Window geometry, logarithmic mapping, palette, skin, number format, and
+animation speed persist across sessions.
 
 Each open dataset has a 1 GiB data cache by default, and volume rendering fills
 a second cache of the same size with the grids it samples the field into, so a

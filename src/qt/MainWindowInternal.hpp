@@ -32,6 +32,7 @@
 #include "ScientificDoubleSpinBox.hpp"
 #include "SetContoursDialog.hpp"
 #include "Theme.hpp"
+#include "ThemeController.hpp"
 #include "UserGuideDialog.hpp"
 
 #include <amrexplorer/io/FitsWriter.hpp>

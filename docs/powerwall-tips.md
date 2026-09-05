@@ -37,3 +37,15 @@ reliably for Win32 applications and we have found that neither of these methods 
 WSL applications.
 
 A workaround for AMReXplorer when launched from WSL is in development.
+
+## Increasing the data cache size
+
+AMReXplorer only loads data up to its internal cache size. For large simulations, this will lead
+to reduced resolution visalizations. You may want to increase the cache size to as
+large of a value as your system RAM on the visualization node can support.
+
+The `AMREXPLORER_CACHE_SIZE_MB` environment variable sets the data cache size in MB.
+This can be set when launching on the command line:
+```console
+$ AMREXPLORER_CACHE_SIZE_MB=8192 amrexplorer
+```

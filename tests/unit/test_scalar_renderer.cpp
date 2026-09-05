@@ -312,5 +312,22 @@ int main()
                 "the symmetric-log transform did not invert");
         }
     }
+    {
+        const amrvis::ColorScaleConfig scale{amrvis::ColorScale::SymLogarithmic, 1.0e-300};
+        const auto range = amrvis::resolveValueRange(-1.0e20, 1.0e20, scale);
+        require(range.has_value(), "an overflowing intermediate ratio rejected a valid symlog range");
+        require(amrvis::valueSlot(0.0, *range, 253) == 126,
+            "an extreme symlog range lost its midpoint");
+        for (const double value : {-1.0e20, -1.0e10, 1.0e10, 1.0e20}) {
+            const auto mapped = amrvis::transformedValue(value, scale);
+            const auto expected = std::copysign(1.0e-300
+                * (amrvis::symmetricLogLinearScale + std::log10(std::abs(value)) + 300.0), value);
+            require(std::abs(mapped / expected - 1.0) < 1.0e-14,
+                "an extreme symlog value transformed incorrectly");
+            const auto roundTrip = amrvis::inverseTransformedValue(expected, scale);
+            require(std::isfinite(roundTrip) && std::abs(roundTrip / value - 1.0) < 1.0e-12,
+                "symlog inversion overflowed an intermediate power");
+        }
+    }
     return 0;
 }

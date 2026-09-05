@@ -1357,10 +1357,10 @@ void MainWindow::requestInitialSlice(
                         if (levelIndex >= 0) {
                             m_levelSelector->setCurrentIndex(levelIndex);
                         }
-                        m_range->setSelection({restoredSpec->rangeMode, restoredSpec->userRange,
-                                               restoredSpec->scale});
                         m_range->setTrackedField(
                             m_fieldSelector->currentText());
+                        m_range->setSelection({restoredSpec->rangeMode, restoredSpec->userRange,
+                                               restoredSpec->scale});
                         m_range->commitFieldRange(m_range->trackedField());
                         // The menu was rebuilt by configureSliceControls
                         // above, while the combo still sat on field 0; it is

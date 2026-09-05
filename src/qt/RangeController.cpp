@@ -195,6 +195,10 @@ void RangeController::setSelection(const Selection& selection)
     m_symmetricLogarithmic->setChecked(scale.scale == ColorScale::SymLogarithmic);
     m_linearThreshold->setValue(scale.linearThreshold);
     m_linearThreshold->setVisible(scale.scale == ColorScale::SymLogarithmic);
+    if (scale.scale == ColorScale::SymLogarithmic && !m_trackedField.isEmpty()) {
+        m_symlogThresholds.insert(m_trackedField, m_linearThreshold->value());
+        m_pendingThresholdInitialization = false;
+    }
     if (selection.userRange) {
         m_minimum->setValue(selection.userRange->first);
         m_maximum->setValue(selection.userRange->second);

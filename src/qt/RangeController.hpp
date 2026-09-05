@@ -61,7 +61,8 @@ public:
 
     // Blocked writes: none of these emits a change signal.
     // The whole selection, as a restore does; the min/max are written only
-    // when a User range is given.
+    // when a User range is given. Set the tracked field first so an explicit
+    // Symlog threshold is remembered for the restored field.
     void setSelection(const Selection& selection);
     // The active view's display range and log flag, mirrored into the boxes
     // and checkbox (the min/max unconditionally: the caller decides whether

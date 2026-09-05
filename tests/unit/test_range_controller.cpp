@@ -206,6 +206,36 @@ int main(int argc, char* argv[])
                 "the first field threshold was initialized more than once");
     }
 
+    // FAB navigation resets the cache and restores a saved selection for
+    // the rendered field, which need not be the first field in the dataset.
+    {
+        QToolBar toolbar;
+        RangeController controller;
+        controller.createToolbarWidgets(&toolbar);
+        Observed observed;
+        observe(controller, observed);
+        for (const double threshold : {2.0e-11, 0.25}) {
+            controller.reset();
+            controller.setTrackedField(QStringLiteral("first"));
+            controller.setTrackedField(QStringLiteral("density"));
+            controller.setSelection({RangeMode::Visible, std::nullopt,
+                {amrvis::ColorScale::SymLogarithmic, threshold}});
+            controller.commitFieldRange(controller.trackedField());
+            require(!controller.showDisplayRange(-3000.0, 8000.0)
+                    && controller.colorScale().linearThreshold == threshold,
+                "navigation replaced an explicitly restored threshold");
+            controller.switchField(QStringLiteral("first"));
+            require(controller.showDisplayRange(-3000.0, 8000.0)
+                    && controller.colorScale().linearThreshold == 10.0,
+                "restoration saved the threshold under the wrong field");
+            controller.switchField(QStringLiteral("density"));
+            require(controller.colorScale().linearThreshold == threshold,
+                "the restored threshold was not cached for field switching");
+        }
+        require(observed.logarithmic == 0,
+            "restoration emitted a user scale edit");
+    }
+
     // Blocked writes: setSelection, showDisplayRange, showColorScale emit
     // nothing and land in the widgets; showDisplayRange writes even in User
     // mode (the caller decides).

@@ -52,9 +52,11 @@ inline constexpr double symmetricLogLinearScale = 10.0 / 9.0;
     if (magnitude <= config.linearThreshold) {
         return value * symmetricLogLinearScale;
     }
+    // The quotient can overflow for a small threshold even though its
+    // logarithm and the transformed value are representable.
     return std::copysign(config.linearThreshold
             * (symmetricLogLinearScale
-                + std::log10(magnitude / config.linearThreshold)), value);
+                + (std::log10(magnitude) - std::log10(config.linearThreshold))), value);
 }
 
 [[nodiscard]] inline double inverseTransformedValue(
@@ -65,9 +67,14 @@ inline constexpr double symmetricLogLinearScale = 10.0 / 9.0;
     const auto limit = config.linearThreshold * symmetricLogLinearScale;
     const auto magnitude = std::abs(value);
     if (magnitude <= limit) return value / symmetricLogLinearScale;
-    return std::copysign(config.linearThreshold
-            * std::pow(10.0, magnitude / config.linearThreshold
-                    - symmetricLogLinearScale), value);
+    const auto exponent = magnitude / config.linearThreshold - symmetricLogLinearScale;
+    // Keep ordinary powers accurate, but combine large powers with the
+    // threshold in log space before exponentiating. The power alone can
+    // overflow even when the final field value is finite.
+    const auto restored = exponent <= 300.0
+        ? config.linearThreshold * std::pow(10.0, exponent)
+        : std::pow(10.0, std::log10(config.linearThreshold) + exponent);
+    return std::copysign(restored, value);
 }
 
 // nullopt for a range no value can be mapped through: a non-finite bound, an

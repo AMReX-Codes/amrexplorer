@@ -40,7 +40,7 @@ public:
     [[nodiscard]] int exportLabelWidth(const QFontMetrics& metrics, int maximumWidth,
                                        int height) const;
 
-  protected:
+protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:

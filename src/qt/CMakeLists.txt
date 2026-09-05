@@ -102,6 +102,7 @@ if(AMREXPLORER_BUILD_TESTS)
         SmokeHarnessLifecycle.cpp
         SmokeHarnessRange.cpp
         SmokeHarnessRemote.cpp
+        SmokeHarnessShortcuts.cpp
         SmokeHarnessSequence.cpp
         SmokeHarnessVolume.cpp
         SmokeHarnessZoom.cpp)

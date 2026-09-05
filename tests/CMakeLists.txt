@@ -1882,6 +1882,19 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_spherical_scale_report_smoke PROPERTIES TIMEOUT 30)
+    # Check sibling mnemonics at every menu depth and window-wide shortcuts,
+    # before opening data and after the dynamic menus have been populated.
+    add_test(
+        NAME qt_menu_shortcuts_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_menu_shortcuts"
+            -DMODE=menu-shortcuts
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_menu_shortcuts_smoke PROPERTIES TIMEOUT 30)
     # Controls reachable before any dataset is: an Animation panel opened from
     # the View menu with nothing loaded must not survive the next open holding
     # no controls, and Reset Zoom with no views must still report Fit.

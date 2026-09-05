@@ -1451,7 +1451,7 @@ void MainWindow::createMenus()
     viewMenu->addMenu(m_themeController->createMenu(this));
 
     // Variable menu: lists all fields with a bullet on the active one.
-    m_variableMenu = menuBar()->addMenu(tr("&Variable"));
+    m_variableMenu = menuBar()->addMenu(tr("Va&riable"));
     // Menus hide action tooltips unless asked: the derived fields carry their
     // expressions there, and the Expression Editor entry carries the reason it
     // is unavailable, neither of which reaches anyone otherwise.

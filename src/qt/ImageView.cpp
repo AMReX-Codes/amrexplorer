@@ -19,6 +19,7 @@
 #include <QPen>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace amrvis::qt {
@@ -32,13 +33,26 @@ namespace {
 class CrispRectItem : public QGraphicsRectItem {
 public:
     using QGraphicsRectItem::QGraphicsRectItem;
+    bool omitOuterEdges = false;
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option,
         QWidget* widget = nullptr) override
     {
+        painter->save();
+        if (omitOuterEdges && parentItem() != nullptr) {
+            // A cosmetic grid stroke on the outer data boundary paints the
+            // first pixel row/column white, looking like a gap beside export
+            // axes. Clip only grid ink there, not the raster or other overlays.
+            const auto transform = painter->worldTransform();
+            const QRectF deviceBounds = transform.mapRect(parentItem()->boundingRect());
+            painter->setClipRect(
+                transform.inverted().mapRect(deviceBounds.adjusted(1.0, 1.0, -1.0, -1.0)),
+                Qt::IntersectClip);
+        }
         const auto antialiasing = painter->testRenderHint(QPainter::Antialiasing);
         painter->setRenderHint(QPainter::Antialiasing, false);
         QGraphicsRectItem::paint(painter, option, widget);
         painter->setRenderHint(QPainter::Antialiasing, antialiasing);
+        painter->restore();
     }
 };
 
@@ -92,10 +106,9 @@ private:
     qreal m_size = 3.0;
 };
 
-void paintScaleBar(QPainter* painter, const QRectF& imageBounds,
-    double codeUnitsPerImagePixel, double pixelsPerImagePixel,
-    std::optional<LengthUnit> lengthUnit)
-{
+void paintScaleBar(QPainter* painter, const QRectF& imageBounds, double codeUnitsPerImagePixel,
+                   double pixelsPerImagePixel, std::optional<LengthUnit> lengthUnit,
+                   const QFont* exportFont = nullptr) {
     if (!(codeUnitsPerImagePixel > 0.0) || imageBounds.width() < 40.0
         || imageBounds.height() < 36.0 || !(pixelsPerImagePixel > 0.0)
         || !std::isfinite(pixelsPerImagePixel)) {
@@ -112,8 +125,9 @@ void paintScaleBar(QPainter* painter, const QRectF& imageBounds,
         return;
     }
 
-    constexpr double inset = 12.0;
-    constexpr double tickHalfHeight = 4.0;
+    const double annotationScale = exportFont != nullptr ? exportFont->pixelSize() / 14.0 : 1.0;
+    const double inset = 12.0 * annotationScale;
+    const double tickHalfHeight = 4.0 * annotationScale;
     const double right = imageBounds.right() - inset;
     const double left = right - bar->lengthPixels;
     const double y = imageBounds.bottom() - inset;
@@ -129,18 +143,20 @@ void paintScaleBar(QPainter* painter, const QRectF& imageBounds,
     painter->resetTransform();
     painter->setRenderHint(QPainter::Antialiasing);
     QPen halo(outline);
-    halo.setWidth(5);
+    halo.setWidthF(5.0 * annotationScale);
     halo.setCapStyle(Qt::FlatCap);
     painter->setPen(halo);
     painter->drawLines({horizontal, leftTick, rightTick});
     QPen line(foreground);
-    line.setWidth(2);
+    line.setWidthF(2.0 * annotationScale);
     line.setCapStyle(Qt::FlatCap);
     painter->setPen(line);
     painter->drawLines({horizontal, leftTick, rightTick});
 
-    QFont font = painter->font();
-    font.setPointSize(10);
+    QFont font = exportFont != nullptr ? *exportFont : painter->font();
+    if (exportFont == nullptr) {
+        font.setPointSize(10);
+    }
     font.setBold(true);
     painter->setFont(font);
     const QString label = QString::fromStdString(bar->label);
@@ -645,8 +661,7 @@ const QImage& ImageView::image() const noexcept
     return m_image;
 }
 
-QImage ImageView::composedImage(qreal scaleFactor) const
-{
+QSize ImageView::composedImageSize(qreal scaleFactor) const {
     if (m_image.isNull()) {
         return {};
     }
@@ -662,7 +677,24 @@ QImage ImageView::composedImage(qreal scaleFactor) const
         static_cast<int>(std::round(baseWidth * effective)));
     const auto outHeight = std::max(1,
         static_cast<int>(std::round(baseHeight * effective)));
+    return {outWidth, outHeight};
+}
+
+QImage ImageView::composedImage(qreal scaleFactor) const {
+    return composedImage(composedImageSize(scaleFactor));
+}
+
+QImage ImageView::composedImage(QSize outputSize, const QFont* exportFont,
+                                bool omitOuterGridEdges) const {
+    if (m_image.isNull() || outputSize.isEmpty()) {
+        return {};
+    }
+    const int outWidth = outputSize.width();
+    const int outHeight = outputSize.height();
     QImage out(outWidth, outHeight, QImage::Format_ARGB32_Premultiplied);
+    if (out.isNull()) {
+        return {};
+    }
     out.fill(Qt::transparent);
     QPainter painter(&out);
     // Smooth upscaling of the raster plus crisp vector overlays (grid boxes,
@@ -671,31 +703,37 @@ QImage ImageView::composedImage(qreal scaleFactor) const
     painter.setRenderHint(QPainter::Antialiasing, true);
     // Render the whole scene (pixmap + grid boxes + overlays) from the image's
     // own pixel rect, so the export matches the on-screen composition, scaled.
-    // Transient interaction overlays (line-plot guide, cell highlight) must not
-    // be baked into the export, so hide them for this render and restore them.
-    const bool guideVisible =
-        m_lineGuide != nullptr && m_lineGuide->isVisible();
-    const bool cellVisible =
-        m_cellHighlightItem != nullptr && m_cellHighlightItem->isVisible();
-    if (m_lineGuide != nullptr) {
-        m_lineGuide->setVisible(false);
-    }
-    if (m_cellHighlightItem != nullptr) {
-        m_cellHighlightItem->setVisible(false);
+    // Navigation and interaction guides belong only in the display windows.
+    const std::array<QGraphicsItem*, 4> displayGuides{
+        m_lineGuide, m_cellHighlightItem, m_crosshairVerticalItem, m_crosshairHorizontalItem};
+    std::array<bool, 4> guideVisibility{};
+    for (std::size_t i = 0; i < displayGuides.size(); ++i) {
+        if (auto* item = displayGuides[i]) {
+            guideVisibility[i] = item->isVisible();
+            item->setVisible(false);
+        }
     }
     // The raster's scene footprint, not the image rect: on a virtual canvas
     // the item sits at its cell offset, and the export must follow it.
-    m_scene->render(&painter, QRectF(0.0, 0.0, outWidth, outHeight),
-        m_item->sceneBoundingRect());
-    paintScaleBar(&painter, QRectF(0.0, 0.0, outWidth, outHeight),
-        m_scaleBarCodeUnitsPerImagePixel,
-        static_cast<double>(outWidth) / static_cast<double>(baseWidth),
-        m_scaleBarLengthUnit);
-    if (m_lineGuide != nullptr) {
-        m_lineGuide->setVisible(guideVisible);
+    for (auto* item : m_gridItems) {
+        if (auto* rectangle = dynamic_cast<CrispRectItem*>(item)) {
+            rectangle->omitOuterEdges = omitOuterGridEdges;
+        }
     }
-    if (m_cellHighlightItem != nullptr) {
-        m_cellHighlightItem->setVisible(cellVisible);
+    m_scene->render(&painter, QRectF(0.0, 0.0, outWidth, outHeight), m_item->sceneBoundingRect(),
+                    Qt::IgnoreAspectRatio);
+    for (auto* item : m_gridItems) {
+        if (auto* rectangle = dynamic_cast<CrispRectItem*>(item)) {
+            rectangle->omitOuterEdges = false;
+        }
+    }
+    paintScaleBar(&painter, QRectF(0.0, 0.0, outWidth, outHeight), m_scaleBarCodeUnitsPerImagePixel,
+                  static_cast<double>(outWidth) / static_cast<double>(m_image.width()),
+                  m_scaleBarLengthUnit, exportFont);
+    for (std::size_t i = 0; i < displayGuides.size(); ++i) {
+        if (auto* item = displayGuides[i]) {
+            item->setVisible(guideVisibility[i]);
+        }
     }
     return out;
 }

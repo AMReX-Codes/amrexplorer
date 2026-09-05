@@ -186,6 +186,10 @@ public:
     // resolution so the export reflects the on-screen zoom (WYSIWYG); an
     // aspect-preserving cap keeps extreme zooms from allocating gigabytes.
     [[nodiscard]] QImage composedImage(qreal scaleFactor = 1.0) const;
+    [[nodiscard]] QSize composedImageSize(qreal scaleFactor) const;
+    // Axes-enabled exports suppress outer grid strokes, not data pixels.
+    [[nodiscard]] QImage composedImage(QSize outputSize, const QFont* exportFont = nullptr,
+                                       bool omitOuterGridEdges = false) const;
     void fitToWindow();
     void setFixedScale(int factor);
     void zoomBy(qreal factor);

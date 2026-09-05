@@ -660,18 +660,13 @@ compatible with the previous one.
 
 ## Exporting images and animations
 
-**File > Export Image...** saves the current view as either a PNG display image
-or a float64 FITS data image. PNG export asks whether to include the color
-scale. FITS export writes the displayed scalar samples with `BITPIX=-64`;
-invalid samples are written as NaN. A 2-D export creates one image. A 3-D
-export creates separate `_xy`, `_xz`, and `_yz` images. Both formats reflect
-the current zoomed data region; only PNG includes visible overlays and the
-optional color scale.
+Use **File > Export Image...** to save the current view as PNG or its numerical
+data as FITS. For PNG, choose whether to include the color scale and
+**axes, labels, and ticks**, and select a **White** or **Transparent** background.
 
-For an open plotfile sequence, **File > Export Animation...** writes numbered
-PNG frames. If `ffmpeg` is installed and available on `PATH`, AMReXplorer also
-encodes an MP4. Three-dimensional sequences produce separate output for each
-orthogonal plane.
+For an open plotfile sequence, use **File > Export Animation...** to save PNG
+frames with the same options. Install FFmpeg to also create an MP4 movie.
+Transparency is available only for PNG, not MP4.
 
 ## Panels, preferences, and diagnostics
 

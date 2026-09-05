@@ -786,6 +786,42 @@ if(TARGET amrexplorer_qt)
             "$<TARGET_FILE:test_widget_image_export>")
     set_tests_properties(widget_image_export PROPERTIES TIMEOUT 60)
 
+    add_executable(test_export_frame unit/test_export_frame.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/ExportFrame.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ColorBarWidget.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp")
+    target_include_directories(test_export_frame PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_export_frame PRIVATE amrexplorer::render2d
+        amrexplorer::warnings Qt6::Widgets)
+    add_test(NAME export_frame COMMAND "${CMAKE_COMMAND}" -E env
+        QT_QPA_PLATFORM=offscreen "$<TARGET_FILE:test_export_frame>")
+
+    add_executable(test_animation_exporter unit/test_animation_exporter.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/AnimationExporter.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/AnimationExporter.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ExportFrame.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ColorBarWidget.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp")
+    set_target_properties(test_animation_exporter PROPERTIES AUTOMOC ON)
+    target_include_directories(test_animation_exporter PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_animation_exporter PRIVATE amrexplorer::render2d
+        amrexplorer::warnings Qt6::Widgets Qt6::Concurrent)
+    add_test(NAME animation_exporter COMMAND "${CMAKE_COMMAND}" -E env
+        QT_QPA_PLATFORM=offscreen "$<TARGET_FILE:test_animation_exporter>")
+    set_tests_properties(animation_exporter PROPERTIES TIMEOUT 60)
+
+    foreach(export_fixture plotfile_2d plotfile_3d plotfile_2d_spherical)
+        add_test(NAME qt_export_axes_${export_fixture}
+            COMMAND "${CMAKE_COMMAND}"
+                "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+                "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+                "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/${export_fixture}"
+                "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_export_axes_${export_fixture}"
+                -DMODE=export-axes
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake")
+        set_tests_properties(qt_export_axes_${export_fixture} PROPERTIES TIMEOUT 30)
+    endforeach()
+
     add_executable(test_volume_controller
         unit/test_volume_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/VolumeController.cpp"

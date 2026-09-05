@@ -111,6 +111,94 @@ void scaleBarIsPaintedIntoExportedComposition()
         "the exported composition omitted the visible scale bar");
 }
 
+void sliceGuidesStayOnScreenButOutOfExports() {
+    amrvis::qt::ImageView view;
+    view.resize(450, 350);
+    view.show();
+    view.setImage(solidImage(400, 300));
+    view.setGridBoxes({{QRectF(30, 30, 100, 100), Qt::yellow, {}}});
+    QApplication::processEvents();
+    const auto displayWithoutGuides = view.viewport()->grab().toImage();
+    const auto nativeExport = view.composedImage();
+    const auto scaledExport = view.composedImage(QSize(800, 600));
+
+    view.setCrosshairs(QLineF(200, 0, 200, 300), QLineF(0, 150, 400, 150), Qt::red, Qt::cyan);
+    QApplication::processEvents();
+    const auto displayWithGuides = view.viewport()->grab().toImage();
+    require(displayWithGuides != displayWithoutGuides,
+            "slice-guide test did not paint visible guides in the display window");
+    require(view.composedImage() == nativeExport,
+            "slice-position guides appeared in the image export");
+    require(view.composedImage(QSize(800, 600)) == scaledExport,
+            "slice-position guides appeared in the fixed-size animation frame");
+    QApplication::processEvents();
+    require(view.viewport()->grab().toImage() == displayWithGuides,
+            "export did not restore the on-screen slice-position guides");
+}
+
+void fixedExportSizePreservesLandmarks() {
+    amrvis::qt::ImageView view;
+    QImage first(400, 300, QImage::Format_RGB32);
+    first.fill(Qt::blue);
+    {
+        QPainter painter(&first);
+        painter.fillRect(100, 75, 40, 30, Qt::yellow);
+    }
+    view.setImage(first);
+    const auto before = view.composedImage(QSize(600, 450));
+    for (const auto size : {QSize(600, 450), QSize(2400, 1800)}) {
+        const auto image = view.composedImage(size);
+        for (int y = 0; y < image.height(); ++y) {
+            require(image.pixelColor(0, y) == QColor(Qt::blue),
+                    "export introduced a gap at the left raster edge");
+        }
+        for (int x = 0; x < image.width(); ++x) {
+            require(image.pixelColor(x, 0) == QColor(Qt::blue),
+                    "export introduced a gap at the top raster edge");
+        }
+    }
+    view.setImage(first.scaled(800, 600));
+    const auto after = view.composedImage(QSize(600, 450));
+    require(before.size() == after.size(), "fixed export size followed the source resolution");
+    require(before.pixelColor(170, 125) == QColor(Qt::yellow) &&
+                after.pixelColor(170, 125) == QColor(Qt::yellow) &&
+                before.pixelColor(140, 100) == QColor(Qt::blue) &&
+                after.pixelColor(140, 100) == QColor(Qt::blue),
+            "a source-resolution change moved an exported landmark");
+    require(view.composedImage(QSize()).isNull(), "empty export dimensions were accepted");
+
+    QImage coarse(17, 31, QImage::Format_RGB32);
+    coarse.fill(Qt::blue);
+    view.setImage(coarse);
+    view.setGridBoxes(
+        {{QRectF(0, 0, 17, 31), Qt::white, {}}, {QRectF(4, 6, 7, 12), Qt::white, {}}});
+    for (const bool placed : {false, true}) {
+        if (placed) {
+            view.setVirtualCanvas(amrvis::qt::ImageView::VirtualPlacement{
+                QRectF(3.25, 7.5, 8.5, 15.5), QSizeF(128, 256)});
+        }
+        for (const auto size : {QSize(270, 540), QSize(541, 541), QSize(1082, 1082)}) {
+            const auto original = view.composedImage(size);
+            require(original.pixelColor(0, 0) == QColor(Qt::white),
+                    "white boundary-grid strip reproducer did not exercise the original gap");
+            const auto image = view.composedImage(size, nullptr, true);
+            for (int y = 0; y < image.height(); ++y) {
+                require(image.pixelColor(0, y) == QColor(Qt::blue),
+                        "coarse/placed raster left an export strip on the left");
+            }
+            for (int x = 0; x < image.width(); ++x) {
+                require(image.pixelColor(x, 0) == QColor(Qt::blue),
+                        "coarse/placed raster left an export strip at the top");
+            }
+            const auto interior = QRect(2, 2, size.width() - 4, size.height() - 4);
+            require(image.copy(interior) == original.copy(interior),
+                    "suppressing outer grid strokes changed interior data or grid lines");
+            require(view.composedImage(size) == original,
+                    "export failed to restore normal grid rendering");
+        }
+    }
+}
+
 // A scene larger than the viewport pans by its scroll bars, and the delta says
 // how far the *content* moves: content travelling +x backs the bar off by the
 // same amount. MainWindow's arrow-key step and its drag handler both hand
@@ -370,6 +458,8 @@ int main(int argc, char* argv[])
     scaleBarUsesNativeOrExplicitUnits();
     scaleBarIsPaintedOverTheSlice();
     scaleBarIsPaintedIntoExportedComposition();
+    sliceGuidesStayOnScreenButOutOfExports();
+    fixedExportSizePreservesLandmarks();
     scrollBarPanFollowsContentDelta();
     fullyVisibleSceneIgnoresPan();
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();

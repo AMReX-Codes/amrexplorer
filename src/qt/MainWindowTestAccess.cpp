@@ -961,13 +961,12 @@ void MainWindow::openStandaloneFabForTest(const std::filesystem::path& path)
     m_fabNavigator->openStandaloneFab(path);
 }
 
-void MainWindow::startAnimationExportForTest(const QString& path,
-    bool includeColorBar)
-{
+void MainWindow::startAnimationExportForTest(const QString& path, bool includeColorBar,
+                                             bool includeAxes, bool transparentBackground) {
     if (m_animationExporter->active()) {
         return;
     }
-    beginAnimationExport(path, includeColorBar);
+    beginAnimationExport(path, exportOptions(includeColorBar, includeAxes, transparentBackground));
 }
 
 int MainWindow::backgroundErrorCountForTest() const

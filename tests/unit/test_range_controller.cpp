@@ -110,10 +110,10 @@ int main(int argc, char* argv[])
                 && widgets.mode->count() == 4,
             "the mode combo is not the one the smoke tests look for");
         const auto initial = controller.selection();
-        require(initial.mode == RangeMode::File && !initial.userRange
-                && !initial.logarithmic && widgets.minimum->value() == 0.0
-                && widgets.maximum->value() == 1.0,
-            "the initial selection is not File, 0..1, linear");
+        require(initial.mode == RangeMode::File && !initial.userRange &&
+                    initial.scale.scale != amrvis::ColorScale::Logarithmic &&
+                    widgets.minimum->value() == 0.0 && widgets.maximum->value() == 1.0,
+                "the initial selection is not File, 0..1, linear");
         require(!widgets.mode->isEnabled() && !widgets.logarithmic->isEnabled()
                 && !widgets.minimum->isEnabled() && !widgets.maximum->isEnabled(),
             "the controls start enabled without a dataset");
@@ -136,9 +136,10 @@ int main(int argc, char* argv[])
                     == std::pair{0.25, 4.0},
             "a User bound edit was not announced with the new range");
         widgets.logarithmic->setChecked(true);
-        require(observed.logarithmic == 1 && controller.logarithmic()
-                && controller.selection().logarithmic,
-            "Log was not announced");
+        require(observed.logarithmic == 1 &&
+                    (controller.colorScale().scale == amrvis::ColorScale::Logarithmic) &&
+                    (controller.selection().scale.scale == amrvis::ColorScale::Logarithmic),
+                "Log was not announced");
         widgets.symlog->setChecked(true);
         require(widgets.linearThreshold->value() == 0.01,
             "Symlog did not choose a range-relative initial threshold");
@@ -194,9 +195,18 @@ int main(int argc, char* argv[])
         require(controller.showDisplayRange(-3.0e-15, 8.0e-15)
                 && widgets.linearThreshold->value() == 1.0e-17,
             "switching to a tiny field retained the previous threshold");
+
+        controller.reset();
+        controller.setTrackedField(QStringLiteral("density"));
+        require(controller.showDisplayRange(-3000.0, 8000.0) &&
+                    widgets.linearThreshold->value() == 10.0,
+                "the first field after reset retained the previous dataset threshold");
+        require(!controller.showDisplayRange(-3.0e9, 8.0e9) &&
+                    widgets.linearThreshold->value() == 10.0,
+                "the first field threshold was initialized more than once");
     }
 
-    // Blocked writes: setSelection, showDisplayRange, showLogarithmic emit
+    // Blocked writes: setSelection, showDisplayRange, showColorScale emit
     // nothing and land in the widgets; showDisplayRange writes even in User
     // mode (the caller decides).
     {
@@ -207,14 +217,15 @@ int main(int argc, char* argv[])
         controller.createToolbarWidgets(&toolbar);
         controller.setControlsReady(true);
         const auto widgets = widgetsOf(toolbar);
-        controller.setSelection({RangeMode::User, std::pair{-1.0, 2.0}, true});
+        controller.setSelection(
+            {RangeMode::User, std::pair{-1.0, 2.0}, {amrvis::ColorScale::Logarithmic}});
         require(controller.mode() == RangeMode::User
                 && widgets.minimum->value() == -1.0
                 && widgets.maximum->value() == 2.0
                 && widgets.logarithmic->isChecked()
                 && widgets.minimum->isEnabled(),
             "setSelection did not land in the widgets");
-        controller.setSelection({RangeMode::Level, std::nullopt, false});
+        controller.setSelection({RangeMode::Level, std::nullopt, {amrvis::ColorScale::Linear}});
         require(controller.mode() == RangeMode::Level
                 && widgets.minimum->value() == -1.0
                 && !widgets.logarithmic->isChecked()
@@ -222,11 +233,11 @@ int main(int argc, char* argv[])
             "setSelection without a range touched the bounds, or kept them "
             "enabled");
         controller.showDisplayRange(3.0, 5.0);
-        controller.showLogarithmic(true);
+        controller.showColorScale({amrvis::ColorScale::Logarithmic});
         require(widgets.minimum->value() == 3.0 && widgets.maximum->value() == 5.0
                 && widgets.logarithmic->isChecked(),
             "the display range or log flag was not mirrored");
-        controller.setSelection({RangeMode::User, std::nullopt, true});
+        controller.setSelection({RangeMode::User, std::nullopt, {amrvis::ColorScale::Logarithmic}});
         controller.showDisplayRange(6.0, 7.0);
         require(widgets.minimum->value() == 6.0,
             "showDisplayRange skipped User mode on its own");
@@ -287,7 +298,7 @@ int main(int argc, char* argv[])
             "the other field's snapshot was not kept");
         require(observed.userRange == edits && observed.mode == 2,
             "a field switch announced a change");
-        controller.setSelection({RangeMode::Visible, std::nullopt, false});
+        controller.setSelection({RangeMode::Visible, std::nullopt, {amrvis::ColorScale::Linear}});
         controller.setTrackedField(QStringLiteral("f7"));
         controller.commitFieldRange(QStringLiteral("f7"));
         controller.switchField(QStringLiteral("f0"));

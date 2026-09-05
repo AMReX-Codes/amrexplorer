@@ -90,17 +90,15 @@ std::uint64_t MainWindow::visibleSyncStaleSkipsForTest() const noexcept
     return m_visibleSyncStaleSkips;
 }
 
-void MainWindow::configureContourSyncForTest(
-    int count, bool logarithmic, std::array<double, 3> slicePositions)
-{
+void MainWindow::configureContourSyncForTest(int count, ColorScaleConfig scale,
+                                             std::array<double, 3> slicePositions) {
     if (!m_dataset) {
         return;
     }
     m_slicePosition3d = slicePositions;
     // Set range/log through the controller (requestSlice reads it) without
     // signals, so only the single scheduleSliceRequest below re-slices.
-    m_range->setSelection({RangeMode::Visible, std::nullopt, logarithmic,
-        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0}});
+    m_range->setSelection({RangeMode::Visible, std::nullopt, scale});
     m_displayMode = DisplayMode::RasterContours;
     m_contourCount = count;
     scheduleSliceRequest(false);
@@ -114,7 +112,7 @@ MainWindow::contourViewProbesForTest()
         ContourViewProbe probe;
         probe.displayMinimum = state->displayMinimum;
         probe.displayMaximum = state->displayMaximum;
-        probe.logarithmic = state->displayLogarithmic;
+        probe.scale = state->displayScale;
         for (const auto& polyline : state->contourPolylines) {
             probe.contourLevels.push_back(polyline.value);
         }
@@ -132,8 +130,7 @@ void MainWindow::enableVisibleRasterForTest()
     if (!m_dataset) {
         return;
     }
-    m_range->setSelection({RangeMode::Visible, std::nullopt,
-        m_range->logarithmic(), m_range->colorScale()});
+    m_range->setSelection({RangeMode::Visible, std::nullopt, m_range->colorScale()});
     m_displayMode = DisplayMode::Raster;
     scheduleSliceRequest(false);
 }
@@ -199,7 +196,6 @@ bool MainWindow::activeViewRasterMatchesDisplayRangeForTest()
         .minimum = state.displayMinimum,
         .maximum = state.displayMaximum,
         .scale = state.displayScale,
-        .logarithmic = state.displayLogarithmic,
         .palette = &m_paletteController->palette()
     });
     if (!reference.valid()) {

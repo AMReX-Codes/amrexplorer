@@ -62,7 +62,7 @@ int main()
     plane.values = {1.0F, 10.0F, 100.0F, -1.0F};
     settings.minimum = 1.0;
     settings.maximum = 100.0;
-    settings.logarithmic = true;
+    settings.scale = {amrvis::ColorScale::Logarithmic};
     const auto logarithmic = amrvis::renderScalarPlane(plane, settings);
     require(logarithmic.rgba[0] != logarithmic.rgba[1]
             && logarithmic.rgba[1] != logarithmic.rgba[2],
@@ -79,7 +79,7 @@ int main()
     plane.valid = {1, 1, 1, 0};
     settings.minimum = 0.0;
     settings.maximum = 1.0;
-    settings.logarithmic = false;
+    settings.scale = {amrvis::ColorScale::Linear};
     const auto nonFinite = amrvis::renderScalarPlane(plane, settings);
     require(nonFinite.rgba[0] == settings.nanColor,
         "positive infinity pixel color mismatch");
@@ -185,7 +185,7 @@ int main()
     // Logarithmic rendering requires a strictly positive minimum.
     {
         auto badSettings = base;
-        badSettings.logarithmic = true;
+        badSettings.scale = {amrvis::ColorScale::Logarithmic};
         badSettings.minimum = 0.0;
         badSettings.maximum = 10.0;
         expectRejected(good, badSettings, "logarithmic scalar range must be positive",
@@ -221,7 +221,7 @@ int main()
 
         badPlane = good;
         badPlane.values.pop_back();                // storage fault ...
-        badSettings.logarithmic = true;
+        badSettings.scale = {amrvis::ColorScale::Logarithmic};
         badSettings.minimum = -1.0;                // ... and a bad log range
         expectRejected(badPlane, badSettings, "storage does not match",
             "the storage check did not precede the range/log checks");

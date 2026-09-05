@@ -113,7 +113,7 @@ int main()
     require(nearlyEqual(values.back(), 0.95), "last contour value mismatch");
     require(nearlyEqual(values[5] - values[4], 0.1), "contour spacing mismatch");
 
-    const auto logValues = amrvis::contourValues(1.0, 1000.0, 3, true);
+    const auto logValues = amrvis::contourValues(1.0, 1000.0, 3, {amrvis::ColorScale::Logarithmic});
     require(logValues.size() == 3, "log contourValues returned the wrong count");
     require(nearlyEqual(logValues[0], std::sqrt(10.0)),
         "first logarithmic contour value mismatch");
@@ -127,47 +127,47 @@ int main()
 
     bool threw = false;
     try {
-        (void)amrvis::contourValues(0.0, 1.0, 0, false);
+        (void)amrvis::contourValues(0.0, 1.0, 0, {amrvis::ColorScale::Linear});
     } catch (const std::invalid_argument&) {
         threw = true;
     }
     require(threw, "contourValues accepted a zero count");
     threw = false;
     try {
-        (void)amrvis::contourValues(1.0, 1.0, 4, false);
+        (void)amrvis::contourValues(1.0, 1.0, 4, {amrvis::ColorScale::Linear});
     } catch (const std::invalid_argument&) {
         threw = true;
     }
     require(threw, "contourValues accepted an empty range");
     threw = false;
     try {
-        (void)amrvis::contourValues(0.0, 1.0, 4, true);
+        (void)amrvis::contourValues(0.0, 1.0, 4, {amrvis::ColorScale::Logarithmic});
     } catch (const std::invalid_argument&) {
         threw = true;
     }
     require(threw, "contourValues accepted a non-positive logarithmic range");
     threw = false;
     try {
-        (void)amrvis::contourValues(
-            -std::numeric_limits<double>::max(),
-            std::numeric_limits<double>::max(), 4, false);
+        (void)amrvis::contourValues(-std::numeric_limits<double>::max(),
+                                    std::numeric_limits<double>::max(), 4,
+                                    {amrvis::ColorScale::Linear});
     } catch (const std::invalid_argument&) {
         threw = true;
     }
     require(threw, "contourValues accepted a range whose span overflows to infinity");
     threw = false;
     try {
-        (void)amrvis::contourValues(
-            -std::numeric_limits<double>::infinity(),
-            std::numeric_limits<double>::infinity(), 4, false);
+        (void)amrvis::contourValues(-std::numeric_limits<double>::infinity(),
+                                    std::numeric_limits<double>::infinity(), 4,
+                                    {amrvis::ColorScale::Linear});
     } catch (const std::invalid_argument&) {
         threw = true;
     }
     require(threw, "contourValues accepted an infinite range");
     threw = false;
     try {
-        (void)amrvis::contourValues(
-            std::numeric_limits<double>::quiet_NaN(), 1.0, 4, false);
+        (void)amrvis::contourValues(std::numeric_limits<double>::quiet_NaN(), 1.0, 4,
+                                    {amrvis::ColorScale::Linear});
     } catch (const std::invalid_argument&) {
         threw = true;
     }

@@ -38,30 +38,23 @@ std::uint32_t argbOf(const QColor& color)
 }
 
 // Every value drawn the way the renderer draws that same value: same palette,
-// same range, same log flag. Values are floats because that is what both the
+// same range, same color scale. Values are floats because that is what both the
 // image plane and the dataset extract hold.
-void requireAgreesWithRenderer(const std::string& what,
-    const std::vector<float>& values, const amrvis::Palette& palette,
-    double minimum, double maximum, bool logarithmic)
-{
+void requireAgreesWithRenderer(const std::string& what, const std::vector<float>& values,
+                               const amrvis::Palette& palette, double minimum, double maximum,
+                               amrvis::ColorScaleConfig scale) {
     amrvis::ScalarPlane plane;
     plane.width = static_cast<int>(values.size());
     plane.height = 1;
     plane.values = values;
     plane.valid.assign(values.size(), 1);
     plane.sourceLevel.assign(values.size(), 0);
-    const auto image = amrvis::renderScalarPlane(plane,
-        amrvis::ScalarRenderSettings{
-            .minimum = minimum,
-            .maximum = maximum,
-            .scale = {},
-            .logarithmic = logarithmic,
-            .palette = &palette
-        });
+    const auto image = amrvis::renderScalarPlane(
+        plane, amrvis::ScalarRenderSettings{
+                   .minimum = minimum, .maximum = maximum, .scale = scale, .palette = &palette});
     require(image.valid(), what + ": the renderer produced no image");
 
-    const auto coloring = amrvis::qt::makeDatasetColoring(
-        palette, minimum, maximum, logarithmic);
+    const auto coloring = amrvis::qt::makeDatasetColoring(palette, minimum, maximum, scale);
     require(coloring.range.has_value(), what + ": the range did not resolve");
     std::size_t distinct = 0;
     for (std::size_t pixel = 0; pixel < values.size(); ++pixel) {
@@ -89,21 +82,21 @@ int main()
     // ValueMapping documents as sensitive to how the normalization is spelled,
     // plus values under and over the range.
     requireAgreesWithRenderer("linear rainbow",
-        {-3.0F, 0.0F, 1.0F, 12.25F, 24.5F, 36.75F, 48.0F, 49.0F, 60.0F},
-        rainbow, 0.0, 49.0, false);
+                              {-3.0F, 0.0F, 1.0F, 12.25F, 24.5F, 36.75F, 48.0F, 49.0F, 60.0F},
+                              rainbow, 0.0, 49.0, {amrvis::ColorScale::Linear});
     requireAgreesWithRenderer("linear reversed viridis",
-        {-3.0F, 0.0F, 1.0F, 12.25F, 24.5F, 36.75F, 48.0F, 49.0F, 60.0F},
-        reversedViridis, 0.0, 49.0, false);
+                              {-3.0F, 0.0F, 1.0F, 12.25F, 24.5F, 36.75F, 48.0F, 49.0F, 60.0F},
+                              reversedViridis, 0.0, 49.0, {amrvis::ColorScale::Linear});
     requireAgreesWithRenderer("logarithmic rainbow",
-        {1e-4F, 1e-3F, 1e-2F, 0.1F, 1.0F, 10.0F, 100.0F, 1e3F},
-        rainbow, 1e-3, 100.0, true);
-    requireAgreesWithRenderer("negative span",
-        {-20.0F, -10.0F, -7.5F, -5.0F, -2.5F, 0.0F, 5.0F},
-        rainbow, -10.0, 0.0, false);
+                              {1e-4F, 1e-3F, 1e-2F, 0.1F, 1.0F, 10.0F, 100.0F, 1e3F}, rainbow, 1e-3,
+                              100.0, {amrvis::ColorScale::Logarithmic});
+    requireAgreesWithRenderer("negative span", {-20.0F, -10.0F, -7.5F, -5.0F, -2.5F, 0.0F, 5.0F},
+                              rainbow, -10.0, 0.0, {amrvis::ColorScale::Linear});
 
     // The ends, named outright: the color bar's bottom and top are the
     // palette's first and last data slots, and the reversal swaps them.
-    const auto linear = amrvis::qt::makeDatasetColoring(rainbow, 2.0, 8.0, false);
+    const auto linear =
+        amrvis::qt::makeDatasetColoring(rainbow, 2.0, 8.0, {amrvis::ColorScale::Linear});
     require(argbOf(amrvis::qt::datasetValueColor(linear, 2.0))
             == rainbow.slotArgb(amrvis::Palette::paletteStart),
         "the minimum is not the palette's first data slot");
@@ -116,8 +109,8 @@ int main()
     require(argbOf(amrvis::qt::datasetValueColor(linear, 100.0))
             == rainbow.slotArgb(amrvis::Palette::paletteEnd),
         "a value over the range does not clamp to the last data slot");
-    const auto reversed = amrvis::qt::makeDatasetColoring(
-        rainbow.reversed(), 2.0, 8.0, false);
+    const auto reversed =
+        amrvis::qt::makeDatasetColoring(rainbow.reversed(), 2.0, 8.0, {amrvis::ColorScale::Linear});
     require(argbOf(amrvis::qt::datasetValueColor(reversed, 2.0))
             == rainbow.slotArgb(amrvis::Palette::paletteEnd),
         "reversal did not swap the low end");
@@ -134,8 +127,8 @@ int main()
     require(argbOf(amrvis::qt::datasetValueColor(
                 linear, std::numeric_limits<double>::infinity())) == nanColor,
         "an infinity is not drawn in the renderer's nan color");
-    const auto logarithmic
-        = amrvis::qt::makeDatasetColoring(rainbow, 1e-3, 100.0, true);
+    const auto logarithmic =
+        amrvis::qt::makeDatasetColoring(rainbow, 1e-3, 100.0, {amrvis::ColorScale::Logarithmic});
     require(argbOf(amrvis::qt::datasetValueColor(logarithmic, 0.0)) == nanColor,
         "zero under a log range is not drawn in the renderer's nan color");
     require(argbOf(amrvis::qt::datasetValueColor(logarithmic, -1.0)) == nanColor,
@@ -144,12 +137,12 @@ int main()
     // A range nothing can be mapped through: no color is meaningful, so the
     // numbers stay legible in the plain viewport foreground instead of all
     // taking the first slot's color.
-    for (const auto& unusable : {
-             amrvis::qt::makeDatasetColoring(rainbow, 5.0, 5.0, false),
-             amrvis::qt::makeDatasetColoring(rainbow, 8.0, 2.0, false),
-             amrvis::qt::makeDatasetColoring(rainbow, -1.0, 10.0, true),
-             amrvis::qt::makeDatasetColoring(rainbow,
-                 std::numeric_limits<double>::quiet_NaN(), 1.0, false)}) {
+    for (const auto& unusable :
+         {amrvis::qt::makeDatasetColoring(rainbow, 5.0, 5.0, {amrvis::ColorScale::Linear}),
+          amrvis::qt::makeDatasetColoring(rainbow, 8.0, 2.0, {amrvis::ColorScale::Linear}),
+          amrvis::qt::makeDatasetColoring(rainbow, -1.0, 10.0, {amrvis::ColorScale::Logarithmic}),
+          amrvis::qt::makeDatasetColoring(rainbow, std::numeric_limits<double>::quiet_NaN(), 1.0,
+                                          {amrvis::ColorScale::Linear})}) {
         require(!unusable.range.has_value(),
             "an unusable range resolved anyway");
         require(amrvis::qt::datasetValueColor(unusable, 5.0)

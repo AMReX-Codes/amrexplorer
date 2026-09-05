@@ -375,6 +375,10 @@ table DirectoryListing {
 // picture where a logarithmic one was asked for. The transfer function is an explicit lookup: one
 // 0x00RRGGBB colour and one [0, 1] opacity per entry, entry 0 the bottom of
 // the range.
+// Since protocol 1.5 the scale enums and thresholds carry the mapping. The
+// legacy logarithmic flags remain for 1.2-1.4 peers: the codec derives them
+// from the enums when encoding and translates them into enums when decoding
+// older messages. Application state stores only ColorScaleConfig.
 table RenderedFrameRequest {
   dataset_id:ulong (id: 0);
   field:uint (id: 1);

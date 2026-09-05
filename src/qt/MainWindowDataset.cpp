@@ -236,7 +236,6 @@ void MainWindow::saveSettings()
     // Range mode is deliberately not persisted: the correct default (File)
     // depends on the dataset and restoring a different mode from a previous
     // session would produce unexpected color bars.
-    settings.setValue(QStringLiteral("range/logarithmic"), m_range->logarithmic());
     const auto scale = m_range->colorScale();
     settings.setValue(QStringLiteral("range/scale"),
         scale.scale == ColorScale::SymLogarithmic ? QStringLiteral("symlog")
@@ -1358,9 +1357,8 @@ void MainWindow::requestInitialSlice(
                         if (levelIndex >= 0) {
                             m_levelSelector->setCurrentIndex(levelIndex);
                         }
-                        m_range->setSelection({restoredSpec->rangeMode,
-                            restoredSpec->userRange, restoredSpec->logarithmic,
-                            restoredSpec->scale});
+                        m_range->setSelection({restoredSpec->rangeMode, restoredSpec->userRange,
+                                               restoredSpec->scale});
                         m_range->setTrackedField(
                             m_fieldSelector->currentText());
                         m_range->commitFieldRange(m_range->trackedField());

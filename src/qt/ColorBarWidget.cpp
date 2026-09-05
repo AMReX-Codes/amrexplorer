@@ -104,11 +104,6 @@ void ColorBarWidget::setNumberFormat(QString format)
     update();
 }
 
-void ColorBarWidget::setLogarithmic(bool logarithmic)
-{
-    setScale({logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0});
-}
-
 void ColorBarWidget::setScale(ColorScaleConfig scale)
 {
     m_scale = scale;

@@ -1298,7 +1298,6 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     state.fieldName = fieldName;
     state.displayMinimum = display.minimum;
     state.displayMaximum = display.maximum;
-    state.displayLogarithmic = display.logarithmic;
     state.displayScale = display.scale;
     state.vectorSegments = std::move(display.vectors);
     if (display.slice.gridBoxesIncluded) {
@@ -1564,9 +1563,8 @@ void MainWindow::syncVisibleRanges()
                     state->displayMaximum = globalMax;
                     // One shared log flag across the panel set (see
                     // shared-log-range-render-throw-fails-load): keep every
-                    // panel's stored flag, and thus the color bar below, in
+                    // panel's stored scale, and thus the color bar below, in
                     // agreement with the raster the sync just rendered.
-                    state->displayLogarithmic = outcome.sync->logarithmic;
                     state->displayScale = outcome.sync->scale;
                     if (update.contoursRecomputed) {
                         state->contourPolylines
@@ -2117,7 +2115,6 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     spec.sphericalDisplay = m_sphericalDisplay;
     {
         const auto selection = m_range->selection();
-        spec.logarithmic = selection.logarithmic;
         spec.scale = selection.scale;
         spec.rangeMode = selection.mode;
         spec.userRange = selection.userRange;

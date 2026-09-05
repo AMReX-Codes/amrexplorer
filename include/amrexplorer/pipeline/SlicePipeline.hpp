@@ -76,7 +76,6 @@ struct SliceDisplayResult {
     std::string fieldName;
     double minimum = 0.0;
     double maximum = 1.0;
-    bool logarithmic = false;
     ColorScaleConfig scale;
     DisplayMode mode = DisplayMode::Raster;
     std::uint32_t vectorUField = 0;
@@ -143,7 +142,6 @@ struct FrameSliceSpec {
     int levelSelection = -1;  // level combo data: -1 = finest available
     RangeMode rangeMode = RangeMode::File;
     std::optional<std::pair<double, double>> userRange;
-    bool logarithmic = false;
     ColorScaleConfig scale;
     Palette palette;
     std::uint32_t vectorUField = 0;
@@ -267,11 +265,6 @@ inline constexpr int maxSliceOutputDimension = maxViewOutputDimension;
 // Executes the display slice and resolves its range, rendering the raster.
 [[nodiscard]] SliceDisplayResult executeSlice(
     const std::shared_ptr<DatasetSession>& dataset, const SliceRequest& request,
-    RangeMode rangeMode,
-    const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const Palette& palette, StopToken cancellation);
-[[nodiscard]] SliceDisplayResult executeSlice(
-    const std::shared_ptr<DatasetSession>& dataset, const SliceRequest& request,
     RangeMode rangeMode, const std::optional<std::pair<double, double>>& userRange,
     ColorScaleConfig scale, const Palette& palette, StopToken cancellation);
 
@@ -292,13 +285,6 @@ void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
 // translated message).
 [[nodiscard]] SliceDisplayResult executeSliceWithFallback(
     const std::shared_ptr<DatasetSession>& dataset, SliceRequest request,
-    RangeMode rangeMode,
-    const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const Palette& palette, DisplayMode displayMode,
-    std::uint32_t vectorUField, std::uint32_t vectorVField, int contourCount,
-    StopToken cancellation);
-[[nodiscard]] SliceDisplayResult executeSliceWithFallback(
-    const std::shared_ptr<DatasetSession>& dataset, SliceRequest request,
     RangeMode rangeMode, const std::optional<std::pair<double, double>>& userRange,
     ColorScaleConfig scale, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField, int contourCount,
@@ -307,10 +293,6 @@ void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
 // Extracts contour polylines for the request at data resolution and maps
 // them to display-plane pixel space; caches the contour plane on the result so
 // range and contour-count changes can re-extract without a new SliceQuery.
-void appendContours(const std::shared_ptr<DatasetSession>& dataset,
-    const SliceRequest& request, int contourCount, double minimum,
-    double maximum, bool logarithmic, StopToken cancellation,
-    SliceDisplayResult& result);
 void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request, int contourCount, double minimum,
     double maximum, ColorScaleConfig scale, StopToken cancellation,
@@ -323,16 +305,6 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
 // re-rendered; SliceDisplayResult::rasterUnchanged tells the GUI to keep
 // the view's pixmap. Vector glyphs are reused from the cache: they do not
 // depend on palette/log/range.
-[[nodiscard]] SliceDisplayResult refreshCachedSlice(
-    const std::shared_ptr<DatasetSession>& dataset,
-    const SliceRequest& request,
-    std::shared_ptr<const ScalarPlane> displayPlanePtr,
-    ScalarPlane contourPlane, std::vector<VectorSegment> vectors,
-    RangeMode rangeMode,
-    const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const Palette& palette, DisplayMode displayMode,
-    std::uint32_t vectorUField, std::uint32_t vectorVField,
-    int contourCount, bool rasterDirty, StopToken cancellation = {});
 [[nodiscard]] SliceDisplayResult refreshCachedSlice(
     const std::shared_ptr<DatasetSession>& dataset, const SliceRequest& request,
     std::shared_ptr<const ScalarPlane> displayPlanePtr,
@@ -349,10 +321,6 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
 // the range is unusable (non-positive log range, zero extent), so a bad range
 // clears the overlay rather than throwing. See the
 // contours-stale-after-visible-range-sync issue.
-[[nodiscard]] std::vector<ContourPolyline> recomputeContourPolylines(
-    const ScalarPlane& plane, double minimum,
-    double maximum, bool logarithmic, int contourCount,
-    int displayWidth, int displayHeight);
 [[nodiscard]] std::vector<ContourPolyline> recomputeContourPolylines(
     const ScalarPlane& plane, double minimum, double maximum,
     ColorScaleConfig scale, int contourCount, int displayWidth, int displayHeight);

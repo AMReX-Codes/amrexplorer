@@ -25,7 +25,6 @@ public:
     void setPalette(const amrvis::Palette* palette);
     void setFieldRange(QString fieldName, double minimum, double maximum);
     void setNumberFormat(QString format);
-    void setLogarithmic(bool logarithmic);
     void setScale(ColorScaleConfig scale);
     void clearRange();
 

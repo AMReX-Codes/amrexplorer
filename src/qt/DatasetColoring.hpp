@@ -30,13 +30,6 @@ struct DatasetColoring {
 };
 
 [[nodiscard]] inline DatasetColoring makeDatasetColoring(
-    const Palette& palette, double minimum, double maximum, bool logarithmic)
-{
-    return DatasetColoring{
-        palette, resolveValueRange(minimum, maximum, logarithmic)};
-}
-
-[[nodiscard]] inline DatasetColoring makeDatasetColoring(
     const Palette& palette, double minimum, double maximum,
     ColorScaleConfig scale)
 {

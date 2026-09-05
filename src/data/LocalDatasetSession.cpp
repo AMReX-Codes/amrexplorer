@@ -49,13 +49,6 @@ std::optional<ValueRange> compositeMetadataRange(const DatasetMetadata& metadata
 
 } // namespace
 
-VolumeRange visibleVolumeRange(const VolumeGrid& grid, bool logarithmic,
-    StopToken cancellation)
-{
-    return visibleVolumeRange(grid,
-        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0}, cancellation);
-}
-
 VolumeRange visibleVolumeRange(const VolumeGrid& grid, ColorScaleConfig scale,
     StopToken cancellation)
 {
@@ -66,25 +59,24 @@ VolumeRange visibleVolumeRange(const VolumeGrid& grid, ColorScaleConfig scale,
     // The slice path decides it the other way round -- finiteRange keeps
     // every finite value and a non-positive minimum makes resolveRange fall
     // back to linear -- and the two views of one field have to agree.
-    const auto extrema = volumeGridRange(grid, false, cancellation);
+    const auto extrema = volumeGridRange(grid, {ColorScale::Linear}, cancellation);
     if (!extrema) {
         // Nothing finite to show. A logarithmic request still wants a
         // logarithmic axis, so the neutral range keeps the mapping.
-        return scale.scale == ColorScale::Logarithmic
-            ? VolumeRange{1.0, 10.0, true, scale}
-            : VolumeRange{0.0, 1.0, false, scale};
+        return scale.scale == ColorScale::Logarithmic ? VolumeRange{1.0, 10.0, scale}
+                                                      : VolumeRange{0.0, 1.0, scale};
     }
     if (scale.scale == ColorScale::Logarithmic && extrema->first > 0.0) {
-        const auto [minimum, maximum]
-            = paddedIfDegenerate(extrema->first, extrema->second, true);
+        const auto [minimum, maximum] =
+            paddedIfDegenerate(extrema->first, extrema->second, {ColorScale::Logarithmic});
         if (minimum > 0.0 && minimum < maximum) {
-            return {minimum, maximum, true, scale};
+            return {minimum, maximum, scale};
         }
     }
-    const auto [minimum, maximum]
-        = paddedIfDegenerate(extrema->first, extrema->second, false);
+    const auto [minimum, maximum] =
+        paddedIfDegenerate(extrema->first, extrema->second, {ColorScale::Linear});
     if (scale.scale == ColorScale::Logarithmic) scale.scale = ColorScale::Linear;
-    return {minimum, maximum, false, scale};
+    return {minimum, maximum, scale};
 }
 
 std::size_t VolumeGridKeyHash::operator()(const VolumeGridKey& key) const noexcept
@@ -423,7 +415,7 @@ VolumeFrame LocalDatasetSession::renderVolume(const VolumeRenderRequest& request
         // answer from the same grid, so publishing last-writer-wins costs
         // nothing but a duplicated scan in a case that needs two misses on
         // one key at once.
-        const auto requestedScale = effectiveColorScale(request.logarithmic, request.scale);
+        const auto requestedScale = request.scale;
         const auto want = std::pair{key, requestedScale};
         std::optional<VolumeRange> memo;
         {

@@ -46,8 +46,6 @@ struct VolumeGridKeyHash {
 // resolveRange -- is worth pinning on its own. Scans the grid, so it throws
 // ReadCancelled when the token stops.
 [[nodiscard]] VolumeRange visibleVolumeRange(
-    const VolumeGrid& grid, bool logarithmic, StopToken cancellation = {});
-[[nodiscard]] VolumeRange visibleVolumeRange(
     const VolumeGrid& grid, ColorScaleConfig scale, StopToken cancellation = {});
 
 class LocalDatasetSession final : public DatasetSession {

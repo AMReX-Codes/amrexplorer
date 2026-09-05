@@ -44,7 +44,7 @@ std::array<std::uint8_t, 3> sampleViridis(double normalized) noexcept
 ImageBuffer renderScalarPlane(
     const ScalarPlane& plane, const ScalarRenderSettings& settings)
 {
-    const auto scale = effectiveColorScale(settings.logarithmic, settings.scale);
+    const auto scale = settings.scale;
     // Check order is pinned by the unit test: positive extent, then the
     // stride representation, then the shared storage-match rule (extent is
     // already vetted here, so AllowEmpty cannot actually pass an empty plane).

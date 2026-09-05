@@ -15,9 +15,8 @@ public:
 
 } // namespace
 
-std::optional<std::pair<double, double>> finiteRange(
-    const ScalarPlane& plane, bool logarithmic)
-{
+std::optional<std::pair<double, double>> finiteRange(const ScalarPlane& plane,
+                                                     ColorScaleConfig scale) {
     auto minimum = std::numeric_limits<double>::infinity();
     auto maximum = -std::numeric_limits<double>::infinity();
     for (std::size_t pixel = 0; pixel < plane.values.size(); ++pixel) {
@@ -34,7 +33,7 @@ std::optional<std::pair<double, double>> finiteRange(
     if (!std::isfinite(minimum) || !std::isfinite(maximum)) {
         return std::nullopt;
     }
-    return paddedIfDegenerate(minimum, maximum, logarithmic);
+    return paddedIfDegenerate(minimum, maximum, scale);
 }
 
 std::optional<ValueRange> selectedMetadataRange(
@@ -114,12 +113,12 @@ std::optional<std::pair<double, double>> fabDataRange(
     return std::pair{range->minimum, range->maximum};
 }
 
-std::pair<double, double> resolveRange(
-    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
-    int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
-    const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const ScalarPlane& plane, StopToken cancellation)
-{
+std::pair<double, double> resolveRange(const std::shared_ptr<DatasetSession>& dataset,
+                                       FieldId field, int maximumLevel,
+                                       CompositionPolicy composition, RangeMode rangeMode,
+                                       const std::optional<std::pair<double, double>>& userRange,
+                                       ColorScaleConfig scale, const ScalarPlane& plane,
+                                       StopToken cancellation) {
     auto selectedRange = userRange;
     if (rangeMode == RangeMode::Level || rangeMode == RangeMode::File) {
         if (rangeMode == RangeMode::File) {
@@ -139,17 +138,16 @@ std::pair<double, double> resolveRange(
             }
         }
     }
-    auto [minimum, maximum] = selectedRange
-        ? *selectedRange
-        : finiteRange(plane, logarithmic).value_or(logarithmic
-              ? std::pair{1.0, 10.0}
-              : std::pair{0.0, 1.0});
-    std::tie(minimum, maximum)
-        = paddedIfDegenerate(minimum, maximum, logarithmic);
+    auto [minimum, maximum] =
+        selectedRange ? *selectedRange
+                      : finiteRange(plane, scale)
+                            .value_or(scale.scale == ColorScale::Logarithmic ? std::pair{1.0, 10.0}
+                                                                             : std::pair{0.0, 1.0});
+    std::tie(minimum, maximum) = paddedIfDegenerate(minimum, maximum, scale);
     if (!(minimum < maximum)) {
         throw std::runtime_error("user scalar range must have positive extent");
     }
-    if (logarithmic && !(minimum > 0.0)) {
+    if (scale.scale == ColorScale::Logarithmic && !(minimum > 0.0)) {
         throw LogarithmicRangeError(
             "logarithmic scalar range must be positive");
     }
@@ -160,37 +158,26 @@ ResolvedRange resolveDisplayRange(
     const std::shared_ptr<DatasetSession>& dataset, FieldId field,
     int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const ScalarPlane& plane, StopToken cancellation)
-{
-    return resolveDisplayRange(dataset, field, maximumLevel, composition,
-        rangeMode, userRange,
-        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0},
-        plane, cancellation);
-}
-
-ResolvedRange resolveDisplayRange(
-    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
-    int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
-    const std::optional<std::pair<double, double>>& userRange,
     ColorScaleConfig scale, const ScalarPlane& plane, StopToken cancellation)
 {
     if (scale.scale == ColorScale::Logarithmic) {
         try {
-            const auto [minimum, maximum] = resolveRange(dataset, field,
-                maximumLevel, composition, rangeMode, userRange, true, plane,
-                cancellation);
-            return {minimum, maximum, true, scale};
+            const auto [minimum, maximum] =
+                resolveRange(dataset, field, maximumLevel, composition, rangeMode, userRange,
+                             {ColorScale::Logarithmic}, plane, cancellation);
+            return {minimum, maximum, scale};
         } catch (const LogarithmicRangeError&) {
             // Log is not viable for this range; fall back to linear below.
         }
     }
-    const auto [minimum, maximum] = resolveRange(dataset, field, maximumLevel,
-        composition, rangeMode, userRange, false, plane, cancellation);
+    const auto [minimum, maximum] =
+        resolveRange(dataset, field, maximumLevel, composition, rangeMode, userRange,
+                     {ColorScale::Linear}, plane, cancellation);
     if (scale.scale == ColorScale::SymLogarithmic
         && resolveValueRange(minimum, maximum, scale)) {
-        return {minimum, maximum, false, scale};
+        return {minimum, maximum, scale};
     }
-    return {minimum, maximum, false, {ColorScale::Linear, scale.linearThreshold}};
+    return {minimum, maximum, {ColorScale::Linear, scale.linearThreshold}};
 }
 
 } // namespace amrvis

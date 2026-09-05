@@ -78,7 +78,7 @@ amrvis::RaycastSettings settingsFor(const amrvis::OrthoCamera& camera,
     settings.camera = camera;
     settings.domain = unitBox();
     settings.outputSize = {size, size};
-    settings.range = {0.0, 1.0, false};
+    settings.range = {0.0, 1.0, {amrvis::ColorScale::Linear}};
     settings.transfer = transfer;
     settings.samplesPerVoxel = samplesPerVoxel;
     settings.threadCount = 1;
@@ -384,21 +384,20 @@ int main()
 
     // --- the value mapping is the 2-D renderer's --------------------------
     {
-        const amrvis::VolumeRange linear{0.0, 49.0, false};
+        const amrvis::VolumeRange linear{0.0, 49.0, {amrvis::ColorScale::Linear}};
         require(amrvis::transferEntryFor(24.5, linear, 253) == 126
                 && amrvis::transferEntryFor(49.0, linear, 253) == 252
                 && amrvis::transferEntryFor(-1.0, linear, 253) == 0
                 && amrvis::transferEntryFor(0.0, linear, 253) == 0
                 && amrvis::transferEntryFor(60.0, linear, 253) == 252,
             "the linear mapping does not truncate like the palette");
-        const amrvis::VolumeRange logarithmic{1.0, 100.0, true};
+        const amrvis::VolumeRange logarithmic{1.0, 100.0, {amrvis::ColorScale::Logarithmic}};
         require(amrvis::transferEntryFor(10.0, logarithmic, 253) == 126
                 && amrvis::transferEntryFor(1.0, logarithmic, 253) == 0
                 && !amrvis::transferEntryFor(0.0, logarithmic, 253).has_value()
                 && !amrvis::transferEntryFor(-3.0, logarithmic, 253).has_value(),
             "the logarithmic mapping is wrong");
-        const amrvis::VolumeRange symlog{-100.0, 100.0, false,
-            {amrvis::ColorScale::SymLogarithmic, 1.0}};
+        const amrvis::VolumeRange symlog{-100.0, 100.0, {amrvis::ColorScale::SymLogarithmic, 1.0}};
         require(amrvis::transferEntryFor(0.0, symlog, 253) == 126
                 && amrvis::transferEntryFor(-100.0, symlog, 253) == 0
                 && amrvis::transferEntryFor(100.0, symlog, 253) == 252,
@@ -412,13 +411,16 @@ int main()
         // its own: entry 0 would look like an answer.
         const auto huge = std::numeric_limits<double>::max();
         require(!amrvis::transferEntryFor(
-                    5.0, amrvis::VolumeRange{-1.0, 10.0, true}, 253).has_value()
-                && !amrvis::transferEntryFor(
-                    5.0, amrvis::VolumeRange{1.0, 1.0, false}, 253).has_value()
-                && !amrvis::transferEntryFor(
-                    5.0, amrvis::VolumeRange{-huge, huge, false}, 253).has_value()
-                && !amrvis::transferEntryFor(5.0, linear, 0).has_value(),
-            "a range that can map nothing returned an entry");
+                     5.0, amrvis::VolumeRange{-1.0, 10.0, {amrvis::ColorScale::Logarithmic}}, 253)
+                        .has_value() &&
+                    !amrvis::transferEntryFor(
+                         5.0, amrvis::VolumeRange{1.0, 1.0, {amrvis::ColorScale::Linear}}, 253)
+                         .has_value() &&
+                    !amrvis::transferEntryFor(
+                         5.0, amrvis::VolumeRange{-huge, huge, {amrvis::ColorScale::Linear}}, 253)
+                         .has_value() &&
+                    !amrvis::transferEntryFor(5.0, linear, 0).has_value(),
+                "a range that can map nothing returned an entry");
         // The renderer honours a logarithmic range: value 10 in [1, 100]
         // takes the middle entry's colour.
         auto grid = uniformGrid(4, 10.0F);
@@ -591,7 +593,7 @@ int main()
             const auto expected
                 = (centreX + 3.0 * centreY) / static_cast<double>(4 * (n - 1));
             const auto slot = amrvis::valueSlot(
-                expected, amrvis::ResolvedValueRange{0.0, 1.0, false},
+                expected, amrvis::ResolvedValueRange{0.0, 1.0, {amrvis::ColorScale::Linear}},
                 entryCount);
             const auto seen
                 = static_cast<int>(blueOf(pixelAt(frame, step, step)));
@@ -684,7 +686,7 @@ int main()
             // Half the field's span, so the top entry begins halfway up the
             // ramp -- at the centre of voxel 3.5, which is the middle of the
             // grid -- instead of only at its very top.
-            settings.range = {0.0, 0.5, false};
+            settings.range = {0.0, 0.5, {amrvis::ColorScale::Linear}};
             settings.sampling = amrvis::SamplingPolicy::Linear;
             const auto frame = amrvis::raycastVolume(grid, settings);
             const auto alpha
@@ -741,25 +743,25 @@ int main()
         auto grid = uniformGrid(2, 0.0F);
         grid.values = {-2.0F, 0.0F, 3.0F, std::numeric_limits<float>::quiet_NaN(),
             std::numeric_limits<float>::infinity(), 5.0F, 0.5F, 1.0F};
-        const auto linear = amrvis::volumeGridRange(grid, false);
-        const auto logarithmic = amrvis::volumeGridRange(grid, true);
+        const auto linear = amrvis::volumeGridRange(grid, {amrvis::ColorScale::Linear});
+        const auto logarithmic = amrvis::volumeGridRange(grid, {amrvis::ColorScale::Logarithmic});
         require(linear && linear->first == -2.0 && linear->second == 5.0,
             "the linear grid range is not the finite extrema");
         require(logarithmic && logarithmic->first == 0.5 && logarithmic->second == 5.0,
             "the logarithmic grid range did not skip non-positive values");
         grid.values.assign(8, std::numeric_limits<float>::quiet_NaN());
-        require(!amrvis::volumeGridRange(grid, false).has_value(),
-            "an all-NaN grid reported a range");
+        require(!amrvis::volumeGridRange(grid, {amrvis::ColorScale::Linear}).has_value(),
+                "an all-NaN grid reported a range");
         grid.values.assign(8, -1.0F);
-        require(!amrvis::volumeGridRange(grid, true).has_value()
-                && amrvis::volumeGridRange(grid, false)->first == -1.0,
-            "a non-positive grid reported a logarithmic range");
+        require(!amrvis::volumeGridRange(grid, {amrvis::ColorScale::Logarithmic}).has_value() &&
+                    amrvis::volumeGridRange(grid, {amrvis::ColorScale::Linear})->first == -1.0,
+                "a non-positive grid reported a logarithmic range");
         // The scan runs over the whole grid, so it stops when the token does.
         amrvis::StopSource stop;
         stop.request_stop();
         bool threw = false;
         try {
-            (void)amrvis::volumeGridRange(grid, false, stop.get_token());
+            (void)amrvis::volumeGridRange(grid, {amrvis::ColorScale::Linear}, stop.get_token());
         } catch (const amrvis::ReadCancelled&) {
             threw = true;
         }
@@ -771,7 +773,7 @@ int main()
         empty.region = unitBox();
         threw = false;
         try {
-            (void)amrvis::volumeGridRange(empty, false, stop.get_token());
+            (void)amrvis::volumeGridRange(empty, {amrvis::ColorScale::Linear}, stop.get_token());
         } catch (const amrvis::ReadCancelled&) {
             threw = true;
         }
@@ -809,11 +811,12 @@ int main()
             return false;
         };
         auto bad = settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F));
-        bad.range = {1.0, 1.0, false};
+        bad.range = {1.0, 1.0, {amrvis::ColorScale::Linear}};
         require(rejects(bad), "an empty range was accepted");
         // An infinite span would map every value to the bottom entry.
         bad.range = {-std::numeric_limits<double>::max(),
-            std::numeric_limits<double>::max(), false};
+                     std::numeric_limits<double>::max(),
+                     {amrvis::ColorScale::Linear}};
         require(rejects(bad), "a range with an infinite span was accepted");
         bad = settingsFor(amrvis::orthoPresetXY, 0, twoEntries(0xFFU, 1.0F));
         require(rejects(bad), "a zero-size output was accepted");

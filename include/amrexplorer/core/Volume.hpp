@@ -31,23 +31,19 @@ struct VolumeTransferFunction {
         const VolumeTransferFunction&) = default;
 };
 
-// The value range the transfer function spans, linear or logarithmic.
+// The value range and color scale the transfer function spans.
 struct VolumeRange {
     double minimum = 0.0;
     double maximum = 1.0;
-    bool logarithmic = false;
     ColorScaleConfig scale;
     constexpr VolumeRange() = default;
     constexpr VolumeRange(double minimumValue, double maximumValue,
-        bool useLogarithmic, ColorScaleConfig scaleConfig = {})
-        : minimum(minimumValue), maximum(maximumValue),
-          logarithmic(useLogarithmic), scale(scaleConfig)
-    {
-    }
+                          ColorScaleConfig scaleConfig = {})
+        : minimum(minimumValue), maximum(maximumValue), scale(scaleConfig) {}
     friend bool operator==(const VolumeRange& lhs, const VolumeRange& rhs)
     {
-        const auto left = effectiveColorScale(lhs.logarithmic, lhs.scale);
-        const auto right = effectiveColorScale(rhs.logarithmic, rhs.scale);
+        const auto left = lhs.scale;
+        const auto right = rhs.scale;
         return lhs.minimum == rhs.minimum && lhs.maximum == rhs.maximum
             && left.scale == right.scale
             && (left.scale != ColorScale::SymLogarithmic
@@ -119,11 +115,10 @@ struct VolumeRenderRequest {
     std::array<int, 2> outputSize{0, 0};   // width, height in pixels
     // The range the colours span; nullopt asks the renderer to use the
     // sampled grid's finite extrema (the "Visible" range) and report them
-    // back, with `logarithmic` as the requested mapping (falling back to
-    // linear when the data is not strictly positive). `logarithmic` is
-    // ignored when `range` is set: the range carries its own mapping.
+    // back, with `scale` as the requested mapping (logarithmic falls back to
+    // linear when the data is not strictly positive). `scale` is ignored
+    // when `range` is set: the range carries its own mapping.
     std::optional<VolumeRange> range;
-    bool logarithmic = false;
     ColorScaleConfig scale;
     VolumeTransferFunction transfer;
     // Ray samples per voxel along the ray (the step is the mean distance a

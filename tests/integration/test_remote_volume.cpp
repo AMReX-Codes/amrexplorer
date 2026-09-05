@@ -65,7 +65,7 @@ amrvis::VolumeRenderRequest requestFor(const amrvis::DatasetSession& dataset)
     request.region = amrvis::datasetSampleBounds(dataset.metadata());
     request.camera = {0.55, 0.35, 1.2};
     request.outputSize = {96, 80};
-    request.range = amrvis::VolumeRange{0.0, 1.0, false};
+    request.range = amrvis::VolumeRange{0.0, 1.0, {amrvis::ColorScale::Linear}};
     // A ramp from transparent to opaque with a bright colour, so the
     // analytic (i + j + k) / 9 field draws something over its whole range.
     for (int entry = 0; entry < 16; ++entry) {
@@ -145,11 +145,10 @@ int main(int argc, char* argv[])
         auto visible = remoteRequest;
         visible.range.reset();
         const auto resolved = remote->renderVolume(visible);
-        require(resolved.usedRange.minimum == 0.0
-                && resolved.usedRange.maximum == 1.0
-                && !resolved.usedRange.logarithmic,
-            "the server did not report the range it resolved");
-        visible.logarithmic = true;
+        require(resolved.usedRange.minimum == 0.0 && resolved.usedRange.maximum == 1.0 &&
+                    resolved.usedRange.scale.scale != amrvis::ColorScale::Logarithmic,
+                "the server did not report the range it resolved");
+        visible.scale = {amrvis::ColorScale::Logarithmic};
         const auto resolvedLog = remote->renderVolume(visible);
         // The field runs down to zero, so a logarithmic range is not viable
         // and the server falls back to linear over every finite value --
@@ -158,11 +157,11 @@ int main(int argc, char* argv[])
         // honest" form of this was a tautology: validateSessionVolumeResult
         // has already thrown on every frame that fails it, so it could not
         // fire.
-        require(!resolvedLog.usedRange.logarithmic
-                && resolvedLog.usedRange.minimum == resolved.usedRange.minimum
-                && resolvedLog.usedRange.maximum == resolved.usedRange.maximum,
-            "asking for a logarithmic Visible range on non-positive data did "
-            "not fall back to the linear one");
+        require(resolvedLog.usedRange.scale.scale != amrvis::ColorScale::Logarithmic &&
+                    resolvedLog.usedRange.minimum == resolved.usedRange.minimum &&
+                    resolvedLog.usedRange.maximum == resolved.usedRange.maximum,
+                "asking for a logarithmic Visible range on non-positive data did "
+                "not fall back to the linear one");
 
         // --- cancellation ------------------------------------------------
         {

@@ -150,7 +150,6 @@ RangeController::Selection RangeController::selection() const
     if (selection.mode == RangeMode::User) {
         selection.userRange = std::pair{m_minimum->value(), m_maximum->value()};
     }
-    selection.logarithmic = logarithmic();
     selection.scale = colorScale();
     return selection;
 }
@@ -158,11 +157,6 @@ RangeController::Selection RangeController::selection() const
 RangeMode RangeController::mode() const
 {
     return static_cast<RangeMode>(m_mode->currentData().toInt());
-}
-
-bool RangeController::logarithmic() const
-{
-    return m_logarithmic->isChecked();
 }
 
 ColorScaleConfig RangeController::colorScale() const
@@ -196,11 +190,7 @@ void RangeController::setSelection(const Selection& selection)
     const QSignalBlocker symlogBlocker(m_symmetricLogarithmic);
     const QSignalBlocker thresholdBlocker(m_linearThreshold);
     setMode(selection.mode);
-    const auto scale = selection.scale.scale != ColorScale::Linear
-        ? selection.scale
-        : ColorScaleConfig{
-            selection.logarithmic ? ColorScale::Logarithmic : ColorScale::Linear,
-            selection.scale.linearThreshold};
+    const auto scale = selection.scale;
     m_logarithmic->setChecked(scale.scale == ColorScale::Logarithmic);
     m_symmetricLogarithmic->setChecked(scale.scale == ColorScale::SymLogarithmic);
     m_linearThreshold->setValue(scale.linearThreshold);
@@ -231,12 +221,6 @@ bool RangeController::showDisplayRange(double minimum, double maximum)
         return true;
     }
     return false;
-}
-
-void RangeController::showLogarithmic(bool logarithmic)
-{
-    showColorScale({logarithmic ? ColorScale::Logarithmic : ColorScale::Linear,
-        m_linearThreshold->value()});
 }
 
 void RangeController::showColorScale(ColorScaleConfig scale)

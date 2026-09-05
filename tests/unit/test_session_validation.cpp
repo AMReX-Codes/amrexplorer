@@ -1210,7 +1210,7 @@ int main()
         frame.width = 16;
         frame.height = 12;
         frame.pixels.assign(16 * 12, 0U);
-        frame.usedRange = {0.0, 1.0, false};
+        frame.usedRange = {0.0, 1.0, {amrvis::ColorScale::Linear}};
         frame.metrics.gridDims = {4, 4, 4};
         frame.metrics.coveredVoxels = 64;
         frame.metrics.sampledMaximumLevel = 1;
@@ -1229,22 +1229,28 @@ int main()
                 validateSessionVolumeResult(metadata, request, bad);
             }, "storage", "a frame with short pixel storage was accepted");
             bad = frame;
-            bad.usedRange = {1.0, 1.0, false};
+            bad.usedRange = {1.0, 1.0, {amrvis::ColorScale::Linear}};
             requireRejectedWith([&] {
                 validateSessionVolumeResult(metadata, request, bad);
             }, "unusable range", "a frame with an empty range was accepted");
             bad = frame;
-            bad.usedRange = {0.0, 1.0, true};
+            bad.usedRange = {0.0, 1.0, {amrvis::ColorScale::Logarithmic}};
             requireRejectedWith([&] {
                 validateSessionVolumeResult(metadata, request, bad);
             }, "unusable range", "a non-positive logarithmic range was accepted");
             bad = frame;
-            bad.usedRange = {0.5, 2.0, true};
+            bad.usedRange = {0.5, 2.0, {amrvis::ColorScale::Logarithmic}};
             requireRejectedWith([&] {
                 validateSessionVolumeResult(metadata, request, bad);
             }, "not requested", "an unrequested logarithmic range was accepted");
+            auto logarithmic = request;
+            logarithmic.scale = {ColorScale::Logarithmic};
+            requireAccepted([&] { validateSessionVolumeResult(metadata, logarithmic, bad); },
+                            "a requested Visible logarithmic response was rejected");
+            requireAccepted([&] { validateSessionVolumeResult(metadata, logarithmic, frame); },
+                            "a Visible logarithmic request could not fall back to linear");
             auto ranged = request;
-            ranged.range = VolumeRange{0.25, 0.75, false};
+            ranged.range = VolumeRange{0.25, 0.75, {amrvis::ColorScale::Linear}};
             requireRejectedWith([&] {
                 validateSessionVolumeResult(metadata, ranged, frame);
             }, "requested range", "a frame ignoring the explicit range was accepted");
@@ -1328,38 +1334,40 @@ int main()
         // linear -- what resolveRange does for the same data on a plane.
         // Deciding from the positive values alone would answer "logarithmic
         // over [2, 2]" and make every negative voxel vanish.
-        const auto mixed = amrvis::visibleVolumeRange(gridOf({-1.0F, 2.0F}), true);
-        require(!mixed.logarithmic && mixed.minimum <= -1.0
-                && mixed.maximum >= 2.0,
-            "a mixed-sign Visible range went logarithmic");
+        const auto mixed =
+            amrvis::visibleVolumeRange(gridOf({-1.0F, 2.0F}), {amrvis::ColorScale::Logarithmic});
+        require(mixed.scale.scale != amrvis::ColorScale::Logarithmic && mixed.minimum <= -1.0 &&
+                    mixed.maximum >= 2.0,
+                "a mixed-sign Visible range went logarithmic");
         // Strictly positive: logarithmic is viable and is used.
-        const auto positive
-            = amrvis::visibleVolumeRange(gridOf({1.0F, 100.0F}), true);
-        require(positive.logarithmic && positive.minimum > 0.0
-                && positive.maximum >= 100.0,
-            "a positive Visible range did not go logarithmic");
+        const auto positive =
+            amrvis::visibleVolumeRange(gridOf({1.0F, 100.0F}), {amrvis::ColorScale::Logarithmic});
+        require((positive.scale.scale == amrvis::ColorScale::Logarithmic) &&
+                    positive.minimum > 0.0 && positive.maximum >= 100.0,
+                "a positive Visible range did not go logarithmic");
         // The same grid without the logarithmic request stays linear.
-        require(!amrvis::visibleVolumeRange(gridOf({1.0F, 100.0F}), false)
-                     .logarithmic,
-            "a linear Visible request came back logarithmic");
+        require(amrvis::visibleVolumeRange(gridOf({1.0F, 100.0F}), {amrvis::ColorScale::Linear})
+                        .scale.scale == amrvis::ColorScale::Linear,
+                "a linear Visible request came back logarithmic");
         // Degenerate: padded either side rather than left empty.
-        const auto degenerate
-            = amrvis::visibleVolumeRange(gridOf({2.0F, 2.0F}), false);
+        const auto degenerate =
+            amrvis::visibleVolumeRange(gridOf({2.0F, 2.0F}), {amrvis::ColorScale::Linear});
         require(degenerate.minimum < 2.0 && degenerate.maximum > 2.0,
             "a degenerate Visible range was not padded");
         // Nothing finite: a neutral range that keeps the requested mapping.
         const auto quietNaN = std::numeric_limits<float>::quiet_NaN();
-        require(amrvis::visibleVolumeRange(gridOf({quietNaN}), true).logarithmic
-                && !amrvis::visibleVolumeRange(gridOf({quietNaN}), false)
-                        .logarithmic,
-            "an all-NaN grid did not fall back to a neutral range");
+        require(amrvis::visibleVolumeRange(gridOf({quietNaN}), {amrvis::ColorScale::Logarithmic})
+                            .scale.scale == amrvis::ColorScale::Logarithmic &&
+                    amrvis::visibleVolumeRange(gridOf({quietNaN}), {amrvis::ColorScale::Linear})
+                            .scale.scale == amrvis::ColorScale::Linear,
+                "an all-NaN grid did not fall back to a neutral range");
         // The scan honours the token: it walks the whole grid otherwise.
         amrvis::StopSource stop;
         stop.request_stop();
         bool cancelled = false;
         try {
             static_cast<void>(amrvis::visibleVolumeRange(
-                gridOf({1.0F, 2.0F}), false, stop.get_token()));
+                gridOf({1.0F, 2.0F}), {amrvis::ColorScale::Linear}, stop.get_token()));
         } catch (const amrvis::ReadCancelled&) {
             cancelled = true;
         }

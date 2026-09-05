@@ -14,7 +14,6 @@ struct ScalarRenderSettings {
     double minimum = 0.0;
     double maximum = 1.0;
     ColorScaleConfig scale;
-    bool logarithmic = false;
     std::uint32_t invalidColor = 0xFF303030U;
     std::uint32_t nanColor = 0xFFFF00FFU;
     // When null, the built-in legacy rainbow palette is used.

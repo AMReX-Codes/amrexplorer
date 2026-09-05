@@ -15,13 +15,6 @@ struct ColorScaleConfig {
         const ColorScaleConfig&) = default;
 };
 
-[[nodiscard]] constexpr ColorScaleConfig effectiveColorScale(
-    bool logarithmic, ColorScaleConfig scale) noexcept
-{
-    return logarithmic
-        ? ColorScaleConfig{ColorScale::Logarithmic, 1.0} : scale;
-}
-
 // Mapping a field value to a slot of a colour lookup -- a palette slot for a
 // slice, a transfer-function entry for a volume. Both renderers map through
 // this, because a value must take the same slot in both: a volume rendered
@@ -44,11 +37,8 @@ struct ResolvedValueRange {
     double span = 1.0;      // maximum - minimum, in the same terms
     ColorScaleConfig scale;
     constexpr ResolvedValueRange() = default;
-    constexpr ResolvedValueRange(double minimumIn, double spanIn,
-        bool logarithmic)
-        : minimum(minimumIn), span(spanIn),
-          scale{logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0}
-    {}
+    constexpr ResolvedValueRange(double minimumIn, double spanIn, ColorScaleConfig scaleConfig)
+        : minimum(minimumIn), span(spanIn), scale(scaleConfig) {}
 };
 
 inline constexpr double symmetricLogLinearScale = 10.0 / 9.0;
@@ -108,13 +98,6 @@ inline constexpr double symmetricLogLinearScale = 10.0 / 9.0;
         return std::nullopt;
     }
     return resolved;
-}
-
-[[nodiscard]] inline std::optional<ResolvedValueRange> resolveValueRange(
-    double minimum, double maximum, bool logarithmic) noexcept
-{
-    return resolveValueRange(minimum, maximum,
-        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0});
 }
 
 // Whether the range can map this value at all: non-finite values, and

@@ -26,10 +26,8 @@ struct ContourPolyline {
 
 // Places count lines at the midpoint of equal-width intervals in either
 // linear value space or logarithmic value space.
-[[nodiscard]] std::vector<double> contourValues(
-    double minimum, double maximum, int count, bool logarithmic = false);
-[[nodiscard]] std::vector<double> contourValues(double minimum, double maximum,
-    int count, ColorScaleConfig scale);
+[[nodiscard]] std::vector<double> contourValues(double minimum, double maximum, int count,
+                                                ColorScaleConfig scale = {});
 
 // Marching squares over the plane's corner samples. A cell is the quad formed
 // by samples (i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1), so segment

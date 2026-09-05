@@ -70,8 +70,7 @@ public:
     // previously drift-prone copies (executeFrameLoad's shared-range block
     // and syncVisibleRanges).
     [[nodiscard]] static std::optional<std::pair<double, double>>
-    sharedVisibleRange(
-        std::span<const ScalarPlane* const> planes, bool logarithmic);
+    sharedVisibleRange(std::span<const ScalarPlane* const> planes, ColorScaleConfig scale);
 
     // How the view should treat its transform when `incoming` replaces the
     // raster produced by `cached`. Compatible physical geometry preserves the
@@ -107,11 +106,10 @@ public:
     };
     struct SharedRangeSync {
         std::pair<double, double> range;
-        // One log flag for the whole panel set: the requested log mapping,
+        // One color scale for the whole panel set: logarithmic mapping is
         // kept only when the shared range minimum is positive (renderScalarPlane
         // rejects a non-positive log minimum). Callers apply it to every panel
         // and to the shared color bar so all three agree with the raster.
-        bool logarithmic = false;
         ColorScaleConfig scale;
         std::vector<PanelSyncUpdate> panels;  // parallel to the input span
     };
@@ -125,10 +123,6 @@ public:
     // case the caller leaves the panels untouched.
     [[nodiscard]] std::optional<SharedRangeSync> syncPanelsToSharedRange(
         const RangeKey& key, std::span<const PanelSyncInput> panels,
-        bool logarithmic, bool contourMode, int contourCount,
-        const Palette& palette) const;
-    [[nodiscard]] std::optional<SharedRangeSync> syncPanelsToSharedRange(
-        const RangeKey& key, std::span<const PanelSyncInput> panels,
         ColorScaleConfig scale, bool contourMode, int contourCount,
         const Palette& palette) const;
 
@@ -139,11 +133,6 @@ public:
     // Static so the GUI can run it on a worker thread over immutable plane
     // snapshots while the coordinator itself stays confined to the GUI
     // thread (see heavy-work-on-gui-thread, part D).
-    [[nodiscard]] static std::optional<SharedRangeSync>
-    renderPanelsToSharedRange(
-        std::optional<std::pair<double, double>> sharedRange,
-        std::span<const PanelSyncInput> panels, bool logarithmic,
-        bool contourMode, int contourCount, const Palette& palette);
     [[nodiscard]] static std::optional<SharedRangeSync> renderPanelsToSharedRange(
         std::optional<std::pair<double, double>> sharedRange,
         std::span<const PanelSyncInput> panels, ColorScaleConfig scale,

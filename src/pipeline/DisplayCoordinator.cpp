@@ -29,9 +29,9 @@ void DisplayCoordinator::invalidateRangeCache()
     m_rangeKey.reset();
 }
 
-std::optional<std::pair<double, double>> DisplayCoordinator::sharedVisibleRange(
-    std::span<const ScalarPlane* const> planes, bool logarithmic)
-{
+std::optional<std::pair<double, double>>
+DisplayCoordinator::sharedVisibleRange(std::span<const ScalarPlane* const> planes,
+                                       ColorScaleConfig scale) {
     auto minimum = std::numeric_limits<double>::infinity();
     auto maximum = -std::numeric_limits<double>::infinity();
     for (const auto* plane : planes) {
@@ -50,7 +50,7 @@ std::optional<std::pair<double, double>> DisplayCoordinator::sharedVisibleRange(
     if (!std::isfinite(minimum) || !std::isfinite(maximum)) {
         return std::nullopt;
     }
-    return paddedIfDegenerate(minimum, maximum, logarithmic);
+    return paddedIfDegenerate(minimum, maximum, scale);
 }
 
 ImageTransformPolicy DisplayCoordinator::rasterTransformPolicy(
@@ -75,9 +75,6 @@ void DisplayCoordinator::realignArrivalToRange(SliceDisplayResult& result,
     std::pair<double, double> range, const Palette& palette,
     bool realignRasterAndContours)
 {
-    if (result.logarithmic && result.scale.scale == ColorScale::Linear) {
-        result.scale.scale = ColorScale::Logarithmic;
-    }
     result.minimum = range.first;
     result.maximum = range.second;
     // The reused full-domain range is a superset of this arrival's own range,
@@ -85,8 +82,7 @@ void DisplayCoordinator::realignArrivalToRange(SliceDisplayResult& result,
     // true per panel). Log is only viable when the shared minimum is positive;
     // degrade to linear otherwise so renderScalarPlane does not reject the
     // non-positive minimum (see shared-log-range-render-throw-fails-load).
-    result.logarithmic = result.logarithmic && range.first > 0.0;
-    if (result.scale.scale == ColorScale::Logarithmic && !result.logarithmic) {
+    if (result.scale.scale == ColorScale::Logarithmic && !(range.first > 0.0)) {
         result.scale.scale = ColorScale::Linear;
     }
     if (!realignRasterAndContours) {
@@ -107,33 +103,11 @@ void DisplayCoordinator::realignArrivalToRange(SliceDisplayResult& result,
 std::optional<DisplayCoordinator::SharedRangeSync>
 DisplayCoordinator::syncPanelsToSharedRange(
     const RangeKey& key, std::span<const PanelSyncInput> panels,
-    bool logarithmic, bool contourMode, int contourCount,
-    const Palette& palette) const
-{
-    return syncPanelsToSharedRange(key, panels,
-        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0},
-        contourMode, contourCount, palette);
-}
-
-std::optional<DisplayCoordinator::SharedRangeSync>
-DisplayCoordinator::syncPanelsToSharedRange(
-    const RangeKey& key, std::span<const PanelSyncInput> panels,
     ColorScaleConfig scale, bool contourMode, int contourCount,
     const Palette& palette) const
 {
     return renderPanelsToSharedRange(cachedFullDomainRange(key), panels,
         scale, contourMode, contourCount, palette);
-}
-
-std::optional<DisplayCoordinator::SharedRangeSync>
-DisplayCoordinator::renderPanelsToSharedRange(
-    std::optional<std::pair<double, double>> sharedRange,
-    std::span<const PanelSyncInput> panels, bool logarithmic,
-    bool contourMode, int contourCount, const Palette& palette)
-{
-    return renderPanelsToSharedRange(std::move(sharedRange), panels,
-        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0},
-        contourMode, contourCount, palette);
 }
 
 std::optional<DisplayCoordinator::SharedRangeSync>
@@ -149,14 +123,14 @@ DisplayCoordinator::renderPanelsToSharedRange(
         for (const auto& panel : panels) {
             planes.push_back(panel.plane);
         }
-        shared = sharedVisibleRange(planes, scale.scale == ColorScale::Logarithmic);
+        shared = sharedVisibleRange(planes, scale);
     }
     if (!shared) {
         return std::nullopt;
     }
     SharedRangeSync sync;
     sync.range = *shared;
-    // One log flag for every panel: log only when the shared minimum is
+    // One color scale for every panel: log only when the shared minimum is
     // positive, matching how a single panel degrades to linear. Keeping it
     // per-panel would render an all-positive plane logarithmically against a
     // union that crosses zero, and renderScalarPlane rejects a non-positive
@@ -166,7 +140,6 @@ DisplayCoordinator::renderPanelsToSharedRange(
     if (sync.scale.scale == ColorScale::Logarithmic && !(sync.range.first > 0.0)) {
         sync.scale.scale = ColorScale::Linear;
     }
-    sync.logarithmic = sync.scale.scale == ColorScale::Logarithmic;
     sync.panels.resize(panels.size());
     for (std::size_t index = 0; index < panels.size(); ++index) {
         const auto& panel = panels[index];

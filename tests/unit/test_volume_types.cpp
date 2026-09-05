@@ -48,9 +48,9 @@ int main()
     require(!rejected(validRequest()), "a well-formed request was rejected");
     {
         auto request = validRequest();
-        request.range = amrvis::VolumeRange{0.5, 2.0, false};
+        request.range = amrvis::VolumeRange{0.5, 2.0, {amrvis::ColorScale::Linear}};
         require(!rejected(request), "an explicit range was rejected");
-        request.range = amrvis::VolumeRange{0.5, 2.0, true};
+        request.range = amrvis::VolumeRange{0.5, 2.0, {amrvis::ColorScale::Logarithmic}};
         require(!rejected(request), "a positive logarithmic range was rejected");
     }
     {
@@ -124,19 +124,18 @@ int main()
     }
     {
         auto request = validRequest();
-        request.range = amrvis::VolumeRange{2.0, 2.0, false};
+        request.range = amrvis::VolumeRange{2.0, 2.0, {amrvis::ColorScale::Linear}};
         require(rejected(request), "an empty range was accepted");
-        request.range = amrvis::VolumeRange{nan, 2.0, false};
+        request.range = amrvis::VolumeRange{nan, 2.0, {amrvis::ColorScale::Linear}};
         require(rejected(request), "a NaN range was accepted");
-        request.range = amrvis::VolumeRange{-1.0, 2.0, true};
+        request.range = amrvis::VolumeRange{-1.0, 2.0, {amrvis::ColorScale::Logarithmic}};
         require(rejected(request), "a non-positive logarithmic range was accepted");
-        request.range = amrvis::VolumeRange{-1.0, 2.0, false,
-            {amrvis::ColorScale::SymLogarithmic, 0.0}};
+        request.range = amrvis::VolumeRange{-1.0, 2.0, {amrvis::ColorScale::SymLogarithmic, 0.0}};
         require(rejected(request),
             "a symmetric-log range with a zero threshold was accepted");
-        request.range = amrvis::VolumeRange{
-            -std::numeric_limits<double>::max(),
-            std::numeric_limits<double>::max(), false};
+        request.range = amrvis::VolumeRange{-std::numeric_limits<double>::max(),
+                                            std::numeric_limits<double>::max(),
+                                            {amrvis::ColorScale::Linear}};
         require(rejected(request), "a range with an infinite span was accepted");
     }
     {

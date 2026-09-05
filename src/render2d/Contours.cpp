@@ -15,12 +15,6 @@
 
 namespace amrvis {
 
-std::vector<double> contourValues(
-    double minimum, double maximum, int count, bool logarithmic)
-{
-    return contourValues(minimum, maximum, count,
-        {logarithmic ? ColorScale::Logarithmic : ColorScale::Linear, 1.0});
-}
 
 std::vector<double> contourValues(double minimum, double maximum, int count,
     ColorScaleConfig scale)

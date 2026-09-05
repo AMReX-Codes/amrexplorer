@@ -117,7 +117,7 @@ std::vector<std::string> validateVolumeRenderRequest(
     }
     if (request.range) {
         const auto& range = *request.range;
-        const auto scale = effectiveColorScale(range.logarithmic, range.scale);
+        const auto scale = range.scale;
         if (!std::isfinite(range.minimum) || !std::isfinite(range.maximum)
             || !(range.minimum < range.maximum)
             || !std::isfinite(range.maximum - range.minimum)) {
@@ -137,7 +137,7 @@ std::vector<std::string> validateVolumeRenderRequest(
                 "a range must span more than one representable scaled value");
         }
     } else {
-        const auto scale = effectiveColorScale(request.logarithmic, request.scale);
+        const auto scale = request.scale;
         if (scale.scale == ColorScale::SymLogarithmic
             && !(scale.linearThreshold > 0.0 && std::isfinite(scale.linearThreshold))) {
             errors.emplace_back(

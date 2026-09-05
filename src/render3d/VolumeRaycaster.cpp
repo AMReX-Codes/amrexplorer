@@ -132,7 +132,7 @@ bool clipToBox(const Ray& ray, const SlabAxes& axes, const RealBox& box,
 std::optional<int> transferEntryFor(double value, const VolumeRange& range,
     int entryCount) noexcept
 {
-    const auto scale = effectiveColorScale(range.logarithmic, range.scale);
+    const auto scale = range.scale;
     const auto resolved = resolveValueRange(
         range.minimum, range.maximum, scale);
     if (entryCount < 1 || !resolved || !mappableValue(value, *resolved)) {
@@ -159,9 +159,8 @@ int raycastThreadCount(unsigned requested, int height) noexcept
         std::clamp(requested != 0 ? requested : hardware, 1U, ceiling));
 }
 
-std::optional<std::pair<double, double>> volumeGridRange(
-    const VolumeGrid& grid, bool logarithmic, StopToken cancellation)
-{
+std::optional<std::pair<double, double>>
+volumeGridRange(const VolumeGrid& grid, ColorScaleConfig scale, StopToken cancellation) {
     auto minimum = std::numeric_limits<double>::infinity();
     auto maximum = -std::numeric_limits<double>::infinity();
     // The grid runs to the 512^3 budget, half a gigabyte of floats. A scan
@@ -180,7 +179,7 @@ std::optional<std::pair<double, double>> volumeGridRange(
             throw ReadCancelled();
         }
         const auto value = grid.values[index];
-        if (!std::isfinite(value) || (logarithmic && !(value > 0.0F))) {
+        if (!std::isfinite(value) || (scale.scale == ColorScale::Logarithmic && !(value > 0.0F))) {
             continue;
         }
         minimum = std::min(minimum, static_cast<double>(value));
@@ -232,9 +231,8 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
             throw std::invalid_argument("output dimensions must be within [1, 4096]");
         }
     }
-    const auto mapping = resolveValueRange(
-        settings.range.minimum, settings.range.maximum,
-        effectiveColorScale(settings.range.logarithmic, settings.range.scale));
+    const auto mapping =
+        resolveValueRange(settings.range.minimum, settings.range.maximum, settings.range.scale);
     if (!mapping) {
         throw std::invalid_argument("volume range must be finite with a finite span, ordered, and positive when logarithmic");
     }

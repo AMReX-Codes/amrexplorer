@@ -35,16 +35,12 @@ public:
         RangeMode mode = RangeMode::File;
         // The User min/max, present when mode is User.
         std::optional<std::pair<double, double>> userRange;
-        bool logarithmic = false;
         ColorScaleConfig scale;
         Selection() = default;
         Selection(RangeMode selectedMode,
-            std::optional<std::pair<double, double>> selectedUserRange,
-            bool useLogarithmic, ColorScaleConfig scaleConfig = {})
-            : mode(selectedMode), userRange(std::move(selectedUserRange)),
-              logarithmic(useLogarithmic), scale(scaleConfig)
-        {
-        }
+                  std::optional<std::pair<double, double>> selectedUserRange,
+                  ColorScaleConfig scaleConfig = {})
+            : mode(selectedMode), userRange(std::move(selectedUserRange)), scale(scaleConfig) {}
     };
     // Which metadata-backed modes the current field/level can offer.
     struct Availability {
@@ -61,7 +57,6 @@ public:
 
     [[nodiscard]] Selection selection() const;
     [[nodiscard]] RangeMode mode() const;
-    [[nodiscard]] bool logarithmic() const;
     [[nodiscard]] ColorScaleConfig colorScale() const;
 
     // Blocked writes: none of these emits a change signal.
@@ -74,7 +69,6 @@ public:
     // Returns true when a newly selected field initializes its Symlog
     // threshold; the host must recolor using the updated selection.
     bool showDisplayRange(double minimum, double maximum);
-    void showLogarithmic(bool logarithmic);
     void showColorScale(ColorScaleConfig scale);
     // Whether a dataset is open: mode and Log enabled iff ready, min/max iff
     // ready and the mode is User.
@@ -100,7 +94,10 @@ public:
     {
         return m_trackedField;
     }
-    void setTrackedField(const QString& field) { m_trackedField = field; }
+    void setTrackedField(const QString& field) {
+        m_trackedField = field;
+        m_pendingThresholdInitialization = !field.isEmpty() && !m_symlogThresholds.contains(field);
+    }
     // Enables or disables the File and Level entries for what `field` at the
     // current level can offer. A selected mode that became unavailable falls
     // back to Visible (recorded in the field's snapshot) with a status

@@ -660,42 +660,13 @@ compatible with the previous one.
 
 ## Exporting images and animations
 
-**File > Export Image...** saves the current view as either a PNG display image
-or a float64 FITS data image. PNG export offers independent options to include
-the color scale and **axes, labels, and ticks**. Axes sit outside the data
-image, along the bottom and left. Their labels follow the displayed coordinates
-(including spherical layouts); selected length units are appended, and no
-units are shown when the unit is unset. FITS export writes the displayed scalar samples with `BITPIX=-64`;
-invalid samples are written as NaN. A 2-D export creates one image. A 3-D
-export creates separate `_xy`, `_xz`, and `_yz` images. Both formats reflect
-the current zoomed data region; only PNG includes visible overlays and the
-optional color scale and axes.
-Still-image margins fit the displayed tick labels. With axes enabled, grid-box
-strokes along the outer raster edge are omitted so they do not appear as white
-gaps; interior grid lines and the data extent are unchanged.
+Use **File > Export Image...** to save the current view as PNG or its numerical
+data as FITS. For PNG, choose whether to include the color scale and
+**axes, labels, and ticks**, and select a **White** or **Transparent** background.
 
-Export annotations use a skin-independent sans-serif font, sized for approximately
-11-point text at a seven-inch figure width. PNG print-resolution metadata records
-that intended size. The default annotation background is **White**;
-**Transparent background (PNG)** leaves both the margins and color-scale
-background transparent for placing a figure on a page or slide. Text and ticks
-remain dark. These options are remembered for the next export. Data colors and
-opacity are preserved with either background.
-
-For an open plotfile sequence, **File > Export Animation...** writes numbered
-PNG frames. If `ffmpeg` is installed and available on `PATH`, AMReXplorer also
-encodes an MP4. Three-dimensional sequences produce separate output for each
-orthogonal plane.
-
-Each animation panel keeps its first exported frame's image rectangle, margins,
-font size, and output dimensions for the entire sequence. Tick values may change
-with the displayed coordinates without moving the image. A compact allowance for
-scientific notation accommodates changing labels without oversized margins.
-Resolution changes with
-the same aspect ratio are supported; an aspect-ratio change stops export with an
-explanation rather than stretching the data. Already-written PNGs are retained
-after a failure. The numbered PNGs honor the chosen background; MP4s composite
-transparent backgrounds onto white because the video format does not retain alpha.
+For an open plotfile sequence, use **File > Export Animation...** to save PNG
+frames with the same options. Install FFmpeg to also create an MP4 movie.
+Transparency is available only for PNG, not MP4.
 
 ## Panels, preferences, and diagnostics
 

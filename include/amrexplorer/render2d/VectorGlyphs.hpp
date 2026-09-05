@@ -27,11 +27,12 @@ struct VectorSegment {
 // head is two short barbs from the tip, each set back 0.25 of the arrow
 // vector and offset 0.125 of it to either side (~26.6 degrees off the shaft,
 // the legacy constants). Samples that are invalid or non-finite in either
-// component are skipped, as are near-zero-length arrows; a plane whose
-// maximum speed is below 1e-8 yields no segments at all. The output lists,
+// component are skipped, as are zero vectors. With unitVectors enabled,
+// each nonzero vector is normalized independently to length arrowMax,
+// preserving only its direction. The output lists,
 // per arrow, the shaft segment followed by its two head segments.
 [[nodiscard]] std::vector<VectorSegment> generateVectorGlyphs(
-    const ScalarPlane& uComponent, const ScalarPlane& vComponent, int count);
+    const ScalarPlane& uComponent, const ScalarPlane& vComponent, int count, bool unitVectors = false);
 
 // Vector glyphs for the warped R-Z display of a 2-D spherical (r, theta)
 // plane. The component planes are the stored fields sampled on the logical
@@ -51,6 +52,6 @@ struct VectorSegment {
 // warped raster resolution, so a supersample change does not invalidate them.
 [[nodiscard]] std::vector<VectorSegment> generateSphericalRZVectorGlyphs(
     const ScalarPlane& uComponent, const ScalarPlane& vComponent, int count,
-    const RealBox& displayRegion);
+    const RealBox& displayRegion, bool unitVectors = false);
 
 } // namespace amrvis

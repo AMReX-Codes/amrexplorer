@@ -287,5 +287,58 @@ int main()
         }
     }
 
+    // Direction-only arrows retain direction across very different magnitudes,
+    // including tiny nonzero fields. Invalid samples and zero vectors vanish.
+    {
+        auto u = makePlane(6, 1, 0.0F);
+        auto v = makePlane(6, 1, 0.0F);
+        u.values = {3.0F, -30.0F, 3.0e-30F, 0.0F,
+            std::numeric_limits<float>::infinity(), 1.0F};
+        v.values = {4.0F, 40.0F, -4.0e-30F, 0.0F, 1.0F, 1.0F};
+        u.valid[5] = 0;
+        u.physicalRegion.lower = {1.0, 0.0, 0.0};
+        u.physicalRegion.upper = {7.0, 1.0, 0.0};
+        v.physicalRegion = u.physicalRegion;
+        amrvis::RealBox display;
+        display.lower = {0.0, 0.0, 0.0};
+        display.upper = {6.0, 6.0, 0.0};
+        for (bool spherical : {false, true}) {
+            const auto normalized = spherical
+                ? amrvis::generateSphericalRZVectorGlyphs(u, v, 6, display, true)
+                : amrvis::generateVectorGlyphs(u, v, 6, true);
+            const auto scaled = spherical
+                ? amrvis::generateSphericalRZVectorGlyphs(u, v, 6, display)
+                : amrvis::generateVectorGlyphs(u, v, 6);
+            require(normalized.size() == 9 && scaled.size() == 9,
+                "unit vectors must omit zero, nonfinite, and masked samples");
+            for (std::size_t i = 0; i < 3; ++i) {
+                const auto& shaft = normalized[3 * i];
+                const float dx = shaft.x1 - shaft.x0;
+                const float dy = shaft.y1 - shaft.y0;
+                require(nearlyEqual(std::hypot(dx, dy), 1.25F),
+                    "unit vector lengths must be equal regardless of magnitude");
+                const double speed = std::hypot(
+                    static_cast<double>(u.values[i]), static_cast<double>(v.values[i]));
+                double ex = u.values[i] / speed;
+                double ey = v.values[i] / speed;
+                if (spherical) {
+                    const double rotatedX = ex * std::sin(0.5) + ey * std::cos(0.5);
+                    ey = ex * std::cos(0.5) - ey * std::sin(0.5);
+                    ex = rotatedX;
+                }
+                require(nearlyEqual(dx, static_cast<float>(1.25 * ex))
+                        && nearlyEqual(dy, static_cast<float>(1.25 * ey)),
+                    "unit vector normalization must preserve field direction");
+            }
+            const auto& shortArrow = scaled[0];
+            const auto& longArrow = scaled[3];
+            require(nearlyEqual(std::hypot(longArrow.x1 - longArrow.x0,
+                                    longArrow.y1 - longArrow.y0),
+                        10.0F * std::hypot(shortArrow.x1 - shortArrow.x0,
+                                    shortArrow.y1 - shortArrow.y0)),
+                "default glyph lengths must still indicate magnitude");
+        }
+    }
+
     return 0;
 }

@@ -574,7 +574,9 @@ Choose **View > Contours...** to select one of three display modes:
 For contours, choose the number of lines and their color. For vectors, select
 the U and V components for 2-D data, and the U, V, and W components for 3-D
 data. AMReXplorer may propose fields based on common velocity names; verify the
-component selections for your dataset.
+component selections for your dataset. Enable **Unit vectors (direction only)**
+to normalize each nonzero vector and draw all glyphs at equal length. Zero
+vectors are omitted. The default uses arrow length to show relative magnitude.
 
 ## Particles
 

@@ -318,7 +318,7 @@ SliceDisplayResult executeSlice(const std::shared_ptr<DatasetSession>& dataset,
 
 void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
     SliceRequest request, FieldId uField, FieldId vField, int count,
-    StopToken cancellation, SliceDisplayResult& result)
+    StopToken cancellation, SliceDisplayResult& result, bool unitVectors)
 {
     // The primary scalar request already carries the optional box list.
     // Auxiliary vector-component planes contribute values only.
@@ -335,8 +335,9 @@ void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
         && request.sphericalDisplay == SphericalDisplay::RZ;
     result.vectors = sphericalRZ
         ? generateSphericalRZVectorGlyphs(
-              uSlice.plane, vSlice.plane, count, result.displayRegion)
-        : generateVectorGlyphs(uSlice.plane, vSlice.plane, count);
+              uSlice.plane, vSlice.plane, count, result.displayRegion, unitVectors)
+        : generateVectorGlyphs(uSlice.plane, vSlice.plane, count, unitVectors);
+    result.unitVectors = unitVectors;
     result.slice.metrics.candidateBlocks += uSlice.metrics.candidateBlocks
         + vSlice.metrics.candidateBlocks;
     result.slice.metrics.blocksRead += uSlice.metrics.blocksRead
@@ -353,7 +354,7 @@ SliceDisplayResult executeSliceWithFallback(
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField, int contourCount,
-    StopToken cancellation)
+    StopToken cancellation, bool unitVectors)
 {
     request.outputSize = frameBudgetBoundedOutputSize(
         request.outputSize, dataset->maximumResponseBytes());
@@ -367,6 +368,7 @@ SliceDisplayResult executeSliceWithFallback(
             result.vectorUField = vectorUField;
             result.vectorVField = vectorVField;
             result.contourCount = contourCount;
+            result.unitVectors = unitVectors;
             if (isContourMode(displayMode)) {
                 appendContours(dataset, request, contourCount,
                     result.minimum, result.maximum, result.logarithmic,
@@ -375,7 +377,7 @@ SliceDisplayResult executeSliceWithFallback(
             if (displayMode == DisplayMode::VelocityVectors) {
                 appendVectorGlyphs(dataset, request,
                     FieldId{vectorUField}, FieldId{vectorVField},
-                    contourCount, cancellation, result);
+                    contourCount, cancellation, result, unitVectors);
             }
             result.cacheFallbackFromLevel = fallbackFrom;
             result.cacheFallbackToLevel = fallbackTo;
@@ -469,7 +471,7 @@ SliceDisplayResult refreshCachedSlice(
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField,
-    int contourCount, bool rasterDirty, StopToken cancellation)
+    int contourCount, bool rasterDirty, StopToken cancellation, bool unitVectors)
 {
     // The cache path exists to reuse an existing display plane; a null one is a
     // caller bug. Reject it here so displayPlane() never silently substitutes an
@@ -484,6 +486,7 @@ SliceDisplayResult refreshCachedSlice(
     result.vectorUField = vectorUField;
     result.vectorVField = vectorVField;
     result.contourCount = contourCount;
+    result.unitVectors = unitVectors;
     // Adopt the cached plane by shared_ptr instead of deep-copying it into
     // slice.plane (up to ~110 MB); every reader goes through displayPlane().
     // `plane` binds to the shared pointee (stable, external to `result`), not
@@ -720,7 +723,7 @@ InitialSliceResult executeSessionFrameLoad(
                     display.vectorVField = f2;
                     appendVectorGlyphs(result.dataset, request,
                         FieldId{f1}, FieldId{f2},
-                        spec.contourCount, cancellation, display);
+                        spec.contourCount, cancellation, display, spec.unitVectors);
                 }
                 result.displays.push_back(std::move(display));
             }

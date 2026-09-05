@@ -886,6 +886,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         state->cachedMode = DisplayMode::Raster;
         state->cachedVectorUField = 0;
         state->cachedVectorVField = 0;
+        state->cachedUnitVectors = false;
         state->cachedContourCount = 0;
         // Cleared, not stale: there is no raster to converge, and the open
         // about to run will stamp whatever it displays. Set after the bump
@@ -1182,6 +1183,7 @@ void MainWindow::requestInitialSlice(
         spec.vectorWField =
             static_cast<std::uint32_t>(std::max(m_vectorWField, 0));
         spec.contourCount = m_contourCount;
+        spec.unitVectors = m_unitVectors;
         spec.sphericalSupersample = m_sphericalSupersample;
         spec.sphericalDisplay = m_sphericalDisplay;
     }

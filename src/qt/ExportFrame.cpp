@@ -178,9 +178,11 @@ ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
         }
         const int tickLength = std::max(4, fontPixels / 4);
         const int gap = std::max(4, fm.height() / 4);
+        const int verticalTitleGap = std::max(2, gap / 2);
         const int left =
             options.includeAxes
-                ? std::max(layout.verticalLabelWidth + fm.height() + tickLength + 3 * gap,
+                ? std::max(layout.verticalLabelWidth + fm.height() + tickLength + 2 * gap +
+                               verticalTitleGap,
                            xOverhang + gap)
                 : 0;
         const int top = options.includeAxes ? fm.height() / 2 + gap : 0;
@@ -260,6 +262,7 @@ QImage composeExportImage(const QImage& raster, const std::array<ExportAxis, 2>&
     const int y0 = rect.bottom() + 1;
     const int tickLength = std::max(4, layout.font.pixelSize() / 4);
     const int gap = std::max(4, fm.height() / 4);
+    const int verticalTitleGap = std::max(2, gap / 2);
     painter.drawLine(x0, rect.top(), x0, y0);
     painter.drawLine(x0, y0, rect.right(), y0);
     const int xLabelSpacing =
@@ -288,7 +291,7 @@ QImage composeExportImage(const QImage& raster, const std::array<ExportAxis, 2>&
         QRect(rect.left(), y0 + tickLength + fm.height() + 2 * gap, rect.width(), fm.height()),
         Qt::AlignCenter, axes[0].label);
     painter.save();
-    painter.translate(x0 - tickLength - 2 * gap - layout.verticalLabelWidth - fm.height(),
+    painter.translate(x0 - tickLength - gap - verticalTitleGap - layout.verticalLabelWidth - fm.height(),
                       rect.center().y());
     painter.rotate(-90);
     painter.drawText(QRect(-rect.height() / 2, 0, rect.height(), fm.height()), Qt::AlignCenter,

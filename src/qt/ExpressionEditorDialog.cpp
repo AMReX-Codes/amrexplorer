@@ -3,6 +3,7 @@
 #include "Theme.hpp"
 
 #include <QDialogButtonBox>
+#include <QEvent>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -101,9 +102,6 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     // renders anything Qt takes for markup: an expression holding `<` would be
     // shown with a piece missing.
     m_error->setTextFormat(Qt::PlainText);
-    // As SetContoursDialog styles its own warning.
-    m_error->setStyleSheet(
-        QStringLiteral("QLabel { color: %1; }").arg(errorTextColor().name()));
 
     m_applyAnyway = new QPushButton(tr("Apply &anyway"), this);
     m_applyAnyway->setObjectName(QStringLiteral("applyAnywayButton"));
@@ -125,10 +123,7 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     m_warning->setVisible(false);
     // Quotes the user's own text, as the error does.
     m_warning->setTextFormat(Qt::PlainText);
-    // Not the error's red: this one does not stop anything, and colouring the
-    // two alike would say the definition had been refused when it has not.
-    m_warning->setStyleSheet(
-        QStringLiteral("QLabel { color: %1; }").arg(warningTextColor().name()));
+    updateMessageColors();
 
     m_fieldsCaption = new QLabel(tr("Fields in this dataset"), this);
     m_fields = new QListWidget(this);
@@ -351,18 +346,39 @@ void ExpressionEditorDialog::clearRefusal()
     m_refusalRevision.reset();
 }
 
+void ExpressionEditorDialog::changeEvent(QEvent* event)
+{
+    QDialog::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange) {
+        updateMessageColors();
+    }
+}
+
+void ExpressionEditorDialog::updateMessageColors()
+{
+    // Stylesheet colours are explicit: Qt cannot adapt them when a skin
+    // changes. Keep the existing messages and their severity intact.
+    const auto update = [](QLabel* label, const QColor& color) {
+        if (label == nullptr) {
+            return;
+        }
+        const auto style = QStringLiteral("QLabel { color: %1; }")
+                               .arg(color.name());
+        // Setting an identical stylesheet still repolishes the widget.
+        if (label->styleSheet() != style) {
+            label->setStyleSheet(style);
+        }
+    };
+    update(m_error, errorTextColor());
+    update(m_warning, m_warningBlocking ? errorTextColor() : warningTextColor());
+}
+
 void ExpressionEditorDialog::showResolutionWarning(
     const QString& message, bool blocking)
 {
-    // Red for what Apply will refuse, amber for what only this dataset cannot
-    // do. Set with the text rather than once at construction, because the one
-    // label carries both and the colour is the whole of what tells them apart
-    // -- but only when there is text, since setStyleSheet reinstalls the
-    // style and repolishes the widget even for an identical string, and most
-    // calls here only clear the label.
-    if (!message.isEmpty()) {
-        m_warning->setStyleSheet(QStringLiteral("QLabel { color: %1; }")
-                .arg((blocking ? errorTextColor() : warningTextColor()).name()));
+    if (m_warningBlocking != blocking) {
+        m_warningBlocking = blocking;
+        updateMessageColors();
     }
     m_warning->setText(message);
     m_warning->setVisible(!message.isEmpty());
@@ -411,10 +427,6 @@ void ExpressionEditorDialog::showError(const QString& message,
     }
     m_applied->clear();
     m_applied->setVisible(false);
-    // Restyled here, not only at construction: the skin can change while this
-    // modeless dialog is open, and the colour is read from the palette.
-    m_error->setStyleSheet(
-        QStringLiteral("QLabel { color: %1; }").arg(errorTextColor().name()));
     m_error->setText(message);
     m_error->setVisible(true);
     m_applyAnyway->setVisible(offerAnyway);

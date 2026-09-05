@@ -1,14 +1,22 @@
 #include "ThemeController.hpp"
+#include "Theme.hpp"
+#include "ExpressionEditorDialog.hpp"
+#include "SetContoursDialog.hpp"
 
 #include <QApplication>
 #include <QColor>
 #include <QDir>
+#include <QImage>
+#include <QLabel>
 #include <QMenu>
 #include <QPalette>
+#include <QPainter>
 #include <QStyle>
+#include <QStyleOption>
 #include <QSettings>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QToolBar>
 #include <QWidget>
 
 #include <algorithm>
@@ -51,6 +59,55 @@ double contrast(const QColor& left, const QColor& right)
     return (std::max(first, second) + 0.05) / (std::min(first, second) + 0.05);
 }
 
+void checkToolbarSeparator(Qt::Orientation orientation, QSize size = {})
+{
+    QToolBar toolbar;
+    toolbar.setOrientation(orientation);
+    toolbar.addAction(QStringLiteral("First"));
+    auto* separator = toolbar.addSeparator();
+    toolbar.addAction(QStringLiteral("Second"));
+    toolbar.show();
+    QApplication::processEvents();
+
+    // Use the real toolbar's separator dimensions, but paint the primitive
+    // alone so its pixels cannot be confused with the toolbar background.
+    QStyleOption option;
+    option.initFrom(&toolbar);
+    option.rect = QRect(QPoint(0, 0), toolbar.actionGeometry(separator).size());
+    if (!size.isEmpty()) {
+        option.rect.setSize(size);
+    }
+    option.state.setFlag(QStyle::State_Horizontal,
+        orientation == Qt::Horizontal);
+    require(!option.rect.isEmpty(), "the toolbar separator has no geometry");
+    QImage image(option.rect.size(), QImage::Format_ARGB32);
+    image.fill(Qt::transparent);
+    {
+        QPainter painter(&image);
+        toolbar.style()->drawPrimitive(QStyle::PE_IndicatorToolBarSeparator,
+            &option, &painter, &toolbar);
+    }
+    QRect painted;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (qAlpha(image.pixel(x, y)) != 0) {
+                painted = painted.united(QRect(x, y, 1, 1));
+            }
+        }
+    }
+    // A horizontal toolbar needs a vertical rule, and vice versa. Checking
+    // span as well as direction catches the negative-width two-pixel dash.
+    if (orientation == Qt::Horizontal) {
+        require(painted.height() >= std::max(1, image.height() / 2)
+                && painted.width() == 1,
+            "a horizontal toolbar has no full-height vertical separator");
+    } else {
+        require(painted.width() >= std::max(1, image.width() / 2)
+                && painted.height() == 1,
+            "a vertical toolbar has no full-width horizontal separator");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -66,6 +123,90 @@ int main(int argc, char** argv)
     // The dark skins install a proxy style over Fusion, so System has to put
     // the style back as well as the palette.
     const QString systemStyle = QApplication::style()->objectName();
+
+    // All four dark skins use the proxy painter. Exercise both toolbar axes.
+    {
+        ThemeController controller;
+        for (const auto skin : {Skin::Dark, Skin::Blue, Skin::Green,
+                 Skin::Maroon}) {
+            controller.selectSkin(skin);
+            checkToolbarSeparator(Qt::Horizontal);
+            checkToolbarSeparator(Qt::Vertical);
+            // Shorter than the usual insets, and with an aspect ratio that
+            // contradicts the toolbar's orientation: the state is authoritative.
+            checkToolbarSeparator(Qt::Horizontal, QSize(6, 3));
+            checkToolbarSeparator(Qt::Vertical, QSize(3, 6));
+            checkToolbarSeparator(Qt::Horizontal, QSize(1, 1));
+            checkToolbarSeparator(Qt::Vertical, QSize(1, 1));
+        }
+        controller.selectSkin(Skin::System);
+    }
+
+    // Keep each message on screen throughout a round trip: writing it again
+    // after the switch would conceal stale stylesheet colours.
+    {
+        ThemeController controller;
+        controller.selectSkin(Skin::Light);
+        amrvis::qt::ExpressionEditorDialog errorDialog({}, nullptr);
+        amrvis::qt::ExpressionEditorDialog warningDialog({}, nullptr);
+        errorDialog.showError(QStringLiteral("Invalid expression"), std::nullopt);
+        errorDialog.show();
+        warningDialog.show();
+        auto* error = errorDialog.findChild<QLabel*>(
+            QStringLiteral("expressionError"));
+        auto* warning = warningDialog.findChild<QLabel*>(
+            QStringLiteral("expressionWarning"));
+        require(error != nullptr && warning != nullptr,
+            "the editor's message labels are missing");
+        for (const bool blocking : {false, true, false}) {
+            warningDialog.showResolutionWarning(
+                QStringLiteral("Resolution warning"), blocking);
+            for (const auto skin : {Skin::Light, Skin::Dark, Skin::Light}) {
+                controller.selectSkin(skin);
+                QApplication::processEvents();
+                require(error->isVisible() && warning->isVisible(),
+                    "a palette change hid a standing message");
+                require(error->text() == QLatin1String("Invalid expression")
+                        && warning->text() == QLatin1String("Resolution warning"),
+                    "a palette change changed a standing message");
+                require(error->palette().color(QPalette::WindowText)
+                        == amrvis::qt::errorTextColor(),
+                    "a standing error did not follow the skin");
+                require(warning->palette().color(QPalette::WindowText)
+                        == (blocking ? amrvis::qt::errorTextColor()
+                                     : amrvis::qt::warningTextColor()),
+                    "a standing warning lost its skin colour or severity");
+            }
+        }
+        controller.selectSkin(Skin::System);
+    }
+
+    // Set Contours is modeless too: leave its field-conflict warning visible
+    // while changing skins, without touching the selected vector fields.
+    {
+        ThemeController controller;
+        controller.selectSkin(Skin::Light);
+        amrvis::qt::SetContoursDialog dialog({"u", "v"}, false);
+        dialog.setMode(amrvis::qt::DisplayMode::VelocityVectors);
+        dialog.setVectorFields(0, 0, 0);
+        dialog.show();
+        QLabel* warning = nullptr;
+        for (auto* label : dialog.findChildren<QLabel*>()) {
+            if (label->text() == QLatin1String("U and V fields must be different")) {
+                warning = label;
+            }
+        }
+        require(warning != nullptr, "the vector-field warning is missing");
+        for (const auto skin : {Skin::Light, Skin::Dark, Skin::Light}) {
+            controller.selectSkin(skin);
+            QApplication::processEvents();
+            require(warning->isVisible(), "a palette change hid the vector warning");
+            require(warning->palette().color(QPalette::WindowText)
+                    == amrvis::qt::errorTextColor(),
+                "a standing vector-field warning did not follow the skin");
+        }
+        controller.selectSkin(Skin::System);
+    }
 
     // The keys are the on-disk settings format: pin them as literals.
     {

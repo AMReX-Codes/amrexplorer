@@ -193,8 +193,10 @@ public:
         QPainter* painter, const QWidget* widget) const override
     {
         if (element == PE_IndicatorToolBarSeparator) {
-            paintSeparator(option, painter, /*horizontal=*/
-                option->rect.width() < option->rect.height());
+            // The separator's line is perpendicular to the toolbar's axis.
+            paintSeparator(option, painter,
+                (option->state & State_Horizontal) != 0
+                    ? Qt::Vertical : Qt::Horizontal);
             return;
         }
         QProxyStyle::drawPrimitive(element, option, painter, widget);
@@ -225,7 +227,7 @@ public:
         const auto* item = qstyleoption_cast<const QStyleOptionMenuItem*>(option);
         if (element == CE_MenuItem && item != nullptr
             && item->menuItemType == QStyleOptionMenuItem::Separator) {
-            paintSeparator(option, painter, /*horizontal=*/true);
+            paintSeparator(option, painter, Qt::Horizontal);
             return;
         }
         QProxyStyle::drawControl(element, option, painter, widget);
@@ -240,18 +242,24 @@ private:
     }
 
     static void paintSeparator(
-        const QStyleOption* option, QPainter* painter, bool horizontal)
+        const QStyleOption* option, QPainter* painter, Qt::Orientation lineAxis)
     {
         const auto line = rule(option);
         const auto rect = option->rect;
-        if (horizontal) {
+        if (rect.isEmpty()) {
+            return;
+        }
+        const int length = lineAxis == Qt::Horizontal ? rect.width() : rect.height();
+        // Retain at least one pixel even in a compressed separator rectangle.
+        const int inset = std::min(kInset, (length - 1) / 2);
+        if (lineAxis == Qt::Horizontal) {
             const int y = rect.center().y();
-            painter->fillRect(rect.left() + kInset, y,
-                rect.width() - 2 * kInset, 1, line);
+            painter->fillRect(rect.left() + inset, y,
+                rect.width() - 2 * inset, 1, line);
         } else {
             const int x = rect.center().x();
-            painter->fillRect(x, rect.top() + kInset, 1,
-                rect.height() - 2 * kInset, line);
+            painter->fillRect(x, rect.top() + inset, 1,
+                rect.height() - 2 * inset, line);
         }
     }
 

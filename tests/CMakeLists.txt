@@ -692,12 +692,17 @@ if(TARGET amrexplorer_qt)
         unit/test_theme_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/ThemeController.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/ThemeController.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ExpressionEditorDialog.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ExpressionEditorDialog.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/SetContoursDialog.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/SetContoursDialog.hpp"
     )
     set_target_properties(test_theme_controller PROPERTIES AUTOMOC ON)
     target_include_directories(test_theme_controller
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
     target_link_libraries(test_theme_controller
         PRIVATE
+            amrexplorer::core
             amrexplorer::warnings
             Qt6::Core
             Qt6::Gui

@@ -11,6 +11,7 @@
 #include <optional>
 #include <vector>
 
+class QEvent;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -184,7 +185,11 @@ signals:
     // is to be committed without being held to the open dataset.
     void applyAnywayRequested();
 
+protected:
+    void changeEvent(QEvent* event) override;
+
 private:
+    void updateMessageColors();
     void clearError();
     // Takes any standing refusal and its offer down, whatever it was about.
     // Every change to the draft does this: the verdict was about a list that
@@ -232,6 +237,8 @@ private:
     // rather than momentary -- it describes the draft, not the last thing
     // done -- so clearError leaves it alone, as it does the notice.
     QLabel* m_warning = nullptr;
+    // Preserve the standing warning's severity when the palette changes.
+    bool m_warningBlocking = false;
     QPushButton* m_remove = nullptr;
     QPushButton* m_apply = nullptr;
     QPushButton* m_applyAnyway = nullptr;

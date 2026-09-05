@@ -26,8 +26,8 @@ inline QColor viewportForeground()
 // Text colours for the dialogs' inline error and warning labels. These are
 // stylesheet colours rather than palette roles -- there is no palette role for
 // "this input is wrong" -- so they have to pick their own contrast, which the
-// window colour's lightness decides. Read when the label's text is set, so a
-// dialog opened after a skin change gets the right pair.
+// window colour's lightness decides. Dialogs apply these at construction and
+// on palette changes so standing messages follow a live skin change too.
 namespace detail {
 
 inline bool onLightBackground()

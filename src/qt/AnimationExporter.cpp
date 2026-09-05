@@ -191,7 +191,8 @@ void AnimationExporter::finalizeEncodingWithProbe()
         // PNG retains alpha, while H.264/yuv420p does not. Composite onto an
         // explicit white background rather than letting alpha become black.
         const auto suffix = stem.mid(m_stem.size());
-        const auto size = m_layouts.at(suffix).canvasSize;
+        const auto layout = m_layouts.find(suffix);
+        const auto size = layout != m_layouts.end() ? layout->second.canvasSize : QSize();
         const QStringList args{
             "-y",
             "-framerate",
@@ -211,7 +212,10 @@ void AnimationExporter::finalizeEncodingWithProbe()
             outputPath,
         };
         return QtConcurrent::run(
-            [args, cancel = m_encoderCancel]() -> QPair<int, QString> {
+            [args, size, cancel = m_encoderCancel]() -> QPair<int, QString> {
+            if (size.isEmpty()) {
+                return { -1, tr("An export panel layout is missing or empty.") };
+            }
             QProcess proc;
             proc.setProcessChannelMode(QProcess::MergedChannels);
             proc.start("ffmpeg", args);

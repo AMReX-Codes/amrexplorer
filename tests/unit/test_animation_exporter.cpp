@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
     if (!encode)
         qputenv("PATH", QByteArray());
     using namespace amrvis::qt;
-    enum class Mode { Success, AspectChange, MissingPanel, Cancel };
+    enum class Mode { Success, AspectChange, MissingPanel, Cancel, MissingLayout, EmptyLayout };
     Mode mode = Mode::Success;
     int frameIndex = 0;
     bool finished = false;
@@ -36,10 +36,12 @@ int main(int argc, char** argv) {
     QString message;
     int encodingStarts = 0;
     ExportLayout firstLayout;
+    std::map<QString, ExportLayout>* renderedLayouts = nullptr;
     QEventLoop loop;
     AnimationExporter* exporterPointer = nullptr;
     AnimationExporter exporter(
         [&](const ExportOptions& options, qreal, std::map<QString, ExportLayout>& layouts) {
+            renderedLayouts = &layouts;
             std::vector<std::pair<QString, QImage>> frames;
             if (mode == Mode::MissingPanel && frameIndex == 1)
                 return frames;
@@ -83,7 +85,15 @@ int main(int argc, char** argv) {
             });
         });
     exporterPointer = &exporter;
-    QObject::connect(&exporter, &AnimationExporter::encodingStarted, [&] { ++encodingStarts; });
+    QObject::connect(&exporter, &AnimationExporter::encodingStarted, [&] {
+        ++encodingStarts;
+        // Inject an invalid layout after frame validation to exercise the
+        // encoder's error path without adding production test hooks.
+        if (mode == Mode::MissingLayout)
+            renderedLayouts->clear();
+        else if (mode == Mode::EmptyLayout)
+            renderedLayouts->begin()->second.canvasSize = QSize();
+    });
     QObject::connect(&exporter, &AnimationExporter::finished,
                      [&](bool ok, const QString& detail, int restoreIndex) {
                          finished = true;
@@ -102,7 +112,10 @@ int main(int argc, char** argv) {
     require(directory.isValid(), "no temporary export directory");
     int runNumber = 0;
     for (const auto nextMode : {Mode::AspectChange, Mode::Success, Mode::MissingPanel,
-                                Mode::Success, Mode::Cancel, Mode::Success}) {
+                                Mode::Success, Mode::Cancel, Mode::Success,
+                                Mode::MissingLayout, Mode::EmptyLayout}) {
+        if (!encode && (nextMode == Mode::MissingLayout || nextMode == Mode::EmptyLayout))
+            continue;
         mode = nextMode;
         frameIndex = 0;
         finished = false;
@@ -143,12 +156,17 @@ int main(int argc, char** argv) {
                             static_cast<unsigned char>(pixels[2]) > 240,
                         "MP4 flattened transparent margins onto a non-white background");
             }
+        } else if (mode == Mode::MissingLayout || mode == Mode::EmptyLayout) {
+            require(QFileInfo::exists(stem + "_00002.png"),
+                "an encoder layout failure did not retain all PNG frames");
+            require(message.contains("layout") && !QFileInfo::exists(stem + ".mp4"),
+                "invalid encoder layout did not report a clean failure");
         } else {
             require(!QFileInfo::exists(stem + "_00001.png"), "an invalid frame was written");
             if (mode != Mode::Cancel)
                 require(message.contains("Frame 1"), "failure omits frame index");
         }
     }
-    require(encodingStarts == (encode ? 3 : 0), "unexpected number of MP4 encodes");
+    require(encodingStarts == (encode ? 5 : 0), "unexpected number of MP4 encodes");
     std::cout << "animation exporter tests passed\n";
 }

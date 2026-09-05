@@ -69,6 +69,19 @@ QString exportNumber(double value, const QString& format, const QFontMetrics& me
     return {};
 }
 
+namespace {
+
+int xLabelSpacing(const QFontMetrics& metrics, const ExportAxis& axis,
+    const QString& format, int labelWidth)
+{
+    return std::max(
+        metrics.horizontalAdvance(exportNumber(axis.minimum, format, metrics, labelWidth)),
+        metrics.horizontalAdvance(exportNumber(axis.maximum, format, metrics, labelWidth)))
+        + 2 * metrics.horizontalAdvance(QChar('0')) + 12;
+}
+
+} // namespace
+
 std::vector<ExportTick> exportTicks(const ExportAxis& axis, int pixelLength, int labelSpacing,
                                     const QString& format, const QFontMetrics& metrics,
                                     int labelWidth) {
@@ -153,11 +166,7 @@ ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
             const int length = axis == 0 ? rasterSize.width() : rasterSize.height();
             const int spacing =
                 axis == 0
-                    ? std::max(fm.horizontalAdvance(exportNumber(
-                                   axes[0].minimum, options.numberFormat, fm, maximumLabelWidth)),
-                               fm.horizontalAdvance(exportNumber(
-                                   axes[0].maximum, options.numberFormat, fm, maximumLabelWidth))) +
-                          2 * fm.horizontalAdvance(QChar('0')) + 12
+                    ? xLabelSpacing(fm, axes[0], options.numberFormat, layout.labelWidth)
                     : fm.height() + 8;
             for (const auto& tick : exportTicks(axes[axis], length, spacing, options.numberFormat,
                                                 fm, maximumLabelWidth)) {
@@ -272,13 +281,8 @@ QImage composeExportImage(const QImage& raster, const std::array<ExportAxis, 2>&
     const int verticalTitleGap = std::max(2, gap / 2);
     painter.drawLine(x0, rect.top(), x0, y0);
     painter.drawLine(x0, y0, rect.right(), y0);
-    const int xLabelSpacing =
-        std::max(fm.horizontalAdvance(
-                     exportNumber(axes[0].minimum, options.numberFormat, fm, layout.labelWidth)),
-                 fm.horizontalAdvance(
-                     exportNumber(axes[0].maximum, options.numberFormat, fm, layout.labelWidth))) +
-        2 * fm.horizontalAdvance(QChar('0')) + 12;
-    for (const auto& tick : exportTicks(axes[0], rect.width(), xLabelSpacing, options.numberFormat,
+    const int spacing = xLabelSpacing(fm, axes[0], options.numberFormat, layout.labelWidth);
+    for (const auto& tick : exportTicks(axes[0], rect.width(), spacing, options.numberFormat,
                                         fm, layout.labelWidth)) {
         const double x = rect.left() + tick.fraction * (rect.width() - 1);
         painter.drawLine(QPointF(x, y0), QPointF(x, y0 + tickLength));

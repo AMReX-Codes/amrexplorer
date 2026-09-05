@@ -263,6 +263,62 @@ int main(int argc, char* argv[])
             boundedSession->close();
         }
 
+        // Explicit ranges override the Visible scale, even before symlog
+        // support. Exercise the server gate with negotiated protocols 1.2-1.4.
+        for (std::uint16_t minor = 2; minor <= 4; ++minor) {
+            auto socket = connectTo("127.0.0.1", server.port());
+            std::uint64_t requestId = 0;
+            const auto exchange = [&](auto payload) {
+                writeFrame(socket, codec::encode(++requestId, std::move(payload), minor),
+                    defaultMaximumFrameBytes);
+                const auto response = readFrame(socket, defaultMaximumFrameBytes);
+                require(response.has_value(), "the server closed a legacy connection");
+                return codec::decode(*response);
+            };
+            auto envelope = exchange(codec::toWire(HelloRequestData{
+                "volume test", "test", 0, minor,
+                defaultMaximumFrameBytes, server.token(), {}}));
+            require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse
+                    && codec::fromWire(*envelope->payload.AsHelloResponse())
+                            .selectedMinorVersion == minor,
+                "the server did not negotiate the requested legacy protocol");
+            envelope = exchange(codec::toWire(OpenDatasetData{path, 16ULL << 20, {}}));
+            require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
+                "the legacy connection could not open the fixture");
+            const auto opened = codec::fromWire(*envelope->payload.AsDatasetOpened());
+            auto request = requestFor(*remote);
+            request.dataset = opened.id;
+            request.sampling = SamplingPolicy::Nearest;
+            request.scale = {ColorScale::SymLogarithmic, 0.25};
+            for (const auto scale : {ColorScale::Linear, ColorScale::Logarithmic}) {
+                request.range = VolumeRange{0.1, 1.0, {scale}};
+                envelope = exchange(codec::toWire(request));
+                require(codec::inspect(*envelope).payload == PayloadKind::RenderedFrameResponse,
+                    "an inactive Visible symlog scale rejected an explicit legacy range");
+                const auto frame = codec::fromWire(*envelope->payload.AsRenderedFrameResponse());
+                auto expected = request;
+                expected.dataset = local->id();
+                const auto localResult = local->renderVolume(expected);
+                require(frame.pixels == localResult.pixels
+                        && frame.usedRange == localResult.usedRange,
+                    "an explicit legacy range differs from local rendering");
+            }
+            // Active symlog must still be refused, for either range mode.
+            for (const bool explicitRange : {false, true}) {
+                request.range.reset();
+                if (explicitRange) {
+                    request.range = VolumeRange{0.1, 1.0,
+                        {ColorScale::SymLogarithmic, 0.25}};
+                    request.scale = {ColorScale::Linear};
+                }
+                envelope = exchange(codec::toWire(request));
+                require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
+                        && codec::fromWire(*envelope->payload.AsErrorResponse()).code
+                            == ErrorCode::UnsupportedProtocol,
+                    "a legacy protocol accepted active symlog scaling");
+            }
+        }
+
         // --- a 1.1 client is told volume rendering needs 1.2 ------------
         {
             auto socket = connectTo("127.0.0.1", server.port());

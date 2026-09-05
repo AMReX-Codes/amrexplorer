@@ -332,8 +332,8 @@ public:
             && !supportsVolumeSampling()) {
             throw std::runtime_error(volumeSamplingUnsupportedMessage);
         }
-        const auto usesSymLog = request.scale.scale == ColorScale::SymLogarithmic
-            || (request.range && request.range->scale.scale == ColorScale::SymLogarithmic);
+        const auto effectiveScale = request.range ? request.range->scale : request.scale;
+        const auto usesSymLog = effectiveScale.scale == ColorScale::SymLogarithmic;
         if (usesSymLog && !supportsSymmetricLogScale()) {
             throw std::runtime_error(symmetricLogUnsupportedMessage);
         }

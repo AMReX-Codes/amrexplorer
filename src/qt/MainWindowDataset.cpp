@@ -534,9 +534,11 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
     ColorBarWidget colorBar;
     colorBar.setPalette(&m_paletteController->palette());
     colorBar.setNumberFormat(options.numberFormat);
-    colorBar.setLogarithmic(state->displayLogarithmic);
-    colorBar.setFieldRange(state->fieldName +
-                               (state->displayLogarithmic ? tr(" (log)") : QString()),
+    colorBar.setScale(state->displayScale);
+    const auto suffix = state->displayScale.scale == ColorScale::Logarithmic
+        ? tr(" (log)") : state->displayScale.scale == ColorScale::SymLogarithmic
+            ? tr(" (symlog)") : QString();
+    colorBar.setFieldRange(state->fieldName + suffix,
                            state->displayMinimum, state->displayMaximum);
     ExportLayout localLayout;
     auto& layout = frozenLayout != nullptr ? *frozenLayout : localLayout;

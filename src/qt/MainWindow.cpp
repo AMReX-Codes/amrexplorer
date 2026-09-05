@@ -1042,7 +1042,10 @@ void MainWindow::syncActiveViewColorControls(const PlaneViewState& state)
         state.displayMinimum, state.displayMaximum);
     m_range->showColorScale(state.displayScale);
     if (m_range->mode() != RangeMode::User) {
-        m_range->showDisplayRange(state.displayMinimum, state.displayMaximum);
+        if (m_range->showDisplayRange(state.displayMinimum, state.displayMaximum)) {
+            scheduleSliceRequest();
+            m_volumeController->refresh();
+        }
     }
     syncDatasetWindowColors();
 }

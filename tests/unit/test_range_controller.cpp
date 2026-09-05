@@ -175,14 +175,25 @@ int main(int argc, char* argv[])
         widgets.linearThreshold->setValue(2.0e-11);
 
         controller.switchField(QStringLiteral("temperature"));
-        controller.showDisplayRange(-3000.0, 8000.0);
-        widgets.symlog->setChecked(false);
-        widgets.symlog->setChecked(true);
+        Observed observed;
+        observe(controller, observed);
+        require(controller.showDisplayRange(-3000.0, 8000.0),
+            "initializing a field threshold did not request recoloring");
+        require(observed.logarithmic == 0,
+            "automatic threshold initialization emitted a user edit");
         require(widgets.linearThreshold->value() == 10.0,
             "a newly selected field did not get its own Symlog threshold");
+        require(!controller.showDisplayRange(-3.0e9, 8.0e9),
+            "a passive range update requested another recoloring");
+        require(widgets.linearThreshold->value() == 10.0,
+            "a passive range update replaced the saved threshold");
         controller.switchField(QStringLiteral("density"));
         require(widgets.linearThreshold->value() == 2.0e-11,
             "a field's edited Symlog threshold was not restored");
+        controller.switchField(QStringLiteral("tiny"));
+        require(controller.showDisplayRange(-3.0e-15, 8.0e-15)
+                && widgets.linearThreshold->value() == 1.0e-17,
+            "switching to a tiny field retained the previous threshold");
     }
 
     // Blocked writes: setSelection, showDisplayRange, showLogarithmic emit

@@ -214,12 +214,23 @@ void RangeController::setSelection(const Selection& selection)
         m_controlsReady && m_symmetricLogarithmic->isChecked());
 }
 
-void RangeController::showDisplayRange(double minimum, double maximum)
+bool RangeController::showDisplayRange(double minimum, double maximum)
 {
     const QSignalBlocker minBlocker(m_minimum);
     const QSignalBlocker maxBlocker(m_maximum);
     m_minimum->setValue(minimum);
     m_maximum->setValue(maximum);
+    if (m_pendingThresholdInitialization && m_symmetricLogarithmic->isChecked()
+        && !m_trackedField.isEmpty()
+        && !m_symlogThresholds.contains(m_trackedField)) {
+        const auto threshold = defaultSymmetricLogThreshold(minimum, maximum);
+        const QSignalBlocker blocker(m_linearThreshold);
+        m_linearThreshold->setValue(threshold);
+        m_symlogThresholds.insert(m_trackedField, threshold);
+        m_pendingThresholdInitialization = false;
+        return true;
+    }
+    return false;
 }
 
 void RangeController::showLogarithmic(bool logarithmic)
@@ -309,6 +320,11 @@ void RangeController::applyFieldRange(const QString& field)
         const QSignalBlocker blocker(m_linearThreshold);
         m_linearThreshold->setValue(threshold.value());
     }
+    m_pendingThresholdInitialization = m_symmetricLogarithmic->isChecked()
+        && !m_symlogThresholds.contains(field);
+    if (m_pendingThresholdInitialization && range.userRange) {
+        showDisplayRange(range.userRange->first, range.userRange->second);
+    }
     updateUserRangeEnabled();
 }
 
@@ -316,6 +332,7 @@ void RangeController::reset()
 {
     m_fieldRanges.clear();
     m_symlogThresholds.clear();
+    m_pendingThresholdInitialization = false;
     m_trackedField.clear();
     const QSignalBlocker minBlocker(m_minimum);
     const QSignalBlocker maxBlocker(m_maximum);

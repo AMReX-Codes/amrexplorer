@@ -1253,6 +1253,10 @@ int main()
             requireAccepted([&] {
                 validateSessionVolumeResult(metadata, ranged, bad);
             }, "a frame honouring the explicit range was rejected");
+            ranged.range->scale = {ColorScale::Linear, 0.01};
+            requireAccepted([&] {
+                validateSessionVolumeResult(metadata, ranged, bad);
+            }, "an inactive threshold caused a valid linear response to be rejected");
             bad = frame;
             bad.metrics.gridDims = {0, 4, 4};
             requireRejectedWith([&] {

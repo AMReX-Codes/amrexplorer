@@ -71,7 +71,9 @@ public:
     // The active view's display range and log flag, mirrored into the boxes
     // and checkbox (the min/max unconditionally: the caller decides whether
     // a User range must be left alone).
-    void showDisplayRange(double minimum, double maximum);
+    // Returns true when a newly selected field initializes its Symlog
+    // threshold; the host must recolor using the updated selection.
+    bool showDisplayRange(double minimum, double maximum);
     void showLogarithmic(bool logarithmic);
     void showColorScale(ColorScaleConfig scale);
     // Whether a dataset is open: mode and Log enabled iff ready, min/max iff
@@ -131,6 +133,7 @@ private:
     QCheckBox* m_symmetricLogarithmic = nullptr;
     ScientificDoubleSpinBox* m_linearThreshold = nullptr;
     bool m_controlsReady = false;
+    bool m_pendingThresholdInitialization = false;
     QHash<QString, FieldRange> m_fieldRanges;
     QHash<QString, double> m_symlogThresholds;
     QString m_trackedField;

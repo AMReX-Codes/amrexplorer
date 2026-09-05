@@ -46,9 +46,12 @@ struct VolumeRange {
     }
     friend bool operator==(const VolumeRange& lhs, const VolumeRange& rhs)
     {
+        const auto left = effectiveColorScale(lhs.logarithmic, lhs.scale);
+        const auto right = effectiveColorScale(rhs.logarithmic, rhs.scale);
         return lhs.minimum == rhs.minimum && lhs.maximum == rhs.maximum
-            && effectiveColorScale(lhs.logarithmic, lhs.scale)
-                == effectiveColorScale(rhs.logarithmic, rhs.scale);
+            && left.scale == right.scale
+            && (left.scale != ColorScale::SymLogarithmic
+                || left.linearThreshold == right.linearThreshold);
     }
 };
 

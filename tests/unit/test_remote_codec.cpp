@@ -623,6 +623,19 @@ int main()
     volume.maximumVoxels = 1 << 20;
     require(codec::fromWire(codec::toWire(volume)) == volume,
         "a volume request with a range did not round-trip");
+    {
+        auto linear = volume;
+        linear.range = VolumeRange{0.5, 4.0, false,
+            {ColorScale::Linear, 0.01}};
+        require(codec::fromWire(codec::toWire(linear)).range == linear.range,
+            "an inactive Symlog threshold changed the remote linear range");
+        const VolumeRange symlog{0.5, 4.0, false,
+            {ColorScale::SymLogarithmic, 0.01}};
+        const VolumeRange differentThreshold{0.5, 4.0, false,
+            {ColorScale::SymLogarithmic, 1.0}};
+        require(symlog != differentThreshold && symlog != *linear.range,
+            "volume range equality ignored an active scale setting");
+    }
     // The value on the wire, not just that it survives a round trip. Two
     // transposed mappings are inverses of each other, so every round-trip
     // check in the suite passes while a peer on the other side of a real

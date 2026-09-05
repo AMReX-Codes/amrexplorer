@@ -1602,7 +1602,10 @@ void MainWindow::syncVisibleRanges()
                     const auto label = fieldName + suffix;
                     m_colorBar->setScale(m_activeView->displayScale);
                     m_colorBar->setFieldRange(label, globalMin, globalMax);
-                    m_range->showDisplayRange(globalMin, globalMax);
+                    if (m_range->showDisplayRange(globalMin, globalMax)) {
+                        scheduleSliceRequest();
+                        m_volumeController->refresh();
+                    }
                     // The panel loop above wrote this range into every applied
                     // panel's state, the active one included, so the Dataset
                     // window reads the same numbers the bar just took.

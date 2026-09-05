@@ -84,6 +84,7 @@ class ParticleController;
 class RangeController;
 class RemoteSessionController;
 class SequenceController;
+class ThemeController;
 class VolumeController;
 struct PlaneMapping;
 class UserGuideDialog;
@@ -1216,6 +1217,9 @@ private:
     // Owns the palette selection, its widgets and persistence; palette() is
     // what the renderer, color bar and overlays use.
     PaletteController* m_paletteController = nullptr;
+    // Owns the Skin selection (System/Light/Dark) and its persistence. The
+    // skin it applies is application-wide, so every window shares one.
+    ThemeController* m_themeController = nullptr;
     DerivedFieldController* m_derivedFields = nullptr;
     QString m_numberFormat = defaultNumberFormat();
     bool m_controlsReady = false;

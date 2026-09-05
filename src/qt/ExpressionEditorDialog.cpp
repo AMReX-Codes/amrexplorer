@@ -1,5 +1,7 @@
 #include "ExpressionEditorDialog.hpp"
 
+#include "Theme.hpp"
+
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -100,7 +102,8 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     // shown with a piece missing.
     m_error->setTextFormat(Qt::PlainText);
     // As SetContoursDialog styles its own warning.
-    m_error->setStyleSheet(QStringLiteral("QLabel { color: red; }"));
+    m_error->setStyleSheet(
+        QStringLiteral("QLabel { color: %1; }").arg(errorTextColor().name()));
 
     m_applyAnyway = new QPushButton(tr("Apply &anyway"), this);
     m_applyAnyway->setObjectName(QStringLiteral("applyAnywayButton"));
@@ -124,7 +127,8 @@ ExpressionEditorDialog::ExpressionEditorDialog(
     m_warning->setTextFormat(Qt::PlainText);
     // Not the error's red: this one does not stop anything, and colouring the
     // two alike would say the definition had been refused when it has not.
-    m_warning->setStyleSheet(QStringLiteral("QLabel { color: #b8860b; }"));
+    m_warning->setStyleSheet(
+        QStringLiteral("QLabel { color: %1; }").arg(warningTextColor().name()));
 
     m_fieldsCaption = new QLabel(tr("Fields in this dataset"), this);
     m_fields = new QListWidget(this);
@@ -357,9 +361,8 @@ void ExpressionEditorDialog::showResolutionWarning(
     // style and repolishes the widget even for an identical string, and most
     // calls here only clear the label.
     if (!message.isEmpty()) {
-        m_warning->setStyleSheet(blocking
-                ? QStringLiteral("QLabel { color: red; }")
-                : QStringLiteral("QLabel { color: #b8860b; }"));
+        m_warning->setStyleSheet(QStringLiteral("QLabel { color: %1; }")
+                .arg((blocking ? errorTextColor() : warningTextColor()).name()));
     }
     m_warning->setText(message);
     m_warning->setVisible(!message.isEmpty());
@@ -408,6 +411,10 @@ void ExpressionEditorDialog::showError(const QString& message,
     }
     m_applied->clear();
     m_applied->setVisible(false);
+    // Restyled here, not only at construction: the skin can change while this
+    // modeless dialog is open, and the colour is read from the palette.
+    m_error->setStyleSheet(
+        QStringLiteral("QLabel { color: %1; }").arg(errorTextColor().name()));
     m_error->setText(message);
     m_error->setVisible(true);
     m_applyAnyway->setVisible(offerAnyway);

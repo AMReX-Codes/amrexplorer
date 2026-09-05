@@ -67,6 +67,8 @@ add_executable(amrexplorer_qt
     SetContoursDialog.cpp
     SetContoursDialog.hpp
     Theme.hpp
+    ThemeController.cpp
+    ThemeController.hpp
     UserGuideDialog.cpp
     UserGuideDialog.hpp
     VolumeController.cpp

@@ -1,6 +1,7 @@
 #include "DerivedFieldController.hpp"
 #include "DerivedFieldStore.hpp"
 #include "ExpressionEditorDialog.hpp"
+#include "Theme.hpp"
 
 #include <QApplication>
 #include <QEventLoop>
@@ -575,7 +576,10 @@ int main(int argc, char** argv)
         dialog->setDraft({{"t", "density"}});
         source->setPlainText(QStringLiteral("sqrt("));
         waitUntil([&] { return !warning->text().isEmpty(); });
-        require(warning->styleSheet().contains(QStringLiteral("red")),
+        require(warning->styleSheet().contains(
+                    amrvis::qt::errorTextColor().name())
+                && !warning->styleSheet().contains(
+                    amrvis::qt::warningTextColor().name()),
             "a fault Apply will refuse was shown as advice");
 
         // A field written into the middle of a name is separated from both

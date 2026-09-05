@@ -37,6 +37,13 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_paletteController, &PaletteController::loadFileRequested, this,
         [this] { loadPaletteFile(); });
 
+    // The skin is application-wide, so this is built first: constructing it
+    // snapshots the desktop's style and palette, which restoreSettings may
+    // then replace. skinChanged only persists, so it is safe to wire here.
+    m_themeController = new ThemeController(this);
+    connect(m_themeController, &ThemeController::skinChanged, this,
+        [this] { saveSettings(); });
+
     // Derived fields: the controller owns this window's definition list and
     // its editor. It asks the window for the fields a definition may read (the
     // open dataset's stored ones) and for the reload that installs a committed
@@ -1437,6 +1444,9 @@ void MainWindow::createMenus()
     viewMenu->addAction(m_diagnosticsDock->toggleViewAction());
     viewMenu->addAction(m_animationDock->toggleViewAction());
     viewMenu->addAction(m_fabSelectorDock->toggleViewAction());
+    viewMenu->addSeparator();
+    // Application-wide rather than per-view, hence its own group at the end.
+    viewMenu->addMenu(m_themeController->createMenu(this));
 
     // Variable menu: lists all fields with a bullet on the active one.
     m_variableMenu = menuBar()->addMenu(tr("&Variable"));

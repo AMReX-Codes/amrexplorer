@@ -1,5 +1,7 @@
 #include "SetContoursDialog.hpp"
 
+#include "Theme.hpp"
+
 #include <QAbstractButton>
 #include <QButtonGroup>
 #include <QComboBox>
@@ -143,7 +145,8 @@ SetContoursDialog::SetContoursDialog(const std::vector<std::string>& fieldNames,
     }
     auto* vectorWarning = new QLabel(
         tr("U and V fields must be different"), m_vectorBox);
-    vectorWarning->setStyleSheet("QLabel { color: red; }");
+    vectorWarning->setStyleSheet(
+        QStringLiteral("QLabel { color: %1; }").arg(errorTextColor().name()));
     vectorWarning->setVisible(false);
     vectorLayout->addRow(vectorWarning);
     const auto checkVectorFields = [this, vectorWarning] {

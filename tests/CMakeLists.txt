@@ -688,6 +688,27 @@ if(TARGET amrexplorer_qt)
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_palette_controller>")
 
+    add_executable(test_theme_controller
+        unit/test_theme_controller.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/ThemeController.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ThemeController.hpp"
+    )
+    set_target_properties(test_theme_controller PROPERTIES AUTOMOC ON)
+    target_include_directories(test_theme_controller
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_theme_controller
+        PRIVATE
+            amrexplorer::warnings
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Widgets
+    )
+    # Builds a real menu and swaps the application palette, so it needs a QPA
+    # platform; offscreen keeps it headless like the other Qt tests.
+    add_test(NAME theme_controller
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_theme_controller>")
+
     add_executable(test_range_controller
         unit/test_range_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/RangeController.cpp"

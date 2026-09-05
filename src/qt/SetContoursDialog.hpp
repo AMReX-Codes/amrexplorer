@@ -11,7 +11,9 @@
 
 class QButtonGroup;
 class QComboBox;
+class QEvent;
 class QGroupBox;
+class QLabel;
 class QSpinBox;
 
 namespace amrvis::qt {
@@ -52,11 +54,16 @@ public:
 signals:
     void applied();
 
+protected:
+    void changeEvent(QEvent* event) override;
+
 private:
+    void updateWarningColor();
     DisplayMode m_mode = DisplayMode::Raster;
     QButtonGroup* m_modeButtons = nullptr;
     QSpinBox* m_contourCount = nullptr;
     QGroupBox* m_vectorBox = nullptr;
+    QLabel* m_vectorWarning = nullptr;
     QComboBox* m_uField = nullptr;
     QComboBox* m_vField = nullptr;
     QComboBox* m_wField = nullptr;

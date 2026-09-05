@@ -1,4 +1,5 @@
 #include "ImageView.hpp"
+#include "ScaleBar.hpp"
 
 #include <QApplication>
 #include <QImage>
@@ -27,6 +28,175 @@ QImage solidImage(int width, int height)
     QImage image(width, height, QImage::Format_RGB32);
     image.fill(Qt::black);
     return image;
+}
+
+void scaleBarUsesNativeOrExplicitUnits()
+{
+    constexpr double au = 1.495978707e13;
+    constexpr double pc = 3.0856775814913673e18;
+
+    const auto native = amrvis::qt::chooseScaleBar(8.0, 2.4, 120.0);
+    require(native && native->label == "2.000e+00 code units",
+        "an unset unit did not preserve the native scale in scientific notation");
+
+    const auto centimetres = amrvis::qt::chooseScaleBar(8.0e12, 2.4e12,
+        120.0, amrvis::qt::LengthUnit::Centimetre);
+    require(centimetres && centimetres->label == "2e+07 km",
+        "an explicit centimetre scale did not convert to a natural unit");
+
+    const auto astronomical = amrvis::qt::chooseScaleBar(8.0 * au,
+        2.4 * au, 120.0, amrvis::qt::LengthUnit::Centimetre);
+    require(astronomical && astronomical->label == "2 AU",
+        "an AU-scale view did not use AU");
+
+    const auto parsecs = amrvis::qt::chooseScaleBar(1.0 * pc,
+        0.26 * pc, 130.0, amrvis::qt::LengthUnit::Centimetre);
+    require(parsecs && parsecs->label == "0.2 pc",
+        "a parsec-scale view did not use pc");
+
+    const auto kiloparsecs = amrvis::qt::chooseScaleBar(4.0e3 * pc,
+        1.2e3 * pc, 120.0, amrvis::qt::LengthUnit::Centimetre);
+    require(kiloparsecs && kiloparsecs->label == "1 kpc",
+        "a kiloparsec-scale view did not use kpc");
+
+    require(!amrvis::qt::chooseScaleBar(0.0, 1.0, 100.0),
+        "a zero-width view produced a scale bar");
+}
+
+void scaleBarIsPaintedOverTheSlice()
+{
+    amrvis::qt::ImageView view;
+    view.resize(400, 300);
+    view.show();
+    view.setImage(solidImage(400, 300));
+    QApplication::processEvents();
+    const QImage withoutBar = view.viewport()->grab().toImage();
+
+    constexpr double pc = 3.0856775814913673e18;
+    view.setScaleBarWidth(4.0 * pc, amrvis::qt::LengthUnit::Centimetre);
+    QApplication::processEvents();
+    const QImage withBar = view.viewport()->grab().toImage();
+
+    require(withBar.size() == withoutBar.size(),
+        "painting the scale bar changed the viewport size");
+    int changed = 0;
+    for (int y = 0; y < withBar.height(); ++y) {
+        for (int x = withBar.width() / 2; x < withBar.width(); ++x) {
+            changed += withBar.pixel(x, y) != withoutBar.pixel(x, y) ? 1 : 0;
+        }
+    }
+    require(changed > 50,
+        "setting a physical width did not paint a visible scale bar");
+}
+
+void scaleBarIsPaintedIntoExportedComposition()
+{
+    amrvis::qt::ImageView view;
+    view.setImage(solidImage(400, 300));
+    const QImage withoutBar = view.composedImage();
+
+    constexpr double pc = 3.0856775814913673e18;
+    view.setScaleBarWidth(4.0 * pc, amrvis::qt::LengthUnit::Centimetre);
+    const QImage withBar = view.composedImage();
+
+    require(withBar.size() == withoutBar.size(),
+        "painting the scale bar changed the export size");
+    int changed = 0;
+    for (int y = 0; y < withBar.height(); ++y) {
+        for (int x = withBar.width() / 2; x < withBar.width(); ++x) {
+            changed += withBar.pixel(x, y) != withoutBar.pixel(x, y) ? 1 : 0;
+        }
+    }
+    require(changed > 50,
+        "the exported composition omitted the visible scale bar");
+}
+
+void sliceGuidesStayOnScreenButOutOfExports() {
+    amrvis::qt::ImageView view;
+    view.resize(450, 350);
+    view.show();
+    view.setImage(solidImage(400, 300));
+    view.setGridBoxes({{QRectF(30, 30, 100, 100), Qt::yellow, {}}});
+    QApplication::processEvents();
+    const auto displayWithoutGuides = view.viewport()->grab().toImage();
+    const auto nativeExport = view.composedImage();
+    const auto scaledExport = view.composedImage(QSize(800, 600));
+
+    view.setCrosshairs(QLineF(200, 0, 200, 300), QLineF(0, 150, 400, 150), Qt::red, Qt::cyan);
+    QApplication::processEvents();
+    const auto displayWithGuides = view.viewport()->grab().toImage();
+    require(displayWithGuides != displayWithoutGuides,
+            "slice-guide test did not paint visible guides in the display window");
+    require(view.composedImage() == nativeExport,
+            "slice-position guides appeared in the image export");
+    require(view.composedImage(QSize(800, 600)) == scaledExport,
+            "slice-position guides appeared in the fixed-size animation frame");
+    QApplication::processEvents();
+    require(view.viewport()->grab().toImage() == displayWithGuides,
+            "export did not restore the on-screen slice-position guides");
+}
+
+void fixedExportSizePreservesLandmarks() {
+    amrvis::qt::ImageView view;
+    QImage first(400, 300, QImage::Format_RGB32);
+    first.fill(Qt::blue);
+    {
+        QPainter painter(&first);
+        painter.fillRect(100, 75, 40, 30, Qt::yellow);
+    }
+    view.setImage(first);
+    const auto before = view.composedImage(QSize(600, 450));
+    for (const auto size : {QSize(600, 450), QSize(2400, 1800)}) {
+        const auto image = view.composedImage(size);
+        for (int y = 0; y < image.height(); ++y) {
+            require(image.pixelColor(0, y) == QColor(Qt::blue),
+                    "export introduced a gap at the left raster edge");
+        }
+        for (int x = 0; x < image.width(); ++x) {
+            require(image.pixelColor(x, 0) == QColor(Qt::blue),
+                    "export introduced a gap at the top raster edge");
+        }
+    }
+    view.setImage(first.scaled(800, 600));
+    const auto after = view.composedImage(QSize(600, 450));
+    require(before.size() == after.size(), "fixed export size followed the source resolution");
+    require(before.pixelColor(170, 125) == QColor(Qt::yellow) &&
+                after.pixelColor(170, 125) == QColor(Qt::yellow) &&
+                before.pixelColor(140, 100) == QColor(Qt::blue) &&
+                after.pixelColor(140, 100) == QColor(Qt::blue),
+            "a source-resolution change moved an exported landmark");
+    require(view.composedImage(QSize()).isNull(), "empty export dimensions were accepted");
+
+    QImage coarse(17, 31, QImage::Format_RGB32);
+    coarse.fill(Qt::blue);
+    view.setImage(coarse);
+    view.setGridBoxes(
+        {{QRectF(0, 0, 17, 31), Qt::white, {}}, {QRectF(4, 6, 7, 12), Qt::white, {}}});
+    for (const bool placed : {false, true}) {
+        if (placed) {
+            view.setVirtualCanvas(amrvis::qt::ImageView::VirtualPlacement{
+                QRectF(3.25, 7.5, 8.5, 15.5), QSizeF(128, 256)});
+        }
+        for (const auto size : {QSize(270, 540), QSize(541, 541), QSize(1082, 1082)}) {
+            const auto original = view.composedImage(size);
+            require(original.pixelColor(0, 0) == QColor(Qt::white),
+                    "white boundary-grid strip reproducer did not exercise the original gap");
+            const auto image = view.composedImage(size, nullptr, true);
+            for (int y = 0; y < image.height(); ++y) {
+                require(image.pixelColor(0, y) == QColor(Qt::blue),
+                        "coarse/placed raster left an export strip on the left");
+            }
+            for (int x = 0; x < image.width(); ++x) {
+                require(image.pixelColor(x, 0) == QColor(Qt::blue),
+                        "coarse/placed raster left an export strip at the top");
+            }
+            const auto interior = QRect(2, 2, size.width() - 4, size.height() - 4);
+            require(image.copy(interior) == original.copy(interior),
+                    "suppressing outer grid strokes changed interior data or grid lines");
+            require(view.composedImage(size) == original,
+                    "export failed to restore normal grid rendering");
+        }
+    }
 }
 
 // A scene larger than the viewport pans by its scroll bars, and the delta says
@@ -285,6 +455,11 @@ void tearingDownTheSceneForgetsThePointTally()
 int main(int argc, char* argv[])
 {
     QApplication application(argc, argv);
+    scaleBarUsesNativeOrExplicitUnits();
+    scaleBarIsPaintedOverTheSlice();
+    scaleBarIsPaintedIntoExportedComposition();
+    sliceGuidesStayOnScreenButOutOfExports();
+    fixedExportSizePreservesLandmarks();
     scrollBarPanFollowsContentDelta();
     fullyVisibleSceneIgnoresPan();
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();

@@ -37,6 +37,13 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_paletteController, &PaletteController::loadFileRequested, this,
         [this] { loadPaletteFile(); });
 
+    // The skin is application-wide, so this is built first: constructing it
+    // snapshots the desktop's style and palette, which restoreSettings may
+    // then replace. skinChanged only persists, so it is safe to wire here.
+    m_themeController = new ThemeController(this);
+    connect(m_themeController, &ThemeController::skinChanged, this,
+        [this] { saveSettings(); });
+
     // Derived fields: the controller owns this window's definition list and
     // its editor. It asks the window for the fields a definition may read (the
     // open dataset's stored ones) and for the reload that installs a committed
@@ -772,7 +779,8 @@ MainWindow::MainWindow(QWidget* parent)
     // exporter owns the whole export state machine; this window supplies
     // frame rendering and navigation, and restores its UI on finished().
     m_animationExporter = new AnimationExporter(
-        [this](bool includeColorBar, qreal scale) {
+        [this](const ExportOptions& options, qreal scale,
+               std::map<QString, ExportLayout>& layouts) {
             std::vector<std::pair<QString, QImage>> frames;
             if (m_viewDimension == 3) {
                 constexpr std::array<const char*, 3> suffixes{
@@ -783,18 +791,19 @@ MainWindow::MainWindow(QWidget* parent)
                     if (panelView == nullptr || !panelView->hasImage()) {
                         continue;
                     }
-                    frames.emplace_back(QString::fromLatin1(suffixes[idx]),
-                        composeExportFrame(panelView, includeColorBar, scale));
+                    const auto suffix = QString::fromLatin1(suffixes[idx]);
+                    frames.emplace_back(
+                        suffix, composeExportFrame(panelView, options, scale, &layouts[suffix]));
                 }
             } else {
-                frames.emplace_back(QString(), composeExportFrame(
-                    m_activeView != nullptr ? m_activeView->view : nullptr,
-                    includeColorBar, scale));
+                frames.emplace_back(
+                    QString(),
+                    composeExportFrame(m_activeView != nullptr ? m_activeView->view : nullptr,
+                                       options, scale, &layouts[QString()]));
             }
             return frames;
         },
-        [this](int index) { goToSequenceFrame(index); },
-        this);
+        [this](int index) { goToSequenceFrame(index); }, this);
     connect(m_animationExporter, &AnimationExporter::encodingStarted,
         this, &MainWindow::exportEncodingStarted);
     connect(m_animationExporter, &AnimationExporter::finished, this,
@@ -1366,6 +1375,19 @@ void MainWindow::createMenus()
         }
         saveSettings();  // overlay/boxes
     });
+    m_scaleBarAction = new QAction(tr("Scale Bar"), this);
+    m_scaleBarAction->setCheckable(true);
+    m_scaleBarAction->setChecked(m_scaleBarVisible);
+    m_scaleBarAction->setEnabled(false);
+    connect(m_scaleBarAction, &QAction::toggled, this, [this](bool visible) {
+        m_scaleBarVisible = visible;
+        updateScaleBars();
+        saveSettings();  // overlay/scaleBar
+    });
+    auto* lengthUnitsAction = new QAction(tr("Length &Units..."), this);
+    lengthUnitsAction->setObjectName(QStringLiteral("lengthUnitsAction"));
+    connect(lengthUnitsAction, &QAction::triggered,
+        this, [this] { showLengthUnitsDialog(); });
     m_slicePlanesAction = new QAction(tr("Sl&ice Planes"), this);
     m_slicePlanesAction->setCheckable(true);
     m_slicePlanesAction->setEnabled(false);
@@ -1401,6 +1423,8 @@ void MainWindow::createMenus()
     viewMenu->addMenu(scaleMenu);
     viewMenu->addMenu(m_levelMenu);
     viewMenu->addAction(m_boxesAction);
+    viewMenu->addAction(m_scaleBarAction);
+    viewMenu->addAction(lengthUnitsAction);
     viewMenu->addAction(m_slicePlanesAction);
     viewMenu->addAction(m_volumeController->createAction(this));
     viewMenu->addMenu(paletteMenu);
@@ -1424,9 +1448,12 @@ void MainWindow::createMenus()
     viewMenu->addAction(m_diagnosticsDock->toggleViewAction());
     viewMenu->addAction(m_animationDock->toggleViewAction());
     viewMenu->addAction(m_fabSelectorDock->toggleViewAction());
+    viewMenu->addSeparator();
+    // Application-wide rather than per-view, hence its own group at the end.
+    viewMenu->addMenu(m_themeController->createMenu(this));
 
     // Variable menu: lists all fields with a bullet on the active one.
-    m_variableMenu = menuBar()->addMenu(tr("&Variable"));
+    m_variableMenu = menuBar()->addMenu(tr("Va&riable"));
     // Menus hide action tooltips unless asked: the derived fields carry their
     // expressions there, and the Expression Editor entry carries the reason it
     // is unavailable, neither of which reaches anyone otherwise.

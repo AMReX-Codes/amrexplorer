@@ -43,6 +43,7 @@ Outcome dispatch(Context& context)
              &dispatchRange,
              &dispatchZoom,
              &dispatchFab,
+             &dispatchShortcuts,
              &dispatchSequence,
              &dispatchVolume,
              &dispatchDerived

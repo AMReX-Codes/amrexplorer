@@ -236,7 +236,8 @@ Outcome dispatchFab(Context& context)
                     && fabSelectorIsAscending(*selector)
                     && fabSelectorColumnsMatch(*selector, false)
                     && fabSelectorPointFilterMatches(*selector, *phase == 0)
-                    && fabRangeSelectorMatches(window);
+                    && fabRangeSelectorMatches(window)
+                    && !window.activeViewHasScaleBarForTest();
                 if (!valid) {
                     application.exit(1);
                 } else if ((*phase)++ == 0) {
@@ -262,7 +263,8 @@ Outcome dispatchFab(Context& context)
                     || !fabSelectorIsAscending(*selector)
                     || !fabSelectorColumnsMatch(*selector, true)
                     || !fabSelectorPointFilterMatches(
-                        *selector, *phase == 0)) {
+                        *selector, *phase == 0)
+                    || window.activeViewHasScaleBarForTest()) {
                     application.exit(1);
                     return;
                 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DatasetWindow.hpp"
+#include "ExportFrame.hpp"
 #include "ImageView.hpp"
 #include "NumberFormat.hpp"
 #include "SetContoursDialog.hpp"
@@ -84,6 +85,7 @@ class ParticleController;
 class RangeController;
 class RemoteSessionController;
 class SequenceController;
+class ThemeController;
 class VolumeController;
 struct PlaneMapping;
 class UserGuideDialog;
@@ -126,7 +128,8 @@ public:
     // Starts an animation export without the interactive color-bar/save
     // dialogs, writing frames and MP4s under path's directory. Test-only entry
     // used by the export-quit smoke test to reach the encoder deterministically.
-    void startAnimationExportForTest(const QString& path, bool includeColorBar);
+    void startAnimationExportForTest(const QString& path, bool includeColorBar,
+                                     bool includeAxes = false, bool transparentBackground = false);
     // Test-only sequence probes: whether the Animation dock is on screen, and
     // whether sequence playback is still running. A frame refresh must not
     // reassert the first, and a failed frame must clear the second.
@@ -419,6 +422,9 @@ public:
     [[nodiscard]] std::array<int, 2> activeViewImageSizeForTest() const;
     [[nodiscard]] std::array<int, 2> activeViewViewportSizeForTest() const;
     [[nodiscard]] QImage activeViewViewportImageForTest() const;
+    void setScaleBarVisibleForTest(bool visible);
+    [[nodiscard]] bool scaleBarActionEnabledForTest() const;
+    [[nodiscard]] bool activeViewHasScaleBarForTest() const;
     [[nodiscard]] bool activeViewFitsWindowForTest() const;
 
     // Test-only: shrink the open dataset's cache budget to force cache-pressure
@@ -588,9 +594,12 @@ private:
     // are known (from the dialogs, or from the test hook): freezes the export
     // zoom, starts the AnimationExporter (which owns the export state machine),
     // and kicks off frame 0.
-    void beginAnimationExport(const QString& path, bool includeColorBar);
-    [[nodiscard]] QImage composeExportFrame(const ImageView* view,
-        bool includeColorBar, qreal scaleFactor) const;
+    void beginAnimationExport(const QString& path, const ExportOptions& options);
+    [[nodiscard]] ExportOptions exportOptions(bool includeColorBar, bool includeAxes,
+                                              bool transparentBackground = false) const;
+    [[nodiscard]] QImage composeExportFrame(const ImageView* view, const ExportOptions& options,
+                                            qreal scaleFactor,
+                                            ExportLayout* frozenLayout = nullptr) const;
     void createMenus();
     void rebuildLevelMenu();
     // One row of the derived part of a field list.
@@ -727,6 +736,8 @@ private:
         int wField, int contourColor);
     void showNumberFormatDialog();
     void applyNumberFormat(const QString& format);
+    void showLengthUnitsDialog();
+    void applyLengthUnit(const QString& unitId);
     void validateVectorMode();
     void ensureVectorFieldDefaults();
     void showDatasetWindow();
@@ -883,6 +894,9 @@ private:
     void updateOverlays();
     void updateGridBoxes(PlaneViewState& state);
     void updateGridBoxes();
+    void updateScaleBar(PlaneViewState& state);
+    void updateScaleBars();
+    void resetLengthUnit();
     void updateCrosshairs(PlaneViewState& state);
     void updateCrosshairs();
     [[nodiscard]] QLineF planeSegmentToScene(const PlaneViewState& state,
@@ -1034,6 +1048,7 @@ private:
     DatasetWindow* m_datasetWindow = nullptr;
     SetContoursDialog* m_contoursDialog = nullptr;
     QDialog* m_numberFormatDialog = nullptr;
+    QDialog* m_lengthUnitsDialog = nullptr;
     UserGuideDialog* m_userGuideDialog = nullptr;
     QComboBox* m_fieldSelector = nullptr;
     QComboBox* m_levelSelector = nullptr;
@@ -1149,6 +1164,14 @@ private:
     // Window-owned so rebuildVariableMenu's clear() does not delete it.
     QAction* m_expressionEditorAction = nullptr;
     QAction* m_boxesAction = nullptr;
+    QAction* m_scaleBarAction = nullptr;
+    // The saved preference is separate from the action's checked state:
+    // anisotropic datasets force the action off without erasing what the user
+    // selected for datasets on which a physical scale bar is meaningful.
+    bool m_scaleBarVisible = false;
+    // Empty means the plotfile coordinate unit is unknown. Otherwise this is
+    // one of ScaleBar.hpp's stable length-unit ids (cm, AU, pc, ...).
+    QString m_lengthUnitId;
     QAction* m_slicePlanesAction = nullptr;
     QAction* m_resetZoomAction = nullptr;
     QAction* m_syncRubberBandZoomAction = nullptr;
@@ -1200,6 +1223,9 @@ private:
     // Owns the palette selection, its widgets and persistence; palette() is
     // what the renderer, color bar and overlays use.
     PaletteController* m_paletteController = nullptr;
+    // Owns the Skin selection (System/Light/Dark) and its persistence. The
+    // skin it applies is application-wide, so every window shares one.
+    ThemeController* m_themeController = nullptr;
     DerivedFieldController* m_derivedFields = nullptr;
     QString m_numberFormat = defaultNumberFormat();
     bool m_controlsReady = false;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ScaleBar.hpp"
+
 #include <amrexplorer/pipeline/ImageTransformPolicy.hpp>
 
 #include <QGraphicsView>
@@ -15,6 +17,7 @@
 #include <optional>
 #include <vector>
 
+class QEvent;
 class QGraphicsLineItem;
 class QGraphicsItem;
 class QGraphicsPathItem;
@@ -126,6 +129,16 @@ public:
     // Small L-shaped axis indicator painted in the lower-left corner of the
     // viewport (not the scene), so it stays fixed regardless of zoom or pan.
     void setAxisIndicator(const QString& horizontal, const QString& vertical);
+    // Add a scale bar in the lower-right of the displayed raster. The width is
+    // in native plotfile coordinates; an absent unit labels that native value
+    // as code units, while an explicit unit permits physical-unit conversion.
+    // A non-positive or non-finite width clears the bar.
+    void setScaleBarWidth(double widthCodeUnits,
+        std::optional<LengthUnit> lengthUnit = std::nullopt);
+    [[nodiscard]] bool hasScaleBar() const noexcept
+    {
+        return m_scaleBarCodeUnitsPerImagePixel > 0.0;
+    }
     // Cosmetic red rectangle marking the cell picked in the dataset window;
     // std::nullopt clears it, and setImage/setPlaceholder drop it too. It
     // layers at z 4, above the overlay segments.
@@ -173,6 +186,10 @@ public:
     // resolution so the export reflects the on-screen zoom (WYSIWYG); an
     // aspect-preserving cap keeps extreme zooms from allocating gigabytes.
     [[nodiscard]] QImage composedImage(qreal scaleFactor = 1.0) const;
+    [[nodiscard]] QSize composedImageSize(qreal scaleFactor) const;
+    // Axes-enabled exports suppress outer grid strokes, not data pixels.
+    [[nodiscard]] QImage composedImage(QSize outputSize, const QFont* exportFont = nullptr,
+                                       bool omitOuterGridEdges = false) const;
     void fitToWindow();
     void setFixedScale(int factor);
     void zoomBy(qreal factor);
@@ -247,6 +264,9 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    // Repaints the placeholder in the new skin's colours; it is drawn from
+    // palette roles, but a QGraphicsTextItem holds the colour it was given.
+    void changeEvent(QEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void drawForeground(QPainter* painter, const QRectF& rect) override;
@@ -286,6 +306,8 @@ private:
     QGraphicsItem* m_cellHighlightItem = nullptr;
     QString m_indicatorH;
     QString m_indicatorV;
+    double m_scaleBarCodeUnitsPerImagePixel = 0.0;
+    std::optional<LengthUnit> m_scaleBarLengthUnit;
     QPoint m_pressPosition;
     QPoint m_lastPanPosition;
     QPointF m_panAccumulated;

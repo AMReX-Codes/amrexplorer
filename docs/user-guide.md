@@ -189,6 +189,12 @@ The main controls are:
    3-D panels.
 4. **Range, Log, and Palette** control the mapping from values to colors.
 5. **Slice panels** display the XY, XZ, and YZ planes for a 3-D dataset.
+   A lower-right scale bar uses native plotfile coordinates by default and
+   labels them as code units in scientific notation. Use **View > Length
+   Units...** to identify the plotfile coordinate unit, or **View > Scale Bar**
+   to show or hide the annotation. It is omitted when the horizontal coordinate
+   is an angle (the spherical theta-r view), and the option is disabled when
+   cell sizes are anisotropic.
 6. **Isometric view** shows the domain, grid boxes, and current slice planes;
    **View > Volume Rendering...** opens the same view with the field
    ray-cast into it.
@@ -558,6 +564,16 @@ between palettes.
 
 Press **B** or choose **View > Boxes** to show AMR grid boundaries.
 
+Choose **View > Scale Bar** to show or hide the length annotation. The option
+is unavailable when cell sizes are anisotropic. Plotfiles do not declare their
+length unit, so AMReXplorer leaves it unset by default and displays native
+coordinate values in scientific notation. Choose **View > Length Units...** to
+identify the unit used by the plotfile; AMReXplorer can then label the bar in a
+natural physical unit. This setting changes only the annotation, not dataset
+coordinates or geometry. The selection resets to unset whenever you open a new
+dataset or sequence, and is not saved between app sessions. Stepping through
+frames within a sequence keeps the selection.
+
 Choose **View > Contours...** to select one of three display modes:
 
 - **Raster** shows the color-mapped slice only.
@@ -653,18 +669,13 @@ compatible with the previous one.
 
 ## Exporting images and animations
 
-**File > Export Image...** saves the current view as either a PNG display image
-or a float64 FITS data image. PNG export asks whether to include the color
-scale. FITS export writes the displayed scalar samples with `BITPIX=-64`;
-invalid samples are written as NaN. A 2-D export creates one image. A 3-D
-export creates separate `_xy`, `_xz`, and `_yz` images. Both formats reflect
-the current zoomed data region; only PNG includes visible overlays and the
-optional color scale.
+Use **File > Export Image...** to save the current view as PNG or its numerical
+data as FITS. For PNG, choose whether to include the color scale and
+**axes, labels, and ticks**, and select a **White** or **Transparent** background.
 
-For an open plotfile sequence, **File > Export Animation...** writes numbered
-PNG frames. If `ffmpeg` is installed and available on `PATH`, AMReXplorer also
-encodes an MP4. Three-dimensional sequences produce separate output for each
-orthogonal plane.
+For an open plotfile sequence, use **File > Export Animation...** to save PNG
+frames with the same options. Install FFmpeg to also create an MP4 movie.
+Transparency is available only for PNG, not MP4.
 
 ## Panels, preferences, and diagnostics
 
@@ -678,8 +689,16 @@ The **View** menu controls these optional panels:
 - **FAB Selector** lists raw FAB records or the FABs belonging to an open
   standalone MultiFab.
 
-Window geometry, logarithmic mapping, palette, number format, and animation
-speed persist across sessions.
+**View > Skin** chooses the application's appearance. **System** (the default)
+keeps whatever the desktop provides; **Light** and **Dark** apply
+AMReXplorer's own; and **Blue**, **Green** and **Maroon** are Dark in a tint,
+Blue being the application icon's own colors. The change takes effect at once
+and applies to every open window. The image viewports and the color scale keep
+their neutral gray under every skin, so a colormap looks the same whichever
+one you pick.
+
+Window geometry, logarithmic mapping, palette, skin, number format, and
+animation speed persist across sessions.
 
 Each open dataset has a 1 GiB data cache by default, and volume rendering fills
 a second cache of the same size with the grids it samples the field into, so a

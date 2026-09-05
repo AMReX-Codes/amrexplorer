@@ -688,6 +688,32 @@ if(TARGET amrexplorer_qt)
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_palette_controller>")
 
+    add_executable(test_theme_controller
+        unit/test_theme_controller.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/ThemeController.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ThemeController.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ExpressionEditorDialog.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ExpressionEditorDialog.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/SetContoursDialog.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/SetContoursDialog.hpp"
+    )
+    set_target_properties(test_theme_controller PROPERTIES AUTOMOC ON)
+    target_include_directories(test_theme_controller
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_theme_controller
+        PRIVATE
+            amrexplorer::core
+            amrexplorer::warnings
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Widgets
+    )
+    # Builds a real menu and swaps the application palette, so it needs a QPA
+    # platform; offscreen keeps it headless like the other Qt tests.
+    add_test(NAME theme_controller
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_theme_controller>")
+
     add_executable(test_range_controller
         unit/test_range_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/RangeController.cpp"
@@ -759,6 +785,42 @@ if(TARGET amrexplorer_qt)
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_widget_image_export>")
     set_tests_properties(widget_image_export PROPERTIES TIMEOUT 60)
+
+    add_executable(test_export_frame unit/test_export_frame.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/ExportFrame.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ColorBarWidget.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp")
+    target_include_directories(test_export_frame PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_export_frame PRIVATE amrexplorer::render2d
+        amrexplorer::warnings Qt6::Widgets)
+    add_test(NAME export_frame COMMAND "${CMAKE_COMMAND}" -E env
+        QT_QPA_PLATFORM=offscreen "$<TARGET_FILE:test_export_frame>")
+
+    add_executable(test_animation_exporter unit/test_animation_exporter.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/AnimationExporter.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/AnimationExporter.hpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ExportFrame.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ColorBarWidget.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp")
+    set_target_properties(test_animation_exporter PROPERTIES AUTOMOC ON)
+    target_include_directories(test_animation_exporter PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_animation_exporter PRIVATE amrexplorer::render2d
+        amrexplorer::warnings Qt6::Widgets Qt6::Concurrent)
+    add_test(NAME animation_exporter COMMAND "${CMAKE_COMMAND}" -E env
+        QT_QPA_PLATFORM=offscreen "$<TARGET_FILE:test_animation_exporter>")
+    set_tests_properties(animation_exporter PROPERTIES TIMEOUT 60)
+
+    foreach(export_fixture plotfile_2d plotfile_3d plotfile_2d_spherical)
+        add_test(NAME qt_export_axes_${export_fixture}
+            COMMAND "${CMAKE_COMMAND}"
+                "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+                "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+                "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/${export_fixture}"
+                "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_export_axes_${export_fixture}"
+                -DMODE=export-axes
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake")
+        set_tests_properties(qt_export_axes_${export_fixture} PROPERTIES TIMEOUT 30)
+    endforeach()
 
     add_executable(test_volume_controller
         unit/test_volume_controller.cpp
@@ -1820,6 +1882,19 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_spherical_scale_report_smoke PROPERTIES TIMEOUT 30)
+    # Check sibling mnemonics at every menu depth and window-wide shortcuts,
+    # before opening data and after the dynamic menus have been populated.
+    add_test(
+        NAME qt_menu_shortcuts_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_menu_shortcuts"
+            -DMODE=menu-shortcuts
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_menu_shortcuts_smoke PROPERTIES TIMEOUT 30)
     # Controls reachable before any dataset is: an Animation panel opened from
     # the View menu with nothing loaded must not survive the next open holding
     # no controls, and Reset Zoom with no views must still report Fit.

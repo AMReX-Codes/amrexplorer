@@ -1,7 +1,9 @@
 #include "ImageView.hpp"
+#include "ScaleBar.hpp"
 
 #include "Theme.hpp"
 
+#include <QEvent>
 #include <QGraphicsLineItem>
 #include <QGraphicsItem>
 #include <QGraphicsPathItem>
@@ -17,6 +19,7 @@
 #include <QPen>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace amrvis::qt {
@@ -30,13 +33,26 @@ namespace {
 class CrispRectItem : public QGraphicsRectItem {
 public:
     using QGraphicsRectItem::QGraphicsRectItem;
+    bool omitOuterEdges = false;
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option,
         QWidget* widget = nullptr) override
     {
+        painter->save();
+        if (omitOuterEdges && parentItem() != nullptr) {
+            // A cosmetic grid stroke on the outer data boundary paints the
+            // first pixel row/column white, looking like a gap beside export
+            // axes. Clip only grid ink there, not the raster or other overlays.
+            const auto transform = painter->worldTransform();
+            const QRectF deviceBounds = transform.mapRect(parentItem()->boundingRect());
+            painter->setClipRect(
+                transform.inverted().mapRect(deviceBounds.adjusted(1.0, 1.0, -1.0, -1.0)),
+                Qt::IntersectClip);
+        }
         const auto antialiasing = painter->testRenderHint(QPainter::Antialiasing);
         painter->setRenderHint(QPainter::Antialiasing, false);
         QGraphicsRectItem::paint(painter, option, widget);
         painter->setRenderHint(QPainter::Antialiasing, antialiasing);
+        painter->restore();
     }
 };
 
@@ -89,6 +105,73 @@ private:
     QColor m_color;
     qreal m_size = 3.0;
 };
+
+void paintScaleBar(QPainter* painter, const QRectF& imageBounds, double codeUnitsPerImagePixel,
+                   double pixelsPerImagePixel, std::optional<LengthUnit> lengthUnit,
+                   const QFont* exportFont = nullptr) {
+    if (!(codeUnitsPerImagePixel > 0.0) || imageBounds.width() < 40.0
+        || imageBounds.height() < 36.0 || !(pixelsPerImagePixel > 0.0)
+        || !std::isfinite(pixelsPerImagePixel)) {
+        return;
+    }
+
+    const double codeUnitsPerOutputPixel
+        = codeUnitsPerImagePixel / pixelsPerImagePixel;
+    const double maximumPixels = imageBounds.width() * 0.25;
+    const auto bar = chooseScaleBar(
+        imageBounds.width() * codeUnitsPerOutputPixel,
+        maximumPixels * codeUnitsPerOutputPixel, maximumPixels, lengthUnit);
+    if (!bar) {
+        return;
+    }
+
+    const double annotationScale = exportFont != nullptr ? exportFont->pixelSize() / 14.0 : 1.0;
+    const double inset = 12.0 * annotationScale;
+    const double tickHalfHeight = 4.0 * annotationScale;
+    const double right = imageBounds.right() - inset;
+    const double left = right - bar->lengthPixels;
+    const double y = imageBounds.bottom() - inset;
+    const QLineF horizontal(left, y, right, y);
+    const QLineF leftTick(
+        left, y - tickHalfHeight, left, y + tickHalfHeight);
+    const QLineF rightTick(
+        right, y - tickHalfHeight, right, y + tickHalfHeight);
+    const QColor foreground(255, 255, 255, 230);
+    const QColor outline(0, 0, 0, 190);
+
+    painter->save();
+    painter->resetTransform();
+    painter->setRenderHint(QPainter::Antialiasing);
+    QPen halo(outline);
+    halo.setWidthF(5.0 * annotationScale);
+    halo.setCapStyle(Qt::FlatCap);
+    painter->setPen(halo);
+    painter->drawLines({horizontal, leftTick, rightTick});
+    QPen line(foreground);
+    line.setWidthF(2.0 * annotationScale);
+    line.setCapStyle(Qt::FlatCap);
+    painter->setPen(line);
+    painter->drawLines({horizontal, leftTick, rightTick});
+
+    QFont font = exportFont != nullptr ? *exportFont : painter->font();
+    if (exportFont == nullptr) {
+        font.setPointSize(10);
+    }
+    font.setBold(true);
+    painter->setFont(font);
+    const QString label = QString::fromStdString(bar->label);
+    const auto fm = painter->fontMetrics();
+    const QRectF textRect(left - 20.0,
+        y - tickHalfHeight - fm.height() - 2.0,
+        bar->lengthPixels + 40.0, fm.height());
+    painter->setPen(outline);
+    painter->drawText(textRect.translated(1.0, 1.0),
+        Qt::AlignHCenter | Qt::AlignVCenter, label);
+    painter->setPen(foreground);
+    painter->drawText(textRect,
+        Qt::AlignHCenter | Qt::AlignVCenter, label);
+    painter->restore();
+}
 
 } // namespace
 
@@ -430,73 +513,98 @@ void ImageView::setAxisIndicator(const QString& horizontal,
     }
 }
 
+void ImageView::setScaleBarWidth(double widthCodeUnits,
+    std::optional<LengthUnit> lengthUnit)
+{
+    m_scaleBarCodeUnitsPerImagePixel = hasImage() && widthCodeUnits > 0.0
+            && std::isfinite(widthCodeUnits) && m_image.width() > 0
+        ? widthCodeUnits / static_cast<double>(m_image.width())
+        : 0.0;
+    m_scaleBarLengthUnit = lengthUnit;
+    if (viewport() != nullptr) {
+        viewport()->update();
+    }
+}
+
 void ImageView::drawForeground(QPainter* painter, const QRectF& /*rect*/)
 {
-    if (!hasImage() || (m_indicatorH.isEmpty() && m_indicatorV.isEmpty())) {
+    if (!hasImage()) {
         return;
     }
 
     painter->save();
     painter->resetTransform();
 
-    constexpr int armLen = 26;
-    constexpr int headLen = 6;
-    constexpr int headHalf = 3;
-    constexpr int margin = 8;
-    const QColor fg(255, 255, 255, 200);
-
     const auto* vp = viewport();
     if (vp == nullptr) {
         painter->restore();
         return;
     }
-    const int vh = vp->height();
-
-    const QPoint origin(margin, vh - margin);
-    const QPoint vTip(origin.x(), origin.y() - armLen);
-    const QPoint hTip(origin.x() + armLen, origin.y());
-
-    QPen pen(fg);
-    pen.setWidth(2);
-    pen.setCapStyle(Qt::RoundCap);
-    pen.setJoinStyle(Qt::RoundJoin);
-    painter->setPen(pen);
-    painter->setBrush(fg);
+    constexpr int margin = 8;
+    const QColor foreground(255, 255, 255, 230);
     painter->setRenderHint(QPainter::Antialiasing);
 
-    painter->drawLine(origin, vTip);
-    QPolygon vHead;
-    vHead << QPoint(vTip.x(), vTip.y())
-          << QPoint(vTip.x() - headHalf, vTip.y() + headLen)
-          << QPoint(vTip.x() + headHalf, vTip.y() + headLen);
-    painter->drawPolygon(vHead);
+    if (!m_indicatorH.isEmpty() || !m_indicatorV.isEmpty()) {
+        constexpr int armLen = 26;
+        constexpr int headLen = 6;
+        constexpr int headHalf = 3;
+        const QPoint origin(margin, vp->height() - margin);
+        const QPoint vTip(origin.x(), origin.y() - armLen);
+        const QPoint hTip(origin.x() + armLen, origin.y());
 
-    painter->drawLine(origin, hTip);
-    QPolygon hHead;
-    hHead << QPoint(hTip.x(), hTip.y())
-          << QPoint(hTip.x() - headLen, hTip.y() - headHalf)
-          << QPoint(hTip.x() - headLen, hTip.y() + headHalf);
-    painter->drawPolygon(hHead);
+        QPen pen(foreground);
+        pen.setWidth(2);
+        pen.setCapStyle(Qt::RoundCap);
+        pen.setJoinStyle(Qt::RoundJoin);
+        painter->setPen(pen);
+        painter->setBrush(foreground);
 
-    QFont font;
-    font.setPointSize(11);
-    font.setBold(true);
-    painter->setFont(font);
-    painter->setPen(fg);
+        painter->drawLine(origin, vTip);
+        QPolygon vHead;
+        vHead << QPoint(vTip.x(), vTip.y())
+              << QPoint(vTip.x() - headHalf, vTip.y() + headLen)
+              << QPoint(vTip.x() + headHalf, vTip.y() + headLen);
+        painter->drawPolygon(vHead);
 
-    if (!m_indicatorH.isEmpty()) {
-        const auto fm = painter->fontMetrics();
-        const QRectF rect(hTip.x() + 4,
-            hTip.y() - fm.height() / 2.0, 40, fm.height());
-        painter->drawText(rect, Qt::AlignLeft | Qt::AlignVCenter,
-            m_indicatorH);
+        painter->drawLine(origin, hTip);
+        QPolygon hHead;
+        hHead << QPoint(hTip.x(), hTip.y())
+              << QPoint(hTip.x() - headLen, hTip.y() - headHalf)
+              << QPoint(hTip.x() - headLen, hTip.y() + headHalf);
+        painter->drawPolygon(hHead);
+
+        QFont font;
+        font.setPointSize(11);
+        font.setBold(true);
+        painter->setFont(font);
+        painter->setPen(foreground);
+
+        if (!m_indicatorH.isEmpty()) {
+            const auto fm = painter->fontMetrics();
+            const QRectF rect(hTip.x() + 4,
+                hTip.y() - fm.height() / 2.0, 40, fm.height());
+            painter->drawText(rect, Qt::AlignLeft | Qt::AlignVCenter,
+                m_indicatorH);
+        }
+        if (!m_indicatorV.isEmpty()) {
+            const auto fm = painter->fontMetrics();
+            const QRectF rect(vTip.x() - 20,
+                vTip.y() - headLen - fm.height() - 2, 40, fm.height());
+            painter->drawText(rect, Qt::AlignHCenter | Qt::AlignVCenter,
+                m_indicatorV);
+        }
     }
-    if (!m_indicatorV.isEmpty()) {
-        const auto fm = painter->fontMetrics();
-        const QRectF rect(vTip.x() - 20,
-            vTip.y() - headLen - fm.height() - 2, 40, fm.height());
-        painter->drawText(rect, Qt::AlignHCenter | Qt::AlignVCenter,
-            m_indicatorV);
+
+    if (m_scaleBarCodeUnitsPerImagePixel > 0.0 && m_item != nullptr) {
+        const auto itemToViewport = m_item->deviceTransform(viewportTransform());
+        const auto imageBounds = itemToViewport.mapRect(m_item->boundingRect())
+                                     .intersected(QRectF(vp->rect()));
+        const auto p0 = itemToViewport.map(QPointF(0.0, 0.0));
+        const auto p1 = itemToViewport.map(QPointF(1.0, 0.0));
+        const double pixelsPerImagePixel = QLineF(p0, p1).length();
+        paintScaleBar(painter, imageBounds,
+            m_scaleBarCodeUnitsPerImagePixel, pixelsPerImagePixel,
+            m_scaleBarLengthUnit);
     }
 
     painter->restore();
@@ -531,6 +639,8 @@ void ImageView::setPlaceholder(const QString& text)
     m_image = {};
     m_logicalSize = {};
     m_placement.reset();
+    m_scaleBarCodeUnitsPerImagePixel = 0.0;
+    m_scaleBarLengthUnit.reset();
     m_placeholderText = text;
     setBackgroundBrush(palette().window());
     auto* label = m_scene->addText(text);
@@ -551,8 +661,7 @@ const QImage& ImageView::image() const noexcept
     return m_image;
 }
 
-QImage ImageView::composedImage(qreal scaleFactor) const
-{
+QSize ImageView::composedImageSize(qreal scaleFactor) const {
     if (m_image.isNull()) {
         return {};
     }
@@ -568,7 +677,24 @@ QImage ImageView::composedImage(qreal scaleFactor) const
         static_cast<int>(std::round(baseWidth * effective)));
     const auto outHeight = std::max(1,
         static_cast<int>(std::round(baseHeight * effective)));
+    return {outWidth, outHeight};
+}
+
+QImage ImageView::composedImage(qreal scaleFactor) const {
+    return composedImage(composedImageSize(scaleFactor));
+}
+
+QImage ImageView::composedImage(QSize outputSize, const QFont* exportFont,
+                                bool omitOuterGridEdges) const {
+    if (m_image.isNull() || outputSize.isEmpty()) {
+        return {};
+    }
+    const int outWidth = outputSize.width();
+    const int outHeight = outputSize.height();
     QImage out(outWidth, outHeight, QImage::Format_ARGB32_Premultiplied);
+    if (out.isNull()) {
+        return {};
+    }
     out.fill(Qt::transparent);
     QPainter painter(&out);
     // Smooth upscaling of the raster plus crisp vector overlays (grid boxes,
@@ -577,27 +703,37 @@ QImage ImageView::composedImage(qreal scaleFactor) const
     painter.setRenderHint(QPainter::Antialiasing, true);
     // Render the whole scene (pixmap + grid boxes + overlays) from the image's
     // own pixel rect, so the export matches the on-screen composition, scaled.
-    // Transient interaction overlays (line-plot guide, cell highlight) must not
-    // be baked into the export, so hide them for this render and restore them.
-    const bool guideVisible =
-        m_lineGuide != nullptr && m_lineGuide->isVisible();
-    const bool cellVisible =
-        m_cellHighlightItem != nullptr && m_cellHighlightItem->isVisible();
-    if (m_lineGuide != nullptr) {
-        m_lineGuide->setVisible(false);
-    }
-    if (m_cellHighlightItem != nullptr) {
-        m_cellHighlightItem->setVisible(false);
+    // Navigation and interaction guides belong only in the display windows.
+    const std::array<QGraphicsItem*, 4> displayGuides{
+        m_lineGuide, m_cellHighlightItem, m_crosshairVerticalItem, m_crosshairHorizontalItem};
+    std::array<bool, 4> guideVisibility{};
+    for (std::size_t i = 0; i < displayGuides.size(); ++i) {
+        if (auto* item = displayGuides[i]) {
+            guideVisibility[i] = item->isVisible();
+            item->setVisible(false);
+        }
     }
     // The raster's scene footprint, not the image rect: on a virtual canvas
     // the item sits at its cell offset, and the export must follow it.
-    m_scene->render(&painter, QRectF(0.0, 0.0, outWidth, outHeight),
-        m_item->sceneBoundingRect());
-    if (m_lineGuide != nullptr) {
-        m_lineGuide->setVisible(guideVisible);
+    for (auto* item : m_gridItems) {
+        if (auto* rectangle = dynamic_cast<CrispRectItem*>(item)) {
+            rectangle->omitOuterEdges = omitOuterGridEdges;
+        }
     }
-    if (m_cellHighlightItem != nullptr) {
-        m_cellHighlightItem->setVisible(cellVisible);
+    m_scene->render(&painter, QRectF(0.0, 0.0, outWidth, outHeight), m_item->sceneBoundingRect(),
+                    Qt::IgnoreAspectRatio);
+    for (auto* item : m_gridItems) {
+        if (auto* rectangle = dynamic_cast<CrispRectItem*>(item)) {
+            rectangle->omitOuterEdges = false;
+        }
+    }
+    paintScaleBar(&painter, QRectF(0.0, 0.0, outWidth, outHeight), m_scaleBarCodeUnitsPerImagePixel,
+                  static_cast<double>(outWidth) / static_cast<double>(m_image.width()),
+                  m_scaleBarLengthUnit, exportFont);
+    for (std::size_t i = 0; i < displayGuides.size(); ++i) {
+        if (auto* item = displayGuides[i]) {
+            item->setVisible(guideVisibility[i]);
+        }
     }
     return out;
 }
@@ -831,6 +967,18 @@ void ImageView::resizeEvent(QResizeEvent* event)
     // A resize changes how much of the raster is on screen even when nothing
     // moved, and in Fit mode fitImage above has just changed the transform.
     emit viewportMoved();
+}
+
+void ImageView::changeEvent(QEvent* event)
+{
+    QGraphicsView::changeEvent(event);
+    // The placeholder is drawn from palette roles, but both the background
+    // brush and the text item's colour are copies taken when it was set, so a
+    // skin changed while a placeholder is up would leave it in the old one.
+    // A view showing a raster keeps the fixed viewport background instead.
+    if (event->type() == QEvent::PaletteChange && !m_placeholderText.isEmpty()) {
+        setPlaceholder(m_placeholderText);
+    }
 }
 
 void ImageView::scrollContentsBy(int dx, int dy)

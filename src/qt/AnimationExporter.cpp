@@ -10,6 +10,9 @@
 #include <QtConcurrent>
 
 #include <algorithm>
+#include <exception>
+#include <set>
+#include <stdexcept>
 
 namespace amrvis::qt {
 
@@ -21,10 +24,9 @@ AnimationExporter::AnimationExporter(
 {
 }
 
-bool AnimationExporter::begin(const QString& path, bool includeColorBar,
-    int totalFrames, int restoreIndex, qreal scale,
-    std::vector<QString> panelSuffixes, QWidget* dialogParent)
-{
+bool AnimationExporter::begin(const QString& path, const ExportOptions& options, int totalFrames,
+                              int restoreIndex, qreal scale, std::vector<QString> panelSuffixes,
+                              QWidget* dialogParent) {
     if (m_active || totalFrames <= 0 || panelSuffixes.empty()) {
         return false;
     }
@@ -32,7 +34,9 @@ bool AnimationExporter::begin(const QString& path, bool includeColorBar,
     m_active = true;
     m_canceled = false;
     m_framesDone = false;
-    m_includeColorBar = includeColorBar;
+    m_options = options;
+    m_layouts.clear();
+    m_nextFrame = 0;
     // Probe ffmpeg off the GUI thread (waitForStarted/Finished can block up to
     // ~4 s); the result is only needed at finalize, after every frame renders.
     m_hasFfmpeg = false;
@@ -79,7 +83,7 @@ void AnimationExporter::cancelForShutdown()
 
 void AnimationExporter::onFrameDisplayed(int index)
 {
-    if (!m_active || m_framesDone) {
+    if (!m_active || m_framesDone || index != m_nextFrame) {
         return;
     }
     if (m_canceled) {
@@ -89,12 +93,30 @@ void AnimationExporter::onFrameDisplayed(int index)
 
     const QString padded
         = QString("%1").arg(index, m_digitWidth, 10, QChar('0'));
-    for (const auto& [suffix, frame] : m_renderFrames(m_includeColorBar,
-             m_scale)) {
-        if (frame.isNull()) {
-            endExport(false, tr("A frame could not be rendered."));
-            return;
+    std::vector<std::pair<QString, QImage>> frames;
+    try {
+        frames = m_renderFrames(m_options, m_scale, m_layouts);
+        std::set<QString> seen;
+        for (const auto& [suffix, frame] : frames) {
+            const auto layout = m_layouts.find(suffix);
+            if (frame.isNull() || !seen.insert(suffix).second ||
+                std::find(m_panelSuffixes.begin(), m_panelSuffixes.end(), suffix) ==
+                    m_panelSuffixes.end() ||
+                layout == m_layouts.end() || frame.size() != layout->second.canvasSize) {
+                throw std::runtime_error(
+                    "An export panel is missing, duplicated, or has inconsistent dimensions.");
+            }
         }
+        if (seen.size() != m_panelSuffixes.size()) {
+            throw std::runtime_error("An expected export panel is missing.");
+        }
+    } catch (const std::exception& error) {
+        endExport(false, tr("Frame %1: %2\nAlready-written PNG frames have been kept.")
+                             .arg(index)
+                             .arg(QString::fromUtf8(error.what())));
+        return;
+    }
+    for (const auto& [suffix, frame] : frames) {
         const QString filePath = QDir(m_directory).absoluteFilePath(
             m_stem + suffix + "_" + padded + ".png");
         if (!frame.save(filePath, "PNG")) {
@@ -108,6 +130,7 @@ void AnimationExporter::onFrameDisplayed(int index)
         .arg(index + 2).arg(m_totalFrames));
 
     if (index + 1 < m_totalFrames) {
+        m_nextFrame = index + 1;
         m_advanceFrame(index + 1);
     } else {
         finalizeEncoding();
@@ -165,13 +188,34 @@ void AnimationExporter::finalizeEncodingWithProbe()
             + stem + "_%0" + QString::number(m_digitWidth) + "d.png";
         const QString outputPath
             = QDir(m_directory).absoluteFilePath(stem + ".mp4");
+        // PNG retains alpha, while H.264/yuv420p does not. Composite onto an
+        // explicit white background rather than letting alpha become black.
+        const auto suffix = stem.mid(m_stem.size());
+        const auto layout = m_layouts.find(suffix);
+        const auto size = layout != m_layouts.end() ? layout->second.canvasSize : QSize();
         const QStringList args{
-            "-y", "-framerate", "24", "-i", inputPattern,
-            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-            "-pix_fmt", "yuv420p", "-crf", "14", outputPath,
+            "-y",
+            "-framerate",
+            "24",
+            "-i",
+            inputPattern,
+            "-f",
+            "lavfi",
+            "-i",
+            QStringLiteral("color=c=white:s=%1x%2:r=24").arg(size.width()).arg(size.height()),
+            "-filter_complex",
+            "[1:v][0:v]overlay=shortest=1,scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-pix_fmt",
+            "yuv420p",
+            "-crf",
+            "14",
+            outputPath,
         };
         return QtConcurrent::run(
-            [args, cancel = m_encoderCancel]() -> QPair<int, QString> {
+            [args, size, cancel = m_encoderCancel]() -> QPair<int, QString> {
+            if (size.isEmpty()) {
+                return { -1, tr("An export panel layout is missing or empty.") };
+            }
             QProcess proc;
             proc.setProcessChannelMode(QProcess::MergedChannels);
             proc.start("ffmpeg", args);
@@ -293,6 +337,8 @@ void AnimationExporter::endExport(bool success, const QString& message)
     m_encodeFailed = false;
     m_encodeFailureLog.clear();
     m_panelSuffixes.clear();
+    m_layouts.clear();
+    m_options = {};
     m_restoreIndex = -1;
 
     emit finished(success, message, restoreIndex);

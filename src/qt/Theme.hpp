@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QColor>
+#include <QGuiApplication>
+#include <QPalette>
 
 namespace amrvis::qt {
 
@@ -19,6 +21,35 @@ inline QColor viewportBackground()
 inline QColor viewportForeground()
 {
     return {0x20, 0x20, 0x20};
+}
+
+// Text colours for the dialogs' inline error and warning labels. These are
+// stylesheet colours rather than palette roles -- there is no palette role for
+// "this input is wrong" -- so they have to pick their own contrast, which the
+// window colour's lightness decides. Dialogs apply these at construction and
+// on palette changes so standing messages follow a live skin change too.
+namespace detail {
+
+inline bool onLightBackground()
+{
+    return QGuiApplication::palette().color(QPalette::Window).lightness() > 127;
+}
+
+} // namespace detail
+
+// Refusal: the input was rejected.
+inline QColor errorTextColor()
+{
+    return detail::onLightBackground() ? QColor(0xc0, 0x00, 0x00)
+                                       : QColor(0xff, 0x6b, 0x6b);
+}
+
+// Caution: the input is accepted but questionable. Deliberately not the error
+// colour, so the two cannot be confused.
+inline QColor warningTextColor()
+{
+    return detail::onLightBackground() ? QColor(0xb8, 0x86, 0x0b)
+                                       : QColor(0xe0, 0xb0, 0x40);
 }
 
 } // namespace amrvis::qt

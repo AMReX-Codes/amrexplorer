@@ -1,5 +1,6 @@
 #include "SmokeHarnessInternal.hpp"
 
+#include "AppSettings.hpp"
 #include "MainWindow.hpp"
 
 #include <amrexplorer/render2d/Contours.hpp>
@@ -149,10 +150,53 @@ Outcome dispatchRange(Context& context)
         });
     } else if (argc == 3 && std::string_view(argv[1]) == "--slice-smoke-test") {
         const std::filesystem::path path(argv[2]);
+        const auto expectedScaleBarVisible = makeSettings().value(
+            QStringLiteral("overlay/scaleBar"), false).toBool();
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-            &application, [&window, &application](bool success) {
-                const auto valid = success
-                    && rangeSelectorMatches(window, true);
+            &application, [&window, &application, expectedScaleBarVisible,
+                              path, reopened = false](bool success) mutable {
+                const auto initialVisibilityMatches =
+                    window.activeViewHasScaleBarForTest() == expectedScaleBarVisible;
+                const auto actionEnabled =
+                    window.scaleBarActionEnabledForTest();
+                auto* lengthUnitsAction = window.findChild<QAction*>(
+                    QStringLiteral("lengthUnitsAction"));
+                if (lengthUnitsAction != nullptr) {
+                    lengthUnitsAction->trigger();
+                    QApplication::processEvents();
+                }
+                auto* lengthUnitsCombo = window.findChild<QComboBox*>(
+                    QStringLiteral("lengthUnitsCombo"));
+                const auto unitsUnsetByDefault = lengthUnitsCombo != nullptr
+                    && lengthUnitsCombo->currentData().toString().isEmpty();
+                if (success && unitsUnsetByDefault && !reopened) {
+                    auto* dialog = qobject_cast<QDialog*>(lengthUnitsCombo->window());
+                    auto* buttons = dialog->findChild<QDialogButtonBox*>();
+                    lengthUnitsCombo->setCurrentIndex(
+                        lengthUnitsCombo->findData(QStringLiteral("pc")));
+                    buttons->button(QDialogButtonBox::Apply)->click();
+                    // Keep an unapplied choice in the open dialog as well.
+                    lengthUnitsCombo->setCurrentIndex(
+                        lengthUnitsCombo->findData(QStringLiteral("kpc")));
+                    reopened = true;
+                    QTimer::singleShot(0, &window, [&window, path] {
+                        window.openDataset(path);
+                    });
+                    return;
+                }
+                if (auto* dialog = qobject_cast<QDialog*>(
+                        lengthUnitsCombo == nullptr ? nullptr
+                                                    : lengthUnitsCombo->window())) {
+                    dialog->reject();
+                }
+                window.setScaleBarVisibleForTest(true);
+                const auto shown = window.activeViewHasScaleBarForTest();
+                window.setScaleBarVisibleForTest(false);
+                const auto hidden = !window.activeViewHasScaleBarForTest();
+                window.setScaleBarVisibleForTest(expectedScaleBarVisible);
+                const auto valid = success && rangeSelectorMatches(window, true)
+                    && actionEnabled && unitsUnsetByDefault && initialVisibilityMatches
+                    && shown && hidden;
                 application.exit(valid ? 0 : 1);
         });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });

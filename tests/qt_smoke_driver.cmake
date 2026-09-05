@@ -28,7 +28,7 @@
 #                 derived-field-frames | derived-field-playback |
 #                 scale-state | effective-scale |
 #                 arrow-key-routing | animation-dock-role | open-failure |
-#                 idle-ui-state | sequence-scale-report |
+#                 idle-ui-state | menu-shortcuts | sequence-scale-report |
 #                 spherical-scale-report |
 #                 fixed-scale-centre | fab-overlap-failure |
 #                 fab-direct-open-failure
@@ -58,7 +58,10 @@ macro(run_or_die)
     endif()
 endmacro()
 
-if(MODE STREQUAL "slice")
+if(MODE STREQUAL "menu-shortcuts")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --menu-shortcuts-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "slice")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --slice-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "volume")
@@ -352,6 +355,15 @@ elseif(MODE STREQUAL "quit-on-failure")
         file(REMOVE "${payload}")
     endforeach()
     run_or_die("${AMREXPLORER_QT}" --quit-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "export-axes")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    file(GLOB oldExportFrames "${WORK}/axes*.png")
+    if(oldExportFrames)
+        file(REMOVE ${oldExportFrames})
+    endif()
+    run_or_die("${AMREXPLORER_QT}" --export-axes-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
 elseif(MODE STREQUAL "export-quit")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")

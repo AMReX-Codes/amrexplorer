@@ -68,13 +68,30 @@ RemoteOpenDialog::RemoteOpenDialog(bool sequence,
     }
     auto* buttons = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    buttons->button(QDialogButtonBox::Ok)->setText(tr("Open"));
+    auto* openButton = buttons->button(QDialogButtonBox::Ok);
+    openButton->setText(tr("Open"));
     // Browse... needs only the connection fields: it starts (or reuses) the
     // session and picks the path in the remote browser once it is ready.
     auto* browseButton
         = buttons->addButton(tr("Browse..."), QDialogButtonBox::ActionRole);
     browseButton->setToolTip(
         tr("Connect and choose the plotfile on the remote machine"));
+    // Return follows the path contents, rather than whichever button last
+    // had focus. The sequence editor still handles Return as a newline.
+    for (auto* button : {openButton, browseButton, buttons->button(QDialogButtonBox::Cancel)}) {
+        button->setAutoDefault(false);
+    }
+    const auto updateDefaultButton = [this, openButton, browseButton] {
+        const bool browse = paths().empty();
+        openButton->setDefault(!browse);
+        browseButton->setDefault(browse);
+    };
+    if (m_pathEdit != nullptr) {
+        connect(m_pathEdit, &QLineEdit::textChanged, this, updateDefaultButton);
+    } else {
+        connect(m_pathsEdit, &QPlainTextEdit::textChanged, this, updateDefaultButton);
+    }
+    updateDefaultButton();
     connect(browseButton, &QPushButton::clicked, this, [this] {
         m_browseRequested = true;
         accept();

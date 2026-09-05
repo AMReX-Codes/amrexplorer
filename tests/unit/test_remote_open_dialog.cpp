@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QDialogButtonBox>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -31,6 +32,14 @@ QPushButton* buttonNamed(QDialog& dialog, const QString& text)
     const auto found = std::find_if(buttons.begin(), buttons.end(),
         [&](QPushButton* button) { return button->text() == text; });
     return found == buttons.end() ? nullptr : *found;
+}
+
+void pressKey(QWidget* widget, int key)
+{
+    QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+    QApplication::sendEvent(widget, &press);
+    QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+    QApplication::sendEvent(widget, &release);
 }
 
 } // namespace
@@ -127,6 +136,67 @@ int main(int argc, char* argv[])
         buttons->button(QDialogButtonBox::Cancel)->click();
         require(dialog.result() == QDialog::Rejected && !dialog.browseRequested(),
             "Cancel did not reject, or set the browse flag");
+    }
+
+    // Return follows the path contents from every single-line field, even
+    // after another button has had focus or a populated path was cleared.
+    for (const bool sequence : {false, true}) {
+        for (const int key : {Qt::Key_Return, Qt::Key_Enter}) {
+            for (const QString& text : {QString(), QStringLiteral(" \t "),
+                     QStringLiteral("  /scratch/plt00010  ")}) {
+                for (int field = 0; field < (sequence ? 2 : 3); ++field) {
+                    RemoteOpenDialog dialog(sequence, QStringLiteral("frontier"),
+                        QString(), executableFor);
+                    const auto edits = dialog.findChildren<QLineEdit*>();
+                    auto* open = buttonNamed(dialog, QStringLiteral("Open"));
+                    auto* browse = buttonNamed(dialog, QStringLiteral("Browse..."));
+                    dialog.show();
+                    QApplication::processEvents();
+                    require(browse->isDefault() && !open->isDefault(),
+                        "an empty dialog did not default to Browse");
+                    const auto setPaths = [&](const QString& value) {
+                        if (sequence)
+                            dialog.findChild<QPlainTextEdit*>()->setPlainText(value);
+                        else
+                            edits[2]->setText(value);
+                    };
+                    setPaths(QStringLiteral("/scratch/plt00020"));
+                    setPaths(text);
+                    const bool expectBrowse = text.trimmed().isEmpty();
+                    // Focus must not select a different default action.
+                    (expectBrowse ? open : browse)->setFocus();
+                    QApplication::processEvents();
+                    require(browse->isDefault() == expectBrowse
+                            && open->isDefault() != expectBrowse,
+                        "button focus overrode the path-dependent default");
+                    edits[field]->setFocus();
+                    pressKey(edits[field], key);
+                    require(dialog.result() == QDialog::Accepted
+                            && dialog.browseRequested() == expectBrowse,
+                        "Return chose the wrong remote-open action");
+                }
+            }
+        }
+    }
+
+    // The multiline sequence editor keeps Return for entering more paths.
+    for (const int key : {Qt::Key_Return, Qt::Key_Enter}) {
+        for (const QString& text : {QString(), QStringLiteral("/scratch/plt00010")}) {
+            RemoteOpenDialog dialog(true, QStringLiteral("frontier"),
+                QString(), executableFor);
+            auto* paths = dialog.findChild<QPlainTextEdit*>();
+            paths->setPlainText(text);
+            dialog.show();
+            QApplication::processEvents();
+            paths->setFocus();
+            pressKey(paths, key);
+            require(dialog.isVisible() && paths->toPlainText().contains(QLatin1Char('\n')),
+                "Return submitted the sequence instead of inserting a newline");
+            pressKey(paths, Qt::Key_Escape);
+            require(!dialog.isVisible() && dialog.result() == QDialog::Rejected
+                    && !dialog.browseRequested(),
+                "Escape did not cancel the dialog");
+        }
     }
 
     std::cout << "remote open dialog tests passed\n";

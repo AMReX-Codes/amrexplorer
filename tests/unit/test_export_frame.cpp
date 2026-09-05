@@ -68,11 +68,34 @@ int main(int argc, char** argv) {
     require(std::abs(points - 11.0) < 0.1, "PNG print resolution does not yield 11-point labels");
     require(exportAspectMatches(QSize(1200, 800), layout), "same-aspect resolution change refused");
     require(!exportAspectMatches(QSize(1200, 600), layout), "aspect-ratio change accepted");
+    // Export dimensions round both scaled axes independently. In a portrait
+    // image, half a pixel of width rounding can imply several pixels of height.
+    for (const QSize source : {QSize(256, 1024), QSize(1024, 256), QSize(16, 1024)}) {
+        for (const double scale : {1.0021, 1.1, 3.9}) {
+            const QSize scaled(static_cast<int>(std::round(source.width() * scale)),
+                               static_cast<int>(std::round(source.height() * scale)));
+            const auto frozen = makeExportLayout(scaled, options);
+            require(exportAspectMatches(source, frozen),
+                    "independently rounded export dimensions refused unchanged source aspect");
+            require(exportAspectMatches(source * 2, frozen),
+                    "rounded export refused same-aspect resolution change");
+            require(!exportAspectMatches(QSize(source.width(), source.height() / 2), frozen),
+                    "rounded export accepted a changed source aspect");
+        }
+    }
+    ExportLayout roundingBoundary;
+    roundingBoundary.dataRect = QRect(0, 0, 257, 1026);
+    require(exportAspectMatches(QSize(256, 1024), roundingBoundary),
+            "portrait rounding example was rejected");
+    roundingBoundary.dataRect.setHeight(1025);
+    require(!exportAspectMatches(QSize(256, 1024), roundingBoundary),
+            "aspect check accepted dimensions outside the half-pixel rounding budget");
 
     QImage raster(600, 400, QImage::Format_ARGB32_Premultiplied);
     raster.fill(QColor(35, 85, 130));
     raster.setPixelColor(120, 90, Qt::yellow);
     raster.setPixelColor(121, 90, QColor(90, 180, 30, 120));
+    raster.setPixelColor(122, 90, Qt::transparent);
     ColorBarWidget bar;
     bar.setFont(layout.font);
     bar.setNumberFormat(options.numberFormat);
@@ -171,14 +194,27 @@ int main(int argc, char** argv) {
     options.transparentBackground = false;
     const auto white = composeExportImage(raster, xy, options, layout, &bar);
     require(white.pixelColor(0, 0) == QColor(Qt::white) &&
-                white.pixelColor(layout.colorBarRect.topLeft()) == QColor(Qt::white) &&
-                white.copy(layout.dataRect) == raster,
-            "white background selection changed the data or left transparent margins");
+                white.pixelColor(layout.colorBarRect.topLeft()) == QColor(Qt::white),
+            "white background selection left transparent margins");
+    const auto checkWhiteRaster = [&](const QImage& image) {
+        require(image.pixelColor(120, 90) == QColor(Qt::yellow),
+                "white background changed an opaque data pixel");
+        require(image.pixelColor(122, 90) == QColor(Qt::white),
+                "white background left a transparent hole in the raster");
+        const auto blended = image.pixelColor(121, 90);
+        require(blended.alpha() == 255 && std::abs(blended.red() - 177) <= 1 &&
+                    std::abs(blended.green() - 220) <= 1 &&
+                    std::abs(blended.blue() - 149) <= 1,
+                "partially transparent data was not blended onto white");
+    };
+    checkWhiteRaster(white.copy(layout.dataRect));
     options.includeAxes = false;
     options.includeColorBar = false;
     const auto plain = makeExportLayout(raster.size(), options);
+    checkWhiteRaster(composeExportImage(raster, xy, options, plain, nullptr));
+    options.transparentBackground = true;
     require(composeExportImage(raster, xy, options, plain, nullptr) == raster,
-            "unannotated export changed the raster");
+            "transparent unannotated export changed the raster");
     if (argc == 2) {
         const auto preview = composeExportImage(raster, xy, compactOptions, compact, &compactBar);
         require(preview.save(QString::fromLocal8Bit(argv[1])), "could not save preview");

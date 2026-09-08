@@ -11,6 +11,7 @@
 // logic is unit-tested in test_display_coordinator and its wiring by the
 // Qt zoom/pan smoke tests.)
 
+#include <amrexplorer/core/ValueMapping.hpp>
 #include <amrexplorer/data/LocalDatasetSession.hpp>
 #include <amrexplorer/io/PlotfileMetadataReader.hpp>
 #include <amrexplorer/pipeline/DisplayCoordinator.hpp>
@@ -189,6 +190,44 @@ void write3dMixedSignPlotfile(const std::filesystem::path& root)
         "((0,0,0) (3,3,3) (0,0,0))", values);
 }
 
+// Every cell is one of two doubles that are positive, strictly ordered, and
+// share a logarithm, so the shared union is a range no logarithmic mapping
+// exists for. Only reachable since the plane stopped narrowing its samples to
+// float, which collapsed the pair into the degenerate padding instead.
+void write3dSameLogarithmPlotfile(const std::filesystem::path& root)
+{
+    const double low = 10.0;
+    const double high = std::nextafter(10.0, 11.0);
+    std::filesystem::create_directories(root / "Level_0");
+    writeText(root / "Header",
+        "HyperCLaw-V1.1\n"
+        "1\nq\n"
+        "3\n0.0\n0\n"
+        "0.0 0.0 0.0\n1.0 1.0 1.0\n\n"
+        "((0,0,0) (3,3,3) (0,0,0))\n"
+        "0\n"
+        "0.25 0.25 0.25\n"
+        "0\n0\n"
+        "0 1 0.0\n0\n"
+        "0.0 1.0\n0.0 1.0\n0.0 1.0\n"
+        "Level_0/Cell\n");
+    writeText(root / "Level_0" / "Cell_H",
+        "1\n1\n1\n0\n"
+        "(1 0\n((0,0,0) (3,3,3) (0,0,0))\n)\n"
+        "1\nFabOnDisk: Cell_D_00000 0\n\n"
+        "1,1\n10.0,\n\n1,1\n10.000000000000002,\n\n");
+    std::vector<double> values;
+    for (int k = 0; k <= 3; ++k) {
+        for (int j = 0; j <= 3; ++j) {
+            for (int i = 0; i <= 3; ++i) {
+                values.push_back((i + j + k) % 2 == 0 ? low : high);
+            }
+        }
+    }
+    writeFab(root / "Level_0" / "Cell_D_00000",
+        "((0,0,0) (3,3,3) (0,0,0))", values);
+}
+
 // The per-display internal-consistency invariants (I2, I3, I5 above).
 void requireDisplayInvariants(const amrvis::DatasetMetadata& metadata,
     const amrvis::SliceDisplayResult& d, const amrvis::Palette& palette,
@@ -196,7 +235,13 @@ void requireDisplayInvariants(const amrvis::DatasetMetadata& metadata,
 {
     require(d.minimum < d.maximum, context + ": range has no extent");
     if (d.logarithmic) {
-        require(d.minimum > 0.0, context + ": logarithmic range not positive");
+        // The mapping the raster was rendered through has to exist. Asserting
+        // positivity alone passed right through the log-collapse defect:
+        // bounds can be positive, strictly ordered, and still share a
+        // logarithm, which renderScalarPlane rejects. Every cell of the
+        // matrix checks the real invariant now, not just the case below.
+        require(amrvis::logarithmicRangeViable(d.minimum, d.maximum),
+            context + ": logarithmic range is not one the renderer can map");
     }
     // I5: the request is internally consistent — its output size is the
     // native size of its own visible region.
@@ -363,9 +408,11 @@ int main()
     const auto root2d = base / "plt2d";
     const auto root3d = base / "plt3d";
     const auto root3dMixed = base / "plt3dmixed";
+    const auto root3dSameLog = base / "plt3dsamelog";
     write2dPlotfile(root2d);
     write3dPlotfile(root3d);
     write3dMixedSignPlotfile(root3dMixed);
+    write3dSameLogarithmPlotfile(root3dSameLog);
 
     const amrvis::Palette palette;
     constexpr std::uint64_t bigBudget = 1ULL << 20;
@@ -645,6 +692,39 @@ int main()
                 "a panel stayed logarithmic against a union that crosses zero");
             requireDisplayInvariants(result.dataset->metadata(), d, palette,
                 "mixed-sign 3-D shared range");
+        }
+    }
+
+    // --- 3-D shared Visible range, log, bounds sharing a logarithm ---------
+    {
+        // The same shared-log-range-render-throw-fails-load failure by the
+        // route positivity cannot see: the union is positive and strictly
+        // ordered, so the old `globalMin > 0.0` test kept Log on, and
+        // renderScalarPlane then rejected a range with nothing to map across
+        // and failed the whole frame load.
+        amrvis::FrameSliceSpec spec;
+        spec.rangeMode = amrvis::RangeMode::Visible;
+        spec.logarithmic = true;
+        spec.displayMode = amrvis::DisplayMode::RasterContours;
+        spec.contourCount = 3;
+        const auto result = amrvis::executeFrameLoad(
+            root3dSameLog, amrvis::DatasetId{nextId++}, spec, bigBudget, {});
+        require(result.displays.size() == 3,
+            "same-logarithm 3-D load lost a panel");
+        const auto& first = result.displays.front();
+        require(first.minimum > 0.0 && first.minimum < first.maximum,
+            "the fixture union is not positive and ordered as intended");
+        require(std::log(first.minimum) == std::log(first.maximum),
+            "the fixture union no longer shares a logarithm");
+        for (const auto& d : result.displays) {
+            // I1: one shared range across all panels.
+            require(nearlyEqual(d.minimum, first.minimum)
+                    && nearlyEqual(d.maximum, first.maximum),
+                "same-logarithm 3-D panels do not share one range");
+            require(!d.logarithmic,
+                "a panel stayed logarithmic over a range it cannot map");
+            requireDisplayInvariants(result.dataset->metadata(), d, palette,
+                "same-logarithm 3-D shared range");
         }
     }
 

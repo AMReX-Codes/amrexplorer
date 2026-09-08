@@ -66,8 +66,8 @@ struct RaycastSettings {
 // logarithmic), for resolving a "Visible" range; nullopt when there are
 // none. Possibly degenerate (minimum == maximum): the caller pads. Scans the
 // whole grid, so it takes a token and throws ReadCancelled like the render.
-[[nodiscard]] std::optional<std::pair<double, double>> volumeGridRange(
-    const VolumeGrid& grid, bool logarithmic, StopToken cancellation = {});
+[[nodiscard]] std::optional<std::pair<double, double>>
+volumeGridRange(const VolumeGrid& grid, ColorScaleConfig scale, StopToken cancellation = {});
 
 // The threads raycastVolume splits the rows across for a frame of this
 // height, given settings.threadCount (0 = hardware_concurrency): bounded by

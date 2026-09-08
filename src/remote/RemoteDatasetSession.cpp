@@ -216,6 +216,11 @@ VolumeFrame RemoteDatasetSession::renderVolume(
         && !m_connection->supportsVolumeSampling()) {
         throw std::runtime_error(volumeSamplingUnsupportedMessage);
     }
+    const auto effectiveScale = request.range ? request.range->scale : request.scale;
+    const auto usesSymLog = effectiveScale.scale == ColorScale::SymLogarithmic;
+    if (usesSymLog && !m_connection->supportsSymmetricLogScale()) {
+        throw std::runtime_error(symmetricLogUnsupportedMessage);
+    }
     validateSessionVolumeRequest(m_metadata, m_id, request);
     return refusingInvalidResponses(*m_connection, [&] {
         auto frame = m_connection->renderVolume(request, cancellation);

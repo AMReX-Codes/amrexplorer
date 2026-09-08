@@ -4,9 +4,11 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QDockWidget>
 #include <QKeyEvent>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <QTreeWidget>
 
 #include <cmath>
 #include <cstdlib>
@@ -543,6 +545,9 @@ Outcome dispatchZoom(Context& context)
             [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--arrow-key-routing-smoke-test") {
+        // Exercise toolbar overflow, whose tab-chain neighbours vary with
+        // platform fonts and the available width.
+        window.resize(640, 480);
         // The arrow keys pan the focused image view and nothing else. They
         // used to be window-context QShortcuts, which took Up/Down from every
         // toolbar spin box and combo -- Qt line edits claim Left/Right through
@@ -640,16 +645,33 @@ Outcome dispatchZoom(Context& context)
                     // the user is working in. This arrives from a watcher
                     // completion, which on a slow open lands long after the
                     // dialog closed and they moved on.
-                    window.focusLevelSelectorForTest();
+                    // Use a control that stays enabled across an open. The
+                    // level selector is disabled during teardown, so Qt may
+                    // legitimately move its focus into the image when the
+                    // other toolbar controls are hidden in the overflow.
+                    auto* tree = window.findChild<QTreeWidget*>(
+                        QStringLiteral("metadataTree"));
+                    auto* dock = tree == nullptr ? nullptr
+                        : qobject_cast<QDockWidget*>(tree->parentWidget());
+                    if (dock == nullptr) {
+                        qCritical("the metadata tree dock was not found");
+                        application.exit(1);
+                        return;
+                    }
+                    dock->show();
+                    tree->setFocus(::Qt::OtherFocusReason);
+                    if (QApplication::focusWidget() != tree) {
+                        qCritical("the metadata tree did not take focus");
+                        application.exit(1);
+                        return;
+                    }
                     reopen();
                     return;
                 }
-                // Not necessarily the level selector by now -- teardown
-                // disables it and Qt moves focus to a neighbouring control --
-                // but it must not have landed in the view.
-                if (window.activeViewHasFocusForTest()) {
-                    qCritical("an open pulled focus into the view while a "
-                              "control had it");
+                if (QApplication::focusWidget()
+                    != window.findChild<QTreeWidget*>(
+                        QStringLiteral("metadataTree"))) {
+                    qCritical("an open took focus away from the metadata tree");
                     application.exit(1);
                     return;
                 }

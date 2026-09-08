@@ -4,6 +4,7 @@
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Result.hpp>
 #include <amrexplorer/core/Statistics.hpp>
+#include <amrexplorer/core/ValueMapping.hpp>
 #include <amrexplorer/data/DatasetSession.hpp>
 
 #include <memory>
@@ -26,7 +27,7 @@ enum class RangeMode {
 struct ResolvedRange {
     double minimum;
     double maximum;
-    bool logarithmic;
+    ColorScaleConfig scale;
 };
 
 // paddedIfDegenerate, once declared here, now lives in core/Statistics.hpp
@@ -34,8 +35,8 @@ struct ResolvedRange {
 
 // Finite extrema of a plane, padded so minimum < maximum; nullopt when the
 // plane has no finite valid samples.
-[[nodiscard]] std::optional<std::pair<double, double>> finiteRange(
-    const ScalarPlane& plane, bool logarithmic = false);
+[[nodiscard]] std::optional<std::pair<double, double>> finiteRange(const ScalarPlane& plane,
+                                                                   ColorScaleConfig scale = {});
 
 // The metadata (File/Level) range for the selection, or nullopt when the
 // statistics needed for that mode are unavailable.
@@ -63,21 +64,20 @@ struct ResolvedRange {
 // minimum < maximum always holds. A logarithmic request whose range is not
 // strictly positive throws, so the caller can fall back to linear. Shared by
 // executeSlice and the re-render-from-cache path, which must agree exactly.
-[[nodiscard]] std::pair<double, double> resolveRange(
-    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
-    int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
-    const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const ScalarPlane& plane, StopToken cancellation = {});
-
+[[nodiscard]] std::pair<double, double>
+resolveRange(const std::shared_ptr<DatasetSession>& dataset, FieldId field, int maximumLevel,
+             CompositionPolicy composition, RangeMode rangeMode,
+             const std::optional<std::pair<double, double>>& userRange, ColorScaleConfig scale,
+             const ScalarPlane& plane, StopToken cancellation = {});
 // Like resolveRange, but if a logarithmic scale is requested and the range is
 // not strictly positive it falls back to a linear range and reports
-// logarithmic=false, so the caller renders linearly instead of failing the
+// ColorScale::Linear, so the caller renders linearly instead of failing the
 // whole slice. A slice with no finite values uses a neutral positive range and
 // can therefore remain logarithmic.
-[[nodiscard]] ResolvedRange resolveDisplayRange(
-    const std::shared_ptr<DatasetSession>& dataset, FieldId field,
-    int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
-    const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, const ScalarPlane& plane, StopToken cancellation = {});
+[[nodiscard]] ResolvedRange
+resolveDisplayRange(const std::shared_ptr<DatasetSession>& dataset, FieldId field, int maximumLevel,
+                    CompositionPolicy composition, RangeMode rangeMode,
+                    const std::optional<std::pair<double, double>>& userRange,
+                    ColorScaleConfig scale, const ScalarPlane& plane, StopToken cancellation = {});
 
 } // namespace amrvis

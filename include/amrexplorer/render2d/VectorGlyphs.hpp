@@ -27,9 +27,10 @@ struct VectorSegment {
 // head is two short barbs from the tip, each set back 0.25 of the arrow
 // vector and offset 0.125 of it to either side (~26.6 degrees off the shaft,
 // the legacy constants). Samples that are invalid or non-finite in either
-// component are skipped, as are near-zero-length arrows; a plane whose
-// maximum speed is below 1e-8 yields no segments at all. The output lists,
-// per arrow, the shaft segment followed by its two head segments.
+// component are skipped, as are arrows shorter than 1e-6 pixels after scaling.
+// There is no absolute speed cutoff; a plane with no valid nonzero vectors
+// yields no segments. The output lists, per arrow, the shaft segment followed
+// by its two head segments.
 [[nodiscard]] std::vector<VectorSegment> generateVectorGlyphs(
     const ScalarPlane& uComponent, const ScalarPlane& vComponent, int count);
 
@@ -46,9 +47,11 @@ struct VectorSegment {
 // Sampling stride, arrow-length normalization (against the maximum speed
 // hypot(v_r, v_theta)), and head construction follow generateVectorGlyphs;
 // the arrow scale derives from displayRegion's longest side so the on-screen
-// glyph size matches the logical layouts. Output segments are in display
-// physical (R, Z) coordinates with y increasing along +Z -- independent of the
-// warped raster resolution, so a supersample change does not invalidate them.
+// glyph size matches the logical layouts. Arrows shorter than 1e-6 times that
+// scale are skipped, independently of physical length units. Output segments
+// are in display physical (R, Z) coordinates with y increasing along +Z --
+// independent of the warped raster resolution, so a supersample change does
+// not invalidate them.
 [[nodiscard]] std::vector<VectorSegment> generateSphericalRZVectorGlyphs(
     const ScalarPlane& uComponent, const ScalarPlane& vComponent, int count,
     const RealBox& displayRegion);

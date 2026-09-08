@@ -47,13 +47,12 @@ std::optional<ValueRange> metadataValueRange(
     return ValueRange{minimum, maximum};
 }
 
-std::pair<double, double> paddedIfDegenerate(
-    double minimum, double maximum, bool logarithmic) noexcept
-{
+std::pair<double, double> paddedIfDegenerate(double minimum, double maximum,
+                                             ColorScaleConfig scale) noexcept {
     if (minimum != maximum) {
         return {minimum, maximum};
     }
-    if (logarithmic && minimum > 0.0) {
+    if (scale.scale == ColorScale::Logarithmic && minimum > 0.0) {
         return {minimum / (1.0 + 1.0e-6), maximum * (1.0 + 1.0e-6)};
     }
     // Relative to the value, not an absolute floor. The old

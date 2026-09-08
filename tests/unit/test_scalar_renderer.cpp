@@ -62,7 +62,7 @@ int main()
     plane.values = {1.0F, 10.0F, 100.0F, -1.0F};
     settings.minimum = 1.0;
     settings.maximum = 100.0;
-    settings.logarithmic = true;
+    settings.scale = {amrvis::ColorScale::Logarithmic};
     const auto logarithmic = amrvis::renderScalarPlane(plane, settings);
     require(logarithmic.rgba[0] != logarithmic.rgba[1]
             && logarithmic.rgba[1] != logarithmic.rgba[2],
@@ -79,7 +79,7 @@ int main()
     plane.valid = {1, 1, 1, 0};
     settings.minimum = 0.0;
     settings.maximum = 1.0;
-    settings.logarithmic = false;
+    settings.scale = {amrvis::ColorScale::Linear};
     const auto nonFinite = amrvis::renderScalarPlane(plane, settings);
     require(nonFinite.rgba[0] == settings.nanColor,
         "positive infinity pixel color mismatch");
@@ -185,7 +185,7 @@ int main()
     // Logarithmic rendering requires a strictly positive minimum.
     {
         auto badSettings = base;
-        badSettings.logarithmic = true;
+        badSettings.scale = {amrvis::ColorScale::Logarithmic};
         badSettings.minimum = 0.0;
         badSettings.maximum = 10.0;
         expectRejected(good, badSettings, "logarithmic scalar range must be positive",
@@ -221,7 +221,7 @@ int main()
 
         badPlane = good;
         badPlane.values.pop_back();                // storage fault ...
-        badSettings.logarithmic = true;
+        badSettings.scale = {amrvis::ColorScale::Logarithmic};
         badSettings.minimum = -1.0;                // ... and a bad log range
         expectRejected(badPlane, badSettings, "storage does not match",
             "the storage check did not precede the range/log checks");
@@ -299,5 +299,35 @@ int main()
             "the range midpoint did not get the midpoint slot");
     }
 
+    {
+        const amrvis::ColorScaleConfig scale{amrvis::ColorScale::SymLogarithmic, 1.0};
+        const auto range = amrvis::resolveValueRange(-100.0, 100.0, scale);
+        require(range.has_value(), "a valid symmetric-log range was rejected");
+        require(amrvis::valueSlot(0.0, *range, 253) == 126,
+            "zero did not map to the palette midpoint");
+        for (const double value : {-100.0, -1.0, 0.0, 1.0, 100.0}) {
+            const auto roundTrip = amrvis::inverseTransformedValue(
+                amrvis::transformedValue(value, scale), scale);
+            require(std::abs(roundTrip - value) <= 1.0e-12 * std::max(1.0, std::abs(value)),
+                "the symmetric-log transform did not invert");
+        }
+    }
+    {
+        const amrvis::ColorScaleConfig scale{amrvis::ColorScale::SymLogarithmic, 1.0e-300};
+        const auto range = amrvis::resolveValueRange(-1.0e20, 1.0e20, scale);
+        require(range.has_value(), "an overflowing intermediate ratio rejected a valid symlog range");
+        require(amrvis::valueSlot(0.0, *range, 253) == 126,
+            "an extreme symlog range lost its midpoint");
+        for (const double value : {-1.0e20, -1.0e10, 1.0e10, 1.0e20}) {
+            const auto mapped = amrvis::transformedValue(value, scale);
+            const auto expected = std::copysign(1.0e-300
+                * (amrvis::symmetricLogLinearScale + std::log10(std::abs(value)) + 300.0), value);
+            require(std::abs(mapped / expected - 1.0) < 1.0e-14,
+                "an extreme symlog value transformed incorrectly");
+            const auto roundTrip = amrvis::inverseTransformedValue(expected, scale);
+            require(std::isfinite(roundTrip) && std::abs(roundTrip / value - 1.0) < 1.0e-12,
+                "symlog inversion overflowed an intermediate power");
+        }
+    }
     return 0;
 }

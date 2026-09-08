@@ -199,8 +199,8 @@ public:
     // shape that exposed the stale-contour bug: three unequal local ranges
     // reconciled into one shared Visible range. interactiveSlicesSettled fires
     // when that batch finishes.
-    void configureContourSyncForTest(
-        int count, bool logarithmic, std::array<double, 3> slicePositions);
+    void configureContourSyncForTest(int count, ColorScaleConfig scale,
+                                     std::array<double, 3> slicePositions);
 
     // Test-only: drive the visible-range sync staleness guard deterministically.
     // Gate a sync mid-flight, re-render every panel through the cache path
@@ -234,7 +234,7 @@ public:
     struct ContourViewProbe {
         double displayMinimum = 0.0;
         double displayMaximum = 0.0;
-        bool logarithmic = false;
+        ColorScaleConfig scale;
         std::vector<double> contourLevels;
     };
     [[nodiscard]] std::vector<ContourViewProbe> contourViewProbesForTest();
@@ -528,7 +528,7 @@ private:
         std::optional<DisplayCoordinator::RasterGeometry> rasterGeometry;
         double displayMinimum = 0.0;
         double displayMaximum = 1.0;
-        bool displayLogarithmic = false;
+        ColorScaleConfig displayScale;
         std::vector<VectorSegment> vectorSegments;
         std::vector<SliceGridBox> gridBoxes;
         // The Dataset window cell this view is marking, held so showSlice can

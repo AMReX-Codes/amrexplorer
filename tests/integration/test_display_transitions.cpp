@@ -195,7 +195,7 @@ void requireDisplayInvariants(const amrvis::DatasetMetadata& metadata,
     const std::string& context)
 {
     require(d.minimum < d.maximum, context + ": range has no extent");
-    if (d.logarithmic) {
+    if ((d.scale.scale == amrvis::ColorScale::Logarithmic)) {
         require(d.minimum > 0.0, context + ": logarithmic range not positive");
     }
     // I5: the request is internally consistent — its output size is the
@@ -211,7 +211,7 @@ void requireDisplayInvariants(const amrvis::DatasetMetadata& metadata,
             amrvis::ScalarRenderSettings{
                 .minimum = d.minimum,
                 .maximum = d.maximum,
-                .logarithmic = d.logarithmic,
+                .scale = d.scale,
                 .palette = &palette
             });
         require(reference.rgba == d.image.rgba,
@@ -220,8 +220,7 @@ void requireDisplayInvariants(const amrvis::DatasetMetadata& metadata,
     // I2: every contour level is one of the levels derived from the
     // displayed range.
     if (!d.contourPolylines.empty()) {
-        const auto expected = amrvis::contourValues(
-            d.minimum, d.maximum, d.contourCount, d.logarithmic);
+        const auto expected = amrvis::contourValues(d.minimum, d.maximum, d.contourCount, d.scale);
         for (const auto& polyline : d.contourPolylines) {
             bool derived = false;
             for (const auto value : expected) {
@@ -452,18 +451,18 @@ int main()
         // non-positive user range it falls back to linear (the whole slice
         // must not fail).
         amrvis::FrameSliceSpec spec;
-        spec.logarithmic = true;
+        spec.scale = {amrvis::ColorScale::Logarithmic};
         const auto log = load2d(spec);
-        require(log.displays.front().logarithmic,
-            "positive-range logarithmic request fell back");
+        require(log.displays.front().scale.scale == amrvis::ColorScale::Logarithmic,
+                "positive-range logarithmic request fell back");
         requireDisplayInvariants(log.dataset->metadata(),
             log.displays.front(), palette, "initial File log");
 
         spec.rangeMode = amrvis::RangeMode::User;
         spec.userRange = std::pair{-1.0, 5.0};
         const auto fallback = load2d(spec);
-        require(!fallback.displays.front().logarithmic,
-            "non-positive logarithmic request did not fall back to linear");
+        require(fallback.displays.front().scale.scale != amrvis::ColorScale::Logarithmic,
+                "non-positive logarithmic request did not fall back to linear");
         requireDisplayInvariants(fallback.dataset->metadata(),
             fallback.displays.front(), palette, "log fallback");
     }
@@ -498,17 +497,17 @@ int main()
         request.maximumLevel = recording->metadata().finestLevel;
         request.outputSize = {16, 16};
         request.includeGridBoxes = true;
-        static_cast<void>(amrvis::executeSliceWithFallback(recording, request,
-            amrvis::RangeMode::File, std::nullopt, false, palette,
-            amrvis::DisplayMode::RasterContours, 0, 0, 4, {}));
+        static_cast<void>(amrvis::executeSliceWithFallback(
+            recording, request, amrvis::RangeMode::File, std::nullopt, {amrvis::ColorScale::Linear},
+            palette, amrvis::DisplayMode::RasterContours, 0, 0, 4, {}));
         require(recording->gridBoxRequests()
                 == std::vector<bool>{true, false},
             "contour mode requested the grid-box list more than once");
 
         recording->clearGridBoxRequests();
-        static_cast<void>(amrvis::executeSliceWithFallback(recording, request,
-            amrvis::RangeMode::File, std::nullopt, false, palette,
-            amrvis::DisplayMode::VelocityVectors, 0, 0, 4, {}));
+        static_cast<void>(amrvis::executeSliceWithFallback(
+            recording, request, amrvis::RangeMode::File, std::nullopt, {amrvis::ColorScale::Linear},
+            palette, amrvis::DisplayMode::VelocityVectors, 0, 0, 4, {}));
         require(recording->gridBoxRequests()
                 == std::vector<bool>{true, false, false},
             "vector mode requested the grid-box list more than once");
@@ -599,7 +598,7 @@ int main()
     {
         amrvis::FrameSliceSpec spec;
         spec.rangeMode = amrvis::RangeMode::Visible;
-        spec.logarithmic = true;
+        spec.scale = {amrvis::ColorScale::Logarithmic};
         spec.displayMode = amrvis::DisplayMode::RasterContours;
         spec.contourCount = 3;
         spec.defaultPositions = false;
@@ -626,7 +625,7 @@ int main()
         // renderScalarPlane threw and executeFrameLoad failed the whole load.
         amrvis::FrameSliceSpec spec;
         spec.rangeMode = amrvis::RangeMode::Visible;
-        spec.logarithmic = true;
+        spec.scale = {amrvis::ColorScale::Logarithmic};
         spec.displayMode = amrvis::DisplayMode::RasterContours;
         spec.contourCount = 3;
         const auto result = amrvis::executeFrameLoad(
@@ -641,8 +640,8 @@ int main()
                     && nearlyEqual(d.maximum, first.maximum),
                 "mixed-sign 3-D panels do not share one range");
             // The whole set degrades to linear together (never per-panel).
-            require(!d.logarithmic,
-                "a panel stayed logarithmic against a union that crosses zero");
+            require(d.scale.scale != amrvis::ColorScale::Logarithmic,
+                    "a panel stayed logarithmic against a union that crosses zero");
             requireDisplayInvariants(result.dataset->metadata(), d, palette,
                 "mixed-sign 3-D shared range");
         }
@@ -664,10 +663,10 @@ int main()
         recording->failRanges(true);
         bool rangeFailurePreserved = false;
         try {
-            static_cast<void>(amrvis::resolveDisplayRange(recording,
-                d0.request.field, d0.request.maximumLevel,
-                d0.request.composition, amrvis::RangeMode::File,
-                std::nullopt, true, d0.slice.plane));
+            static_cast<void>(amrvis::resolveDisplayRange(
+                recording, d0.request.field, d0.request.maximumLevel, d0.request.composition,
+                amrvis::RangeMode::File, std::nullopt, {amrvis::ColorScale::Logarithmic},
+                d0.slice.plane));
         } catch (const std::runtime_error& error) {
             rangeFailurePreserved
                 = std::string(error.what()) == "range transport failed";
@@ -683,13 +682,11 @@ int main()
         stoppedRange.request_stop();
         bool rangeCancellationPreserved = false;
         try {
-            static_cast<void>(amrvis::refreshCachedSlice(recording,
-                d0.request,
-                std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane),
-                d0.contourPlane, {},
-                amrvis::RangeMode::File, std::nullopt, true, palette,
-                amrvis::DisplayMode::RasterContours, 0, 0, 4, true,
-                stoppedRange.get_token()));
+            static_cast<void>(amrvis::refreshCachedSlice(
+                recording, d0.request, std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane),
+                d0.contourPlane, {}, amrvis::RangeMode::File, std::nullopt,
+                {amrvis::ColorScale::Logarithmic}, palette, amrvis::DisplayMode::RasterContours, 0,
+                0, 4, true, stoppedRange.get_token()));
         } catch (const amrvis::ReadCancelled&) {
             rangeCancellationPreserved = true;
         }
@@ -705,11 +702,12 @@ int main()
         // (leaving reusedPlane null) fails here instead of silently.
         const auto reusedInput
             = std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane);
-        const auto log = amrvis::refreshCachedSlice(baseLoad.dataset,
-            d0.request, reusedInput, d0.contourPlane, {},
-            amrvis::RangeMode::File, std::nullopt,
-            true, palette, amrvis::DisplayMode::RasterContours, 0, 0, 4, true);
-        require(log.logarithmic, "cached-plane log toggle fell back");
+        const auto log = amrvis::refreshCachedSlice(
+            baseLoad.dataset, d0.request, reusedInput, d0.contourPlane, {}, amrvis::RangeMode::File,
+            std::nullopt, {amrvis::ColorScale::Logarithmic}, palette,
+            amrvis::DisplayMode::RasterContours, 0, 0, 4, true);
+        require((log.scale.scale == amrvis::ColorScale::Logarithmic),
+                "cached-plane log toggle fell back");
         require(log.reusedPlane.get() == reusedInput.get()
                 && &log.displayPlane() == reusedInput.get(),
             "cached refresh copied the display plane instead of reusing it");
@@ -721,10 +719,10 @@ int main()
         // empty-plane substitution.
         bool nullPlaneRejected = false;
         try {
-            static_cast<void>(amrvis::refreshCachedSlice(baseLoad.dataset,
-                d0.request, nullptr, d0.contourPlane, {},
-                amrvis::RangeMode::File, std::nullopt,
-                false, palette, amrvis::DisplayMode::Raster, 0, 0, 0, true));
+            static_cast<void>(amrvis::refreshCachedSlice(
+                baseLoad.dataset, d0.request, nullptr, d0.contourPlane, {}, amrvis::RangeMode::File,
+                std::nullopt, {amrvis::ColorScale::Linear}, palette, amrvis::DisplayMode::Raster, 0,
+                0, 0, true));
         } catch (const std::invalid_argument&) {
             nullPlaneRejected = true;
         }
@@ -732,12 +730,11 @@ int main()
             "refreshCachedSlice accepted a null display plane");
 
         // A contour-count change with a clean raster leaves the image alone.
-        const auto recount = amrvis::refreshCachedSlice(baseLoad.dataset,
-            d0.request,
-            std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane),
-            d0.contourPlane, {}, amrvis::RangeMode::File, std::nullopt,
-            false, palette, amrvis::DisplayMode::RasterContours, 0, 0, 2,
-            false);
+        const auto recount = amrvis::refreshCachedSlice(
+            baseLoad.dataset, d0.request,
+            std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane), d0.contourPlane, {},
+            amrvis::RangeMode::File, std::nullopt, {amrvis::ColorScale::Linear}, palette,
+            amrvis::DisplayMode::RasterContours, 0, 0, 2, false);
         require(recount.rasterUnchanged && recount.image.width == 0,
             "a contour-only refresh re-rendered the raster");
         require(!recount.contourPolylines.empty(),
@@ -745,11 +742,10 @@ int main()
         requireDisplayInvariants(metadata, recount, palette, "refresh count");
 
         // A range-mode change to User re-renders against the user range.
-        const auto user = amrvis::refreshCachedSlice(baseLoad.dataset,
-            d0.request,
-            std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane),
-            d0.contourPlane, {}, amrvis::RangeMode::User,
-            std::pair{2.0, 3.0}, false, palette,
+        const auto user = amrvis::refreshCachedSlice(
+            baseLoad.dataset, d0.request,
+            std::make_shared<const amrvis::ScalarPlane>(d0.slice.plane), d0.contourPlane, {},
+            amrvis::RangeMode::User, std::pair{2.0, 3.0}, {amrvis::ColorScale::Linear}, palette,
             amrvis::DisplayMode::RasterContours, 0, 0, 4, true);
         require(nearlyEqual(user.minimum, 2.0)
                 && nearlyEqual(user.maximum, 3.0),
@@ -803,13 +799,13 @@ int main()
         request.composition = amrvis::CompositionPolicy::ExactLevel;
         request.maximumLevel = 0;
         request.dataset = measured->id();
-        (void)amrvis::executeSlice(measured, request,
-            amrvis::RangeMode::Visible, std::nullopt, false, palette, {});
+        (void)amrvis::executeSlice(measured, request, amrvis::RangeMode::Visible, std::nullopt,
+                                   {amrvis::ColorScale::Linear}, palette, {});
         const auto coarseBytes = measured->cacheMetrics().residentBytes;
         request.composition = amrvis::CompositionPolicy::FinestAvailable;
         request.maximumLevel = 1;
-        (void)amrvis::executeSlice(measured, request,
-            amrvis::RangeMode::Visible, std::nullopt, false, palette, {});
+        (void)amrvis::executeSlice(measured, request, amrvis::RangeMode::Visible, std::nullopt,
+                                   {amrvis::ColorScale::Linear}, palette, {});
         const auto bothBytes = measured->cacheMetrics().residentBytes;
         const auto fineBytes = bothBytes - coarseBytes;
         require(coarseBytes > 0 && fineBytes > 0,
@@ -825,9 +821,9 @@ int main()
         // the fallback; the result is still internally consistent.
         auto tight = std::make_shared<amrvis::LocalDatasetSession>(root2d,
             amrvis::DatasetId{nextId++}, coarseBytes + fineBytes / 2);
-        const auto fallback = amrvis::executeSliceWithFallback(tight,
-            freshRequest(*tight), amrvis::RangeMode::Visible, std::nullopt,
-            false, palette, amrvis::DisplayMode::Raster, 0, 0, 4, {});
+        const auto fallback = amrvis::executeSliceWithFallback(
+            tight, freshRequest(*tight), amrvis::RangeMode::Visible, std::nullopt,
+            {amrvis::ColorScale::Linear}, palette, amrvis::DisplayMode::Raster, 0, 0, 4, {});
         require(fallback.cacheFallbackFromLevel == 1
                 && fallback.cacheFallbackToLevel == 0
                 && fallback.request.maximumLevel == 0,
@@ -838,9 +834,9 @@ int main()
         // A generous budget records no fallback.
         auto roomy = std::make_shared<amrvis::LocalDatasetSession>(root2d,
             amrvis::DatasetId{nextId++}, bigBudget);
-        const auto normal = amrvis::executeSliceWithFallback(roomy,
-            freshRequest(*roomy), amrvis::RangeMode::Visible, std::nullopt,
-            false, palette, amrvis::DisplayMode::Raster, 0, 0, 4, {});
+        const auto normal = amrvis::executeSliceWithFallback(
+            roomy, freshRequest(*roomy), amrvis::RangeMode::Visible, std::nullopt,
+            {amrvis::ColorScale::Linear}, palette, amrvis::DisplayMode::Raster, 0, 0, 4, {});
         require(normal.cacheFallbackFromLevel == -1
                 && normal.cacheFallbackToLevel == -1,
             "an unpressured slice recorded a fallback");
@@ -853,9 +849,9 @@ int main()
             auto exactRequest = freshRequest(*exact);
             exactRequest.composition = amrvis::CompositionPolicy::ExactLevel;
             exactRequest.maximumLevel = 1;
-            (void)amrvis::executeSliceWithFallback(exact, exactRequest,
-                amrvis::RangeMode::Visible, std::nullopt, false, palette,
-                amrvis::DisplayMode::Raster, 0, 0, 4, {});
+            (void)amrvis::executeSliceWithFallback(
+                exact, exactRequest, amrvis::RangeMode::Visible, std::nullopt,
+                {amrvis::ColorScale::Linear}, palette, amrvis::DisplayMode::Raster, 0, 0, 4, {});
         } catch (const std::exception& error) {
             threw = true;
             require(std::string(error.what()).find("selected slice level")
@@ -869,10 +865,9 @@ int main()
             amrvis::DatasetId{nextId++}, coarseBytes / 2);
         threw = false;
         try {
-            (void)amrvis::executeSliceWithFallback(hopeless,
-                freshRequest(*hopeless), amrvis::RangeMode::Visible,
-                std::nullopt, false, palette, amrvis::DisplayMode::Raster,
-                0, 0, 4, {});
+            (void)amrvis::executeSliceWithFallback(
+                hopeless, freshRequest(*hopeless), amrvis::RangeMode::Visible, std::nullopt,
+                {amrvis::ColorScale::Linear}, palette, amrvis::DisplayMode::Raster, 0, 0, 4, {});
         } catch (const std::exception& error) {
             threw = true;
             require(std::string(error.what()).find("even at level 0")

@@ -223,7 +223,7 @@ std::optional<VolumeRange> resolveVolumeRange(
     const std::shared_ptr<DatasetSession>& dataset, FieldId field,
     int maximumLevel, CompositionPolicy composition, RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
-    bool logarithmic, StopToken cancellation)
+    ColorScaleConfig scale, StopToken cancellation)
 {
     std::optional<std::pair<double, double>> selected;
     if (rangeMode == RangeMode::User) {
@@ -250,8 +250,7 @@ std::optional<VolumeRange> resolveVolumeRange(
     // level statistics sends the reader to a control that is not the cause.
     const auto* source = rangeMode == RangeMode::User ? "user"
         : rangeMode == RangeMode::File ? "file" : "level";
-    auto [minimum, maximum]
-        = paddedIfDegenerate(selected->first, selected->second, logarithmic);
+    auto [minimum, maximum] = paddedIfDegenerate(selected->first, selected->second, scale);
     if (!(minimum < maximum)) {
         throw std::runtime_error(
             std::string(source) + " scalar range must have positive extent");
@@ -266,13 +265,12 @@ std::optional<VolumeRange> resolveVolumeRange(
         throw std::runtime_error(
             std::string(source) + " scalar range must be finite with a finite span");
     }
-    VolumeRange resolved{minimum, maximum, false};
-    if (logarithmic && minimum > 0.0) {
-        resolved = VolumeRange{minimum, maximum, true};
-    } else if (logarithmic) {
+    VolumeRange resolved{minimum, maximum, scale};
+    if (scale.scale == ColorScale::Logarithmic && !(minimum > 0.0)) {
         // Not viable in log: linear, re-padded without the log rule.
-        std::tie(resolved.minimum, resolved.maximum)
-            = paddedIfDegenerate(selected->first, selected->second, false);
+        std::tie(resolved.minimum, resolved.maximum) =
+            paddedIfDegenerate(selected->first, selected->second, {ColorScale::Linear});
+        resolved.scale.scale = ColorScale::Linear;
     }
     // The last thing the renderers do with a range is resolveValueRange, so
     // one it cannot resolve is this function's error to report. Ordering and
@@ -282,7 +280,7 @@ std::optional<VolumeRange> resolveVolumeRange(
     // validateVolumeRenderRequest would otherwise refuse from inside the
     // render, as an invalid_argument rather than a named range error.
     if (!resolveValueRange(
-            resolved.minimum, resolved.maximum, resolved.logarithmic)) {
+            resolved.minimum, resolved.maximum, resolved.scale)) {
         throw std::runtime_error(std::string(source)
             + " scalar range is too narrow to map: its bounds share a logarithm");
     }
@@ -388,10 +386,11 @@ VolumeDisplayResult renderWithFallback(
                 // modes resolve to the same range every time round, which
                 // costs a statistics lookup and nothing else -- only the
                 // repeat below is worth gating on the mode.
-                request.logarithmic = choice->logarithmic;
+                const auto scale = choice->scale;
+                request.scale = scale;
                 request.range = resolveVolumeRange(dataset, request.field,
                     request.maximumLevel, request.composition, choice->mode,
-                    choice->userRange, choice->logarithmic, cancellation);
+                    choice->userRange, scale, cancellation);
             }
             auto frame = dataset->renderVolume(request, cancellation);
             // A fallback the session made inside this attempt counts the same

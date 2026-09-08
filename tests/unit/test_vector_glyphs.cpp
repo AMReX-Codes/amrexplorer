@@ -96,6 +96,37 @@ int main()
     const auto zero = amrvis::generateVectorGlyphs(zeroU, zeroV, 10);
     require(zero.empty(), "zero field produced segments");
 
+    // Magnitude is unit-independent: a uniformly tiny nonzero field must
+    // render exactly like the unit-scale field above.
+    const auto tinyU = makePlane(20, 10, 1.0e-20F);
+    const auto tiny = amrvis::generateVectorGlyphs(tinyU, zeroV, 10);
+    require(tiny.size() == 150, "small nonzero field produced no glyphs");
+
+    // A large dynamic range must not turn the small samples into a grid of
+    // zero-length segments: arrowMax = 2.5, so the weaker arrows have length
+    // 2.5e-9 pixels. Only the sample at 1e6 should contribute its three segments.
+    // This pins the previous cutoff behavior, not a general rounding guarantee:
+    // at larger coordinates, float rounding can collapse arrows above 1e-6 too.
+    {
+        auto wideU = makePlane(20, 10, 1.0e-3F);
+        wideU.values[0] = 1.0e6F;
+        const auto wide = amrvis::generateVectorGlyphs(wideU, zeroV, 10);
+        require(wide.size() == 3,
+            "high-dynamic-range field did not suppress near-zero-length arrows");
+        require(std::all_of(wide.begin(), wide.end(), [](const auto& segment) {
+            return segment.x0 != segment.x1 || segment.y0 != segment.y1;
+        }), "high-dynamic-range field produced degenerate segments");
+    }
+
+    // Individual exactly-zero samples are omitted while the tiny maximum-speed
+    // sample remains visible. With count 2 both cells are sampling sites.
+    auto mixedU = makePlane(2, 1, 1.0e-20F);
+    mixedU.values[0] = 0.0F;
+    const auto mixedV = makePlane(2, 1, 0.0F);
+    const auto mixed = amrvis::generateVectorGlyphs(mixedU, mixedV, 2);
+    require(mixed.size() == 3,
+        "exact-zero filtering did not suppress only the zero vector");
+
     // count > longestSide used to give sight = 0 (integer division) and thus
     // zero glyphs; floating-point division keeps sight nonzero. stride is
     // floor(8/10) clamped to 1, so every one of the 8x8 = 64 cells draws an
@@ -162,6 +193,33 @@ int main()
             box.upper[1] = t1;
             return box;
         };
+
+        // The spherical cutoff must scale with the physical display extent.
+        // At each length scale, keep only the strongest sample in a field with
+        // a 1e9 speed ratio, but keep every arrow in a uniformly tiny field.
+        for (const double lengthScale : {1.0e-9, 1.0, 1.0e9}) {
+            auto u = makePlane(20, 10, 1.0e-3F);
+            auto v = makePlane(20, 10, 0.0F);
+            u.values[0] = 1.0e6F;
+            const auto region = logicalBox(
+                lengthScale, 21.0 * lengthScale, 0.0, 1.5707963267948966);
+            u.physicalRegion = region;
+            v.physicalRegion = region;
+            const auto display = amrvis::sphericalDisplayBounds(region);
+            const auto wide = amrvis::generateSphericalRZVectorGlyphs(
+                u, v, 10, display);
+            require(wide.size() == 3,
+                "spherical high-dynamic-range field retained near-zero-length arrows");
+            require(std::all_of(wide.begin(), wide.end(), [](const auto& segment) {
+                return segment.x0 != segment.x1 || segment.y0 != segment.y1;
+            }), "spherical high-dynamic-range field produced degenerate segments");
+
+            std::fill(u.values.begin(), u.values.end(), 1.0e-20F);
+            const auto tinyArrows = amrvis::generateSphericalRZVectorGlyphs(
+                u, v, 10, display);
+            require(tinyArrows.size() == 150,
+                "small nonzero spherical field produced the wrong glyph count");
+        }
 
         // One sample centered at theta ~ 0 (on the +Z axis), pure v_r = 1:
         // the arrow must point along +Z with the full arrowMax length, anchored

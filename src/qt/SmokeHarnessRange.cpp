@@ -80,17 +80,17 @@ bool contourSyncMatches(amrvis::qt::MainWindow& window)
     // applied and all panels must agree on the shared, positive Visible range.
     const auto& shared = probes.front();
     for (const auto& probe : probes) {
-        if (!probe.logarithmic || !(probe.displayMinimum > 0.0)
-            || !(probe.displayMinimum < probe.displayMaximum)
-            || !within(probe.displayMinimum, shared.displayMinimum)
-            || !within(probe.displayMaximum, shared.displayMaximum)) {
+        if (probe.scale.scale != ColorScale::Logarithmic || !(probe.displayMinimum > 0.0) ||
+            !(probe.displayMinimum < probe.displayMaximum) ||
+            !within(probe.displayMinimum, shared.displayMinimum) ||
+            !within(probe.displayMaximum, shared.displayMaximum)) {
             return false;
         }
     }
     std::vector<double> expected;
     try {
-        expected = amrvis::contourValues(
-            shared.displayMinimum, shared.displayMaximum, 3, true);
+        expected = amrvis::contourValues(shared.displayMinimum, shared.displayMaximum, 3,
+                                         {ColorScale::Logarithmic});
     } catch (const std::exception&) {
         return false;
     }
@@ -220,8 +220,8 @@ Outcome dispatchRange(Context& context)
                     });
                 // YZ(x)@i=3, XZ(y)@j=2, XY(z)@k=1 on the 4^3 cube q=(i+j+k)/9:
                 // local ranges [3/9,1], [2/9,8/9], [1/9,7/9] -> shared [1/9,1].
-                window.configureContourSyncForTest(
-                    3, true, {0.875, 0.625, 0.375});
+                window.configureContourSyncForTest(3, {ColorScale::Logarithmic},
+                                                   {0.875, 0.625, 0.375});
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
@@ -312,8 +312,8 @@ Outcome dispatchRange(Context& context)
                         poll->start();
                     });
                 // Into 3-D Visible + contours; its re-slice settles into a sync.
-                window.configureContourSyncForTest(
-                    kSetupContours, false, kPositions);
+                window.configureContourSyncForTest(kSetupContours, {ColorScale::Linear},
+                                                   kPositions);
             });
         QObject::connect(poll, &QTimer::timeout, &application,
             [&window, finish, phase, attempts, refreshGen, before, refreshed,
@@ -332,8 +332,8 @@ Outcome dispatchRange(Context& context)
                     // keep their pointers; only the render generations move,
                     // which is what makes the parked sync's outcome stale.
                     *refreshGen = window.activeViewRenderGenerationForTest();
-                    window.configureContourSyncForTest(
-                        kChangedContours, false, kPositions);
+                    window.configureContourSyncForTest(kChangedContours, {ColorScale::Linear},
+                                                       kPositions);
                     return;
                 }
                 if (*phase == 2) {
@@ -427,8 +427,8 @@ Outcome dispatchRange(Context& context)
                     if (!window.visibleSyncWorkerWaitingForTest()) {
                         return;
                     }
-                    window.configureContourSyncForTest(
-                        kSetupContours, false, kPositions);
+                    window.configureContourSyncForTest(kSetupContours, {ColorScale::Linear},
+                                                       kPositions);
                     *phase = 8;
                     return;
                 }

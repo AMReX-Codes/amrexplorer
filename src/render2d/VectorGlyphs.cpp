@@ -11,7 +11,6 @@ namespace amrvis {
 
 namespace {
 
-constexpr double minimumMaxSpeed = 1.0e-8;
 constexpr double minimumArrowLength = 1.0e-6;
 constexpr double headBack = 0.25;
 constexpr double headSide = 0.125;
@@ -64,7 +63,7 @@ std::vector<VectorSegment> generateVectorGlyphs(
     const double maxSpeed = std::sqrt(maxSpeedSquared);
 
     std::vector<VectorSegment> segments;
-    if (!(maxSpeed >= minimumMaxSpeed)) {
+    if (!(maxSpeed > 0.0)) {
         return segments;
     }
 
@@ -162,7 +161,7 @@ std::vector<VectorSegment> generateSphericalRZVectorGlyphs(
         }
         maxSpeed = std::max(maxSpeed, std::hypot(u, v));
     }
-    if (!(maxSpeed >= minimumMaxSpeed)) {
+    if (!(maxSpeed > 0.0)) {
         return segments;
     }
 

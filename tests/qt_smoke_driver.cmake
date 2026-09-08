@@ -39,6 +39,9 @@ foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
 endforeach()
 
 set(ENV{QT_QPA_PLATFORM} offscreen)
+# Windows otherwise sends Qt diagnostics to the debugger instead of the
+# stderr stream captured below, leaving failed assertions without a message.
+set(ENV{QT_FORCE_STDERR_LOGGING} 1)
 
 # Isolate QSettings per run: a fresh, empty config directory makes every smoke
 # test start from defaults, so persisted UI state (spherical display mode and

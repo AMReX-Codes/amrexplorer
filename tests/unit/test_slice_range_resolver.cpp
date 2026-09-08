@@ -142,17 +142,17 @@ int main()
     // --- resolveRange ------------------------------------------------------
     {
         const auto plane = makePlane({0.5F, 8.0F});
-        const auto [minimum, maximum] = amrvis::resolveRange(noDataset,
-            FieldId{0}, 0, CompositionPolicy::FinestAvailable, RangeMode::User,
-            std::pair{2.0, 6.0}, false, plane);
+        const auto [minimum, maximum] = amrvis::resolveRange(
+            noDataset, FieldId{0}, 0, CompositionPolicy::FinestAvailable, RangeMode::User,
+            std::pair{2.0, 6.0}, {amrvis::ColorScale::Linear}, plane);
         require(nearlyEqual(minimum, 2.0) && nearlyEqual(maximum, 6.0),
             "User range was not passed through");
     }
     {
         const auto plane = makePlane({0.5F, 8.0F});
-        const auto [minimum, maximum] = amrvis::resolveRange(noDataset,
-            FieldId{0}, 0, CompositionPolicy::FinestAvailable,
-            RangeMode::Visible, std::nullopt, false, plane);
+        const auto [minimum, maximum] = amrvis::resolveRange(
+            noDataset, FieldId{0}, 0, CompositionPolicy::FinestAvailable, RangeMode::Visible,
+            std::nullopt, {amrvis::ColorScale::Linear}, plane);
         require(nearlyEqual(minimum, 0.5) && nearlyEqual(maximum, 8.0),
             "Visible range is not the plane extrema");
     }
@@ -160,28 +160,28 @@ int main()
         // No finite samples: neutral fallbacks, linear and logarithmic.
         auto plane = makePlane({1.0F});
         plane.valid.assign(1, 0);
-        const auto linear = amrvis::resolveRange(noDataset, FieldId{0}, 0,
-            CompositionPolicy::FinestAvailable, RangeMode::Visible,
-            std::nullopt, false, plane);
+        const auto linear = amrvis::resolveRange(
+            noDataset, FieldId{0}, 0, CompositionPolicy::FinestAvailable, RangeMode::Visible,
+            std::nullopt, {amrvis::ColorScale::Linear}, plane);
         require(nearlyEqual(linear.first, 0.0) && nearlyEqual(linear.second, 1.0),
             "empty-plane linear fallback is not [0, 1]");
-        const auto log = amrvis::resolveRange(noDataset, FieldId{0}, 0,
-            CompositionPolicy::FinestAvailable, RangeMode::Visible,
-            std::nullopt, true, plane);
+        const auto log = amrvis::resolveRange(
+            noDataset, FieldId{0}, 0, CompositionPolicy::FinestAvailable, RangeMode::Visible,
+            std::nullopt, {amrvis::ColorScale::Logarithmic}, plane);
         require(nearlyEqual(log.first, 1.0) && nearlyEqual(log.second, 10.0),
             "empty-plane logarithmic fallback is not [1, 10]");
     }
     {
         // Degenerate user range: padded additively (linear) or by ratio (log).
         const auto plane = makePlane({1.0F});
-        const auto linear = amrvis::resolveRange(noDataset, FieldId{0}, 0,
-            CompositionPolicy::FinestAvailable, RangeMode::User,
-            std::pair{5.0, 5.0}, false, plane);
+        const auto linear = amrvis::resolveRange(
+            noDataset, FieldId{0}, 0, CompositionPolicy::FinestAvailable, RangeMode::User,
+            std::pair{5.0, 5.0}, {amrvis::ColorScale::Linear}, plane);
         require(linear.first < 5.0 && linear.second > 5.0,
             "degenerate linear range was not padded");
-        const auto log = amrvis::resolveRange(noDataset, FieldId{0}, 0,
-            CompositionPolicy::FinestAvailable, RangeMode::User,
-            std::pair{5.0, 5.0}, true, plane);
+        const auto log = amrvis::resolveRange(
+            noDataset, FieldId{0}, 0, CompositionPolicy::FinestAvailable, RangeMode::User,
+            std::pair{5.0, 5.0}, {amrvis::ColorScale::Logarithmic}, plane);
         require(log.first < 5.0 && log.second > 5.0 && log.first > 0.0,
             "degenerate logarithmic range was not ratio-padded");
         // Zero has no magnitude for the padding to be relative to. Falling back
@@ -189,9 +189,9 @@ int main()
         // which is what the color bar and the seeded User-range spin boxes then
         // show for a uniform plane of zeros -- an ordinary case. The padding
         // has to stay the absolute constant.
-        const auto zero = amrvis::resolveRange(noDataset, FieldId{0}, 0,
-            CompositionPolicy::FinestAvailable, RangeMode::User,
-            std::pair{0.0, 0.0}, false, plane);
+        const auto zero = amrvis::resolveRange(
+            noDataset, FieldId{0}, 0, CompositionPolicy::FinestAvailable, RangeMode::User,
+            std::pair{0.0, 0.0}, {amrvis::ColorScale::Linear}, plane);
         require(nearlyEqual(zero.first, -1.0e-6)
                 && nearlyEqual(zero.second, 1.0e-6),
             "a degenerate range at zero was not padded by the constant");
@@ -199,9 +199,9 @@ int main()
     {
         bool threw = false;
         try {
-            (void)amrvis::resolveRange(noDataset, FieldId{0}, 0,
-                CompositionPolicy::FinestAvailable, RangeMode::User,
-                std::pair{6.0, 2.0}, false, makePlane({1.0F}));
+            (void)amrvis::resolveRange(noDataset, FieldId{0}, 0, CompositionPolicy::FinestAvailable,
+                                       RangeMode::User, std::pair{6.0, 2.0},
+                                       {amrvis::ColorScale::Linear}, makePlane({1.0F}));
         } catch (const std::exception&) {
             threw = true;
         }
@@ -209,9 +209,9 @@ int main()
 
         threw = false;
         try {
-            (void)amrvis::resolveRange(noDataset, FieldId{0}, 0,
-                CompositionPolicy::FinestAvailable, RangeMode::User,
-                std::pair{-1.0, 2.0}, true, makePlane({1.0F}));
+            (void)amrvis::resolveRange(noDataset, FieldId{0}, 0, CompositionPolicy::FinestAvailable,
+                                       RangeMode::User, std::pair{-1.0, 2.0},
+                                       {amrvis::ColorScale::Logarithmic}, makePlane({1.0F}));
         } catch (const std::exception&) {
             threw = true;
         }
@@ -223,20 +223,19 @@ int main()
         // A logarithmic request over a non-positive range falls back to
         // linear and reports logarithmic=false instead of failing the slice.
         const auto plane = makePlane({1.0F});
-        const auto fallback = amrvis::resolveDisplayRange(noDataset, FieldId{0},
-            0, CompositionPolicy::FinestAvailable, RangeMode::User,
-            std::pair{-1.0, 2.0}, true, plane);
-        require(!fallback.logarithmic
-                && nearlyEqual(fallback.minimum, -1.0)
-                && nearlyEqual(fallback.maximum, 2.0),
-            "non-positive logarithmic request did not fall back to linear");
+        const auto fallback = amrvis::resolveDisplayRange(
+            noDataset, FieldId{0}, 0, CompositionPolicy::FinestAvailable, RangeMode::User,
+            std::pair{-1.0, 2.0}, {amrvis::ColorScale::Logarithmic}, plane);
+        require(fallback.scale.scale != amrvis::ColorScale::Logarithmic &&
+                    nearlyEqual(fallback.minimum, -1.0) && nearlyEqual(fallback.maximum, 2.0),
+                "non-positive logarithmic request did not fall back to linear");
 
-        const auto log = amrvis::resolveDisplayRange(noDataset, FieldId{0},
-            0, CompositionPolicy::FinestAvailable, RangeMode::User,
-            std::pair{1.0, 100.0}, true, plane);
-        require(log.logarithmic && nearlyEqual(log.minimum, 1.0)
-                && nearlyEqual(log.maximum, 100.0),
-            "a positive logarithmic request did not stay logarithmic");
+        const auto log = amrvis::resolveDisplayRange(
+            noDataset, FieldId{0}, 0, CompositionPolicy::FinestAvailable, RangeMode::User,
+            std::pair{1.0, 100.0}, {amrvis::ColorScale::Logarithmic}, plane);
+        require((log.scale.scale == amrvis::ColorScale::Logarithmic) &&
+                    nearlyEqual(log.minimum, 1.0) && nearlyEqual(log.maximum, 100.0),
+                "a positive logarithmic request did not stay logarithmic");
     }
 
     return 0;

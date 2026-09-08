@@ -467,7 +467,7 @@ void VolumeController::startRender()
         || (m_hooks.sequencePlaying && m_hooks.sequencePlaying());
     request.outputSize = volumeOutputSize(
         viewSize, m_window->viewDevicePixelRatio(), draft);
-    // No request.logarithmic here: the choice built below carries it, and
+    // The color scale comes from the range choice built below, and
     // the pipeline sets it from there before each attempt's range resolve.
     request.transfer = makeVolumeTransferFunction(
         m_hooks.palette ? m_hooks.palette() : builtinPalette(BuiltinPalette::Rainbow),
@@ -562,8 +562,8 @@ void VolumeController::startRender()
     // and that key cannot be made right -- after a cache fallback the level
     // combo reads "Level 0 only" while the plane came from a finest-available
     // request, so it never matches again.
-    const VolumeRangeChoice rangeChoice{rangeSelection.mode,
-        rangeSelection.userRange, rangeSelection.logarithmic};
+    const VolumeRangeChoice rangeChoice{rangeSelection.mode, rangeSelection.userRange,
+                                        rangeSelection.scale};
     watcher->setFuture(QtConcurrent::run(
         [dataset, request = std::move(request), rangeChoice,
             cancellation]() mutable {
@@ -601,7 +601,9 @@ QString VolumeController::describe(
         .arg(result.request.maximumLevel)
         .arg(range.minimum)
         .arg(range.maximum)
-        .arg(range.logarithmic ? tr(" log") : QString())
+        .arg(range.scale.scale == ColorScale::SymLogarithmic ? tr(" symlog")
+             : range.scale.scale == ColorScale::Logarithmic  ? tr(" log")
+                                                             : QString())
         .arg(frame.metrics.gridDims[0])
         .arg(frame.metrics.gridDims[1])
         .arg(frame.metrics.gridDims[2])

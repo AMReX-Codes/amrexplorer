@@ -1,4 +1,5 @@
 #pragma once
+#include <amrexplorer/core/ValueMapping.hpp>
 
 #include <QPainter>
 #include <QRect>
@@ -24,7 +25,7 @@ public:
     void setPalette(const amrvis::Palette* palette);
     void setFieldRange(QString fieldName, double minimum, double maximum);
     void setNumberFormat(QString format);
-    void setLogarithmic(bool logarithmic);
+    void setScale(ColorScaleConfig scale);
     void clearRange();
 
     // Paints the color bar into an arbitrary rect (e.g. for image export),
@@ -53,7 +54,7 @@ private:
     QString m_numberFormat;
     double m_minimum = 0.0;
     double m_maximum = 1.0;
-    bool m_logarithmic = false;
+    ColorScaleConfig m_scale;
     bool m_hasRange = false;
 };
 

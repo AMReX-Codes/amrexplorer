@@ -48,6 +48,9 @@ inline constexpr const char* volumeSamplingUnsupportedMessage
 inline constexpr const char* derivedFieldsUnsupportedMessage
     = "the remote server predates derived fields (protocol 1.4); install a "
       "current amrexplorer-server";
+inline constexpr const char* symmetricLogUnsupportedMessage
+    = "the remote server predates symmetric-log volume scaling (protocol 1.5); "
+      "install a current amrexplorer-server";
 
 class Connection : public std::enable_shared_from_this<Connection> {
 public:
@@ -91,6 +94,7 @@ public:
     // open request (1.4). A 1.3 peer opens datasets perfectly well; it just
     // cannot be asked to compute a field.
     [[nodiscard]] bool supportsDerivedFields() const noexcept;
+    [[nodiscard]] bool supportsSymmetricLogScale() const noexcept;
     // Renders a volume on the server and returns the frame (protocol 1.2).
     // Ask supportsVolumeRendering() first: this throws when the server
     // negotiated an older protocol.

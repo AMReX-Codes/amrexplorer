@@ -34,7 +34,7 @@ inline constexpr std::uint16_t protocolMajor = 1;
 // answer a plain catalog, so the client would show an Expression Editor whose
 // Apply reported success while every slice kept coming back from the stored
 // fields alone.
-inline constexpr std::uint16_t protocolMinorVersion = 4;
+inline constexpr std::uint16_t protocolMinorVersion = 5;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,

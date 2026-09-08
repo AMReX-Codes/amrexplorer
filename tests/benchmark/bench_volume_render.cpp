@@ -116,7 +116,7 @@ int main(int argc, char** argv)
     settings.camera = amrvis::orthoPresetXY;
     settings.domain = grid.region;
     settings.outputSize = {outputDim, outputDim};
-    settings.range = {0.0, 1.0, false};
+    settings.range = {0.0, 1.0, {amrvis::ColorScale::Linear}};
     settings.samplesPerVoxel = samplesPerVoxel;
     settings.threadCount = static_cast<unsigned>(std::max(0, threads));
     settings.sampling = linear == 1 ? amrvis::SamplingPolicy::Linear

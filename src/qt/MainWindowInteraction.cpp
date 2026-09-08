@@ -12,15 +12,10 @@ void MainWindow::focusActiveViewForPanning()
     // Both callers run from a watcher's completion, which on a slow open lands
     // well after the file dialog closed and the user moved on to a toolbar
     // control. Move focus only when it is on nothing in particular or on
-    // another image view; a control outranks a convenience.
-    //
-    // What this preserves is that focus stays *out of the view*, not that it
-    // stays exactly where the user put it: the teardown disables the field,
-    // level and range widgets, and Qt moves focus off a disabled focus widget
-    // to a tab-chain neighbour before this runs. That neighbour is still a
-    // control, so the guard declines either way -- which is the outcome that
-    // matters, because the alternative is their next arrow key panning the
-    // image.
+    // another image view; a control outranks a convenience. Teardown disables
+    // the field, level and range widgets, so Qt may already have moved focus
+    // from one of them to a tab-chain neighbour (including an image view).
+    // The guard preserves whichever control still holds focus when we arrive.
     auto* const focused = QApplication::focusWidget();
     const QWidget* probe = focused;
     while (probe != nullptr && qobject_cast<const ImageView*>(probe) == nullptr) {

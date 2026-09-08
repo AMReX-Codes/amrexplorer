@@ -178,7 +178,8 @@ public:
         frame.height = request.outputSize[1];
         frame.pixels.assign(static_cast<std::size_t>(frame.width)
             * static_cast<std::size_t>(frame.height), 0xFF4080C0U);
-        frame.usedRange = request.range.value_or(amrvis::VolumeRange{0.0, 1.0, false});
+        frame.usedRange =
+            request.range.value_or(amrvis::VolumeRange{0.0, 1.0, {amrvis::ColorScale::Linear}});
         frame.metrics.gridDims = {2, 2, 2};
         frame.metrics.coveredVoxels = 8;
         if (sessionFallback && request.maximumLevel > 0) {
@@ -911,11 +912,11 @@ int main(int argc, char** argv)
         controller.closeWindow();
     }
 
-    // The logarithmic flag rides on the VolumeRangeChoice, not on the request
+    // The color scale rides on the VolumeRangeChoice, not on the request
     // the controller hands over: the pipeline sets it per attempt, so nothing
     // here writes it and only the arriving request proves it got through.
     {
-        rangeSelection.logarithmic = true;
+        rangeSelection.scale = {amrvis::ColorScale::Logarithmic};
         VolumeController controller(hooks());
         Observed observed;
         observe(controller, observed);
@@ -923,9 +924,9 @@ int main(int argc, char** argv)
         controller.showWindow(nullptr);
         waitFor(application, [&] { return session->requests == before + 1; },
             "the logarithmic render did not run");
-        require(session->requestsSoFar().back().logarithmic,
-            "the logarithmic flag did not reach the request");
-        rangeSelection.logarithmic = false;
+        require(session->requestsSoFar().back().scale.scale == amrvis::ColorScale::Logarithmic,
+                "the logarithmic scale did not reach the request");
+        rangeSelection.scale = {amrvis::ColorScale::Linear};
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the logarithmic render did not finish");
         controller.closeWindow();

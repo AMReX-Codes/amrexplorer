@@ -1,4 +1,5 @@
 #pragma once
+#include <amrexplorer/core/ValueMapping.hpp>
 
 #include <amrexplorer/core/Metadata.hpp>
 #include <amrexplorer/core/Request.hpp>
@@ -29,7 +30,7 @@ struct ValueRange {
 // in DisplayCoordinator, and only two of them knew about logarithmic ranges.
 // It lives in core because the data layer resolves a volume's visible range
 // with it too.
-[[nodiscard]] std::pair<double, double> paddedIfDegenerate(
-    double minimum, double maximum, bool logarithmic) noexcept;
+[[nodiscard]] std::pair<double, double> paddedIfDegenerate(double minimum, double maximum,
+                                                           ColorScaleConfig scale) noexcept;
 
 } // namespace amrvis

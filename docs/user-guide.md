@@ -539,6 +539,15 @@ Enable **Log** for logarithmic color mapping. The displayed range must have a
 positive minimum. If it does not, AMReXplorer falls back to linear mapping and
 turns **Log** off; use a positive user minimum when necessary.
 
+Enable **Symlog** for Matplotlib-style symmetric logarithmic mapping across
+positive, negative, and zero values. Values from `-linthresh` to `+linthresh`
+are linear; larger magnitudes use base-10 logarithmic mapping in both
+directions. Set **linthresh** to a finite positive value in the field's units.
+The first time Symlog is enabled for a field, AMReXplorer chooses a round
+power of ten two decades below the largest absolute displayed bound. For
+example, a range extending to `7e-8` starts with `linthresh=1e-10`. An edited
+threshold is remembered for that field for the rest of the dataset session.
+
 Built-in palettes include rainbow, turbo, viridis, plasma, parula, coolwarm,
 and blackbody. Use **View > Palette > Load Palette File...** to load a custom
 `.pal` file: a legacy Amrvis sequential palette of 256 red, green and blue

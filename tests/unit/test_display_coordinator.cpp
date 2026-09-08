@@ -99,8 +99,8 @@ int main()
         const auto a = makePlane({2.0F, 5.0F});
         const auto b = makePlane({-1.0F, 3.0F});
         const std::array<const amrvis::ScalarPlane*, 2> planes{&a, &b};
-        const auto shared = DisplayCoordinator::sharedVisibleRange(
-            planes, false);
+        const auto shared =
+            DisplayCoordinator::sharedVisibleRange(planes, {amrvis::ColorScale::Linear});
         require(shared && nearlyEqual(shared->first, -1.0)
                 && nearlyEqual(shared->second, 5.0),
             "shared range is not the union across panels");
@@ -115,8 +115,8 @@ int main()
         const amrvis::ScalarPlane empty;
         const std::array<const amrvis::ScalarPlane*, 4> planes{
             &a, &b, &empty, nullptr};
-        const auto shared = DisplayCoordinator::sharedVisibleRange(
-            planes, false);
+        const auto shared =
+            DisplayCoordinator::sharedVisibleRange(planes, {amrvis::ColorScale::Linear});
         // Only the 2.0 sample survives, so the degenerate union is padded
         // around it; the masked 50 and the NaN must not have widened it.
         require(shared && shared->first < 2.0 && shared->second > 2.0
@@ -127,19 +127,20 @@ int main()
     {
         const amrvis::ScalarPlane empty;
         const std::array<const amrvis::ScalarPlane*, 1> planes{&empty};
-        require(!DisplayCoordinator::sharedVisibleRange(planes, false),
-            "an all-empty panel set produced a range");
+        require(!DisplayCoordinator::sharedVisibleRange(planes, {amrvis::ColorScale::Linear}),
+                "an all-empty panel set produced a range");
     }
     {
         // Degenerate union: additive pad in linear mode, ratio pad (staying
         // positive) in logarithmic mode.
         const auto constant = makePlane({5.0F, 5.0F});
         const std::array<const amrvis::ScalarPlane*, 1> planes{&constant};
-        const auto linear = DisplayCoordinator::sharedVisibleRange(
-            planes, false);
+        const auto linear =
+            DisplayCoordinator::sharedVisibleRange(planes, {amrvis::ColorScale::Linear});
         require(linear && linear->first < 5.0 && linear->second > 5.0,
             "a constant plane was not padded in linear mode");
-        const auto log = DisplayCoordinator::sharedVisibleRange(planes, true);
+        const auto log =
+            DisplayCoordinator::sharedVisibleRange(planes, {amrvis::ColorScale::Logarithmic});
         require(log && log->first < 5.0 && log->second > 5.0
                 && log->first > 0.0,
             "a constant plane was not ratio-padded in logarithmic mode");
@@ -207,8 +208,8 @@ int main()
         }};
 
         // No cached range: the union across panels drives every update.
-        auto sync = coordinator.syncPanelsToSharedRange(
-            key, inputs, false, true, 3, palette);
+        auto sync = coordinator.syncPanelsToSharedRange(key, inputs, {amrvis::ColorScale::Linear},
+                                                        true, 3, palette);
         require(sync.has_value(), "panel sync found no shared range");
         require(nearlyEqual(sync->range.first, -4.0)
                 && nearlyEqual(sync->range.second, 6.0),
@@ -225,8 +226,8 @@ int main()
 
         // A stored full-domain range takes precedence over the union.
         coordinator.storeFullDomainRange(key, {-100.0, 100.0});
-        sync = coordinator.syncPanelsToSharedRange(
-            key, inputs, false, false, 3, palette);
+        sync = coordinator.syncPanelsToSharedRange(key, inputs, {amrvis::ColorScale::Linear}, false,
+                                                   3, palette);
         require(sync && nearlyEqual(sync->range.first, -100.0)
                 && nearlyEqual(sync->range.second, 100.0),
             "the cached full-domain range did not take precedence");
@@ -235,9 +236,11 @@ int main()
         coordinator.invalidateRangeCache();
         const std::array<DisplayCoordinator::PanelSyncInput, 1> emptyOnly{{
             {&empty, nullptr, {0, 0}}}};
-        require(!coordinator.syncPanelsToSharedRange(
-                key, emptyOnly, false, false, 3, palette).has_value(),
-            "an empty panel set produced a sync");
+        require(!coordinator
+                     .syncPanelsToSharedRange(key, emptyOnly, {amrvis::ColorScale::Linear}, false,
+                                              3, palette)
+                     .has_value(),
+                "an empty panel set produced a sync");
     }
 
     // --- shared log degrades when the union crosses zero --------------------
@@ -255,16 +258,24 @@ int main()
             {&crossing, nullptr, {2, 1}},
         }};
         const auto sync = DisplayCoordinator::renderPanelsToSharedRange(
-            std::nullopt, mixed, true, true, 3, palette);
+            std::nullopt, mixed, {amrvis::ColorScale::Logarithmic}, true, 3, palette);
         require(sync.has_value(), "mixed-sign log sync found no range");
         require(nearlyEqual(sync->range.first, -4.0)
                 && nearlyEqual(sync->range.second, 6.0),
             "mixed-sign log sync range is not the union");
-        require(!sync->logarithmic,
-            "log was not degraded for a union that crosses zero");
+        require(sync->scale.scale != amrvis::ColorScale::Logarithmic,
+                "log was not degraded for a union that crosses zero");
         require(sync->panels[0].image.width > 0
                 && sync->panels[1].image.width > 0,
             "mixed-sign log sync did not render every panel");
+
+        const amrvis::ColorScaleConfig symlog{amrvis::ColorScale::SymLogarithmic, 0.25};
+        const auto symmetricSync = DisplayCoordinator::renderPanelsToSharedRange(
+            std::nullopt, mixed, symlog, true, 3, palette);
+        require(symmetricSync && symmetricSync->scale == symlog
+                && symmetricSync->panels[0].image.valid()
+                && symmetricSync->panels[1].image.valid(),
+            "shared range synchronization lost the Symlog scale or threshold");
 
         // An all-positive union keeps the requested log mapping.
         const auto other = makePlane({3.0F, 5.0F});
@@ -273,29 +284,29 @@ int main()
             {&other, nullptr, {2, 1}},
         }};
         const auto positiveSync = DisplayCoordinator::renderPanelsToSharedRange(
-            std::nullopt, allPositive, true, false, 3, palette);
-        require(positiveSync && positiveSync->logarithmic,
-            "log was dropped over an all-positive union");
+            std::nullopt, allPositive, {amrvis::ColorScale::Logarithmic}, false, 3, palette);
+        require(positiveSync && (positiveSync->scale.scale == amrvis::ColorScale::Logarithmic),
+                "log was dropped over an all-positive union");
 
         // realignArrivalToRange degrades identically: a log arrival realigned
         // to a full-domain range that crosses zero must render linear.
         amrvis::SliceDisplayResult arrival;
         arrival.slice.plane = makePlane({2.0F, 6.0F});
-        arrival.logarithmic = true;
+        arrival.scale = {amrvis::ColorScale::Logarithmic};
         DisplayCoordinator::realignArrivalToRange(
             arrival, {-1.0, 10.0}, palette, true);
-        require(!arrival.logarithmic,
-            "realign kept log against a range that crosses zero");
+        require(arrival.scale.scale != amrvis::ColorScale::Logarithmic,
+                "realign kept log against a range that crosses zero");
         require(arrival.image.valid() && arrival.image.width > 0,
             "realign did not render the degraded raster");
 
         amrvis::SliceDisplayResult positiveArrival;
         positiveArrival.slice.plane = makePlane({2.0F, 6.0F});
-        positiveArrival.logarithmic = true;
+        positiveArrival.scale = {amrvis::ColorScale::Logarithmic};
         DisplayCoordinator::realignArrivalToRange(
             positiveArrival, {0.5, 10.0}, palette, true);
-        require(positiveArrival.logarithmic,
-            "realign dropped log over a positive range");
+        require((positiveArrival.scale.scale == amrvis::ColorScale::Logarithmic),
+                "realign dropped log over a positive range");
     }
 
     // --- planeDensitiesDiffer -----------------------------------------------

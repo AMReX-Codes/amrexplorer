@@ -5,6 +5,7 @@ enum SamplingPolicy : ubyte {
   PiecewiseConstant = 1,
   Linear = 2
 }
+enum ColorScale : ubyte { Linear = 0, Logarithmic = 1, SymLogarithmic = 2 }
 
 enum CompositionPolicy : ubyte {
   FinestAvailable = 0,
@@ -374,6 +375,10 @@ table DirectoryListing {
 // picture where a logarithmic one was asked for. The transfer function is an explicit lookup: one
 // 0x00RRGGBB colour and one [0, 1] opacity per entry, entry 0 the bottom of
 // the range.
+// Since protocol 1.5 the scale enums and thresholds carry the mapping. The
+// legacy logarithmic flags remain for 1.2-1.4 peers: the codec derives them
+// from the enums when encoding and translates them into enums when decoding
+// older messages. Application state stores only ColorScaleConfig.
 table RenderedFrameRequest {
   dataset_id:ulong (id: 0);
   field:uint (id: 1);
@@ -401,6 +406,10 @@ table RenderedFrameRequest {
   // a server that predates 1.3 does -- but a 1.3 client never relies on that,
   // because the version gate stops it asking such a server for Linear at all.
   sampling:SamplingPolicy (id: 20);
+  range_scale:ColorScale (id: 21);
+  visible_scale:ColorScale (id: 22);
+  range_linear_threshold:double = 1.0 (id: 23);
+  visible_linear_threshold:double = 1.0 (id: 24);
 }
 
 // Premultiplied 0xAARRGGBB pixels, row 0 at the top, exactly width x height.
@@ -428,6 +437,8 @@ table RenderedFrameResponse {
   cache_fallback_from_level:int = -1 (id: 16);
   cache_fallback_to_level:int = -1 (id: 17);
   cache:CacheState (id: 18);
+  used_scale:ColorScale (id: 19);
+  used_linear_threshold:double = 1.0 (id: 20);
 }
 
 union Payload {

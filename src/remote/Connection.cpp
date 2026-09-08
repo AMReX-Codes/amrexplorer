@@ -302,6 +302,13 @@ public:
         return m_selectedMinorVersion >= 4;
     }
 
+    // And this one gates nothing: a 1.4 server answers every request, just in
+    // floats. Asked so the session can say so, not so a caller can refuse.
+    [[nodiscard]] bool supportsDoublePrecisionValues() const noexcept
+    {
+        return m_selectedMinorVersion >= doubleValueVectorsMinorVersion;
+    }
+
     VolumeFrame renderVolume(
         const VolumeRenderRequest& request, StopToken cancellation)
     {
@@ -821,6 +828,11 @@ bool Connection::supportsVolumeSampling() const noexcept
 bool Connection::supportsDerivedFields() const noexcept
 {
     return m_impl->supportsDerivedFields();
+}
+
+bool Connection::supportsDoublePrecisionValues() const noexcept
+{
+    return m_impl->supportsDoublePrecisionValues();
 }
 
 VolumeFrame Connection::renderVolume(

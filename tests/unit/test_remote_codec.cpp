@@ -252,6 +252,52 @@ int main()
                 == slice.gridBoxes.front().physicalRegion,
         "bounded slice response did not round-trip");
 
+    // --- the 1.5 value vectors -------------------------------------------
+    {
+        // Two doubles one float ulp apart cannot both survive the legacy
+        // encoding, which is what makes them the test.
+        constexpr double narrowLow = 1.2566370621199999e-06;
+        constexpr double narrowHigh = 1.25663706213e-06;
+        require(static_cast<float>(narrowLow) == static_cast<float>(narrowHigh),
+            "the fixture pair no longer collapses under the legacy encoding");
+        SliceQueryResult narrow;
+        narrow.plane.width = 2;
+        narrow.plane.height = 1;
+        narrow.plane.physicalRegion = RealBox{
+            Real3{{0.0, 0.0, 0.0}}, Real3{{1.0, 1.0, 0.0}}};
+        narrow.plane.values = {narrowLow, narrowHigh};
+        narrow.plane.valid = {1, 1};
+        narrow.plane.sourceLevel = {0, 0};
+
+        // A current peer: the doubles go in the wide vector and come back
+        // bit for bit.
+        auto current = codec::toWire(narrow, CacheMetrics{});
+        require(current.values.empty() && current.values_f64.size() == 2,
+            "a current peer was not sent the double vector alone");
+        require(codec::fromWire(current).plane.values == narrow.plane.values,
+            "the double vector did not round-trip");
+
+        // A pre-1.5 peer: floats only, and the pair collapses. Lossy by
+        // construction, but consistently so -- pinned here so the legacy path
+        // cannot quietly start sending both vectors or neither.
+        auto legacy = codec::toWire(narrow, CacheMetrics{}, 4);
+        require(legacy.values_f64.empty() && legacy.values.size() == 2,
+            "a pre-1.5 peer was not sent the float vector alone");
+        const auto promoted = codec::fromWire(legacy).plane.values;
+        require(promoted.size() == 2 && promoted[0] == promoted[1],
+            "the legacy float encoding did not collapse the pair");
+        require(promoted[0] == static_cast<double>(static_cast<float>(narrowLow)),
+            "the legacy path did not promote the float it sent");
+
+        // Both populated is ambiguous: which vector wins would decide the
+        // payload's meaning, so it is refused rather than resolved.
+        auto ambiguous = codec::toWire(narrow, CacheMetrics{});
+        ambiguous.values = {1.0F, 2.0F};
+        requireRejected(
+            [&] { static_cast<void>(codec::fromWire(ambiguous)); },
+            "a slice carrying both value vectors was accepted");
+    }
+
     auto wrongIdentifier = bytes;
     wrongIdentifier[4] = 'X';
     requireRejected([&] { static_cast<void>(

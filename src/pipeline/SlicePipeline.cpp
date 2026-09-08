@@ -3,6 +3,7 @@
 #include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/data/LocalDatasetSession.hpp>
 #include <amrexplorer/core/CoordinateSystem.hpp>
+#include <amrexplorer/core/ValueMapping.hpp>
 #include <amrexplorer/pipeline/DisplayCoordinator.hpp>
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
 #include <amrexplorer/render2d/SphericalWarp.hpp>
@@ -739,14 +740,15 @@ InitialSliceResult executeSessionFrameLoad(
                 const auto [globalMin, globalMax] = shared.value_or(
                     spec.logarithmic ? std::pair{1.0, 10.0}
                                      : std::pair{0.0, 1.0});
-                // One log flag for all three panels: log only when the shared
-                // minimum is positive, matching how a single panel degrades to
+                // One log flag for all three panels, and only where the
+                // mapping exists, matching how a single panel degrades to
                 // linear. A per-panel flag kept an all-positive plane
                 // logarithmic against a union that crosses zero, and
-                // renderScalarPlane rejects a non-positive log minimum -- which
+                // renderScalarPlane rejects any range it cannot map -- which
                 // failed the whole frame load
                 // (see shared-log-range-render-throw-fails-load).
-                const bool sharedLog = spec.logarithmic && globalMin > 0.0;
+                const bool sharedLog = spec.logarithmic
+                    && logarithmicRangeViable(globalMin, globalMax);
                 for (auto& d : result.displays) {
                     d.minimum = globalMin;
                     d.maximum = globalMax;

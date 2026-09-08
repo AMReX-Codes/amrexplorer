@@ -54,6 +54,22 @@ struct ResolvedValueRange {
     return resolved;
 }
 
+// Whether a logarithmic mapping over these bounds is one a renderer can
+// actually build, which is the question every "keep Log or degrade to linear"
+// decision is really asking.
+//
+// Positivity is the obvious half and not the whole test: bounds can be
+// positive and strictly ordered and still share a logarithm -- adjacent
+// doubles a decade up do -- leaving a span of zero and nothing to map across.
+// The slice resolver, the 3-D shared range and the arrival realignment all
+// decide this, so they decide it here rather than each re-deriving when a log
+// range is viable.
+[[nodiscard]] inline bool logarithmicRangeViable(
+    double minimum, double maximum) noexcept
+{
+    return resolveValueRange(minimum, maximum, true).has_value();
+}
+
 // Whether the range can map this value at all: non-finite values, and
 // non-positive ones under a logarithmic range, have no slot.
 [[nodiscard]] inline bool mappableValue(

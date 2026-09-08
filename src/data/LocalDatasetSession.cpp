@@ -70,12 +70,10 @@ VolumeRange visibleVolumeRange(const VolumeGrid& grid, bool logarithmic,
     if (logarithmic && extrema->first > 0.0) {
         const auto [minimum, maximum]
             = paddedIfDegenerate(extrema->first, extrema->second, true);
-        // Ordered and positive is not enough: adjacent doubles a decade up
-        // clear both and still share a logarithm, which the raycaster cannot
-        // map across and refuses outright. Ask the mapping, as the slice
-        // resolver does, and fall through to linear when it says no.
-        if (minimum > 0.0 && minimum < maximum
-            && resolveValueRange(minimum, maximum, true)) {
+        // The raycaster refuses a range it cannot map, so fall through to
+        // linear whenever the logarithmic one does not exist -- which ordered
+        // and positive does not establish.
+        if (logarithmicRangeViable(minimum, maximum)) {
             return {minimum, maximum, true};
         }
     }

@@ -1,5 +1,7 @@
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
 
+#include <amrexplorer/core/ValueMapping.hpp>
+
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -216,6 +218,33 @@ int main()
             threw = true;
         }
         require(threw, "a non-positive logarithmic range did not throw");
+    }
+
+    // --- logarithmicRangeViable --------------------------------------------
+    // The one predicate behind every "keep Log or degrade to linear" decision
+    // -- the slice resolver below, the 3-D shared range, and the arrival
+    // realignment -- so it is pinned once here rather than three times.
+    {
+        require(amrvis::logarithmicRangeViable(1.0, 100.0),
+            "an ordinary positive range was called unviable");
+        require(!amrvis::logarithmicRangeViable(0.0, 10.0),
+            "a range reaching zero was called viable");
+        require(!amrvis::logarithmicRangeViable(-1.0, 2.0),
+            "a range crossing zero was called viable");
+        require(!amrvis::logarithmicRangeViable(5.0, 5.0),
+            "a degenerate range was called viable");
+        require(!amrvis::logarithmicRangeViable(10.0, 9.0),
+            "an inverted range was called viable");
+        require(!amrvis::logarithmicRangeViable(
+                    std::numeric_limits<double>::quiet_NaN(), 10.0),
+            "a NaN bound was called viable");
+        require(!amrvis::logarithmicRangeViable(
+                    1.0, std::numeric_limits<double>::infinity()),
+            "an infinite bound was called viable");
+        // The case positivity cannot see: ordered, positive, same logarithm.
+        require(!amrvis::logarithmicRangeViable(
+                    10.0, std::nextafter(10.0, 11.0)),
+            "bounds sharing a logarithm were called viable");
     }
 
     // --- resolveDisplayRange ----------------------------------------------

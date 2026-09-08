@@ -377,5 +377,44 @@ int main()
             "a displayed-orientation change should refit");
     }
 
+    // --- a shared range whose bounds share a logarithm ---------------------
+    {
+        // Positive and strictly ordered, so the old positivity test kept Log
+        // on, and renderScalarPlane then rejected the range and failed the
+        // whole 3-D load -- the shared-log-range-render-throw-fails-load
+        // failure, reached by a route positivity cannot see. Only reachable
+        // since the planes stopped narrowing their samples to float.
+        constexpr double low = 10.0;
+        const double high = std::nextafter(10.0, 11.0);
+        require(low < high && std::log(low) == std::log(high),
+            "the fixture pair no longer shares a logarithm");
+
+        const auto plane = makePlane({low, high});
+        const auto& palette = amrvis::builtinPalette(
+            amrvis::BuiltinPalette::Rainbow);
+        std::array<DisplayCoordinator::PanelSyncInput, 1> panels{
+            DisplayCoordinator::PanelSyncInput{&plane, nullptr, {2, 1}}};
+
+        const auto sync = DisplayCoordinator::renderPanelsToSharedRange(
+            std::nullopt, panels, true, false, 0, palette);
+        require(sync.has_value(), "the shared sync produced no range");
+        require(!sync->logarithmic,
+            "a shared range whose bounds share a logarithm stayed logarithmic");
+        require(sync->panels.front().applies
+                && !sync->panels.front().image.rgba.empty(),
+            "the shared sync did not render the panel");
+
+        // The same guard on the arrival-realignment path, which reuses a
+        // cached full-domain range and re-decides the flag for itself.
+        amrvis::SliceDisplayResult arrival;
+        arrival.slice.plane = plane;
+        arrival.logarithmic = true;
+        arrival.rasterUnchanged = true;
+        DisplayCoordinator::realignArrivalToRange(
+            arrival, {low, high}, palette, false);
+        require(!arrival.logarithmic,
+            "a realigned arrival kept an unrenderable logarithmic range");
+    }
+
     return 0;
 }

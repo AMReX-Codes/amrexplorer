@@ -96,6 +96,21 @@ int main()
     const auto zero = amrvis::generateVectorGlyphs(zeroU, zeroV, 10);
     require(zero.empty(), "zero field produced segments");
 
+    // Magnitude is unit-independent: a uniformly tiny nonzero field must
+    // render exactly like the unit-scale field above.
+    const auto tinyU = makePlane(20, 10, 1.0e-20F);
+    const auto tiny = amrvis::generateVectorGlyphs(tinyU, zeroV, 10);
+    require(tiny.size() == 150, "small nonzero field produced no glyphs");
+
+    // Individual exactly-zero samples are omitted without hiding any
+    // nonzero sample. With count 2 both cells are sampling sites.
+    auto mixedU = makePlane(2, 1, 1.0e-20F);
+    mixedU.values[0] = 0.0F;
+    const auto mixedV = makePlane(2, 1, 0.0F);
+    const auto mixed = amrvis::generateVectorGlyphs(mixedU, mixedV, 2);
+    require(mixed.size() == 3,
+        "exact-zero filtering did not suppress only the zero vector");
+
     // count > longestSide used to give sight = 0 (integer division) and thus
     // zero glyphs; floating-point division keeps sight nonzero. stride is
     // floor(8/10) clamped to 1, so every one of the 8x8 = 64 cells draws an

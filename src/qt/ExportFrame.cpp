@@ -54,19 +54,28 @@ std::array<ExportAxis, 2> exportAxes(const RealBox& region, int dimension, int n
 
 QString exportNumber(double value, const QString& format, const QFontMetrics& metrics,
                      int availableWidth) {
-    auto label = formatNumber(value == 0.0 ? 0.0 : value, format);
-    if (metrics.horizontalAdvance(label) <= availableWidth) {
-        return label;
-    }
     // Never clip or elide numeric values. The layout reserves enough width
-    // for scientific notation, independent of a frame's magnitude or sign.
-    for (int precision = 6; precision >= 1; --precision) {
-        label = QString::number(value, 'g', precision);
-        if (metrics.horizontalAdvance(label) <= availableWidth) {
-            return label;
-        }
-    }
-    return {};
+    // for scientific notation, independent of a frame's magnitude or sign, so
+    // narrowing past what a plain %g shows means the reservation was wrong;
+    // drop the label rather than print a misleading one.
+    const auto normalized = value == 0.0 ? 0.0 : value;
+    const auto digits = formatDigits(format);
+    const auto label = fitNumber(normalized, format, digits,
+        std::min(digits, minimumDisplayDigits),
+        [&metrics](const QString& text) {
+            return metrics.horizontalAdvance(text);
+        },
+        availableWidth);
+    return metrics.horizontalAdvance(label) <= availableWidth ? label : QString();
+}
+
+// Width to allow a label of `digits` significant digits: the mantissa plus
+// sign, point, 'e', exponent sign and three exponent digits, with a glyph of
+// slack. Both the layout and the drawing pass must reach this same number, or
+// a label measured under one budget is drawn under another.
+int labelBudget(int glyphWidth, int digits)
+{
+    return (digits + 8) * glyphWidth;
 }
 
 namespace {
@@ -147,13 +156,22 @@ ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
         for (const QChar character : QStringLiteral("0123456789.e+-")) {
             glyphWidth = std::max(glyphWidth, fm.horizontalAdvance(character));
         }
-        const int maximumLabelWidth = 16 * glyphWidth;
-        // Movies keep room for compact scientific notation, not sixteen
-        // widest-case glyphs. Stills only need the labels they actually draw.
-        const int growthWidth = reserveLabelGrowth
-                                    ? std::max(fm.horizontalAdvance(QStringLiteral("-9e-308")),
-                                               fm.horizontalAdvance(QStringLiteral("-9e+308")))
-                                    : 0;
+        // Derived from the digits the format actually renders, not a fixed
+        // sixteen glyphs: a range narrow enough to need 15 digits produces
+        // labels a fixed cap would force back down to 6, silently undoing the
+        // precision the format asked for.
+        const int formatDigitCount = formatDigits(options.numberFormat);
+        const int maximumLabelWidth = labelBudget(glyphWidth, formatDigitCount);
+        // Movies keep room for compact scientific notation, not a widest-case
+        // label. Stills only need the labels they actually draw.
+        const int growthWidth
+            = reserveLabelGrowth
+                  ? std::max(fm.horizontalAdvance(
+                                 QStringLiteral("-9e-308")),
+                        fm.horizontalAdvance(QStringLiteral("-9e+308")))
+                      + std::max(0, formatDigitCount - minimumDisplayDigits)
+                          * glyphWidth
+                  : 0;
         layout.labelWidth = growthWidth;
         for (double endpoint : {axes[0].minimum, axes[0].maximum}) {
             layout.labelWidth = std::max(

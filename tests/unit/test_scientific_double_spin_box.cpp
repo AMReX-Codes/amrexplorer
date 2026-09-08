@@ -1,4 +1,5 @@
 #include "ScientificDoubleSpinBox.hpp"
+#include "NumberFormat.hpp"
 
 #include <QApplication>
 #include <QLineEdit>
@@ -95,4 +96,32 @@ int main(int argc, char* argv[])
     spinBox.setValue(1.25);
     require(spinBox.cleanText() == QStringLiteral("1.25e+00"),
         "range display should ignore surrounding format text");
+
+    // A resolved format carries more digits than a bare %g, and committing
+    // text nobody edited must still hand back the stored double unchanged --
+    // textFromValue and valueFromText have to read the same precision.
+    constexpr double narrowLow = 1.2566370621199999e-06;
+    constexpr double narrowHigh = 1.25663706213e-06;
+    const auto resolved = amrvis::qt::resolveNumberFormat(
+        amrvis::qt::defaultNumberFormat(), narrowLow, narrowHigh);
+    spinBox.setNumberFormat(resolved);
+    spinBox.setValue(narrowLow);
+    require(spinBox.cleanText() == QStringLiteral("1.25663706212e-06"),
+        "an adaptive format did not reach the spin box display");
+    spinBox.interpretText();
+    require(spinBox.value() == narrowLow,
+        "committing unchanged text under an adaptive format lost precision");
+
+    // The format now tracks the displayed range, so it can change while the
+    // user is part way through typing a bound. That must not wipe what they
+    // have entered.
+    spinBox.setNumberFormat(QStringLiteral("%g"));
+    spinBox.setValue(1.0);
+    spinBox.editor()->setText(QStringLiteral("2.5e-"));
+    spinBox.editor()->setModified(true);
+    spinBox.setNumberFormat(QStringLiteral("%.15g"));
+    require(spinBox.editor()->text() == QStringLiteral("min 2.5e-"),
+        "a format change discarded a partially typed value");
+    require(spinBox.editor()->isModified(),
+        "a format change cleared the pending-edit flag");
 }

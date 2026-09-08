@@ -54,6 +54,15 @@ void ScientificDoubleSpinBox::setNumberFormat(const QString& format)
         return;
     }
     m_numberFormat = numberFormat;
+    // Not while the user is typing. The format used to change only when
+    // someone visited the Number Format dialog, but it now tracks the
+    // displayed range, so it can change under a half-entered bound -- and
+    // rewriting the editor there discards what they typed and moves the
+    // cursor. The pending text keeps its own digits until it is committed,
+    // and interpretText re-renders through the new format then.
+    if (lineEdit()->isModified()) {
+        return;
+    }
     const QSignalBlocker blocker(this);
     lineEdit()->setText(prefix() + textFromValue(value()) + suffix());
     lineEdit()->setModified(false);

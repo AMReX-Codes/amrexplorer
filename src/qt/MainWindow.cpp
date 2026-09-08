@@ -1033,7 +1033,9 @@ void MainWindow::setActiveView(PlaneViewState& state)
 
 void MainWindow::syncActiveViewColorControls(const PlaneViewState& state)
 {
-    // The color scale and range boxes track the active view.
+    // The color scale and range boxes track the active view. Precision first,
+    // so the boxes render the new values at the new digit count in one pass.
+    applyDisplayPrecision(state.displayMinimum, state.displayMaximum);
     m_colorBar->setLogarithmic(state.displayLogarithmic);
     m_colorBar->setFieldRange(state.displayLogarithmic
         ? state.fieldName + tr(" (log)") : state.fieldName,

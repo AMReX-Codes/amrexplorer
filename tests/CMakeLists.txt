@@ -797,6 +797,16 @@ if(TARGET amrexplorer_qt)
             "$<TARGET_FILE:test_widget_image_export>")
     set_tests_properties(widget_image_export PROPERTIES TIMEOUT 60)
 
+    add_executable(test_color_bar_labels unit/test_color_bar_labels.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/ColorBarWidget.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp")
+    target_include_directories(test_color_bar_labels
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_color_bar_labels PRIVATE amrexplorer::render2d
+        amrexplorer::warnings Qt6::Widgets)
+    add_test(NAME color_bar_labels COMMAND "${CMAKE_COMMAND}" -E env
+        QT_QPA_PLATFORM=offscreen "$<TARGET_FILE:test_color_bar_labels>")
+
     add_executable(test_export_frame unit/test_export_frame.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/ExportFrame.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/ColorBarWidget.cpp"

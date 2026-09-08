@@ -295,6 +295,14 @@ Ctrl+W (Cmd+W on macOS), the same key that closes the main and volume windows.
 Choose **View > Number Format...** to set the `printf`-style format used for
 numeric readouts. The default is `%g`.
 
+A format that names no precision — `%g` included — adapts its digits to the
+range being shown, so a field whose values differ only in their twelfth digit
+still reads as distinct numbers instead of the same string repeated down the
+colour bar. Ordinary data is unaffected: trailing zeros are dropped, so `0.1`
+stays `0.1`. Give an explicit precision, such as `%.13g`, to pin the digit
+count and stop it adapting; **Full precision** in that dialog sets `%.17g`,
+which is every digit a double can carry.
+
 ## Working with 3-D data
 
 A 3-D dataset is shown as three orthogonal slices:

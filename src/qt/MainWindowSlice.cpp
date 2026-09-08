@@ -1595,6 +1595,7 @@ void MainWindow::syncVisibleRanges()
                     const auto fieldName = m_fieldSelector->currentText();
                     const auto label = m_activeView->displayLogarithmic
                         ? fieldName + tr(" (log)") : fieldName;
+                    applyDisplayPrecision(globalMin, globalMax);
                     m_colorBar->setLogarithmic(
                         m_activeView->displayLogarithmic);
                     m_colorBar->setFieldRange(label, globalMin, globalMax);

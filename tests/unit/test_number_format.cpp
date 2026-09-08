@@ -8,7 +8,9 @@
 #include <QString>
 
 #include <clocale>
+#include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <iostream>
 
 namespace {
@@ -135,6 +137,115 @@ int main()
         std::cerr << "note: no comma-decimal locale installed (tried de_DE, "
                      "en_DK, fr_FR); the LC_NUMERIC case did not run\n";
     }
+
+    // --- adaptive precision -------------------------------------------------
+    // Ranges with nothing to separate fall back to what a bare %g always gave.
+    require(displayDigits(0.0, 1.0) == 6, "an ordinary range asked for digits");
+    require(displayDigits(-1.0, 1.0) == 6, "a signed range asked for digits");
+    require(displayDigits(0.1, 0.1) == 6, "a zero span asked for digits");
+    require(displayDigits(0.0, 0.0) == 6, "a zero range asked for digits");
+    require(displayDigits(1.0, 0.0) == 6, "an inverted range asked for digits");
+    require(displayDigits(std::numeric_limits<double>::quiet_NaN(), 1.0) == 6,
+        "a NaN bound asked for digits");
+    require(displayDigits(1.0, std::numeric_limits<double>::infinity()) == 6,
+        "an infinite bound asked for digits");
+    require(displayDigits(-std::numeric_limits<double>::max(),
+                std::numeric_limits<double>::max())
+            == 6,
+        "a span that overflows asked for digits");
+    // Magnitude alone means nothing; only the span relative to it counts.
+    require(displayDigits(1.0e-30, 1.0e30) == 6,
+        "a decade-spanning range asked for digits");
+    require(displayDigits(0.0, 1.0e-300) == 6,
+        "a tiny-magnitude wide range asked for digits");
+    require(displayDigits(-1.000000001, -1.0) == 12,
+        "an all-negative narrow range got the wrong digit count");
+    require(displayDigits(1.0, std::nextafter(1.0, 2.0)) == 17,
+        "adjacent doubles did not clamp at max_digits10");
+    require(displayDigits(1.0e300, 1.0e300 * (1.0 + 1.0e-13)) == 17,
+        "a large-magnitude narrow range did not clamp");
+
+    // Splicing keeps flags, width and literal text, and leaves alone both a
+    // precision the user wrote and a conversion whose precision means
+    // something else.
+    const double narrowLow = 1.2566370621199999e-06;
+    const double narrowHigh = 1.25663706213e-06;
+    require(displayDigits(narrowLow, narrowHigh) == 15,
+        "the reported range got the wrong digit count");
+    const auto resolved
+        = resolveNumberFormat(defaultNumberFormat(), narrowLow, narrowHigh);
+    require(resolved == QStringLiteral("%.15g"),
+        "a bare %g did not resolve to the range's digits");
+    require(resolveNumberFormat(QStringLiteral("%G"), narrowLow, narrowHigh)
+            == QStringLiteral("%.15G"),
+        "%G did not resolve");
+    require(resolveNumberFormat(QStringLiteral("%.13g"), narrowLow, narrowHigh)
+            == QStringLiteral("%.13g"),
+        "an explicit precision was overridden");
+    require(resolveNumberFormat(QStringLiteral("%+12g"), narrowLow, narrowHigh)
+            == QStringLiteral("%+12.15g"),
+        "resolving dropped flags or width");
+    require(resolveNumberFormat(
+                QStringLiteral("rho=%g kg/m3"), narrowLow, narrowHigh)
+            == QStringLiteral("rho=%.15g kg/m3"),
+        "resolving dropped literal text");
+    require(resolveNumberFormat(QStringLiteral("%e"), narrowLow, narrowHigh)
+            == QStringLiteral("%e"),
+        "%e was given significant-digit precision");
+    require(resolveNumberFormat(QStringLiteral("%.2f"), narrowLow, narrowHigh)
+            == QStringLiteral("%.2f"),
+        "%f was given significant-digit precision");
+    require(resolveNumberFormat(QStringLiteral("%d"), narrowLow, narrowHigh)
+            == QStringLiteral("%d"),
+        "an invalid format was rewritten");
+    // Idempotence is what freezes an animation's digits and what stops a
+    // pinned format being re-derived downstream. A different second range so
+    // this cannot pass by both sides computing the same thing.
+    require(resolveNumberFormat(resolved, 0.0, 1.0) == resolved,
+        "resolving an already-resolved format changed it");
+
+    // The headline: at the old default these two collide.
+    require(formatNumber(narrowLow, defaultNumberFormat())
+            == formatNumber(narrowHigh, defaultNumberFormat()),
+        "the test pair no longer collides at the default format");
+    require(formatNumber(narrowLow, defaultNumberFormat())
+            == QStringLiteral("1.25664e-06"),
+        "the default format no longer renders the reported string");
+    require(formatNumber(narrowLow, resolved)
+            != formatNumber(narrowHigh, resolved),
+        "two values differing at the 12th digit still render alike");
+    require(formatNumber(narrowLow, resolved)
+            == QStringLiteral("1.25663706212e-06"),
+        "the low value did not render at full precision");
+    require(formatNumber(narrowHigh, resolved)
+            == QStringLiteral("1.25663706213e-06"),
+        "the high value did not render at full precision");
+
+    // Ordinary data must not grow noise digits.
+    const auto ordinary = resolveNumberFormat(defaultNumberFormat(), 0.0, 1.0);
+    require(formatNumber(0.1, ordinary) == QStringLiteral("0.1"),
+        "an ordinary value grew noise digits");
+    require(formatNumber(0.3, ordinary) == QStringLiteral("0.3"),
+        "an ordinary value grew noise digits");
+
+    // --- fitNumber ----------------------------------------------------------
+    // A plain character count stands in for a font.
+    const auto charWidth = [](const QString& text) {
+        return static_cast<int>(text.size());
+    };
+    require(fitNumber(narrowLow, resolved, 15, 6, charWidth, 80)
+            == QStringLiteral("1.25663706212e-06"),
+        "a label that fits was narrowed anyway");
+    // 17 characters at 15 digits; 13 fits only by stepping down. Asserting the
+    // intermediate count is what catches a loop that restarts at 6.
+    require(fitNumber(narrowLow, resolved, 15, 6, charWidth, 13)
+            == QStringLiteral("1.2566371e-06"),
+        "fitting did not step down one digit at a time");
+    require(fitNumber(narrowLow, resolved, 15, 12, charWidth, 1)
+            == QStringLiteral("1.25663706212e-06"),
+        "fitting went below its floor");
+    require(charWidth(fitNumber(narrowLow, resolved, 15, 6, charWidth, 1)) > 1,
+        "fitting past the floor did not return the narrowest rendering");
 
     return 0;
 }

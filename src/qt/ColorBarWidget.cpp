@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <utility>
 
 namespace amrvis::qt {
@@ -24,20 +25,61 @@ constexpr int barWidth = 24;
 constexpr int labelGap = 6;
 constexpr int labelCount = 8;
 
+// Never below what a plain %g always showed, and never above what the range
+// asked for: the digits are the point of the label, so width yields to them
+// rather than the other way round.
 QString boundedNumber(double value, const QString& format, const QFontMetrics& metrics, int width) {
-    auto text = formatNumber(value, format);
-    for (int precision = 6; precision >= 1 && metrics.horizontalAdvance(text) > width;
-         --precision) {
-        text = QString::number(value, 'g', precision);
+    const auto digits = formatDigits(format);
+    return fitNumber(value, format, digits,
+        std::min(digits, minimumDisplayDigits),
+        [&metrics](const QString& text) {
+            return metrics.horizontalAdvance(text);
+        },
+        width);
+}
+
+// The common leading part of a narrow range, factored out of the tick labels
+// the way matplotlib's ScalarFormatter does: the ticks then read as short
+// residuals and one offset label carries the magnitude, instead of eight
+// labels repeating the same twelve digits.
+//
+// Offered only when the ticks share a sign and the span is small next to the
+// magnitude -- matplotlib's threshold is three orders of magnitude -- so an
+// ordinary range is untouched. Not in log mode, where ticks are decades apart
+// and share no leading part.
+std::optional<double> tickOffset(double minimum, double maximum, bool logarithmic)
+{
+    if (logarithmic || !std::isfinite(minimum) || !std::isfinite(maximum)) {
+        return std::nullopt;
     }
-    return text;
+    const auto low = std::min(minimum, maximum);
+    const auto high = std::max(minimum, maximum);
+    if (low == high || (low <= 0.0 && high >= 0.0)) {
+        return std::nullopt;
+    }
+    const auto span = high - low;
+    const auto scale = std::max(std::abs(low), std::abs(high));
+    if (!(span < scale / 1000.0)) {
+        return std::nullopt;
+    }
+    // Round down to the decade just below the span, so the offset is a clean
+    // number and every residual is positive.
+    const auto step = std::pow(10.0, std::floor(std::log10(span)));
+    if (!std::isfinite(step) || !(step > 0.0)) {
+        return std::nullopt;
+    }
+    const auto offset = std::floor(low / step) * step;
+    if (!std::isfinite(offset) || offset == 0.0) {
+        return std::nullopt;
+    }
+    return offset;
 }
 
 // Pixel width of the widest tick label for the format/range. Because it
 // measures the actual formatted strings, exponent forms (from %e / %g) are
 // included at their full width.
 int maxTickLabelWidth(const QFontMetrics& fm, double minimum, double maximum,
-    bool logarithmic, const QString& format)
+    bool logarithmic, const QString& format, double offset)
 {
     int maxWidth = 0;
     for (int label = 0; label < labelCount; ++label) {
@@ -45,9 +87,18 @@ int maxTickLabelWidth(const QFontMetrics& fm, double minimum, double maximum,
             / static_cast<double>(labelCount - 1);
         maxWidth = std::max(maxWidth,
             fm.horizontalAdvance(formatNumber(
-                ColorBarWidget::tickValue(minimum, maximum, logarithmic, fraction), format)));
+                ColorBarWidget::tickValue(minimum, maximum, logarithmic, fraction) - offset,
+                format)));
     }
     return maxWidth;
+}
+
+// "+1.256637062e-06" under the title, matplotlib's placement: the sign says
+// the ticks are added to it.
+QString offsetLabel(double offset, const QString& format)
+{
+    const auto text = formatNumber(offset, format);
+    return offset < 0.0 ? text : QStringLiteral("+") + text;
 }
 
 } // namespace
@@ -117,6 +168,28 @@ void ColorBarWidget::clearRange()
     update();
 }
 
+QString ColorBarWidget::effectiveFormat() const
+{
+    return resolveNumberFormat(m_numberFormat, m_minimum, m_maximum);
+}
+
+double ColorBarWidget::labelOffset() const
+{
+    return tickOffset(m_minimum, m_maximum, m_logarithmic).value_or(0.0);
+}
+
+// With an offset in play the ticks carry only the residual, whose own span
+// needs no extra digits; without one they carry the value and do.
+QString ColorBarWidget::tickFormat() const
+{
+    const auto offset = labelOffset();
+    if (offset == 0.0) {
+        return effectiveFormat();
+    }
+    return resolveNumberFormat(
+        m_numberFormat, m_minimum - offset, m_maximum - offset);
+}
+
 void ColorBarWidget::applyPreferredWidth()
 {
     setFixedWidth(std::max(panelWidth, preferredWidth()));
@@ -137,9 +210,17 @@ void ColorBarWidget::paintBar(QPainter* painter, const QRect& target, bool trans
     const int paintMargin =
         boundedLabels ? std::min(std::max(margin, labelHeight / 4), std::max(0, (h - 1) / 2))
                       : margin;
-    const int paintTitleHeight =
+    const int titleBlock =
         boundedLabels ? (h >= 3 * labelHeight + 2 * paintMargin ? labelHeight + paintMargin : 0)
                       : titleHeight;
+    // One more line under the title when the ticks carry a residual, so the
+    // offset that completes them is beside them rather than implied.
+    const auto offset = labelOffset();
+    const int offsetHeight
+        = (offset != 0.0 && titleBlock > 0 && h >= 4 * labelHeight + 2 * paintMargin)
+        ? labelHeight
+        : 0;
+    const int paintTitleHeight = titleBlock + offsetHeight;
     const int paintBarWidth = boundedLabels ? std::max(barWidth, labelHeight) : barWidth;
     const int paintLabelGap = boundedLabels ? std::max(margin, labelHeight / 4) : labelGap;
 
@@ -154,8 +235,15 @@ void ColorBarWidget::paintBar(QPainter* painter, const QRect& target, bool trans
                     std::max(1, h - 2 * paintMargin - paintTitleHeight));
     const auto title =
         painter->fontMetrics().elidedText(m_fieldName, Qt::ElideRight, w - 2 * paintMargin);
-    painter->drawText(QRect(paintMargin, paintMargin, w - 2 * paintMargin, paintTitleHeight),
+    painter->drawText(QRect(paintMargin, paintMargin, w - 2 * paintMargin, titleBlock),
                       Qt::AlignLeft | Qt::AlignVCenter, title);
+    if (offsetHeight > 0) {
+        painter->drawText(
+            QRect(paintMargin, paintMargin + titleBlock, w - 2 * paintMargin,
+                offsetHeight),
+            Qt::AlignLeft | Qt::AlignVCenter,
+            offsetLabel(offset, effectiveFormat()));
+    }
 
     const auto& palette = m_palette != nullptr
         ? *m_palette : builtinPalette(BuiltinPalette::Rainbow);
@@ -171,6 +259,11 @@ void ColorBarWidget::paintBar(QPainter* painter, const QRect& target, bool trans
     painter->drawRect(bar.adjusted(0, 0, -1, -1));
 
     const auto labelLeft = bar.left() + bar.width() + paintLabelGap;
+    // Residuals when the offset is drawn; the values themselves when it is
+    // not -- a panel too short for the offset line must not print ticks that
+    // silently omit it.
+    const auto drawnOffset = offsetHeight > 0 ? offset : 0.0;
+    const auto format = drawnOffset == 0.0 ? effectiveFormat() : tickFormat();
     const int count =
         boundedLabels ? std::clamp(bar.height() / (labelHeight + 4), 0, labelCount) : labelCount;
     for (int label = 0; label < count; ++label) {
@@ -179,15 +272,17 @@ void ColorBarWidget::paintBar(QPainter* painter, const QRect& target, bool trans
         // In log mode the labels must be geometrically spaced to match the
         // gradient: the color at vertical position `fraction` (from the top)
         // corresponds to min*(max/min)^(1-fraction).
-        const auto value = ColorBarWidget::tickValue(m_minimum, m_maximum, m_logarithmic, fraction);
+        const auto value
+            = ColorBarWidget::tickValue(m_minimum, m_maximum, m_logarithmic, fraction)
+            - drawnOffset;
         const auto center = bar.top()
             + static_cast<int>(std::lround(fraction * static_cast<double>(rows)));
         const auto top = std::clamp(center - labelHeight / 2, bar.top(),
             std::max(bar.top(), bar.top() + bar.height() - labelHeight));
         const auto text = boundedLabels
-                              ? boundedNumber(value, m_numberFormat, painter->fontMetrics(),
+                              ? boundedNumber(value, format, painter->fontMetrics(),
                                               w - labelLeft - paintMargin)
-                              : formatNumber(value, m_numberFormat);
+                              : formatNumber(value, format);
         painter->drawText(QRect(labelLeft, top, w - labelLeft - paintMargin, labelHeight),
                           Qt::AlignLeft | Qt::AlignVCenter, text);
     }
@@ -220,7 +315,7 @@ int ColorBarWidget::exportLabelWidth(const QFontMetrics& metrics, int maximumWid
         const double fraction = static_cast<double>(label) / std::max(1, count - 1);
         width = std::max(width, metrics.horizontalAdvance(boundedNumber(
                                     ColorBarWidget::tickValue(m_minimum, m_maximum, m_logarithmic, fraction),
-                                    m_numberFormat, metrics, maximumWidth)));
+                                    effectiveFormat(), metrics, maximumWidth)));
     }
     // Keep short field names intact without allowing long expressions to
     // dictate the width of the entire figure (paintBar elides those).
@@ -234,13 +329,22 @@ int ColorBarWidget::preferredWidth() const
     const QFontMetrics fm = fontMetrics();
     int labelWidth = 0;
     if (m_hasRange) {
+        const auto offset = labelOffset();
         labelWidth = maxTickLabelWidth(
-            fm, m_minimum, m_maximum, m_logarithmic, m_numberFormat);
+            fm, m_minimum, m_maximum, m_logarithmic, tickFormat(), offset);
+        if (offset != 0.0) {
+            // The offset line runs the full panel width rather than sitting in
+            // the label column, so it has to fit too.
+            labelWidth = std::max(labelWidth,
+                fm.horizontalAdvance(offsetLabel(offset, effectiveFormat()))
+                    - barWidth - labelGap);
+        }
     }
-    // The default %g format tops out at 13 characters (e.g. "-1.23456e-308"),
-    // so reserving that width keeps the panel stable across ranges while still
-    // fitting every %g label. A wider format (e.g. %f on large magnitudes)
-    // grows past it via the max() above, so nothing clips.
+    // A 6-digit %g label is at most 13 characters (e.g. "-1.23456e-308"), so
+    // reserving that width keeps the panel from twitching across ordinary
+    // ranges. It is a floor, not a cap: a narrow range resolves to more digits
+    // and a wide format (say %f on large magnitudes) is wider still, and both
+    // grow past it via the max() above, so nothing clips.
     labelWidth = std::max(labelWidth,
         fm.horizontalAdvance(QStringLiteral("-1.23456e-308")));
     return 2 * margin + barWidth + labelGap + labelWidth;

@@ -265,7 +265,8 @@ QString LinePlotWidget::hoverTextAt(const QPointF& position) const
         nearestCurve->line.values[nearestSample]);
     const auto coordinateText = nearestCurve->line.positionsAreIndices
         ? QString::number(static_cast<long long>(std::llround(coordinate)))
-        : formatNumber(coordinate, m_numberFormat);
+        : formatNumber(coordinate,
+              resolveNumberFormat(m_numberFormat, range.xMinimum, range.xMaximum));
     const auto axis = nearestCurve->lineAxis >= 0
             && nearestCurve->lineAxis
                 < static_cast<int>(nearestCurve->axisNames.size())
@@ -275,7 +276,8 @@ QString LinePlotWidget::hoverTextAt(const QPointF& position) const
         .arg(QString::fromStdString(nearestCurve->fieldName))
         .arg(axis)
         .arg(coordinateText)
-        .arg(formatNumber(value, m_numberFormat));
+        .arg(formatNumber(value,
+            resolveNumberFormat(m_numberFormat, range.yMinimum, range.yMaximum)));
 }
 
 void LinePlotWidget::hideHover()
@@ -303,6 +305,10 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
     const auto xMaximum = range->xMaximum;
     const auto yMinimum = range->yMinimum;
     const auto yMaximum = range->yMaximum;
+    // Each axis resolves against what it spans, which for a zoomed plot is
+    // the visible window rather than the whole curve.
+    const auto xFormat = resolveNumberFormat(m_numberFormat, xMinimum, xMaximum);
+    const auto yFormat = resolveNumberFormat(m_numberFormat, yMinimum, yMaximum);
     const auto mapX = [&](double value) {
         return plot.left() + (value - xMinimum) / (xMaximum - xMinimum) * plot.width();
     };
@@ -339,7 +345,7 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
         for (int tick = 0; tick < tickCount; ++tick) {
             const auto fraction = static_cast<double>(tick) / (tickCount - 1);
             const auto xValue = xMinimum + fraction * (xMaximum - xMinimum);
-            drawXTick(xValue, formatNumber(xValue, m_numberFormat));
+            drawXTick(xValue, formatNumber(xValue, xFormat));
         }
     }
     for (int tick = 0; tick < tickCount; ++tick) {
@@ -351,7 +357,7 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
         painter.setPen(viewportForeground());
         painter.drawText(QRectF(0.0, y - 8.0, plot.left() - 6.0, 16.0),
             Qt::AlignRight | Qt::AlignVCenter,
-            formatNumber(yValue, m_numberFormat));
+            formatNumber(yValue, yFormat));
     }
     painter.setPen(viewportForeground());
     painter.drawRect(plot);

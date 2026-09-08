@@ -47,11 +47,19 @@ void MainWindow::showNumberFormatDialog()
     auto* edit = new QLineEdit(m_numberFormat, dialog);
     edit->setMinimumWidth(160);
     auto* syntaxLabel = new QLabel(
-        tr("C printf format, e.g. %1").arg(defaultNumberFormat()), dialog);
+        tr("C printf format, e.g. %1. A format with no precision adapts its "
+           "digits to the range on display, so values that differ only far "
+           "out stay distinguishable. Give an explicit precision, like %2, "
+           "to pin the digit count.")
+            .arg(defaultNumberFormat(), QStringLiteral("%.13g")),
+        dialog);
+    syntaxLabel->setWordWrap(true);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok
         | QDialogButtonBox::Apply | QDialogButtonBox::Cancel, dialog);
     auto* defaultButton = buttons->addButton(
         tr("Default"), QDialogButtonBox::ResetRole);
+    auto* fullPrecisionButton = buttons->addButton(
+        tr("Full precision"), QDialogButtonBox::ResetRole);
     auto* layout = new QVBoxLayout(dialog);
     layout->addWidget(syntaxLabel);
     layout->addWidget(edit);
@@ -60,6 +68,13 @@ void MainWindow::showNumberFormatDialog()
     connect(defaultButton, &QPushButton::clicked, dialog, [this, edit] {
         edit->setText(defaultNumberFormat());
         applyNumberFormat(defaultNumberFormat());
+    });
+    connect(fullPrecisionButton, &QPushButton::clicked, dialog, [this, edit] {
+        // Every digit a double round-trips, pinned: the one-click answer for
+        // a user who wants the numbers rather than the reading.
+        const auto full = QStringLiteral("%.17g");
+        edit->setText(full);
+        applyNumberFormat(full);
     });
     connect(buttons, &QDialogButtonBox::clicked, dialog,
         [this, dialog, edit, buttons](QAbstractButton* button) {
@@ -96,17 +111,44 @@ void MainWindow::applyNumberFormat(const QString& format)
         return;
     }
     m_numberFormat = format;
-    m_range->setNumberFormat(format);
+    // The color bar takes the authored format and resolves its own; everyone
+    // else takes the resolved one. Push the authored format first so a
+    // resolution that turns out unchanged still reaches the bar.
     m_colorBar->setNumberFormat(format);
+    const auto previous = m_displayFormat;
+    m_displayFormat = resolveNumberFormat(
+        format, m_lastDisplayMinimum, m_lastDisplayMaximum);
+    if (m_displayFormat != previous) {
+        pushDisplayFormat();
+    } else {
+        m_range->setNumberFormat(m_displayFormat);
+    }
+    saveSettings();
+}
+
+void MainWindow::applyDisplayPrecision(double minimum, double maximum)
+{
+    m_lastDisplayMinimum = minimum;
+    m_lastDisplayMaximum = maximum;
+    const auto resolved = resolveNumberFormat(m_numberFormat, minimum, maximum);
+    if (resolved == m_displayFormat) {
+        return;
+    }
+    m_displayFormat = resolved;
+    pushDisplayFormat();
+}
+
+void MainWindow::pushDisplayFormat()
+{
+    m_range->setNumberFormat(m_displayFormat);
     // Open child windows repaint against the stored format; a null pointer
     // means the window picks the format up when it is next created.
     if (m_datasetWindow != nullptr) {
-        m_datasetWindow->setNumberFormat(format);
+        m_datasetWindow->setNumberFormat(m_displayFormat);
     }
     if (m_linePlotWindow != nullptr) {
-        m_linePlotWindow->setNumberFormat(format);
+        m_linePlotWindow->setNumberFormat(m_displayFormat);
     }
-    saveSettings();
 }
 
 void MainWindow::showLengthUnitsDialog()
@@ -891,13 +933,22 @@ QString MainWindow::probeReadout(
     const auto levelText = metadata.hasPhysicalGeometry
         ? tr(" level=%1").arg(level)
         : QString();
-    const auto valueText = formatNumber(
-        static_cast<double>(plane.values[offset]), m_numberFormat);
+    // The value resolves against the field range, the coordinates against the
+    // region they live in. Sharing one digit count would print x to fifteen
+    // digits whenever the field happened to be nearly flat.
+    const auto valueFormat = resolveNumberFormat(
+        m_numberFormat, state.displayMinimum, state.displayMaximum);
+    const auto coordinateFormat = [&](std::size_t axis) {
+        return resolveNumberFormat(m_numberFormat,
+            plane.physicalRegion.lower[axis], plane.physicalRegion.upper[axis]);
+    };
+    const auto valueText = formatNumber(plane.values[offset], valueFormat);
     if (displayIsSpherical()) {
         // position[xAxis] is r, position[yAxis] is theta (from logicalFromScene).
         const QString theta(QChar(0x03B8));
-        const auto rText = formatNumber(position[xAxis], m_numberFormat);
-        const auto thetaText = formatNumber(position[yAxis], m_numberFormat);
+        const auto rText = formatNumber(position[xAxis], coordinateFormat(xAxis));
+        const auto thetaText
+            = formatNumber(position[yAxis], coordinateFormat(yAxis));
         QString coords;
         // The state's mode, not the menu selection: the readout labels must
         // match the mapping that produced the coordinates above.
@@ -907,8 +958,9 @@ QString MainWindow::probeReadout(
             const auto display = sphericalToDisplay(
                 position[xAxis], position[yAxis]);
             coords = QStringLiteral("R=%1 Z=%2 r=%3 %4=%5").arg(
-                formatNumber(display[0], m_numberFormat),
-                formatNumber(display[1], m_numberFormat), rText, theta, thetaText);
+                formatNumber(display[0], coordinateFormat(xAxis)),
+                formatNumber(display[1], coordinateFormat(yAxis)), rText, theta,
+                thetaText);
             break;
         }
         case SphericalDisplay::ThetaR:
@@ -924,9 +976,9 @@ QString MainWindow::probeReadout(
     }
     return tr("%1=%2 %3=%4 value=%5%6 %7=(%8) %9")
         .arg(QString::fromLatin1(axisNames[xAxis]))
-        .arg(formatNumber(position[xAxis], m_numberFormat))
+        .arg(formatNumber(position[xAxis], coordinateFormat(xAxis)))
         .arg(QString::fromLatin1(axisNames[yAxis]))
-        .arg(formatNumber(position[yAxis], m_numberFormat))
+        .arg(formatNumber(position[yAxis], coordinateFormat(yAxis)))
         .arg(valueText)
         .arg(levelText)
         .arg(QString::fromLatin1(indexKind))

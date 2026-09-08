@@ -44,6 +44,14 @@ public:
     [[nodiscard]] int exportLabelWidth(const QFontMetrics& metrics, int maximumWidth,
                                        int height) const;
 
+    // What the tick labels are actually drawn against: the format resolved
+    // for this range, the common leading part factored out of the ticks (0
+    // when the range is ordinary enough to print in full -- see tickOffset),
+    // and the format the residuals use.
+    [[nodiscard]] QString effectiveFormat() const;
+    [[nodiscard]] double labelOffset() const;
+    [[nodiscard]] QString tickFormat() const;
+
 protected:
     void paintEvent(QPaintEvent* event) override;
 
@@ -54,6 +62,9 @@ private:
 
     const amrvis::Palette* m_palette = nullptr;
     QString m_fieldName;
+    // The authored format. It is resolved against the range this widget holds
+    // (see effectiveFormat) rather than at the three setFieldRange call
+    // sites, which is what keeps the two from drifting apart.
     QString m_numberFormat;
     double m_minimum = 0.0;
     double m_maximum = 1.0;

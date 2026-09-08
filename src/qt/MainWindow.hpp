@@ -735,6 +735,12 @@ private:
         int wField, int contourColor);
     void showNumberFormatDialog();
     void applyNumberFormat(const QString& format);
+    // Re-resolve the authored format against a displayed range and push the
+    // result to the readouts. Driven from committed range values only --
+    // deriving it from a bound the user is mid-edit would re-render the box
+    // being typed into on every keystroke.
+    void applyDisplayPrecision(double minimum, double maximum);
+    void pushDisplayFormat();
     void showLengthUnitsDialog();
     void applyLengthUnit(const QString& unitId);
     void validateVectorMode();
@@ -1226,7 +1232,17 @@ private:
     // skin it applies is application-wide, so every window shares one.
     ThemeController* m_themeController = nullptr;
     DerivedFieldController* m_derivedFields = nullptr;
+    // The authored format, and that format resolved against the displayed
+    // range. m_numberFormat is what the dialog shows and what is persisted;
+    // m_displayFormat is what the readouts render with, so a range whose
+    // values differ far out stays legible. The color bar resolves its own,
+    // from the range it holds.
     QString m_numberFormat = defaultNumberFormat();
+    QString m_displayFormat = defaultNumberFormat();
+    // The range the resolved format was derived from, so a format change can
+    // re-resolve without waiting for the next slice.
+    double m_lastDisplayMinimum = 0.0;
+    double m_lastDisplayMaximum = 1.0;
     bool m_controlsReady = false;
     std::uint64_t m_generation = 0;
     bool m_closing = false;

@@ -238,6 +238,37 @@ int main()
                 && nearlyEqual(log.maximum, 100.0),
             "a positive logarithmic request did not stay logarithmic");
     }
+    {
+        // Positive and strictly ordered, and still unusable as a log range:
+        // adjacent doubles a decade up are too far apart for the degenerate
+        // padding and too close for log() to separate. Reachable only since
+        // the plane stopped narrowing its samples to float, which used to
+        // collapse the pair and trigger the padding instead.
+        constexpr double low = 10.0;
+        const double high = std::nextafter(10.0, 11.0);
+        require(low < high && std::log(low) == std::log(high),
+            "the fixture pair no longer shares a logarithm");
+        const auto plane = makePlane({low, high});
+
+        bool threw = false;
+        try {
+            (void)amrvis::resolveRange(noDataset, FieldId{0}, 0,
+                CompositionPolicy::FinestAvailable, RangeMode::Visible,
+                std::nullopt, true, plane);
+        } catch (const std::exception&) {
+            threw = true;
+        }
+        require(threw, "a range that collapses under log did not throw");
+
+        // The display path turns that into linear rather than failing the
+        // slice, exactly as it does for a non-positive range.
+        const auto fallback = amrvis::resolveDisplayRange(noDataset,
+            FieldId{0}, 0, CompositionPolicy::FinestAvailable,
+            RangeMode::Visible, std::nullopt, true, plane);
+        require(!fallback.logarithmic && fallback.minimum == low
+                && fallback.maximum == high,
+            "a log-collapsing range did not fall back to linear");
+    }
 
     return 0;
 }

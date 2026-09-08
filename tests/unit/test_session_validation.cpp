@@ -1,4 +1,5 @@
 #include <amrexplorer/core/Metadata.hpp>
+#include <amrexplorer/core/ValueMapping.hpp>
 #include <amrexplorer/data/LocalDatasetSession.hpp>
 #include <amrexplorer/data/SessionValidation.hpp>
 
@@ -1349,6 +1350,24 @@ int main()
                 && !amrvis::visibleVolumeRange(gridOf({quietNaN}), false)
                         .logarithmic,
             "an all-NaN grid did not fall back to a neutral range");
+        // Positive and strictly ordered is not enough. Adjacent doubles a
+        // decade up clear both tests and still share a logarithm, which the
+        // raycaster refuses outright -- so this has to reach linear the same
+        // way a mixed-sign range does. Reachable only since the grid stopped
+        // narrowing its voxels to float, which collapsed the pair into the
+        // degenerate padding instead.
+        const double justAboveTen = std::nextafter(10.0, 11.0);
+        require(10.0 < justAboveTen
+                && std::log(10.0) == std::log(justAboveTen),
+            "the fixture pair no longer shares a logarithm");
+        const auto sameLogarithm
+            = amrvis::visibleVolumeRange(gridOf({10.0, justAboveTen}), true);
+        require(!sameLogarithm.logarithmic,
+            "a range whose bounds share a logarithm went logarithmic");
+        require(amrvis::resolveValueRange(sameLogarithm.minimum,
+                    sameLogarithm.maximum, sameLogarithm.logarithmic)
+                    .has_value(),
+            "the fallback range is still unusable by the raycaster");
         // The scan honours the token: it walks the whole grid otherwise.
         amrvis::StopSource stop;
         stop.request_stop();

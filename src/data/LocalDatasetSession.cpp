@@ -1,6 +1,7 @@
 #include <amrexplorer/data/LocalDatasetSession.hpp>
 
 #include <amrexplorer/core/Statistics.hpp>
+#include <amrexplorer/core/ValueMapping.hpp>
 #include <amrexplorer/data/SessionValidation.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/query/LineQuery.hpp>
@@ -69,7 +70,12 @@ VolumeRange visibleVolumeRange(const VolumeGrid& grid, bool logarithmic,
     if (logarithmic && extrema->first > 0.0) {
         const auto [minimum, maximum]
             = paddedIfDegenerate(extrema->first, extrema->second, true);
-        if (minimum > 0.0 && minimum < maximum) {
+        // Ordered and positive is not enough: adjacent doubles a decade up
+        // clear both and still share a logarithm, which the raycaster cannot
+        // map across and refuses outright. Ask the mapping, as the slice
+        // resolver does, and fall through to linear when it says no.
+        if (minimum > 0.0 && minimum < maximum
+            && resolveValueRange(minimum, maximum, true)) {
             return {minimum, maximum, true};
         }
     }

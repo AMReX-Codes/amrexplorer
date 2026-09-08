@@ -1,5 +1,7 @@
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
 
+#include <amrexplorer/core/ValueMapping.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -152,6 +154,16 @@ std::pair<double, double> resolveRange(
     if (logarithmic && !(minimum > 0.0)) {
         throw LogarithmicRangeError(
             "logarithmic scalar range must be positive");
+    }
+    // Ordered bounds can still share a logarithm: adjacent doubles a decade up
+    // are far enough apart to skip the degenerate padding above and close
+    // enough that log() maps them onto the same value, which leaves the
+    // renderer nothing to map across. Positivity is not the only way a log
+    // range fails, so ask the mapping itself rather than re-deriving when.
+    if (logarithmic && !resolveValueRange(minimum, maximum, true)) {
+        throw LogarithmicRangeError(
+            "logarithmic scalar range is too narrow: its bounds share a "
+            "logarithm");
     }
     return {minimum, maximum};
 }

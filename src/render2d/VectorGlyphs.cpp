@@ -45,11 +45,18 @@ std::vector<VectorSegment> generateVectorGlyphs(
         * static_cast<std::size_t>(uComponent.height);
 
     // Only the maximum is wanted, and sqrt is monotonic, so compare squared
-    // speeds and take one root at the end. std::hypot's overflow-safe scaling
-    // buys nothing here: the inputs are floats promoted to double, whose
-    // squares and sum cannot overflow a double. At the output cap this is up
-    // to 16.7 million hypot calls saved per vector slice.
+    // speeds and take one root at the end. At the output cap that is up to
+    // 16.7 million hypot calls saved per vector slice.
+    //
+    // The squares do have to be guarded, though. The samples are doubles, so
+    // a component near the top of the range squares to infinity, and one such
+    // cell would normalize every arrow in the plane to zero and empty the
+    // overlay. Those go through hypot, whose scaling handles them; the
+    // threshold is chosen so the fast path's sum stays far inside the double
+    // range, and no physical field reaches it, so the saving stands.
+    constexpr double squareSafeMagnitude = 1.0e150;
     double maxSpeedSquared = 0.0;
+    double maxScaledSpeed = 0.0;
     for (std::size_t pixel = 0; pixel < pixelCount; ++pixel) {
         if (uComponent.valid[pixel] == 0 || vComponent.valid[pixel] == 0) {
             continue;
@@ -59,9 +66,15 @@ std::vector<VectorSegment> generateVectorGlyphs(
         if (!std::isfinite(u) || !std::isfinite(v)) {
             continue;
         }
+        if (std::abs(u) > squareSafeMagnitude
+            || std::abs(v) > squareSafeMagnitude) {
+            maxScaledSpeed = std::max(maxScaledSpeed, std::hypot(u, v));
+            continue;
+        }
         maxSpeedSquared = std::max(maxSpeedSquared, u * u + v * v);
     }
-    const double maxSpeed = std::sqrt(maxSpeedSquared);
+    const double maxSpeed
+        = std::max(maxScaledSpeed, std::sqrt(maxSpeedSquared));
 
     std::vector<VectorSegment> segments;
     if (!(maxSpeed >= minimumMaxSpeed)) {

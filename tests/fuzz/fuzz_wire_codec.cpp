@@ -54,11 +54,23 @@ bool finite(const amrvis::RealBox& box)
 }
 
 // Bitwise equality: sample values may legitimately be NaN, which == denies.
-bool sameBits(const std::vector<float>& a, const std::vector<float>& b)
+bool sameBits(const std::vector<double>& a, const std::vector<double>& b)
 {
     return a.size() == b.size()
         && (a.empty()
-            || std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0);
+            || std::memcmp(a.data(), b.data(), a.size() * sizeof(double)) == 0);
+}
+
+// The values the payload carries, whichever field holds them -- restated here
+// rather than borrowed from the codec so this stays a check on the codec and
+// not a copy of it. An accepted payload never populates both.
+std::vector<double> wireValues(
+    const std::vector<float>& narrow, const std::vector<double>& wide)
+{
+    if (!wide.empty()) {
+        return wide;
+    }
+    return {narrow.begin(), narrow.end()};
 }
 
 // Postconditions of an accepted payload: what its fromWire converter claims
@@ -191,9 +203,12 @@ void checkConverted(
     }
     const auto expected = static_cast<std::size_t>(plane.width)
         * static_cast<std::size_t>(plane.height);
+    if (!wire.values.empty() && !wire.values_f64.empty()) {
+        fail("SliceViewResponse converter accepted both value vectors");
+    }
     if (plane.values.size() != expected || plane.valid.size() != expected
         || plane.sourceLevel.size() != expected
-        || !sameBits(plane.values, wire.values)
+        || !sameBits(plane.values, wireValues(wire.values, wire.values_f64))
         || !finite(plane.physicalRegion)
         || result.gridBoxes.size() != wire.grid_boxes.size()) {
         fail("SliceViewResponse converter accepted inconsistent vectors");
@@ -265,8 +280,12 @@ void checkConverted(
 {
     const auto& line = result.line;
     const auto expected = line.positions.size();
+    if (!wire.values.empty() && !wire.values_f64.empty()) {
+        fail("LineViewResponse converter accepted both value vectors");
+    }
     if (line.values.size() != expected || line.valid.size() != expected
         || line.sourceLevel.size() != expected
+        || !sameBits(line.values, wireValues(wire.values, wire.values_f64))
         || line.positions != wire.positions
         || !std::all_of(line.positions.begin(), line.positions.end(),
             [](double position) { return std::isfinite(position); })) {
@@ -323,8 +342,12 @@ void checkConverted(
     }
     const auto expected = static_cast<std::size_t>(result.nx)
         * static_cast<std::size_t>(result.ny);
+    if (!wire.values.empty() && !wire.values_f64.empty()) {
+        fail("DatasetPageResponse converter accepted both value vectors");
+    }
     if (result.values.size() != expected || result.covered.size() != expected
-        || !sameBits(result.values, wire.values) || wire.lower.size() != 2
+        || !sameBits(result.values, wireValues(wire.values, wire.values_f64))
+        || wire.lower.size() != 2
         || wire.upper.size() != 2
         || !std::equal(result.lower.begin(), result.lower.end(),
             wire.lower.begin())) {

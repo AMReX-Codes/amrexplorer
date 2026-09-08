@@ -38,10 +38,10 @@ std::uint32_t argbOf(const QColor& color)
 }
 
 // Every value drawn the way the renderer draws that same value: same palette,
-// same range, same log flag. Values are floats because that is what both the
+// same range, same log flag. Values are doubles because that is what both the
 // image plane and the dataset extract hold.
 void requireAgreesWithRenderer(const std::string& what,
-    const std::vector<float>& values, const amrvis::Palette& palette,
+    const std::vector<double>& values, const amrvis::Palette& palette,
     double minimum, double maximum, bool logarithmic)
 {
     amrvis::ScalarPlane plane;

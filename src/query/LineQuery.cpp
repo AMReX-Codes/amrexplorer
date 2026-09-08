@@ -18,7 +18,6 @@ using detail::IndexedBlocks;
 using detail::LoadedBlock;
 using detail::intersects;
 using detail::lookupBlockValue;
-using detail::narrowToFloat;
 using detail::physicalToIndex;
 
 // A covering cell hit during the line walk: which level won, the cell index,
@@ -26,7 +25,7 @@ using detail::physicalToIndex;
 struct Cover {
     int level = 0;
     Int3 point{};
-    float value = 0.0F;
+    double value = 0.0;
 };
 
 
@@ -170,7 +169,7 @@ LineQueryResult LineQuery::execute(
                     point)) {
                 cover.level = levelIndex;
                 cover.point = point;
-                cover.value = narrowToFloat(*value);
+                cover.value = *value;
                 return true;
             }
         }
@@ -238,7 +237,7 @@ LineQueryResult LineQuery::execute(
                 result.line.positions.push_back(metadata.hasPhysicalGeometry
                     ? center
                     : static_cast<double>(point[lineAxis]));
-                result.line.values.push_back(0.0F);
+                result.line.values.push_back(0.0);
                 result.line.valid.push_back(0);
                 result.line.sourceLevel.push_back(-1);
             }

@@ -474,6 +474,17 @@ target_link_libraries(
 )
 add_test(NAME single_precision_plotfile COMMAND test_single_precision_plotfile)
 
+add_executable(
+    test_near_degenerate_field
+    integration/test_near_degenerate_field.cpp
+)
+target_link_libraries(
+    test_near_degenerate_field
+    PRIVATE amrexplorer::query amrexplorer::data amrexplorer::pipeline
+            amrexplorer::render2d amrexplorer::warnings
+)
+add_test(NAME near_degenerate_field COMMAND test_near_degenerate_field)
+
 add_executable(test_display_transitions integration/test_display_transitions.cpp)
 target_link_libraries(
     test_display_transitions

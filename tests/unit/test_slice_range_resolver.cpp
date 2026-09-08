@@ -22,7 +22,7 @@ bool nearlyEqual(double a, double b, double tolerance = 1.0e-12)
     return std::fabs(a - b) <= tolerance * std::max({1.0, std::fabs(a), std::fabs(b)});
 }
 
-amrvis::ScalarPlane makePlane(std::initializer_list<float> values)
+amrvis::ScalarPlane makePlane(std::initializer_list<double> values)
 {
     amrvis::ScalarPlane plane;
     plane.width = static_cast<int>(values.size());

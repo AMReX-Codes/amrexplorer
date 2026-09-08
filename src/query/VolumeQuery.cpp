@@ -13,13 +13,12 @@
 namespace amrvis {
 namespace {
 
-using detail::floatOverflowThreshold;
 using detail::intersects;
 using detail::requireBlockPayload;
 using detail::sampleCentre;
 using detail::valueOffset;
 
-constexpr auto quietNaN = std::numeric_limits<float>::quiet_NaN();
+constexpr auto quietNaN = std::numeric_limits<double>::quiet_NaN();
 
 // The same product in double: no overflow, so the scaling below shrinks by
 // the true ratio even when the integer product has saturated.
@@ -302,17 +301,12 @@ VolumeQueryResult VolumeQuery::execute(
                         cell[1] = cellJ;
                         cell[2] = cellK;
                         const auto value = fab.values[valueOffset(fab.box, cell, 3)];
-                        // Range-checked before the cast, not after: converting
-                        // a double past the overflow threshold is undefined.
-                        // The grid promises NaN for anything that is not a
-                        // finite float, which is both the non-finite values
-                        // and the ones past float's range -- an infinity
-                        // would survive the cast, but it is no more showable
-                        // than a voxel nothing covered.
-                        const auto storable = std::isfinite(value)
-                            && std::fabs(value) < floatOverflowThreshold;
+                        // The grid promises NaN for anything not finite: an
+                        // infinity would survive storage, but it is no more
+                        // showable than a voxel nothing covered.
+                        const auto storable = std::isfinite(value);
                         row[static_cast<std::size_t>(i)]
-                            = storable ? static_cast<float>(value) : quietNaN;
+                            = storable ? value : quietNaN;
                         // A NaN is indistinguishable from an uncovered voxel,
                         // so a level that wrote only those contributed
                         // nothing the grid can show.
@@ -329,7 +323,7 @@ VolumeQueryResult VolumeQuery::execute(
 
     grid.coveredVoxels = static_cast<std::uint64_t>(std::count_if(
         grid.values.begin(), grid.values.end(),
-        [](float value) { return !std::isnan(value); }));
+        [](double value) { return !std::isnan(value); }));
     return result;
 }
 

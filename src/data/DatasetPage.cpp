@@ -121,7 +121,7 @@ DatasetPage extractDatasetPage(PlotfileDataset& dataset,
 
     const auto cellCount = static_cast<std::size_t>(page.nx)
         * static_cast<std::size_t>(page.ny);
-    page.values.assign(cellCount, 0.0F);
+    page.values.assign(cellCount, 0.0);
     page.covered.assign(cellCount, std::uint8_t{0});
 
     const auto xAxis = static_cast<std::size_t>(axes[0]);
@@ -174,7 +174,7 @@ DatasetPage extractDatasetPage(PlotfileDataset& dataset,
                     static_cast<std::int64_t>(i) - page.lower[0]);
                 const auto offset = valueX
                     + static_cast<std::size_t>(page.nx) * valueY;
-                page.values[offset] = static_cast<float>(value);
+                page.values[offset] = value;
                 page.covered[offset] = std::uint8_t{1};
                 if (std::isfinite(value)) {
                     minimum = std::min(minimum, value);

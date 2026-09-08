@@ -271,7 +271,7 @@ std::string planeDifference(
         const auto index = static_cast<std::size_t>(found - local.values.begin());
         std::ostringstream message;
         message << "sample values differ at pixel " << index
-                << " (local=" << std::setprecision(9) << local.values[index]
+                << " (local=" << std::setprecision(17) << local.values[index]
                 << ", remote=" << remote.values[index] << ')';
         return message.str();
     }

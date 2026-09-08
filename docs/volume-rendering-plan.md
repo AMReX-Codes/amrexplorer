@@ -32,7 +32,7 @@ Decisions taken with the user:
   alpha"; `Palette` gains the legacy `.pal` alpha ramp (parsed-and-discarded
   today). No curve editor now.
 - **Sampling:** composite the AMR hierarchy (finest-available up to the Level
-  combo, as slices do) into a **bounded uniform float grid** (voxel budget,
+  combo, as slices do) into a **bounded uniform double grid** (voxel budget,
   256^3 default), cache it per (dataset, field, level, region, dims), and
   ray-cast the cached grid so rotation only re-casts.
 
@@ -82,7 +82,7 @@ Key design points (each keeps something existing honest):
 Resolved defaults (routine calls, stated so nobody re-asks): alpha byte =
 legacy percent, `opacity = min(1, byte/100)` (Amrvis `Palette.cpp:670`);
 `reversed()` reverses RGB only; voxel budget 256^3 default / 512^3 hard cap;
-grid cache 256 MiB per session, server flags `--max-volume-voxels`,
+grid cache 512 MiB per session, server flags `--max-volume-voxels`,
 `--volume-cache-mib`; point sampling at voxel centres (box averaging later);
 window mirrors the main window's field/level/range/log/palette (no own range
 controls); drafts at half the logical size, the settled frame at the view's
@@ -126,7 +126,7 @@ struct VolumeRenderRequest {
     VolumeTransferFunction transfer; int samplesPerVoxel = 2;
     std::uint64_t maximumVoxels = defaultVolumeVoxelBudget;           // 256^3
 };
-struct VolumeGrid { std::array<int,3> dims{}; RealBox region; std::vector<float> values; std::uint64_t coveredVoxels = 0; int maximumLevel = 0; };
+struct VolumeGrid { std::array<int,3> dims{}; RealBox region; std::vector<double> values; std::uint64_t coveredVoxels = 0; int maximumLevel = 0; };
 struct VolumeRenderMetrics { gridDims, coveredVoxels, sampledMaximumLevel, gridFromCache, sample/renderMicroseconds, candidateBlocks, blocksRead, cacheHits, payloadBytesRead };
 struct VolumeFrame { int width = 0, height = 0; std::vector<std::uint32_t> pixels; VolumeRange usedRange; VolumeRenderMetrics metrics; int cacheFallbackFromLevel = -1, cacheFallbackToLevel = -1; };
 constexpr int maxVolumeOutputDimension = 4096; constexpr std::size_t maxVolumeTransferEntries = 1024;
@@ -221,7 +221,7 @@ registered like `bench_slice_query` (functional guard, generous timeout).
   by default.
 - `LocalDatasetSession`: supports iff 3-D && !isFab && hasPhysicalGeometry.
   `renderVolume`: `validateSessionVolumeRequest`; grid cache
-  (`ByteLruCache<VolumeGridKey, VolumeGrid>` 256 MiB, key {field, component,
+  (`ByteLruCache<VolumeGridKey, VolumeGrid>` 512 MiB, key {field, component,
   maximumLevel, composition, region, dims}; `findAndPin`/`insertAndPin`; cleared
   by `close()`/`clearUnpinnedCache()`); on miss `VolumeQuery::execute`; range =
   request or `volumeGridRange` with linear fallback (mirror `resolveDisplayRange`,
@@ -343,7 +343,7 @@ row, threading note; `docs/building.md` unchanged.
 - **Cancellation:** `StopToken` per block/z-slab in the sampler, per 16 rows in
   the caster; `ReadCancelled` propagates like slices; server `CancelRequest`
   unchanged.
-- **Memory:** 256^3 floats = 64 MiB per grid; 256 MiB grid cache per session; server
+- **Memory:** 256^3 doubles = 128 MiB per grid; 512 MiB grid cache per session; server
   worst case `maximumDatasets` × cache; 512^3 hard cap. Frame ≈ w·h·4 + 1 KiB
   (1000×800 ≈ 3.2 MB; half-res drag frames ≈ 0.8 MB).
 - **Determinism:** pixel work independent of thread partition → local == remote

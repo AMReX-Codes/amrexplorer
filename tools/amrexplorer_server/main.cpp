@@ -300,7 +300,7 @@ int main(int argc, char* argv[])
                 "--stdio and --port are mutually exclusive");
         }
 
-        // A grid is four bytes a voxel, so a cache below four times
+        // A grid is eight bytes a voxel, so a cache below eight times
         // --max-volume-voxels cannot hold a request that asks for the full
         // budget: those render uncached every time, while smaller requests
         // cache and evict normally. Setting the cache small is a legitimate
@@ -311,14 +311,14 @@ int main(int argc, char* argv[])
         // the server, which would take the deliberate case with it.
         //
         // Only when one of the two flags was actually given. The voxel cap now
-        // defaults to the 512^3 ceiling, which is 512 MiB of floats and more
+        // defaults to the 512^3 ceiling, which is 1 GiB of doubles and more
         // than the default grid cache holds, so the condition is true of every
         // unconfigured server -- and a warning printed on every start is one
         // nobody reads. What it is for is a configuration the operator chose;
         // nothing the GUI asks for reaches 512^3 anyway, its High preset being
         // 384^3, which the default cache does hold.
         if (volumeLimitsChosen
-            && options.maximumVolumeVoxels * 4ULL > options.volumeGridCacheBytes) {
+            && options.maximumVolumeVoxels * 8ULL > options.volumeGridCacheBytes) {
             std::cerr << "warning: --volume-cache-mib cannot hold one grid of "
                          "--max-volume-voxels voxels, so a request asking for "
                          "that many will render uncached every time; smaller "

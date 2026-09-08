@@ -795,7 +795,8 @@ private:
             dataset->requestView(ViewDataRequest{request}, cancellation));
         const auto responseSize = [&] {
             return codec::encode(envelope.request_id,
-                codec::toWire(result, dataset->cacheMetrics()),
+                codec::toWire(result, dataset->cacheMetrics(),
+                    m_selectedMinorVersion),
                 m_selectedMinorVersion).size();
         };
         // The planner uses a conservative per-box budget. Keep an exact final
@@ -813,7 +814,8 @@ private:
                 "slice raster cannot fit in one negotiated frame");
         }
         send(envelope.request_id,
-            codec::toWire(result, dataset->cacheMetrics()));
+            codec::toWire(result, dataset->cacheMetrics(),
+                m_selectedMinorVersion));
     }
 
     void renderedFrame(
@@ -887,8 +889,8 @@ private:
             throw RemoteError(ErrorCode::ResourceLimitExceeded,
                 "line viewport width is outside the server limit");
         }
-        constexpr std::uint64_t bytesPerPoint = sizeof(double)
-            + sizeof(float) + sizeof(std::uint8_t) + sizeof(std::int16_t);
+        const std::uint64_t bytesPerPoint = sizeof(double) + wireValueBytes()
+            + sizeof(std::uint8_t) + sizeof(std::int16_t);
         if (!fitsResponse(static_cast<std::uint64_t>(request.outputWidth)
                 * 2U * bytesPerPoint)) {
             throw RemoteError(ErrorCode::ResourceLimitExceeded,
@@ -903,7 +905,8 @@ private:
                 "line planner exceeded its viewport response bound");
         }
         send(envelope.request_id,
-            codec::toWire(result, dataset->cacheMetrics()));
+            codec::toWire(result, dataset->cacheMetrics(),
+                m_selectedMinorVersion));
     }
 
     void datasetPage(
@@ -923,7 +926,7 @@ private:
         const auto page
             = dataset->requestDatasetPage(request, cancellation);
         const auto vectorBytes
-            = static_cast<std::uint64_t>(page.values.size()) * sizeof(float)
+            = static_cast<std::uint64_t>(page.values.size()) * wireValueBytes()
             + static_cast<std::uint64_t>(page.covered.size())
                 * sizeof(std::uint8_t);
         if (!fitsResponse(vectorBytes)) {
@@ -931,7 +934,8 @@ private:
                 "dataset page cannot fit in one negotiated frame");
         }
         send(envelope.request_id,
-            codec::toWire(page, dataset->cacheMetrics()));
+            codec::toWire(page, dataset->cacheMetrics(),
+                m_selectedMinorVersion));
     }
 
     void range(
@@ -1051,7 +1055,7 @@ private:
         }
         const auto cells = static_cast<std::uint64_t>(request.outputSize[0])
             * static_cast<std::uint64_t>(request.outputSize[1]);
-        if (!fitsResponse(cells * sliceResponseBytesPerCell)) {
+        if (!fitsResponse(cells * wireSliceBytesPerCell())) {
             throw RemoteError(ErrorCode::ResourceLimitExceeded,
                 "slice viewport cannot fit in one negotiated frame");
         }
@@ -1099,7 +1103,7 @@ private:
             return 0;
         }
         const auto available = frameBytes - responseOverheadReserveBytes;
-        const auto rasterBytes = cells * sliceResponseBytesPerCell;
+        const auto rasterBytes = cells * wireSliceBytesPerCell();
         if (available <= rasterBytes) {
             return 0;
         }
@@ -1279,6 +1283,21 @@ private:
     std::atomic<std::uint32_t> m_maximumFrameBytes;
     std::atomic_bool m_stopping{false};
     StopSource m_lifecycleStop;
+    // What one sampled value costs this session on the wire. A peer that
+    // predates the double vectors is really sent floats, so charging it for
+    // doubles would newly refuse a response it used to receive.
+    [[nodiscard]] std::uint64_t wireValueBytes() const noexcept
+    {
+        return m_selectedMinorVersion >= doubleValueVectorsMinorVersion
+            ? sizeof(double)
+            : sizeof(float);
+    }
+
+    [[nodiscard]] std::uint64_t wireSliceBytesPerCell() const noexcept
+    {
+        return wireValueBytes() + sizeof(std::uint8_t) + sizeof(std::int16_t);
+    }
+
     std::uint16_t m_selectedMinorVersion = 0;
     bool m_handshakeComplete = false;
     std::atomic<std::uint64_t> m_nextDatasetId{1};

@@ -1310,7 +1310,7 @@ int main()
 
     // --- the Visible range rule, which the slice path has to agree with ---
     {
-        const auto gridOf = [](std::vector<float> values) {
+        const auto gridOf = [](std::vector<double> values) {
             amrvis::VolumeGrid grid;
             grid.dims = {static_cast<int>(values.size()), 1, 1};
             grid.region.lower = {{0.0, 0.0, 0.0}};

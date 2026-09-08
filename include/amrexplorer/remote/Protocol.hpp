@@ -34,7 +34,17 @@ inline constexpr std::uint16_t protocolMajor = 1;
 // answer a plain catalog, so the client would show an Expression Editor whose
 // Apply reported success while every slice kept coming back from the stored
 // fields alone.
-inline constexpr std::uint16_t protocolMinorVersion = 4;
+//
+// 1.5 carries slice, line and page values as doubles. It is a version rather
+// than a widened field because the element width cannot change under a field
+// id: the verifier checks element count against byte length, so a 1.4 peer
+// would read the first half of the bytes, pass verification, and render
+// garbage. The float field therefore stays and is written for a 1.4 peer,
+// which is also why a client must be able to tell that a flat picture came
+// from the server's precision rather than from the field.
+inline constexpr std::uint16_t doubleValueVectorsMinorVersion = 5;
+inline constexpr std::uint16_t protocolMinorVersion
+    = doubleValueVectorsMinorVersion;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,

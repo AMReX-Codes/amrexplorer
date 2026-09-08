@@ -239,7 +239,14 @@ int main(int argc, char* argv[])
         // nearly all of it. The optional overlay list must be truncated by the
         // planner while the raster response still succeeds within the frame.
         amrvis::remote::ConnectionOptions smallFrameOptions;
-        smallFrameOptions.maximumFrameBytes = 4096;
+        // Sized so the 22x22 raster leaves room for exactly one grid box
+        // (128 bytes each), which is what makes the planner truncate the
+        // overlay while the raster itself still fits. Derived from the
+        // per-cell width so widening a value re-tunes this rather than
+        // turning the raster into a hard frame overflow.
+        smallFrameOptions.maximumFrameBytes = static_cast<std::uint32_t>(
+            amrvis::sliceResponseOverheadBytes
+            + 22U * 22U * amrvis::sliceResponseBytesPerCell + 164U);
         smallFrameOptions.sessionToken = server.token();
         auto smallFrameConnection
             = std::make_shared<amrvis::remote::Connection>(

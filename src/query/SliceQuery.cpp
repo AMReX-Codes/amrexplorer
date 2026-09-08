@@ -20,7 +20,6 @@ using detail::LoadedBlock;
 using detail::indexRangeOnAxis;
 using detail::intersects;
 using detail::lookupBlockValue;
-using detail::narrowToFloat;
 using detail::physicalToIndex;
 using detail::sampleCentre;
 
@@ -88,7 +87,7 @@ SliceQueryResult SliceQuery::execute(
     result.plane.width = request.outputSize[0];
     result.plane.height = request.outputSize[1];
     result.plane.physicalRegion = request.visibleRegion;
-    result.plane.values.assign(pixelCount, 0.0F);
+    result.plane.values.assign(pixelCount, 0.0);
     result.plane.valid.assign(pixelCount, 0);
     result.plane.sourceLevel.assign(pixelCount, -1);
 
@@ -318,7 +317,7 @@ SliceQueryResult SliceQuery::execute(
             if (!sample) {
                 continue;
             }
-            result.plane.values[output] = narrowToFloat(sample->first);
+            result.plane.values[output] = sample->first;
             result.plane.valid[output] = 1;
             result.plane.sourceLevel[output] =
                 static_cast<std::int16_t>(sample->second);

@@ -161,8 +161,8 @@ std::filesystem::path writeSeamFixture(const std::filesystem::path& root)
 
 // 4^3 cells of dx = 0.25 whose index domain starts at -2, over [-0.5,0.5]^3.
 // Cell (i,j,k) holds i + 10*j + 100*k, so a voxel that silently fell back to
-// another cell is visible in the value. One cell carries 1e300, which no
-// float can hold.
+// another cell is visible in the value. One cell carries 1e300, which the
+// grid holds exactly now that it stores doubles.
 std::filesystem::path writeNegativeIndexFixture(const std::filesystem::path& root)
 {
     std::filesystem::create_directories(root / "Level_0");
@@ -376,8 +376,10 @@ bool rejects(amrvis::VolumeQuery& query,
     return false;
 }
 
-// The two-level fixture with the fine level holding 1e300, which no float
-// can store: level 1 covers those voxels but puts nothing showable in them.
+// The two-level fixture with the fine level holding infinity, which the grid
+// cannot show: level 1 covers those voxels but puts nothing showable in them.
+// Infinity rather than a large finite value -- the grid holds any finite
+// double now, so only the non-finite ones still exercise the NaN sentinel.
 std::filesystem::path writeNanFineFixture(const std::filesystem::path& root)
 {
     writeTwoLevelFixture(root);
@@ -387,7 +389,7 @@ std::filesystem::path writeNanFineFixture(const std::filesystem::path& root)
         "1\nFabOnDisk: Cell_D_00000 0\n\n"
         "1,1\n1e300,\n\n1,1\n1e300,\n\n");
     std::array<double, 64> fine{};
-    fine.fill(1.0e300);
+    fine.fill(std::numeric_limits<double>::infinity());
     writeFab(root / "Level_1" / "Cell_D_00000", "((2,2,2) (5,5,5) (0,0,0))",
         fine);
     return root;
@@ -448,8 +450,7 @@ int main()
         for (int k = 0; k < 4; ++k) {
             for (int j = 0; j < 4; ++j) {
                 for (int i = 0; i < 4; ++i) {
-                    const auto expected
-                        = static_cast<float>(static_cast<double>(i + j + k) / 9.0);
+                    const auto expected = static_cast<double>(i + j + k) / 9.0;
                     require(native.grid.values[voxel(native.grid, i, j, k)]
                             == expected,
                         "a native voxel does not carry its cell's value");
@@ -473,8 +474,8 @@ int main()
             for (int j = 0; j < 2; ++j) {
                 for (int i = 0; i < 2; ++i) {
                     const auto cell = [](int index) { return index == 0 ? 1 : 3; };
-                    const auto expected = static_cast<float>(
-                        static_cast<double>(cell(i) + cell(j) + cell(k)) / 9.0);
+                    const auto expected
+                        = static_cast<double>(cell(i) + cell(j) + cell(k)) / 9.0;
                     require(coarse.grid.values[voxel(coarse.grid, i, j, k)]
                             == expected,
                         "a downsampled voxel is not the cell under its centre");
@@ -485,7 +486,7 @@ int main()
         request.maximumVoxels = 1;
         const auto single = query.execute(request);
         require(single.grid.dims == (std::array<int, 3>{1, 1, 1})
-                && single.grid.values[0] == static_cast<float>(6.0 / 9.0),
+                && single.grid.values[0] == 6.0 / 9.0,
             "a one-voxel grid is not the centre cell");
 
         // A sub-region: [0.5,1] x [0,1] x [0.25,0.75] at native pitch is
@@ -499,8 +500,8 @@ int main()
         for (int k = 0; k < 2; ++k) {
             for (int j = 0; j < 4; ++j) {
                 for (int i = 0; i < 2; ++i) {
-                    const auto expected = static_cast<float>(
-                        static_cast<double>((i + 2) + j + (k + 1)) / 9.0);
+                    const auto expected
+                        = static_cast<double>((i + 2) + j + (k + 1)) / 9.0;
                     require(sub.grid.values[voxel(sub.grid, i, j, k)] == expected,
                         "a sub-region voxel does not carry its cell's value");
                 }
@@ -699,7 +700,7 @@ int main()
         const auto grid = query.execute(request).grid;
         require(grid.dims == (std::array<int, 3>{4, 4, 4}),
             "the negative-index grid has the wrong shape");
-        require(grid.coveredVoxels == 63,
+        require(grid.coveredVoxels == 64,
             "the negative-index grid covered the wrong number of voxels");
         for (int k = 0; k < 4; ++k) {
             for (int j = 0; j < 4; ++j) {
@@ -707,7 +708,7 @@ int main()
                     if (i == 3 && j == 3 && k == 3) {
                         continue;
                     }
-                    const auto expected = static_cast<float>(
+                    const auto expected = static_cast<double>(
                         (i - 2) + 10 * (j - 2) + 100 * (k - 2));
                     require(grid.values[voxel(grid, i, j, k)] == expected,
                         "a voxel over a negative index read the wrong cell");
@@ -715,10 +716,11 @@ int main()
             }
         }
 
-        // 1e300 is finite as a double but has no float to round to, and the
-        // grid promises NaN for anything it cannot hold.
-        require(std::isnan(grid.values[voxel(grid, 3, 3, 3)]),
-            "a value outside float's range was not reported as uncovered");
+        // 1e300 is finite, and the grid now holds it exactly. Narrowing to
+        // float used to send it to NaN and drop the voxel from the coverage
+        // count; nothing finite is unshowable any more.
+        require(grid.values[voxel(grid, 3, 3, 3)] == 1.0e300,
+            "a large finite value did not survive into the grid");
     }
 
     // --- the budget holds for a level too large to multiply out -----------
@@ -1073,7 +1075,7 @@ int main()
 
     // --- a level that writes only NaN contributed nothing ------------------
     {
-        // Level 1 holds 1e300 throughout, so every voxel it covers lands in
+        // Level 1 holds infinity throughout, so every voxel it covers lands in
         // the grid as NaN -- indistinguishable from a voxel no level
         // covered. It overwrote level 0 without putting anything showable
         // in its place, so the finest level that contributed is 0.
@@ -1093,7 +1095,7 @@ int main()
         // Voxel centres are 0.125, 0.375, 0.625, 0.875; the fine level spans
         // [0.25, 0.75], so the middle two on each axis fall inside it.
         require(grid.coveredVoxels == 64 - 8,
-            "the fine level's 1e300 cells were not reported as uncovered");
+            "the fine level's infinite cells were not reported as uncovered");
         for (int k = 0; k < 4; ++k) {
             for (int j = 0; j < 4; ++j) {
                 for (int i = 0; i < 4; ++i) {

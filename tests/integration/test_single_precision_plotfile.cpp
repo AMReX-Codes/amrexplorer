@@ -152,7 +152,7 @@ int main()
     sliceRequest.visibleRegion = metadata.physicalDomain;
     sliceRequest.outputSize = {2, 2};
     const auto slice = amrvis::SliceQuery(dataset).execute(sliceRequest);
-    require(slice.plane.values == std::vector<float>(
+    require(slice.plane.values == std::vector<double>(
             singleValues.begin(), singleValues.end()),
         "single-precision slice values mismatch");
     require(std::all_of(slice.plane.valid.begin(), slice.plane.valid.end(),

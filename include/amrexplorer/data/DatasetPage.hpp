@@ -30,7 +30,7 @@ struct DatasetPage {
     int nx = 0;
     int ny = 0;
     int sliceIndex = 0;
-    std::vector<float> values;
+    std::vector<double> values;
     std::vector<std::uint8_t> covered;
     double minimum = 0.0;
     double maximum = 0.0;

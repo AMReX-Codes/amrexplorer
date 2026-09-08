@@ -121,7 +121,7 @@ LocalDatasetSession::LocalDatasetSession(
     // not on its own default. setCacheBudget keeps the two in step afterwards,
     // but the normal local and server open paths only construct a session --
     // they never call it -- so without this a session opened with a small
-    // AMREXPLORER_CACHE_SIZE_MB still held up to the 256 MiB grid default.
+    // AMREXPLORER_CACHE_SIZE_MB still held up to the 512 MiB grid default.
     static_cast<void>(
         m_volumeGrids.setBudget(m_dataset->cacheMetrics().budgetBytes));
 }
@@ -371,7 +371,7 @@ VolumeFrame LocalDatasetSession::renderVolume(const VolumeRenderRequest& request
         metrics.cacheHits = sampled.metrics.cacheHits;
         metrics.payloadBytesRead = sampled.metrics.payloadBytesRead;
         const auto bytes = static_cast<std::uint64_t>(sampled.grid.values.size())
-            * sizeof(float);
+            * sizeof(decltype(VolumeGrid::values)::value_type);
         auto owned = std::make_shared<const VolumeGrid>(std::move(sampled.grid));
         try {
             handle = m_volumeGrids.insertAndPin(key, owned, bytes);

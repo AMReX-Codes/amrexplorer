@@ -236,6 +236,37 @@ void validateResultVectors(
     }
 }
 
+// Fill whichever value vector the negotiated version can read, and only that
+// one: a 1.5 peer gets the doubles, an older one the narrowed floats. Sending
+// both would double the payload for no reader.
+void encodeValues(std::uint16_t minorVersion, const std::vector<double>& values,
+    std::vector<float>& narrow, std::vector<double>& wide)
+{
+    if (minorVersion >= doubleValueVectorsMinorVersion) {
+        wide = values;
+        return;
+    }
+    narrow.reserve(values.size());
+    for (const auto sample : values) {
+        narrow.push_back(detail::narrowToFloat(sample));
+    }
+}
+
+// The values a response carries, whichever field holds them. Both populated
+// is rejected rather than resolved: the payload's meaning would otherwise
+// depend on which field the decoder happened to prefer.
+std::vector<double> decodeValues(const std::vector<float>& narrow,
+    const std::vector<double>& wide, const char* description)
+{
+    if (!narrow.empty() && !wide.empty()) {
+        throw std::invalid_argument(description);
+    }
+    if (!wide.empty()) {
+        return wide;
+    }
+    return {narrow.begin(), narrow.end()};
+}
+
 // flatbuffers' Verifier checks the alignment of table scalars and of a
 // vector's 4-byte length prefix, but not of the vector's elements, so a
 // hostile buffer can place a [double] or [ulong] vector at a 4-byte offset
@@ -985,14 +1016,15 @@ SliceRequest fromWire(const fb::SliceViewRequestT& value)
     return result;
 }
 
-fb::SliceViewResponseT toWire(
-    const SliceQueryResult& value, const CacheMetrics& cache)
+fb::SliceViewResponseT toWire(const SliceQueryResult& value,
+    const CacheMetrics& cache, std::uint16_t minorVersion)
 {
     fb::SliceViewResponseT wire;
     wire.width = value.plane.width;
     wire.height = value.plane.height;
     wire.physical_region = toWire(value.plane.physicalRegion);
-    wire.values = value.plane.values;
+    encodeValues(minorVersion, value.plane.values, wire.values,
+        wire.values_f64);
     wire.valid = value.plane.valid;
     wire.source_level = value.plane.sourceLevel;
     wire.grid_boxes_included = value.gridBoxesIncluded;
@@ -1020,14 +1052,16 @@ SliceQueryResult fromWire(const fb::SliceViewResponseT& value)
     const auto expected = checkedProduct(static_cast<std::size_t>(value.width),
         static_cast<std::size_t>(value.height),
         "wire slice dimensions overflow");
-    validateResultVectors(expected, value.values.size(), value.valid.size(),
+    auto values = decodeValues(value.values, value.values_f64,
+        "wire slice carries both float and double values");
+    validateResultVectors(expected, values.size(), value.valid.size(),
         value.source_level.size(), "wire slice vectors are inconsistent");
     const auto physicalRegion = fromWire(value.physical_region.get());
     SliceQueryResult result;
     result.plane.width = value.width;
     result.plane.height = value.height;
     result.plane.physicalRegion = physicalRegion;
-    result.plane.values = value.values;
+    result.plane.values = std::move(values);
     result.plane.valid = value.valid;
     result.plane.sourceLevel = value.source_level;
     result.gridBoxesIncluded = value.grid_boxes_included;
@@ -1217,14 +1251,15 @@ LineViewRequest fromWire(const fb::LineViewRequestT& value)
     return result;
 }
 
-fb::LineViewResponseT toWire(
-    const LineQueryResult& value, const CacheMetrics& cache)
+fb::LineViewResponseT toWire(const LineQueryResult& value,
+    const CacheMetrics& cache, std::uint16_t minorVersion)
 {
     fb::LineViewResponseT wire;
     wire.axis = value.line.axis;
     wire.positions_are_indices = value.line.positionsAreIndices;
     wire.positions = value.line.positions;
-    wire.values = value.line.values;
+    encodeValues(minorVersion, value.line.values, wire.values,
+        wire.values_f64);
     wire.valid = value.line.valid;
     wire.source_level = value.line.sourceLevel;
     wire.candidate_blocks = value.metrics.candidateBlocks;
@@ -1237,7 +1272,9 @@ fb::LineViewResponseT toWire(
 
 LineQueryResult fromWire(const fb::LineViewResponseT& value)
 {
-    validateResultVectors(value.positions.size(), value.values.size(),
+    auto values = decodeValues(value.values, value.values_f64,
+        "wire line carries both float and double values");
+    validateResultVectors(value.positions.size(), values.size(),
         value.valid.size(), value.source_level.size(),
         "wire line vectors are inconsistent");
     requireFiniteValues(value.positions,
@@ -1246,7 +1283,7 @@ LineQueryResult fromWire(const fb::LineViewResponseT& value)
     result.line.axis = value.axis;
     result.line.positionsAreIndices = value.positions_are_indices;
     result.line.positions = value.positions;
-    result.line.values = value.values;
+    result.line.values = std::move(values);
     result.line.valid = value.valid;
     result.line.sourceLevel = value.source_level;
     result.metrics = {value.candidate_blocks, value.blocks_read,
@@ -1276,8 +1313,8 @@ DatasetPageRequest fromWire(const fb::DatasetPageRequestT& value)
         region, value.normal_axis, value.slice_position, value.maximum_extent};
 }
 
-fb::DatasetPageResponseT toWire(
-    const DatasetPage& value, const CacheMetrics& cache)
+fb::DatasetPageResponseT toWire(const DatasetPage& value,
+    const CacheMetrics& cache, std::uint16_t minorVersion)
 {
     fb::DatasetPageResponseT wire;
     wire.lower.assign(value.lower.begin(), value.lower.end());
@@ -1285,7 +1322,7 @@ fb::DatasetPageResponseT toWire(
     wire.nx = value.nx;
     wire.ny = value.ny;
     wire.slice_index = value.sliceIndex;
-    wire.values = value.values;
+    encodeValues(minorVersion, value.values, wire.values, wire.values_f64);
     wire.covered = value.covered;
     wire.minimum = value.minimum;
     wire.maximum = value.maximum;
@@ -1310,7 +1347,9 @@ DatasetPage fromWire(const fb::DatasetPageResponseT& value)
     const auto expected = checkedProduct(static_cast<std::size_t>(value.nx),
         static_cast<std::size_t>(value.ny),
         "wire dataset page extent overflows");
-    if (value.values.size() != expected || value.covered.size() != expected) {
+    auto values = decodeValues(value.values, value.values_f64,
+        "wire dataset page carries both float and double values");
+    if (values.size() != expected || value.covered.size() != expected) {
         throw std::invalid_argument(
             "wire dataset page vectors are inconsistent");
     }
@@ -1329,7 +1368,7 @@ DatasetPage fromWire(const fb::DatasetPageResponseT& value)
     result.nx = value.nx;
     result.ny = value.ny;
     result.sliceIndex = value.slice_index;
-    result.values = value.values;
+    result.values = std::move(values);
     result.covered = value.covered;
     result.minimum = value.minimum;
     result.maximum = value.maximum;

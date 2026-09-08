@@ -11,8 +11,12 @@
 
 namespace amrvis::remote {
 
+// Sized so a full 4096^2 slice still fits: at 11 bytes a cell plus the
+// response overhead that is 176 MiB. Dropping below it does not fail, it
+// silently hands back a smaller raster, which is the failure mode this
+// codebase keeps designing against.
 inline constexpr std::uint32_t defaultMaximumFrameBytes
-    = 128U * 1024U * 1024U;
+    = 192U * 1024U * 1024U;
 
 // A bidirectional byte stream the frame layer reads and writes. Implementations
 // are a connected socket (loopback TCP, or an AF_UNIX pair handed to a child

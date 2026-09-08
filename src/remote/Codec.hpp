@@ -6,7 +6,9 @@
 
 #include <flatbuffers/flatbuffers.h>
 
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -18,6 +20,39 @@ namespace amrvis::remote::codec {
 namespace fb = amrexplorer::wire;
 using Bytes = std::vector<std::uint8_t>;
 using NativeEnvelope = fb::EnvelopeT;
+
+namespace detail {
+
+// The magnitude at which a double stops converting to a finite float: the
+// midpoint between float's largest finite value and 2^128. Not that largest
+// value itself -- a double above it but below this midpoint still rounds
+// down to it, and converting one is perfectly well defined. Only from the
+// midpoint up does the conversion overflow, and only there is it undefined.
+inline constexpr double floatOverflowThreshold = 0x1.ffffffp127;
+
+// The only narrowing left in the process: what a value vector becomes for a
+// peer that predates the double-precision fields. Maps the overflow that
+// would otherwise be undefined to the infinity the hardware produces.
+//
+// Safe for the slice, line and page alike because each carries a separate
+// valid or covered mask, so an infinity here is still a sample the sender
+// marked valid. A volume grid has only NaN to say "nothing here" and so
+// cannot use this -- but it is never sent narrowed.
+[[nodiscard]] inline float narrowToFloat(double value)
+{
+    if (std::isnan(value)) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+    if (value >= floatOverflowThreshold) {
+        return std::numeric_limits<float>::infinity();
+    }
+    if (value <= -floatOverflowThreshold) {
+        return -std::numeric_limits<float>::infinity();
+    }
+    return static_cast<float>(value);
+}
+
+} // namespace detail
 
 template <typename Payload>
 Bytes encode(std::uint64_t requestId, Payload payload,
@@ -79,14 +114,16 @@ Bytes encode(std::uint64_t requestId, Payload payload,
 [[nodiscard]] fb::SliceViewRequestT toWire(const SliceRequest& value);
 [[nodiscard]] SliceRequest fromWire(const fb::SliceViewRequestT& value);
 [[nodiscard]] fb::SliceViewResponseT toWire(
-    const SliceQueryResult& value, const CacheMetrics& cache);
+    const SliceQueryResult& value, const CacheMetrics& cache,
+    std::uint16_t minorVersion = protocolMinorVersion);
 [[nodiscard]] SliceQueryResult fromWire(
     const fb::SliceViewResponseT& value);
 
 [[nodiscard]] fb::LineViewRequestT toWire(const LineViewRequest& value);
 [[nodiscard]] LineViewRequest fromWire(const fb::LineViewRequestT& value);
 [[nodiscard]] fb::LineViewResponseT toWire(
-    const LineQueryResult& value, const CacheMetrics& cache);
+    const LineQueryResult& value, const CacheMetrics& cache,
+    std::uint16_t minorVersion = protocolMinorVersion);
 [[nodiscard]] LineQueryResult fromWire(
     const fb::LineViewResponseT& value);
 
@@ -95,7 +132,8 @@ Bytes encode(std::uint64_t requestId, Payload payload,
 [[nodiscard]] DatasetPageRequest fromWire(
     const fb::DatasetPageRequestT& value);
 [[nodiscard]] fb::DatasetPageResponseT toWire(
-    const DatasetPage& value, const CacheMetrics& cache);
+    const DatasetPage& value, const CacheMetrics& cache,
+    std::uint16_t minorVersion = protocolMinorVersion);
 [[nodiscard]] DatasetPage fromWire(const fb::DatasetPageResponseT& value);
 
 [[nodiscard]] fb::ParticleSampleRequestT toWire(DatasetId dataset,

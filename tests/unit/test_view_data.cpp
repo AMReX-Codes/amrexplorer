@@ -14,7 +14,7 @@ void require(bool condition, const char* message)
     }
 }
 
-amrvis::LineQueryResult lineResult(std::vector<float> values,
+amrvis::LineQueryResult lineResult(std::vector<double> values,
     std::vector<std::uint8_t> valid)
 {
     amrvis::LineQueryResult result;
@@ -45,8 +45,8 @@ int main()
         "downsampling discarded every valid sample in a mixed bucket");
 
     const auto extrema = amrvis::boundLineToViewport(
-        lineResult({2.0F, -4.0F, 7.0F, 1.0F}, {1, 1, 1, 1}), 1);
-    require(extrema.line.values == std::vector<float>({-4.0F, 7.0F}),
+        lineResult({2.0, -4.0, 7.0, 1.0}, {1, 1, 1, 1}), 1);
+    require(extrema.line.values == std::vector<double>({-4.0, 7.0}),
         "valid bucket did not preserve its ordered extrema");
     return 0;
 }

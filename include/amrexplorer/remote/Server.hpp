@@ -37,7 +37,7 @@ struct ServerOptions {
     // Volume rendering (protocol 1.2): the most voxels a client may ask the
     // server to sample per request (its own budget is clamped to this), and
     // the per-dataset cache of sampled grids a rotating client re-casts
-    // from. A grid is four bytes per voxel.
+    // from. A grid is eight bytes per voxel.
     //
     // Each bounds one thing -- one grid, and one dataset's cache -- not the
     // server's memory in total. The aggregate is these multiplied by

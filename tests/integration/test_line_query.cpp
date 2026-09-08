@@ -150,10 +150,10 @@ void test2d(const std::filesystem::path& source, const std::filesystem::path& wo
     // Native composite sampling emits one sample per actual cell: coarse cell 0
     // over [0, 0.25), fine cells 2-5 over [0.25, 0.75), coarse cell 3 over
     // [0.75, 1.0). Six samples total, with no flat coarse steps.
-    struct NativeSample { double position; float value; int level; };
+    struct NativeSample { double position; double value; int level; };
     const std::vector<NativeSample> native = {
-        {0.125, 1.0F, 0}, {0.3125, 3.0F, 1}, {0.4375, 3.5F, 1},
-        {0.5625, 4.0F, 1}, {0.6875, 4.5F, 1}, {0.875, 2.5F, 0},
+        {0.125, 1.0, 0}, {0.3125, 3.0, 1}, {0.4375, 3.5, 1},
+        {0.5625, 4.0, 1}, {0.6875, 4.5, 1}, {0.875, 2.5, 0},
     };
     require(composite.line.positions.size() == native.size(),
         "native composite sample count mismatch");
@@ -291,7 +291,7 @@ void test2d(const std::filesystem::path& source, const std::filesystem::path& wo
         require(exactCoarse.line.valid[sample] == 1
                 && exactCoarse.line.sourceLevel[sample] == 0,
             "exact coarse line coverage mismatch");
-        require(exactCoarse.line.values[sample] == static_cast<float>(0.5 * (s + 2.0)),
+        require(exactCoarse.line.values[sample] == 0.5 * (s + 2.0),
             "exact coarse line used fine data");
     }
 
@@ -320,7 +320,7 @@ void test2d(const std::filesystem::path& source, const std::filesystem::path& wo
             "line along y position mismatch");
         require(vertical.line.valid[sample] == 1 && vertical.line.sourceLevel[sample] == 0,
             "line along y unexpectedly used the fine grid");
-        require(vertical.line.values[sample] == static_cast<float>(0.5 * s),
+        require(vertical.line.values[sample] == 0.5 * s,
             "line along y value mismatch");
     }
 
@@ -362,7 +362,7 @@ void test3d(const std::filesystem::path& source, const std::filesystem::path& wo
             "3-D line position mismatch");
         require(alongX.line.valid[sample] == 1 && alongX.line.sourceLevel[sample] == 0,
             "3-D line coverage mismatch");
-        require(alongX.line.values[sample] == static_cast<float>((s + 4.0) / 9.0),
+        require(alongX.line.values[sample] == (s + 4.0) / 9.0,
             "3-D line value mismatch");
     }
 
@@ -394,7 +394,7 @@ void test3d(const std::filesystem::path& source, const std::filesystem::path& wo
             "3-D z line position mismatch");
         require(alongZ.line.valid[sample] == 1 && alongZ.line.sourceLevel[sample] == 0,
             "3-D z line coverage mismatch");
-        require(alongZ.line.values[sample] == static_cast<float>((s + 4.0) / 9.0),
+        require(alongZ.line.values[sample] == (s + 4.0) / 9.0,
             "3-D z line value mismatch");
     }
 

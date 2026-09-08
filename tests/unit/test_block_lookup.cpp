@@ -536,38 +536,6 @@ int main()
             {second, pin(4, box2d(5, 1, 4, 0), {0.0})}, true);
     }
 
-    // --- narrowToFloat overflows where the conversion does, not sooner ---
-    {
-        // A double above float's largest finite value still rounds down to
-        // it until the midpoint with 2^128; only from there does converting
-        // it overflow. Thresholding at the largest value instead would send
-        // that whole band to infinity, which is not what converting gives.
-        using amrvis::detail::floatOverflowThreshold;
-        using amrvis::detail::narrowToFloat;
-        constexpr auto largest = std::numeric_limits<float>::max();
-        constexpr auto largestAsDouble = static_cast<double>(largest);
-        require(largestAsDouble < floatOverflowThreshold,
-            "the overflow threshold is not above FLT_MAX");
-        for (const auto value : {largestAsDouble,
-                 std::nextafter(largestAsDouble, floatOverflowThreshold),
-                 std::nextafter(floatOverflowThreshold, 0.0)}) {
-            require(narrowToFloat(value) == largest,
-                "a double that rounds to FLT_MAX was reported as infinite");
-            require(narrowToFloat(-value) == -largest,
-                "a double that rounds to -FLT_MAX was reported as infinite");
-        }
-        require(std::isinf(narrowToFloat(floatOverflowThreshold))
-                && narrowToFloat(floatOverflowThreshold) > 0.0F,
-            "a double at the overflow threshold was not +infinity");
-        require(std::isinf(narrowToFloat(-floatOverflowThreshold))
-                && narrowToFloat(-floatOverflowThreshold) < 0.0F,
-            "a double at the negative threshold was not -infinity");
-        require(std::isnan(narrowToFloat(
-                    std::numeric_limits<double>::quiet_NaN())),
-            "a NaN did not survive narrowing");
-        require(narrowToFloat(1.5) == 1.5F && narrowToFloat(0.0) == 0.0F,
-            "an ordinary value did not narrow to itself");
-    }
 
     std::cout << "block lookup tests passed\n";
     return 0;

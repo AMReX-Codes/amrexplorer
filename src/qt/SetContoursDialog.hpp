@@ -11,6 +11,7 @@
 
 class QButtonGroup;
 class QComboBox;
+class QCheckBox;
 class QEvent;
 class QGroupBox;
 class QLabel;
@@ -44,6 +45,8 @@ public:
     void setContourCount(int count);
     void setVectorFields(int uField, int vField, int wField);
     void setContourColor(int color);
+    void setUnitVectors(bool enabled);
+    [[nodiscard]] bool unitVectors() const;
     [[nodiscard]] DisplayMode mode() const;
     [[nodiscard]] int contourCount() const;
     [[nodiscard]] int uField() const;
@@ -63,6 +66,7 @@ private:
     QButtonGroup* m_modeButtons = nullptr;
     QSpinBox* m_contourCount = nullptr;
     QGroupBox* m_vectorBox = nullptr;
+    QCheckBox* m_unitVectors = nullptr;
     QLabel* m_vectorWarning = nullptr;
     QComboBox* m_uField = nullptr;
     QComboBox* m_vField = nullptr;

@@ -81,6 +81,7 @@ struct SliceDisplayResult {
     std::uint32_t vectorUField = 0;
     std::uint32_t vectorVField = 0;
     int contourCount = 0;
+    bool unitVectors = false;
     // Set when the image was intentionally not re-rendered (contour-only
     // refresh): the GUI keeps the view's current pixmap.
     bool rasterUnchanged = false;
@@ -148,6 +149,7 @@ struct FrameSliceSpec {
     std::uint32_t vectorVField = 0;
     std::uint32_t vectorWField = 0;
     int contourCount = 10;
+    bool unitVectors = false;
     // 2-D spherical warp resolution carried across frame loads (see
     // SliceRequest::sphericalSupersample).
     int sphericalSupersample = 4;
@@ -274,7 +276,7 @@ inline constexpr int maxSliceOutputDimension = maxViewOutputDimension;
 // region, level, and output size so the planes line up sample for sample.
 void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
     SliceRequest request, FieldId uField, FieldId vField, int count,
-    StopToken cancellation, SliceDisplayResult& result);
+    StopToken cancellation, SliceDisplayResult& result, bool unitVectors = false);
 
 // The whole non-cached slice worker: executeSlice plus the display-mode
 // extras (contours or vector glyphs), with the same cache-pressure level
@@ -290,7 +292,7 @@ void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField, int contourCount,
-    StopToken cancellation);
+    StopToken cancellation, bool unitVectors = false);
 
 // Extracts contour polylines for the request at data resolution and maps
 // them to display-plane pixel space; caches the contour plane on the result so
@@ -316,7 +318,7 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
     std::uint32_t vectorUField, std::uint32_t vectorVField,
-    int contourCount, bool rasterDirty, StopToken cancellation = {});
+    int contourCount, bool rasterDirty, StopToken cancellation = {}, bool unitVectors = false);
 
 // Re-extract contour polylines from an already-populated contour plane after
 // the display range is replaced downstream of appendContours/refreshCachedSlice

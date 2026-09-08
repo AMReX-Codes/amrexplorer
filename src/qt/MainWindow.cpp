@@ -1836,10 +1836,11 @@ void MainWindow::showContoursDialog()
     dialog->setContourCount(m_contourCount);
     dialog->setVectorFields(m_vectorUField, m_vectorVField, m_vectorWField);
     dialog->setContourColor(m_contourColor);
+    dialog->setUnitVectors(m_unitVectors);
     connect(dialog, &SetContoursDialog::applied, this, [this, dialog] {
         applyContourSettings(dialog->mode(), dialog->contourCount(),
             dialog->uField(), dialog->vField(), dialog->wField(),
-            dialog->contourColor());
+            dialog->contourColor(), dialog->unitVectors());
     });
     connect(dialog, &QDialog::finished, this, [this] {
         m_contoursDialog = nullptr;
@@ -1850,8 +1851,10 @@ void MainWindow::showContoursDialog()
 
 void MainWindow::applyContourSettings(
     DisplayMode mode, int count, int uField, int vField, int wField,
-    int contourColor)
+    int contourColor, bool unitVectors)
 {
+    const auto previousUnitVectors = m_unitVectors;
+    m_unitVectors = unitVectors;
     const auto previousMode = m_displayMode;
     const auto previousCount = m_contourCount;
     const auto previousUField = m_vectorUField;
@@ -1873,7 +1876,7 @@ void MainWindow::applyContourSettings(
         || previousMode == DisplayMode::VelocityVectors;
     const auto inputsChanged = mode != previousMode || count != previousCount
         || uField != previousUField || vField != previousVField
-        || wField != previousWField;
+        || wField != previousWField || unitVectors != previousUnitVectors;
     if (inputsChanged) {
         if (involvesVectors) {
             for (auto* state : currentViews()) {

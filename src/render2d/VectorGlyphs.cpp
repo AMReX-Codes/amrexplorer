@@ -25,7 +25,7 @@ void validatePlane(const ScalarPlane& plane)
 } // namespace
 
 std::vector<VectorSegment> generateVectorGlyphs(
-    const ScalarPlane& uComponent, const ScalarPlane& vComponent, int count)
+    const ScalarPlane& uComponent, const ScalarPlane& vComponent, int count, bool unitVectors)
 {
     if (count < 1) {
         throw std::invalid_argument("vector glyph count must be positive");
@@ -86,11 +86,13 @@ std::vector<VectorSegment> generateVectorGlyphs(
             if (!std::isfinite(u) || !std::isfinite(v)) {
                 continue;
             }
-            if (!(std::hypot(u, v) > 0.0)) {
+            const double speed = std::hypot(u, v);
+            if (!(speed > 0.0)) {
                 continue;
             }
-            const double a = arrowMax * (u / maxSpeed);
-            const double b = arrowMax * (v / maxSpeed);
+            const double normalizer = unitVectors ? speed : maxSpeed;
+            const double a = arrowMax * (u / normalizer);
+            const double b = arrowMax * (v / normalizer);
             const auto baseX = static_cast<float>(i) + 0.5F;
             const auto baseY = static_cast<float>(j) + 0.5F;
             const auto tipX = static_cast<float>(baseX + a);
@@ -111,7 +113,7 @@ std::vector<VectorSegment> generateVectorGlyphs(
 
 std::vector<VectorSegment> generateSphericalRZVectorGlyphs(
     const ScalarPlane& uComponent, const ScalarPlane& vComponent, int count,
-    const RealBox& displayRegion)
+    const RealBox& displayRegion, bool unitVectors)
 {
     if (count < 1) {
         throw std::invalid_argument("vector glyph count must be positive");
@@ -194,11 +196,13 @@ std::vector<VectorSegment> generateSphericalRZVectorGlyphs(
             // e_theta = (cos, -sin).
             const double displayR = u * sinTheta + v * cosTheta;
             const double displayZ = u * cosTheta - v * sinTheta;
-            if (!(std::hypot(displayR, displayZ) > 0.0)) {
+            const double speed = std::hypot(displayR, displayZ);
+            if (!(speed > 0.0)) {
                 continue;
             }
-            const double a = arrowMax * (displayR / maxSpeed);
-            const double b = arrowMax * (displayZ / maxSpeed);
+            const double normalizer = unitVectors ? speed : maxSpeed;
+            const double a = arrowMax * (displayR / normalizer);
+            const double b = arrowMax * (displayZ / normalizer);
             const auto anchor = sphericalToDisplay(r, theta);
             const auto baseX = static_cast<float>(anchor[0]);
             const auto baseY = static_cast<float>(anchor[1]);

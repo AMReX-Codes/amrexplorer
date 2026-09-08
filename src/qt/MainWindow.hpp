@@ -547,6 +547,7 @@ private:
         DisplayMode cachedMode = DisplayMode::Raster;
         std::uint32_t cachedVectorUField = 0;
         std::uint32_t cachedVectorVField = 0;
+        bool cachedUnitVectors = false;
         int cachedContourCount = 0;
         StopSource stopSource;
         // The session epoch `plane` was produced under. A reload replaces the
@@ -732,7 +733,7 @@ private:
     void updateParticleOverlay(PlaneViewState& state);
     void updateParticleOverlays();
     void applyContourSettings(DisplayMode mode, int count, int uField, int vField,
-        int wField, int contourColor);
+        int wField, int contourColor, bool unitVectors = false);
     void showNumberFormatDialog();
     void applyNumberFormat(const QString& format);
     void showLengthUnitsDialog();
@@ -1206,6 +1207,7 @@ private:
     int m_vectorUField = -1;
     int m_vectorVField = -1;
     int m_vectorWField = -1;
+    bool m_unitVectors = false;
     // Owns the particle selection, samples, sample load, dialog, action and
     // progress indicator; the host draws its samples into the views.
     ParticleController* m_particleController = nullptr;

@@ -298,5 +298,49 @@ int main()
             "the surviving arrow is degenerate or non-finite");
     }
 
+    // Scaling a field must preserve both Cartesian and spherical arrows,
+    // even when a finite vector's magnitude or rotated component overflows.
+    for (const double magnitude : {1.0e200, 1.3e308,
+             std::numeric_limits<double>::max()}) {
+        auto u = makePlane(3, 2, 1.0);
+        auto v = makePlane(3, 2, 0.0);
+        u.values[1] = magnitude;
+        v.values[1] = magnitude;
+        u.values[2] = -magnitude / 2.0;
+        v.values[2] = magnitude / 4.0;
+        u.physicalRegion = amrvis::RealBox{
+            amrvis::Real3{{1.0, 0.0, 0.0}},
+            amrvis::Real3{{2.0, 3.141592653589793, 0.0}}};
+        v.physicalRegion = u.physicalRegion;
+        auto scaledU = u;
+        auto scaledV = v;
+        for (auto& value : scaledU.values) {
+            value /= magnitude;
+        }
+        for (auto& value : scaledV.values) {
+            value /= magnitude;
+        }
+        const auto display = amrvis::sphericalDisplayBounds(u.physicalRegion);
+        for (const bool spherical : {false, true}) {
+            const auto generate = [&](const auto& first, const auto& second) {
+                return spherical
+                    ? amrvis::generateSphericalRZVectorGlyphs(
+                          first, second, 3, display)
+                    : amrvis::generateVectorGlyphs(first, second, 3);
+            };
+            const auto expected = generate(scaledU, scaledV);
+            const auto actual = generate(u, v);
+            require(expected.size() == 6 && actual.size() == expected.size(),
+                "a huge finite vector changed the number of arrows");
+            for (std::size_t index = 0; index < expected.size(); ++index) {
+                const auto& a = actual[index];
+                const auto& e = expected[index];
+                require(nearlyEqual(a.x0, e.x0) && nearlyEqual(a.y0, e.y0)
+                        && nearlyEqual(a.x1, e.x1) && nearlyEqual(a.y1, e.y1),
+                    "a huge finite vector changed arrow geometry");
+            }
+        }
+    }
+
     return 0;
 }

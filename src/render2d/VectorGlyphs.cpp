@@ -16,6 +16,48 @@ constexpr double minimumArrowLength = 1.0e-6;
 constexpr double headBack = 0.25;
 constexpr double headSide = 0.125;
 
+struct SpeedNormalization {
+    double scale = 1.0;
+    double speed = 0.0;
+
+    [[nodiscard]] double normalize(double value) const
+    {
+        return (value / scale) / speed;
+    }
+};
+
+SpeedNormalization maximumSpeed(
+    const ScalarPlane& uComponent, const ScalarPlane& vComponent)
+{
+    // Keep the squared-speed fast path for ordinary fields. Larger values
+    // stay in scaled units: even hypot can overflow on finite components,
+    // so never reconstruct their unscaled magnitude.
+    constexpr double componentScale = 1.0e150;
+    double maxSpeedSquared = 0.0;
+    double maxScaledSpeed = 0.0;
+    for (std::size_t pixel = 0; pixel < uComponent.values.size(); ++pixel) {
+        if (uComponent.valid[pixel] == 0 || vComponent.valid[pixel] == 0) {
+            continue;
+        }
+        const double u = uComponent.values[pixel];
+        const double v = vComponent.values[pixel];
+        if (!std::isfinite(u) || !std::isfinite(v)) {
+            continue;
+        }
+        if (std::abs(u) > componentScale || std::abs(v) > componentScale) {
+            maxScaledSpeed = std::max(maxScaledSpeed,
+                std::hypot(u / componentScale, v / componentScale));
+        } else {
+            maxSpeedSquared = std::max(maxSpeedSquared, u * u + v * v);
+        }
+    }
+    if (maxScaledSpeed > 0.0) {
+        return {componentScale,
+            std::max(maxScaledSpeed, std::sqrt(maxSpeedSquared) / componentScale)};
+    }
+    return {1.0, std::sqrt(maxSpeedSquared)};
+}
+
 void validatePlane(const ScalarPlane& plane)
 {
     // AllowEmpty keeps the caller's own positive-extent check authoritative;
@@ -41,43 +83,10 @@ std::vector<VectorSegment> generateVectorGlyphs(
     validatePlane(uComponent);
     validatePlane(vComponent);
 
-    const auto pixelCount = static_cast<std::size_t>(uComponent.width)
-        * static_cast<std::size_t>(uComponent.height);
-
-    // Only the maximum is wanted, and sqrt is monotonic, so compare squared
-    // speeds and take one root at the end. At the output cap that is up to
-    // 16.7 million hypot calls saved per vector slice.
-    //
-    // The squares do have to be guarded, though. The samples are doubles, so
-    // a component near the top of the range squares to infinity, and one such
-    // cell would normalize every arrow in the plane to zero and empty the
-    // overlay. Those go through hypot, whose scaling handles them; the
-    // threshold is chosen so the fast path's sum stays far inside the double
-    // range, and no physical field reaches it, so the saving stands.
-    constexpr double squareSafeMagnitude = 1.0e150;
-    double maxSpeedSquared = 0.0;
-    double maxScaledSpeed = 0.0;
-    for (std::size_t pixel = 0; pixel < pixelCount; ++pixel) {
-        if (uComponent.valid[pixel] == 0 || vComponent.valid[pixel] == 0) {
-            continue;
-        }
-        const double u = uComponent.values[pixel];
-        const double v = vComponent.values[pixel];
-        if (!std::isfinite(u) || !std::isfinite(v)) {
-            continue;
-        }
-        if (std::abs(u) > squareSafeMagnitude
-            || std::abs(v) > squareSafeMagnitude) {
-            maxScaledSpeed = std::max(maxScaledSpeed, std::hypot(u, v));
-            continue;
-        }
-        maxSpeedSquared = std::max(maxSpeedSquared, u * u + v * v);
-    }
-    const double maxSpeed
-        = std::max(maxScaledSpeed, std::sqrt(maxSpeedSquared));
+    const auto normalization = maximumSpeed(uComponent, vComponent);
 
     std::vector<VectorSegment> segments;
-    if (!(maxSpeed >= minimumMaxSpeed)) {
+    if (!(normalization.speed >= minimumMaxSpeed / normalization.scale)) {
         return segments;
     }
 
@@ -101,8 +110,8 @@ std::vector<VectorSegment> generateVectorGlyphs(
             if (!std::isfinite(u) || !std::isfinite(v)) {
                 continue;
             }
-            const double a = arrowMax * (u / maxSpeed);
-            const double b = arrowMax * (v / maxSpeed);
+            const double a = arrowMax * normalization.normalize(u);
+            const double b = arrowMax * normalization.normalize(v);
             if (std::hypot(a, b) < minimumArrowLength) {
                 continue;
             }
@@ -163,19 +172,8 @@ std::vector<VectorSegment> generateSphericalRZVectorGlyphs(
     // Maximum physical speed. Both stored components are physical velocities
     // (v_r and the meridional v_theta), so the speed is their plain norm.
     const auto width = static_cast<std::size_t>(uComponent.width);
-    double maxSpeed = 0.0;
-    for (std::size_t pixel = 0; pixel < uComponent.values.size(); ++pixel) {
-        if (uComponent.valid[pixel] == 0 || vComponent.valid[pixel] == 0) {
-            continue;
-        }
-        const double u = uComponent.values[pixel];
-        const double v = vComponent.values[pixel];
-        if (!std::isfinite(u) || !std::isfinite(v)) {
-            continue;
-        }
-        maxSpeed = std::max(maxSpeed, std::hypot(u, v));
-    }
-    if (!(maxSpeed >= minimumMaxSpeed)) {
+    const auto normalization = maximumSpeed(uComponent, vComponent);
+    if (!(normalization.speed >= minimumMaxSpeed / normalization.scale)) {
         return segments;
     }
 
@@ -209,10 +207,14 @@ std::vector<VectorSegment> generateSphericalRZVectorGlyphs(
             // Rotate the physical (v_r, v_theta) pair into display components
             // along the local unit vectors e_r = (sin, cos),
             // e_theta = (cos, -sin).
-            const double displayR = u * sinTheta + v * cosTheta;
-            const double displayZ = u * cosTheta - v * sinTheta;
-            const double a = arrowMax * (displayR / maxSpeed);
-            const double b = arrowMax * (displayZ / maxSpeed);
+            // Normalize before rotating: the sum can overflow even when
+            // both original components are finite.
+            const double normalizedU = normalization.normalize(u);
+            const double normalizedV = normalization.normalize(v);
+            const double displayR = normalizedU * sinTheta + normalizedV * cosTheta;
+            const double displayZ = normalizedU * cosTheta - normalizedV * sinTheta;
+            const double a = arrowMax * displayR;
+            const double b = arrowMax * displayZ;
             if (std::hypot(a, b) < minimumLength) {
                 continue;
             }

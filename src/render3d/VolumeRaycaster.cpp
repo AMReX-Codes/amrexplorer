@@ -820,8 +820,11 @@ VolumeFrame raycastVolume(const RaycastGrids& grids,
                         // In halves, like the gradient below: values that
                         // straddle the double range overflow both differences
                         // to infinity, and infinity over infinity is NaN,
-                        // which would put the hit at voxel zero. If it is still
-                        // not finite, the bracket's middle is the best answer.
+                        // which would put the hit at voxel zero. The bisections
+                        // above make that unreachable at two steps -- the
+                        // bracket's ends are then a quarter of a sample apart
+                        // -- so this is a guard on the refinement count, and
+                        // the middle stands in if it is ever not finite.
                         auto where = (0.5 * fromValue - 0.5 * iso.value)
                             / (0.5 * fromValue - 0.5 * toValue);
                         if (!std::isfinite(where)) {

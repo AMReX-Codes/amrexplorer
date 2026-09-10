@@ -963,9 +963,13 @@ int main()
             isoOnlySettings(amrvis::orthoPresetXY, 64, isosurface(0.0, 0xCC0000U, 1.0F)));
         require(stepped.pixels == opaque.pixels,
             "a step spanning the double range lost its isosurface");
-        // The same step with the iso-value near one end: both differences of
-        // the secant overflow, and a hit placed by their NaN quotient lands at
-        // voxel zero, where the field is flat and the surface vanishes.
+        // The same step with the iso-value near one end. Taken whole between
+        // the two samples, both differences of the secant would overflow and
+        // their NaN quotient would put the hit at voxel zero; the bisections
+        // narrow the bracket fourfold first, so today the quotient stays
+        // finite and this pins only that the surface is drawn. The halves and
+        // the midpoint fallback in the march guard the day the refinement is
+        // shortened, which no face-on picture can tell apart.
         const auto lopsided = amrvis::raycastVolume(
             amrvis::RaycastGrids{nullptr, &step},
             isoOnlySettings(amrvis::orthoPresetXY, 64, isosurface(1.5e308, 0xCC0000U, 1.0F)));

@@ -4,6 +4,7 @@
 
 #include <QAction>
 #include <QCheckBox>
+#include <QLabel>
 #include <QRectF>
 #include <QTimer>
 #include <QTreeWidget>
@@ -135,6 +136,15 @@ Outcome dispatchCompanion(Context& context)
                     || metadataTree->findItems(QStringLiteral("water"),
                         Qt::MatchExactly | Qt::MatchRecursive).isEmpty()) {
                     fail("the metadata dock does not list the companion");
+                    return;
+                }
+                // The companion is named by its directory, however the path
+                // was written.
+                auto* label = window.findChild<QLabel*>(QStringLiteral("companionLabel"));
+                if (label == nullptr || label->text() != QStringLiteral("lower:")) {
+                    qCritical("companion label: '%s'",
+                        label == nullptr ? "(none)" : qUtf8Printable(label->text()));
+                    fail("the companion is not named by its directory");
                     return;
                 }
                 // Each layer renders its own field.

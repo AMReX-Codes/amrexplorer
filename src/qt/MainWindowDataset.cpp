@@ -272,10 +272,7 @@ void MainWindow::updateWindowTitle()
         return;
     }
     const auto& metadata = *primary().openMetadata;
-    auto name = QString::fromStdString(m_datasetPath.filename().string());
-    if (name.isEmpty()) {
-        name = QString::fromStdString(m_datasetPath.string());
-    }
+    const auto name = datasetDisplayName(m_datasetPath);
     // Standalone FABs and MultiFabs carry neither a simulation time nor an
     // AMR hierarchy, so their titles show just the format name.
     if (m_fabNavigator->fabMode()) {

@@ -234,8 +234,10 @@ elseif(MODE STREQUAL "companion")
     # Two plotfiles sharing a plane: SOURCE above SOURCE2, touching at z = 0.
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
     run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    # The companion path ends in a separator, as a shell completion leaves
+    # it; its name must still be the directory's.
     run_or_die("${AMREXPLORER_QT}" --companion-smoke-test
-        "${WORK}/upper" "${WORK}/lower")
+        "${WORK}/upper" "${WORK}/lower/")
 elseif(MODE STREQUAL "remote-canvas-wheel")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --remote-canvas-wheel-smoke-test

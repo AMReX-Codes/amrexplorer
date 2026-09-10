@@ -401,6 +401,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_companionToolbar->setObjectName(QStringLiteral("companionToolbar"));
     auto& companion = m_layers[1];
     m_companionLabel = new QLabel(tr("Companion:"), m_companionToolbar);
+    m_companionLabel->setObjectName(QStringLiteral("companionLabel"));
     m_companionToolbar->addWidget(m_companionLabel);
     m_companionToolbar->addSeparator();
     m_companionToolbar->addWidget(new QLabel(tr("Field:"), m_companionToolbar));
@@ -841,7 +842,7 @@ MainWindow::MainWindow(QWidget* parent)
         this, [this](int index) {
             m_animationPanel->setSequenceFrame(index);
             m_animationPanel->setSequenceInfo(
-                QString::fromStdString(m_datasetPath.filename().string()),
+                datasetDisplayName(m_datasetPath),
                 primary().openMetadata->time);
             updateDiagnostics();
             emit sequenceFrameDisplayed(index);

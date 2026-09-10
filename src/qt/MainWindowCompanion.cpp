@@ -187,10 +187,7 @@ void MainWindow::installCompanion(
     layer.openMetadata = load.metadata.metadata;
     layer.fileVersion = load.metadata.fileVersion;
     layer.path = path;
-    layer.name = QString::fromStdString(path.filename().string());
-    if (layer.name.isEmpty()) {
-        layer.name = QString::fromStdString(path.string());
-    }
+    layer.name = datasetDisplayName(path);
     layer.active = true;
     m_pair = load.geometry;
     if (load.result.displays.size() != layer.planeViews.size()) {

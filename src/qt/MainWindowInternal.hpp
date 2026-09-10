@@ -331,4 +331,22 @@ inline void populateLevelCombo(QComboBox* combo, int finestLevel)
     }
 }
 
+// A dataset's short name for titles, toolbars, the dock and export file
+// names: the plotfile directory's basename. A path written with a trailing
+// separator has an empty filename(), so the separator is dropped first; a
+// bare root falls back to the whole path.
+inline QString datasetDisplayName(const std::filesystem::path& path)
+{
+    auto trimmed = path.string();
+    while (trimmed.size() > 1
+        && (trimmed.back() == '/' || trimmed.back() == std::filesystem::path::preferred_separator)) {
+        trimmed.pop_back();
+    }
+    auto name = std::filesystem::path(trimmed).filename().string();
+    if (name.empty()) {
+        name = trimmed;
+    }
+    return QString::fromStdString(name);
+}
+
 } // namespace amrvis::qt

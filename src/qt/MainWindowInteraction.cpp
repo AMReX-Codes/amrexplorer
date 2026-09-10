@@ -284,7 +284,7 @@ void MainWindow::showAxisScalingDialog()
             static_cast<int>(axis) < dimension);
         form->addRow(perpendicular
                 ? tr("%1 (%2)").arg(names[axis],
-                    QString::fromStdString(m_datasetPath.filename().string()))
+                    datasetDisplayName(m_datasetPath))
                 : names[axis],
             spin);
         spins[axis] = spin;
@@ -1155,7 +1155,7 @@ QString MainWindow::probeLine(const PlaneViewState& state, int x, int displayY) 
     }
     // Two datasets: say which one the pointer is over.
     const auto name = state.layer == 0
-        ? QString::fromStdString(m_datasetPath.filename().string())
+        ? datasetDisplayName(m_datasetPath)
         : m_layers[1].name;
     return name.isEmpty() ? readout : name + QStringLiteral(": ") + readout;
 }
@@ -1843,7 +1843,7 @@ void MainWindow::appendLinePlotCurve(const LineResult& line,
     int maximumLevel, CompositionPolicy composition)
 {
     if (m_linePlotWindow == nullptr) {
-        auto name = QString::fromStdString(m_datasetPath.filename().string());
+        auto name = datasetDisplayName(m_datasetPath);
         if (name.isEmpty()) {
             name = QString::fromStdString(m_datasetPath.string());
         }

@@ -419,7 +419,8 @@ MainWindow::MainWindow(QWidget* parent)
     companion.range = new RangeController(this);
     companion.range->createToolbarWidgets(m_companionToolbar, QStringLiteral("companion"));
     companion.range->setLogarithmicVisible(false);
-    m_companionToolbar->addSeparator();
+    // No separator of its own: the range widgets end with the one before the
+    // (hidden) Log box, which now stands before this.
     m_companionFollowBox = new QCheckBox(tr("Same as primary"), m_companionToolbar);
     m_companionFollowBox->setObjectName(QStringLiteral("companionFollowPrimary"));
     m_companionFollowBox->setToolTip(tr(

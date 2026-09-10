@@ -979,6 +979,28 @@ int main()
                     .frame.usedRange
                 == amrvis::neutralVolumeRange(true),
             "the neutral range did not keep the logarithmic mapping");
+        // A range choice the volume's field cannot honour aborts a render
+        // that shows the volume, and is not even resolved by one that hides
+        // it: the surface is drawn against the neutral range.
+        const amrvis::VolumeRangeChoice unusable{amrvis::RangeMode::User,
+            std::pair{std::numeric_limits<double>::quiet_NaN(), 1.0}, false};
+        auto shownUnusable = request;
+        shownUnusable.range.reset();
+        bool refused = false;
+        try {
+            (void)amrvis::executeVolumeRenderWithFallback(
+                dataset, shownUnusable, unusable);
+        } catch (const std::runtime_error&) {
+            refused = true;
+        }
+        require(refused, "an unusable range did not abort a render showing the volume");
+        auto hiddenUnusable = shownUnusable;
+        hiddenUnusable.showVolume = false;
+        const auto anyway = amrvis::executeVolumeRenderWithFallback(
+            dataset, hiddenUnusable, unusable);
+        require(litPixels(anyway.frame) > 0
+                && anyway.frame.usedRange == amrvis::neutralVolumeRange(false),
+            "an unusable volume range aborted an isosurface-only render");
         // An isosurface of the volume's own field shares its grid: one block
         // read, and phi never crosses 1.5, so nothing is drawn but the volume.
         auto shared = request;

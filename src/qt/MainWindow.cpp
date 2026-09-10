@@ -1139,8 +1139,10 @@ std::array<int, 2> MainWindow::stretchedViewportPixelSize(
     const auto stretch = displayStretchFor(state);
     const auto largest = std::max(stretch[0], stretch[1]);
     const auto enlarge = [](int pixels, double factor) {
-        return std::clamp(static_cast<int>(std::lround(pixels * factor)),
-            1, maxSliceOutputDimension);
+        // Clamped as a double: the product can pass INT_MAX on an extreme
+        // cell aspect, and an int cast first would wrap.
+        return static_cast<int>(std::lround(std::clamp(pixels * factor, 1.0,
+            static_cast<double>(maxSliceOutputDimension))));
     };
     return {enlarge(viewportPixels[0], largest / stretch[0]),
         enlarge(viewportPixels[1], largest / stretch[1])};

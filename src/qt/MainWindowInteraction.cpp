@@ -328,9 +328,14 @@ void MainWindow::resetAxisScale()
         m_axisScalingDialog->reject();
     }
     m_axisScale = {1.0, 1.0, 1.0};
-    // No views hold a raster of the new dataset yet; showSlice installs the
-    // stretch with the first one. The scale-bar gate is re-evaluated when the
-    // controls are enabled for the dataset.
+    // The views still show the outgoing dataset, and keep showing it if the
+    // new one fails to load, so they take the unit factors now. No remote
+    // re-request: that dataset is on its way out.
+    for (auto* state : currentViews()) {
+        applyDisplayStretch(*state);
+    }
+    updateScaleBarAvailability();
+    updateScaleBars();
 }
 
 void MainWindow::validateVectorMode()

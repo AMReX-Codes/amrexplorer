@@ -129,9 +129,19 @@ public:
     {
         throw std::logic_error("not used");
     }
+    // A range request can be slowed, to stand in for a remote round trip,
+    // and made to fail for one field, to stand in for a dropped one.
+    std::atomic<int> rangeDelayMs{0};
+    std::atomic<int> rangeFailingField{-1};
     [[nodiscard]] std::optional<amrvis::ValueRange> requestRange(
         const amrvis::RangeRequest& request, amrvis::StopToken) override
     {
+        if (rangeDelayMs > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(rangeDelayMs.load()));
+        }
+        if (static_cast<int>(request.field.value) == rangeFailingField) {
+            throw std::runtime_error("synthetic range failure");
+        }
         // Level-dependent on purpose: level 0 spans to 10, level 1 to 20, so
         // a range resolved for the level that was asked for instead of the
         // one that rendered shows up as the wrong maximum.
@@ -1992,6 +2002,60 @@ int main(int argc, char** argv)
         require(!latest.isosurface.has_value() && latest.showVolume
                 && !showVolume->isEnabled() && showVolume->isChecked(),
             "unticking the isosurface left the volume hidden");
+        controller.closeWindow();
+    }
+
+    // --- the range fetch neither lags nor latches ----------------------------
+    // While a new field's range is on its way the slider is disabled, so a
+    // drag cannot commit a value from the old field's span; and a fetch that
+    // fails is asked again on the next change rather than leaving the slider
+    // off for that field for good.
+    {
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the opening frame was not displayed");
+        auto* const window = volumeWindow();
+        auto* const group = window->findChild<QGroupBox*>(
+            QStringLiteral("volumeIsosurfaceGroup"));
+        auto* const fieldCombo = window->findChild<QComboBox*>(
+            QStringLiteral("volumeIsosurfaceFieldCombo"));
+        auto* const valueSlider = window->findChild<QSlider*>(
+            QStringLiteral("volumeIsosurfaceValueSlider"));
+        require(group != nullptr && fieldCombo != nullptr && valueSlider != nullptr,
+            "the isosurface controls are missing from the volume window");
+        QMetaObject::invokeMethod(window, [group] { group->setChecked(true); });
+        waitFor(application, [&] { return valueSlider->isEnabled(); },
+            "the first field's range did not enable the slider");
+
+        // A slow fetch for the next field: the slider goes off at once and
+        // comes back only with the answer.
+        session->rangeDelayMs = 300;
+        QMetaObject::invokeMethod(
+            window, [fieldCombo] { fieldCombo->setCurrentIndex(1); });
+        application.processEvents();
+        require(!valueSlider->isEnabled(),
+            "the slider kept the old field's range while the new one was fetched");
+        waitFor(application, [&] { return valueSlider->isEnabled(); },
+            "the new field's range never enabled the slider");
+        session->rangeDelayMs = 0;
+
+        // A fetch that fails: the slider stays off, and the next change
+        // (here a refresh with the session healthy again) fetches and enables.
+        session->rangeFailingField = 0;
+        QMetaObject::invokeMethod(
+            window, [fieldCombo] { fieldCombo->setCurrentIndex(0); });
+        settle(application, 200);
+        require(!valueSlider->isEnabled(),
+            "a failed range fetch left the slider enabled");
+        session->rangeFailingField = -1;
+        controller.refresh();
+        waitFor(application, [&] { return valueSlider->isEnabled(); },
+            "a failed range fetch was never retried");
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the last render did not finish");
         controller.closeWindow();
     }
     return 0;

@@ -332,27 +332,36 @@ void VolumeController::fetchIsosurfaceRange()
     }
     m_isosurfaceRangeFor = key;
     const auto generation = ++m_isosurfaceRangeGeneration;
+    // The old range goes now, not when the new one lands: a slider left over
+    // the previous field's span would commit a value from it in between.
+    m_window->setIsosurfaceValueRange(std::nullopt);
     // Known without a read, so a field with no statistics is answered at
     // once rather than after a round trip that would say the same.
     if (!dataset->rangeAvailable(request)) {
-        m_window->setIsosurfaceValueRange(std::nullopt);
         return;
     }
     auto* watcher = new QFutureWatcher<std::optional<ValueRange>>(this);
     connect(watcher, &QFutureWatcher<std::optional<ValueRange>>::finished, this,
         [this, watcher, generation] {
             std::optional<ValueRange> range;
+            bool failed = false;
             try {
                 range = watcher->future().takeResult();
             } catch (const std::exception&) {
                 // A range that could not be read is a range that is not known:
                 // the spin box still works, and the render reports its own
                 // failure if the session is really gone.
-                range.reset();
+                failed = true;
             }
             watcher->deleteLater();
             if (generation != m_isosurfaceRangeGeneration || !m_window
                 || (m_hooks.isShuttingDown && m_hooks.isShuttingDown())) {
+                return;
+            }
+            if (failed) {
+                // Forgotten, so the next change asks again rather than leaving
+                // the slider disabled for this field for good.
+                m_isosurfaceRangeFor.reset();
                 return;
             }
             m_window->setIsosurfaceValueRange(range);

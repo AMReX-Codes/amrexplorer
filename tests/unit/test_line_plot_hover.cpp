@@ -148,6 +148,30 @@ int main(int argc, char* argv[])
             "extreme line range lost the midpoint hover readout");
     };
     requireHover();
+
+    // Hover must use the range that was painted, including its label margins.
+    // Change distant samples before the next repaint: a fresh extrema scan
+    // would widen the margins and move the midpoint away from the cursor.
+    extremePlot.resetZoom();
+    const auto originalFont = extremePlot.font();
+    auto largerFont = originalFont;
+    largerFont.setPixelSize(24);
+    extremePlot.setFont(largerFont);
+    curves[0].line.values = {-1.0, 0.0, 1.0};
+    requirePainted();
+    QToolTip::hideText();
+    curves[0].fieldName = "pending-range";
+    curves[0].line.values = {-1.0e308, 0.0, 1.0e308};
+    QMouseEvent pendingMove(QEvent::MouseMove, QPointF(centre),
+        QPointF(extremePlot.mapToGlobal(centre)),
+        Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&extremePlot, &pendingMove);
+    require(QToolTip::text().contains("pending-range")
+            && QToolTip::text().contains("value = 0"),
+        "hover rescanned pending data instead of using the painted geometry");
+    curves[0].fieldName = "extreme";
+    extremePlot.setFont(originalFont);
+    requirePainted();
     const auto beforeZoom = extremePlot.grab().toImage().copy(extremeRect);
     const QPoint inset(extremeRect.width() / 4, extremeRect.height() / 3);
     QTest::mousePress(&extremePlot, Qt::LeftButton, Qt::NoModifier, centre - inset);

@@ -807,6 +807,16 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake")
     set_tests_properties(qt_adaptive_precision PROPERTIES TIMEOUT 30)
 
+    add_test(NAME qt_spherical_adaptive_precision
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_spherical"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_spherical_adaptive_precision"
+            -DMODE=adaptive-precision
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake")
+    set_tests_properties(qt_spherical_adaptive_precision PROPERTIES TIMEOUT 30)
+
     add_executable(test_color_bar_labels unit/test_color_bar_labels.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/ColorBarWidget.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp")

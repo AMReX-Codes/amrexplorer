@@ -11,6 +11,31 @@ bool MainWindow::adaptivePrecisionForTest()
     constexpr double low = 1.25663706212e-6;
     constexpr double high = 1.25663706213e-6;
     applyNumberFormat("%g");
+    if (displayIsSpherical()) {
+        // Probe two R-Z pixels in a thin radial shell. Z must retain radial
+        // precision even though the theta range spans an ordinary [0, pi].
+        ImageView view;
+        QImage image(2, 2, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::black);
+        view.setImage(image);
+        auto plane = std::make_shared<ScalarPlane>();
+        plane->width = 2;
+        plane->height = 2;
+        plane->physicalRegion = RealBox{Real3{{1e6, 0.0, 0.0}},
+            Real3{{1e6 + 1.0, 3.141592653589793, 0.0}}};
+        plane->values.assign(4, 1.0);
+        plane->valid.assign(4, 1);
+        plane->sourceLevel.assign(4, 0);
+        PlaneViewState state;
+        state.view = &view;
+        state.normal = 2;
+        state.plane = std::move(plane);
+        state.sphericalDisplay = SphericalDisplay::RZ;
+        state.displayRegion = RealBox{Real3{{600000.0, 800000.0, 0.0}},
+            Real3{{600000.6, 800000.8, 0.0}}};
+        return probeReadout(state, 0, 0).startsWith("R=600000.15 Z=800000.6 ")
+            && probeReadout(state, 0, 1).startsWith("R=600000.15 Z=800000.2 ");
+    }
     applyDisplayPrecision(0.0, 1.0);
     showDatasetWindow();
     if (m_datasetWindow == nullptr) {

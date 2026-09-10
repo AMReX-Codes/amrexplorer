@@ -121,7 +121,9 @@ QRect LinePlotWidget::plotRect() const
 {
     int leftMargin = 92;
     int rightMargin = 32;
-    if (const auto range = displayedRange()) {
+    // Interaction uses the last painted range, so it neither scans every
+    // sample nor changes the margins before new data is actually painted.
+    if (const auto& range = m_paintedRange) {
         const auto xFormat = resolveNumberFormat(m_numberFormat, range->xMinimum, range->xMaximum);
         const auto yFormat = resolveNumberFormat(m_numberFormat, range->yMinimum, range->yMaximum);
         const QFontMetrics metrics(font());
@@ -498,7 +500,7 @@ void LinePlotWidget::mouseReleaseEvent(QMouseEvent* event)
         }
         const auto dragged = QRect(m_pressPosition, event->position().toPoint())
             .normalized().intersected(plotRect());
-        const auto base = displayedRange();
+        const auto base = m_paintedRange;
         if (base.has_value() && dragged.width() >= 4 && dragged.height() >= 4) {
             const auto plot = plotRect();
             const auto xMinimum = base->xMinimum

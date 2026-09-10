@@ -229,9 +229,11 @@ ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
             int barWidth = ColorBarWidget::exportWidth(fm,
                 std::max(labels, reserveLabelGrowth ? maximumLabelWidth : 0));
             if (reserveLabelGrowth && presentation.offsetLine) {
+                // A later narrow range may have no usable offset, so leave
+                // room for full-value ticks beside the bar as well.
                 barWidth = std::max(barWidth,
-                    labelBudget(glyphWidth, formatDigits(presentation.valueFormat))
-                        + 2 * std::max(8, fm.height() / 4));
+                    ColorBarWidget::exportWidth(fm,
+                        labelBudget(glyphWidth, formatDigits(presentation.valueFormat))));
             }
             // The color scale is beside the data, above the x tick labels.
             // Their endpoint overhang must not become an inter-panel gutter.

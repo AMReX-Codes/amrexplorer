@@ -2,6 +2,8 @@
 #include "NumberFormat.hpp"
 
 #include <QApplication>
+#include <QFocusEvent>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QString>
 
@@ -124,4 +126,29 @@ int main(int argc, char* argv[])
         "a format change discarded a partially typed value");
     require(spinBox.editor()->isModified(),
         "a format change cleared the pending-edit flag");
+
+    // Committing a retyped value can leave the rendered text unchanged.
+    // It must still finish the edit so later format changes reach the box.
+    for (const bool useEnter : {true, false}) {
+        spinBox.setNumberFormat(QStringLiteral("%g"));
+        spinBox.setValue(0.5);
+        spinBox.editor()->selectAll();
+        spinBox.editor()->insert(QStringLiteral("min 0.5"));
+        require(spinBox.editor()->isModified(), "retyping did not start an edit");
+        spinBox.setNumberFormat(QStringLiteral("%.15g"));
+        if (useEnter) {
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(&spinBox, &enter);
+            require(spinBox.editor()->selectedText() == QStringLiteral("0.5"),
+                "finishing an unchanged edit discarded the Enter selection");
+        } else {
+            QFocusEvent focusOut(QEvent::FocusOut, Qt::TabFocusReason);
+            QApplication::sendEvent(&spinBox, &focusOut);
+        }
+        spinBox.setNumberFormat(QStringLiteral("%.3e"));
+        require(spinBox.cleanText() == QStringLiteral("5.000e-01"),
+            "committing identical text left subsequent format changes deferred");
+        require(spinBox.value() == 0.5 && !spinBox.editor()->isModified(),
+            "committing identical text changed the value or left a pending edit");
+    }
 }

@@ -259,6 +259,39 @@ int main(int argc, char** argv) {
         require(frame.copy(adaptive.colorBarRect) == expected.copy(adaptive.colorBarRect),
             "frame composition did not use its frozen color bar presentation");
     }
+    // A rounded offset can lie just above a later narrow range and become
+    // unusable. Keep the reserved line, but print full values with enough
+    // digits to distinguish the ticks instead of using residual precision.
+    adaptiveBar.setFieldRange("field", narrowLow, narrowHigh);
+    const auto narrowMovie = makeExportLayout(raster.size(), compactOptions,
+        mixedAxes, &adaptiveBar, true);
+    constexpr double laterLow = 1.3839999999999999e-11;
+    constexpr double laterHigh = 1.3840000000138398e-11;
+    adaptiveBar.setFieldRange("field", laterLow, laterHigh);
+    require(adaptiveBar.labelOffset() == 0.0,
+        "the later range no longer exercises an unusable offset");
+    RecordingPaintDevice laterDevice(narrowMovie.canvasSize.width(), narrowMovie.canvasSize.height());
+    QPainter laterPainter(&laterDevice);
+    laterPainter.setFont(narrowMovie.font);
+    adaptiveBar.paintBar(&laterPainter, narrowMovie.colorBarRect, true, true,
+        &*narrowMovie.colorBarPresentation);
+    laterPainter.end();
+    require(laterDevice.text().size() >= 4 && laterDevice.text()[1].value == "+0",
+        "a narrow animation frame lost its reserved offset line or ticks");
+    const auto& valueFormat = narrowMovie.colorBarPresentation->valueFormat;
+    const auto laterTickCount = laterDevice.text().size() - 2;
+    for (std::size_t tick = 0; tick < laterTickCount; ++tick) {
+        const auto value = ColorBarWidget::tickValue(laterLow, laterHigh, false,
+            static_cast<double>(tick) / static_cast<double>(laterTickCount - 1));
+        const auto& label = laterDevice.text()[tick + 2];
+        require(label.value == formatNumber(value, valueFormat),
+            "a narrow animation frame without an offset lost full-value precision");
+        require(tick == 0 || label.value != laterDevice.text()[tick + 1].value,
+            "a narrow animation frame has identical adjacent tick labels");
+        require(QRectF(narrowMovie.colorBarRect).adjusted(-1, -1, 1, 1).contains(label.bounds),
+            "a full-value animation tick escaped its frozen color bar");
+    }
+
     // An ordinary first frame must not acquire an offset line later.
     adaptiveBar.setFieldRange("field", 0.0, 1.0);
     const auto ordinary = makeExportLayout(raster.size(), compactOptions, xy, &adaptiveBar);

@@ -42,6 +42,16 @@ ScientificDoubleSpinBox::ScientificDoubleSpinBox(QWidget* parent)
     setDecimals(std::numeric_limits<double>::max_exponent10
         + std::numeric_limits<double>::digits10);
     setKeyboardTracking(false);
+    connect(this, &QAbstractSpinBox::editingFinished, this, [this] {
+        // Qt can leave identical retyped text marked as modified on focus
+        // loss. Finish the edit and apply any format deferred while typing.
+        const QSignalBlocker blocker(this);
+        const auto text = prefix() + textFromValue(value()) + suffix();
+        if (lineEdit()->text() != text) {
+            lineEdit()->setText(text);
+        }
+        lineEdit()->setModified(false);
+    });
 }
 
 void ScientificDoubleSpinBox::setNumberFormat(const QString& format)
@@ -58,8 +68,8 @@ void ScientificDoubleSpinBox::setNumberFormat(const QString& format)
     // someone visited the Number Format dialog, but it now tracks the
     // displayed range, so it can change under a half-entered bound -- and
     // rewriting the editor there discards what they typed and moves the
-    // cursor. The pending text keeps its own digits until it is committed,
-    // and interpretText re-renders through the new format then.
+    // cursor. The pending text keeps its own digits until it is committed;
+    // editingFinished applies the new format and clears the pending edit.
     if (lineEdit()->isModified()) {
         return;
     }

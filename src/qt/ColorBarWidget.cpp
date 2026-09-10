@@ -242,6 +242,13 @@ ColorBarWidget::LabelLayout ColorBarWidget::labelLayout(
         ? std::clamp(result.barHeight / (labelHeight + 4), 0, labelCount) : labelCount;
     result.format = !offsetLine ? valueFormat
         : (presentation != nullptr ? presentation->tickFormat : tickFormat());
+    // A reserved offset line can print +0 when the current offset is unusable.
+    // Narrow ranges then need full-value precision; ordinary ranges retain
+    // the frozen residual format.
+    if (presentation != nullptr && result.offset == 0.0
+        && displayDigits(m_minimum, m_maximum) > formatDigits(result.format)) {
+        result.format = valueFormat;
+    }
     return result;
 }
 

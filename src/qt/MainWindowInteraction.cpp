@@ -950,12 +950,12 @@ QString MainWindow::probeReadout(
         // match the mapping that produced the coordinates above.
         switch (state.sphericalDisplay) {
         case SphericalDisplay::RZ: {
-            // Physical (R, Z) plus the native spherical (r, theta).
+            // Physical (R, Z) share the radial precision; theta is an angle.
             const auto display = sphericalToDisplay(
                 position[xAxis], position[yAxis]);
             coords = QStringLiteral("R=%1 Z=%2 r=%3 %4=%5").arg(
                 formatNumber(display[0], coordinateFormat(xAxis)),
-                formatNumber(display[1], coordinateFormat(yAxis)), rText, theta,
+                formatNumber(display[1], coordinateFormat(xAxis)), rText, theta,
                 thetaText);
             break;
         }

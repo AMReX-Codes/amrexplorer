@@ -191,6 +191,38 @@ int main()
     require(tinySegments.size() == 4,
         "small-magnitude varying field was treated as constant");
 
+    // Subnormal edge differences have overflowing reciprocals, even though
+    // the interpolation fraction is finite. Cover both edge directions and
+    // a corner-exact level as well as an interior crossing.
+    for (const double scale : {1.0e-310, -1.0e-310}) {
+        auto subnormalPlane = makePlane();
+        for (auto& value : subnormalPlane.values) {
+            value *= scale;
+        }
+        for (const double level : {2.0, 2.5}) {
+            const auto reference = amrvis::generateContours(plane, {level});
+            const auto subnormal = amrvis::generateContours(
+                subnormalPlane, {level * scale});
+            require(subnormal.size() == reference.size(),
+                "subnormal field changed the contour segment count");
+            for (const auto& segment : reference) {
+                require(hasSegment(subnormal,
+                            segment.x0, segment.y0, segment.x1, segment.y1),
+                    "subnormal field changed the contour geometry");
+            }
+            const auto display = amrvis::contourPolylinesForDisplay(
+                subnormalPlane, {level * scale}, 100, 100);
+            require(!display.empty(),
+                "subnormal field lost its display contours");
+            for (const auto& polyline : display) {
+                for (const auto& point : polyline.points) {
+                    require(std::isfinite(point[0]) && std::isfinite(point[1]),
+                        "subnormal contour has nonfinite display coordinates");
+                }
+            }
+        }
+    }
+
     // Invalidating corner (1, 1) must suppress the four cells touching it,
     // leaving only cell (2, 0).
     auto masked = makePlane();

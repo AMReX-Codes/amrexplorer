@@ -129,11 +129,13 @@ std::vector<ContourSegment> generateContours(
             const auto x1 = static_cast<float>(i + 1);
             const auto y0 = static_cast<float>(j);
             const auto y1 = static_cast<float>(j + 1);
-            // Precompute edge-interpolation denominators (inverse).
-            const double invDYl = (tl != bl) ? 1.0 / (tl - bl) : 0.0;
-            const double invDYr = (tr != br) ? 1.0 / (tr - br) : 0.0;
-            const double invDXb = (br != bl) ? 1.0 / (br - bl) : 0.0;
-            const double invDXt = (tr != tl) ? 1.0 / (tr - tl) : 0.0;
+            // Divide by the edge difference only at a crossing, where it is
+            // nonzero. Its reciprocal can overflow for subnormal samples
+            // even though the interpolation fraction lies in [0, 1].
+            const double dYl = tl - bl;
+            const double dYr = tr - br;
+            const double dXb = br - bl;
+            const double dXt = tr - tl;
             for (double value : finiteValues) {
                 // Half-open edge-crossing test: an edge is crossed when its two
                 // endpoints fall on opposite sides of `value`, classifying a
@@ -162,10 +164,10 @@ std::vector<ContourSegment> generateContours(
                 float xR = x1, yR = y1;
                 float xB = x0, yB = y0;
                 float xT = x1, yT = y1;
-                if (left)   yL = y0 + static_cast<float>((value - bl) * invDYl);
-                if (right)  yR = y0 + static_cast<float>((value - br) * invDYr);
-                if (bottom) xB = x0 + static_cast<float>((value - bl) * invDXb);
-                if (top)    xT = x0 + static_cast<float>((value - tl) * invDXt);
+                if (left)   yL = y0 + static_cast<float>((value - bl) / dYl);
+                if (right)  yR = y0 + static_cast<float>((value - br) / dYr);
+                if (bottom) xB = x0 + static_cast<float>((value - bl) / dXb);
+                if (top)    xT = x0 + static_cast<float>((value - tl) / dXt);
 
                 const auto emit = [&](float ax, float ay, float bx, float by) {
                     // Drop zero-length segments: a contour passing exactly

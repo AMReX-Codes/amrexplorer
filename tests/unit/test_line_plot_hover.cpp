@@ -247,6 +247,14 @@ int main(int argc, char* argv[])
             if (label.bounds.top() > extremePlot.height() - bottomMargin
                 && label.value.contains("e-200")) {
                 ++narrowLabels;
+                if (label.bounds.left() < right
+                    || label.bounds.right() > extremePlot.width() + 0.5) {
+                    std::cerr << "widget=" << extremePlot.width()
+                              << " label=" << label.value.toStdString()
+                              << " left=" << label.bounds.left()
+                              << " right=" << label.bounds.right()
+                              << " previous=" << right << '\n';
+                }
                 require(label.bounds.left() >= right
                         && label.bounds.right() <= extremePlot.width() + 0.5,
                     "narrow plot's adaptive x labels overlap or escape the widget");

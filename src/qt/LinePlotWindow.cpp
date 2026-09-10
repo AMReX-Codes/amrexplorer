@@ -339,13 +339,23 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
     // 96,96,96 was only a shade off the background.
     const QPen gridPen(QColor(0x55, 0x55, 0x55));
     constexpr int tickCount = 5;
+    // Where a tick's label actually inks: centered under the tick, but never
+    // outside the widget. The margins reserve an end label's overhang from
+    // the widget's own metrics, and the painter's may not be the same ones.
+    const auto labelInk = [&](double value, const QString& label) {
+        const auto span
+            = static_cast<double>(painter.fontMetrics().horizontalAdvance(label));
+        const auto left = std::clamp(mapX(value) - span / 2.0, 0.0,
+            std::max(0.0, static_cast<double>(width()) - span));
+        return QRectF(left, plot.bottom() + 4.0, span, 16.0);
+    };
     const auto drawXTick = [&](double value, const QString& label) {
         const auto x = mapX(value);
         painter.setPen(gridPen);
         painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
         painter.setPen(viewportForeground());
-        const auto labelWidth = std::max(80, painter.fontMetrics().horizontalAdvance(label) + 2);
-        painter.drawText(QRectF(x - labelWidth / 2.0, plot.bottom() + 4.0, labelWidth, 16.0),
+        // A hair wider than the text, so centering leaves the ink in place.
+        painter.drawText(labelInk(value, label).adjusted(-1.0, 0.0, 1.0, 0.0),
             Qt::AlignHCenter | Qt::AlignTop, label);
     };
     if (usesIndexPositions(m_curves)) {
@@ -383,10 +393,9 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
             bool clears = true;
             auto previousRight = std::numeric_limits<double>::lowest();
             for (const auto& [value, label] : candidate) {
-                const auto half
-                    = painter.fontMetrics().horizontalAdvance(label) / 2.0;
-                clears = clears && mapX(value) - half >= previousRight + 12.0;
-                previousRight = mapX(value) + half;
+                const auto ink = labelInk(value, label);
+                clears = clears && ink.left() >= previousRight + 12.0;
+                previousRight = ink.right();
             }
             if (clears) {
                 ticks = candidate;

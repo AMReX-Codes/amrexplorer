@@ -828,7 +828,15 @@ VolumeFrame raycastVolume(const RaycastGrids& grids,
                         // that reads NaN (a coverage boundary) falls back to
                         // the one-sided difference against the iso-value
                         // itself, which is what the field is at the hit.
-                        std::array<double, 3> gradient{};
+                        //
+                        // Differenced in halves and normalised by the largest
+                        // component before the pitch is applied: only the
+                        // direction is wanted, and a field near the top of the
+                        // double range would otherwise overflow the difference
+                        // and lose a perfectly good surface to infinity.
+                        std::array<double, 3> halfDifference{};
+                        std::array<bool, 3> oneSided{};
+                        double largest = 0.0;
                         for (std::size_t axis = 0; axis < 3; ++axis) {
                             auto ahead = hit;
                             auto behind = hit;
@@ -836,21 +844,30 @@ VolumeFrame raycastVolume(const RaycastGrids& grids,
                             behind[axis] -= 0.5;
                             const auto plus = isoAt(ahead, scratch);
                             const auto minus = isoAt(behind, scratch);
-                            double perVoxel = 0.0;
                             if (std::isfinite(plus) && std::isfinite(minus)) {
-                                perVoxel = plus - minus;
+                                halfDifference[axis] = 0.5 * plus - 0.5 * minus;
                             } else if (std::isfinite(plus)) {
-                                perVoxel = 2.0 * (plus - iso.value);
+                                halfDifference[axis] = 0.5 * plus - 0.5 * iso.value;
+                                oneSided[axis] = true;
                             } else if (std::isfinite(minus)) {
-                                perVoxel = 2.0 * (iso.value - minus);
+                                halfDifference[axis] = 0.5 * iso.value - 0.5 * minus;
+                                oneSided[axis] = true;
                             }
-                            gradient[axis] = perVoxel * inversePitch[axis];
+                            largest = std::max(largest, std::abs(halfDifference[axis]));
+                        }
+                        std::array<double, 3> gradient{};
+                        if (largest > 0.0) {
+                            for (std::size_t axis = 0; axis < 3; ++axis) {
+                                // A one-sided difference spans half the
+                                // distance of a central one.
+                                gradient[axis] = halfDifference[axis] / largest
+                                    * (oneSided[axis] ? 2.0 : 1.0) * inversePitch[axis];
+                            }
                         }
                         const auto length
                             = std::hypot(gradient[0], gradient[1], gradient[2]);
-                        // A flat or overflowing cell has no orientable surface
-                        // to shade; the crossing is dropped rather than lit
-                        // arbitrarily.
+                        // A flat cell has no orientable surface to shade; the
+                        // crossing is dropped rather than lit arbitrarily.
                         if (std::isfinite(length) && length > 0.0) {
                             // Headlight: light, viewer and half vector are all
                             // -direction, and the normal faces the viewer, so

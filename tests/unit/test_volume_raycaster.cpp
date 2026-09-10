@@ -933,6 +933,18 @@ int main()
         require(alphaOf(half) == 128 && redOf(half) == 128 && greenOf(half) == 128
                 && blueOf(half) == 128,
             "a half-opaque white surface wrote a channel above its alpha");
+        // The same plane in a field near the top of the double range: the
+        // gradient's differences would overflow if taken whole, and the
+        // surface is still there.
+        auto huge = grid;
+        for (auto& value : huge.values) {
+            value *= 1.0e308;
+        }
+        const auto vast = amrvis::raycastVolume(
+            amrvis::RaycastGrids{nullptr, &huge},
+            isoOnlySettings(amrvis::orthoPresetXY, 64, isosurface(0.5e308, 0xCC0000U, 1.0F)));
+        require(vast.pixels == opaque.pixels,
+            "a field near the double range's top lost its isosurface");
     }
 
     // --- a plane seen edge-on is invisible -----------------------------------

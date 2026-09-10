@@ -465,6 +465,10 @@ public:
         setSlicePosition(axis, value);
     }
     void setCompanionPerpendicularScaleForTest(double factor);
+    [[nodiscard]] double slicePositionForTest(int axis) const
+    {
+        return m_slicePosition3d[static_cast<std::size_t>(std::clamp(axis, 0, 2))];
+    }
 
     // Test-only: shrink the open dataset's cache budget to force cache-pressure
     // fallback on the next non-cache slice, and read the current resident bytes

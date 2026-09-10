@@ -129,19 +129,46 @@ Outcome dispatchCompanion(Context& context)
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
                     &application, [&window, &application, fail, phase] {
-                        if (*phase != 0) {
+                        if (*phase == 0) {
+                            *phase = 1;
+                            if (window.panelTileVisibleForTest(xy, 0)
+                                || !window.panelTileVisibleForTest(xy, 1)) {
+                                fail("the XY panel did not flip to the ocean below z = 0");
+                                return;
+                            }
+                            // A fixed scale keeps both tiles on the pair's canvas.
+                            window.selectFixedScaleForTest(2);
+                            if (window.panelTileCountForTest(xz) != 2
+                                || !near(window.panelTileRectForTest(xz, 1),
+                                    QRectF(2.0, 4.0, 4.0, 4.0))) {
+                                fail("a fixed scale moved the tiles off the pair's canvas");
+                                return;
+                            }
+                            // Visible range re-colors every panel through the
+                            // range sync; both tiles must survive it.
+                            window.enableVisibleRasterForTest();
                             return;
                         }
-                        *phase = 1;
-                        if (window.panelTileVisibleForTest(xy, 0)
-                            || !window.panelTileVisibleForTest(xy, 1)) {
-                            fail("the XY panel did not flip to the ocean below z = 0");
+                        if (*phase != 1) {
+                            return;
+                        }
+                        *phase = 2;
+                        if (window.panelTileCountForTest(xz) != 2
+                            || !near(window.panelTileRectForTest(xz, 1),
+                                QRectF(2.0, 4.0, 4.0, 4.0))) {
+                            fail("the visible-range sync dropped a tile");
                             return;
                         }
                         window.closeCompanion();
                         if (window.companionOpen() || window.panelTileCountForTest(xz) != 1
                             || !window.panelTileVisibleForTest(xy, 0)) {
                             fail("closing the companion did not restore one tile");
+                            return;
+                        }
+                        // The position was in the ocean; it comes back inside
+                        // the primary's domain.
+                        if (window.slicePositionForTest(2) < 0.0) {
+                            fail("closing the companion left z outside the primary");
                             return;
                         }
                         auto* tree = window.findChild<QTreeWidget*>(

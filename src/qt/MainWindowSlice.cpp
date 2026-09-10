@@ -1729,12 +1729,28 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
                             placement = virtualPlacementFor(
                                 *state, state->plane->physicalRegion);
                         }
-                        state->view->setImage(outcome.images[index],
-                            ImageTransformPolicy::GeometryAware,
-                            logicalImageSize(*state, *state->plane,
-                                outcome.images[index]),
-                            placement);
-                        // setImage clears the scene overlays; restore them.
+                        if (m_pair && m_viewDimension == 3) {
+                            // Two datasets: only this layer's tile changes.
+                            const auto& layout = pairLayout(state->normal);
+                            const auto rect = layout.sceneRectForRegion(
+                                state->layer, state->plane->physicalRegion);
+                            const auto canvas = layout.canvasRect();
+                            state->view->setTileImage(state->tile,
+                                outcome.images[index],
+                                QRectF(rect.x, rect.y, rect.width, rect.height),
+                                QRectF(canvas.x, canvas.y, canvas.width,
+                                    canvas.height),
+                                ImageTransformPolicy::Preserve);
+                            state->view->setTileVisible(
+                                state->tile, stateShown(*state));
+                        } else {
+                            state->view->setImage(outcome.images[index],
+                                ImageTransformPolicy::GeometryAware,
+                                logicalImageSize(*state, *state->plane,
+                                    outcome.images[index]),
+                                placement);
+                        }
+                        // Replacing the raster drops its overlays; restore them.
                         updateGridBoxes(*state);
                         updateOverlay(*state);
                         updateParticleOverlay(*state);

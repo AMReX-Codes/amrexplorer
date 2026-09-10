@@ -1476,7 +1476,10 @@ void MainWindow::applyFixedScale(int factor)
             // fetch (see updateRemoteFixedScaleDemand).
             state.view->setVirtualCanvas(virtualPlacementFor(
                 state, state.plane->physicalRegion));
-        } else {
+        } else if (!m_pair) {
+            // With a companion the tiles sit on the pair's canvas, which the
+            // fixed scale reads as scene units; resetting the placement
+            // would snap the primary back to the origin.
             state.view->setVirtualCanvas(std::nullopt);
         }
         state.view->setFixedScale(factor);

@@ -535,6 +535,16 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
             break;
         }
     }
+    // On the panel normal to the shared plane only one layer is on show, and
+    // its field, range and region are the ones to annotate.
+    if (m_pair && state != &m_view2d && state->normal == m_pair->perpendicularAxis) {
+        for (const auto& candidate : m_layers[1].planeViews) {
+            if (candidate.view == view && stateShown(candidate)) {
+                state = &candidate;
+                break;
+            }
+        }
+    }
     // A panel stacking two datasets has no single vertical axis to label
     // (each tile has its own scale), so axes are left off it.
     auto panelOptions = options;
@@ -714,7 +724,7 @@ void MainWindow::clearDatasetCellHighlights()
 {
     for (auto* state : allViewStates()) {
         state->datasetCell.reset();
-        state->view->setCellHighlight(std::nullopt);
+        state->view->setCellHighlight(std::nullopt, state->tile);
     }
 }
 

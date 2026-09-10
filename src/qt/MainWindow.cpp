@@ -2317,7 +2317,7 @@ void MainWindow::applyContourSettings(
         if (involvesVectors) {
             for (auto* state : currentViews()) {
                 state->vectorSegments.clear();
-                state->view->setOverlaySegments({});
+                state->view->setOverlaySegments({}, state->tile);
             }
         }
         scheduleSliceRequest(false);

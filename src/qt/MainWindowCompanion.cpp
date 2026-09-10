@@ -83,6 +83,8 @@ void MainWindow::openCompanion(const std::filesystem::path& path)
     spec.displayMode = m_displayMode;
     spec.includeGridBoxes = m_boxesAction->isChecked();
     spec.contourCount = m_contourCount;
+    // Log is shared with the primary; the range mode starts at File.
+    spec.logarithmic = primary().range->logarithmic();
     spec.slicePositions = m_slicePosition3d;
     spec.defaultPositions = false;
     const auto primaryMetadata = primary().openMetadata;
@@ -275,8 +277,21 @@ void MainWindow::closeCompanion()
         state->view->setTileVisible(state->tile, true);
     }
     if (m_controlsReady && primary().session) {
-        if (primary().session->metadata().dimension == 3) {
-            m_isoWidget->setGeometry(primary().session->metadata());
+        const auto& metadata = primary().session->metadata();
+        if (metadata.dimension == 3) {
+            m_isoWidget->setGeometry(metadata);
+            // The shared position may sit in the companion's part of the
+            // union; back inside the primary, and that panel re-sliced.
+            const auto bounds = datasetSampleBounds(metadata);
+            for (int axis = 0; axis < 3; ++axis) {
+                const auto a = static_cast<std::size_t>(axis);
+                const auto clamped = std::clamp(m_slicePosition3d[a],
+                    bounds.lower[a], std::nextafter(bounds.upper[a], bounds.lower[a]));
+                if (clamped != m_slicePosition3d[a]) {
+                    m_slicePosition3d[a] = clamped;
+                    scheduleSliceRequest(primary().planeViews[a]);
+                }
+            }
             publishSlicePositions();
         }
         updatePairedModeControls();

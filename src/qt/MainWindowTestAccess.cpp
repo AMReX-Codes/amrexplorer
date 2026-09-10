@@ -2,6 +2,41 @@
 
 namespace amrvis::qt {
 
+bool MainWindow::adaptivePrecisionForTest()
+{
+    constexpr double low = 1.25663706212e-6;
+    constexpr double high = 1.25663706213e-6;
+    applyNumberFormat("%g");
+    applyDisplayPrecision(0.0, 1.0);
+    LinePlotWindow child("adaptive precision");
+    child.resize(800, 480);
+    child.setNumberFormat(m_numberFormat);
+    LinePlotCurve curve;
+    curve.fieldName = "narrow";
+    curve.line.positions = {0.0, 1.0, 2.0};
+    curve.line.values = {low, (low + high) / 2.0, high};
+    curve.line.valid = {1, 1, 1};
+    child.addCurve(std::move(curve));
+    // Use the same live child pointer that range and format updates reach.
+    m_linePlotWindow = &child;
+    const auto before = child.grab().toImage();
+    applyDisplayPrecision(low, high);
+    applyDisplayPrecision(0.0, 1.0);
+    const bool rangePreserved = child.grab().toImage() == before;
+    applyNumberFormat("%.6g");
+    const bool explicitChanged = child.grab().toImage() != before;
+    applyNumberFormat("%g");
+    const bool defaultRestored = child.grab().toImage() == before;
+    m_linePlotWindow = nullptr;
+    const auto options = exportOptions(true, false, false);
+    ColorBarWidget exported;
+    exported.setNumberFormat(options.colorBarNumberFormat);
+    exported.setFieldRange("narrow", low, high);
+    return rangePreserved && explicitChanged && defaultRestored
+        && formatDigits(exported.tickFormat()) == minimumDisplayDigits
+        && formatDigits(exported.effectiveFormat()) > minimumDisplayDigits;
+}
+
 void MainWindow::setInitialSliceLaunchedHookForTest(std::function<void()> hook)
 {
     m_initialSliceLaunchedForTest = std::move(hook);

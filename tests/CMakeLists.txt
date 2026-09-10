@@ -797,6 +797,11 @@ if(TARGET amrexplorer_qt)
             "$<TARGET_FILE:test_widget_image_export>")
     set_tests_properties(widget_image_export PROPERTIES TIMEOUT 60)
 
+    add_test(NAME qt_adaptive_precision
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>" --adaptive-precision-smoke-test)
+    set_tests_properties(qt_adaptive_precision PROPERTIES TIMEOUT 30)
+
     add_executable(test_color_bar_labels unit/test_color_bar_labels.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/ColorBarWidget.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp")

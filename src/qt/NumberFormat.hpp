@@ -2,6 +2,8 @@
 
 #include <QString>
 
+#include <algorithm>
+
 namespace amrvis::qt {
 
 // The default readout format for the color bar / probe (View -> Number Format...
@@ -42,8 +44,8 @@ inline constexpr int displayGuardDigits = 3;
 // searched rather than the thing being honored.
 [[nodiscard]] QString withForcedPrecision(const QString& format, int digits);
 
-// The digits `format` renders with: its explicit precision, or the 6 a bare
-// %g gives.
+// The explicit precision, capped at maximumDisplayDigits, or the default 6.
+// This is decimal places for %f/%e, not a bound on their output width.
 [[nodiscard]] int formatDigits(const QString& format);
 
 // `format` resolved against the range it will render, ready to store wherever
@@ -74,7 +76,8 @@ QString formatNumber(double value, const QString& format);
 
 // `value` rendered as narrow as it must be to fit `width`, stepping the
 // precision down one digit at a time from `digits` and never past
-// `floorDigits`. Returns the narrowest rendering even when that still
+// `floorDigits`, with compact general notation as a fallback for wide formats.
+// Returns the narrowest rendering even when that still
 // overflows, so a caller that must not clip can test the width itself.
 //
 // Templated on the measurement so this stays Qt Core only and a test can
@@ -83,10 +86,26 @@ template <typename Measure>
 [[nodiscard]] QString fitNumber(double value, const QString& format, int digits,
     int floorDigits, Measure&& widthOf, int width)
 {
-    auto text = formatNumber(value, withForcedPrecision(format, digits));
-    for (int precision = digits - 1;
-         precision >= floorDigits && widthOf(text) > width; --precision) {
+    digits = std::clamp(digits, 1, maximumDisplayDigits);
+    floorDigits = std::clamp(floorDigits, 1, digits);
+    auto text = formatNumber(value, format);
+    if (widthOf(text) <= width) {
+        return text;
+    }
+    for (int precision = digits; precision >= floorDigits; --precision) {
         text = formatNumber(value, withForcedPrecision(format, precision));
+        if (widthOf(text) <= width) {
+            return text;
+        }
+    }
+    // Fixed/exponential notation and literal text may remain too wide.
+    // Retain the requested significant digits when compact notation fits,
+    // then reduce them only as far as the caller allows.
+    for (int precision = digits; precision >= floorDigits; --precision) {
+        text = QString::number(value, 'g', precision);
+        if (widthOf(text) <= width) {
+            return text;
+        }
     }
     return text;
 }

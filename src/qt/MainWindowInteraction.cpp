@@ -111,18 +111,14 @@ void MainWindow::applyNumberFormat(const QString& format)
         return;
     }
     m_numberFormat = format;
-    // The color bar takes the authored format and resolves its own; everyone
-    // else takes the resolved one. Push the authored format first so a
-    // resolution that turns out unchanged still reaches the bar.
+    // The color bar and child windows resolve against their own ranges;
+    // only the range controls take the main view's resolved format.
     m_colorBar->setNumberFormat(format);
-    const auto previous = m_displayFormat;
     m_displayFormat = resolveNumberFormat(
         format, m_lastDisplayMinimum, m_lastDisplayMaximum);
-    if (m_displayFormat != previous) {
-        pushDisplayFormat();
-    } else {
-        m_range->setNumberFormat(m_displayFormat);
-    }
+    // The authored format can change even when its resolved form does not
+    // (for example, %.6g back to %g). Children must receive that change too.
+    pushDisplayFormat();
     saveSettings();
 }
 
@@ -144,10 +140,10 @@ void MainWindow::pushDisplayFormat()
     // Open child windows repaint against the stored format; a null pointer
     // means the window picks the format up when it is next created.
     if (m_datasetWindow != nullptr) {
-        m_datasetWindow->setNumberFormat(m_displayFormat);
+        m_datasetWindow->setNumberFormat(m_numberFormat);
     }
     if (m_linePlotWindow != nullptr) {
-        m_linePlotWindow->setNumberFormat(m_displayFormat);
+        m_linePlotWindow->setNumberFormat(m_numberFormat);
     }
 }
 

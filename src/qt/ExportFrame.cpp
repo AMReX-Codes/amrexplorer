@@ -54,14 +54,12 @@ std::array<ExportAxis, 2> exportAxes(const RealBox& region, int dimension, int n
 
 QString exportNumber(double value, const QString& format, const QFontMetrics& metrics,
                      int availableWidth) {
-    // Never clip or elide numeric values. The layout reserves enough width
-    // for scientific notation, independent of a frame's magnitude or sign, so
-    // narrowing past what a plain %g shows means the reservation was wrong;
-    // drop the label rather than print a misleading one.
+    // Never clip or elide numeric values. Compact notation is the fallback
+    // when a fixed animation layout cannot fit the requested notation.
     const auto normalized = value == 0.0 ? 0.0 : value;
-    const auto digits = formatDigits(format);
+    const auto digits = std::max(minimumDisplayDigits, formatDigits(format));
     const auto label = fitNumber(normalized, format, digits,
-        std::min(digits, minimumDisplayDigits),
+        1,
         [&metrics](const QString& text) {
             return metrics.horizontalAdvance(text);
         },
@@ -75,7 +73,7 @@ QString exportNumber(double value, const QString& format, const QFontMetrics& me
 // a label measured under one budget is drawn under another.
 int labelBudget(int glyphWidth, int digits)
 {
-    return (digits + 8) * glyphWidth;
+    return (std::clamp(digits, minimumDisplayDigits, maximumDisplayDigits) + 9) * glyphWidth;
 }
 
 namespace {

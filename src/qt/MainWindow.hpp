@@ -154,6 +154,7 @@ public:
     // release build does not have is: the body cannot be inline here, where
     // AMREXPLORER_QT_TEST_ACCESS is not necessarily on.
     void setInitialSliceLaunchedHookForTest(std::function<void()> hook);
+    [[nodiscard]] bool adaptivePrecisionForTest();
     // Sends the next initial-slice completion down its failure arm, standing
     // in for the reopen a server refuses or a connection that has gone. The
     // one state a test cannot reach through the widgets, and the one the
@@ -1234,9 +1235,8 @@ private:
     DerivedFieldController* m_derivedFields = nullptr;
     // The authored format, and that format resolved against the displayed
     // range. m_numberFormat is what the dialog shows and what is persisted;
-    // m_displayFormat is what the readouts render with, so a range whose
-    // values differ far out stays legible. The color bar resolves its own,
-    // from the range it holds.
+    // m_displayFormat is what the range controls render with. The color bar
+    // and child windows resolve the authored format against their own ranges.
     QString m_numberFormat = defaultNumberFormat();
     QString m_displayFormat = defaultNumberFormat();
     // The range the resolved format was derived from, so a format change can

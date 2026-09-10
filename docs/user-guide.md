@@ -295,7 +295,7 @@ Ctrl+W (Cmd+W on macOS), the same key that closes the main and volume windows.
 Choose **View > Number Format...** to set the `printf`-style format used for
 numeric readouts. The default is `%g`.
 
-A format that names no precision — `%g` included — adapts its digits to the
+A `%g` or `%G` format with no explicit precision adapts its digits to the
 range being shown, so a field whose values differ only in their twelfth digit
 still reads as distinct numbers instead of the same string repeated down the
 colour bar. Ordinary data is unaffected: trailing zeros are dropped, so `0.1`

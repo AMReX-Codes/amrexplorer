@@ -135,7 +135,8 @@ int spanPrecision(const QByteArray& bytes, ConversionSpan span)
     int precision = 0;
     for (++index; index < span.end && bytes[index] >= '0'
          && bytes[index] <= '9'; ++index) {
-        precision = precision * 10 + (bytes[index] - '0');
+        precision = std::min(maximumDisplayDigits,
+            precision * 10 + (bytes[index] - '0'));
     }
     return precision;
 }
@@ -167,7 +168,7 @@ QString splicePrecision(const QString& format, int digits, bool force)
         result.append(bytes[index]);
     }
     result.append('.');
-    result.append(QByteArray::number(digits));
+    result.append(QByteArray::number(std::clamp(digits, 1, maximumDisplayDigits)));
     result.append(conversion);
     result.append(bytes.mid(span.end));
     return QString::fromUtf8(result);
@@ -261,6 +262,19 @@ QString formatNumber(double value, const QString& format)
     // of the conversion's output and says nothing about the literals around it.
     const QByteArray specifier(bytes.constData() + span.start,
         span.end - span.start);
+    // Oversized width/precision cannot fit the buffer and can make snprintf
+    // do unbounded work even though its destination is small.
+    int run = 0;
+    for (const char character : specifier) {
+        if (character >= '0' && character <= '9') {
+            run = run * 10 + (character - '0');
+            if (run >= 128) {
+                return QString::number(value, 'g', 7);
+            }
+        } else {
+            run = 0;
+        }
+    }
     char buffer[128];
     // The validator guarantees exactly one floating conversion and no other
     // arguments, so a single double is the whole vararg list.

@@ -119,8 +119,24 @@ void LinePlotWidget::setShowMarkers(bool on)
 
 QRect LinePlotWidget::plotRect() const
 {
-    constexpr int leftMargin = 92;
-    constexpr int rightMargin = 32;
+    int leftMargin = 92;
+    int rightMargin = 32;
+    if (const auto range = displayedRange()) {
+        const auto xFormat = resolveNumberFormat(m_numberFormat, range->xMinimum, range->xMaximum);
+        const auto yFormat = resolveNumberFormat(m_numberFormat, range->yMinimum, range->yMaximum);
+        const QFontMetrics metrics(font());
+        for (int tick = 0; tick < 5; ++tick) {
+            const auto fraction = static_cast<double>(tick) / 4.0;
+            const auto yLabel = formatNumber(
+                std::lerp(range->yMinimum, range->yMaximum, fraction), yFormat);
+            leftMargin = std::max(leftMargin, metrics.horizontalAdvance(yLabel) + 6);
+            const auto xLabel = formatNumber(
+                std::lerp(range->xMinimum, range->xMaximum, fraction), xFormat);
+            const auto overhang = metrics.horizontalAdvance(xLabel) / 2 + 6;
+            leftMargin = std::max(leftMargin, overhang);
+            rightMargin = std::max(rightMargin, overhang);
+        }
+    }
     constexpr int topMargin = 18;
     constexpr int bottomMargin = 36;
     return QRect(leftMargin, topMargin,
@@ -325,7 +341,8 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
         painter.setPen(gridPen);
         painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
         painter.setPen(viewportForeground());
-        painter.drawText(QRectF(x - 40.0, plot.bottom() + 4.0, 80.0, 16.0),
+        const auto labelWidth = std::max(80, painter.fontMetrics().horizontalAdvance(label) + 2);
+        painter.drawText(QRectF(x - labelWidth / 2.0, plot.bottom() + 4.0, labelWidth, 16.0),
             Qt::AlignHCenter | Qt::AlignTop, label);
     };
     if (usesIndexPositions(m_curves)) {
@@ -342,9 +359,17 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
             tick += step;
         }
     } else {
+        int maximumWidth = 0;
         for (int tick = 0; tick < tickCount; ++tick) {
-            const auto fraction = static_cast<double>(tick) / (tickCount - 1);
-            const auto xValue = xMinimum + fraction * (xMaximum - xMinimum);
+            const auto value = std::lerp(xMinimum, xMaximum,
+                static_cast<double>(tick) / (tickCount - 1));
+            maximumWidth = std::max(maximumWidth,
+                painter.fontMetrics().horizontalAdvance(formatNumber(value, xFormat)));
+        }
+        const int count = std::clamp(plot.width() / (maximumWidth + 12) + 1, 2, tickCount);
+        for (int tick = 0; tick < count; ++tick) {
+            const auto fraction = static_cast<double>(tick) / (count - 1);
+            const auto xValue = std::lerp(xMinimum, xMaximum, fraction);
             drawXTick(xValue, formatNumber(xValue, xFormat));
         }
     }

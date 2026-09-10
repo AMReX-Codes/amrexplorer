@@ -505,6 +505,7 @@ ExportOptions MainWindow::exportOptions(bool includeColorBar, bool includeAxes,
     // of an animation -- the layout is frozen after the first frame, and
     // digits re-derived per frame would change label widths under it.
     options.numberFormat = m_displayFormat;
+    options.colorBarNumberFormat = m_numberFormat;
     options.lengthUnit = m_lengthUnitId;
     return options;
 }
@@ -527,7 +528,8 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
                    options.lengthUnit);
     ColorBarWidget colorBar;
     colorBar.setPalette(&m_paletteController->palette());
-    colorBar.setNumberFormat(options.numberFormat);
+    colorBar.setNumberFormat(options.colorBarNumberFormat.isEmpty()
+        ? options.numberFormat : options.colorBarNumberFormat);
     colorBar.setLogarithmic(state->displayLogarithmic);
     colorBar.setFieldRange(state->fieldName +
                                (state->displayLogarithmic ? tr(" (log)") : QString()),

@@ -56,6 +56,9 @@ protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
+    struct LabelLayout;
+    [[nodiscard]] LabelLayout labelLayout(
+        const QFontMetrics& metrics, int height, bool bounded, int width) const;
     // Resize to whichever is larger, panelWidth or what the current labels
     // need, after anything that can change their width.
     void applyPreferredWidth();

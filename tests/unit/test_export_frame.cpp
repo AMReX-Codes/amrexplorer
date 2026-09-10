@@ -206,6 +206,29 @@ int main(int argc, char** argv) {
                     "a tick has an invalid position");
         }
     }
+    // Fixed/exponential notation must retain ticks when compact notation is
+    // needed, and enormous precision fields must not inflate the layout.
+    for (const auto& format : {QString("%.2f"), QString("%.6e"),
+             QString("%.2000g"), QString("%.99999999999g")}) {
+        auto fixedOptions = options;
+        fixedOptions.numberFormat = format;
+        const std::array<ExportAxis, 2> largeAxes{{{"x", 12345678.9, 22345678.9},
+            {"y", -1e200, 1e200}}};
+        const auto fixed = makeExportLayout(QSize(600, 400), fixedOptions, largeAxes);
+        require(fixed.canvasSize.width() < 4096 && fixed.font.pixelSize() < 128,
+            "an oversized precision made the export layout unbounded");
+        const QFontMetrics fixedMetrics(fixed.font);
+        for (const auto& axis : largeAxes) {
+            const auto labels = exportTicks(axis, 400, 100, format, fixedMetrics,
+                fixed.labelWidth);
+            require(!labels.empty(), "fixed/exponential format erased the export ticks");
+            for (const auto& label : labels) {
+                require(fixedMetrics.horizontalAdvance(label.label) <= fixed.labelWidth,
+                    "an exported tick overflowed the frozen label budget");
+            }
+        }
+    }
+
     const auto savedPalette = app.palette();
     QPalette hostile;
     hostile.setColor(QPalette::Window, Qt::black);

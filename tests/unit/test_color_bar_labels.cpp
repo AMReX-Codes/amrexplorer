@@ -2,11 +2,13 @@
 // offset factored out of its ticks, and when it prints values in full.
 #include "ColorBarWidget.hpp"
 #include "NumberFormat.hpp"
+#include "RecordingPaintDevice.hpp"
 
 #include <QApplication>
 #include <QString>
 
 #include <cstdlib>
+#include <cmath>
 #include <iostream>
 
 namespace {
@@ -76,6 +78,53 @@ int main(int argc, char* argv[])
     require(negativeOffset != 0.0, "a negative narrow range got no offset");
     require(negativeOffset <= -narrowHigh,
         "the negative offset would make a residual negative");
+
+    // Offsets must reconstruct the values actually printed. Explicit coarse
+    // formats disable an offset whose discarded digits exceed the range.
+    bar.setFieldRange("mu", narrowLow, narrowHigh);
+    for (const auto& format : {QString("%g"), QString("%.6g"), QString("%.17g"), QString("%+.17g")}) {
+        bar.setNumberFormat(format);
+        const auto actualOffset = bar.labelOffset();
+        if (actualOffset != 0.0) {
+            require(formatNumber(actualOffset, bar.effectiveFormat()).toDouble() == actualOffset,
+                "ticks subtract an offset different from the printed one");
+        } else {
+            require(format == "%.6g", "adaptive/full precision lost a usable offset");
+        }
+    }
+
+    // Use the real paint path at the exported width. Cover both the offset
+    // line and the short-panel fallback, plus fixed/exponential notation.
+    QFont font;
+    font.setPixelSize(18);
+    const QFontMetrics metrics(font);
+    for (const auto& format : {QString("%g"), QString("%.6g"), QString("%.17g"),
+             QString("%.2f"), QString("%.6e")}) {
+        bar.setNumberFormat(format);
+        for (const int height : {60, 100, 480}) {
+            for (const auto& bounds : {std::pair{narrowLow, narrowHigh},
+                     std::pair{12345678.9, 22345678.9}, std::pair{1e200, 2e200}}) {
+                bar.setFieldRange("field", bounds.first, bounds.second);
+                const auto width = ColorBarWidget::exportWidth(metrics,
+                    bar.exportLabelWidth(metrics, metrics.horizontalAdvance("-1.234567e-308"), height));
+                RecordingPaintDevice device(width, height);
+                QPainter painter(&device);
+                painter.setFont(font);
+                bar.paintBar(&painter, QRect(0, 0, width, height), true, true);
+                painter.end();
+                int numericLabels = 0;
+                for (const auto& label : device.text()) {
+                    bool numeric = false;
+                    label.value.toDouble(&numeric);
+                    if (!numeric) { continue; }
+                    ++numericLabels;
+                    require(label.bounds.left() >= -0.5 && label.bounds.right() <= width + 0.5,
+                        "export clipped a numeric tick or offset label");
+                }
+                require(numericLabels > 0, "export lost every numeric label");
+            }
+        }
+    }
 
     return 0;
 }

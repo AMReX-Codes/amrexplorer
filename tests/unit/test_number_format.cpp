@@ -247,5 +247,17 @@ int main()
     require(charWidth(fitNumber(narrowLow, resolved, 15, 6, charWidth, 1)) > 1,
         "fitting past the floor did not return the narrowest rendering");
 
+    for (const auto& format : {QString("%.99999999999g"), QString("%.2000g"),
+             QString("%.99999999999f"), QString("%99999999999g")}) {
+        require(formatDigits(format) <= maximumDisplayDigits,
+            "unbounded precision escaped the display budget");
+        require(!formatNumber(1.2345, format).isEmpty(),
+            "oversized formatting did not return a bounded fallback");
+    }
+    require(fitNumber(12345678.9, "%.2f", 6, 1, charWidth, 10) == "1.2346e+07",
+        "fixed-point export did not fall back to compact notation");
+    require(charWidth(fitNumber(1.23456e200, "%.6e", 6, 1, charWidth, 10)) <= 10,
+        "exponential export did not fit its label budget");
+
     return 0;
 }

@@ -1,4 +1,5 @@
 #include "LinePlotWindow.hpp"
+#include "RecordingPaintDevice.hpp"
 
 #include <QAction>
 #include <QApplication>
@@ -155,6 +156,43 @@ int main(int argc, char* argv[])
     require(extremePlot.grab().toImage().copy(extremeRect) != beforeZoom,
         "zooming an extreme line range did not change the plotted geometry");
     requireHover();
+
+    // Adaptive labels must keep their leading digits inside the widget.
+    curves[0].line.values = {1.25663706212e-6, 1.256637062125e-6, 1.25663706213e-6};
+    extremePlot.resetZoom();
+    RecordingPaintDevice recording(extremePlot.width(), extremePlot.height());
+    QPainter painter(&recording);
+    extremePlot.render(&painter);
+    painter.end();
+    int preciseLabels = 0;
+    for (const auto& label : recording.text()) {
+        if (label.value.contains("e-06")) {
+            ++preciseLabels;
+            require(label.bounds.left() >= -0.5,
+                "an adaptive y tick lost leading digits outside the plot widget");
+        }
+    }
+    require(preciseLabels >= 5, "the paint probe did not see the adaptive axis labels");
+
+    curves[0].line.positions = curves[0].line.values;
+    extremePlot.resetZoom();
+    RecordingPaintDevice bothAxes(extremePlot.width(), extremePlot.height());
+    QPainter bothPainter(&bothAxes);
+    extremePlot.render(&bothPainter);
+    bothPainter.end();
+    int horizontalLabels = 0;
+    double previousRight = -1.0;
+    for (const auto& label : bothAxes.text()) {
+        if (label.bounds.top() > extremePlot.height() - bottomMargin
+            && label.value.contains("e-06")) {
+            ++horizontalLabels;
+            require(label.bounds.left() >= previousRight
+                    && label.bounds.right() <= extremePlot.width() + 0.5,
+                "adaptive x labels overlap or extend outside the widget");
+            previousRight = label.bounds.right();
+        }
+    }
+    require(horizontalLabels >= 2, "adaptive x range lost its tick labels");
 
     return 0;
 }

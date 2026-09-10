@@ -18,6 +18,9 @@ struct ExportOptions {
     bool transparentBackground = false;
     QFont font;
     QString numberFormat = QStringLiteral("%g");
+    // The authored color-bar format remains independent of the fixed axis
+    // precision, so residuals can use their own range. Empty uses numberFormat.
+    QString colorBarNumberFormat;
     QString lengthUnit;
 };
 

@@ -5,6 +5,7 @@
 #include <QApplication>
 #include <QTest>
 #include <QEvent>
+#include <QFontMetrics>
 #include <QKeySequence>
 #include <QMouseEvent>
 #include <QPointF>
@@ -235,7 +236,12 @@ int main(int argc, char* argv[])
     curves[0].line.positions = {narrowLow, std::lerp(narrowLow, narrowHigh, 0.5), narrowHigh};
     curves[0].line.values = curves[0].line.positions;
     extremePlot.resetZoom();
-    for (const int width : {496, 420}) {
+    // Sized from the label the painter measures rather than fixed pixels: a
+    // runner without fonts draws box glyphs a full pixel size wide. Room for
+    // both end labels first, then a hair too little for them.
+    const int labelSpan = QFontMetrics(narrowFont).horizontalAdvance(
+        QString::number(narrowLow, 'g', 17));
+    for (const int width : {2 * labelSpan + 32, 2 * labelSpan - 44}) {
         extremePlot.resize(width, 400);
         RecordingPaintDevice narrowAxes(extremePlot.width(), extremePlot.height());
         QPainter narrowPainter(&narrowAxes);

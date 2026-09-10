@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <utility>
 
 namespace {
 void require(bool value, const char* message) {
@@ -122,6 +123,29 @@ int main(int argc, char** argv) {
                 "a numeric label overflowed its frozen budget");
     }
     const QFontMetrics fm(layout.font);
+    // The actual label calculation must stay finite over the full double
+    // range, with exact endpoints and geometric spacing in between.
+    for (const auto& bounds : {std::pair{1.0e-200, 1.0e200},
+             std::pair{std::numeric_limits<double>::denorm_min(),
+                 std::numeric_limits<double>::max()}}) {
+        require(ColorBarWidget::tickValue(bounds.first, bounds.second, true, 0.0)
+                    == bounds.second
+                && ColorBarWidget::tickValue(bounds.first, bounds.second, true, 1.0)
+                    == bounds.first,
+            "logarithmic color bar lost its endpoints");
+        double previous = bounds.second;
+        for (int label = 0; label < 8; ++label) {
+            const auto fraction = static_cast<double>(label) / 7.0;
+            const auto value = ColorBarWidget::tickValue(
+                bounds.first, bounds.second, true, fraction);
+            require(std::isfinite(value) && value >= bounds.first && value <= previous,
+                "logarithmic color bar has a nonfinite or unordered label");
+            previous = value;
+        }
+    }
+    require(std::abs(ColorBarWidget::tickValue(1.0e-200, 1.0e200, true, 0.5) - 1.0)
+                < 1.0e-12,
+        "logarithmic color bar lost geometric spacing");
     ExportOptions compactOptions;
     compactOptions.includeAxes = true;
     compactOptions.font = options.font;

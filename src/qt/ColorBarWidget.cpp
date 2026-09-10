@@ -33,15 +33,6 @@ QString boundedNumber(double value, const QString& format, const QFontMetrics& m
     return text;
 }
 
-// Value at a given label fraction (0 = top = max, 1 = bottom = min), honoring
-// log spacing so the labels match the drawn gradient.
-double tickValue(double minimum, double maximum, bool logarithmic, double fraction)
-{
-    return logarithmic
-        ? minimum * std::pow(maximum / minimum, 1.0 - fraction)
-        : std::lerp(maximum, minimum, fraction);
-}
-
 // Pixel width of the widest tick label for the format/range. Because it
 // measures the actual formatted strings, exponent forms (from %e / %g) are
 // included at their full width.
@@ -54,12 +45,27 @@ int maxTickLabelWidth(const QFontMetrics& fm, double minimum, double maximum,
             / static_cast<double>(labelCount - 1);
         maxWidth = std::max(maxWidth,
             fm.horizontalAdvance(formatNumber(
-                tickValue(minimum, maximum, logarithmic, fraction), format)));
+                ColorBarWidget::tickValue(minimum, maximum, logarithmic, fraction), format)));
     }
     return maxWidth;
 }
 
 } // namespace
+
+double ColorBarWidget::tickValue(
+    double minimum, double maximum, bool logarithmic, double fraction)
+{
+    if (fraction == 0.0) {
+        return maximum;
+    }
+    if (fraction == 1.0) {
+        return minimum;
+    }
+    return logarithmic
+        ? std::clamp(std::exp(std::lerp(std::log(maximum), std::log(minimum),
+                         fraction)), minimum, maximum)
+        : std::lerp(maximum, minimum, fraction);
+}
 
 ColorBarWidget::ColorBarWidget(QWidget* parent)
     : QWidget(parent)
@@ -173,7 +179,7 @@ void ColorBarWidget::paintBar(QPainter* painter, const QRect& target, bool trans
         // In log mode the labels must be geometrically spaced to match the
         // gradient: the color at vertical position `fraction` (from the top)
         // corresponds to min*(max/min)^(1-fraction).
-        const auto value = tickValue(m_minimum, m_maximum, m_logarithmic, fraction);
+        const auto value = ColorBarWidget::tickValue(m_minimum, m_maximum, m_logarithmic, fraction);
         const auto center = bar.top()
             + static_cast<int>(std::lround(fraction * static_cast<double>(rows)));
         const auto top = std::clamp(center - labelHeight / 2, bar.top(),
@@ -213,7 +219,7 @@ int ColorBarWidget::exportLabelWidth(const QFontMetrics& metrics, int maximumWid
     for (int label = 0; label < count; ++label) {
         const double fraction = static_cast<double>(label) / std::max(1, count - 1);
         width = std::max(width, metrics.horizontalAdvance(boundedNumber(
-                                    tickValue(m_minimum, m_maximum, m_logarithmic, fraction),
+                                    ColorBarWidget::tickValue(m_minimum, m_maximum, m_logarithmic, fraction),
                                     m_numberFormat, metrics, maximumWidth)));
     }
     // Keep short field names intact without allowing long expressions to

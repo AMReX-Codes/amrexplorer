@@ -457,6 +457,7 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
         std::array<std::size_t, 3> low{};
         std::array<double, 8> corner{};
         unsigned uncovered = 0;
+        bool largeValues = false;
         bool loaded = false;
     };
     const auto linearValue
@@ -514,25 +515,18 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                           }
                       }
                   }
+                  cache.largeValues = std::any_of(
+                      cache.corner.begin(), cache.corner.end(), [](double value) {
+                          return std::abs(value) > std::numeric_limits<double>::max() / 2.0;
+                      });
                   cache.loaded = true;
                   cache.low = {bracket[0][0], bracket[1][0], bracket[2][0]};
               }
               // Seven interpolations along the axes in turn rather than
               // eight corners each weighted by a product: the same value, and
               // the weight products are what this loop spends its time on.
-              // Not std::lerp, which costs about a quarter of the frame here
-              // (160 ms against 129 at 900 square over 256 cubed): it carries
-              // guarantees about infinities and monotonicity that this does
-              // not need, and does not fold to the same arithmetic. The one
-              // guarantee that would matter -- returning the endpoints
-              // exactly -- is already had: the weight is exactly zero in the
-              // clamped shell, where this returns `from` unchanged, and the
-              // bracket only produces a fraction in [0, 1) elsewhere, so the
-              // far endpoint is never asked for.
-              const auto between = [](double from, double to, double where) {
-                  return from + where * (to - from);
-              };
-              const auto blend = [&](const std::array<double, 8>& corner) {
+              const auto blend = [&](const std::array<double, 8>& corner,
+                                     const auto& between) {
                   const auto lowY
                       = between(between(corner[0], corner[1], weight[0]),
                           between(corner[2], corner[3], weight[0]), weight[1]);
@@ -541,8 +535,22 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                           between(corner[6], corner[7], weight[0]), weight[1]);
                   return between(lowY, highY, weight[2]);
               };
+              // Only extreme cells need the more expensive interpolation:
+              // their finite corners can have an overflowing difference.
+              // Decide once per cell and dispatch once per sample, retaining
+              // the ordinary arithmetic in the seven inner interpolations.
+              const auto interpolate = [&](const std::array<double, 8>& corner) {
+                  if (cache.largeValues) {
+                      return blend(corner, [](double from, double to, double where) {
+                          return std::lerp(from, to, where);
+                      });
+                  }
+                  return blend(corner, [](double from, double to, double where) {
+                      return from + where * (to - from);
+                  });
+              };
               if (cache.uncovered == 0) {
-                  return blend(cache.corner);
+                  return interpolate(cache.corner);
               }
               // The uncommon path: a cell at the edge of what the levels
               // cover. The landed voxel stands in for the corners they do not.
@@ -552,7 +560,7 @@ VolumeFrame raycastVolume(const VolumeGrid& grid,
                       covered[corner] = landed;
                   }
               }
-              return blend(covered);
+              return interpolate(covered);
           };
 
     const auto renderRow = [&](int row) {

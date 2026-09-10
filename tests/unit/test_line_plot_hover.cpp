@@ -7,10 +7,12 @@
 #include <QKeySequence>
 #include <QMouseEvent>
 #include <QPointF>
+#include <QImage>
 #include <QToolTip>
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -93,5 +95,66 @@ int main(int argc, char* argv[])
     window.activateWindow();
     QTest::keyClick(&window, Qt::Key_W, Qt::ControlModifier);
     require(!window.isVisible(), "Ctrl+W left the line plot window open");
+    // Large finite samples must still paint and remain hoverable after zoom.
+    // Test both signs, plus constants whose ordinary padding would overflow.
+    amrvis::qt::LinePlotWidget extremePlot;
+    extremePlot.resize(640, 480);
+    extremePlot.setNumberFormat("%g");
+    std::vector<amrvis::qt::LinePlotCurve> curves(1);
+    curves[0].fieldName = "extreme";
+    curves[0].color = Qt::red;
+    curves[0].line.positions = {0.0, 1.0, 2.0};
+    curves[0].line.valid = {1, 1, 1};
+    extremePlot.setCurves(&curves);
+    extremePlot.show();
+    const QRect extremeRect(leftMargin, topMargin,
+        extremePlot.width() - leftMargin - rightMargin,
+        extremePlot.height() - topMargin - bottomMargin);
+    const auto requirePainted = [&] {
+        const auto image = extremePlot.grab().toImage();
+        int colored = 0;
+        for (int y = extremeRect.top(); y <= extremeRect.bottom(); ++y) {
+            for (int x = extremeRect.left(); x <= extremeRect.right(); ++x) {
+                const auto pixel = image.pixelColor(x, y);
+                colored += pixel.red() > 150 && pixel.green() < 80 && pixel.blue() < 80;
+            }
+        }
+        require(colored > 100, "extreme finite values erased the plotted curve");
+    };
+    const auto largest = std::numeric_limits<double>::max();
+    for (const auto& values : {std::vector{-1.0e308, 0.0, 1.0e308},
+             std::vector{-largest, 0.0, largest}, std::vector{largest, largest, largest},
+             std::vector{-largest, -largest, -largest}}) {
+        curves[0].line.values = values;
+        extremePlot.resetZoom();
+        requirePainted();
+    }
+    curves[0].line.values = {-1.0e308, 0.0, 1.0e308};
+    extremePlot.resetZoom();
+    requirePainted();
+    const QPoint centre(extremeRect.left() + extremeRect.width() / 2,
+        extremeRect.bottom() - extremeRect.height() / 2);
+    const auto requireHover = [&] {
+        QEvent clear(QEvent::Leave);
+        QApplication::sendEvent(&extremePlot, &clear);
+        QMouseEvent moveEvent(QEvent::MouseMove, QPointF(centre),
+            QPointF(extremePlot.mapToGlobal(centre)),
+            Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&extremePlot, &moveEvent);
+        application.processEvents();
+        require(QToolTip::text().contains("extreme")
+                && QToolTip::text().contains("value = 0"),
+            "extreme line range lost the midpoint hover readout");
+    };
+    requireHover();
+    const auto beforeZoom = extremePlot.grab().toImage().copy(extremeRect);
+    const QPoint inset(extremeRect.width() / 4, extremeRect.height() / 3);
+    QTest::mousePress(&extremePlot, Qt::LeftButton, Qt::NoModifier, centre - inset);
+    QTest::mouseRelease(&extremePlot, Qt::LeftButton, Qt::NoModifier, centre + inset);
+    requirePainted();
+    require(extremePlot.grab().toImage().copy(extremeRect) != beforeZoom,
+        "zooming an extreme line range did not change the plotted geometry");
+    requireHover();
+
     return 0;
 }

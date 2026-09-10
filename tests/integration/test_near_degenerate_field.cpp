@@ -245,7 +245,7 @@ int main()
     // padding of a constant would overflow. Exercise real slice/volume reads.
     const auto huge = std::numeric_limits<double>::max();
     int caseIndex = 0;
-    for (const auto [low, high] : {std::pair{-1.0e308, 1.0e308},
+    for (const auto& [low, high] : {std::pair{-1.0e308, 1.0e308},
              std::pair{-huge, huge}, std::pair{huge, huge},
              std::pair{-huge, -huge}}) {
         const auto caseRoot = scratch / std::to_string(caseIndex++);

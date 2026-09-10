@@ -432,6 +432,31 @@ int main()
             "the logarithmic range did not select the middle entry");
     }
 
+    // Trilinear interpolation must preserve the picture when finite corners
+    // acquire a difference larger than DBL_MAX, in any of the three axes.
+    for (int axis = 0; axis < 3; ++axis) {
+        auto grid = uniformGrid(2, 0.0F);
+        for (std::size_t i = 0; i < grid.values.size(); ++i) {
+            grid.values[i] = ((i >> axis) & 1U) != 0 ? 1.0 : -1.0;
+        }
+        amrvis::VolumeTransferFunction transfer;
+        transfer.colors = {0xFF0000U, 0x00FF00U, 0x0000FFU};
+        transfer.opacities = {1.0F, 1.0F, 1.0F};
+        auto settings = settingsFor(amrvis::orthoPresetXY, 64, transfer);
+        settings.sampling = amrvis::SamplingPolicy::Linear;
+        settings.range = {-1.0, 1.0, false};
+        const auto reference = amrvis::raycastVolume(grid, settings);
+        for (const double magnitude : {1.0e308, std::numeric_limits<double>::max()}) {
+            auto scaled = grid;
+            for (auto& value : scaled.values) {
+                value *= magnitude;
+            }
+            settings.range = {-magnitude, magnitude, false};
+            require(amrvis::raycastVolume(scaled, settings).pixels == reference.pixels,
+                "extreme finite corners changed trilinear volume colors");
+        }
+    }
+
     // --- NaN voxels are transparent ---------------------------------------
     {
         auto grid = uniformGrid(4, std::numeric_limits<float>::quiet_NaN());

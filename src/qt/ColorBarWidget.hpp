@@ -27,6 +27,10 @@ public:
     void setLogarithmic(bool logarithmic);
     void clearRange();
 
+    // Label value at a fraction of the bar (0 = maximum, 1 = minimum).
+    [[nodiscard]] static double tickValue(
+        double minimum, double maximum, bool logarithmic, double fraction);
+
     // Paints the color bar into an arbitrary rect (e.g. for image export),
     // using this widget's current palette/range/format state.
     void paintBar(QPainter* painter, const QRect& target, bool transparentBackground = false,

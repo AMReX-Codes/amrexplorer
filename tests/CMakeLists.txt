@@ -993,7 +993,8 @@ if(TARGET amrexplorer_qt)
 
     # RemoteSessionController: install() over a loopback Server, start() over
     # the stand-in ssh script running the real server, per-destination
-    # settings, diagnostics lines. Never opens a modal dialog.
+    # settings, diagnostics lines, and a hand-rolled older peer for the
+    # precision notice. Never opens a modal dialog.
     add_executable(test_remote_session_controller
         unit/test_remote_session_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/RemoteSessionController.cpp"
@@ -1007,10 +1008,13 @@ if(TARGET amrexplorer_qt)
     set_target_properties(test_remote_session_controller
         PROPERTIES AUTOMOC ON)
     target_include_directories(test_remote_session_controller
-        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
+            "${PROJECT_SOURCE_DIR}/src/remote"
+            "${PROJECT_BINARY_DIR}/src/remote/generated")
     target_link_libraries(test_remote_session_controller
         PRIVATE amrexplorer::remote amrexplorer::warnings
-            Qt6::Widgets Qt6::Concurrent)
+            ${AMREXPLORER_FLATBUFFERS_LIBRARY_TARGET}
+            Qt6::Widgets Qt6::Concurrent Threads::Threads)
     add_test(NAME remote_session_controller
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_remote_session_controller>"

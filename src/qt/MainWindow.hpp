@@ -1046,6 +1046,10 @@ private:
     QStackedWidget* m_stack = nullptr;
     IsoWidget* m_isoWidget = nullptr;
     QLabel* m_probeLabel = nullptr;
+    // Permanent status-bar item, shown only while the remote server
+    // predates full-precision values; a status message would be
+    // overwritten by the open that follows the session's ready line.
+    QLabel* m_remotePrecisionLabel = nullptr;
     ColorBarWidget* m_colorBar = nullptr;
     LinePlotWindow* m_linePlotWindow = nullptr;
     // Cancels in-flight line-plot queries on dataset switch or window close so

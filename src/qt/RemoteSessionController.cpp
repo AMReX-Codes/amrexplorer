@@ -29,6 +29,13 @@ void RemoteSessionController::install(
 {
     m_connection = std::move(connection);
     m_label = std::move(label);
+    // A property of the connection, so it is derived once here and stands for
+    // the session's life. A status message cannot carry it: the open that
+    // follows the ready line replaces it within the same event-loop turn.
+    m_precisionNotice
+        = m_connection && !m_connection->supportsDoublePrecisionValues()
+        ? QString::fromLatin1(remote::doublePrecisionValuesUnsupportedMessage)
+        : QString();
     ++m_connectionGeneration;
     emit sessionChanged();
 }
@@ -108,6 +115,7 @@ void RemoteSessionController::start(std::string destination,
     m_session.reset();
     m_connection.reset();
     m_label.clear();
+    m_precisionNotice.clear();
     m_session = std::make_unique<SshRemoteSession>(this);
     emit statusMessage(
         tr("Starting remote session on %1...").arg(destinationText), 0);
@@ -121,21 +129,16 @@ void RemoteSessionController::start(std::string destination,
                 return;
             }
             const auto& server = connection->serverInfo();
-            // Before the move: the notice is a property of the connection.
-            const auto precisionNotice = connection->supportsDoublePrecisionValues()
-                ? QString()
-                : tr(" -- %1")
-                      .arg(QString::fromLatin1(
-                          remote::doublePrecisionValuesUnsupportedMessage));
             install(std::move(connection),
                 tr("ssh %1").arg(QString::fromStdString(destination)));
+            // One multi-arg call: chaining would rescan the inserted text, so
+            // a peer whose reported name held a marker could steer the rest.
             emit statusMessage(
-                tr("Remote session on %1 is ready (%2 %3, %4 worker threads)%5")
+                tr("Remote session on %1 is ready (%2 %3, %4 worker threads)")
                     .arg(QString::fromStdString(destination),
                         QString::fromStdString(server.serverName),
-                        QString::fromStdString(server.softwareVersion))
-                    .arg(server.workerCount)
-                    .arg(precisionNotice),
+                        QString::fromStdString(server.softwareVersion),
+                        QString::number(server.workerCount)),
                 0);
             if (!paths.empty()) {
                 emit openRequested(paths, paths.size() > 1);
@@ -271,6 +274,9 @@ QString RemoteSessionController::diagnosticsLines() const
         if (remotePath) {
             text += tr("\nremote path: %1")
                         .arg(QString::fromStdString(*remotePath));
+        }
+        if (!m_precisionNotice.isEmpty()) {
+            text += tr("\nremote values: float -- %1").arg(m_precisionNotice);
         }
     } else if (m_session) {
         text += tr("\nremote session: ssh %1 (starting)")

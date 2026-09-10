@@ -2288,6 +2288,15 @@ void MainWindow::reportBackgroundError(const QString& message)
 
 void MainWindow::updateDiagnostics()
 {
+    // Follows the session because it is wired to sessionChanged(): every
+    // install decides afresh whether the values arrive at full precision.
+    if (m_remotePrecisionLabel && m_remoteSession) {
+        const auto notice = m_remoteSession->valuePrecisionNotice();
+        m_remotePrecisionLabel->setText(
+            notice.isEmpty() ? QString() : tr("Remote values: float"));
+        m_remotePrecisionLabel->setToolTip(notice);
+        m_remotePrecisionLabel->setVisible(!notice.isEmpty());
+    }
     m_diagnosticsModel->refresh();
 }
 

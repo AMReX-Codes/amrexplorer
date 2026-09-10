@@ -865,8 +865,13 @@ MainWindow::MainWindow(QWidget* parent)
     }
 
     m_probeLabel = new QLabel(statusBar());
+    m_remotePrecisionLabel = new QLabel(statusBar());
+    m_remotePrecisionLabel->setObjectName(
+        QStringLiteral("remotePrecisionLabel"));
+    m_remotePrecisionLabel->setVisible(false);
     statusBar()->addPermanentWidget(
         m_particleController->createProgress(statusBar()));
+    statusBar()->addPermanentWidget(m_remotePrecisionLabel);
     statusBar()->addPermanentWidget(m_probeLabel);
     statusBar()->showMessage(tr("No dataset open"));
     updateDiagnostics();

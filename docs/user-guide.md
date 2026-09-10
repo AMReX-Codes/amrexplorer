@@ -152,6 +152,10 @@ provided the script passes the remote command through (`exec ssh target
 - *"unknown option: --stdio"*: the `amrexplorer-server` installed on the
   remote machine predates this client. Build and install a current one -- see
   [INSTALL.md](../INSTALL.md).
+- *"Remote values: float"* in the status bar: the remote server predates
+  full-precision values (protocol 1.5), so a field whose values differ only in
+  their eighth significant digit or beyond renders flat. Hover it for the full
+  notice; installing a current server clears it.
 - The tail of the remote side's error output is included in the failure
   message, and the Diagnostics dock shows the session's state at any time.
 - A shell startup file that prints output is harmless before the session

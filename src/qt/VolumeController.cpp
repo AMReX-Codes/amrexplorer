@@ -273,7 +273,13 @@ void VolumeController::pushGeometry()
     }
     pushPalette();
     pushFields();
-    fetchIsosurfaceRange();
+    // Only while there is a surface to want it: this runs once per sequence
+    // frame, each frame is a new session, and a range fetched for a group
+    // that is off is a round trip per frame for nothing. Ticking the group
+    // fetches on its own.
+    if (m_window->isosurface()) {
+        fetchIsosurfaceRange();
+    }
     slicePositionsChanged();
     slicePlanesVisibilityChanged();
 }
@@ -466,7 +472,9 @@ void VolumeController::refresh()
     // The field list may have changed (derived fields added or removed), and
     // with it the field the isosurface follows and the range it spans.
     pushFields();
-    fetchIsosurfaceRange();
+    if (m_window->isosurface()) {
+        fetchIsosurfaceRange();
+    }
     scheduleRender();
 }
 

@@ -133,9 +133,11 @@ public:
     // and made to fail for one field, to stand in for a dropped one.
     std::atomic<int> rangeDelayMs{0};
     std::atomic<int> rangeFailingField{-1};
+    std::atomic<int> rangeRequests{0};
     [[nodiscard]] std::optional<amrvis::ValueRange> requestRange(
         const amrvis::RangeRequest& request, amrvis::StopToken) override
     {
+        ++rangeRequests;
         if (rangeDelayMs > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(rangeDelayMs.load()));
         }
@@ -1858,22 +1860,25 @@ int main(int argc, char** argv)
                 && fieldCombo->currentText() == QStringLiteral("density"),
             "the isosurface field list is not the host's, or does not follow "
             "the volume's field");
-        // The range comes from a worker; the default value follows it.
-        waitFor(application, [&] { return valueSpin->value() == 10.0; },
-            "the field's range did not give the default iso-value");
         require(!valueSlider->isEnabled(),
             "the value slider was enabled before there was a surface");
 
+        // Ticking the group fetches the field's range on a worker and, once
+        // it lands, defaults the value to its midpoint and renders with the
+        // surface at it.
         auto before = session->requests.load();
         QMetaObject::invokeMethod(window, [group] { group->setChecked(true); });
-        waitFor(application,
-            [&] { return session->requests == before + 1 && !controller.renderInFlight(); },
-            "ticking the isosurface did not render");
+        waitFor(application, [&] {
+            if (session->requests <= before || controller.renderInFlight()) {
+                return false;
+            }
+            const auto request = session->requestsSoFar().back();
+            return request.isosurface.has_value() && request.isosurface->value == 10.0;
+        }, "ticking the isosurface did not render at the range's midpoint");
         auto latest = session->requestsSoFar().back();
         require(latest.isosurface.has_value()
                 && latest.isosurface->field == amrvis::FieldId{0}
                 && latest.isosurface->component == 0
-                && latest.isosurface->value == 10.0
                 && latest.isosurface->color == 0xFFFFFFU
                 && latest.isosurface->opacity == 1.0F && latest.showVolume
                 && latest.samplesPerVoxel == 2,
@@ -2052,9 +2057,21 @@ int main(int argc, char** argv)
             QStringLiteral("volumeIsosurfaceValueSlider"));
         require(group != nullptr && fieldCombo != nullptr && valueSlider != nullptr,
             "the isosurface controls are missing from the volume window");
+        // With the group off nothing is fetched, however many frames arrive:
+        // each would be a round trip for a range nothing reads.
+        const auto fetchesBefore = session->rangeRequests.load();
+        controller.configureForDataset();
+        controller.configureForDataset();
+        waitFor(application, [&] { return !controller.renderInFlight(); },
+            "the frames did not render");
+        settle(application, 100);
+        require(session->rangeRequests == fetchesBefore,
+            "frames with the isosurface off fetched its range");
         QMetaObject::invokeMethod(window, [group] { group->setChecked(true); });
         waitFor(application, [&] { return valueSlider->isEnabled(); },
             "the first field's range did not enable the slider");
+        require(session->rangeRequests == fetchesBefore + 1,
+            "ticking the group did not fetch the range exactly once");
 
         // A slow fetch for the next field: the slider goes off at once and
         // comes back only with the answer.

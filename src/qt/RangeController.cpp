@@ -2,6 +2,7 @@
 
 #include "ScientificDoubleSpinBox.hpp"
 
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QSignalBlocker>
@@ -44,7 +45,7 @@ void RangeController::createToolbarWidgets(QToolBar* toolbar,
     // per-group separators on the Slice Controls toolbar.
     toolbar->addSeparator();
     m_logarithmic = new QCheckBox(tr("Log"), toolbar);
-    toolbar->addWidget(m_logarithmic);
+    m_logarithmicAction = toolbar->addWidget(m_logarithmic);
     m_mode->setEnabled(false);
     m_logarithmic->setEnabled(false);
 
@@ -251,8 +252,8 @@ void RangeController::updateAvailability(
 
 void RangeController::setLogarithmicVisible(bool visible)
 {
-    if (m_logarithmic != nullptr) {
-        m_logarithmic->setVisible(visible);
+    if (m_logarithmicAction != nullptr) {
+        m_logarithmicAction->setVisible(visible);
     }
 }
 

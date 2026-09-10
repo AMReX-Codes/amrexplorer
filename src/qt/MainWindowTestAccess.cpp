@@ -523,6 +523,15 @@ QString MainWindow::layerFieldNameForTest(int layer, int normal) const
         .planeViews[static_cast<std::size_t>(normal)].fieldName;
 }
 
+bool MainWindow::layerLogarithmicSelectedForTest(int layer) const
+{
+    if (layer < 0 || layer > 1) {
+        return false;
+    }
+    const auto* range = m_layers[static_cast<std::size_t>(layer)].range;
+    return range != nullptr && range->logarithmic();
+}
+
 void MainWindow::setCompanionPerpendicularScaleForTest(double factor)
 {
     m_layers[1].perpendicularScale = factor;

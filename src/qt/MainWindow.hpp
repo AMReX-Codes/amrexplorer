@@ -460,6 +460,8 @@ public:
     [[nodiscard]] QRectF panelTileRectForTest(int normal, int tile) const;
     [[nodiscard]] bool panelTileVisibleForTest(int normal, int tile) const;
     [[nodiscard]] QString layerFieldNameForTest(int layer, int normal) const;
+    // The Log setting a layer's next slice request will carry.
+    [[nodiscard]] bool layerLogarithmicSelectedForTest(int layer) const;
     void setSlicePositionForTest(int axis, double value)
     {
         setSlicePosition(axis, value);

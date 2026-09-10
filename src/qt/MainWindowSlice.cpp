@@ -1441,10 +1441,14 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     state.cachedVectorUField = display.vectorUField;
     state.cachedVectorVField = display.vectorVField;
     state.cachedContourCount = display.contourCount;
-    if (m_activeView == &state) {
-        // Tracks the active view; if log was requested but fell back to linear,
-        // the checkbox reflects that log did not apply.
-        syncActiveViewColorControls(state);
+    if (m_activeView == &state
+        || (m_pair && m_activeView != nullptr
+            && m_activeView->normal == state.normal)) {
+        // Tracks the active panel; if log was requested but fell back to
+        // linear, the checkbox reflects that log did not apply. With a
+        // companion the other layer's raster on that panel arrives on its
+        // own, so its colour bar is refreshed from here too.
+        syncActiveViewColorControls(*m_activeView);
     }
     // The straight-line profile tool works on the logical r-theta / theta-r
     // grid but not on the warped R-Z view.

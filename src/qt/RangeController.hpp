@@ -9,6 +9,7 @@
 #include <optional>
 #include <utility>
 
+class QAction;
 class QCheckBox;
 class QComboBox;
 class QToolBar;
@@ -122,6 +123,9 @@ private:
     ScientificDoubleSpinBox* m_minimum = nullptr;
     ScientificDoubleSpinBox* m_maximum = nullptr;
     QCheckBox* m_logarithmic = nullptr;
+    // The toolbar's action for the checkbox: a toolbar shows a widget through
+    // its action, so that is what setLogarithmicVisible hides.
+    QAction* m_logarithmicAction = nullptr;
     bool m_controlsReady = false;
     QHash<QString, FieldRange> m_fieldRanges;
     QString m_trackedField;

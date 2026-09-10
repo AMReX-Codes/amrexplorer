@@ -3,6 +3,7 @@
 #include "MainWindow.hpp"
 
 #include <QAction>
+#include <QCheckBox>
 #include <QRectF>
 #include <QTimer>
 #include <QTreeWidget>
@@ -142,6 +143,35 @@ Outcome dispatchCompanion(Context& context)
                                 || !near(window.panelTileRectForTest(xz, 1),
                                     QRectF(2.0, 4.0, 4.0, 4.0))) {
                                 fail("a fixed scale moved the tiles off the pair's canvas");
+                                return;
+                            }
+                            // Log is shared: the primary's box is the only one
+                            // shown, and its click reaches the companion.
+                            QCheckBox* logBox = nullptr;
+                            for (auto* box : window.findChildren<QCheckBox*>()) {
+                                if (box->text() != QStringLiteral("Log")
+                                    || !box->isVisibleTo(&window)) {
+                                    continue;
+                                }
+                                if (logBox != nullptr) {
+                                    fail("two Log boxes are shown");
+                                    return;
+                                }
+                                logBox = box;
+                            }
+                            if (logBox == nullptr) {
+                                fail("no Log box is shown");
+                                return;
+                            }
+                            logBox->click();
+                            // Checked at once: the synthetic fields touch zero,
+                            // so the arrivals fall back to linear and clear the
+                            // boxes again, as they do for one dataset. What
+                            // the toggle must do is reach the companion's
+                            // next requests.
+                            if (!window.layerLogarithmicSelectedForTest(0)
+                                || !window.layerLogarithmicSelectedForTest(1)) {
+                                fail("the Log toggle did not reach both layers");
                                 return;
                             }
                             // Visible range re-colors every panel through the

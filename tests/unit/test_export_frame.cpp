@@ -94,6 +94,15 @@ int main(int argc, char** argv) {
     roundingBoundary.dataRect.setHeight(1025);
     require(!exportAspectMatches(QSize(256, 1024), roundingBoundary),
             "aspect check accepted dimensions outside the half-pixel rounding budget");
+    // A stretched footprint capped to a one-pixel axis is the size floor, not
+    // a rounding: the same footprint must pass on the next frame, and a
+    // raster that would not round down to one pixel must not.
+    ExportLayout hairline;
+    hairline.dataRect = QRect(0, 0, 1, 8192);
+    require(exportAspectMatches(QSizeF(64.0, 6553600.0), hairline),
+            "a one-pixel export axis was rejected as an aspect change");
+    require(!exportAspectMatches(QSizeF(64.0, 64.0), hairline),
+            "a square raster matched a one-pixel export axis");
 
     QImage raster(600, 400, QImage::Format_ARGB32_Premultiplied);
     raster.fill(QColor(35, 85, 130));

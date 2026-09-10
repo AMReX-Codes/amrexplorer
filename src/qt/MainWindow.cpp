@@ -1103,26 +1103,7 @@ std::array<int, 2> MainWindow::sliceOutputSize(
     if (!m_openMetadata || m_openMetadata->levels.empty()) {
         return {1, 1};
     }
-    auto viewportPixels = viewportPixelSize(state);
-    // The raster keeps the cell aspect; the view stretches it. A raster sized
-    // to fill the viewport along its binding axis would then be shown with
-    // more screen pixels than raster pixels along the stretched axis. Sizing
-    // it for a viewport enlarged along the less stretched axis by the ratio
-    // keeps a raster pixel no larger than a screen pixel on both axes; the
-    // native and frame-budget bounds below still cap it.
-    {
-        const auto stretch = displayStretchPerAxis();
-        const auto axes = displayAxes(state.normal);
-        const auto sx = stretch[static_cast<std::size_t>(axes[0])];
-        const auto sy = stretch[static_cast<std::size_t>(axes[1])];
-        const auto largest = std::max(sx, sy);
-        const auto enlarge = [](int pixels, double factor) {
-            return std::clamp(static_cast<int>(std::lround(pixels * factor)),
-                1, maxSliceOutputDimension);
-        };
-        viewportPixels = {enlarge(viewportPixels[0], largest / sx),
-            enlarge(viewportPixels[1], largest / sy)};
-    }
+    const auto viewportPixels = stretchedViewportPixelSize(state);
     const auto target = state.visibleRegion.value_or(
         datasetSampleBounds(*m_openMetadata));
     std::array<int, 2> outputSize{};
@@ -1143,6 +1124,26 @@ std::array<int, 2> MainWindow::sliceOutputSize(
     return frameBudgetBoundedOutputSize(
         outputSize,
         m_dataset ? m_dataset->maximumResponseBytes() : std::nullopt);
+}
+
+std::array<int, 2> MainWindow::stretchedViewportPixelSize(
+    const PlaneViewState& state) const
+{
+    // The raster keeps the cell aspect; the view stretches it. A raster sized
+    // to fill the viewport along its binding axis would then be shown with
+    // more screen pixels than raster pixels along the stretched axis. Sizing
+    // it for a viewport enlarged along the less stretched axis by the ratio
+    // keeps a raster pixel no larger than a screen pixel on both axes; the
+    // native and frame-budget bounds the callers apply still cap it.
+    const auto viewportPixels = viewportPixelSize(state);
+    const auto stretch = displayStretchFor(state);
+    const auto largest = std::max(stretch[0], stretch[1]);
+    const auto enlarge = [](int pixels, double factor) {
+        return std::clamp(static_cast<int>(std::lround(pixels * factor)),
+            1, maxSliceOutputDimension);
+    };
+    return {enlarge(viewportPixels[0], largest / stretch[0]),
+        enlarge(viewportPixels[1], largest / stretch[1])};
 }
 
 std::array<int, 2> MainWindow::viewportPixelSize(
@@ -1230,16 +1231,32 @@ std::array<double, 3> MainWindow::displayStretchPerAxis() const
         m_aspectMode, m_axisScale, displayIsSpherical());
 }
 
+std::array<double, 2> MainWindow::displayStretchFor(
+    const PlaneViewState& state) const
+{
+    // Normalized over the panel's own two axes, not the dataset's three: a
+    // 3-D panel that leaves out the smallest-cell axis would otherwise show
+    // neither of its axes at one screen pixel per cell at 1x.
+    const auto stretch = displayStretchPerAxis();
+    const auto axes = displayAxes(state.normal);
+    std::array<double, 2> panel{
+        stretch[static_cast<std::size_t>(axes[0])],
+        stretch[static_cast<std::size_t>(axes[1])]};
+    const auto smallest = std::min(panel[0], panel[1]);
+    if (std::isfinite(smallest) && smallest > 0.0) {
+        panel[0] /= smallest;
+        panel[1] /= smallest;
+    }
+    return panel;
+}
+
 void MainWindow::applyDisplayStretch(PlaneViewState& state)
 {
     if (state.view == nullptr) {
         return;
     }
-    const auto stretch = displayStretchPerAxis();
-    const auto axes = displayAxes(state.normal);
-    state.view->setDisplayStretch(
-        stretch[static_cast<std::size_t>(axes[0])],
-        stretch[static_cast<std::size_t>(axes[1])]);
+    const auto stretch = displayStretchFor(state);
+    state.view->setDisplayStretch(stretch[0], stretch[1]);
 }
 
 void MainWindow::applyDisplayStretches()
@@ -1247,6 +1264,9 @@ void MainWindow::applyDisplayStretches()
     const bool remote = m_dataset
         && std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset);
     for (auto* state : currentViews()) {
+        if (state->view == nullptr) {
+            continue;
+        }
         applyDisplayStretch(*state);
         if (!remote || !state->view->hasImage()) {
             continue;

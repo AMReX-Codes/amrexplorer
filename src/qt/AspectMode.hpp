@@ -39,14 +39,20 @@ enum class AspectMode : int {
     const bool physical = mode == AspectMode::PhysicalSize
         && metadata.hasPhysicalGeometry && !spherical
         && !metadata.levels.empty();
+    // Indexed only once levels is known non-empty (physical implies it).
+    const LevelMetadata* finest = physical
+        ? &metadata.levels[static_cast<std::size_t>(
+            std::clamp(metadata.finestLevel, 0,
+                static_cast<int>(metadata.levels.size()) - 1))]
+        : nullptr;
     const auto dimension = static_cast<std::size_t>(
         std::clamp(metadata.dimension, 1, 3));
     std::array<double, 3> stretch{1.0, 1.0, 1.0};
     double smallest = std::numeric_limits<double>::infinity();
     for (std::size_t axis = 0; axis < dimension; ++axis) {
         auto factor = sane(axisScale[axis]);
-        if (physical) {
-            factor *= sane(metadata.levels.back().cellSize[axis]);
+        if (finest != nullptr) {
+            factor *= sane(finest->cellSize[axis]);
         }
         stretch[axis] = factor;
         smallest = std::min(smallest, factor);
@@ -69,7 +75,9 @@ enum class AspectMode : int {
     if (!metadata.hasPhysicalGeometry || metadata.levels.empty()) {
         return false;
     }
-    const auto& finest = metadata.levels.back();
+    const auto& finest = metadata.levels[static_cast<std::size_t>(
+        std::clamp(metadata.finestLevel, 0,
+            static_cast<int>(metadata.levels.size()) - 1))];
     const auto dimension = static_cast<std::size_t>(
         std::clamp(metadata.dimension, 1, 3));
     const auto density = [&](std::size_t axis) {

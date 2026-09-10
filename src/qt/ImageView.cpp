@@ -1139,15 +1139,20 @@ void ImageView::fitSceneRect(const QRectF& rect)
     if (viewport() == nullptr) {
         return;
     }
+    if (rect.isEmpty()) {
+        return;
+    }
+    // A pane collapsed below the margin still gets a transform, so the view
+    // always carries the stretch it was given (isotropicScale, export size);
+    // the next resize refits it properly.
     constexpr int margin = 2;
     const QRectF viewRect
         = viewport()->rect().adjusted(margin, margin, -margin, -margin);
-    if (viewRect.isEmpty() || rect.isEmpty()) {
-        return;
-    }
+    const auto viewWidth = std::max(1.0, viewRect.width());
+    const auto viewHeight = std::max(1.0, viewRect.height());
     const auto scale = std::min(
-        viewRect.width() / (rect.width() * m_stretch.x()),
-        viewRect.height() / (rect.height() * m_stretch.y()));
+        viewWidth / (rect.width() * m_stretch.x()),
+        viewHeight / (rect.height() * m_stretch.y()));
     setTransform(QTransform::fromScale(
         scale * m_stretch.x(), scale * m_stretch.y()));
     centerOn(rect.center());

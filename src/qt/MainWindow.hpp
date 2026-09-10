@@ -768,6 +768,13 @@ private:
     void resetAxisScale();
     void setAspectMode(AspectMode mode);
     [[nodiscard]] std::array<double, 3> displayStretchPerAxis() const;
+    // The two factors a panel shows, normalized so the smaller is one.
+    [[nodiscard]] std::array<double, 2> displayStretchFor(
+        const PlaneViewState& state) const;
+    // viewportPixelSize enlarged along the less stretched axis, the bound a
+    // remote raster is sized to (see sliceOutputSize and the sequence spec).
+    [[nodiscard]] std::array<int, 2> stretchedViewportPixelSize(
+        const PlaneViewState& state) const;
     // Push the current stretch to one view (showSlice, before the raster is
     // installed) or to every view after an option change, when a remote view
     // also re-requests a raster sized for the new stretch.

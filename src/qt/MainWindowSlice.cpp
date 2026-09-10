@@ -2238,7 +2238,7 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     for (const auto* state : views) {
         spec.visibleRegions.push_back(state->visibleRegion);
         if (m_remoteSequence) {
-            spec.outputSizes.push_back(viewportPixelSize(*state));
+            spec.outputSizes.push_back(stretchedViewportPixelSize(*state));
         }
     }
     return spec;

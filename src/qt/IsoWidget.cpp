@@ -240,11 +240,14 @@ void IsoWidget::paintEvent(QPaintEvent* event)
         }
     }
     if (m_domainOutlineVisible) {
-        drawBox(painter, frame, m_domain, QPen(Qt::white, 1));
-        // Where two datasets share the widget, their own domains too, so the
-        // plane they meet at is visible inside the union.
-        for (const auto& box : m_datasetDomains) {
-            drawBox(painter, frame, box, QPen(QColor(255, 255, 255, 160), 1));
+        if (m_datasetDomains.empty()) {
+            drawBox(painter, frame, m_domain, QPen(Qt::white, 1));
+        } else {
+            // Two datasets: each domain on its own, never their union, which
+            // would enclose the part of one's extent the other lacks.
+            for (const auto& box : m_datasetDomains) {
+                drawBox(painter, frame, box, QPen(Qt::white, 1));
+            }
         }
     }
     // Translucent slice planes overlay the wireframe so the user can see where

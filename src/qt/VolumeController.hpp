@@ -258,6 +258,11 @@ private:
     VolumeFrame m_lastFrame;
     std::optional<IsosurfaceRangeKey> m_isosurfaceRangeFor;
     std::uint64_t m_isosurfaceRangeGeneration = 0;
+    // Stops the range fetch in flight: superseded by a newer one, or the
+    // window going away. The generation drops its result; this drops the
+    // work, which for a remote session is a round trip the pool would
+    // otherwise wait out.
+    StopSource m_isosurfaceRangeStop;
     std::optional<QColor> m_persistedIsosurfaceColor;
 };
 

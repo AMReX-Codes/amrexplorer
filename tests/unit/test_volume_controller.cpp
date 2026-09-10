@@ -137,12 +137,19 @@ public:
     std::atomic<int> rangeDelayMs{0};
     std::atomic<int> rangeFailingField{-1};
     std::atomic<int> rangeRequests{0};
+    std::atomic<int> rangeCancellations{0};
     [[nodiscard]] std::optional<amrvis::ValueRange> requestRange(
-        const amrvis::RangeRequest& request, amrvis::StopToken) override
+        const amrvis::RangeRequest& request, amrvis::StopToken cancellation) override
     {
         ++rangeRequests;
-        if (rangeDelayMs > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(rangeDelayMs.load()));
+        // Polled while it waits, the way a real read is: a fetch that is
+        // stopped ends now rather than when the delay runs out.
+        for (int waited = 0; waited < rangeDelayMs.load(); waited += 5) {
+            if (cancellation.stop_requested()) {
+                ++rangeCancellations;
+                throw amrvis::ReadCancelled();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         if (static_cast<int>(request.field.value) == rangeFailingField) {
             throw std::runtime_error("synthetic range failure");
@@ -2218,7 +2225,24 @@ int main(int argc, char** argv)
             "a failed range fetch was never retried");
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the last render did not finish");
+
+        // A fetch still out when the window closes is stopped, not left to
+        // run: a remote round trip would otherwise hold the session and the
+        // pool until it timed out. The fake's delay is far longer than the
+        // wait allows, so only a stop can end it in time.
+        session->rangeDelayMs = 20000;
+        const auto cancellationsBefore = session->rangeCancellations.load();
+        const auto fetchesBeforeClose = session->rangeRequests.load();
+        QMetaObject::invokeMethod(
+            window, [fieldCombo] { fieldCombo->setCurrentIndex(1); });
+        waitFor(application,
+            [&] { return session->rangeRequests > fetchesBeforeClose; },
+            "the field change did not start a fetch");
         controller.closeWindow();
+        waitFor(application,
+            [&] { return session->rangeCancellations > cancellationsBefore; },
+            "closing the window did not stop the range fetch");
+        session->rangeDelayMs = 0;
     }
     return 0;
 }

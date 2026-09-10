@@ -281,6 +281,7 @@ void VolumeController::forgetWindow()
     // And so did the range fetched for its isosurface controls.
     m_isosurfaceRangeFor.reset();
     ++m_isosurfaceRangeGeneration;
+    m_isosurfaceRangeStop.request_stop();
 }
 
 bool VolumeController::windowOpen() const noexcept
@@ -392,6 +393,10 @@ void VolumeController::fetchIsosurfaceRange()
     }
     m_isosurfaceRangeFor = key;
     const auto generation = ++m_isosurfaceRangeGeneration;
+    // A fetch still out for the previous key is stopped, not merely ignored.
+    m_isosurfaceRangeStop.request_stop();
+    m_isosurfaceRangeStop = StopSource{};
+    const auto cancellation = m_isosurfaceRangeStop.get_token();
     // The old range goes now, not when the new one lands: a slider left over
     // the previous field's span would commit a value from it in between.
     m_window->setIsosurfaceValueRange(std::nullopt);
@@ -427,7 +432,9 @@ void VolumeController::fetchIsosurfaceRange()
             m_window->setIsosurfaceValueRange(range);
         });
     watcher->setFuture(QtConcurrent::run(
-        [dataset, request] { return dataset->requestRange(request); }));
+        [dataset, request, cancellation] {
+            return dataset->requestRange(request, cancellation);
+        }));
 }
 
 void VolumeController::configureForDataset()
@@ -576,6 +583,11 @@ void VolumeController::cancel()
     // geometry.
     m_settle->stop();
     m_interacting = false;
+    // And the range fetch: the dataset it was asked of is going away, and a
+    // late answer would be applied to the window regardless.
+    m_isosurfaceRangeStop.request_stop();
+    m_isosurfaceRangeFor.reset();
+    ++m_isosurfaceRangeGeneration;
 }
 
 void VolumeController::scheduleRender()

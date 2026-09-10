@@ -65,8 +65,7 @@ void MainWindow::openCompanion(const std::filesystem::path& path)
         refuse(tr("a plotfile sequence cannot take a companion"));
         return;
     }
-    if (primary().session->metadata().dimension != 3
-        || !primary().session->metadata().hasPhysicalGeometry) {
+    if (!canOpenCompanion()) {
         refuse(tr("the open dataset is not a three-dimensional plotfile"));
         return;
     }
@@ -491,9 +490,25 @@ void MainWindow::setCompanionFollowsPrimary(bool follows)
     }
 }
 
+bool MainWindow::canOpenCompanion() const
+{
+    if (!m_controlsReady || !primary().session || !primary().openMetadata) {
+        return false;
+    }
+    if (std::dynamic_pointer_cast<remote::RemoteDatasetSession>(primary().session)
+        || m_sequenceController->hasSequence()) {
+        return false;
+    }
+    const auto& metadata = primary().session->metadata();
+    return metadata.dimension == 3 && metadata.hasPhysicalGeometry && !metadata.isFab;
+}
+
 void MainWindow::updatePairedModeControls()
 {
     const bool paired = companionOpen();
+    if (m_openCompanionAction != nullptr) {
+        m_openCompanionAction->setEnabled(canOpenCompanion());
+    }
     if (m_closeCompanionAction != nullptr) {
         m_closeCompanionAction->setEnabled(paired);
     }

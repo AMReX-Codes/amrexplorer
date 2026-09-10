@@ -983,6 +983,9 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     m_boxesAction->setEnabled(false);
     m_scaleBarAction->setEnabled(false);
     m_slicePlanesAction->setEnabled(false);
+    if (m_openCompanionAction != nullptr) {
+        m_openCompanionAction->setEnabled(false);
+    }
     setSlicePositionControlsVisible(false);
     m_animationPanel->setSweepVisible(false);
     m_levelMenu->setEnabled(false);

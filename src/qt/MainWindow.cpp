@@ -1599,6 +1599,9 @@ void MainWindow::createMenus()
     // A second 3-D plotfile beside the open one (see MainWindowCompanion.cpp).
     auto* openCompanionAction = new QAction(tr("Open Compan&ion Plotfile..."), this);
     openCompanionAction->setObjectName(QStringLiteral("openCompanionAction"));
+    // Offered once a plotfile that can take one is open.
+    openCompanionAction->setEnabled(false);
+    m_openCompanionAction = openCompanionAction;
     connect(openCompanionAction, &QAction::triggered, this,
         [this] { chooseCompanion(); });
     m_closeCompanionAction = new QAction(tr("Close Companion"), this);

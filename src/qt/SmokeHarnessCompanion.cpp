@@ -65,6 +65,15 @@ Outcome dispatchCompanion(Context& context)
                     application.exit(1);
                     return;
                 }
+                // The menu action comes alive with a plotfile that can take
+                // a companion (it starts disabled, checked below).
+                const auto* openAction = window.findChild<QAction*>(
+                    QStringLiteral("openCompanionAction"));
+                if (openAction == nullptr || !openAction->isEnabled()) {
+                    qCritical("Open Companion Plotfile is not offered for an open plotfile");
+                    application.exit(1);
+                    return;
+                }
                 // Zoom the active (XY) panel first: opening a companion must
                 // put its raster back to the whole domain, since zoom is
                 // view-only with two datasets.
@@ -265,6 +274,12 @@ Outcome dispatchCompanion(Context& context)
             qCritical("companion smoke test timed out");
             application.exit(4);
         });
+        const auto* openAction = window.findChild<QAction*>(
+            QStringLiteral("openCompanionAction"));
+        if (openAction == nullptr || openAction->isEnabled()) {
+            qCritical("Open Companion Plotfile is offered before any plotfile is open");
+            return {true, 1};
+        }
         QTimer::singleShot(0, &window, [&window, upper] { window.openDataset(upper); });
         return {true, std::nullopt};
     }

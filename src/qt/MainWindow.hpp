@@ -716,6 +716,9 @@ private:
     // Actions that have no meaning with two datasets open are disabled while
     // a companion is, and restored when it closes.
     void updatePairedModeControls();
+    // Whether the open dataset can take a companion: a local 3-D plotfile
+    // with physical geometry, outside a sequence.
+    [[nodiscard]] bool canOpenCompanion() const;
     // Push the pair geometry, in the panels' display proportions, to the
     // isometric view.
     void updatePairedIsoGeometry();
@@ -1388,6 +1391,7 @@ private:
     // withheld.
     QCheckBox* m_companionFollowBox = nullptr;
     bool m_companionFollowsPrimary = false;
+    QAction* m_openCompanionAction = nullptr;
     QAction* m_closeCompanionAction = nullptr;
     QAction* m_volumeAction = nullptr;
     QAction* m_particlesAction = nullptr;

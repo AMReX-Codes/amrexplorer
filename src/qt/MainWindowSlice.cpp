@@ -13,6 +13,7 @@ void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
     m_boxesAction->setEnabled(true);
     updateAspectControls();
     updateScaleBarAvailability();
+    updatePairedModeControls();
     m_slicePlanesAction->setEnabled(metadata.dimension == 3);
     rebuildLevelMenu();
     m_levelMenu->setEnabled(true);

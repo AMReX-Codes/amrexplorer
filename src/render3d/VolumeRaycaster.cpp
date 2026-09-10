@@ -817,7 +817,16 @@ VolumeFrame raycastVolume(const RaycastGrids& grids,
                                 toValue = middleValue;
                             }
                         }
-                        const auto where = (fromValue - iso.value) / (fromValue - toValue);
+                        // In halves, like the gradient below: values that
+                        // straddle the double range overflow both differences
+                        // to infinity, and infinity over infinity is NaN,
+                        // which would put the hit at voxel zero. If it is still
+                        // not finite, the bracket's middle is the best answer.
+                        auto where = (0.5 * fromValue - 0.5 * iso.value)
+                            / (0.5 * fromValue - 0.5 * toValue);
+                        if (!std::isfinite(where)) {
+                            where = 0.5;
+                        }
                         std::array<double, 3> hit{};
                         for (std::size_t axis = 0; axis < 3; ++axis) {
                             hit[axis] = from[axis] + where * (to[axis] - from[axis]);

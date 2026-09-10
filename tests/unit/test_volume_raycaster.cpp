@@ -963,6 +963,14 @@ int main()
             isoOnlySettings(amrvis::orthoPresetXY, 64, isosurface(0.0, 0xCC0000U, 1.0F)));
         require(stepped.pixels == opaque.pixels,
             "a step spanning the double range lost its isosurface");
+        // The same step with the iso-value near one end: both differences of
+        // the secant overflow, and a hit placed by their NaN quotient lands at
+        // voxel zero, where the field is flat and the surface vanishes.
+        const auto lopsided = amrvis::raycastVolume(
+            amrvis::RaycastGrids{nullptr, &step},
+            isoOnlySettings(amrvis::orthoPresetXY, 64, isosurface(1.5e308, 0xCC0000U, 1.0F)));
+        require(lopsided.pixels == opaque.pixels,
+            "a crossing with an extreme iso-value lost its isosurface");
     }
 
     // --- a plane seen edge-on is invisible -----------------------------------

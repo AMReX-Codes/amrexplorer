@@ -111,9 +111,13 @@ void MainWindow::applyNumberFormat(const QString& format)
         return;
     }
     m_numberFormat = format;
-    // The color bar and child windows resolve against their own ranges;
+    // The color bars and child windows resolve against their own ranges;
     // only the range controls take the main view's resolved format.
-    primary().colorBar->setNumberFormat(format);
+    for (auto& layer : m_layers) {
+        if (layer.colorBar != nullptr) {
+            layer.colorBar->setNumberFormat(format);
+        }
+    }
     m_displayFormat = resolveNumberFormat(
         format, m_lastDisplayMinimum, m_lastDisplayMaximum);
     // The authored format can change even when its resolved form does not
@@ -136,7 +140,11 @@ void MainWindow::applyDisplayPrecision(double minimum, double maximum)
 
 void MainWindow::pushDisplayFormat()
 {
-    primary().range->setNumberFormat(m_displayFormat);
+    for (auto& layer : m_layers) {
+        if (layer.range != nullptr) {
+            layer.range->setNumberFormat(m_displayFormat);
+        }
+    }
     // Open child windows repaint against the stored format; a null pointer
     // means the window picks the format up when it is next created.
     if (m_datasetWindow != nullptr) {
@@ -574,7 +582,8 @@ void MainWindow::updateOverlays()
 void MainWindow::updateParticleOverlay(PlaneViewState& state)
 {
     std::vector<PointOverlay> overlays;
-    if (!primary().session || !state.view->hasImage()
+    // Particles are the primary's; a companion's tile carries none.
+    if (!primary().session || state.layer != 0 || !state.view->hasImage()
         || state.plane->width <= 0 || state.plane->height <= 0
         // The warped R-Z view has no linear plane-pixel mapping for points.
         || displayIsSphericalWarp()) {
@@ -730,13 +739,15 @@ double MainWindow::effectiveFixedScale(int factor) const
     // exact over-claim this report exists to prevent. The transpose needs no
     // special case: the worst axis is a min over both, which a swap does not
     // change.
-    if (!primary().openMetadata || primary().openMetadata->levels.empty() || factor <= 0
-        || m_activeView == nullptr || m_activeView->view == nullptr
+    if (m_activeView == nullptr || m_activeView->view == nullptr
+        || !layerFor(*m_activeView).openMetadata
+        || layerFor(*m_activeView).openMetadata->levels.empty() || factor <= 0
         || m_activeView->view->virtualCanvasActive()
         || displayIsSphericalWarp()) {
         return 0.0;
     }
-    const auto& metadata = *primary().openMetadata;
+    // The active view's own layer: with a companion it may be the one on show.
+    const auto& metadata = *layerFor(*m_activeView).openMetadata;
     const auto& finest = metadata.levels[static_cast<std::size_t>(
         std::max(0, metadata.finestLevel))];
     // The region the raster actually covers, which is what nativeOutputSize
@@ -1671,8 +1682,16 @@ void MainWindow::linePlotRequested(PlaneViewState& state, int imageX, int imageY
     const auto [composition, maximumLevel] = decodeLevelData(
         level, metadata.finestLevel);
     const auto field = layerFor(state).fieldSelector->currentData().toUInt();
-    const auto slicePosition = metadata.dimension == 3
+    auto slicePosition = metadata.dimension == 3
         ? m_slicePosition3d[static_cast<std::size_t>(state.normal)] : 0.0;
+    if (m_pair && metadata.dimension == 3) {
+        // The raster under the pointer was cut at the shared position clamped
+        // into this layer's domain (see requestSlice); the line follows it.
+        const auto bounds = datasetSampleBounds(metadata);
+        const auto axis = static_cast<std::size_t>(state.normal);
+        slicePosition = std::clamp(slicePosition, bounds.lower[axis],
+            std::nextafter(bounds.upper[axis], bounds.lower[axis]));
+    }
     LineRequest request;
     if (displayIsSpherical()) {
         // Logical r-theta / theta-r layout: the click is in the possibly

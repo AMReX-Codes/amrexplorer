@@ -65,10 +65,47 @@ Outcome dispatchCompanion(Context& context)
                     application.exit(1);
                     return;
                 }
-                window.openCompanion(lower);
+                // Zoom the active (XY) panel first: opening a companion must
+                // put its raster back to the whole domain, since zoom is
+                // view-only with two datasets.
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled, &application,
+                    [&window, lower] { window.openCompanion(lower); },
+                    Qt::SingleShotConnection);
+                window.rubberBandZoomActiveViewForTest();
             });
         QObject::connect(&window, &amrvis::qt::MainWindow::companionOpenFinished,
-            &application, [&window, &application, fail, phase](bool success) {
+            &application, [&window, &application, fail, phase, upper](bool success) {
+                if (*phase == 3) {
+                    // The refused second companion: the first stays.
+                    if (success || !window.companionOpen()
+                        || window.panelTileCountForTest(xz) != 2) {
+                        fail("a refused companion did not leave the first in place");
+                        return;
+                    }
+                    window.closeCompanion();
+                    if (window.companionOpen() || window.panelTileCountForTest(xz) != 1
+                        || !window.panelTileVisibleForTest(xy, 0)) {
+                        fail("closing the companion did not restore one tile");
+                        return;
+                    }
+                    // The position was in the ocean; it comes back inside
+                    // the primary's domain.
+                    if (window.slicePositionForTest(2) < 0.0) {
+                        fail("closing the companion left z outside the primary");
+                        return;
+                    }
+                    auto* tree = window.findChild<QTreeWidget*>(
+                        QStringLiteral("metadataTree"));
+                    if (tree == nullptr
+                        || !tree->findItems(QStringLiteral("Companion"),
+                            Qt::MatchExactly).isEmpty()) {
+                        fail("closing the companion left it in the metadata dock");
+                        return;
+                    }
+                    application.exit(0);
+                    return;
+                }
                 if (!success) {
                     fail("the companion did not open");
                     return;
@@ -77,20 +114,6 @@ Outcome dispatchCompanion(Context& context)
                 // atmosphere and two cells in from its left edge.
                 if (!window.companionOpen() || window.panelTileCountForTest(xz) != 2) {
                     fail("the XZ panel does not show two tiles");
-                    return;
-                }
-                if (!near(window.panelTileRectForTest(xz, 0), QRectF(0.0, 0.0, 6.0, 4.0))
-                    || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 4.0, 4.0))) {
-                    qCritical("XZ tiles: upper %gx%g at (%g,%g), lower %gx%g at (%g,%g)",
-                        window.panelTileRectForTest(xz, 0).width(),
-                        window.panelTileRectForTest(xz, 0).height(),
-                        window.panelTileRectForTest(xz, 0).x(),
-                        window.panelTileRectForTest(xz, 0).y(),
-                        window.panelTileRectForTest(xz, 1).width(),
-                        window.panelTileRectForTest(xz, 1).height(),
-                        window.panelTileRectForTest(xz, 1).x(),
-                        window.panelTileRectForTest(xz, 1).y());
-                    fail("the tiles are not stacked at their physical positions");
                     return;
                 }
                 // The metadata dock lists both datasets.
@@ -117,19 +140,12 @@ Outcome dispatchCompanion(Context& context)
                     fail("the XY panel does not show the upper layer alone");
                     return;
                 }
-                // Stretching the companion along z stretches only its tile.
-                window.setCompanionPerpendicularScaleForTest(2.0);
-                if (!near(window.panelTileRectForTest(xz, 0), QRectF(0.0, 0.0, 6.0, 4.0))
-                    || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 4.0, 8.0))) {
-                    fail("a companion z factor did not stretch only the lower tile");
-                    return;
-                }
-                window.setCompanionPerpendicularScaleForTest(1.0);
                 // Move z into the ocean: the XY panel flips to the companion
-                // once the slices settle.
+                // once the slices settle -- the same settle that brings the
+                // primary's full-domain rasters back after the zoom.
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application, [&window, &application, fail, phase] {
+                    &application, [&window, &application, fail, phase, upper] {
                         if (*phase == 0) {
                             *phase = 1;
                             if (window.panelTileVisibleForTest(xy, 0)
@@ -137,6 +153,33 @@ Outcome dispatchCompanion(Context& context)
                                 fail("the XY panel did not flip to the ocean below z = 0");
                                 return;
                             }
+                            // Both tiles on the XZ panel, the ocean directly
+                            // under the atmosphere and two cells in from its
+                            // left edge; the zoom made before the open is
+                            // gone, so the rasters cover their whole domains.
+                            if (!near(window.panelTileRectForTest(xz, 0), QRectF(0.0, 0.0, 6.0, 4.0))
+                                || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 4.0, 4.0))
+                                || !near(window.panelTileRectForTest(xy, 0), QRectF(0.0, 0.0, 6.0, 4.0))) {
+                                qCritical("XZ tiles: upper %gx%g at (%g,%g), lower %gx%g at (%g,%g)",
+                                    window.panelTileRectForTest(xz, 0).width(),
+                                    window.panelTileRectForTest(xz, 0).height(),
+                                    window.panelTileRectForTest(xz, 0).x(),
+                                    window.panelTileRectForTest(xz, 0).y(),
+                                    window.panelTileRectForTest(xz, 1).width(),
+                                    window.panelTileRectForTest(xz, 1).height(),
+                                    window.panelTileRectForTest(xz, 1).x(),
+                                    window.panelTileRectForTest(xz, 1).y());
+                                fail("the tiles are not stacked at their physical positions");
+                                return;
+                            }
+                            // Stretching the companion along z stretches only its tile.
+                            window.setCompanionPerpendicularScaleForTest(2.0);
+                            if (!near(window.panelTileRectForTest(xz, 0), QRectF(0.0, 0.0, 6.0, 4.0))
+                                || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 4.0, 8.0))) {
+                                fail("a companion z factor did not stretch only the lower tile");
+                                return;
+                            }
+                            window.setCompanionPerpendicularScaleForTest(1.0);
                             // A fixed scale keeps both tiles on the pair's canvas.
                             window.selectFixedScaleForTest(2);
                             if (window.panelTileCountForTest(xz) != 2
@@ -189,27 +232,11 @@ Outcome dispatchCompanion(Context& context)
                             fail("the visible-range sync dropped a tile");
                             return;
                         }
-                        window.closeCompanion();
-                        if (window.companionOpen() || window.panelTileCountForTest(xz) != 1
-                            || !window.panelTileVisibleForTest(xy, 0)) {
-                            fail("closing the companion did not restore one tile");
-                            return;
-                        }
-                        // The position was in the ocean; it comes back inside
-                        // the primary's domain.
-                        if (window.slicePositionForTest(2) < 0.0) {
-                            fail("closing the companion left z outside the primary");
-                            return;
-                        }
-                        auto* tree = window.findChild<QTreeWidget*>(
-                            QStringLiteral("metadataTree"));
-                        if (tree == nullptr
-                            || !tree->findItems(QStringLiteral("Companion"),
-                                Qt::MatchExactly).isEmpty()) {
-                            fail("closing the companion left it in the metadata dock");
-                            return;
-                        }
-                        application.exit(0);
+                        // A second companion that cannot pair (the primary's
+                        // own path overlaps it everywhere) must be refused
+                        // without disturbing the one on show.
+                        *phase = 3;
+                        window.openCompanion(upper);
                     });
                 window.setSlicePositionForTest(2, -0.1);
             });

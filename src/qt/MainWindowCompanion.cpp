@@ -70,7 +70,8 @@ void MainWindow::openCompanion(const std::filesystem::path& path)
         refuse(tr("the open dataset is not a three-dimensional plotfile"));
         return;
     }
-    closeCompanion();
+    // Only the previous load is stopped; a companion already on show stays
+    // until the new one has read and paired, so a refusal leaves it as it was.
     m_companionStopSource.request_stop();
     m_companionStopSource = StopSource{};
     const auto cancellation = m_companionStopSource.get_token();
@@ -164,6 +165,18 @@ void MainWindow::openCompanion(const std::filesystem::path& path)
 void MainWindow::installCompanion(
     const std::filesystem::path& path, CompanionLoad load)
 {
+    if (m_layers[1].active) {
+        closeCompanion();
+    }
+    // Zoom is view-only with a companion, so the primary's rasters must cover
+    // their whole domain; a rubber-band selection made before is re-sliced.
+    for (auto* state : primaryViews()) {
+        if (state->visibleRegion.has_value()) {
+            state->visibleRegion.reset();
+            state->view->setVirtualCanvas(std::nullopt);
+            scheduleSliceRequest(*state);
+        }
+    }
     auto& layer = m_layers[1];
     layer.session = load.result.dataset;
     ++layer.sessionEpoch;
@@ -217,7 +230,6 @@ void MainWindow::installCompanion(
 
 void MainWindow::closeCompanion()
 {
-    m_companionStopSource.request_stop();
     auto& layer = m_layers[1];
     if (!layer.active) {
         return;

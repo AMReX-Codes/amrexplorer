@@ -12,6 +12,7 @@
 #include <QToolTip>
 
 #include <cstdlib>
+#include <cmath>
 #include <iostream>
 #include <limits>
 #include <utility>
@@ -217,6 +218,40 @@ int main(int argc, char* argv[])
         }
     }
     require(horizontalLabels >= 2, "adaptive x range lost its tick labels");
+
+    // A larger font and a narrow window can leave less than one label's
+    // width between the endpoints. Keep a readable tick in that case.
+    auto narrowFont = extremePlot.font();
+    narrowFont.setPixelSize(18);
+    extremePlot.setFont(narrowFont);
+    const double narrowLow = -1.2566370621234567e-200;
+    double narrowHigh = narrowLow;
+    for (int step = 0; step < 8; ++step) {
+        narrowHigh = std::nextafter(narrowHigh, 0.0);
+    }
+    curves[0].line.positions = {narrowLow, std::lerp(narrowLow, narrowHigh, 0.5), narrowHigh};
+    curves[0].line.values = curves[0].line.positions;
+    extremePlot.resetZoom();
+    for (const int width : {496, 420}) {
+        extremePlot.resize(width, 400);
+        RecordingPaintDevice narrowAxes(extremePlot.width(), extremePlot.height());
+        QPainter narrowPainter(&narrowAxes);
+        extremePlot.render(&narrowPainter);
+        narrowPainter.end();
+        int narrowLabels = 0;
+        double right = -0.5;
+        for (const auto& label : narrowAxes.text()) {
+            if (label.bounds.top() > extremePlot.height() - bottomMargin
+                && label.value.contains("e-200")) {
+                ++narrowLabels;
+                require(label.bounds.left() >= right
+                        && label.bounds.right() <= extremePlot.width() + 0.5,
+                    "narrow plot's adaptive x labels overlap or escape the widget");
+                right = label.bounds.right();
+            }
+        }
+        require(narrowLabels > 0, "narrow plot lost every x tick label");
+    }
 
     return 0;
 }

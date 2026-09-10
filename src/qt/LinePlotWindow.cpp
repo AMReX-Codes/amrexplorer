@@ -368,9 +368,12 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
             maximumWidth = std::max(maximumWidth,
                 painter.fontMetrics().horizontalAdvance(formatNumber(value, xFormat)));
         }
-        const int count = std::clamp(plot.width() / (maximumWidth + 12) + 1, 2, tickCount);
+        const int count = std::clamp(plot.width() / (maximumWidth + 12) + 1, 1, tickCount);
         for (int tick = 0; tick < count; ++tick) {
-            const auto fraction = static_cast<double>(tick) / (count - 1);
+            // When even the endpoint labels would overlap, keep one tick
+            // centered in the plot without reducing its precision.
+            const auto fraction = count == 1 ? 0.5
+                : static_cast<double>(tick) / (count - 1);
             const auto xValue = std::lerp(xMinimum, xMaximum, fraction);
             drawXTick(xValue, formatNumber(xValue, xFormat));
         }

@@ -415,7 +415,9 @@ match. Its own controls set the opacity:
   units; the slider
   under it runs over the field's range and starts in the middle, or type a
   value. **Color** and **Opacity** are the surface's own -- the palette plays
-  no part in it. Dragging a slider shows drafts like a moving camera does.
+  no part in it. The color is remembered across sessions; the field and the
+  value belong to a plotfile and start afresh. Dragging a slider shows drafts
+  like a moving camera does.
 - **Show volume** is ticked by default and has a say only while there is an
   isosurface: clear it to draw the surface alone. The volume's field is then
   not sampled at all, so a surface of one field costs nothing for the other.
@@ -721,8 +723,8 @@ and applies to every open window. The image viewports and the color scale keep
 their neutral gray under every skin, so a colormap looks the same whichever
 one you pick.
 
-Window geometry, logarithmic mapping, palette, skin, number format, and
-animation speed persist across sessions.
+Window geometry, logarithmic mapping, palette, skin, number format,
+animation speed, and the isosurface color persist across sessions.
 
 Each open dataset has a 1 GiB data cache by default, and volume rendering fills
 a second cache of the same size with the grids it samples the field into (an

@@ -82,8 +82,13 @@ public:
     // the volume (a server speaking an older protocol cannot): the shape of
     // setSamplingSelectable, for the same reason.
     void setIsosurfaceSelectable(bool selectable);
-    // For tests and the colour dialog: the surface's colour.
+    // The surface's colour: set by the colour dialog, by a host restoring a
+    // remembered one, and by tests; read by the host to remember it.
     void setIsosurfaceColor(const QColor& color);
+    [[nodiscard]] QColor isosurfaceColor() const noexcept
+    {
+        return m_isosurfaceColorValue;
+    }
 
     // What the render should draw. showVolume is true whenever there is no
     // isosurface in effect -- a render has to draw something -- and otherwise

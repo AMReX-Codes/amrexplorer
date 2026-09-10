@@ -21,6 +21,8 @@
 #include <QRectF>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QSettings>
+#include <QTemporaryDir>
 #include <QDoubleSpinBox>
 #include <QGroupBox>
 #include <QLabel>
@@ -40,6 +42,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -549,6 +552,11 @@ int main(int argc, char** argv)
     std::vector<std::pair<amrvis::FieldId, QString>> fieldList{
         {amrvis::FieldId{0}, QString("density")},
         {amrvis::FieldId{1}, QString("pressure")}};
+    // A scratch settings file, so what the controller remembers is checked
+    // against a store this test owns rather than the user's.
+    const QTemporaryDir scratch;
+    require(scratch.isValid(), "no scratch directory for settings");
+    const auto settingsPath = scratch.filePath(QStringLiteral("settings.ini"));
     const auto& palette = amrvis::builtinPalette(amrvis::BuiltinPalette::Rainbow);
     const auto hooks = [&] {
         return VolumeController::Hooks{
@@ -567,6 +575,9 @@ int main(int argc, char** argv)
             },
             [&playingSequence] { return playingSequence; },
             [&fieldList] { return fieldList; },
+            [&settingsPath] {
+                return std::make_unique<QSettings>(settingsPath, QSettings::IniFormat);
+            },
         };
     };
 
@@ -2076,6 +2087,69 @@ int main(int argc, char** argv)
             "the isosurface did not start on the volume fraction");
         controller.closeWindow();
         fieldList.pop_back();
+    }
+
+    // --- the colour is remembered across windows; the field and value not ----
+    // A chosen colour goes to the settings and comes back in the next window
+    // opened; the group starts off and the value and field start afresh.
+    {
+        // Earlier blocks chose colours into the same scratch store.
+        QSettings(settingsPath, QSettings::IniFormat)
+            .remove(QStringLiteral("volume/isosurfaceColor"));
+        {
+            VolumeController controller(hooks());
+            Observed observed;
+            observe(controller, observed);
+            controller.showWindow(nullptr);
+            waitFor(application, [&] { return observed.frames == 1; },
+                "the opening frame was not displayed");
+            auto* const window = volumeWindow();
+            require(window->isosurfaceColor() == QColor(Qt::white),
+                "a fresh store did not leave the default colour");
+            QMetaObject::invokeMethod(window, [window] {
+                window->setIsosurfaceColor(QColor(0x40, 0xC0, 0xFF));
+                emit window->isosurfaceChanged();
+            });
+            waitFor(application, [&] { return !controller.renderInFlight(); },
+                "the colour change did not render");
+            require(QSettings(settingsPath, QSettings::IniFormat)
+                        .value(QStringLiteral("volume/isosurfaceColor"))
+                        .toString()
+                    == QStringLiteral("#40c0ff"),
+                "the chosen colour was not written to the settings");
+            auto* const valueSpin = window->findChild<QDoubleSpinBox*>(
+                QStringLiteral("volumeIsosurfaceValueSpin"));
+            QMetaObject::invokeMethod(window, [valueSpin] { valueSpin->setValue(7.0); });
+            waitFor(application, [&] { return !controller.renderInFlight(); },
+                "the value change did not render");
+            controller.closeWindow();
+        }
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the reopened frame was not displayed");
+        auto* const window = volumeWindow();
+        auto* const group = window->findChild<QGroupBox*>(
+            QStringLiteral("volumeIsosurfaceGroup"));
+        auto* const valueSpin = window->findChild<QDoubleSpinBox*>(
+            QStringLiteral("volumeIsosurfaceValueSpin"));
+        require(window->isosurfaceColor() == QColor(0x40, 0xC0, 0xFF),
+            "the remembered colour did not come back");
+        require(!group->isChecked() && valueSpin->value() != 7.0,
+            "the surface's state came back along with its colour");
+        const auto before = session->requests.load();
+        QMetaObject::invokeMethod(window, [group] { group->setChecked(true); });
+        waitFor(application, [&] {
+            if (session->requests <= before || controller.renderInFlight()) {
+                return false;
+            }
+            const auto request = session->requestsSoFar().back();
+            return request.isosurface.has_value()
+                && request.isosurface->color == 0x40C0FFU;
+        }, "the remembered colour did not reach the request");
+        controller.closeWindow();
     }
 
     // --- the range fetch neither lags nor latches ----------------------------

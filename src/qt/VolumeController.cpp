@@ -8,6 +8,7 @@
 #include <QAction>
 #include <QFutureWatcher>
 #include <QScreen>
+#include <QSettings>
 #include <QTimer>
 #include <QWindow>
 #include <QtConcurrent/QtConcurrent>
@@ -155,6 +156,18 @@ void VolumeController::showWindow(QWidget* parent)
     auto* window = new VolumeWindow(parent);
     m_window = window;
     m_frameShown = false;
+    // The colour a person last chose, from the settings. Only the colour: the
+    // field and the value belong to a plotfile and start afresh with each.
+    m_persistedIsosurfaceColor.reset();
+    if (m_hooks.settings) {
+        const QColor saved(m_hooks.settings()
+                ->value(QStringLiteral("volume/isosurfaceColor"))
+                .toString());
+        if (saved.isValid()) {
+            window->setIsosurfaceColor(saved);
+            m_persistedIsosurfaceColor = saved;
+        }
+    }
     // A camera move, a resize and a dragged opacity slider all arrive far
     // faster than a full render finishes, so they share one path: draft
     // frames while it continues, a full frame once it has been still for the
@@ -213,6 +226,7 @@ void VolumeController::showWindow(QWidget* parent)
     connect(window, &VolumeWindow::isosurfaceDragged, this, beginInteraction);
     connect(window, &VolumeWindow::isosurfaceChanged, this,
         [this, endInteraction] {
+            persistIsosurfaceColor();
             fetchIsosurfaceRange();
             endInteraction();
         });
@@ -327,6 +341,20 @@ void VolumeController::pushFields()
     const auto field = m_hooks.field ? m_hooks.field() : std::nullopt;
     m_window->setIsosurfaceFields(
         fields, fraction ? *fraction : (field ? field->first : FieldId{}));
+}
+
+void VolumeController::persistIsosurfaceColor()
+{
+    if (!m_window || !m_hooks.settings) {
+        return;
+    }
+    const auto color = m_window->isosurfaceColor();
+    if (m_persistedIsosurfaceColor == color) {
+        return;
+    }
+    m_hooks.settings()->setValue(
+        QStringLiteral("volume/isosurfaceColor"), color.name());
+    m_persistedIsosurfaceColor = color;
 }
 
 bool VolumeController::sameKey(

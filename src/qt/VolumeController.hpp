@@ -9,6 +9,7 @@
 #include <amrexplorer/pipeline/VolumePipeline.hpp>
 #include <amrexplorer/render2d/Palette.hpp>
 
+#include <QColor>
 #include <QMetaObject>
 #include <QObject>
 #include <QPointer>
@@ -24,6 +25,7 @@
 #include <vector>
 
 class QAction;
+class QSettings;
 class QTimer;
 class QWidget;
 
@@ -130,6 +132,11 @@ public:
         // included: what the isosurface may be taken from. Optional, like the
         // rest; without it the isosurface controls list nothing.
         std::function<std::vector<std::pair<FieldId, QString>>()> fields;
+        // The application's settings store, opened per use: where the
+        // isosurface colour is kept across sessions. The field and the value
+        // are not -- they belong to a plotfile, the colour to a person.
+        // Optional; without it nothing is remembered.
+        std::function<std::unique_ptr<QSettings>()> settings;
     };
 
     VolumeController(Hooks hooks, QObject* parent = nullptr);
@@ -196,6 +203,9 @@ private:
     // first answer is a round trip; the same key is not asked twice.
     void pushFields();
     void fetchIsosurfaceRange();
+    // The window's isosurface colour into the settings when it differs from
+    // what was last saved or restored.
+    void persistIsosurfaceColor();
     // The window is going away, closed here or by the user: abandon the render
     // in flight and forget that a frame was ever shown in it.
     void forgetWindow();
@@ -248,6 +258,7 @@ private:
     VolumeFrame m_lastFrame;
     std::optional<IsosurfaceRangeKey> m_isosurfaceRangeFor;
     std::uint64_t m_isosurfaceRangeGeneration = 0;
+    std::optional<QColor> m_persistedIsosurfaceColor;
 };
 
 } // namespace amrvis::qt

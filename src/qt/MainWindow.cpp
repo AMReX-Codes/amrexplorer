@@ -728,6 +728,7 @@ MainWindow::MainWindow(QWidget* parent)
                 }
                 return fields;
             },
+            [] { return makeSettingsPtr(); },
         },
         this);
     connect(m_volumeController, &VolumeController::renderActivityChanged, this,

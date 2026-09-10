@@ -46,11 +46,11 @@ void writeText(const std::filesystem::path& path, const std::string& text)
 }
 
 void writeFab(const std::filesystem::path& path, std::string_view box,
-    std::span<const double> values)
+    std::span<const double> values, int components = 1)
 {
     std::ofstream output(path, std::ios::binary);
     require(static_cast<bool>(output), "could not create fixture FAB");
-    output << "FAB " << realDescriptor << box << " 1\n";
+    output << "FAB " << realDescriptor << box << " " << components << "\n";
     output.write(reinterpret_cast<const char*>(values.data()),
         static_cast<std::streamsize>(values.size() * sizeof(double)));
 }
@@ -96,6 +96,39 @@ std::filesystem::path writeTwoLevelFixture(const std::filesystem::path& root)
         coarse);
     writeFab(root / "Level_1" / "Cell_D_00000", "((0,0,0) (7,7,7) (0,0,0))",
         fine);
+    return root;
+}
+
+// One level, 8^3 over [0,1]^3, two fields: phi = 2.0 everywhere and zeta
+// = the z coordinate of each cell centre, so an isosurface of zeta at 0.5 is
+// the plane z = 0.5 while phi alone never crosses anything.
+std::filesystem::path writeRampFixture(const std::filesystem::path& root)
+{
+    std::filesystem::create_directories(root / "Level_0");
+    writeText(root / "Header",
+        "HyperCLaw-V1.1\n"
+        "2\nphi\nzeta\n"
+        "3\n0.0\n0\n"
+        "0.0 0.0 0.0\n1.0 1.0 1.0\n\n"
+        "((0,0,0) (7,7,7) (0,0,0))\n"
+        "0\n"
+        "0.125 0.125 0.125\n"
+        "0\n0\n"
+        "0 1 0.0\n0\n"
+        "0.0 1.0\n0.0 1.0\n0.0 1.0\n"
+        "Level_0/Cell\n");
+    writeText(root / "Level_0" / "Cell_H",
+        "1\n1\n2\n0\n"
+        "(1 0\n((0,0,0) (7,7,7) (0,0,0))\n)\n"
+        "1\nFabOnDisk: Cell_D_00000 0\n\n"
+        "1,2\n2.0,0.0625,\n\n1,2\n2.0,0.9375,\n\n");
+    std::array<double, 1024> values{};
+    for (std::size_t index = 0; index < 512; ++index) {
+        values[index] = 2.0;
+        values[512 + index] = (static_cast<double>(index / 64) + 0.5) / 8.0;
+    }
+    writeFab(root / "Level_0" / "Cell_D_00000", "((0,0,0) (7,7,7) (0,0,0))",
+        values, 2);
     return root;
 }
 
@@ -879,6 +912,94 @@ int main()
                 != std::string::npos;
         }
         require(threw, "an exact level that cannot fit did not fail actionably");
+    }
+
+    // --- an isosurface of one field over the volume of another -------------
+    {
+        const auto ramp = writeRampFixture(scratch / "ramp");
+        auto session = std::make_shared<amrvis::LocalDatasetSession>(
+            ramp, amrvis::DatasetId{5}, 1024 * 1024);
+        std::shared_ptr<amrvis::DatasetSession> dataset = session;
+        require(session->supportsVolumeIsosurface(),
+            "a local 3-D session does not support isosurfaces");
+        amrvis::VolumeRenderRequest request;
+        request.dataset = amrvis::DatasetId{5};
+        request.field = amrvis::FieldId{0};   // phi
+        request.maximumLevel = 0;
+        request.region = amrvis::datasetSampleBounds(session->metadata());
+        request.camera = amrvis::orthoPresetXY;
+        request.outputSize = {64, 64};
+        request.range = amrvis::VolumeRange{1.0, 3.0, false};
+        // A faint volume, so the surface's own colour dominates where it is.
+        request.transfer = amrvis::makeVolumeTransferFunction(
+            amrvis::builtinPalette(amrvis::BuiltinPalette::Rainbow),
+            amrvis::OpacityRamp{0.0, 1.0, 0.1, false, {}});
+        request.maximumVoxels = 4096;
+        request.isosurface = amrvis::VolumeIsosurface{
+            amrvis::FieldId{1}, 0, 0.5, 0xFF0000U, 1.0F};   // zeta = 0.5
+        const auto both = amrvis::executeVolumeRenderWithFallback(dataset, request);
+        const auto centre = both.frame.pixels[static_cast<std::size_t>(32 * 64 + 32)];
+        require(litPixels(both.frame) > 0 && (centre >> 24U) == 255U
+                && ((centre >> 16U) & 0xFFU) > 200U,
+            "an isosurface over the volume did not draw an opaque red plane");
+        require(!both.frame.metrics.gridFromCache
+                && both.frame.metrics.blocksRead >= 2
+                && both.frame.metrics.gridDims == (std::array<int, 3>{8, 8, 8}),
+            "two grids were not sampled for two fields");
+        // Both grids are cached now: the same render reads neither block.
+        const auto again = amrvis::executeVolumeRenderWithFallback(dataset, request);
+        require(again.frame.metrics.gridFromCache && again.frame.metrics.blocksRead == 0
+                && again.frame.pixels == both.frame.pixels,
+            "the second two-grid render did not come from the cache");
+        // The volume alone is a faint picture with no red plane in it.
+        auto volumeOnly = request;
+        volumeOnly.isosurface.reset();
+        const auto plain = amrvis::executeVolumeRenderWithFallback(dataset, volumeOnly);
+        require((plain.frame.pixels[static_cast<std::size_t>(32 * 64 + 32)] >> 24U) < 255U
+                && plain.frame.pixels != both.frame.pixels,
+            "the isosurface changed nothing");
+        // The isosurface alone: the volume's grid is not read, the reported
+        // range is the request's, or the neutral one when none was given.
+        auto surfaceOnly = request;
+        surfaceOnly.showVolume = false;
+        session->clearUnpinnedCache();
+        const auto alone = amrvis::executeVolumeRenderWithFallback(dataset, surfaceOnly);
+        require((alone.frame.pixels[static_cast<std::size_t>(32 * 64 + 32)] >> 24U) == 255U
+                && alone.frame.usedRange == *request.range
+                && alone.frame.metrics.blocksRead == 1
+                && !alone.frame.metrics.gridFromCache,
+            "an isosurface alone did not render from its grid only");
+        surfaceOnly.range.reset();
+        const auto neutral = amrvis::executeVolumeRenderWithFallback(dataset, surfaceOnly);
+        require(neutral.frame.usedRange == amrvis::neutralVolumeRange(false)
+                && neutral.frame.metrics.gridFromCache,
+            "an isosurface-only Visible render did not report the neutral range");
+        surfaceOnly.logarithmic = true;
+        require(amrvis::executeVolumeRenderWithFallback(dataset, surfaceOnly)
+                    .frame.usedRange
+                == amrvis::neutralVolumeRange(true),
+            "the neutral range did not keep the logarithmic mapping");
+        // An isosurface of the volume's own field shares its grid: one block
+        // read, and phi never crosses 1.5, so nothing is drawn but the volume.
+        auto shared = request;
+        shared.isosurface->field = amrvis::FieldId{0};
+        shared.isosurface->value = 1.5;
+        session->clearUnpinnedCache();
+        const auto sharedFrame = amrvis::executeVolumeRenderWithFallback(dataset, shared);
+        require(sharedFrame.frame.metrics.blocksRead == 1
+                && sharedFrame.frame.pixels == plain.frame.pixels,
+            "an isosurface of the volume's field did not share its grid");
+        // A field the catalog lacks is refused by the session, naming it.
+        auto unknown = request;
+        unknown.isosurface->field = amrvis::FieldId{7};
+        bool threw = false;
+        try {
+            (void)amrvis::executeVolumeRenderWithFallback(dataset, unknown);
+        } catch (const std::invalid_argument& error) {
+            threw = std::string(error.what()).find("isosurface field")
+                != std::string::npos;
+        }
+        require(threw, "an unknown isosurface field was not refused by name");
     }
 
     std::error_code removeError;

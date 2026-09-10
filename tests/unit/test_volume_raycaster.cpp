@@ -101,6 +101,88 @@ std::uint32_t pixelAt(const amrvis::VolumeFrame& frame, int x, int y)
         * static_cast<std::size_t>(frame.width) + static_cast<std::size_t>(x)];
 }
 
+// A field equal to the coordinate along `axis`: voxel centres sit at
+// (index + 0.5) / n, so the trilinear read reproduces the coordinate exactly
+// between the outermost centres.
+amrvis::VolumeGrid rampGrid(int n, int axis)
+{
+    auto grid = uniformGrid(n, 0.0F);
+    for (int k = 0; k < n; ++k) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const int index = axis == 0 ? i : axis == 1 ? j : k;
+                grid.values[voxel(grid, i, j, k)]
+                    = (static_cast<double>(index) + 0.5) / static_cast<double>(n);
+            }
+        }
+    }
+    return grid;
+}
+
+// The distance from `centre`, so its iso-value r is a sphere of that radius.
+amrvis::VolumeGrid sphereGrid(int n, const std::array<double, 3>& centre)
+{
+    auto grid = uniformGrid(n, 0.0F);
+    for (int k = 0; k < n; ++k) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const auto dx = (static_cast<double>(i) + 0.5) / n - centre[0];
+                const auto dy = (static_cast<double>(j) + 0.5) / n - centre[1];
+                const auto dz = (static_cast<double>(k) + 0.5) / n - centre[2];
+                grid.values[voxel(grid, i, j, k)] = std::sqrt(dx * dx + dy * dy + dz * dz);
+            }
+        }
+    }
+    return grid;
+}
+
+amrvis::VolumeIsosurface isosurface(double value, std::uint32_t color, float opacity)
+{
+    amrvis::VolumeIsosurface iso;
+    iso.field.value = 1;
+    iso.value = value;
+    iso.color = color;
+    iso.opacity = opacity;
+    return iso;
+}
+
+// Settings for an isosurface alone: the volume is off, its transfer function
+// present only because the settings must still validate.
+amrvis::RaycastSettings isoOnlySettings(const amrvis::OrthoCamera& camera, int size,
+    const amrvis::VolumeIsosurface& iso, int samplesPerVoxel = 2)
+{
+    auto settings = settingsFor(camera, size, twoEntries(0xFFFFFFU, 1.0F), samplesPerVoxel);
+    settings.showVolume = false;
+    settings.isosurface = iso;
+    return settings;
+}
+
+// The colour a hit composites for a channel value in [0, 1] and the cosine
+// between the normal and the view: the header's headlight terms.
+double shaded(double channel, double cosTheta)
+{
+    double highlight = 1.0;
+    for (int power = 0; power < amrvis::isosurfaceShininess; ++power) {
+        highlight *= cosTheta;
+    }
+    return channel * (amrvis::isosurfaceAmbient + amrvis::isosurfaceDiffuse * cosTheta)
+        + amrvis::isosurfaceSpecular * highlight;
+}
+
+unsigned byteOf(double value)
+{
+    return static_cast<unsigned>(std::lround(std::clamp(value, 0.0, 1.0) * 255.0));
+}
+
+std::size_t litCount(const amrvis::VolumeFrame& frame)
+{
+    std::size_t lit = 0;
+    for (const auto pixel : frame.pixels) {
+        lit += pixel != 0U;
+    }
+    return lit;
+}
+
 } // namespace
 
 int main()
@@ -800,6 +882,270 @@ int main()
             threw = true;
         }
         require(threw, "a cancelled scan of an empty grid did not throw");
+    }
+
+    // --- an isosurface seen face-on composites once, whatever the rate ------
+    // f = z on the unit grid, iso-value 0.5: the plane z = 0.5, which the XY
+    // view (rays along -z) meets head-on, so the normal is the view direction
+    // and every headlight term is at its maximum. The volume is off. One hit
+    // per ray, so the alpha is the surface's opacity exactly -- not corrected
+    // per step like a volume entry -- at every samples-per-voxel.
+    {
+        const auto grid = rampGrid(8, 2);
+        const auto opaque = amrvis::raycastVolume(
+            amrvis::RaycastGrids{nullptr, &grid},
+            isoOnlySettings(amrvis::orthoPresetXY, 64, isosurface(0.5, 0xCC0000U, 1.0F)));
+        const auto centre = pixelAt(opaque, 32, 32);
+        require(alphaOf(centre) == 255, "a face-on opaque isosurface is not opaque");
+        require(redOf(centre) == byteOf(shaded(0.8, 1.0))
+                && greenOf(centre) == byteOf(shaded(0.0, 1.0))
+                && blueOf(centre) == byteOf(shaded(0.0, 1.0)),
+            "a face-on isosurface is not lit by the headlight terms");
+        require(redOf(centre) == 235 && greenOf(centre) == 51,
+            "the headlight constants moved the expected colour");
+        require(pixelAt(opaque, 0, 0) == 0U && pixelAt(opaque, 63, 63) == 0U,
+            "an isosurface lit pixels outside the domain");
+        // The same footprint as an opaque volume of the same grid: a plane
+        // spanning the region is crossed by every ray through it.
+        const auto slab = amrvis::raycastVolume(uniformGrid(8, 1.0F),
+            settingsFor(amrvis::orthoPresetXY, 64, twoEntries(0xFFFFFFU, 1.0F)));
+        for (std::size_t index = 0; index < slab.pixels.size(); ++index) {
+            require((slab.pixels[index] != 0U) == (opaque.pixels[index] != 0U),
+                "the isosurface footprint differs from the volume's");
+        }
+        for (const int samplesPerVoxel : {1, 2, 4, 8}) {
+            const auto frame = amrvis::raycastVolume(
+                amrvis::RaycastGrids{nullptr, &grid},
+                isoOnlySettings(amrvis::orthoPresetXY, 64,
+                    isosurface(0.5, 0xCC0000U, 0.3F), samplesPerVoxel));
+            require(alphaOf(pixelAt(frame, 32, 32)) == 77,
+                "a translucent isosurface's alpha depends on the sampling rate");
+        }
+        require(opaque.metrics.gridDims == grid.dims
+                && opaque.metrics.coveredVoxels == grid.coveredVoxels,
+            "an isosurface-only frame does not describe its grid");
+    }
+
+    // --- a plane seen edge-on is invisible -----------------------------------
+    // f = x under the same view: constant along every ray, so no ray crosses
+    // it and nothing is drawn. An infinitely thin surface has no edge to show.
+    {
+        const auto grid = rampGrid(8, 0);
+        const auto frame = amrvis::raycastVolume(
+            amrvis::RaycastGrids{nullptr, &grid},
+            isoOnlySettings(amrvis::orthoPresetXY, 64, isosurface(0.5, 0xCC0000U, 1.0F)));
+        require(litCount(frame) == 0, "an edge-on plane lit a pixel");
+    }
+
+    // --- a closed surface is hit going in and coming out ---------------------
+    // A sphere of radius 0.3 about the centre, at half opacity: the centre ray
+    // (odd viewport, so a pixel centre sits on the domain centre) crosses the
+    // front and the back, both face-on by symmetry, and composites to exactly
+    // 1 - 0.5^2. Pixels outside the projected disc stay empty: the domain
+    // spans 20.5 pixels, so the disc is 6.15 pixels in radius.
+    {
+        const auto grid = sphereGrid(32, {0.5, 0.5, 0.5});
+        const auto frame = amrvis::raycastVolume(
+            amrvis::RaycastGrids{nullptr, &grid},
+            isoOnlySettings(amrvis::orthoPresetXY, 65, isosurface(0.3, 0x00CC00U, 0.5F)));
+        const auto centre = pixelAt(frame, 32, 32);
+        require(alphaOf(centre) == 191, "two half-opaque hits did not composite to 0.75");
+        require(greenOf(centre) == byteOf(0.75 * shaded(0.8, 1.0))
+                && redOf(centre) == byteOf(0.75 * shaded(0.0, 1.0)),
+            "the sphere's centre is not lit face-on twice");
+        require(alphaOf(pixelAt(frame, 30, 32)) == 191,
+            "a pixel inside the disc was not hit twice");
+        require(pixelAt(frame, 40, 32) == 0U && pixelAt(frame, 32, 40) == 0U,
+            "a pixel outside the disc but inside the domain was lit");
+        // Off-centre the surface is oblique and darker, never brighter.
+        require(greenOf(pixelAt(frame, 36, 32)) < greenOf(centre)
+                && alphaOf(pixelAt(frame, 36, 32)) == 191,
+            "an oblique hit is not darker than a face-on one");
+    }
+
+    // --- the surface composites in depth order with the volume ---------------
+    // A blue slab over z in [0.25, 0.75] (four voxels at 0.3 each: alpha
+    // 1 - 0.7^4) and an opaque red plane. The XY view marches from z = 1 down,
+    // so a plane at z = 0.875 is met first and hides the slab -- the picture
+    // is the isosurface alone -- and one at z = 0.125 is seen through it.
+    {
+        auto slab = uniformGrid(8, 0.0F);
+        for (int k = 2; k <= 5; ++k) {
+            for (int j = 0; j < 8; ++j) {
+                for (int i = 0; i < 8; ++i) {
+                    slab.values[voxel(slab, i, j, k)] = 1.0;
+                }
+            }
+        }
+        const auto ramp = rampGrid(8, 2);
+        auto both = settingsFor(amrvis::orthoPresetXY, 64, twoEntries(0x0000FFU, 0.3F));
+        both.isosurface = isosurface(0.875, 0xCC0000U, 1.0F);
+        const auto inFront = amrvis::raycastVolume(
+            amrvis::RaycastGrids{&slab, &ramp}, both);
+        const auto alone = amrvis::raycastVolume(
+            amrvis::RaycastGrids{nullptr, &ramp},
+            isoOnlySettings(amrvis::orthoPresetXY, 64, *both.isosurface));
+        require(inFront.pixels == alone.pixels,
+            "a volume behind an opaque isosurface showed through");
+        both.isosurface->value = 0.125;
+        const auto behind = amrvis::raycastVolume(
+            amrvis::RaycastGrids{&slab, &ramp}, both);
+        const auto centre = pixelAt(behind, 32, 32);
+        const auto slabAlpha = 1.0 - std::pow(0.7, 4.0);
+        const auto tolerance = 1.5 / 255.0;
+        require(alphaOf(centre) == 255, "a slab over an opaque surface is not opaque");
+        require(std::abs(blueOf(centre) / 255.0 - (slabAlpha + (1.0 - slabAlpha) * shaded(0.0, 1.0)))
+                    <= tolerance
+                && std::abs(redOf(centre) / 255.0 - (1.0 - slabAlpha) * shaded(0.8, 1.0))
+                    <= tolerance
+                && std::abs(greenOf(centre) / 255.0 - (1.0 - slabAlpha) * shaded(0.0, 1.0))
+                    <= tolerance,
+            "a surface behind the slab is not blended under it");
+        // The volume alone, for contrast: less than opaque, and pure blue.
+        const auto volumeOnly = amrvis::raycastVolume(slab,
+            settingsFor(amrvis::orthoPresetXY, 64, twoEntries(0x0000FFU, 0.3F)));
+        require(alphaOf(pixelAt(volumeOnly, 32, 32)) < 255
+                && redOf(pixelAt(volumeOnly, 32, 32)) == 0,
+            "the slab alone is not the expected contrast");
+    }
+
+    // --- no surface is invented at a coverage boundary -----------------------
+    // The plane's crossing cell has an uncovered corner: no hit anywhere. And
+    // an uncovered half: the covered half is lit, the uncovered half is not,
+    // with the one-voxel band between free either way.
+    {
+        constexpr auto nan = std::numeric_limits<double>::quiet_NaN();
+        auto gap = rampGrid(8, 2);
+        for (int j = 0; j < 8; ++j) {
+            for (int i = 0; i < 8; ++i) {
+                gap.values[voxel(gap, i, j, 3)] = nan;
+            }
+        }
+        const auto settings = isoOnlySettings(
+            amrvis::orthoPresetXY, 64, isosurface(0.5, 0xCC0000U, 1.0F));
+        require(litCount(amrvis::raycastVolume(amrvis::RaycastGrids{nullptr, &gap}, settings))
+                == 0,
+            "a crossing through an uncovered slab lit a pixel");
+        auto half = rampGrid(8, 2);
+        for (int k = 0; k < 8; ++k) {
+            for (int j = 0; j < 8; ++j) {
+                for (int i = 0; i < 4; ++i) {
+                    half.values[voxel(half, i, j, k)] = nan;
+                }
+            }
+        }
+        const auto frame = amrvis::raycastVolume(
+            amrvis::RaycastGrids{nullptr, &half}, settings);
+        // The unit domain spans 20 pixels, columns 22 through 41: x = 0.275
+        // is column 27 and x = 0.775 is column 37.
+        require(pixelAt(frame, 27, 32) == 0U, "the uncovered half was lit");
+        require(alphaOf(pixelAt(frame, 37, 32)) == 255, "the covered half was not lit");
+        // The boundary column itself, x = 0.5, reads a cell with uncovered
+        // corners and is left alone rather than given an invented surface.
+        require(pixelAt(frame, 32, 32) == 0U, "the coverage boundary was lit");
+    }
+
+    // --- a field that never crosses the iso-value draws nothing --------------
+    {
+        const auto flat = uniformGrid(8, 0.5F);
+        for (const double value : {0.5, 2.0, -1.0}) {
+            const auto frame = amrvis::raycastVolume(
+                amrvis::RaycastGrids{nullptr, &flat},
+                isoOnlySettings(amrvis::orthoPresetXY, 32, isosurface(value, 0xCC0000U, 1.0F)));
+            require(litCount(frame) == 0, "a flat field lit a pixel");
+        }
+        // A zero-opacity surface is accepted and changes nothing.
+        const auto ramp = rampGrid(8, 2);
+        const auto frame = amrvis::raycastVolume(
+            amrvis::RaycastGrids{nullptr, &ramp},
+            isoOnlySettings(amrvis::orthoPresetXY, 32, isosurface(0.5, 0xCC0000U, 0.0F)));
+        require(litCount(frame) == 0, "a zero-opacity isosurface lit a pixel");
+    }
+
+    // --- an isosurface does not break thread invariance ----------------------
+    // The sphere over the pseudo-random volume of the thread test above, seen
+    // obliquely; and one grid passed as both volume and isosurface renders.
+    {
+        auto grid = uniformGrid(16, 0.0F);
+        for (std::size_t index = 0; index < grid.values.size(); ++index) {
+            grid.values[index] = static_cast<float>((index * 7919U) % 101U) / 100.0F;
+        }
+        const auto sphere = sphereGrid(16, {0.5, 0.5, 0.5});
+        amrvis::VolumeTransferFunction transfer;
+        for (int entry = 0; entry < 16; ++entry) {
+            transfer.colors.push_back(static_cast<std::uint32_t>(entry * 16)
+                | (static_cast<std::uint32_t>(255 - entry * 16) << 16U));
+            transfer.opacities.push_back(static_cast<float>(entry) / 40.0F);
+        }
+        auto single = settingsFor(amrvis::OrthoCamera{0.7, -0.4, 1.3}, 97, transfer, 3);
+        single.sampling = amrvis::SamplingPolicy::Linear;
+        single.isosurface = isosurface(0.3, 0x40C0FFU, 0.6F);
+        auto many = single;
+        many.threadCount = 7;
+        auto oversubscribed = single;
+        oversubscribed.threadCount = 500;
+        const amrvis::RaycastGrids grids{&grid, &sphere};
+        const auto one = amrvis::raycastVolume(grids, single);
+        const auto seven = amrvis::raycastVolume(grids, many);
+        const auto clamped = amrvis::raycastVolume(grids, oversubscribed);
+        require(one.pixels == seven.pixels && one.pixels == clamped.pixels,
+            "the thread split changed an isosurface picture");
+        require(litCount(one) > 0, "the oblique isosurface render lit nothing");
+        const auto shared = amrvis::raycastVolume(
+            amrvis::RaycastGrids{&sphere, &sphere}, single);
+        require(litCount(shared) > 0, "one grid as both volume and isosurface lit nothing");
+    }
+
+    // --- isosurface refusals -------------------------------------------------
+    {
+        const auto grid = uniformGrid(4, 1.0F);
+        const auto ramp = rampGrid(4, 2);
+        const auto rejects = [](const amrvis::RaycastGrids& grids,
+                                 const amrvis::RaycastSettings& settings) {
+            try {
+                (void)amrvis::raycastVolume(grids, settings);
+            } catch (const std::invalid_argument&) {
+                return true;
+            }
+            return false;
+        };
+        const auto plain = settingsFor(amrvis::orthoPresetXY, 16, twoEntries(0xFFU, 1.0F));
+        const auto isoOnly = isoOnlySettings(
+            amrvis::orthoPresetXY, 16, isosurface(0.5, 0xCC0000U, 1.0F));
+        require(rejects({nullptr, nullptr}, plain), "no grids at all was accepted");
+        require(rejects({nullptr, nullptr}, isoOnly), "no grids at all was accepted");
+        require(rejects({&grid, nullptr}, isoOnly),
+            "isosurface settings without an isosurface grid were accepted");
+        require(rejects({&grid, &ramp}, plain),
+            "an isosurface grid without settings was accepted");
+        require(rejects({nullptr, &ramp}, plain),
+            "a shown volume without a volume grid was accepted");
+        auto withIso = plain;
+        withIso.isosurface = isosurface(0.5, 0xCC0000U, 1.0F);
+        require(rejects({&grid, &ramp}, plain) && !rejects({&grid, &ramp}, withIso),
+            "a well-formed two-grid render was refused");
+        const auto smaller = rampGrid(2, 2);
+        require(rejects({&grid, &smaller}, withIso), "mismatched grid dims were accepted");
+        auto moved = ramp;
+        moved.region.upper[0] = 2.0;
+        require(rejects({&grid, &moved}, withIso), "mismatched grid regions were accepted");
+        auto bad = withIso;
+        bad.isosurface->value = std::numeric_limits<double>::quiet_NaN();
+        require(rejects({&grid, &ramp}, bad), "a NaN iso-value was accepted");
+        bad = withIso;
+        bad.isosurface->opacity = 1.5F;
+        require(rejects({&grid, &ramp}, bad), "an isosurface opacity above one was accepted");
+        bad.isosurface->opacity = -0.1F;
+        require(rejects({&grid, &ramp}, bad), "a negative isosurface opacity was accepted");
+        bad.isosurface->opacity = std::numeric_limits<float>::quiet_NaN();
+        require(rejects({&grid, &ramp}, bad), "a NaN isosurface opacity was accepted");
+        bad = withIso;
+        bad.isosurface->color = 0x01000000U;
+        require(rejects({&grid, &ramp}, bad), "an isosurface colour with a high byte was accepted");
+        auto malformed = ramp;
+        malformed.values.pop_back();
+        require(rejects({&grid, &malformed}, withIso),
+            "a malformed isosurface grid was accepted");
     }
 
     // --- refusals and cancellation ----------------------------------------

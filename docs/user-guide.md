@@ -402,6 +402,20 @@ match. Its own controls set the opacity:
   the domain over the volume. The outline is on by default and the boxes are
   not: box edges crossing a translucent field read as structure in it, which
   is worth asking for rather than having to switch off.
+- **Isosurface** draws the surface where a field equals one value -- a shaded
+  shell, lit from where you are looking -- inside the volume, in depth order
+  with it, so a translucent volume shows through a translucent surface and a
+  surface hides what is behind it. Tick the group to turn it on. **Field** is
+  the field the surface is taken from, and it need not be the one the volume
+  shows: a density isosurface inside a temperature volume is the usual reason
+  to want one. It starts as the volume's field and follows it until you pick
+  another. **Value** is the iso-value in the field's own units; the slider
+  under it runs over the field's range and starts in the middle, or type a
+  value. **Color** and **Opacity** are the surface's own -- the palette plays
+  no part in it. Dragging a slider shows drafts like a moving camera does.
+- **Show volume** is ticked by default and has a say only while there is an
+  isosurface: clear it to draw the surface alone. The volume's field is then
+  not sampled at all, so a surface of one field costs nothing for the other.
 
 While the camera moves the window shows quick half-resolution drafts and
 renders the full frame once it settles. Rotating and zooming reuse the field
@@ -416,7 +430,9 @@ sends back the picture, never the field. It needs an `amrexplorer-server`
 that speaks protocol 1.2; against an older server the menu item stays
 disabled. **Smooth sampling** needs protocol 1.3, since the server is what
 does the sampling; against a 1.2 server the box is greyed out and says so,
-and the volume is rendered from the nearest voxel.
+and the volume is rendered from the nearest voxel. The **Isosurface** group
+and **Show volume** need protocol 1.6 for the same reason; against an older
+server the group is greyed out and says so, and the volume is drawn alone.
 
 The server's `--max-volume-voxels` and `--volume-cache-mib` options set how
 large one volume and one dataset's cache may get. They are per volume
@@ -704,8 +720,9 @@ Window geometry, logarithmic mapping, palette, skin, number format, and
 animation speed persist across sessions.
 
 Each open dataset has a 1 GiB data cache by default, and volume rendering fills
-a second cache of the same size with the grids it samples the field into, so a
-dataset you have volume-rendered can hold up to twice that. Closing the volume
+a second cache of the same size with the grids it samples the field into (an
+isosurface of a second field holds a second grid there), so a dataset you have
+volume-rendered can hold up to twice that. Closing the volume
 window does not give that memory back -- the grids stay cached for as long as
 the dataset is open, so that reopening the window draws immediately. Set
 `AMREXPLORER_CACHE_SIZE_MB` to a positive number of MiB before launching to

@@ -1103,6 +1103,15 @@ fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value)
     wire.samples_per_voxel = value.samplesPerVoxel;
     wire.maximum_voxels = value.maximumVoxels;
     wire.sampling = toWireSampling(value.sampling);
+    wire.show_volume = value.showVolume;
+    wire.has_isosurface = value.isosurface.has_value();
+    if (value.isosurface) {
+        wire.isosurface_field = value.isosurface->field.value;
+        wire.isosurface_component = value.isosurface->component;
+        wire.isosurface_value = value.isosurface->value;
+        wire.isosurface_color = value.isosurface->color;
+        wire.isosurface_opacity = value.isosurface->opacity;
+    }
     return wire;
 }
 
@@ -1121,6 +1130,10 @@ VolumeRenderRequest fromWire(const fb::RenderedFrameRequestT& value)
     }
     requireFiniteValues(value.transfer_opacities,
         "wire volume transfer opacities are non-finite");
+    if (value.has_isosurface) {
+        requireFinite(value.isosurface_value, "wire isosurface value is non-finite");
+        requireFinite(value.isosurface_opacity, "wire isosurface opacity is non-finite");
+    }
     const auto region = fromWire(value.region.get());
     const auto composition = fromWireComposition(value.composition);
     VolumeRenderRequest result;
@@ -1142,6 +1155,12 @@ VolumeRenderRequest fromWire(const fb::RenderedFrameRequestT& value)
     result.samplesPerVoxel = value.samples_per_voxel;
     result.maximumVoxels = value.maximum_voxels;
     result.sampling = fromWireSampling(value.sampling);
+    result.showVolume = value.show_volume;
+    if (value.has_isosurface) {
+        result.isosurface = VolumeIsosurface{FieldId{value.isosurface_field},
+            value.isosurface_component, value.isosurface_value,
+            value.isosurface_color, value.isosurface_opacity};
+    }
     return result;
 }
 

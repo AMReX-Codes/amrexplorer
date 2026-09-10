@@ -886,6 +886,8 @@ if(TARGET amrexplorer_qt)
         "${PROJECT_SOURCE_DIR}/src/qt/VolumeWindow.hpp"
         "${PROJECT_SOURCE_DIR}/src/qt/IsoWidget.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/OpacityCurveWidget.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/ScientificDoubleSpinBox.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp"
         "${PROJECT_SOURCE_DIR}/src/qt/IsoWidget.hpp"
     )
     set_target_properties(test_volume_controller PROPERTIES AUTOMOC ON)
@@ -1458,6 +1460,8 @@ if(TARGET amrexplorer_qt)
     # The Volume Rendering window over the 3-D fixture, locally: opened as the
     # View menu action opens it, its first frame must have lit pixels (the
     # ray caster ran end to end through the session, pipeline and window).
+    # Then again with an isosurface alone and the volume hidden, set through
+    # the window's own controls, so the lit pixels are the surface's.
     add_test(
         NAME qt_volume_smoke_3d
         COMMAND "${CMAKE_COMMAND}"

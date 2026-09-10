@@ -42,6 +42,11 @@ inline constexpr const char* volumeSamplingUnsupportedMessage
     = "the remote server predates smooth volume sampling (protocol 1.3) and "
       "samples each ray at the nearest voxel; install a current "
       "amrexplorer-server";
+// And for isosurfaces, which a 1.5 server would leave out of the frame while
+// still drawing the volume it was asked to hide.
+inline constexpr const char* volumeIsosurfaceUnsupportedMessage
+    = "the remote server predates isosurfaces (protocol 1.6) and renders the "
+      "volume alone; install a current amrexplorer-server";
 // And for derived fields, which a 1.3 server would not read off an open
 // request at all -- so it would answer a catalog of stored fields while the
 // client believed the definitions had been installed.
@@ -98,6 +103,10 @@ public:
     // Whether the negotiated protocol carries the volume march's sampling
     // policy (1.3). A 1.2 peer renders volumes but always sampled nearest.
     [[nodiscard]] bool supportsVolumeSampling() const noexcept;
+    // Whether the negotiated protocol carries an isosurface and the volume's
+    // visibility on a rendered frame (1.6). A 1.5 peer renders the volume
+    // alone whatever it is sent.
+    [[nodiscard]] bool supportsVolumeIsosurface() const noexcept;
     // Whether the negotiated protocol carries derived-field definitions on an
     // open request (1.4). A 1.3 peer opens datasets perfectly well; it just
     // cannot be asked to compute a field.

@@ -47,6 +47,11 @@ struct VolumeGridKeyHash {
 // ReadCancelled when the token stops.
 [[nodiscard]] VolumeRange visibleVolumeRange(
     const VolumeGrid& grid, bool logarithmic, StopToken cancellation = {});
+// The range a frame reports when there is nothing to resolve one from: a
+// grid with no finite value, or a render that hides the volume and so never
+// maps a value at all. Neutral but usable -- finite, ordered, positive when
+// logarithmic -- so the frame passes the same checks as any other.
+[[nodiscard]] VolumeRange neutralVolumeRange(bool logarithmic) noexcept;
 
 class LocalDatasetSession final : public DatasetSession {
 public:
@@ -93,6 +98,10 @@ public:
     // Whatever this can render, it can sample either way: the choice only
     // ever fails to reach a peer, and there is no peer here.
     [[nodiscard]] bool supportsVolumeSampling() const noexcept override
+    {
+        return supportsVolumeRendering();
+    }
+    [[nodiscard]] bool supportsVolumeIsosurface() const noexcept override
     {
         return supportsVolumeRendering();
     }

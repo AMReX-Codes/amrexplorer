@@ -22,7 +22,15 @@ namespace amrvis {
 // correctly rounded, so two libm implementations (or two versions of one)
 // can differ by an ulp, and an ulp in a step opacity can compound over a few
 // hundred composites into one 8-bit level. Pixel equality across a
-// heterogeneous deployment is not a promise this can keep.
+// heterogeneous deployment is not a promise this can keep. The isosurface
+// shading adds no second such term: its shininess is an integer power taken
+// by repeated multiplication, and std::hypot and std::sqrt are correctly
+// rounded.
+//
+// An isosurface, when asked for, is marched in the same pass: each ray
+// watches where a second grid's trilinear value crosses the iso-value between
+// consecutive samples, shades the crossing from the field's gradient under a
+// fixed headlight, and composites it in depth order with the volume samples.
 struct RaycastSettings {
     OrthoCamera camera;
     // The box the camera is normalised to (the dataset's sample bounds), so
@@ -51,16 +59,54 @@ struct RaycastSettings {
     // and by a small multiple of the hardware's, so an outsized request costs
     // no more than a sensible one.
     unsigned threadCount = 0;
+    // Whether the volume grid is composited at all; off, only the isosurface
+    // draws, and the range and transfer above merely have to be valid.
+    bool showVolume = true;
+    // The surface to draw, if any: its value, colour and opacity. Its field
+    // and component name the grid handed in as RaycastGrids::isosurface and
+    // are the caller's business; the march never reads them. Set exactly when
+    // that grid is.
+    std::optional<VolumeIsosurface> isosurface;
 };
 
-// Renders the grid; the frame's usedRange is settings.range and its metrics
-// carry the render time and what the grid reports about itself (its dims,
-// covered voxels and finest sampled level) -- the sampling and cache fields
-// belong to whoever produced the grid. Throws std::invalid_argument for
-// inconsistent settings or a malformed grid, ReadCancelled when the token
-// stops.
-[[nodiscard]] VolumeFrame raycastVolume(const VolumeGrid& grid,
+// Fixed headlight: light, viewer and half vector coincide, so every term is a
+// power of the cosine between the normal and the view. Exposed so a test or a
+// swatch can compute the colour a hit composites.
+inline constexpr double isosurfaceAmbient = 0.25;
+inline constexpr double isosurfaceDiffuse = 0.65;
+inline constexpr double isosurfaceSpecular = 0.20;   // white
+inline constexpr int isosurfaceShininess = 32;
+// Bisections of the trilinear field between the two samples bracketing a
+// crossing before the hit is placed by one secant step within the bracket.
+inline constexpr int isosurfaceRefinementSteps = 2;
+
+// The grids a render reads. Non-owning: the caller keeps both alive for the
+// call. `volume` is required exactly when settings.showVolume, `isosurface`
+// exactly when settings.isosurface is set; when both are given their dims
+// and region must be identical, which a session guarantees by sampling both
+// through one VolumeSampleRequest geometry. They may be the same object.
+struct RaycastGrids {
+    const VolumeGrid* volume = nullptr;
+    const VolumeGrid* isosurface = nullptr;
+};
+
+// Renders the grids; the frame's usedRange is settings.range and its metrics
+// carry the render time and what the reference grid (the volume when shown,
+// else the isosurface's) reports about itself -- its dims, covered voxels and
+// finest sampled level; the sampling and cache fields belong to whoever
+// produced the grid. Throws std::invalid_argument for inconsistent settings
+// or a malformed grid, ReadCancelled when the token stops.
+[[nodiscard]] VolumeFrame raycastVolume(const RaycastGrids& grids,
     const RaycastSettings& settings, StopToken cancellation = {});
+
+// The volume alone, with no isosurface: what every caller before isosurfaces
+// existed means, and what settings default to.
+[[nodiscard]] inline VolumeFrame raycastVolume(const VolumeGrid& grid,
+    const RaycastSettings& settings, StopToken cancellation = {})
+{
+    return raycastVolume(
+        RaycastGrids{&grid, nullptr}, settings, std::move(cancellation));
+}
 
 // The finite extrema of the grid's values (of its positive values when
 // logarithmic), for resolving a "Visible" range; nullopt when there are

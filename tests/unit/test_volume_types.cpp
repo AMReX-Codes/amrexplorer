@@ -171,5 +171,60 @@ int main()
         request.maximumVoxels = amrvis::maxVolumeVoxelBudget + 1;
         require(rejected(request), "an over-cap voxel budget was accepted");
     }
+    {
+        // The isosurface: a well-formed one passes, each bound refuses, and a
+        // render showing nothing at all is refused.
+        auto request = validRequest();
+        request.isosurface = amrvis::VolumeIsosurface{
+            amrvis::FieldId{2}, 0, 0.5, 0x00CC00U, 0.5F};
+        require(!rejected(request), "a well-formed isosurface was rejected");
+        request.showVolume = false;
+        require(!rejected(request), "an isosurface-only request was rejected");
+        request.isosurface->opacity = 0.0F;
+        require(!rejected(request), "a zero-opacity isosurface was rejected");
+        request.isosurface->opacity = 1.0F;
+        require(!rejected(request), "a fully opaque isosurface was rejected");
+        request = validRequest();
+        request.showVolume = false;
+        require(rejected(request), "a request rendering nothing was accepted");
+        request = validRequest();
+        request.isosurface = amrvis::VolumeIsosurface{};
+        request.isosurface->value = nan;
+        require(rejected(request), "a NaN iso-value was accepted");
+        request.isosurface->value = infinity;
+        require(rejected(request), "an infinite iso-value was accepted");
+        request.isosurface = amrvis::VolumeIsosurface{};
+        request.isosurface->opacity = 1.5F;
+        require(rejected(request), "an isosurface opacity above one was accepted");
+        request.isosurface->opacity = -0.5F;
+        require(rejected(request), "a negative isosurface opacity was accepted");
+        request.isosurface->opacity = std::numeric_limits<float>::quiet_NaN();
+        require(rejected(request), "a NaN isosurface opacity was accepted");
+        request.isosurface = amrvis::VolumeIsosurface{};
+        request.isosurface->component = -1;
+        require(rejected(request), "a negative isosurface component was accepted");
+        request.isosurface = amrvis::VolumeIsosurface{};
+        request.isosurface->color = 0x01FFFFFFU;
+        require(rejected(request), "an isosurface colour with a high byte was accepted");
+    }
+    {
+        // The isosurface's sample request is the volume's with the field and
+        // component swapped, and nothing else.
+        auto request = validRequest();
+        request.component = 1;
+        require(!amrvis::isosurfaceSampleRequestOf(request).has_value(),
+            "a request without an isosurface produced an isosurface sample");
+        request.isosurface = amrvis::VolumeIsosurface{
+            amrvis::FieldId{4}, 2, 0.5, 0x00CC00U, 0.5F};
+        const auto sample = amrvis::isosurfaceSampleRequestOf(request);
+        require(sample.has_value(), "an isosurface produced no sample request");
+        auto expected = amrvis::volumeSampleRequestOf(request);
+        require(expected.field.value == 1 && expected.component == 1,
+            "the volume sample request changed");
+        expected.field = amrvis::FieldId{4};
+        expected.component = 2;
+        require(*sample == expected,
+            "the isosurface sample request differs beyond field and component");
+    }
     return 0;
 }

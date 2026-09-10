@@ -138,7 +138,8 @@ either should preserve its invariants.
    re-derives and cross-checks every server *response* (raster size, region,
    source levels, grid-box provenance, page/particle shape, a rendered
    volume frame's size, range and sampling metrics) against the request
-   before the client trusts it.
+   before the client trusts it, and checks a volume request's fields -- the
+   volume's and the isosurface's -- against the catalog before it is sent.
 
 ## Where to start reading
 

@@ -89,6 +89,13 @@ public:
     {
         return false;
     }
+    // Whether a render may carry an isosurface or hide the volume: the same
+    // shape as supportsVolumeSampling, for the same reason -- a peer speaking
+    // an older protocol renders volumes and cannot be asked for either.
+    [[nodiscard]] virtual bool supportsVolumeIsosurface() const noexcept
+    {
+        return false;
+    }
     [[nodiscard]] virtual VolumeFrame renderVolume(
         const VolumeRenderRequest& request, StopToken cancellation = {})
     {

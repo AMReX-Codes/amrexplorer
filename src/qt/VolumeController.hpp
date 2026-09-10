@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 class QAction;
 class QTimer;
@@ -116,6 +117,10 @@ public:
         // moving camera and the frame already up is left in place until the
         // next draft replaces it.
         std::function<bool()> sequencePlaying;
+        // Every field the host offers, id and display name, derived fields
+        // included: what the isosurface may be taken from. Optional, like the
+        // rest; without it the isosurface controls list nothing.
+        std::function<std::vector<std::pair<FieldId, QString>>()> fields;
     };
 
     VolumeController(Hooks hooks, QObject* parent = nullptr);
@@ -160,6 +165,8 @@ public:
     // The last frame displayed (empty until one is), for tests.
     [[nodiscard]] const VolumeFrame& lastFrame() const noexcept { return m_lastFrame; }
     [[nodiscard]] bool renderInFlight() const noexcept { return m_inFlight; }
+    // The open window, or null, for tests that drive its controls.
+    [[nodiscard]] VolumeWindow* window() const noexcept;
 
 signals:
     // A render started (+1) or ended (-1), for the host's activity count.
@@ -175,6 +182,11 @@ private:
     void startRender();
     void pushGeometry();
     void pushPalette();
+    // The host's field list into the isosurface controls, and the chosen
+    // field's range fetched for them -- on a worker, since a remote session's
+    // first answer is a round trip; the same key is not asked twice.
+    void pushFields();
+    void fetchIsosurfaceRange();
     // The window is going away, closed here or by the user: abandon the render
     // in flight and forget that a frame was ever shown in it.
     void forgetWindow();
@@ -185,8 +197,21 @@ private:
     // every frame means it never elapses at the frame intervals the Speed
     // slider allows, and nothing renders at all.
     void abandonInFlight();
-    [[nodiscard]] QString describe(
-        const VolumeDisplayResult& result, const QString& fieldName) const;
+    [[nodiscard]] QString describe(const VolumeDisplayResult& result,
+        const QString& fieldName, const QString& isosurfaceName) const;
+
+    // What the last isosurface range was fetched for. The session by
+    // identity rather than by id, because a sequence opens a new one per
+    // frame and each has a range of its own; a late answer for an earlier key
+    // is dropped by generation.
+    struct IsosurfaceRangeKey {
+        std::weak_ptr<DatasetSession> dataset;
+        FieldId field;
+        int maximumLevel = 0;
+        CompositionPolicy composition = CompositionPolicy::FinestAvailable;
+    };
+    [[nodiscard]] static bool sameKey(
+        const IsosurfaceRangeKey& a, const IsosurfaceRangeKey& b) noexcept;
 
     Hooks m_hooks;
     QPointer<QAction> m_action;
@@ -212,6 +237,8 @@ private:
     // stretching something, and only then is it worth a draft.
     bool m_frameShown = false;
     VolumeFrame m_lastFrame;
+    std::optional<IsosurfaceRangeKey> m_isosurfaceRangeFor;
+    std::uint64_t m_isosurfaceRangeGeneration = 0;
 };
 
 } // namespace amrvis::qt

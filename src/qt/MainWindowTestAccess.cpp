@@ -438,6 +438,11 @@ bool MainWindow::volumeWindowOpenForTest() const
     return m_volumeController->windowOpen();
 }
 
+VolumeWindow* MainWindow::volumeWindowForTest() const
+{
+    return m_volumeController->window();
+}
+
 double MainWindow::volumeFrameAlphaCoverageForTest() const
 {
     const auto& frame = m_volumeController->lastFrame();

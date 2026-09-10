@@ -20,6 +20,11 @@
 #include <QAction>
 #include <QRectF>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QDoubleSpinBox>
+#include <QGroupBox>
+#include <QLabel>
+#include <QSlider>
 #include <QEvent>
 #include <QImage>
 #include <QKeyEvent>
@@ -154,6 +159,12 @@ public:
     [[nodiscard]] bool supportsVolumeSampling() const noexcept override
     {
         return supportsVolumeRendering() && samplingSupported;
+    }
+    // Likewise for isosurfaces: off, it stands in for a 1.5 server.
+    std::atomic<bool> isosurfaceSupported{true};
+    [[nodiscard]] bool supportsVolumeIsosurface() const noexcept override
+    {
+        return supportsVolumeRendering() && isosurfaceSupported;
     }
     [[nodiscard]] amrvis::VolumeFrame renderVolume(
         const amrvis::VolumeRenderRequest& request,
@@ -535,6 +546,11 @@ int main(int argc, char** argv)
                     viewRegions);
             },
             [&playingSequence] { return playingSequence; },
+            [] {
+                return std::vector<std::pair<amrvis::FieldId, QString>>{
+                    {amrvis::FieldId{0}, QString("density")},
+                    {amrvis::FieldId{1}, QString("pressure")}};
+            },
         };
     };
 
@@ -1777,6 +1793,205 @@ int main(int argc, char** argv)
         playingSequence = false;
         waitFor(application, [&] { return !controller.renderInFlight(); },
             "the last playback render did not finish");
+        controller.closeWindow();
+    }
+
+    // --- the isosurface controls reach the request ---------------------------
+    // Off by default and the volume always shown; on, the request carries the
+    // chosen field, the value, the colour and the opacity, and the volume can
+    // be hidden. The value slider spans the field's range fetched from the
+    // session (the fake's is [0, 20] at level 1) and defaults the value to its
+    // midpoint; a drag drafts and the release settles; a typed value holds. A
+    // session that cannot be asked disables the group and the request goes
+    // back to the volume alone, the tick surviving for when it can.
+    {
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the opening frame was not displayed");
+        auto* const window = volumeWindow();
+        require(window != nullptr, "no volume window on screen");
+        auto* const group = window->findChild<QGroupBox*>(
+            QStringLiteral("volumeIsosurfaceGroup"));
+        auto* const showVolume = window->findChild<QCheckBox*>(
+            QStringLiteral("volumeShowVolumeCheck"));
+        auto* const fieldCombo = window->findChild<QComboBox*>(
+            QStringLiteral("volumeIsosurfaceFieldCombo"));
+        auto* const valueSpin = window->findChild<QDoubleSpinBox*>(
+            QStringLiteral("volumeIsosurfaceValueSpin"));
+        auto* const valueSlider = window->findChild<QSlider*>(
+            QStringLiteral("volumeIsosurfaceValueSlider"));
+        auto* const opacitySlider = window->findChild<QSlider*>(
+            QStringLiteral("volumeIsosurfaceOpacitySlider"));
+        auto* const status = window->findChild<QLabel*>(
+            QStringLiteral("volumeStatusLabel"));
+        require(group != nullptr && showVolume != nullptr && fieldCombo != nullptr
+                && valueSpin != nullptr && valueSlider != nullptr
+                && opacitySlider != nullptr && status != nullptr,
+            "the isosurface controls are missing from the volume window");
+        {
+            const auto opening = session->requestsSoFar().back();
+            require(!opening.isosurface.has_value() && opening.showVolume,
+                "the opening request carried an isosurface nobody asked for");
+        }
+        require(!group->isChecked() && !showVolume->isEnabled()
+                && showVolume->isChecked(),
+            "with no isosurface the volume box still had a say");
+        require(fieldCombo->count() == 2 && fieldCombo->currentIndex() == 0
+                && fieldCombo->currentText() == QStringLiteral("density"),
+            "the isosurface field list is not the host's, or does not follow "
+            "the volume's field");
+        // The range comes from a worker; the default value follows it.
+        waitFor(application, [&] { return valueSpin->value() == 10.0; },
+            "the field's range did not give the default iso-value");
+        require(!valueSlider->isEnabled(),
+            "the value slider was enabled before there was a surface");
+
+        auto before = session->requests.load();
+        QMetaObject::invokeMethod(window, [group] { group->setChecked(true); });
+        waitFor(application,
+            [&] { return session->requests == before + 1 && !controller.renderInFlight(); },
+            "ticking the isosurface did not render");
+        auto latest = session->requestsSoFar().back();
+        require(latest.isosurface.has_value()
+                && latest.isosurface->field == amrvis::FieldId{0}
+                && latest.isosurface->component == 0
+                && latest.isosurface->value == 10.0
+                && latest.isosurface->color == 0xFFFFFFU
+                && latest.isosurface->opacity == 1.0F && latest.showVolume
+                && latest.samplesPerVoxel == 2,
+            "the request does not carry the isosurface the controls describe");
+        require(showVolume->isEnabled() && valueSlider->isEnabled()
+                && valueSlider->value() == 500,
+            "the volume box and the slider did not follow the surface");
+        waitFor(application, [&] { return observed.frames >= 2; },
+            "the isosurface frame was not displayed");
+        require(status->text().contains(QStringLiteral("iso density = 10")),
+            "the status line does not name the isosurface");
+
+        // Hiding the volume.
+        before = session->requests.load();
+        QMetaObject::invokeMethod(
+            window, [showVolume] { showVolume->setChecked(false); });
+        waitFor(application,
+            [&] { return session->requests == before + 1 && !controller.renderInFlight(); },
+            "hiding the volume did not render");
+        latest = session->requestsSoFar().back();
+        require(!latest.showVolume && latest.isosurface.has_value(),
+            "the request still showed the volume");
+        waitFor(application, [&] { return !status->text().contains(QStringLiteral("range")); },
+            "the status line kept a range for a hidden volume");
+
+        // A drag of the value slider drafts at the dragged value -- a quarter
+        // of the way is 5 -- and the release renders it in full.
+        before = session->requests.load();
+        QMetaObject::invokeMethod(window, [valueSlider] {
+            valueSlider->setSliderDown(true);
+            valueSlider->setValue(250);
+        });
+        waitFor(application, [&] { return session->requests == before + 1; },
+            "the slider drag did not draft");
+        latest = session->requestsSoFar().back();
+        require(latest.samplesPerVoxel == 1 && latest.isosurface.has_value()
+                && std::abs(latest.isosurface->value - 5.0) < 1.0e-9
+                && valueSpin->value() == 5.0,
+            "the drag did not draft at the dragged value");
+        QMetaObject::invokeMethod(window, [valueSlider] {
+            valueSlider->setSliderDown(false);
+            emit valueSlider->sliderReleased();
+        });
+        waitFor(application,
+            [&] { return session->requests == before + 2 && !controller.renderInFlight(); },
+            "the release did not render in full");
+        latest = session->requestsSoFar().back();
+        require(latest.samplesPerVoxel == 2
+                && std::abs(latest.isosurface->value - 5.0) < 1.0e-9,
+            "the settled frame is not at the released value");
+
+        // A typed value is kept, and the slider follows it.
+        before = session->requests.load();
+        QMetaObject::invokeMethod(window, [valueSpin] { valueSpin->setValue(15.0); });
+        waitFor(application,
+            [&] { return session->requests == before + 1 && !controller.renderInFlight(); },
+            "a typed value did not render");
+        latest = session->requestsSoFar().back();
+        require(latest.isosurface->value == 15.0 && valueSlider->value() == 750,
+            "the typed value did not reach the request or the slider");
+
+        // Opacity and colour.
+        before = session->requests.load();
+        QMetaObject::invokeMethod(
+            window, [opacitySlider] { opacitySlider->setValue(40); });
+        waitFor(application,
+            [&] { return session->requests == before + 1 && !controller.renderInFlight(); },
+            "the opacity did not render");
+        latest = session->requestsSoFar().back();
+        require(std::abs(latest.isosurface->opacity - 0.4F) < 1.0e-6F,
+            "the opacity did not reach the request");
+        before = session->requests.load();
+        QMetaObject::invokeMethod(window, [window] {
+            window->setIsosurfaceColor(QColor(0x40, 0xC0, 0xFF));
+            emit window->isosurfaceChanged();
+        });
+        waitFor(application,
+            [&] { return session->requests == before + 1 && !controller.renderInFlight(); },
+            "the colour did not render");
+        latest = session->requestsSoFar().back();
+        require(latest.isosurface->color == 0x40C0FFU,
+            "the colour did not reach the request");
+
+        // Another field: the request names it, and once its range arrives the
+        // value defaults again -- the typed 15 belonged to the other field.
+        QMetaObject::invokeMethod(
+            window, [fieldCombo] { fieldCombo->setCurrentIndex(1); });
+        waitFor(application, [&] {
+            if (controller.renderInFlight()) {
+                return false;
+            }
+            const auto request = session->requestsSoFar().back();
+            return request.isosurface.has_value()
+                && request.isosurface->field == amrvis::FieldId{1}
+                && request.isosurface->value == 10.0;
+        }, "the new field did not render at its range's midpoint");
+
+        // A session that cannot be asked: the group is disabled, the request
+        // is the volume alone, and the tick and the hidden volume come back
+        // with a session that can.
+        before = session->requests.load();
+        session->isosurfaceSupported = false;
+        controller.configureForDataset();
+        waitFor(application,
+            [&] { return session->requests > before && !controller.renderInFlight(); },
+            "the unsupporting session did not render");
+        latest = session->requestsSoFar().back();
+        require(!group->isEnabled() && !latest.isosurface.has_value()
+                && latest.showVolume,
+            "a session that cannot be asked was asked for an isosurface");
+        before = session->requests.load();
+        session->isosurfaceSupported = true;
+        controller.configureForDataset();
+        waitFor(application, [&] {
+            if (session->requests <= before || controller.renderInFlight()) {
+                return false;
+            }
+            const auto request = session->requestsSoFar().back();
+            return request.isosurface.has_value() && !request.showVolume;
+        }, "the isosurface and the hidden volume did not come back");
+        require(group->isEnabled() && group->isChecked() && !showVolume->isChecked(),
+            "the controls did not come back as they were");
+
+        // Unticking the group: the volume is drawn whatever the box said.
+        before = session->requests.load();
+        QMetaObject::invokeMethod(window, [group] { group->setChecked(false); });
+        waitFor(application,
+            [&] { return session->requests == before + 1 && !controller.renderInFlight(); },
+            "unticking the isosurface did not render");
+        latest = session->requestsSoFar().back();
+        require(!latest.isosurface.has_value() && latest.showVolume
+                && !showVolume->isEnabled() && showVolume->isChecked(),
+            "unticking the isosurface left the volume hidden");
         controller.closeWindow();
     }
     return 0;

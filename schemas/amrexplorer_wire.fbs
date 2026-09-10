@@ -410,6 +410,18 @@ table RenderedFrameRequest {
   // a server that predates 1.3 does -- but a 1.3 client never relies on that,
   // because the version gate stops it asking such a server for Linear at all.
   sampling:SamplingPolicy (id: 20);
+  // Protocol 1.6: whether the volume is drawn at all, and the isosurface --
+  // its own field and component, the iso-value in field units, a 0x00RRGGBB
+  // colour and a [0, 1] opacity applied once per crossing. has_isosurface
+  // rather than a nested table so a 1.5 peer sees defaults it already
+  // understands; the version gate stops a 1.6 client sending either to it.
+  show_volume:bool = true (id: 21);
+  has_isosurface:bool (id: 22);
+  isosurface_field:uint (id: 23);
+  isosurface_component:int (id: 24);
+  isosurface_value:double (id: 25);
+  isosurface_color:uint (id: 26);
+  isosurface_opacity:float (id: 27);
 }
 
 // Premultiplied 0xAARRGGBB pixels, row 0 at the top, exactly width x height.

@@ -184,6 +184,15 @@ void VolumeController::showWindow(QWidget* parent)
     connect(window, &VolumeWindow::regionLimitChanged, this, endInteraction);
     connect(window, &VolumeWindow::samplingChanged, this, endInteraction);
     connect(window, &VolumeWindow::paletteAlphaChanged, this, endInteraction);
+    // The isosurface: its sliders draft while they move, like the opacity
+    // curve; everything else is one discrete change. A change may name a new
+    // field, whose range the slider needs.
+    connect(window, &VolumeWindow::isosurfaceDragged, this, beginInteraction);
+    connect(window, &VolumeWindow::isosurfaceChanged, this,
+        [this, endInteraction] {
+            fetchIsosurfaceRange();
+            endInteraction();
+        });
     // A close from the title bar: closeWindow drops this connection before
     // closing, so reaching here means the user closed the window and nothing
     // else has handled it.
@@ -232,11 +241,19 @@ void VolumeController::forgetWindow()
     // whole pixel buffer for the life of the process and leaves lastFrame()
     // describing a window that no longer exists.
     m_lastFrame = VolumeFrame{};
+    // And so did the range fetched for its isosurface controls.
+    m_isosurfaceRangeFor.reset();
+    ++m_isosurfaceRangeGeneration;
 }
 
 bool VolumeController::windowOpen() const noexcept
 {
     return !m_window.isNull();
+}
+
+VolumeWindow* VolumeController::window() const noexcept
+{
+    return m_window.data();
 }
 
 void VolumeController::pushGeometry()
@@ -251,8 +268,12 @@ void VolumeController::pushGeometry()
         // can, a server speaking an older protocol cannot. Pushed here so it
         // follows the dataset, the way the palette's alpha ramp does.
         m_window->setSamplingSelectable(dataset->supportsVolumeSampling());
+        // And whether it can be asked for an isosurface, the same way.
+        m_window->setIsosurfaceSelectable(dataset->supportsVolumeIsosurface());
     }
     pushPalette();
+    pushFields();
+    fetchIsosurfaceRange();
     slicePositionsChanged();
     slicePlanesVisibilityChanged();
 }
@@ -264,6 +285,80 @@ void VolumeController::pushPalette()
         m_window->setColorPalette(&palette);
         m_window->setPaletteHasAlpha(palette.hasAlphaRamp());
     }
+}
+
+void VolumeController::pushFields()
+{
+    if (!m_window || !m_hooks.fields) {
+        return;
+    }
+    const auto field = m_hooks.field ? m_hooks.field() : std::nullopt;
+    m_window->setIsosurfaceFields(
+        m_hooks.fields(), field ? field->first : FieldId{});
+}
+
+bool VolumeController::sameKey(
+    const IsosurfaceRangeKey& a, const IsosurfaceRangeKey& b) noexcept
+{
+    // Two weak_ptrs to one control block: neither orders before the other.
+    return !a.dataset.owner_before(b.dataset) && !b.dataset.owner_before(a.dataset)
+        && a.field == b.field && a.maximumLevel == b.maximumLevel
+        && a.composition == b.composition;
+}
+
+void VolumeController::fetchIsosurfaceRange()
+{
+    if (!m_window) {
+        return;
+    }
+    const auto dataset = m_hooks.dataset ? m_hooks.dataset() : nullptr;
+    const auto field = m_window->isosurfaceField();
+    if (!dataset || !field || !dataset->supportsVolumeIsosurface()) {
+        return;
+    }
+    const auto level = m_hooks.levelSelection
+        ? m_hooks.levelSelection() : LevelSelection{};
+    const RangeRequest request{
+        .field = *field,
+        .maximumLevel = std::clamp(
+            level.maximumLevel, 0, dataset->metadata().finestLevel),
+        .composition = level.composition,
+        .scope = RangeScope::File,
+    };
+    const IsosurfaceRangeKey key{
+        dataset, request.field, request.maximumLevel, request.composition};
+    if (m_isosurfaceRangeFor && sameKey(*m_isosurfaceRangeFor, key)) {
+        return;
+    }
+    m_isosurfaceRangeFor = key;
+    const auto generation = ++m_isosurfaceRangeGeneration;
+    // Known without a read, so a field with no statistics is answered at
+    // once rather than after a round trip that would say the same.
+    if (!dataset->rangeAvailable(request)) {
+        m_window->setIsosurfaceValueRange(std::nullopt);
+        return;
+    }
+    auto* watcher = new QFutureWatcher<std::optional<ValueRange>>(this);
+    connect(watcher, &QFutureWatcher<std::optional<ValueRange>>::finished, this,
+        [this, watcher, generation] {
+            std::optional<ValueRange> range;
+            try {
+                range = watcher->future().takeResult();
+            } catch (const std::exception&) {
+                // A range that could not be read is a range that is not known:
+                // the spin box still works, and the render reports its own
+                // failure if the session is really gone.
+                range.reset();
+            }
+            watcher->deleteLater();
+            if (generation != m_isosurfaceRangeGeneration || !m_window
+                || (m_hooks.isShuttingDown && m_hooks.isShuttingDown())) {
+                return;
+            }
+            m_window->setIsosurfaceValueRange(range);
+        });
+    watcher->setFuture(QtConcurrent::run(
+        [dataset, request] { return dataset->requestRange(request); }));
 }
 
 void VolumeController::configureForDataset()
@@ -359,6 +454,10 @@ void VolumeController::refresh()
         return;
     }
     pushPalette();
+    // The field list may have changed (derived fields added or removed), and
+    // with it the field the isosurface follows and the range it spans.
+    pushFields();
+    fetchIsosurfaceRange();
     scheduleRender();
 }
 
@@ -477,6 +576,13 @@ void VolumeController::startRender()
     // them, which is exactly where reading one voxel per sample terraces.
     request.sampling = m_window->sampling();
     request.maximumVoxels = quality.maximumVoxels;
+    // The window keeps these consistent: with no isosurface the volume is
+    // shown, so the request always draws something.
+    request.showVolume = m_window->showVolume();
+    request.isosurface = m_window->isosurface();
+    // Read now for the reason the field name is: the combo may show another
+    // field by the time the frame lands.
+    const auto isosurfaceName = m_window->isosurfaceFieldName();
 
     const auto generation = ++m_generation;
     m_stopSource = StopSource{};
@@ -491,7 +597,7 @@ void VolumeController::startRender()
     const auto fieldName = field->second;
     auto* watcher = new QFutureWatcher<VolumeDisplayResult>(this);
     connect(watcher, &QFutureWatcher<VolumeDisplayResult>::finished, this,
-        [this, watcher, generation, cancellation, fieldName] {
+        [this, watcher, generation, cancellation, fieldName, isosurfaceName] {
             emit renderActivityChanged(-1);
             m_inFlight = false;
             if (m_hooks.isShuttingDown && m_hooks.isShuttingDown()) {
@@ -502,7 +608,7 @@ void VolumeController::startRender()
             try {
                 auto result = watcher->future().takeResult();
                 if (current) {
-                    auto status = describe(result, fieldName);
+                    auto status = describe(result, fieldName, isosurfaceName);
                     m_lastFrame = std::move(result.frame);
                     m_window->showFrame(
                         m_lastFrame, result.request.camera, status);
@@ -572,8 +678,8 @@ void VolumeController::startRender()
         }));
 }
 
-QString VolumeController::describe(
-    const VolumeDisplayResult& result, const QString& fieldName) const
+QString VolumeController::describe(const VolumeDisplayResult& result,
+    const QString& fieldName, const QString& isosurfaceName) const
 {
     const auto& frame = result.frame;
     const auto& range = frame.usedRange;
@@ -596,17 +702,27 @@ QString VolumeController::describe(
     const auto elapsed = shown >= 1000.0
         ? tr("%1 s").arg(shown / 1000.0, 0, 'f', 2)
         : tr("%1 ms").arg(shown, 0, 'f', whole ? 0 : 1);
-    return tr("%1  level %2  range [%3, %4]%5\ngrid %6 x %7 x %8 (%9)  %10")
-        .arg(fieldName)
-        .arg(result.request.maximumLevel)
-        .arg(range.minimum)
-        .arg(range.maximum)
-        .arg(range.logarithmic ? tr(" log") : QString())
-        .arg(frame.metrics.gridDims[0])
-        .arg(frame.metrics.gridDims[1])
-        .arg(frame.metrics.gridDims[2])
-        .arg(frame.metrics.gridFromCache ? tr("cached") : tr("sampled"))
-        .arg(elapsed);
+    auto text = tr("%1  level %2").arg(fieldName).arg(result.request.maximumLevel);
+    // The range only while the volume is mapped through it: with the volume
+    // hidden the frame carries a placeholder, which is not a number to show.
+    if (result.request.showVolume) {
+        text += tr("  range [%1, %2]%3")
+                    .arg(range.minimum)
+                    .arg(range.maximum)
+                    .arg(range.logarithmic ? tr(" log") : QString());
+    }
+    if (result.request.isosurface) {
+        text += tr("  iso %1 = %2")
+                    .arg(isosurfaceName)
+                    .arg(result.request.isosurface->value);
+    }
+    text += tr("\ngrid %1 x %2 x %3 (%4)  %5")
+                .arg(frame.metrics.gridDims[0])
+                .arg(frame.metrics.gridDims[1])
+                .arg(frame.metrics.gridDims[2])
+                .arg(frame.metrics.gridFromCache ? tr("cached") : tr("sampled"))
+                .arg(elapsed);
+    return text;
 }
 
 } // namespace amrvis::qt

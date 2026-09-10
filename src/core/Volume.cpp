@@ -67,6 +67,37 @@ VolumeSampleRequest volumeSampleRequestOf(const VolumeRenderRequest& request)
     return sample;
 }
 
+std::optional<VolumeSampleRequest> isosurfaceSampleRequestOf(
+    const VolumeRenderRequest& request)
+{
+    if (!request.isosurface) {
+        return std::nullopt;
+    }
+    auto sample = volumeSampleRequestOf(request);
+    sample.field = request.isosurface->field;
+    sample.component = request.isosurface->component;
+    return sample;
+}
+
+std::vector<std::string> validateVolumeIsosurface(const VolumeIsosurface& iso)
+{
+    std::vector<std::string> errors;
+    if (iso.component < 0) {
+        errors.emplace_back("isosurface component must be non-negative");
+    }
+    if (!std::isfinite(iso.value)) {
+        errors.emplace_back("isosurface value must be finite");
+    }
+    if (iso.color > 0x00FFFFFFU) {
+        errors.emplace_back("isosurface color must be 0x00RRGGBB");
+    }
+    if (!(iso.opacity >= 0.0F) || !(iso.opacity <= 1.0F)) {
+        errors.emplace_back(
+            "isosurface opacity must be finite and within [0, 1]");
+    }
+    return errors;
+}
+
 std::vector<std::string> validateVolumeSampleRequest(
     const VolumeSampleRequest& request, int datasetDimension)
 {
@@ -141,6 +172,17 @@ std::vector<std::string> validateVolumeRenderRequest(
     if (request.samplesPerVoxel < 1
         || request.samplesPerVoxel > maxVolumeSamplesPerVoxel) {
         errors.emplace_back("samples per voxel must be within [1, 8]");
+    }
+    // The volume's own fields are checked whether or not it is shown: the
+    // client always has them, and the result validator needs a usable range.
+    if (!request.showVolume && !request.isosurface) {
+        errors.emplace_back(
+            "a volume render must show the volume or an isosurface");
+    }
+    if (request.isosurface) {
+        for (const auto& error : validateVolumeIsosurface(*request.isosurface)) {
+            errors.push_back(error);
+        }
     }
     return errors;
 }

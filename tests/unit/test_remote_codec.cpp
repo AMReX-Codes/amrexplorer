@@ -670,6 +670,40 @@ int main()
     volume.maximumVoxels = 1 << 20;
     require(codec::fromWire(codec::toWire(volume)) == volume,
         "a volume request with a range did not round-trip");
+    // Protocol 1.6: the isosurface and the volume flag round-trip, the flag
+    // on the wire says when the isosurface fields mean something, and a
+    // non-finite value or opacity is refused.
+    {
+        auto withIsosurface = volume;
+        withIsosurface.isosurface = VolumeIsosurface{FieldId{3}, 1, 0.75, 0x40C0FFU, 0.6F};
+        require(codec::fromWire(codec::toWire(withIsosurface)) == withIsosurface,
+            "a volume request with an isosurface did not round-trip");
+        withIsosurface.showVolume = false;
+        require(codec::fromWire(codec::toWire(withIsosurface)) == withIsosurface,
+            "an isosurface-only request did not round-trip");
+        const auto wire = codec::toWire(withIsosurface);
+        require(wire.has_isosurface && !wire.show_volume && wire.isosurface_field == 3
+                && wire.isosurface_component == 1 && wire.isosurface_value == 0.75
+                && wire.isosurface_color == 0x40C0FFU,
+            "the isosurface fields are not what the wire carries");
+        const auto plain = codec::toWire(volume);
+        require(!plain.has_isosurface && plain.show_volume,
+            "a request without an isosurface set the wire flag");
+        auto bad = wire;
+        bad.isosurface_value = std::numeric_limits<double>::quiet_NaN();
+        requireRejected([&] { static_cast<void>(codec::fromWire(bad)); },
+            "a NaN isosurface value was accepted");
+        bad = wire;
+        bad.isosurface_opacity = std::numeric_limits<float>::infinity();
+        requireRejected([&] { static_cast<void>(codec::fromWire(bad)); },
+            "an infinite isosurface opacity was accepted");
+        // Without the flag the same fields are ignored, as a 1.5 peer's
+        // defaults would be.
+        bad = wire;
+        bad.has_isosurface = false;
+        require(!codec::fromWire(bad).isosurface.has_value(),
+            "isosurface fields without the flag produced an isosurface");
+    }
     // The value on the wire, not just that it survives a round trip. Two
     // transposed mappings are inverses of each other, so every round-trip
     // check in the suite passes while a peer on the other side of a real

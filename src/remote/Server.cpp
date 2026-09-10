@@ -839,6 +839,12 @@ private:
             throw RemoteError(ErrorCode::UnsupportedProtocol,
                 "smooth volume sampling requires protocol 1.3");
         }
+        // Likewise for the isosurface fields: a 1.5 client has none to send.
+        if ((request.isosurface || !request.showVolume)
+            && m_selectedMinorVersion < isosurfaceMinorVersion) {
+            throw RemoteError(ErrorCode::UnsupportedProtocol,
+                "isosurfaces require protocol 1.6");
+        }
         validateVolumeBound(request);
         // The server's own voxel cap applies on top of the client's budget.
         request.maximumVoxels = std::min<std::uint64_t>(

@@ -2,19 +2,28 @@
 
 #include <amrexplorer/core/Metadata.hpp>
 #include <amrexplorer/core/OrthoProjection.hpp>
+#include <amrexplorer/core/Request.hpp>
+#include <amrexplorer/core/Statistics.hpp>
 #include <amrexplorer/core/Volume.hpp>
 #include <amrexplorer/pipeline/VolumePipeline.hpp>
 
+#include <QColor>
 #include <QMainWindow>
 #include <QSize>
 #include <QString>
 
 #include <cstdint>
+#include <optional>
+#include <utility>
+#include <vector>
 
 class QCheckBox;
 class QComboBox;
+class QGroupBox;
 class QLabel;
+class QPushButton;
 class QSlider;
+class QVBoxLayout;
 
 namespace amrvis {
 class Palette;
@@ -24,6 +33,7 @@ namespace amrvis::qt {
 
 class IsoWidget;
 class OpacityCurveWidget;
+class ScientificDoubleSpinBox;
 
 // The Volume Rendering window: an IsoWidget in the middle -- the same
 // orthographic view as the main window's iso quadrant, drag to rotate, wheel
@@ -55,6 +65,35 @@ public:
     // older protocol renders volumes but always at the nearest voxel, so the
     // control is offered only when asking for anything else would be heard.
     void setSamplingSelectable(bool selectable);
+    // The fields an isosurface may be taken from -- the main window's list,
+    // id and display name -- and the one to select while the user has not
+    // chosen (the volume's own field). A chosen field is kept by name across
+    // refills, since ids shift when derived fields come and go. Silent: the
+    // host that pushes the list schedules its own render.
+    void setIsosurfaceFields(
+        const std::vector<std::pair<FieldId, QString>>& fields, FieldId fallback);
+    // The isosurface field's value range: the slider's span, and the default
+    // iso-value (its midpoint) until the user picks one. nullopt when the
+    // session has none, which disables the slider and leaves the spin box as
+    // the way in.
+    void setIsosurfaceValueRange(std::optional<ValueRange> range);
+    // Whether the session can be asked for an isosurface at all, or to hide
+    // the volume (a server speaking an older protocol cannot): the shape of
+    // setSamplingSelectable, for the same reason.
+    void setIsosurfaceSelectable(bool selectable);
+    // For tests and the colour dialog: the surface's colour.
+    void setIsosurfaceColor(const QColor& color);
+
+    // What the render should draw. showVolume is true whenever there is no
+    // isosurface in effect -- a render has to draw something -- and otherwise
+    // follows its box; isosurface is nullopt while the group is off or the
+    // session cannot be asked.
+    [[nodiscard]] bool showVolume() const;
+    [[nodiscard]] std::optional<VolumeIsosurface> isosurface() const;
+    // The field the isosurface controls name whether or not the surface is on,
+    // so the host can have its range ready before the toggle.
+    [[nodiscard]] std::optional<FieldId> isosurfaceField() const;
+    [[nodiscard]] QString isosurfaceFieldName() const;
 
     // The frame to draw, the camera it was rendered with (so a camera moved
     // since can be corrected for), and a line of status text; and whether a
@@ -94,14 +133,27 @@ signals:
     void qualityChanged();
     void regionLimitChanged();
     void samplingChanged();
+    // The isosurface controls: isosurfaceChanged is a discrete change (the
+    // toggles, the field, the colour, a committed value), isosurfaceDragged a
+    // slider still moving -- the same split as rampChanged.
+    void isosurfaceChanged();
+    void isosurfaceDragged();
     void viewResized();
     void viewScaleChanged();
 
 private:
     void buildControls();
+    void buildIsosurfaceControls(QVBoxLayout* layout, QWidget* panel);
     // Follows the palette-alpha box: the curve is editable only when it is the
     // opacity source.
     void syncCurveEnabled();
+    // The volume box and the value slider follow the isosurface group and the
+    // session: the box has no say while there is no surface (the volume is
+    // then all there is to draw), the slider none while no range spans it.
+    void syncIsosurfaceEnabled();
+    void chooseIsosurfaceColor();
+    void setIsosurfaceValueFromSlider(int position);
+    void syncIsosurfaceSlider();
     void exportImage();
 
     IsoWidget* m_view = nullptr;
@@ -117,6 +169,23 @@ private:
     bool m_smoothWanted = true;
     QCheckBox* m_boxesCheck = nullptr;
     QCheckBox* m_outlineCheck = nullptr;
+    QCheckBox* m_showVolumeCheck = nullptr;
+    QGroupBox* m_isosurfaceGroup = nullptr;
+    QComboBox* m_isosurfaceField = nullptr;
+    ScientificDoubleSpinBox* m_isosurfaceValue = nullptr;
+    QSlider* m_isosurfaceSlider = nullptr;
+    QPushButton* m_isosurfaceColor = nullptr;
+    QSlider* m_isosurfaceOpacity = nullptr;
+    QColor m_isosurfaceColorValue = Qt::white;
+    std::optional<ValueRange> m_isosurfaceRange;
+    // Whether the user has picked a field, and a value: until they do, the
+    // field follows the volume's and the value the range's midpoint.
+    bool m_isosurfaceFieldChosen = false;
+    bool m_isosurfaceValueChosen = false;
+    bool m_isosurfaceSelectable = true;
+    // What was last asked of the volume box while it had a say; see
+    // m_smoothWanted for why the box cannot hold it itself.
+    bool m_volumeWanted = true;
     QLabel* m_status = nullptr;
     QLabel* m_rendering = nullptr;
 };

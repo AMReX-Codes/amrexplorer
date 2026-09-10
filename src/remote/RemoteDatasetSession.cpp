@@ -191,6 +191,11 @@ bool RemoteDatasetSession::supportsVolumeSampling() const noexcept
     return supportsVolumeRendering() && m_connection->supportsVolumeSampling();
 }
 
+bool RemoteDatasetSession::supportsVolumeIsosurface() const noexcept
+{
+    return supportsVolumeRendering() && m_connection->supportsVolumeIsosurface();
+}
+
 VolumeFrame RemoteDatasetSession::renderVolume(
     const VolumeRenderRequest& request, StopToken cancellation)
 {
@@ -215,6 +220,12 @@ VolumeFrame RemoteDatasetSession::renderVolume(
     if (request.sampling == SamplingPolicy::Linear
         && !m_connection->supportsVolumeSampling()) {
         throw std::runtime_error(volumeSamplingUnsupportedMessage);
+    }
+    // The same for an isosurface or a hidden volume: a 1.5 server would draw
+    // the volume alone and nothing downstream could tell.
+    if ((request.isosurface || !request.showVolume)
+        && !m_connection->supportsVolumeIsosurface()) {
+        throw std::runtime_error(volumeIsosurfaceUnsupportedMessage);
     }
     validateSessionVolumeRequest(m_metadata, m_id, request);
     return refusingInvalidResponses(*m_connection, [&] {

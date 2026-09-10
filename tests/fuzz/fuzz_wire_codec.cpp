@@ -244,7 +244,16 @@ void checkConverted(const fb::RenderedFrameRequestT& wire,
         // only against a peer that disagrees, which is what the composition
         // check above exists to catch.
         || roundTripped.sampling != wire.sampling
-        || result.outputSize[0] != wire.width || result.outputSize[1] != wire.height) {
+        || result.outputSize[0] != wire.width || result.outputSize[1] != wire.height
+        // Protocol 1.6: the isosurface arrives exactly when the flag says so,
+        // with a finite value and opacity, and the volume flag is carried.
+        || result.showVolume != wire.show_volume
+        || result.isosurface.has_value() != wire.has_isosurface
+        || (result.isosurface
+            && (!finite(result.isosurface->value)
+                || !std::isfinite(result.isosurface->opacity)
+                || result.isosurface->field.value != wire.isosurface_field
+                || result.isosurface->color != wire.isosurface_color))) {
         fail("RenderedFrameRequest converter accepted a bad request");
     }
 }
@@ -826,6 +835,12 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         request.transfer.opacities = {0.0F, 0.25F, 0.5F, 1.0F};
         request.samplesPerVoxel = 3;
         request.maximumVoxels = 4096;
+        // Protocol 1.6: an isosurface, so its fields are in the buffer to be
+        // mutated, and the volume hidden, since true is the schema default
+        // and would be left out.
+        request.showVolume = false;
+        request.isosurface = amrvis::VolumeIsosurface{
+            amrvis::FieldId{2}, 1, 0.75, 0x40C0FFU, 0.6F};
         add(codec::toWire(request));
         amrvis::VolumeFrame frame;
         frame.width = 2;

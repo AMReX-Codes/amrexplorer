@@ -64,8 +64,7 @@ VolumeRange visibleVolumeRange(const VolumeGrid& grid, bool logarithmic,
     if (!extrema) {
         // Nothing finite to show. A logarithmic request still wants a
         // logarithmic axis, so the neutral range keeps the mapping.
-        return logarithmic ? VolumeRange{1.0, 10.0, true}
-                           : VolumeRange{0.0, 1.0, false};
+        return neutralVolumeRange(logarithmic);
     }
     if (logarithmic && extrema->first > 0.0) {
         const auto [minimum, maximum]
@@ -80,6 +79,12 @@ VolumeRange visibleVolumeRange(const VolumeGrid& grid, bool logarithmic,
     const auto [minimum, maximum]
         = paddedIfDegenerate(extrema->first, extrema->second, false);
     return {minimum, maximum, false};
+}
+
+VolumeRange neutralVolumeRange(bool logarithmic) noexcept
+{
+    return logarithmic ? VolumeRange{1.0, 10.0, true}
+                       : VolumeRange{0.0, 1.0, false};
 }
 
 std::size_t VolumeGridKeyHash::operator()(const VolumeGridKey& key) const noexcept
@@ -350,36 +355,44 @@ VolumeFrame LocalDatasetSession::renderVolume(const VolumeRenderRequest& request
         volumeGridDims(m_metadata, request.region, maximumLevel,
             request.maximumVoxels)};
 
+    // A grid as the cache hands it out -- pinned for as long as this lives,
+    // or owned here when it was too large for the cache -- and whether it
+    // was already there.
+    struct AcquiredGrid {
+        decltype(m_volumeGrids)::Handle pin;
+        std::shared_ptr<const VolumeGrid> grid;
+        bool fromCache = false;
+    };
+    VolumeRenderMetrics metrics;
     // The grid: from the cache when the same sample was rendered before
     // (a camera change re-casts it), else sampled now and cached -- unless
     // it is larger than the whole grid budget, in which case it is rendered
-    // from the local copy and forgotten.
-    VolumeRenderMetrics metrics;
-    auto handle = m_volumeGrids.findAndPin(key);
-    std::shared_ptr<const VolumeGrid> grid;
-    if (handle) {
-        metrics.gridFromCache = true;
-        grid = handle.value();
-    } else {
+    // from the local copy and forgotten. Run once per grid the render reads,
+    // so the sample metrics accumulate.
+    const auto acquire = [&](const VolumeGridKey& gridKey,
+                             const VolumeSampleRequest& sample) {
+        AcquiredGrid acquired;
+        acquired.pin = m_volumeGrids.findAndPin(gridKey);
+        if (acquired.pin) {
+            acquired.fromCache = true;
+            acquired.grid = acquired.pin.value();
+            return acquired;
+        }
         const auto started = std::chrono::steady_clock::now();
-        // Through the shared helper, so the fields the validator checked are
-        // the fields the sampler gets. Hand-copying them means a field added
-        // to VolumeSampleRequest is validated and then silently dropped here.
-        auto sampled = VolumeQuery(*dataset).execute(
-            volumeSampleRequestOf(request), cancellation);
-        metrics.sampleMicroseconds = static_cast<std::uint64_t>(
+        auto sampled = VolumeQuery(*dataset).execute(sample, cancellation);
+        metrics.sampleMicroseconds += static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - started).count());
-        metrics.candidateBlocks = sampled.metrics.candidateBlocks;
-        metrics.blocksRead = sampled.metrics.blocksRead;
-        metrics.cacheHits = sampled.metrics.cacheHits;
-        metrics.payloadBytesRead = sampled.metrics.payloadBytesRead;
+        metrics.candidateBlocks += sampled.metrics.candidateBlocks;
+        metrics.blocksRead += sampled.metrics.blocksRead;
+        metrics.cacheHits += sampled.metrics.cacheHits;
+        metrics.payloadBytesRead += sampled.metrics.payloadBytesRead;
         const auto bytes = static_cast<std::uint64_t>(sampled.grid.values.size())
             * sizeof(decltype(VolumeGrid::values)::value_type);
         auto owned = std::make_shared<const VolumeGrid>(std::move(sampled.grid));
         try {
-            handle = m_volumeGrids.insertAndPin(key, owned, bytes);
-            grid = handle.value();
+            acquired.pin = m_volumeGrids.insertAndPin(gridKey, owned, bytes);
+            acquired.grid = acquired.pin.value();
             // A racing thread may have inserted this key first, in which
             // case insertAndPin returns its grid and ours is discarded. The
             // grid rendered did come from the cache, so say so -- but the
@@ -387,16 +400,45 @@ VolumeFrame LocalDatasetSession::renderVolume(const VolumeRenderRequest& request
             // cost what they cost, so those stay. Zeroing them would make the
             // diagnostics understate the work the process actually did, which
             // is the opposite error.
-            if (grid != owned) {
-                metrics.gridFromCache = true;
-            }
+            acquired.fromCache = acquired.grid != owned;
         } catch (const CacheBudgetExceeded&) {
             // Too big for the grid cache: render it anyway, uncached. (The
             // block cache's own budget failures come out of the sample above
             // and propagate, so the caller can fall back to a coarser level.)
-            grid = std::move(owned);
+            acquired.grid = std::move(owned);
+        }
+        return acquired;
+    };
+    // Through the shared helpers, so the fields the validator checked are
+    // the fields the sampler gets. Hand-copying them means a field added to
+    // VolumeSampleRequest is validated and then silently dropped here.
+    std::optional<AcquiredGrid> volume;
+    if (request.showVolume) {
+        volume = acquire(key, volumeSampleRequestOf(request));
+    }
+    // The isosurface's grid shares everything but the field, so an
+    // isosurface of the volume's own field reads the volume's grid rather
+    // than acquiring it twice -- which on the uncached path would sample the
+    // field twice.
+    std::optional<AcquiredGrid> isosurface;
+    const VolumeGrid* isosurfaceGrid = nullptr;
+    if (request.isosurface) {
+        auto isosurfaceKey = key;
+        isosurfaceKey.field = request.isosurface->field;
+        isosurfaceKey.component = request.isosurface->component;
+        if (volume && isosurfaceKey == key) {
+            isosurfaceGrid = volume->grid.get();
+        } else {
+            isosurface = acquire(isosurfaceKey, *isosurfaceSampleRequestOf(request));
+            isosurfaceGrid = isosurface->grid.get();
         }
     }
+    metrics.gridFromCache = (!volume || volume->fromCache)
+        && (!isosurface || isosurface->fromCache);
+    // What the frame reports about "the grid": the volume's when it is
+    // shown, since that is what the transfer function describes, else the
+    // isosurface's. Their dims agree either way.
+    const auto& grid = volume ? *volume->grid : *isosurfaceGrid;
 
     RaycastSettings settings;
     settings.threadCount = renderThreads;
@@ -405,6 +447,10 @@ VolumeFrame LocalDatasetSession::renderVolume(const VolumeRenderRequest& request
     settings.outputSize = request.outputSize;
     if (request.range) {
         settings.range = *request.range;
+    } else if (!volume) {
+        // No volume is mapped, so there is no range to resolve: the neutral
+        // one keeps the frame valid and the mapping the request asked for.
+        settings.range = neutralVolumeRange(request.logarithmic);
     } else {
         // Memoized against the grid's own cache key: the answer depends only
         // on the grid and the requested mapping, both of which the key and
@@ -427,7 +473,7 @@ VolumeFrame LocalDatasetSession::renderVolume(const VolumeRenderRequest& request
             }
         }
         if (!memo) {
-            memo = visibleVolumeRange(*grid, request.logarithmic, cancellation);
+            memo = visibleVolumeRange(grid, request.logarithmic, cancellation);
             const std::scoped_lock lock(m_mutex);
             m_visibleRange = *memo;
             m_visibleRangeFor = want;
@@ -439,13 +485,17 @@ VolumeFrame LocalDatasetSession::renderVolume(const VolumeRenderRequest& request
     // Not part of VolumeGridKey: this shapes the march, not the grid, so both
     // modes read the same cached grid.
     settings.sampling = request.sampling;
-    auto frame = raycastVolume(*grid, settings, cancellation);
+    settings.showVolume = request.showVolume;
+    settings.isosurface = request.isosurface;
+    auto frame = raycastVolume(
+        RaycastGrids{volume ? volume->grid.get() : nullptr, isosurfaceGrid},
+        settings, cancellation);
     const auto renderMicroseconds = frame.metrics.renderMicroseconds;
     frame.metrics = metrics;
     frame.metrics.renderMicroseconds = renderMicroseconds;
-    frame.metrics.gridDims = grid->dims;
-    frame.metrics.coveredVoxels = grid->coveredVoxels;
-    frame.metrics.sampledMaximumLevel = grid->maximumLevel;
+    frame.metrics.gridDims = grid.dims;
+    frame.metrics.coveredVoxels = grid.coveredVoxels;
+    frame.metrics.sampledMaximumLevel = grid.maximumLevel;
     return frame;
 }
 

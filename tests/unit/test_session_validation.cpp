@@ -1205,6 +1205,31 @@ int main()
             requireRejected([&] {
                 validateSessionVolumeRequest(metadata, id, bad);
             }, "a structurally invalid volume request was accepted");
+            // The isosurface's field is checked against the catalog too, and
+            // named as its own so the message says which of the two failed.
+            bad = request;
+            bad.isosurface = VolumeIsosurface{FieldId{0}, 0, 0.5, 0xFFFFFFU, 1.0F};
+            requireAccepted([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "a well-formed isosurface was rejected");
+            bad.showVolume = false;
+            requireAccepted([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "an isosurface-only request was rejected");
+            bad.isosurface->field = FieldId{3};
+            requireRejectedWith([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "isosurface field", "an unknown isosurface field was accepted");
+            bad.isosurface->field = FieldId{0};
+            bad.isosurface->component = 1;
+            requireRejectedWith([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "isosurface component", "a missing isosurface component was accepted");
+            bad = request;
+            bad.showVolume = false;
+            requireRejected([&] {
+                validateSessionVolumeRequest(metadata, id, bad);
+            }, "a request rendering nothing was accepted");
         }
 
         VolumeFrame frame;

@@ -136,6 +136,34 @@ int main(int argc, char* argv[])
                 && remoteFrame.metrics.coveredVoxels == 64,
             "the fixture did not sample to its native 4x4x4 grid");
 
+        // --- an isosurface renders the same on both sides (protocol 1.6) --
+        // The fixture's field is (i + j + k) / 9, so its iso-value 0.5 is a
+        // plane across the domain; drawn over the volume, and alone with the
+        // volume hidden, the server's frame is the local one pixel for pixel.
+        {
+            require(remote->supportsVolumeIsosurface()
+                    && local->supportsVolumeIsosurface(),
+                "a 1.6 session does not offer isosurfaces");
+            auto withIsosurface = remoteRequest;
+            withIsosurface.isosurface = VolumeIsosurface{
+                FieldId{0}, 0, 0.5, 0x40C0FFU, 0.7F};
+            auto localIsosurface = withIsosurface;
+            localIsosurface.dataset = local->id();
+            const auto remoteIso = remote->renderVolume(withIsosurface);
+            const auto localIso = local->renderVolume(localIsosurface);
+            require(litPixels(remoteIso) > 0 && remoteIso.pixels == localIso.pixels
+                    && remoteIso.pixels != remoteFrame.pixels,
+                "the remote isosurface frame is empty or differs from the local one");
+            withIsosurface.showVolume = false;
+            localIsosurface.showVolume = false;
+            const auto remoteAlone = remote->renderVolume(withIsosurface);
+            const auto localAlone = local->renderVolume(localIsosurface);
+            require(litPixels(remoteAlone) > 0 && remoteAlone.pixels == localAlone.pixels
+                    && remoteAlone.pixels != remoteIso.pixels
+                    && remoteAlone.usedRange == *withIsosurface.range,
+                "the remote isosurface-only frame differs from the local one");
+        }
+
         // --- the second frame comes from the server's grid cache --------
         const auto cached = remote->renderVolume(remoteRequest);
         require(cached.metrics.gridFromCache && cached.pixels == remoteFrame.pixels,
@@ -340,6 +368,50 @@ int main(int argc, char* argv[])
                     && codec::fromWire(*envelope->payload.AsErrorResponse()).code
                         == ErrorCode::UnsupportedProtocol,
                 "the connection stopped answering after one refusal");
+        }
+
+        // --- a 1.5 client is told isosurfaces need 1.6 --------------------
+        // The same shape one version on: 1.5 renders volumes and has no
+        // isosurface fields to send, so a request carrying one -- or hiding
+        // the volume -- is a peer speaking a version it did not negotiate, and
+        // is refused readably rather than answered with the volume alone.
+        {
+            auto socket = connectTo("127.0.0.1", server.port());
+            HelloRequestData hello{"volume test", "test", 0, 5,
+                defaultMaximumFrameBytes, server.token(), {}};
+            writeFrame(socket, codec::encode(1, codec::toWire(hello), 5),
+                defaultMaximumFrameBytes);
+            auto response = readFrame(socket, defaultMaximumFrameBytes);
+            require(response.has_value(), "the server closed on a 1.5 hello");
+            auto envelope = codec::decode(*response);
+            require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse
+                    && codec::fromWire(*envelope->payload.AsHelloResponse())
+                            .selectedMinorVersion == 5,
+                "the server did not negotiate 1.5 with a 1.5 client");
+            auto request = requestFor(*remote);
+            request.isosurface = VolumeIsosurface{FieldId{0}, 0, 0.5, 0xFFFFFFU, 1.0F};
+            writeFrame(socket, codec::encode(2, codec::toWire(request), 5),
+                defaultMaximumFrameBytes);
+            response = readFrame(socket, defaultMaximumFrameBytes);
+            require(response.has_value(),
+                "the server closed on a 1.5 client asking for an isosurface");
+            envelope = codec::decode(*response);
+            require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
+                    && codec::fromWire(*envelope->payload.AsErrorResponse()).code
+                        == ErrorCode::UnsupportedProtocol,
+                "a 1.5 client's isosurface request was not refused");
+            request.isosurface.reset();
+            request.showVolume = false;
+            writeFrame(socket, codec::encode(3, codec::toWire(request), 5),
+                defaultMaximumFrameBytes);
+            response = readFrame(socket, defaultMaximumFrameBytes);
+            require(response.has_value(),
+                "the server closed on a 1.5 client hiding the volume");
+            envelope = codec::decode(*response);
+            require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
+                    && codec::fromWire(*envelope->payload.AsErrorResponse()).code
+                        == ErrorCode::UnsupportedProtocol,
+                "a 1.5 client hiding the volume was not refused");
         }
         remote->close();
         local->close();

@@ -73,6 +73,7 @@ class AnimationPanel;
 class ColorBarWidget;
 class DatasetWindow;
 class FabSelectorDock;
+class VolumeWindow;
 class ImageView;
 class IsoWidget;
 class LinePlotWindow;
@@ -299,6 +300,9 @@ public:
     void showVolumeWindowForTest();
     [[nodiscard]] bool volumeWindowOpenForTest() const;
     [[nodiscard]] double volumeFrameAlphaCoverageForTest() const;
+    // Test-only: the open Volume Rendering window, or null, so a harness can
+    // drive its controls the way a user would.
+    [[nodiscard]] VolumeWindow* volumeWindowForTest() const;
     [[nodiscard]] bool fabStateClearedForTest() const;
     // Test-only: how many failures have been reported non-modally. The FAB
     // rollback smoke tests assert on this so a passing run proves the failure

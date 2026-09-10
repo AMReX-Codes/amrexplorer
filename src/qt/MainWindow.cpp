@@ -714,6 +714,20 @@ MainWindow::MainWindow(QWidget* parent)
                 return volumeVisibleRegion(domain, regions);
             },
             [this] { return m_playbackMode == PlaybackMode::Sequence; },
+            [this] {
+                // The field selector's rows, derived fields included; a row
+                // without an id (a heading) is not a field.
+                std::vector<std::pair<FieldId, QString>> fields;
+                for (int row = 0; row < m_fieldSelector->count(); ++row) {
+                    const auto rowData = m_fieldSelector->itemData(row);
+                    if (!rowData.isValid()) {
+                        continue;
+                    }
+                    fields.emplace_back(
+                        FieldId{rowData.toUInt()}, m_fieldSelector->itemText(row));
+                }
+                return fields;
+            },
         },
         this);
     connect(m_volumeController, &VolumeController::renderActivityChanged, this,

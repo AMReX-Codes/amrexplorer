@@ -308,6 +308,12 @@ void validateSessionVolumeRequest(const DatasetMetadata& metadata,
     }
     requireFieldAndLevel(metadata, request.field, request.maximumLevel, "volume");
     requireComponent(metadata, request.field, request.component, "volume");
+    if (request.isosurface) {
+        requireFieldAndLevel(metadata, request.isosurface->field,
+            request.maximumLevel, "isosurface");
+        requireComponent(metadata, request.isosurface->field,
+            request.isosurface->component, "isosurface");
+    }
     const auto errors = validateVolumeRenderRequest(request, metadata.dimension);
     if (!errors.empty()) {
         throw std::invalid_argument(errors.front());

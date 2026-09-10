@@ -43,8 +43,12 @@ inline constexpr std::uint16_t protocolMajor = 1;
 // which is also why a client must be able to tell that a flat picture came
 // from the server's precision rather than from the field.
 inline constexpr std::uint16_t doubleValueVectorsMinorVersion = 5;
-inline constexpr std::uint16_t protocolMinorVersion
-    = doubleValueVectorsMinorVersion;
+// 1.6 adds an isosurface to a rendered frame and lets the volume be hidden
+// (RenderedFrameRequest.show_volume and isosurface_*). A version for the 1.3
+// reason: a 1.5 server ignores the fields and returns the volume alone, a
+// frame the client could not tell from the one it asked for.
+inline constexpr std::uint16_t isosurfaceMinorVersion = 6;
+inline constexpr std::uint16_t protocolMinorVersion = isosurfaceMinorVersion;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,

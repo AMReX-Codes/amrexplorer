@@ -1630,6 +1630,21 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_rubber_zoom_sync_smoke_3d PROPERTIES TIMEOUT 30)
+    # Regression test for issue #243: a second synchronized rubber-band zoom
+    # while the sibling panels' slices from the first are still in flight must
+    # leave every panel on the same subregion, not the siblings a zoom behind.
+    add_test(
+        NAME qt_rubber_zoom_sync_in_flight_smoke_3d
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_fine"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_rubber_zoom_sync_in_flight_3d"
+            -DMODE=rubber-zoom-sync-in-flight
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(
+        qt_rubber_zoom_sync_in_flight_smoke_3d PROPERTIES TIMEOUT 60)
     # Disabling the option preserves the former panel-local rubber-band
     # behavior; wheel zoom is independently panel-local in ImageView.
     add_test(

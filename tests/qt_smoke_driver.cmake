@@ -13,6 +13,7 @@
 #                 close-window |
 #                 export-quit |
 #                 contour-sync | raster-zoom | rubber-zoom-sync |
+#                 rubber-zoom-sync-in-flight |
 #                 particle-visible-range | particle-dialog |
 #                 particle-settings-reset | particle-slice-cells |
 #                 rubber-zoom-local | rubber-overzoom | pan-zoom |
@@ -301,6 +302,9 @@ elseif(MODE STREQUAL "spherical-supersample")
 elseif(MODE STREQUAL "rubber-zoom-sync")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --rubber-zoom-sync-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "rubber-zoom-sync-in-flight")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --rubber-zoom-sync-in-flight-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "rubber-zoom-local")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --rubber-zoom-local-smoke-test "${WORK}/plt")

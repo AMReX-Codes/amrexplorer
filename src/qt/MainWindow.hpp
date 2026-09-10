@@ -328,6 +328,20 @@ public:
     // Used to lock down synchronized 3-D rubber-band zoom.
     [[nodiscard]] bool allViewsRubberBandZoomedForTest();
     [[nodiscard]] std::size_t rubberBandZoomedViewCountForTest();
+    // Test-only: park the slice workers of every 3-D panel but the active one
+    // until released, so a zoom can land in the active panel while its
+    // siblings' slices are still in flight (issue #243). A superseded worker
+    // leaves the gate on cancellation.
+    void holdSiblingSliceWorkersForTest();
+    void releaseSliceWorkersForTest();
+    [[nodiscard]] int activeViewSlicesInFlightForTest() const;
+    // Test-only: each current view's visible region as fractions of the domain
+    // along its display axes, {left, right, bottom, top}; the whole domain
+    // when it has none. The largest finest cell as a fraction of its axis
+    // bounds the cell snapping those fractions carry.
+    [[nodiscard]] std::vector<std::array<double, 4>>
+    rubberBandZoomFractionsForTest();
+    [[nodiscard]] double finestCellFractionForTest() const;
 
     // Test-only: apply a panel-local scale, drive the exact data-region pan
     // handlers used by Shift+left drag, and inspect the resulting transform.
@@ -832,8 +846,14 @@ private:
     [[nodiscard]] QString probeReadout(
         const PlaneViewState& state, int x, int displayY) const;
     void rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect);
-    void applyRubberBandZoom(
-        PlaneViewState& state, const QRectF& normalizedRect);
+    // The physical box a view has asked to show: its visible subregion, else
+    // the whole domain. This is the region of the plane on screen once its
+    // slice has landed, and runs ahead of that plane while one is in flight.
+    [[nodiscard]] RealBox requestedRegion(const PlaneViewState& state) const;
+    // Zooms one view to a physical region: clamped to the domain, snapped to
+    // cells for local data, framed over the raster on screen as feedback,
+    // and re-sliced.
+    void zoomToRegion(PlaneViewState& state, RealBox region);
     void beginPanDrag(PlaneViewState& state);
     void updatePanDrag(PlaneViewState& state, const QPointF& totalSceneDelta,
         const QPoint& viewportDelta);

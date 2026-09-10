@@ -6,8 +6,10 @@
 #include <QApplication>
 #include <QKeyEvent>
 #include <QSignalBlocker>
+#include <QThreadPool>
 #include <QTimer>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -121,6 +123,94 @@ Outcome dispatchZoom(Context& context)
                             window.allViewsRubberBandZoomedForTest() ? 0 : 1);
                     }, Qt::SingleShotConnection);
                 window.rubberBandZoomActiveViewForTest();
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1])
+            == "--rubber-zoom-sync-in-flight-smoke-test") {
+        // Regression for issue #243: zoom the XY panel again once its own
+        // slice has landed but the siblings' are still in flight (parked at a
+        // test gate, as a slow connection would leave them). Mirrored through
+        // the planes on screen, the siblings restated the first zoom and
+        // stayed a zoom behind for good; every panel must end on the second
+        // zoom's central quarter of the domain.
+        const std::filesystem::path path(argv[2]);
+        // Two parked workers must not starve the source's own slice.
+        auto* pool = QThreadPool::globalInstance();
+        pool->setMaxThreadCount(std::max(4, pool->maxThreadCount()));
+        auto* poll = new QTimer(&window);
+        poll->setInterval(5);
+        auto phase = std::make_shared<int>(0);
+        auto attempts = std::make_shared<int>(0);
+        const auto finish = [&application, poll, &window](int code) {
+            window.releaseSliceWorkersForTest();  // free any parked worker
+            poll->stop();
+            application.exit(code);
+        };
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, finish, poll](bool success) {
+                auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (!success || sync == nullptr || !sync->isVisible()) {
+                    finish(1);
+                    return;
+                }
+                const QSignalBlocker blocker(sync);
+                sync->setChecked(true);
+                window.holdSiblingSliceWorkersForTest();
+                window.rubberBandZoomActiveViewForTest();
+                poll->start();
+            });
+        QObject::connect(poll, &QTimer::timeout, &application,
+            [&window, finish, phase, attempts] {
+                if (++*attempts > 3000) {
+                    finish(3);
+                    return;
+                }
+                if (*phase == 0) {
+                    // The source has landed; both siblings are parked.
+                    if (window.sliceRequestPendingForTest()
+                        || window.activeViewSlicesInFlightForTest() != 0
+                        || window.slicesInFlightForTest() != 2) {
+                        return;
+                    }
+                    *phase = 1;
+                    window.rubberBandZoomActiveViewForTest();
+                    return;
+                }
+                if (*phase == 1) {
+                    // Release once the second zoom's requests have been
+                    // issued, so the parked first-round arrivals are stale.
+                    if (window.sliceRequestPendingForTest()) {
+                        return;
+                    }
+                    *phase = 2;
+                    window.releaseSliceWorkersForTest();
+                    return;
+                }
+                if (window.slicesInFlightForTest() != 0
+                    || window.sliceRequestPendingForTest()) {
+                    return;
+                }
+                const auto fractions = window.rubberBandZoomFractionsForTest();
+                const auto tolerance
+                    = window.finestCellFractionForTest() + 1.0e-9;
+                if (fractions.size() != 3) {
+                    finish(4);
+                    return;
+                }
+                for (const auto& entry : fractions) {
+                    for (std::size_t k = 0; k < 4; ++k) {
+                        const auto expected = k % 2 == 0 ? 0.375 : 0.625;
+                        if (std::abs(entry[k] - expected) > tolerance) {
+                            qCritical("panel fraction %g, expected %g",
+                                entry[k], expected);
+                            finish(5);
+                            return;
+                        }
+                    }
+                }
+                finish(0);
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3

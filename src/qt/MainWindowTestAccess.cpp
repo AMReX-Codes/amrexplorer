@@ -560,6 +560,68 @@ std::size_t MainWindow::rubberBandZoomedViewCountForTest()
         }));
 }
 
+void MainWindow::holdSiblingSliceWorkersForTest()
+{
+    int held = 0;
+    for (const auto* state : currentViews()) {
+        if (state != m_activeView) {
+            held |= 1 << state->normal;
+        }
+    }
+    slice_gate_test::heldNormals.store(held);
+}
+
+void MainWindow::releaseSliceWorkersForTest()
+{
+    slice_gate_test::heldNormals.store(0);
+}
+
+int MainWindow::activeViewSlicesInFlightForTest() const
+{
+    return m_activeView == nullptr ? 0 : m_activeView->pendingRequests;
+}
+
+std::vector<std::array<double, 4>> MainWindow::rubberBandZoomFractionsForTest()
+{
+    std::vector<std::array<double, 4>> fractions;
+    if (!m_dataset) {
+        return fractions;
+    }
+    const auto domain = datasetSampleBounds(m_dataset->metadata());
+    for (const auto* state : currentViews()) {
+        const auto region = requestedRegion(*state);
+        const auto axes = displayAxes(state->normal);
+        std::array<double, 4> entry{};
+        for (std::size_t k = 0; k < 2; ++k) {
+            const auto i = static_cast<std::size_t>(axes[k]);
+            const auto extent = domain.upper[i] - domain.lower[i];
+            entry[2 * k] = (region.lower[i] - domain.lower[i]) / extent;
+            entry[2 * k + 1] = (region.upper[i] - domain.lower[i]) / extent;
+        }
+        fractions.push_back(entry);
+    }
+    return fractions;
+}
+
+double MainWindow::finestCellFractionForTest() const
+{
+    if (!m_dataset || m_dataset->metadata().levels.empty()) {
+        return 0.0;
+    }
+    const auto& metadata = m_dataset->metadata();
+    const auto domain = datasetSampleBounds(metadata);
+    const auto& finest = metadata.levels[static_cast<std::size_t>(
+        std::max(0, metadata.finestLevel))];
+    double fraction = 0.0;
+    for (std::size_t i = 0; i < 3; ++i) {
+        const auto extent = domain.upper[i] - domain.lower[i];
+        if (extent > 0.0) {
+            fraction = std::max(fraction, finest.cellSize[i] / extent);
+        }
+    }
+    return fraction;
+}
+
 bool MainWindow::activeViewHasFocusForTest() const
 {
     return m_activeView != nullptr && m_activeView->view != nullptr

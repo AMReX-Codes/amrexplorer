@@ -677,7 +677,8 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
         future = QtConcurrent::run(
             [dataset, request, rangeMode, userRange, logarithmic, palette,
                 cancellation, displayMode, vectorUField, vectorVField,
-                contourCount]() mutable {
+                contourCount, normal = state.normal]() mutable {
+            slice_gate_test::waitIfHeld(normal, cancellation);
             // The pipeline owns the whole non-cached slice worker, including
             // the cache-pressure level fallback (see
             // cache-budget-exceeded-hard-fails-after-load).

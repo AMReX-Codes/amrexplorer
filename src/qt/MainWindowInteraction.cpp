@@ -1024,82 +1024,92 @@ void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
     if (clamped.width() < 1.0 || clamped.height() < 1.0) {
         return;
     }
-    const QRectF normalizedRect(
-        clamped.left() / static_cast<double>(plane.width),
-        clamped.top() / static_cast<double>(plane.height),
-        clamped.width() / static_cast<double>(plane.width),
-        clamped.height() / static_cast<double>(plane.height));
+    // The selection is over the raster on screen, so it is measured through
+    // the displayed plane -- shared with the volume's region of interest, which
+    // maps the part of the raster on screen the same way.
+    const auto axes = displayAxes(state.normal);
+    const auto selected = physicalRegionForRasterRect(plane.physicalRegion,
+        static_cast<double>(plane.width), static_cast<double>(plane.height),
+        clamped, axes);
     const auto views = currentViews();
     const bool synchronize = m_syncRubberBandZoomAction != nullptr
         && m_syncRubberBandZoomAction->isChecked()
         && views.size() > 1;
+    // The other panels take the selection as fractions of the region each has
+    // been asked to show, not of the plane it happens to display: with the
+    // last zoom's slice still in flight that plane is the one before it, and
+    // mirroring through it left the panel a zoom behind for good (issue #243).
+    // The source's own base is read before its zoom moves it.
+    const auto sourceBase = requestedRegion(state);
+    zoomToRegion(state, selected);
     if (synchronize) {
         for (auto* target : views) {
-            applyRubberBandZoom(*target, normalizedRect);
+            if (target != &state) {
+                zoomToRegion(*target, mirroredRegion(sourceBase, selected,
+                    axes, requestedRegion(*target), displayAxes(target->normal)));
+            }
         }
-    } else {
-        applyRubberBandZoom(state, normalizedRect);
     }
     setScaleUiState(views.size() > 1 && !synchronize
             ? ScaleUiState::Mixed
             : ScaleUiState::Custom);
 }
 
-void MainWindow::applyRubberBandZoom(
-    PlaneViewState& state, const QRectF& normalizedRect)
+RealBox MainWindow::requestedRegion(const PlaneViewState& state) const
+{
+    return state.visibleRegion.value_or(
+        datasetSampleBounds(m_dataset->metadata()));
+}
+
+void MainWindow::zoomToRegion(PlaneViewState& state, RealBox region)
 {
     const auto& plane = *state.plane;
     if (!m_dataset || plane.width <= 0 || plane.height <= 0) {
         return;
     }
-    const auto normalized = normalizedRect.normalized().intersected(
-        QRectF(0.0, 0.0, 1.0, 1.0));
-    if (normalized.isEmpty()) {
-        return;
-    }
-    const auto width = static_cast<double>(plane.width);
-    const auto height = static_cast<double>(plane.height);
-    const QRectF clamped(
-        normalized.left() * width, normalized.top() * height,
-        normalized.width() * width, normalized.height() * height);
+    const auto& metadata = m_dataset->metadata();
+    const auto domain = datasetSampleBounds(metadata);
     const auto axes = displayAxes(state.normal);
-    const auto xAxis = static_cast<std::size_t>(axes[0]);
-    const auto yAxis = static_cast<std::size_t>(axes[1]);
-    const auto& region = plane.physicalRegion;
-    const auto xExtent = region.upper[xAxis] - region.lower[xAxis];
-    const auto yExtent = region.upper[yAxis] - region.lower[yAxis];
-    // Shared with the volume's region of interest, which maps the same way
-    // from the part of the raster on screen. The reverse mapping below, back
-    // to scene pixels, is this function's own.
-    auto visible = physicalRegionForRasterRect(
-        region, width, height, clamped, axes);
+    for (const auto axis : axes) {
+        const auto i = static_cast<std::size_t>(axis);
+        region.lower[i] = std::clamp(region.lower[i], domain.lower[i], domain.upper[i]);
+        region.upper[i] = std::clamp(region.upper[i], domain.lower[i], domain.upper[i]);
+        if (!(region.upper[i] > region.lower[i])) {
+            return;
+        }
+    }
     // Local slices use one output pixel per finest cell, so their edges land
     // on cell boundaries. Remote slices are viewport-resampled; retaining the
     // exact selection keeps an arbitrary rubber-band aspect ratio intact.
     if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)) {
-        const auto& metadata = m_dataset->metadata();
         const auto& finest = metadata.levels[static_cast<std::size_t>(
             std::max(0, metadata.finestLevel))];
-        visible = snapToCellBoundaries(
-            visible, datasetSampleBounds(metadata), finest.cellSize, axes);
+        region = snapToCellBoundaries(region, domain, finest.cellSize, axes);
     }
-    state.visibleRegion = visible;
+    state.visibleRegion = region;
     // Rubber-band zoom leaves the virtual canvas: as with local data, the
     // selection is re-rendered as a standalone raster fitted to the pane,
     // with no domain-spanning scroll bars.
     state.view->setVirtualCanvas(std::nullopt);
-    // Zoom to the requested region mapped back to scene pixels, so the view
-    // transform matches the region the requested slice will actually cover.
-    // Confined: the selection becomes a standalone raster with no
-    // domain-spanning scroll bars, so the feedback zoom must not raise them
-    // either — transient scroll bars shrink the viewport, and the remote
+    // Zoom to the requested region mapped back to scene pixels of the raster
+    // on screen, so the view transform matches the region the requested slice
+    // will actually cover. Confined: the selection becomes a standalone raster
+    // with no domain-spanning scroll bars, so the feedback zoom must not raise
+    // them either -- transient scroll bars shrink the viewport, and the remote
     // request would be sized to the stolen pixels and re-fetched (and
     // re-framed, visibly) once they vanish.
+    const auto xAxis = static_cast<std::size_t>(axes[0]);
+    const auto yAxis = static_cast<std::size_t>(axes[1]);
+    const auto& shown = plane.physicalRegion;
+    const auto width = static_cast<double>(plane.width);
+    const auto height = static_cast<double>(plane.height);
+    const auto xExtent = shown.upper[xAxis] - shown.lower[xAxis];
+    const auto yExtent = shown.upper[yAxis] - shown.lower[yAxis];
     const QRectF requestedScene(
-        QPointF((visible.lower[xAxis] - region.lower[xAxis]) / xExtent * width,
-            (region.upper[yAxis] - visible.upper[yAxis]) / yExtent * height),
-        QPointF((visible.upper[xAxis] - region.lower[xAxis]) / xExtent * width,
-            (region.upper[yAxis] - visible.lower[yAxis]) / yExtent * height));
+        QPointF((region.lower[xAxis] - shown.lower[xAxis]) / xExtent * width,
+            (shown.upper[yAxis] - region.upper[yAxis]) / yExtent * height),
+        QPointF((region.upper[xAxis] - shown.lower[xAxis]) / xExtent * width,
+            (shown.upper[yAxis] - region.lower[yAxis]) / yExtent * height));
     state.view->zoomToRect(requestedScene.normalized(), true);
     scheduleSliceRequest(state);
 }

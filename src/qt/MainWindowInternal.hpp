@@ -304,4 +304,31 @@ inline std::atomic<int> waiting{0};        // # of workers currently parked
 } // namespace visible_sync_test
 #endif
 
+// A gate the slice worker of a chosen 3-D panel parks at, so a test can land
+// one panel's zoom while its siblings' slices are still in flight -- the
+// state a slow connection produces -- and zoom again. Compiled to a no-op
+// outside the test-access build.
+namespace slice_gate_test {
+
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+inline std::atomic<int> heldNormals{0};  // one bit per plane normal axis
+
+inline void waitIfHeld(int normal, const StopToken& cancellation)
+{
+    // Cancellation frees a superseded worker's pool thread; the bound keeps a
+    // test that dies without releasing from hanging the pool's join.
+    for (int waited = 0; waited < 10000; ++waited) {
+        if ((heldNormals.load() & (1 << normal)) == 0
+            || cancellation.stop_requested()) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+#else
+inline void waitIfHeld(int /*normal*/, const StopToken& /*cancellation*/) noexcept {}
+#endif
+
+} // namespace slice_gate_test
+
 } // namespace amrvis::qt

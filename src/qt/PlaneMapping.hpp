@@ -43,6 +43,32 @@ namespace amrvis::qt {
     return region;
 }
 
+// The box that sits in `targetBase` where `region` sits in `sourceBase`, as
+// fractions of each base along the axes the two panels display, paired
+// horizontal with horizontal and vertical with vertical. Only those two axes of
+// the target move; its third keeps `targetBase`'s bounds. The fractions are not
+// clamped, so a region reaching outside its base mirrors outside the target's.
+[[nodiscard]] inline RealBox mirroredRegion(const RealBox& sourceBase,
+    const RealBox& region, const std::array<int, 2>& sourceAxes,
+    const RealBox& targetBase, const std::array<int, 2>& targetAxes) noexcept
+{
+    auto mirrored = targetBase;
+    for (std::size_t k = 0; k < 2; ++k) {
+        const auto s = static_cast<std::size_t>(sourceAxes[k]);
+        const auto t = static_cast<std::size_t>(targetAxes[k]);
+        const auto sourceExtent = sourceBase.upper[s] - sourceBase.lower[s];
+        if (!(sourceExtent > 0.0)) {
+            continue;
+        }
+        const auto targetExtent = targetBase.upper[t] - targetBase.lower[t];
+        mirrored.lower[t] = targetBase.lower[t]
+            + (region.lower[s] - sourceBase.lower[s]) / sourceExtent * targetExtent;
+        mirrored.upper[t] = targetBase.lower[t]
+            + (region.upper[s] - sourceBase.lower[s]) / sourceExtent * targetExtent;
+    }
+    return mirrored;
+}
+
 // Converts between a view's logical in-plane physical coordinates (dataset
 // axes 0 and 1 -- (x, y) for Cartesian, (r, theta) for 2-D spherical) and
 // scene (pixmap-pixel) coordinates, absorbing the spherical layout: the R-Z

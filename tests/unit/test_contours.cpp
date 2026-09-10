@@ -223,6 +223,56 @@ int main()
         }
     }
 
+    // Scaling a field must preserve crossings and saddle connectivity even
+    // when subtracting endpoints or summing the four corners would overflow.
+    for (const auto& samples : {std::array{-1.0, -1.0, 1.0, 1.0},
+             std::array{-1.0, 1.0, -1.0, 1.0},
+             std::array{0.5, 0.8, 0.8, 0.5}}) {
+        amrvis::ScalarPlane referencePlane;
+        referencePlane.width = 2;
+        referencePlane.height = 2;
+        referencePlane.values.assign(samples.begin(), samples.end());
+        referencePlane.valid.assign(4, 1);
+        referencePlane.sourceLevel.assign(4, 0);
+        for (const double magnitude : {1.0e308,
+                 std::numeric_limits<double>::max()}) {
+            for (const double sign : {1.0, -1.0}) {
+                auto signedPlane = referencePlane;
+                for (auto& value : signedPlane.values) {
+                    value *= sign;
+                }
+                auto scaledPlane = signedPlane;
+                for (auto& value : scaledPlane.values) {
+                    value *= magnitude;
+                }
+                for (const double level : {-1.0, 0.0, 0.6, 0.75, 1.0}) {
+                    const auto reference = amrvis::generateContours(
+                        signedPlane, {level * sign});
+                    const auto scaled = amrvis::generateContours(
+                        scaledPlane, {level * sign * magnitude});
+                    require(scaled.size() == reference.size(),
+                        "large field changed the contour segment count");
+                    for (const auto& segment : reference) {
+                        require(hasSegment(scaled, segment.x0, segment.y0,
+                                    segment.x1, segment.y1),
+                            "large field changed contour crossings or connectivity");
+                    }
+                    const auto display = amrvis::contourPolylinesForDisplay(
+                        scaledPlane, {level * sign * magnitude}, 100, 100);
+                    require(display.empty() == reference.empty(),
+                        "large field changed display contour presence");
+                    for (const auto& polyline : display) {
+                        for (const auto& point : polyline.points) {
+                            require(std::isfinite(point[0])
+                                    && std::isfinite(point[1]),
+                                "large contour has nonfinite display coordinates");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Invalidating corner (1, 1) must suppress the four cells touching it,
     // leaving only cell (2, 0).
     auto masked = makePlane();

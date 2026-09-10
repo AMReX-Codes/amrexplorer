@@ -487,6 +487,15 @@ void displayStretchLivesInTheViewTransform()
         "displaySize does not multiply the raster by the stretch");
     require(view.composedImageSize(1.0) == QSize(100, 200),
         "the export size ignores the stretch");
+    // A footprint past the cap on its own is still capped, aspect kept.
+    {
+        amrvis::qt::ImageView tall;
+        tall.setImage(solidImage(1024, 1024));
+        tall.setDisplayStretch(1.0, 1000.0);
+        const auto capped = tall.composedImageSize(1.0);
+        require(capped.height() == 8192 && capped.width() == 8,
+            "a stretched export footprint escaped the size cap");
+    }
     // The raster still fits: both device-space extents are within the view.
     const auto footprint
         = view.mapFromScene(view.imageSceneRect()).boundingRect();

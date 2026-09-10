@@ -1202,9 +1202,22 @@ void MainWindow::updateAspectControls()
     }
     const bool hasDataset = m_dataset != nullptr;
     m_aspectMenu->setEnabled(hasDataset && !displayIsSpherical());
+    const bool physicalAvailable
+        = hasDataset && m_dataset->metadata().hasPhysicalGeometry;
     if (m_aspectPhysicalAction != nullptr) {
-        m_aspectPhysicalAction->setEnabled(
-            hasDataset && m_dataset->metadata().hasPhysicalGeometry);
+        m_aspectPhysicalAction->setEnabled(physicalAvailable);
+    }
+    // Show the mode in effect: Physical Size falls back to Cell Counts on a
+    // dataset without geometry, and the saved preference returns with the
+    // next dataset that has it. setChecked does not emit triggered, so the
+    // preference itself is untouched here.
+    const auto shown = physicalAvailable ? m_aspectMode : AspectMode::CellCounts;
+    if (m_aspectGroup != nullptr) {
+        for (auto* action : m_aspectGroup->actions()) {
+            if (action->data().toInt() == static_cast<int>(shown)) {
+                action->setChecked(true);
+            }
+        }
     }
 }
 

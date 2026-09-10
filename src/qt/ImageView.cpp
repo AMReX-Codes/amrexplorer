@@ -672,10 +672,12 @@ QSize ImageView::composedImageSize(qreal scaleFactor) const {
     const auto baseHeight = base.height();
     // Cap the longer output axis so a large zoom on big data can't allocate a
     // gigabyte image; reduce the factor (preserving aspect) when it would.
+    // The factor may drop below one: a stretched footprint can exceed the
+    // cap on its own, and the cap must still hold.
     constexpr int maxAxis = 8192;
     const auto cap = static_cast<qreal>(maxAxis)
         / std::max(baseWidth, baseHeight);
-    const auto effective = std::clamp(scaleFactor, 1.0, std::max(1.0, cap));
+    const auto effective = std::min(std::max(scaleFactor, 1.0), cap);
     const auto outWidth = std::max(1,
         static_cast<int>(std::round(baseWidth * effective)));
     const auto outHeight = std::max(1,

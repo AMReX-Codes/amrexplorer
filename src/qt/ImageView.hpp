@@ -298,7 +298,10 @@ private:
     // axis is multiplied by its stretch. QGraphicsView::fitInView cannot be
     // used because it resets the transform to 1:1 per axis and so flattens
     // any stretch already in force. Mirrors fitInView's 2-pixel margin and
-    // final centerOn so an unstretched fit is pixel-for-pixel what it was.
+    // final centerOn. Callers pass the item's bounding rect, where fitInView
+    // fitted the pixmap's alpha mask: a raster with transparent pixels (an
+    // alpha-ramp palette, the spherical R-Z warp outside its sector) now
+    // fits its whole rect, consistent with fixed scale and export.
     void fitSceneRect(const QRectF& rect);
     void applyFixedScale();
     void applyPlacement();

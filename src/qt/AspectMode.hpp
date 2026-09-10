@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 
 // How a slice panel's two axes are proportioned on screen. Qt-free so the
 // helper below can be unit-tested without a QApplication.

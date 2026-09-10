@@ -48,16 +48,13 @@ int main(int argc, char* argv[])
     auto* plot = window.findChild<amrvis::qt::LinePlotWidget*>();
     require(plot != nullptr, "line plot canvas was not created");
 
-    constexpr int leftMargin = 92;
-    constexpr int rightMargin = 32;
-    constexpr int topMargin = 18;
+    // The plot insets follow the tick labels the last paint measured, so ask
+    // the widget where its data area is rather than assuming fixed margins.
     constexpr int bottomMargin = 36;
-    const QRect plotRect(leftMargin, topMargin,
-        plot->width() - leftMargin - rightMargin,
-        plot->height() - topMargin - bottomMargin);
+    const QRect dataRect = plot->plotRect();
     const QPoint hoverPosition(
-        plotRect.left() + plotRect.width() / 2,
-        plotRect.bottom() - plotRect.height() / 2);
+        dataRect.left() + dataRect.width() / 2,
+        dataRect.bottom() - dataRect.height() / 2);
     const auto globalPosition = plot->mapToGlobal(hoverPosition);
     QMouseEvent move(QEvent::MouseMove,
         QPointF(hoverPosition), QPointF(globalPosition),
@@ -109,14 +106,12 @@ int main(int argc, char* argv[])
     curves[0].line.valid = {1, 1, 1};
     extremePlot.setCurves(&curves);
     extremePlot.show();
-    const QRect extremeRect(leftMargin, topMargin,
-        extremePlot.width() - leftMargin - rightMargin,
-        extremePlot.height() - topMargin - bottomMargin);
     const auto requirePainted = [&] {
         const auto image = extremePlot.grab().toImage();
+        const QRect painted = extremePlot.plotRect();
         int colored = 0;
-        for (int y = extremeRect.top(); y <= extremeRect.bottom(); ++y) {
-            for (int x = extremeRect.left(); x <= extremeRect.right(); ++x) {
+        for (int y = painted.top(); y <= painted.bottom(); ++y) {
+            for (int x = painted.left(); x <= painted.right(); ++x) {
                 const auto pixel = image.pixelColor(x, y);
                 colored += pixel.red() > 150 && pixel.green() < 80 && pixel.blue() < 80;
             }
@@ -134,9 +129,14 @@ int main(int argc, char* argv[])
     curves[0].line.values = {-1.0e308, 0.0, 1.0e308};
     extremePlot.resetZoom();
     requirePainted();
-    const QPoint centre(extremeRect.left() + extremeRect.width() / 2,
-        extremeRect.bottom() - extremeRect.height() / 2);
+    // Taken from the painted geometry each time: the same insets the hover
+    // maps through, so the cursor lands on the midpoint sample itself.
+    const auto centreOf = [](const QRect& area) {
+        return QPoint(area.left() + area.width() / 2,
+            area.bottom() - area.height() / 2);
+    };
     const auto requireHover = [&] {
+        const auto centre = centreOf(extremePlot.plotRect());
         QEvent clear(QEvent::Leave);
         QApplication::sendEvent(&extremePlot, &clear);
         QMouseEvent moveEvent(QEvent::MouseMove, QPointF(centre),
@@ -163,8 +163,9 @@ int main(int argc, char* argv[])
     QToolTip::hideText();
     curves[0].fieldName = "pending-range";
     curves[0].line.values = {-1.0e308, 0.0, 1.0e308};
-    QMouseEvent pendingMove(QEvent::MouseMove, QPointF(centre),
-        QPointF(extremePlot.mapToGlobal(centre)),
+    const auto pendingCentre = centreOf(extremePlot.plotRect());
+    QMouseEvent pendingMove(QEvent::MouseMove, QPointF(pendingCentre),
+        QPointF(extremePlot.mapToGlobal(pendingCentre)),
         Qt::NoButton, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(&extremePlot, &pendingMove);
     require(QToolTip::text().contains("pending-range")
@@ -173,10 +174,12 @@ int main(int argc, char* argv[])
     curves[0].fieldName = "extreme";
     extremePlot.setFont(originalFont);
     requirePainted();
+    const QRect extremeRect = extremePlot.plotRect();
     const auto beforeZoom = extremePlot.grab().toImage().copy(extremeRect);
+    const QPoint zoomCentre = centreOf(extremeRect);
     const QPoint inset(extremeRect.width() / 4, extremeRect.height() / 3);
-    QTest::mousePress(&extremePlot, Qt::LeftButton, Qt::NoModifier, centre - inset);
-    QTest::mouseRelease(&extremePlot, Qt::LeftButton, Qt::NoModifier, centre + inset);
+    QTest::mousePress(&extremePlot, Qt::LeftButton, Qt::NoModifier, zoomCentre - inset);
+    QTest::mouseRelease(&extremePlot, Qt::LeftButton, Qt::NoModifier, zoomCentre + inset);
     requirePainted();
     require(extremePlot.grab().toImage().copy(extremeRect) != beforeZoom,
         "zooming an extreme line range did not change the plotted geometry");

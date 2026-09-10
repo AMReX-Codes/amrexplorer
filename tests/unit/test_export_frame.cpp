@@ -5,6 +5,7 @@
 
 #include <QApplication>
 #include <QTemporaryDir>
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -174,9 +175,13 @@ int main(int argc, char** argv) {
         const auto squareAxes = exportAxes(tallDomain, 3, 2, 0, SphericalDisplay::RZ, true, {});
         const auto square =
             makeExportLayout(QSize(540, 540), compactOptions, squareAxes, &compactBar, animation);
+        // Annotations wider than the data grow the canvas but not the font,
+        // so the reference width stops at twice the data's longer side.
+        const int dataLength = std::max(square.dataRect.width(), square.dataRect.height());
+        const int referenceWidth = std::min(square.canvasSize.width(), 2 * dataLength);
         require(square.font.pixelSize() ==
                     std::max(12, static_cast<int>(
-                                     std::lround(square.canvasSize.width() * 11.0 / (72.0 * 7.0)))),
+                                     std::lround(referenceWidth * 11.0 / (72.0 * 7.0)))),
                 "square XY export font sizing changed");
         for (int normal : {0, 1}) {
             const auto tallAxes =

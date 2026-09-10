@@ -5,6 +5,7 @@
 
 #include <QColor>
 #include <QPoint>
+#include <QRect>
 #include <QRectF>
 #include <QString>
 #include <QWidget>
@@ -57,6 +58,9 @@ public:
     void resetZoom();
     // Toggles per-sample data markers over each curve (legacy Amrvis style).
     void setShowMarkers(bool on);
+    // The data area inside the axes. Its insets follow the tick labels of the
+    // last paint, so callers mapping data to pixels have to ask for it.
+    [[nodiscard]] QRect plotRect() const;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -74,7 +78,6 @@ private:
         double yMaximum;
     };
 
-    [[nodiscard]] QRect plotRect() const;
     [[nodiscard]] std::optional<PlotRange> automaticRange() const;
     [[nodiscard]] std::optional<PlotRange> displayedRange() const;
     [[nodiscard]] QString hoverTextAt(const QPointF& position) const;

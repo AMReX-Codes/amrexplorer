@@ -70,7 +70,7 @@ private:
     std::vector<amrvis::ParticleSpeciesMetadata> m_species;
 };
 
-void checkCells(QTabWidget& tabs, bool distinct)
+void checkCells(QTabWidget& tabs, bool distinct, bool recordPaint)
 {
     for (int level = 0; level < tabs.count(); ++level) {
         tabs.setCurrentIndex(level);
@@ -84,8 +84,6 @@ void checkCells(QTabWidget& tabs, bool distinct)
             const auto expected = index.data().toString();
             const int width = table->columnWidth(column);
             const int height = table->rowHeight(0);
-            RecordingPaintDevice device(width, height);
-            QPainter painter(&device);
             QStyleOptionViewItem option;
             option.initFrom(table);
             option.font = table->font();
@@ -93,24 +91,35 @@ void checkCells(QTabWidget& tabs, bool distinct)
             option.widget = table;
             option.rect = QRect(0, 0, width - 1, height - 1);
             option.textElideMode = table->textElideMode();
-            table->itemDelegate()->paint(&painter, option, index);
-            painter.end();
-            // Font fallback and script changes can split one label into
-            // several text draws. Check every glyph run and the complete
-            // string, rather than requiring a single paint-engine call.
-            QString painted;
-            for (const auto& run : device.text()) {
-                painted += run.value;
-                require(run.bounds.left() >= -0.5 && run.bounds.right() <= width - 0.5,
-                    "dataset cell text escaped its column");
-            }
-            if (painted != expected) {
+            // The style elides exactly when an item is wider than the space
+            // it is painted in, so the column has to reserve what this cell's
+            // own digits ask for, beside the grid line. Asked of the delegate
+            // and the current style, which is what the view itself consults.
+            const int needed = table->itemDelegate()->sizeHint(option, index).width();
+            if (needed > width - 1) {
                 std::cerr << "style=" << table->style()->objectName().toStdString()
                           << " font=" << table->font().family().toStdString()
-                          << " expected=" << expected.toStdString()
-                          << " painted=" << painted.toStdString() << '\n';
+                          << " text=" << expected.toStdString()
+                          << " needs=" << needed << " column=" << width << '\n';
             }
-            require(painted == expected, "dataset cell elided digits or the exponent");
+            require(needed <= width - 1,
+                "dataset column is narrower than the digits it has to show");
+            if (recordPaint) {
+                RecordingPaintDevice device(width, height);
+                QPainter painter(&device);
+                table->itemDelegate()->paint(&painter, option, index);
+                painter.end();
+                // Font fallback and script changes can split one label into
+                // several text draws. Check every glyph run and the complete
+                // string, rather than requiring a single paint-engine call.
+                QString painted;
+                for (const auto& run : device.text()) {
+                    painted += run.value;
+                    require(run.bounds.left() >= -0.5 && run.bounds.right() <= width - 0.5,
+                        "dataset cell text escaped its column");
+                }
+                require(painted == expected, "dataset cell elided digits or the exponent");
+            }
             if (distinct && column > 0) {
                 require(expected != table->model()->index(0, column - 1).data().toString(),
                     "adaptive dataset values lost their distinguishing digits");
@@ -126,6 +135,12 @@ int main(int argc, char** argv)
     QApplication application(argc, argv);
     for (const auto& style : QStyleFactory::keys()) {
         QApplication::setStyle(QStyleFactory::create(style));
+        // Every style sizes its cells, but only Qt's own drawing reaches a
+        // recording paint device: a native style paints its items through a
+        // platform graphics context that such a device cannot provide, and
+        // then draws no text at all.
+        const bool recordPaint = style.compare(QLatin1String("fusion"),
+            Qt::CaseInsensitive) == 0;
         for (const int pixels : {12, 24}) {
             amrvis::qt::DatasetRequest request;
             request.dataset = std::make_shared<PageSession>();
@@ -137,18 +152,18 @@ int main(int argc, char** argv)
             auto* tabs = window.findChild<QTabWidget*>();
             require(tabs != nullptr && QTest::qWaitFor([tabs] { return tabs->count() == 2; }),
                 "dataset pages did not load");
-            checkCells(*tabs, true);
+            checkCells(*tabs, true, recordPaint);
             // Changing the format rebuilds the tables and must size them again.
             window.setNumberFormat("%.3e");
-            checkCells(*tabs, false);
+            checkCells(*tabs, false, recordPaint);
             window.setNumberFormat("rho=%.17g kg/m3");
-            checkCells(*tabs, true);
+            checkCells(*tabs, true, recordPaint);
             // Greek and Latin text exercise multiple glyph runs even when
             // the platform's default font covers the entire numeric label.
             window.setNumberFormat(QStringLiteral("\u03c1=%.17g kg/m3"));
-            checkCells(*tabs, true);
+            checkCells(*tabs, true, recordPaint);
             window.setNumberFormat("%g");
-            checkCells(*tabs, true);
+            checkCells(*tabs, true, recordPaint);
         }
     }
 }

@@ -291,6 +291,12 @@ std::size_t ImageView::tileAt(const QPointF& scenePoint) const
             return index;
         }
     }
+    // Outside every tile: the first one on show, never a hidden raster.
+    for (std::size_t index = 0; index < m_tiles.size(); ++index) {
+        if (m_tiles[index].item != nullptr && m_tiles[index].visible) {
+            return index;
+        }
+    }
     return 0;
 }
 

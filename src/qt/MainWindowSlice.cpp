@@ -606,7 +606,12 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                 primaryState.displayMaximum};
         }
     }
-    const auto logarithmic = selection.logarithmic;
+    // A following companion also takes the mapping the primary rendered
+    // with: the same bounds drawn linear under a logarithmic bar would lie.
+    const auto logarithmic = m_pair && state.layer == 1 && m_companionFollowsPrimary
+            && primary().planeViews[static_cast<std::size_t>(state.normal)].plane->width > 0
+        ? primary().planeViews[static_cast<std::size_t>(state.normal)].displayLogarithmic
+        : selection.logarithmic;
     const auto palette = m_paletteController->palette();
     // The primary's vector field ids mean nothing in a companion's field
     // list, so a companion renders its raster (and contours) without glyphs.
@@ -1453,7 +1458,8 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     // A companion following the primary's range takes the new one.
     if (m_pair && state.layer == 0 && m_companionFollowsPrimary && rangeMoved
         && m_viewDimension == 3 && m_layers[1].active) {
-        scheduleSliceRequest(m_layers[1].planeViews[static_cast<std::size_t>(state.normal)]);
+        refreshFollowingCompanion(static_cast<std::size_t>(state.normal),
+            state.displayMinimum, state.displayMaximum, state.displayLogarithmic);
     }
     if (display.slice.gridBoxesIncluded) {
         state.gridBoxes = std::move(display.slice.gridBoxes);
@@ -1518,6 +1524,18 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     m_volumeController->regionChanged();
 }
 
+void MainWindow::refreshFollowingCompanion(std::size_t normal, double minimum,
+    double maximum, bool logarithmic)
+{
+    auto& state = m_layers[1].planeViews[normal];
+    const bool current = state.plane->width > 0
+        && state.displayMinimum == minimum && state.displayMaximum == maximum
+        && state.displayLogarithmic == logarithmic;
+    if (!current) {
+        scheduleSliceRequest(state);
+    }
+}
+
 void MainWindow::resliceReplacedViews()
 {
     if (!m_controlsReady || !primary().session) {
@@ -1568,6 +1586,11 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
         return;
     }
     if (layer.range->mode() != RangeMode::Visible) {
+        return;
+    }
+    if (&layer == &m_layers[1] && m_companionFollowsPrimary) {
+        // Following the primary: its range is the primary's, not a union of
+        // its own panels.
         return;
     }
     // Single-flight: dispatch one sync only once the panel slice batch has
@@ -1785,7 +1808,11 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
                     }
                     if (&layer == &primary() && m_pair && m_companionFollowsPrimary
                         && m_layers[1].active) {
-                        scheduleSliceRequest(m_layers[1].planeViews[index]);
+                        // Only when the companion's raster shows something
+                        // else: its own arrival re-dispatches this sync, so an
+                        // unconditional request here would never settle.
+                        refreshFollowingCompanion(index, globalMin, globalMax,
+                            outcome.sync->logarithmic);
                     }
                     // This layer's raster on the active panel: the active
                     // view itself, or its counterpart when the active view

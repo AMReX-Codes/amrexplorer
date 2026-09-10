@@ -723,6 +723,10 @@ private:
     // isometric view.
     void updatePairedIsoGeometry();
     void setCompanionFollowsPrimary(bool follows);
+    // Re-slice a following companion's panel when the primary's displayed
+    // range or mapping there differs from what the companion shows.
+    void refreshFollowingCompanion(std::size_t normal, double minimum,
+        double maximum, bool logarithmic);
     void chooseStandaloneDataset(const QString& caption, bool rawFab);
     struct RemoteOpen {
         std::shared_ptr<remote::Connection> connection;
@@ -1020,6 +1024,10 @@ private:
     [[nodiscard]] static std::array<QString, 2> sphericalAxisLabels(
         SphericalDisplay mode);
     void probeMoved(PlaneViewState& state, int x, int displayY);
+    // The readout for the status bar: probeReadout, prefixed with the
+    // dataset's name while a companion is open.
+    [[nodiscard]] QString probeLine(
+        const PlaneViewState& state, int x, int displayY) const;
     void probeClicked(PlaneViewState& state, int x, int displayY);
     [[nodiscard]] QString probeReadout(
         const PlaneViewState& state, int x, int displayY) const;

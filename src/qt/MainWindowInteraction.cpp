@@ -1009,8 +1009,15 @@ QString MainWindow::probeReadout(
         return tr("no data");
     }
     if (metadata.dimension == 3) {
-        position[static_cast<std::size_t>(state.normal)]
-            = m_slicePosition3d[static_cast<std::size_t>(state.normal)];
+        const auto axis = static_cast<std::size_t>(state.normal);
+        position[axis] = m_slicePosition3d[axis];
+        if (m_pair) {
+            // The raster was cut at the shared position clamped into this
+            // layer's domain (see requestSlice); so is the readout.
+            const auto bounds = datasetSampleBounds(metadata);
+            position[axis] = std::clamp(position[axis], bounds.lower[axis],
+                std::nextafter(bounds.upper[axis], bounds.lower[axis]));
+        }
     }
     const auto level = std::clamp(
         static_cast<int>(plane.sourceLevel[offset]), 0, metadata.finestLevel);
@@ -1155,15 +1162,28 @@ QString MainWindow::probeReadout(
         .arg(boxText);
 }
 
+QString MainWindow::probeLine(const PlaneViewState& state, int x, int displayY) const
+{
+    const auto readout = probeReadout(state, x, displayY);
+    if (!companionOpen()) {
+        return readout;
+    }
+    // Two datasets: say which one the pointer is over.
+    const auto name = state.layer == 0
+        ? QString::fromStdString(m_datasetPath.filename().string())
+        : m_layers[1].name;
+    return name.isEmpty() ? readout : name + QStringLiteral(": ") + readout;
+}
+
 void MainWindow::probeMoved(PlaneViewState& state, int x, int displayY)
 {
-    m_probeLabel->setText(probeReadout(state, x, displayY));
+    m_probeLabel->setText(probeLine(state, x, displayY));
 }
 
 void MainWindow::probeClicked(PlaneViewState& state, int x, int displayY)
 {
     setActiveView(state);
-    const auto line = probeReadout(state, x, displayY);
+    const auto line = probeLine(state, x, displayY);
     m_probeLabel->setText(line);
     m_diagnosticsModel->appendProbeLine(line);
     updateDiagnostics();

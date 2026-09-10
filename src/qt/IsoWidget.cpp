@@ -156,14 +156,12 @@ void IsoWidget::setGeometries(const std::vector<const DatasetMetadata*>& metadat
         // forgets setSlicePositions draws the planes mid-domain instead of
         // clamped to the lower face by the {0,0,0} default.
         m_slicePositions = m_domain.center().values;
-        m_physicalSlicePositions = m_slicePositions;
     }
     update();
 }
 
 void IsoWidget::setSlicePositions(double x, double y, double z)
 {
-    m_physicalSlicePositions = {x, y, z};
     // Each coordinate through the dataset that holds it: along the axis two
     // datasets share a plane on, the bands differ.
     Real3 point{{x, y, z}};

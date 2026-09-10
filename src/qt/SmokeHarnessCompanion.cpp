@@ -50,6 +50,7 @@ Outcome dispatchCompanion(Context& context)
         constexpr int xz = 1;
         constexpr int xy = 2;
         auto phase = std::make_shared<int>(0);
+        auto quietSettles = std::make_shared<int>(0);
         const auto fail = [&application](const char* message) {
             qCritical("%s", message);
             application.exit(1);
@@ -84,8 +85,8 @@ Outcome dispatchCompanion(Context& context)
                 window.rubberBandZoomActiveViewForTest();
             });
         QObject::connect(&window, &amrvis::qt::MainWindow::companionOpenFinished,
-            &application, [&window, &application, fail, phase, upper](bool success) {
-                if (*phase == 4) {
+            &application, [&window, &application, fail, phase, quietSettles, upper](bool success) {
+                if (*phase == 5) {
                     // The refused second companion: the first stays.
                     if (success || !window.companionOpen()
                         || window.panelTileCountForTest(xz) != 2) {
@@ -154,7 +155,7 @@ Outcome dispatchCompanion(Context& context)
                 // primary's full-domain rasters back after the zoom.
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application, [&window, fail, phase, upper] {
+                    &application, [&window, fail, phase, quietSettles, upper] {
                         if (*phase == 0) {
                             *phase = 1;
                             if (window.panelTileVisibleForTest(xy, 0)
@@ -231,6 +232,13 @@ Outcome dispatchCompanion(Context& context)
                             window.enableVisibleRasterForTest();
                             return;
                         }
+                        if (*phase == 4) {
+                            // A settle while the pair should be at rest: the
+                            // follower and the primary's Visible sync are
+                            // feeding each other.
+                            ++*quietSettles;
+                            return;
+                        }
                         if (*phase == 3) {
                             *phase = 4;
                             const auto primaryRange = window.layerDisplayRangeForTest(0, xz);
@@ -241,10 +249,21 @@ Outcome dispatchCompanion(Context& context)
                                 fail("Same as primary did not give the companion the primary's range");
                                 return;
                             }
-                            // A second companion that cannot pair (the primary's
-                            // own path overlaps it everywhere) must be refused
-                            // without disturbing the one on show.
-                            window.openCompanion(upper);
+                            // With the primary in Visible mode and the companion
+                            // following it, nothing may keep re-slicing.
+                            QTimer::singleShot(600, &window,
+                                [&window, fail, phase, quietSettles, upper] {
+                                    if (*quietSettles != 0) {
+                                        fail("range following kept re-slicing at rest");
+                                        return;
+                                    }
+                                    // A second companion that cannot pair (the
+                                    // primary's own path overlaps it everywhere)
+                                    // must be refused without disturbing the one
+                                    // on show.
+                                    *phase = 5;
+                                    window.openCompanion(upper);
+                                });
                             return;
                         }
                         if (*phase != 1) {

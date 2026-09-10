@@ -141,7 +141,6 @@ private:
     // The same in physical coordinates, to place the slice positions.
     std::vector<RealBox> m_physicalDomains;
     DisplayMap m_displayMap;
-    std::array<double, 3> m_physicalSlicePositions{0.0, 0.0, 0.0};
     std::vector<LevelBoxes> m_levels;
     std::array<double, 3> m_slicePositions{0.0, 0.0, 0.0};
     bool m_slicePlanesVisible = false;

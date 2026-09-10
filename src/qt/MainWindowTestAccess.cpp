@@ -119,7 +119,7 @@ void MainWindow::requestActiveViewSliceForTest()
 
 bool MainWindow::activeViewSliceMatchesSessionForTest() const
 {
-    if (!m_dataset || m_activeView == nullptr
+    if (!primary().session || m_activeView == nullptr
         || !m_activeView->hasCachedRequest) {
         return false;
     }
@@ -128,7 +128,7 @@ bool MainWindow::activeViewSliceMatchesSessionForTest() const
     // generation, remotely the server's per-connection counter -- so these
     // disagree exactly when a view is still showing the outgoing session.
     return m_activeView->cachedRequest.dataset.value
-        == m_dataset->id().value;
+        == primary().session->id().value;
 }
 
 std::optional<int> MainWindow::prefetchedSequenceFrameForTest() const
@@ -191,13 +191,13 @@ std::uint64_t MainWindow::visibleSyncStaleSkipsForTest() const noexcept
 void MainWindow::configureContourSyncForTest(
     int count, bool logarithmic, std::array<double, 3> slicePositions)
 {
-    if (!m_dataset) {
+    if (!primary().session) {
         return;
     }
     m_slicePosition3d = slicePositions;
     // Set range/log through the controller (requestSlice reads it) without
     // signals, so only the single scheduleSliceRequest below re-slices.
-    m_range->setSelection({RangeMode::Visible, std::nullopt, logarithmic});
+    primary().range->setSelection({RangeMode::Visible, std::nullopt, logarithmic});
     m_displayMode = DisplayMode::RasterContours;
     m_contourCount = count;
     scheduleSliceRequest(false);
@@ -226,21 +226,21 @@ MainWindow::contourViewProbesForTest()
 
 void MainWindow::enableVisibleRasterForTest()
 {
-    if (!m_dataset) {
+    if (!primary().session) {
         return;
     }
-    m_range->setSelection(
-        {RangeMode::Visible, std::nullopt, m_range->logarithmic()});
+    primary().range->setSelection(
+        {RangeMode::Visible, std::nullopt, primary().range->logarithmic()});
     m_displayMode = DisplayMode::Raster;
     scheduleSliceRequest(false);
 }
 
 void MainWindow::zoomActiveViewForTest()
 {
-    if (!m_dataset || m_activeView == nullptr) {
+    if (!primary().session || m_activeView == nullptr) {
         return;
     }
-    const auto bounds = datasetSampleBounds(m_dataset->metadata());
+    const auto bounds = datasetSampleBounds(primary().session->metadata());
     auto subregion = bounds;
     const auto centre = bounds.center();
     const auto axes = displayAxes(m_activeView->normal);
@@ -308,7 +308,7 @@ bool MainWindow::activeViewRasterMatchesDisplayRangeForTest()
 
 bool MainWindow::activeViewUsesViewportBoundedOutputForTest() const
 {
-    if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)
+    if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(primary().session)
         || m_activeView == nullptr || m_activeView->plane->width <= 0
         || m_activeView->plane->height <= 0) {
         return false;
@@ -331,11 +331,11 @@ bool MainWindow::activeViewUsesNativeOutputForTest() const
 
 bool MainWindow::allViewsUseViewportBoundedOutputForTest() const
 {
-    if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset)) {
+    if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(primary().session)) {
         return false;
     }
     const std::array<const PlaneViewState*, 3> threeDimensional{
-        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+        &primary().planeViews[0], &primary().planeViews[1], &primary().planeViews[2]};
     const auto check = [&](const PlaneViewState& state) {
         if (state.plane->width <= 1 || state.plane->height <= 1) {
             return false;
@@ -389,7 +389,7 @@ bool MainWindow::allViewsFixedScaleRasterCoversViewportForTest() const
         return check(m_view2d);
     }
     const std::array<const PlaneViewState*, 3> threeDimensional{
-        &m_planeViews[0], &m_planeViews[1], &m_planeViews[2]};
+        &primary().planeViews[0], &primary().planeViews[1], &primary().planeViews[2]};
     return m_viewDimension == 3
         && std::all_of(threeDimensional.begin(), threeDimensional.end(),
             [&](const auto* state) { return check(*state); });
@@ -398,7 +398,7 @@ bool MainWindow::allViewsFixedScaleRasterCoversViewportForTest() const
 bool MainWindow::activeViewHasPhysicalAspectForTest(
     double expectedAspect) const
 {
-    if (!m_dataset || m_activeView == nullptr
+    if (!primary().session || m_activeView == nullptr
         || m_activeView->plane->width <= 0
         || m_activeView->plane->height <= 0 || !(expectedAspect > 0.0)) {
         return false;
@@ -411,7 +411,7 @@ bool MainWindow::activeViewHasPhysicalAspectForTest(
 
 bool MainWindow::activeViewRasterHasCellAspectForTest() const
 {
-    if (!m_openMetadata || m_openMetadata->levels.empty()
+    if (!primary().openMetadata || primary().openMetadata->levels.empty()
         || m_activeView == nullptr || m_activeView->plane->width <= 0
         || m_activeView->plane->height <= 0) {
         return false;
@@ -420,7 +420,7 @@ bool MainWindow::activeViewRasterHasCellAspectForTest() const
     // sample it more coarsely or finely, but at the same aspect. A raster
     // fitted to the physical aspect misses this by the cells' own aspect
     // ratio, far outside the rounding the tolerance allows for.
-    const auto cells = finestNativeOutputSize(*m_openMetadata,
+    const auto cells = finestNativeOutputSize(*primary().openMetadata,
         m_activeView->plane->physicalRegion, m_activeView->normal);
     const auto expected = static_cast<double>(cells[0]) / cells[1];
     const auto actual = static_cast<double>(m_activeView->plane->width)
@@ -480,6 +480,53 @@ bool MainWindow::scaleBarActionEnabledForTest() const
 bool MainWindow::aspectMenuEnabledForTest() const
 {
     return m_aspectMenu != nullptr && m_aspectMenu->isEnabled();
+}
+
+int MainWindow::panelTileCountForTest(int normal) const
+{
+    if (normal < 0 || normal > 2) {
+        return 0;
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    int count = 0;
+    for (std::size_t tile = 0; view != nullptr && tile < view->tileCount(); ++tile) {
+        count += view->hasTileImage(tile) ? 1 : 0;
+    }
+    return count;
+}
+
+QRectF MainWindow::panelTileRectForTest(int normal, int tile) const
+{
+    if (normal < 0 || normal > 2 || tile < 0) {
+        return {};
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    return view == nullptr ? QRectF()
+                           : view->tileSceneRect(static_cast<std::size_t>(tile));
+}
+
+bool MainWindow::panelTileVisibleForTest(int normal, int tile) const
+{
+    if (normal < 0 || normal > 2 || tile < 0) {
+        return false;
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    return view != nullptr && view->isTileVisible(static_cast<std::size_t>(tile));
+}
+
+QString MainWindow::layerFieldNameForTest(int layer, int normal) const
+{
+    if (layer < 0 || layer > 1 || normal < 0 || normal > 2) {
+        return {};
+    }
+    return m_layers[static_cast<std::size_t>(layer)]
+        .planeViews[static_cast<std::size_t>(normal)].fieldName;
+}
+
+void MainWindow::setCompanionPerpendicularScaleForTest(double factor)
+{
+    m_layers[1].perpendicularScale = factor;
+    applyDisplayStretches();
 }
 
 double MainWindow::activeViewStretchRatioForTest() const
@@ -587,8 +634,8 @@ bool MainWindow::activeViewHasFocusForTest() const
 
 void MainWindow::focusLevelSelectorForTest()
 {
-    if (m_levelSelector != nullptr) {
-        m_levelSelector->setFocus(::Qt::OtherFocusReason);
+    if (primary().levelSelector != nullptr) {
+        primary().levelSelector->setFocus(::Qt::OtherFocusReason);
     }
 }
 
@@ -675,11 +722,11 @@ QString MainWindow::scaleMenuCheckedLabelForTest() const
 
 QRectF MainWindow::datasetPhysicalDomainForTest() const
 {
-    if (!m_openMetadata || m_openMetadata->levels.empty()
+    if (!primary().openMetadata || primary().openMetadata->levels.empty()
         || m_activeView == nullptr) {
         return {};
     }
-    const auto domain = datasetSampleBounds(*m_openMetadata);
+    const auto domain = datasetSampleBounds(*primary().openMetadata);
     const auto axes = displayAxes(m_activeView->normal);
     const auto x = static_cast<std::size_t>(axes[0]);
     const auto y = static_cast<std::size_t>(axes[1]);
@@ -689,12 +736,12 @@ QRectF MainWindow::datasetPhysicalDomainForTest() const
 
 double MainWindow::activeViewFinestCellSizeForTest() const
 {
-    if (!m_openMetadata || m_openMetadata->levels.empty()
+    if (!primary().openMetadata || primary().openMetadata->levels.empty()
         || m_activeView == nullptr) {
         return 0.0;
     }
-    const auto& finest = m_openMetadata->levels[static_cast<std::size_t>(
-        std::max(0, m_openMetadata->finestLevel))];
+    const auto& finest = primary().openMetadata->levels[static_cast<std::size_t>(
+        std::max(0, primary().openMetadata->finestLevel))];
     return finest.cellSize[static_cast<std::size_t>(
         displayAxes(m_activeView->normal)[0])];
 }
@@ -943,16 +990,16 @@ bool MainWindow::activeViewFitsWindowForTest() const
 
 void MainWindow::setCacheBudgetForTest(std::uint64_t bytes)
 {
-    if (m_dataset) {
+    if (primary().session) {
         // The return (whether resident already fits) is irrelevant here; the
         // next non-cache slice re-pins and triggers the fallback.
-        static_cast<void>(m_dataset->setCacheBudget(bytes));
+        static_cast<void>(primary().session->setCacheBudget(bytes));
     }
 }
 
 std::uint64_t MainWindow::cacheResidentBytesForTest() const
 {
-    return m_dataset ? m_dataset->cacheMetrics().residentBytes : 0;
+    return primary().session ? primary().session->cacheMetrics().residentBytes : 0;
 }
 
 void MainWindow::setParticleSelectionForTest(

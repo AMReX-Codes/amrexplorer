@@ -18,10 +18,11 @@ RangeController::RangeController(QObject* parent)
 {
 }
 
-void RangeController::createToolbarWidgets(QToolBar* toolbar)
+void RangeController::createToolbarWidgets(QToolBar* toolbar,
+    const QString& objectNamePrefix)
 {
     m_mode = new QComboBox(toolbar);
-    m_mode->setObjectName(QStringLiteral("rangeModeSelector"));
+    m_mode->setObjectName(objectNamePrefix + QStringLiteral("rangeModeSelector"));
     m_mode->addItem(tr("File"), static_cast<int>(RangeMode::File));
     m_mode->addItem(tr("Level"), static_cast<int>(RangeMode::Level));
     m_mode->addItem(tr("Visible"), static_cast<int>(RangeMode::Visible));
@@ -246,6 +247,13 @@ void RangeController::updateAvailability(
     }
     emit statusMessage(
         tr("Metadata range unavailable; using the visible-data range."), 0);
+}
+
+void RangeController::setLogarithmicVisible(bool visible)
+{
+    if (m_logarithmic != nullptr) {
+        m_logarithmic->setVisible(visible);
+    }
 }
 
 } // namespace amrvis::qt

@@ -1231,6 +1231,23 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_remote_physical_aspect_smoke PROPERTIES TIMEOUT 30)
 
+    # Two plotfiles in one window: an atmosphere over an ocean touching at
+    # z = 0 (tests/data/plotfile_3d_pair_*). Tiles stack at their physical
+    # positions, the XY panel follows the slice position across the
+    # interface, each layer keeps its own field, and closing restores one.
+    add_test(
+        NAME qt_companion_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_companion"
+            -DMODE=companion
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_companion_smoke PROPERTIES TIMEOUT 30)
+
     add_test(
         NAME qt_remote_rubber_aspect_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
@@ -1333,6 +1350,15 @@ if(TARGET amrexplorer_qt)
         PRIVATE amrexplorer::core amrexplorer::warnings
     )
     add_test(NAME aspect_mode COMMAND test_aspect_mode)
+
+    add_executable(test_pair_geometry unit/test_pair_geometry.cpp)
+    target_include_directories(test_pair_geometry
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
+    )
+    target_link_libraries(test_pair_geometry
+        PRIVATE amrexplorer::core amrexplorer::warnings
+    )
+    add_test(NAME pair_geometry COMMAND test_pair_geometry)
 
     add_executable(test_scientific_double_spin_box
         unit/test_scientific_double_spin_box.cpp

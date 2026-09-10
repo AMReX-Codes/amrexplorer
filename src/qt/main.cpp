@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -38,11 +39,13 @@ QtMessageHandler g_previousMessageHandler = nullptr;
 void printUsage(std::FILE* output)
 {
     std::fprintf(output,
-        "usage: amrexplorer [PLOTFILE...]\n"
+        "usage: amrexplorer [PLOTFILE...] [--companion PLOTFILE]\n"
         "       amrexplorer --ssh SSH_DESTINATION [--server PATH] [--] "
         "[REMOTE_PLOTFILE...]\n\n"
         "Open one plotfile directory, or several to play them as a\n"
         "sequence, or none for an empty window.\n\n"
+        "  --companion PLOTFILE   show a second 3-D plotfile beside the first;\n"
+        "                         the two must share a plane\n"
         "  --ssh SSH_DESTINATION  run amrexplorer-server on the destination\n"
         "                         through ssh and open the remote plotfile\n"
         "                         paths there; with no paths, only establish\n"
@@ -457,11 +460,31 @@ int main(int argc, char* argv[])
     } else if (argc >= 2 && !std::string_view(argv[1]).starts_with("-")) {
         // One or more plotfile paths: a single path opens a dataset, two or
         // more open a plotfile sequence (matching the GUI's Open Plotfile
-        // Sequence, which also takes plotfile directories).
+        // Sequence, which also takes plotfile directories). A trailing
+        // "--companion PATH" opens that plotfile beside the first once its
+        // slices are up (File > Open Companion Plotfile...).
         std::vector<std::filesystem::path> paths;
+        std::optional<std::filesystem::path> companion;
         paths.reserve(static_cast<std::size_t>(argc - 1));
         for (int index = 1; index < argc; ++index) {
+            if (std::string_view(argv[index]) == "--companion") {
+                if (index + 1 >= argc) {
+                    std::fprintf(stderr,
+                        "amrexplorer: --companion requires a plotfile path\n");
+                    return 2;
+                }
+                companion = std::filesystem::path(argv[++index]);
+                continue;
+            }
             paths.emplace_back(argv[index]);
+        }
+        if (companion) {
+            QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+                &window, [&window, companion](bool success) {
+                    if (success) {
+                        window.openCompanion(*companion);
+                    }
+                }, Qt::SingleShotConnection);
         }
         QTimer::singleShot(0, &window, [&window, paths] {
             if (paths.size() == 1) {

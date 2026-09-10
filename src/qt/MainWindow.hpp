@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AspectMode.hpp"
+#include "PairGeometry.hpp"
 #include "DatasetWindow.hpp"
 #include "ExportFrame.hpp"
 #include "ImageView.hpp"
@@ -46,6 +47,7 @@ class QCloseEvent;
 class QComboBox;
 class QDockWidget;
 class QLabel;
+class QToolBar;
 class QSpinBox;
 class QLineF;
 class QMenu;
@@ -54,6 +56,7 @@ class QPushButton;
 class QStackedWidget;
 class QTimer;
 class QTreeWidget;
+class QTreeWidgetItem;
 class QRectF;
 class QWidget;
 
@@ -124,6 +127,14 @@ public:
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.
     void openSequence(const std::vector<std::filesystem::path>& frames);
+    // Show a second local 3-D plotfile beside the open one: the two must
+    // share a plane (see PairGeometry). The companion is a secondary load
+    // onto the installed dataset; it is closed again by closeCompanion, by
+    // any other open, and when its geometry cannot pair. Emits
+    // companionOpenFinished either way.
+    void openCompanion(const std::filesystem::path& path);
+    void closeCompanion();
+    [[nodiscard]] bool companionOpen() const noexcept { return m_layers[1].active; }
     // Steps the open sequence by direction frames, wrapping at the ends; the
     // same slot the sequence step buttons and the smoke test hook use.
     void stepSequence(int direction);
@@ -443,6 +454,17 @@ public:
     }
     [[nodiscard]] bool aspectMenuEnabledForTest() const;
     [[nodiscard]] double activeViewStretchRatioForTest() const;
+    // Test-only: the companion (paired) display. Tiles are indexed by layer;
+    // rects are in the panel's scene units.
+    [[nodiscard]] int panelTileCountForTest(int normal) const;
+    [[nodiscard]] QRectF panelTileRectForTest(int normal, int tile) const;
+    [[nodiscard]] bool panelTileVisibleForTest(int normal, int tile) const;
+    [[nodiscard]] QString layerFieldNameForTest(int layer, int normal) const;
+    void setSlicePositionForTest(int axis, double value)
+    {
+        setSlicePosition(axis, value);
+    }
+    void setCompanionPerpendicularScaleForTest(double factor);
 
     // Test-only: shrink the open dataset's cache budget to force cache-pressure
     // fallback on the next non-cache slice, and read the current resident bytes
@@ -480,6 +502,9 @@ public:
 signals:
     void datasetOpenFinished(bool success);
     void initialSliceFinished(bool success);
+    // Emitted once a companion's slices are on screen, or when its load or
+    // pairing failed (the primary stays as it was).
+    void companionOpenFinished(bool success);
     // Emitted when an interactive re-slice batch (a mode/range/log/field
     // change, pan, or zoom) finishes with no slice work left in flight. The
     // contour-sync smoke test waits on it. Not emitted for the initial load.
@@ -509,6 +534,10 @@ private:
         ImageView* view = nullptr;
         int normal = 1;
         QString label;      // "2-D" / "YZ" / "XZ" / "XY"
+        // The dataset layer this state slices for, and the tile of `view` it
+        // draws into: 0 for the primary dataset, 1 for a companion.
+        std::size_t layer = 0;
+        std::size_t tile = 0;
         // The displayed plane and its contour-mode companions are immutable
         // shared snapshots, never null (empty planes when nothing is shown),
         // never mutated in place. An executeSlice arrival installs a *fresh*
@@ -590,7 +619,93 @@ private:
         int pendingRequests = 0;
     };
 
+    // One dataset shown in this window and everything that belongs to it
+    // alone: its session and catalog, its field and level selectors, its
+    // range controls and colour bar, and one PlaneViewState per 3-D panel.
+    // The primary layer is always index 0; a companion dataset occupies
+    // index 1 while one is open. The array is fixed so every PlaneViewState
+    // keeps its address for the lambdas that capture it.
+    struct DatasetLayer {
+        bool active = false;
+        std::shared_ptr<DatasetSession> session;
+        std::shared_ptr<const DatasetMetadata> openMetadata;
+        std::string fileVersion;
+        std::filesystem::path path;
+        QString name;
+        QComboBox* fieldSelector = nullptr;
+        QComboBox* levelSelector = nullptr;
+        // Owns the range mode, User min/max and Log widgets and the per-field
+        // range memory; selection() feeds every slice request and frame spec.
+        RangeController* range = nullptr;
+        ColorBarWidget* colorBar = nullptr;
+        // Which session is installed. Bumped wherever the session is replaced
+        // or cleared, and captured by a slice request at submission: an
+        // arrival whose stamp no longer matches was computed against a
+        // session that is gone, and the catalog, field list and colour bar on
+        // screen are the new one's.
+        //
+        // Note what this cannot do on its own. In the common ordering an
+        // interactive slice finishes *before* the reload installs, so its
+        // stamp still matches and it is rightly accepted -- it only goes stale
+        // a moment later. Acceptance is therefore only half the invariant; the
+        // other half is that a view whose display the reload skipped is
+        // re-sliced, so no view keeps a raster from a session that is no
+        // longer installed.
+        std::uint64_t sessionEpoch = 0;
+        // Display stretch factor along the axis perpendicular to the plane
+        // two paired datasets share (see PairGeometry); unused alone.
+        double perpendicularScale = 1.0;
+        std::array<PlaneViewState, 3> planeViews;
+        // The 3-D visible-range sync's single-flight state (see
+        // syncVisibleRanges) and the full-domain range store it defers.
+        bool visibleSyncInFlight = false;
+        bool visibleSyncRerun = false;
+        std::optional<amrvis::DisplayCoordinator::RangeKey> pendingRangeStore;
+    };
+
+    [[nodiscard]] DatasetLayer& primary() noexcept { return m_layers[0]; }
+    [[nodiscard]] const DatasetLayer& primary() const noexcept
+    {
+        return m_layers[0];
+    }
+    [[nodiscard]] DatasetLayer& layerFor(const PlaneViewState& state) noexcept
+    {
+        return m_layers[state.layer];
+    }
+    [[nodiscard]] const DatasetLayer& layerFor(
+        const PlaneViewState& state) const noexcept
+    {
+        return m_layers[state.layer];
+    }
+
     void chooseDataset();
+    void chooseCompanion();
+    // What a companion load hands back: the catalog it read, how it pairs
+    // with the primary, and the rendered first slices.
+    struct CompanionLoad {
+        PlotfileMetadataResult metadata;
+        PairGeometry geometry;
+        InitialSliceResult result;
+    };
+    void installCompanion(const std::filesystem::path& path, CompanionLoad load);
+    void configureCompanionControls();
+    // Which views a companion's controls and states reach.
+    void scheduleLayerSliceRequests(DatasetLayer& layer);
+    // The per-panel layouts follow the pair geometry and the aspect settings;
+    // applying them re-places every tile without re-rendering.
+    void updatePairLayouts();
+    void applyPairLayouts();
+    [[nodiscard]] const PairLayout& pairLayout(int normal) const noexcept
+    {
+        return m_pairLayouts[static_cast<std::size_t>(std::clamp(normal, 0, 2))];
+    }
+    // The panel normal to the perpendicular axis shows one layer at a time:
+    // the one whose domain holds the slice position along that axis.
+    [[nodiscard]] bool stateShown(const PlaneViewState& state) const noexcept;
+    void updateShownLayers();
+    // Actions that have no meaning with two datasets open are disabled while
+    // a companion is, and restored when it closes.
+    void updatePairedModeControls();
     void chooseStandaloneDataset(const QString& caption, bool rawFab);
     struct RemoteOpen {
         std::shared_ptr<remote::Connection> connection;
@@ -685,7 +800,7 @@ private:
     [[nodiscard]] bool addUnavailableFieldItem(
         const QString& name, const QString& tooltip);
     // Whether a load built from the window's state as it stands can install
-    // derived fields. Deliberately not asked of m_dataset: a sequence builds
+    // derived fields. Deliberately not asked of primary().session: a sequence builds
     // its first spec while the *outgoing* dataset is still installed (see
     // prepareSequence), so frame 0 would load without the definitions and
     // frame 1 would make them appear. A prepared session cannot take them
@@ -743,6 +858,7 @@ private:
     // Which metadata-backed range modes the current field/level offers,
     // handed to the RangeController (which falls back to Visible if needed).
     void updateRangeModeAvailability();
+    void updateRangeModeAvailability(DatasetLayer& layer);
     void showContoursDialog();
     // Draws the ParticleController's samples into a view: the projection and
     // the plane mapping are the host's, the settings and samples are its.
@@ -764,7 +880,10 @@ private:
     // The dialog edits m_axisScale; applyAxisScale installs a new set and
     // resetAxisScale returns to unit factors when a dataset is opened.
     void showAxisScalingDialog();
-    void applyAxisScale(const std::array<double, 3>& axisScale);
+    // The shared-axis factors, and with a companion each layer's factor along
+    // the perpendicular axis.
+    void applyAxisScale(const std::array<double, 3>& axisScale,
+        std::optional<std::array<double, 2>> perpendicularScale = std::nullopt);
     void resetAxisScale();
     void setAspectMode(AspectMode mode);
     [[nodiscard]] std::array<double, 3> displayStretchPerAxis() const;
@@ -806,6 +925,10 @@ private:
     void showKeyboardMouseReference();
     void showAboutDialog();
     void showMetadata(const PlotfileMetadataResult& result, const std::filesystem::path& path);
+    // The rows for one dataset, at the top level (root null) or under a parent
+    // row when two datasets are listed.
+    void appendMetadataRows(QTreeWidgetItem* root,
+        const PlotfileMetadataResult& result, const std::filesystem::path& path);
     // Re-renders the Diagnostics panel; the model owns the counters, this
     // window only supplies the lines it alone knows (see the model's Hooks).
     void updateDiagnostics();
@@ -820,15 +943,29 @@ private:
     void restoreSettings();
     void saveSettings();
 
-    // Per-view wiring and display updates.
-    void wireView(PlaneViewState& state);
-    // Every view state, whatever the current dimension -- the 2-D view and all
-    // three slice panels. currentViews() answers a narrower question: the views
-    // the *displayed* dataset uses. Teardown and failure states have to reach
-    // all four, since the dimension they were showing is already gone.
-    [[nodiscard]] std::array<PlaneViewState*, 4> allViewStates();
+    // Per-view wiring and display updates. A panel's ImageView is wired once
+    // for the signals that belong to the panel (zoom, fit, resize, scroll,
+    // pan) and fanned out to every layer's state on it; each state is wired
+    // for the tile-addressed signals (probe, line plot, slice move), taking
+    // only those for its own tile. Wiring per state for everything would
+    // fire the panel signals once per layer.
+    void wirePanelSignals(ImageView* view, int normal);
+    void wireTileSignals(PlaneViewState& state);
+    // Every view state of every layer, whatever the current dimension -- the
+    // 2-D view and both layers' slice panels. currentViews() answers a
+    // narrower question: the views the *displayed* datasets use. Teardown and
+    // failure states have to reach them all, since the dimension they were
+    // showing is already gone.
+    [[nodiscard]] std::vector<PlaneViewState*> allViewStates();
     void setAllViewPlaceholders(const QString& text);
+    // The active layers' states for the current dimension: three per layer in
+    // 3-D, the 2-D view otherwise.
     [[nodiscard]] std::vector<PlaneViewState*> currentViews();
+    // The primary layer's states only: what a dataset load produces one
+    // display per, and what frame specs and exports enumerate.
+    [[nodiscard]] std::vector<PlaneViewState*> primaryViews();
+    // The states drawn on one 3-D panel, one per active layer.
+    [[nodiscard]] std::vector<PlaneViewState*> statesForPanel(int normal);
     void setActiveView(PlaneViewState& state);
     // Give the active view keyboard focus so the arrow-key pan works on a
     // freshly opened dataset without a click first -- unless the user is
@@ -975,12 +1112,17 @@ private:
     // on the per-view render generation (see PlaneViewState::renderGeneration) --
     // if any panel was re-sliced mid-sync the whole outcome is dropped and the
     // rerun recomputes it.
+    // Per layer: each dataset has its own range and colour bar, so its three
+    // panels are synchronized on their own. The no-argument form runs it for
+    // every active layer.
     void syncVisibleRanges();
+    void syncVisibleRanges(DatasetLayer& layer);
     // Panel slices currently on a worker (summed PlaneViewState::pendingRequests);
     // the visible-range sync defers dispatch until this is zero. Panel work only
     // -- excludes particle/line-plot/prefetch requests, which the
     // DiagnosticsModel's active count tracks.
     [[nodiscard]] int slicesInFlight() const;
+    [[nodiscard]] int slicesInFlight(const DatasetLayer& layer) const;
 
     // Slice requests: the debounce timer coalesces into per-view requests.
     // rasterDirty false means the trigger (contour mode/count) cannot change
@@ -1092,7 +1234,6 @@ private:
     // predates full-precision values; a status message would be
     // overwritten by the open that follows the session's ready line.
     QLabel* m_remotePrecisionLabel = nullptr;
-    ColorBarWidget* m_colorBar = nullptr;
     LinePlotWindow* m_linePlotWindow = nullptr;
     // Cancels in-flight line-plot queries on dataset switch or window close so
     // a late result neither reopens a closed window nor wastes I/O.
@@ -1103,11 +1244,6 @@ private:
     QDialog* m_lengthUnitsDialog = nullptr;
     QDialog* m_axisScalingDialog = nullptr;
     UserGuideDialog* m_userGuideDialog = nullptr;
-    QComboBox* m_fieldSelector = nullptr;
-    QComboBox* m_levelSelector = nullptr;
-    // Owns the range mode, User min/max and Log widgets and the per-field
-    // range memory; selection() feeds every slice request and frame spec.
-    RangeController* m_range = nullptr;
     QWidget* m_slicePositionControls = nullptr;
     QAction* m_positionSeparator = nullptr;
     std::array<QSpinBox*, 3> m_sliceSpinboxes{nullptr, nullptr, nullptr};
@@ -1130,9 +1266,6 @@ private:
     // pending range-store key carries the "cache the full-domain union after
     // the sync" step (see the slice-arrival completion) into the sync
     // completion, where the union is actually known.
-    bool m_visibleSyncInFlight = false;
-    bool m_visibleSyncRerun = false;
-    std::optional<amrvis::DisplayCoordinator::RangeKey> m_pendingRangeStore;
 #ifdef AMREXPLORER_QT_TEST_ACCESS
     // Test-only: run just after an initial-slice load is launched; see
     // setInitialSliceLaunchedHookForTest.
@@ -1148,22 +1281,10 @@ private:
     std::uint64_t m_visibleSyncStaleSkips = 0;
 #endif
     // Whether the connection a remote sequence was opened on can install
-    // derived fields. Captured there rather than asked of m_dataset, for the
+    // derived fields. Captured there rather than asked of primary().session, for the
     // reason derivedFieldsReachNextLoad gives: frame 0's spec is built while
     // the outgoing dataset is still installed.
     bool m_remoteSequenceDerivedFields = false;
-    // Which session is installed. Bumped wherever m_dataset is replaced or
-    // cleared, and captured by a slice request at submission: an arrival whose
-    // stamp no longer matches was computed against a session that is gone, and
-    // the catalog, field list and colour bar on screen are the new one's.
-    //
-    // Note what this cannot do on its own. In the common ordering an
-    // interactive slice finishes *before* the reload installs, so its stamp
-    // still matches and it is rightly accepted -- it only goes stale a moment
-    // later. Acceptance is therefore only half the invariant; the other half is
-    // that a view whose display the reload skipped is re-sliced, so no view
-    // keeps a raster from a session that is no longer installed.
-    std::uint64_t m_sessionEpoch = 0;
     // The list a reload has already been asked for, with the session epoch it
     // was asked under. What bounds the reopens is no longer the memo itself:
     // any install invalidates it, so the bound rests on no install ever leaving
@@ -1241,11 +1362,20 @@ private:
     // (progress, cancellation, FFmpeg encoding). This window supplies frame
     // rendering and sequence navigation, and restores its UI on finished().
     AnimationExporter* m_animationExporter = nullptr;
-    std::shared_ptr<DatasetSession> m_dataset;
-    std::shared_ptr<const DatasetMetadata> m_openMetadata;
-    std::string m_fileVersion;
+    std::array<DatasetLayer, 2> m_layers;
+    // Set while a companion is open: how the two layers' domains meet, and the
+    // scene layout of each 3-D panel derived from it (index = normal).
+    std::optional<PairGeometry> m_pair;
+    std::array<PairLayout, 3> m_pairLayouts;
+    QToolBar* m_companionToolbar = nullptr;
+    QLabel* m_companionLabel = nullptr;
+    QAction* m_closeCompanionAction = nullptr;
+    QAction* m_volumeAction = nullptr;
+    QAction* m_particlesAction = nullptr;
+    StopSource m_companionStopSource;
+    std::uint64_t m_companionGeneration = 0;
+    // The 2-D page's one view state; it always slices the primary layer.
     PlaneViewState m_view2d;
-    std::array<PlaneViewState, 3> m_planeViews;
     PlaneViewState* m_activeView = nullptr;
     int m_viewDimension = 0;
     std::array<double, 3> m_slicePosition3d{0.0, 0.0, 0.0};

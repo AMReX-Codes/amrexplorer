@@ -24,7 +24,8 @@
 #                 sequence-equal-size-transform-preserve |
 #                 sequence-geometry-refit | sequence-noop | sequence-failure |
 #                 remote-canvas-wheel | remote-cell-aspect |
-#                 physical-aspect | remote-physical-aspect | volume |
+#                 physical-aspect | remote-physical-aspect | companion |
+#                 volume |
 #                 derived-field | derived-field-sequence |
 #                 derived-field-frames | derived-field-playback |
 #                 scale-state | effective-scale |
@@ -229,6 +230,12 @@ elseif(MODE STREQUAL "remote-physical-aspect")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --remote-physical-aspect-smoke-test
         "${WORK}/plt")
+elseif(MODE STREQUAL "companion")
+    # Two plotfiles sharing a plane: SOURCE above SOURCE2, touching at z = 0.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    run_or_die("${AMREXPLORER_QT}" --companion-smoke-test
+        "${WORK}/upper" "${WORK}/lower")
 elseif(MODE STREQUAL "remote-canvas-wheel")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --remote-canvas-wheel-smoke-test

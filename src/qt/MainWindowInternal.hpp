@@ -306,4 +306,28 @@ inline std::atomic<int> waiting{0};        // # of workers currently parked
 } // namespace visible_sync_test
 #endif
 
+// Fill a level combo for a dataset with the given finest level: "Finest
+// available", the composite "Levs 0-N" rows, then "Level N only". Shared by
+// the primary's selector and a companion's.
+inline void populateLevelCombo(QComboBox* combo, int finestLevel)
+{
+    combo->clear();
+    combo->addItem(QObject::tr("Finest available"), -1);
+    // "Level N only" is redundant when there is only one level; the whole
+    // block is skipped for finestLevel == 0 so the combo shows just the
+    // "Finest available" entry.
+    if (finestLevel <= 0) {
+        return;
+    }
+    // "Update to Level N" (composite 0..N) in reverse order, from
+    // finestLevel-1 down to 1; only when there are at least three levels.
+    for (int level = finestLevel - 1; level >= 1; --level) {
+        combo->addItem(QObject::tr("Levs 0-%1").arg(level),
+            kUpdateToLevelOffset + level);
+    }
+    for (int level = 0; level <= finestLevel; ++level) {
+        combo->addItem(QObject::tr("Level %1 only").arg(level), level);
+    }
+}
+
 } // namespace amrvis::qt

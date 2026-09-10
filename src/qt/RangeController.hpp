@@ -47,7 +47,13 @@ public:
     // Builds the mode combo, the min/max spin boxes and the Log checkbox into
     // the toolbar, in that order (Log after a separator). Owned by the
     // toolbar; call once.
-    void createToolbarWidgets(QToolBar* toolbar);
+    // objectNamePrefix distinguishes a second controller's widgets (a
+    // companion dataset's) from the first's for tests that find them by name.
+    void createToolbarWidgets(QToolBar* toolbar,
+        const QString& objectNamePrefix = QString());
+    // The Log checkbox can be withheld when another controller's is the one
+    // that counts (a companion dataset shares the primary's log setting).
+    void setLogarithmicVisible(bool visible);
 
     [[nodiscard]] Selection selection() const;
     [[nodiscard]] RangeMode mode() const;

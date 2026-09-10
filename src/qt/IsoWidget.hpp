@@ -38,6 +38,11 @@ public:
 
     using QWidget::setGeometry;
     void setGeometry(const DatasetMetadata& metadata);
+    // Two datasets sharing a plane: the outline and the projection span the
+    // union of their domains, each domain is outlined on its own, and both
+    // level box sets are drawn.
+    void setPairedGeometry(const DatasetMetadata& primary,
+        const DatasetMetadata& companion);
     void setSlicePositions(double x, double y, double z);
     void setSlicePlanesVisible(bool visible);
     void setColorPalette(const Palette* palette);
@@ -115,7 +120,11 @@ private:
     void setViewAngles(double azimuth, double elevation);
     void layoutButtons();
 
+    void setGeometries(const std::vector<const DatasetMetadata*>& metadata);
+
     RealBox m_domain{};
+    // Each dataset's own domain when several share the widget; empty for one.
+    std::vector<RealBox> m_datasetDomains;
     std::vector<LevelBoxes> m_levels;
     std::array<double, 3> m_slicePositions{0.0, 0.0, 0.0};
     bool m_slicePlanesVisible = false;

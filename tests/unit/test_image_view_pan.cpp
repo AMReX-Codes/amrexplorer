@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QImage>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QPoint>
 #include <QPointF>
 #include <QRectF>
@@ -454,6 +455,91 @@ void tearingDownTheSceneForgetsThePointTally()
         "replacing the overlays left the point tally behind");
 }
 
+// Move the pointer over a scene point and report which tile and raster pixel
+// the view named, or -1 when it stayed silent.
+struct TileProbe {
+    int tile = -1;
+    int x = -1;
+    int y = -1;
+};
+
+TileProbe probeAt(amrvis::qt::ImageView& view, const QPointF& scenePoint)
+{
+    TileProbe probe;
+    const auto connection = QObject::connect(&view,
+        &amrvis::qt::ImageView::tileProbeMoved, &view,
+        [&probe](int tile, int x, int y) { probe = {tile, x, y}; });
+    const auto position = QPointF(view.mapFromScene(scenePoint));
+    QMouseEvent event(QEvent::MouseMove, position,
+        view.viewport()->mapToGlobal(position), Qt::NoButton, Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(view.viewport(), &event);
+    QObject::disconnect(connection);
+    return probe;
+}
+
+void tilesShareOnePlacedScene()
+{
+    amrvis::qt::ImageView view;
+    view.resize(400, 400);
+    view.show();
+    QApplication::processEvents();
+    // An upper 100x50 raster over the top of a 100x90 canvas and a lower
+    // 60x40 raster under it, offset 20 units in x: the shape of two datasets
+    // stacked along z and aligned along x.
+    view.setTileImage(0, solidImage(100, 50), QRectF(0.0, 0.0, 100.0, 50.0),
+        QRectF(0.0, 0.0, 100.0, 90.0), amrvis::qt::ImageTransformPolicy::GeometryAware);
+    view.setTileImage(1, solidImage(60, 40), QRectF(20.0, 50.0, 60.0, 40.0));
+    require(view.tileCount() == 2 && view.hasTileImage(0) && view.hasTileImage(1),
+        "two tiles were not installed");
+    require(view.tileSceneRect(1) == QRectF(20.0, 50.0, 60.0, 40.0),
+        "the second tile did not take its scene rect");
+    require(view.displaySize() == QSizeF(100.0, 90.0),
+        "displaySize is not the tiles' footprint");
+    require(view.sceneRect() == QRectF(0.0, 0.0, 100.0, 90.0),
+        "the canvas rect did not become the scene rect");
+    QApplication::processEvents();
+    // Fit frames the footprint: both tiles are inside the viewport.
+    const auto footprint = view.mapFromScene(QRectF(0.0, 0.0, 100.0, 90.0)).boundingRect();
+    require(view.viewport()->rect().contains(footprint),
+        "Fit did not frame both tiles");
+
+    // The pointer names the tile it is over, in that tile's raster pixels.
+    auto probe = probeAt(view, QPointF(50.5, 70.5));
+    require(probe.tile == 1 && probe.x == 30 && probe.y == 20,
+        "a point over the lower tile was not reported in its pixels");
+    probe = probeAt(view, QPointF(50.5, 25.5));
+    require(probe.tile == 0 && probe.x == 50 && probe.y == 25,
+        "a point over the upper tile was not reported in its pixels");
+    // A hidden tile is not hit; the point falls outside the other tile.
+    view.setTileVisible(1, false);
+    probe = probeAt(view, QPointF(50.5, 70.5));
+    require(probe.tile == -1, "a hidden tile still took the pointer");
+    view.setTileVisible(1, true);
+
+    // Overlays belong to their tile: replacing one raster keeps the other's.
+    view.setGridBoxes({{QRectF(0.0, 0.0, 10.0, 10.0), Qt::yellow, {}}}, 1);
+    view.setGridBoxes({{QRectF(0.0, 0.0, 10.0, 10.0), Qt::yellow, {}}}, 0);
+    require(view.gridBoxCount() == 2, "grid boxes were not installed per tile");
+    view.setTileImage(0, solidImage(100, 50), QRectF(0.0, 0.0, 100.0, 50.0));
+    require(view.gridBoxCount() == 1 && view.hasTileImage(1),
+        "replacing the upper tile disturbed the lower one");
+
+    // Removing the extra tile shrinks the list; the placeholder clears all.
+    view.removeTile(1);
+    require(view.tileCount() == 1 && view.hasTileImage(0),
+        "removing the second tile did not leave the first alone");
+    view.setTileImage(1, solidImage(60, 40), QRectF(20.0, 50.0, 60.0, 40.0));
+    view.setPlaceholder(QStringLiteral("Loading dataset..."));
+    require(view.tileCount() == 1 && !view.hasImage(),
+        "the placeholder left a tile behind");
+    // And setImage is the single-tile form again.
+    view.setTileImage(1, solidImage(60, 40), QRectF(20.0, 50.0, 60.0, 40.0));
+    view.setImage(solidImage(8, 8));
+    require(view.tileCount() == 1 && view.image().size() == QSize(8, 8),
+        "setImage did not reduce the view to one tile");
+}
+
 } // namespace
 
 bool nearly(double actual, double expected, double relative = 1e-9)
@@ -555,5 +641,6 @@ int main(int argc, char* argv[])
     fullyVisibleSceneIgnoresPan();
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();
     tearingDownTheSceneForgetsThePointTally();
+    tilesShareOnePlacedScene();
     return 0;
 }

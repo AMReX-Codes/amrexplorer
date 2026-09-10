@@ -42,9 +42,15 @@ contour polylines, vector glyphs, resolved color range — with no Qt dependency
 `MainWindow` is the one window; it owns the plane views (`PlaneViewState`
 per 2-D view and 3-D panel), the slice request/arrival paths, the
 visible-range sync that keeps three 3-D panels on one color range, zoom/pan,
-crosshairs and the probe, and the menus and docks. Everything else the window
-does is delegated to an **owned collaborator**, each a `QObject` created by
-the window, wired to it in one of two ways:
+crosshairs and the probe, and the menus and docks. Everything about one
+dataset lives in a `DatasetLayer` (session, catalog, field and level
+selectors, range controls, colour bar, and three plane view states); the
+window holds two, the primary and an optional companion plotfile that shares
+a plane with it (`PairGeometry`, `MainWindowCompanion.cpp`). Each
+`ImageView` draws one tile per layer in a shared scene, so a companion adds
+states and tiles rather than panels. Everything else the window does is
+delegated to an **owned collaborator**, each a `QObject` created by the
+window, wired to it in one of two ways:
 
 - **`Hooks`** — a struct of `std::function`s the window fills in at
   construction, for what the collaborator must *ask* the window (the open

@@ -35,6 +35,9 @@ You can also start without a path and use the File menu:
   Headerless `_D_*` files are supported when their companion `_H` file is
   present in the same directory.
 - **Open MultiFab...** opens a standalone MultiFab header.
+- **Open Companion Plotfile...** shows a second 3-D plotfile in the same
+  window beside the open one, when the two share a plane -- see
+  [Companion plotfiles](#companion-plotfiles). **Close Companion** removes it.
 - **Open New Window** creates an independent viewer for side-by-side
   comparison.
 - **Close Window** (Ctrl+W, Cmd+W on macOS) closes only the current window;
@@ -325,7 +328,9 @@ domain. **View > Aspect Ratio** offers two proportions:
 
 **View > Aspect Ratio > Axis Scaling...** stretches the X, Y, and Z axes by
 factors of your own, on top of the chosen proportion. Each 3-D panel applies
-the factors of the two axes it shows. The factors reset to 1 when you open a
+the factors of the two axes it shows. With a [companion
+plotfile](#companion-plotfiles) open, the axis perpendicular to the shared
+plane has one factor per dataset. The factors reset to 1 when you open a
 new dataset or sequence and are kept while stepping through a sequence's
 frames; the proportion persists across sessions.
 
@@ -361,6 +366,42 @@ directly comparable.
 The **Plane Sweep** controls in the Animation panel select an axis and step or
 play through its sample indices. The speed slider controls the delay between
 frames.
+
+### Companion plotfiles
+
+Coupled simulations often write two plotfiles that meet at a plane: an
+atmosphere above the ocean surface and the ocean below it, for example. With
+a 3-D plotfile open, choose **File > Open Companion Plotfile...** (or start
+`amrexplorer atmosphere_plt --companion ocean_plt`) to show the second one in
+the same window. The two domains must touch, or be apart, along exactly one
+axis and overlap along the other two; anything else is refused with a
+message and the open dataset stays as it was.
+
+In the two panels that show the perpendicular axis, both datasets are drawn
+stacked at their physical positions and aligned along the shared axis, each
+at one raster sample per finest cell. The panel normal to the shared plane
+shows whichever dataset holds the current slice position; moving the position
+across the interface switches it. The position control along the
+perpendicular axis counts the lower dataset's rows then the upper's, and the
+shared axes count cells over the union of the two domains.
+
+A second toolbar row, named after the companion's directory, holds its own
+**Field**, **Level**, and **Range** controls, and the Color Scale panel shows
+one bar per dataset; the palette and **Log** are shared. Probing, right-click
+slice moves, and line plots work on whichever dataset is under the pointer.
+**View > Aspect Ratio > Axis Scaling...** offers one factor per dataset along
+the perpendicular axis, so a shallow ocean can be stretched under a tall
+atmosphere, and one factor for each shared axis. Rubber-band and wheel zoom,
+panning, and the fixed scales act on the view; the rasters stay at their
+native resolution.
+
+While a companion is open the Dataset Metadata panel lists both plotfiles,
+the isometric view outlines both domains, and image export composes the
+stacked panels without axes (their two vertical scales differ). Volume
+rendering, particles, the Dataset window, sequences, remote datasets, the
+scale bar, synchronized rubber-band zoom, and derived fields for the
+companion are not available in this mode. Opening any other dataset closes
+the companion.
 
 ## Volume rendering
 

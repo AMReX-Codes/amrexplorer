@@ -71,10 +71,37 @@ IsoWidget::IsoWidget(QWidget* parent)
 
 void IsoWidget::setGeometry(const DatasetMetadata& metadata)
 {
+    setGeometries({&metadata});
+}
+
+void IsoWidget::setPairedGeometry(
+    const DatasetMetadata& primary, const DatasetMetadata& companion)
+{
+    setGeometries({&primary, &companion});
+}
+
+void IsoWidget::setGeometries(const std::vector<const DatasetMetadata*>& metadata)
+{
     const bool hadGeometry = m_hasGeometry;
     const auto previousDomain = m_domain;
-    m_hasGeometry = metadata.dimension == 3;
-    m_domain = datasetSampleBounds(metadata);
+    m_hasGeometry = !metadata.empty()
+        && std::all_of(metadata.begin(), metadata.end(),
+            [](const DatasetMetadata* m) { return m->dimension == 3; });
+    // The union of the datasets' bounds; one dataset is its own union.
+    m_datasetDomains.clear();
+    for (const auto* m : metadata) {
+        m_datasetDomains.push_back(datasetSampleBounds(*m));
+    }
+    m_domain = m_datasetDomains.empty() ? RealBox{} : m_datasetDomains.front();
+    for (const auto& box : m_datasetDomains) {
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            m_domain.lower[axis] = std::min(m_domain.lower[axis], box.lower[axis]);
+            m_domain.upper[axis] = std::max(m_domain.upper[axis], box.upper[axis]);
+        }
+    }
+    if (m_datasetDomains.size() < 2) {
+        m_datasetDomains.clear();
+    }
     m_levels.clear();
     // The frame belonged to the previous geometry: kept across a domain that
     // moved, it would be drawn under a wireframe for a region it was not
@@ -92,10 +119,11 @@ void IsoWidget::setGeometry(const DatasetMetadata& metadata)
         m_backdropCamera = OrthoCamera{};
     }
     if (m_hasGeometry) {
-        m_levels.reserve(metadata.levels.size());
-        for (const auto& level : metadata.levels) {
-            m_levels.push_back({level.level, level.domain, level.cellSize,
-                level.indexOrigin, level.boxes});
+        for (const auto* m : metadata) {
+            for (const auto& level : m->levels) {
+                m_levels.push_back({level.level, level.domain, level.cellSize,
+                    level.indexOrigin, level.boxes});
+            }
         }
         // Default to the domain center so a caller that sets geometry but
         // forgets setSlicePositions draws the planes mid-domain instead of
@@ -177,6 +205,11 @@ void IsoWidget::paintEvent(QPaintEvent* event)
     }
     if (m_domainOutlineVisible) {
         drawBox(painter, frame, m_domain, QPen(Qt::white, 1));
+        // Where two datasets share the widget, their own domains too, so the
+        // plane they meet at is visible inside the union.
+        for (const auto& box : m_datasetDomains) {
+            drawBox(painter, frame, box, QPen(QColor(255, 255, 255, 160), 1));
+        }
     }
     // Translucent slice planes overlay the wireframe so the user can see where
     // the XY/XZ/YZ slices sit in the domain.

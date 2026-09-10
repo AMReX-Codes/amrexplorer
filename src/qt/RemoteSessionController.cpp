@@ -275,8 +275,9 @@ QString RemoteSessionController::diagnosticsLines() const
             text += tr("\nremote path: %1")
                         .arg(QString::fromStdString(*remotePath));
         }
-        if (!m_precisionNotice.isEmpty()) {
-            text += tr("\nremote values: float -- %1").arg(m_precisionNotice);
+        const auto precisionNotice = valuePrecisionNotice();
+        if (!precisionNotice.isEmpty()) {
+            text += tr("\nremote values: float -- %1").arg(precisionNotice);
         }
     } else if (m_session) {
         text += tr("\nremote session: ssh %1 (starting)")

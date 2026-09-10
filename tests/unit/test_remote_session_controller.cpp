@@ -299,6 +299,10 @@ int main(int argc, char* argv[])
             "diagnostics did not keep the precision notice");
         connection->close();
         peer.join();
+        require(controller.valuePrecisionNotice().isEmpty()
+                && !controller.diagnosticsLines().contains(
+                    QStringLiteral("remote values")),
+            "a dead session kept warning about values it cannot send");
 
         // And a current server clears it, rather than leaving the last
         // session's warning standing over full-precision values.

@@ -87,12 +87,13 @@ public:
     [[nodiscard]] QString serverExecutableFor(const QString& destination) const;
     // The Diagnostics panel's remote lines, or empty when there is no session.
     [[nodiscard]] QString diagnosticsLines() const;
-    // Non-empty while the installed server predates full-precision values
-    // (protocol 1.5). The one capability gap that refuses nothing, so it is
-    // shown for as long as the session lasts rather than announced once.
+    // Non-empty while a live connection's server predates full-precision
+    // values (protocol 1.5). The one capability gap that refuses nothing, so
+    // it is shown for as long as the session lasts rather than announced
+    // once -- and no longer: a dead session sends no values to warn about.
     [[nodiscard]] QString valuePrecisionNotice() const
     {
-        return m_precisionNotice;
+        return connected() ? m_precisionNotice : QString();
     }
     // Ends the ssh session; the host's close path.
     void shutdown();

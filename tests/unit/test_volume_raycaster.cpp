@@ -933,18 +933,36 @@ int main()
         require(alphaOf(half) == 128 && redOf(half) == 128 && greenOf(half) == 128
                 && blueOf(half) == 128,
             "a half-opaque white surface wrote a channel above its alpha");
-        // The same plane in a field near the top of the double range: the
-        // gradient's differences would overflow if taken whole, and the
-        // surface is still there.
+        // The same plane in a field near the top of the double range: f =
+        // (4z - 2) * 1e308, whose values stay finite but whose slope is 4e308
+        // per unit length. The gradient's per-voxel difference times the
+        // reciprocal pitch overflows, halved or not; only normalising the
+        // direction first keeps the surface.
         auto huge = grid;
         for (auto& value : huge.values) {
-            value *= 1.0e308;
+            value = (4.0 * value - 2.0) * 1.0e308;
         }
         const auto vast = amrvis::raycastVolume(
             amrvis::RaycastGrids{nullptr, &huge},
-            isoOnlySettings(amrvis::orthoPresetXY, 64, isosurface(0.5e308, 0xCC0000U, 1.0F)));
+            isoOnlySettings(amrvis::orthoPresetXY, 64, isosurface(0.0, 0xCC0000U, 1.0F)));
         require(vast.pixels == opaque.pixels,
             "a field near the double range's top lost its isosurface");
+        // And a step from -1.6e308 to +1.6e308 across the same plane: the two
+        // sides of a central difference are then further apart than a double
+        // can hold, so the difference has to be taken in halves.
+        auto step = grid;
+        for (int k = 0; k < 8; ++k) {
+            for (int j = 0; j < 8; ++j) {
+                for (int i = 0; i < 8; ++i) {
+                    step.values[voxel(step, i, j, k)] = k < 4 ? -1.6e308 : 1.6e308;
+                }
+            }
+        }
+        const auto stepped = amrvis::raycastVolume(
+            amrvis::RaycastGrids{nullptr, &step},
+            isoOnlySettings(amrvis::orthoPresetXY, 64, isosurface(0.0, 0xCC0000U, 1.0F)));
+        require(stepped.pixels == opaque.pixels,
+            "a step spanning the double range lost its isosurface");
     }
 
     // --- a plane seen edge-on is invisible -----------------------------------

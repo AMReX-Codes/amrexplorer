@@ -172,6 +172,21 @@ struct PairGeometryResult {
         return {std::nullopt,
             "the two domains are apart along more than one axis, so they share no plane"};
     }
+    {
+        // Apart, not just non-overlapping: a gap would be drawn shut and the
+        // positions inside it would belong to nobody, so the domains must
+        // meet within the same tolerance.
+        const auto a = static_cast<std::size_t>(perpendicular);
+        const auto gap = std::max(geometry.bounds[0].lower[a], geometry.bounds[1].lower[a])
+            - std::min(geometry.bounds[0].upper[a], geometry.bounds[1].upper[a]);
+        const auto span = std::max(
+            geometry.bounds[0].upper[a] - geometry.bounds[0].lower[a],
+            geometry.bounds[1].upper[a] - geometry.bounds[1].lower[a]);
+        if (gap > 1.0e-9 * span) {
+            return {std::nullopt,
+                "the two domains do not touch, so they share no plane"};
+        }
+    }
     geometry.perpendicularAxis = perpendicular;
     std::size_t next = 0;
     for (int axis = 0; axis < 3; ++axis) {
@@ -391,6 +406,80 @@ private:
     PairGeometry m_geometry;
     int m_normal = 2;
     std::array<int, 2> m_axes{0, 1};
+    Real3 m_sharedUnitsPerLength{{1.0, 1.0, 1.0}};
+    std::array<double, 2> m_perpendicularUnitsPerLength{1.0, 1.0};
+    std::array<double, 2> m_bandStart{0.0, 0.0};
+};
+
+// The same proportions for the whole 3-D domain, for the isometric view: a
+// shared linear map along the shared axes and one band per layer along the
+// perpendicular axis (the lower layer's first), normalized over all three
+// axes as PairLayout normalizes a panel.
+class PairDisplayMap {
+public:
+    PairDisplayMap() = default;
+    PairDisplayMap(const PairGeometry& geometry, AspectMode mode,
+        const std::array<double, 3>& axisScale,
+        const std::array<double, 2>& perpendicularScale)
+        : m_geometry(geometry)
+    {
+        const bool physical = mode == AspectMode::PhysicalSize;
+        const auto sane = [](double value) {
+            return std::isfinite(value) && value > 0.0 ? value : 1.0;
+        };
+        const auto p = static_cast<std::size_t>(geometry.perpendicularAxis);
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            m_sharedUnitsPerLength[axis] = sane(axisScale[axis])
+                * (physical ? 1.0 : 1.0 / geometry.referenceCellSize[axis]);
+        }
+        for (std::size_t layer = 0; layer < 2; ++layer) {
+            m_perpendicularUnitsPerLength[layer] = sane(perpendicularScale[layer])
+                * (physical ? 1.0 : 1.0 / geometry.finestCellSize[layer][p]);
+        }
+        double smallest = std::numeric_limits<double>::infinity();
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            for (std::size_t layer = 0; layer < 2; ++layer) {
+                const auto perPixel = axis == p
+                    ? m_perpendicularUnitsPerLength[layer] * geometry.finestCellSize[layer][axis]
+                    : m_sharedUnitsPerLength[axis] * geometry.finestCellSize[layer][axis];
+                smallest = std::min(smallest, perPixel);
+            }
+        }
+        if (std::isfinite(smallest) && smallest > 0.0) {
+            for (auto& value : m_sharedUnitsPerLength.values) {
+                value /= smallest;
+            }
+            for (auto& value : m_perpendicularUnitsPerLength) {
+                value /= smallest;
+            }
+        }
+        const auto lower = geometry.lowerLayer();
+        m_bandStart[lower] = 0.0;
+        m_bandStart[geometry.upperLayer]
+            = (geometry.bounds[lower].upper[p] - geometry.bounds[lower].lower[p])
+            * m_perpendicularUnitsPerLength[lower];
+    }
+
+    // A layer's physical point in display units.
+    [[nodiscard]] Real3 displayFromPhysical(std::size_t layer, const Real3& point) const noexcept
+    {
+        Real3 display;
+        const auto p = static_cast<std::size_t>(m_geometry.perpendicularAxis);
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            if (axis == p) {
+                display[axis] = m_bandStart[layer]
+                    + (point[axis] - m_geometry.bounds[layer].lower[axis])
+                        * m_perpendicularUnitsPerLength[layer];
+            } else {
+                display[axis] = (point[axis] - m_geometry.unionBounds.lower[axis])
+                    * m_sharedUnitsPerLength[axis];
+            }
+        }
+        return display;
+    }
+
+private:
+    PairGeometry m_geometry;
     Real3 m_sharedUnitsPerLength{{1.0, 1.0, 1.0}};
     std::array<double, 2> m_perpendicularUnitsPerLength{1.0, 1.0};
     std::array<double, 2> m_bandStart{0.0, 0.0};

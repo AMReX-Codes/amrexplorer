@@ -106,10 +106,10 @@ void refusesWhatCannotShareAPlane()
     auto fab = remora();
     fab.hasPhysicalGeometry = false;
     require(!amrvis::qt::pairGeometry(erf(), fab).geometry, "a FAB companion was paired");
-    // A gap is allowed: the ocean floor a little below the atmosphere.
+    // A gap is refused: drawn shut it would hide the missing 100 m.
     const auto gapped = plotfile({{0.0, 0.0, -400.0}}, {{50000.0, 20000.0, -100.0}}, {{50, 20, 40}});
-    require(amrvis::qt::pairGeometry(erf(), gapped).geometry.has_value(),
-        "a gap along the perpendicular axis was refused");
+    require(!amrvis::qt::pairGeometry(erf(), gapped).geometry.has_value(),
+        "a gap along the perpendicular axis was accepted");
     // Side by side along x is a shared plane too.
     const auto east = plotfile({{50000.0, 0.0, 0.0}}, {{60000.0, 20000.0, 9000.0}}, {{10, 20, 48}});
     const auto beside = amrvis::qt::pairGeometry(erf(), east);
@@ -219,10 +219,28 @@ void physicalLayoutStretchesEachLayerOnItsOwn()
         "an x factor did not widen both tiles");
 }
 
+void displayMapStacksTheWholeDomains()
+{
+    const auto geometry = *amrvis::qt::pairGeometry(erf(), remora()).geometry;
+    const std::array<double, 3> unit{1.0, 1.0, 1.0};
+    const amrvis::qt::PairDisplayMap map(geometry, amrvis::qt::AspectMode::CellCounts,
+        unit, {1.0, 1.0});
+    // The ocean floor is the origin along z; the surface is 40 units up, and
+    // the top of the atmosphere 48 more. x counts cells from the union's west.
+    const auto floor = map.displayFromPhysical(1, {{0.0, 0.0, -300.0}});
+    const auto surface = map.displayFromPhysical(0, {{0.0, 0.0, 0.0}});
+    const auto top = map.displayFromPhysical(0, {{50000.0, 20000.0, 9000.0}});
+    require(nearly(floor[0], 20.0) && nearly(floor[2], 0.0),
+        "the ocean floor is not the display origin along z");
+    require(nearly(surface[2], 40.0) && nearly(top[2], 88.0) && nearly(top[0], 70.0),
+        "the display map does not stack the two domains");
+}
+
 } // namespace
 
 int main()
 {
+    displayMapStacksTheWholeDomains();
     detectsTheSharedPlane();
     refusesWhatCannotShareAPlane();
     indicesSpanBothLayers();

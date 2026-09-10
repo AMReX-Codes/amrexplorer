@@ -373,9 +373,9 @@ Coupled simulations often write two plotfiles that meet at a plane: an
 atmosphere above the ocean surface and the ocean below it, for example. With
 a 3-D plotfile open, choose **File > Open Companion Plotfile...** (or start
 `amrexplorer atmosphere_plt --companion ocean_plt`) to show the second one in
-the same window. The two domains must touch, or be apart, along exactly one
-axis and overlap along the other two; anything else is refused with a
-message and the open dataset stays as it was.
+the same window. The two domains must touch along exactly one axis and
+overlap along the other two; anything else is refused with a message and the
+open dataset stays as it was.
 
 In the two panels that show the perpendicular axis, both datasets are drawn
 stacked at their physical positions and aligned along the shared axis, each
@@ -387,7 +387,10 @@ shared axes count cells over the union of the two domains.
 
 A second toolbar row, named after the companion's directory, holds its own
 **Field**, **Level**, and **Range** controls, and the Color Scale panel shows
-one bar per dataset; the palette and **Log** are shared. Probing, right-click
+one bar per dataset; the palette and **Log** are shared. Tick **Same as
+primary** to colour the companion with the primary's displayed range instead;
+its own range controls and colour bar are then withheld and one scale serves
+both. Velocity vectors are drawn on the primary only. Probing, right-click
 slice moves, and line plots work on whichever dataset is under the pointer.
 **View > Aspect Ratio > Axis Scaling...** offers one factor per dataset along
 the perpendicular axis, so a shallow ocean can be stretched under a tall
@@ -396,7 +399,8 @@ panning, and the fixed scales act on the view; the rasters stay at their
 native resolution.
 
 While a companion is open the Dataset Metadata panel lists both plotfiles,
-the isometric view outlines both domains, and image export composes the
+the isometric view outlines both domains in the panels' proportions (so a
+shallow ocean under a tall atmosphere stays visible), and image export composes the
 stacked panels without axes (their two vertical scales differ). Volume
 rendering, particles, the Dataset window, sequences, remote datasets, the
 scale bar, synchronized rubber-band zoom, and derived fields for the

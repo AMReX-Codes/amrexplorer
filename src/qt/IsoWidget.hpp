@@ -9,6 +9,7 @@
 #include <QWidget>
 
 #include <array>
+#include <functional>
 #include <vector>
 
 class QMouseEvent;
@@ -41,8 +42,12 @@ public:
     // Two datasets sharing a plane: the outline and the projection span the
     // union of their domains, each domain is outlined on its own, and both
     // level box sets are drawn.
+    // The map takes a dataset index and a physical point to the display
+    // coordinates the wireframe is drawn in, so the view keeps the panels'
+    // proportions rather than the physical ones.
+    using DisplayMap = std::function<Real3(std::size_t dataset, const Real3& point)>;
     void setPairedGeometry(const DatasetMetadata& primary,
-        const DatasetMetadata& companion);
+        const DatasetMetadata& companion, DisplayMap displayMap);
     void setSlicePositions(double x, double y, double z);
     void setSlicePlanesVisible(bool visible);
     void setColorPalette(const Palette* palette);
@@ -101,6 +106,7 @@ protected:
 private:
     struct LevelBoxes {
         int level = 0;
+        std::size_t dataset = 0;
         IntBox domain;
         Real3 cellSize;
         Real3 indexOrigin;
@@ -120,11 +126,22 @@ private:
     void setViewAngles(double azimuth, double elevation);
     void layoutButtons();
 
-    void setGeometries(const std::vector<const DatasetMetadata*>& metadata);
+    void setGeometries(const std::vector<const DatasetMetadata*>& metadata,
+        DisplayMap displayMap);
+    // A dataset's physical point in the coordinates the wireframe uses:
+    // physical for one dataset, the display map's for two.
+    [[nodiscard]] Real3 toDisplay(std::size_t dataset, const Real3& point) const;
+    [[nodiscard]] RealBox toDisplay(std::size_t dataset, const RealBox& box) const;
+    [[nodiscard]] std::size_t datasetHolding(int axis, double position) const;
 
+    // In display coordinates (see toDisplay).
     RealBox m_domain{};
     // Each dataset's own domain when several share the widget; empty for one.
     std::vector<RealBox> m_datasetDomains;
+    // The same in physical coordinates, to place the slice positions.
+    std::vector<RealBox> m_physicalDomains;
+    DisplayMap m_displayMap;
+    std::array<double, 3> m_physicalSlicePositions{0.0, 0.0, 0.0};
     std::vector<LevelBoxes> m_levels;
     std::array<double, 3> m_slicePositions{0.0, 0.0, 0.0};
     bool m_slicePlanesVisible = false;

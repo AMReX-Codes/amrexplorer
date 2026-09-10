@@ -71,26 +71,53 @@ IsoWidget::IsoWidget(QWidget* parent)
 
 void IsoWidget::setGeometry(const DatasetMetadata& metadata)
 {
-    setGeometries({&metadata});
+    setGeometries({&metadata}, {});
 }
 
-void IsoWidget::setPairedGeometry(
-    const DatasetMetadata& primary, const DatasetMetadata& companion)
+void IsoWidget::setPairedGeometry(const DatasetMetadata& primary,
+    const DatasetMetadata& companion, DisplayMap displayMap)
 {
-    setGeometries({&primary, &companion});
+    setGeometries({&primary, &companion}, std::move(displayMap));
 }
 
-void IsoWidget::setGeometries(const std::vector<const DatasetMetadata*>& metadata)
+Real3 IsoWidget::toDisplay(std::size_t dataset, const Real3& point) const
+{
+    return m_displayMap ? m_displayMap(dataset, point) : point;
+}
+
+RealBox IsoWidget::toDisplay(std::size_t dataset, const RealBox& box) const
+{
+    // The map is monotonic per axis, so corners map to corners.
+    return {toDisplay(dataset, box.lower), toDisplay(dataset, box.upper)};
+}
+
+std::size_t IsoWidget::datasetHolding(int axis, double position) const
+{
+    const auto a = static_cast<std::size_t>(axis);
+    for (std::size_t dataset = 0; dataset < m_physicalDomains.size(); ++dataset) {
+        const auto& box = m_physicalDomains[dataset];
+        if (position >= box.lower[a] && position < box.upper[a]) {
+            return dataset;
+        }
+    }
+    return 0;
+}
+
+void IsoWidget::setGeometries(const std::vector<const DatasetMetadata*>& metadata,
+    DisplayMap displayMap)
 {
     const bool hadGeometry = m_hasGeometry;
     const auto previousDomain = m_domain;
     m_hasGeometry = !metadata.empty()
         && std::all_of(metadata.begin(), metadata.end(),
             [](const DatasetMetadata* m) { return m->dimension == 3; });
+    m_displayMap = std::move(displayMap);
     // The union of the datasets' bounds; one dataset is its own union.
     m_datasetDomains.clear();
-    for (const auto* m : metadata) {
-        m_datasetDomains.push_back(datasetSampleBounds(*m));
+    m_physicalDomains.clear();
+    for (std::size_t dataset = 0; dataset < metadata.size(); ++dataset) {
+        m_physicalDomains.push_back(datasetSampleBounds(*metadata[dataset]));
+        m_datasetDomains.push_back(toDisplay(dataset, m_physicalDomains.back()));
     }
     m_domain = m_datasetDomains.empty() ? RealBox{} : m_datasetDomains.front();
     for (const auto& box : m_datasetDomains) {
@@ -119,23 +146,31 @@ void IsoWidget::setGeometries(const std::vector<const DatasetMetadata*>& metadat
         m_backdropCamera = OrthoCamera{};
     }
     if (m_hasGeometry) {
-        for (const auto* m : metadata) {
-            for (const auto& level : m->levels) {
-                m_levels.push_back({level.level, level.domain, level.cellSize,
-                    level.indexOrigin, level.boxes});
+        for (std::size_t dataset = 0; dataset < metadata.size(); ++dataset) {
+            for (const auto& level : metadata[dataset]->levels) {
+                m_levels.push_back({level.level, dataset, level.domain,
+                    level.cellSize, level.indexOrigin, level.boxes});
             }
         }
         // Default to the domain center so a caller that sets geometry but
         // forgets setSlicePositions draws the planes mid-domain instead of
         // clamped to the lower face by the {0,0,0} default.
         m_slicePositions = m_domain.center().values;
+        m_physicalSlicePositions = m_slicePositions;
     }
     update();
 }
 
 void IsoWidget::setSlicePositions(double x, double y, double z)
 {
-    m_slicePositions = {x, y, z};
+    m_physicalSlicePositions = {x, y, z};
+    // Each coordinate through the dataset that holds it: along the axis two
+    // datasets share a plane on, the bands differ.
+    Real3 point{{x, y, z}};
+    for (int axis = 0; axis < 3; ++axis) {
+        const auto a = static_cast<std::size_t>(axis);
+        m_slicePositions[a] = toDisplay(datasetHolding(axis, point[a]), point)[a];
+    }
     update();
 }
 
@@ -199,7 +234,8 @@ void IsoWidget::paintEvent(QPaintEvent* event)
         for (const auto& level : m_levels) {
             const QPen pen(levelOutlineColor(level.level), 1);
             for (const auto& box : level.boxes) {
-                drawBox(painter, frame, physicalBox(level, box), pen);
+                drawBox(painter, frame,
+                    toDisplay(level.dataset, physicalBox(level, box)), pen);
             }
         }
     }

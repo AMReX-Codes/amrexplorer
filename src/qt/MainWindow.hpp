@@ -46,6 +46,7 @@ class QActionGroup;
 class QCloseEvent;
 class QComboBox;
 class QDockWidget;
+class QCheckBox;
 class QLabel;
 class QToolBar;
 class QSpinBox;
@@ -462,6 +463,9 @@ public:
     [[nodiscard]] QString layerFieldNameForTest(int layer, int normal) const;
     // The Log setting a layer's next slice request will carry.
     [[nodiscard]] bool layerLogarithmicSelectedForTest(int layer) const;
+    [[nodiscard]] std::pair<double, double> layerDisplayRangeForTest(
+        int layer, int normal) const;
+    [[nodiscard]] bool companionColorBarVisibleForTest() const;
     void setSlicePositionForTest(int axis, double value)
     {
         setSlicePosition(axis, value);
@@ -712,6 +716,10 @@ private:
     // Actions that have no meaning with two datasets open are disabled while
     // a companion is, and restored when it closes.
     void updatePairedModeControls();
+    // Push the pair geometry, in the panels' display proportions, to the
+    // isometric view.
+    void updatePairedIsoGeometry();
+    void setCompanionFollowsPrimary(bool follows);
     void chooseStandaloneDataset(const QString& caption, bool rawFab);
     struct RemoteOpen {
         std::shared_ptr<remote::Connection> connection;
@@ -1375,6 +1383,11 @@ private:
     std::array<PairLayout, 3> m_pairLayouts;
     QToolBar* m_companionToolbar = nullptr;
     QLabel* m_companionLabel = nullptr;
+    // "Same as primary": the companion's slices take the primary's displayed
+    // range on the same panel and its own range controls and colour bar are
+    // withheld.
+    QCheckBox* m_companionFollowBox = nullptr;
+    bool m_companionFollowsPrimary = false;
     QAction* m_closeCompanionAction = nullptr;
     QAction* m_volumeAction = nullptr;
     QAction* m_particlesAction = nullptr;

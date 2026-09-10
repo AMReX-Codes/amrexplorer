@@ -56,6 +56,7 @@
 #include <QWheelEvent>
 #include <QCloseEvent>
 #include <QColorDialog>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialog>

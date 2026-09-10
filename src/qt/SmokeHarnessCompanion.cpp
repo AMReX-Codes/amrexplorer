@@ -76,7 +76,7 @@ Outcome dispatchCompanion(Context& context)
             });
         QObject::connect(&window, &amrvis::qt::MainWindow::companionOpenFinished,
             &application, [&window, &application, fail, phase, upper](bool success) {
-                if (*phase == 3) {
+                if (*phase == 4) {
                     // The refused second companion: the first stays.
                     if (success || !window.companionOpen()
                         || window.panelTileCountForTest(xz) != 2) {
@@ -145,7 +145,7 @@ Outcome dispatchCompanion(Context& context)
                 // primary's full-domain rasters back after the zoom.
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application, [&window, &application, fail, phase, upper] {
+                    &application, [&window, fail, phase, upper] {
                         if (*phase == 0) {
                             *phase = 1;
                             if (window.panelTileVisibleForTest(xy, 0)
@@ -222,6 +222,22 @@ Outcome dispatchCompanion(Context& context)
                             window.enableVisibleRasterForTest();
                             return;
                         }
+                        if (*phase == 3) {
+                            *phase = 4;
+                            const auto primaryRange = window.layerDisplayRangeForTest(0, xz);
+                            const auto companionRange = window.layerDisplayRangeForTest(1, xz);
+                            if (window.companionColorBarVisibleForTest()
+                                || !near(companionRange.first, primaryRange.first)
+                                || !near(companionRange.second, primaryRange.second)) {
+                                fail("Same as primary did not give the companion the primary's range");
+                                return;
+                            }
+                            // A second companion that cannot pair (the primary's
+                            // own path overlaps it everywhere) must be refused
+                            // without disturbing the one on show.
+                            window.openCompanion(upper);
+                            return;
+                        }
                         if (*phase != 1) {
                             return;
                         }
@@ -232,11 +248,16 @@ Outcome dispatchCompanion(Context& context)
                             fail("the visible-range sync dropped a tile");
                             return;
                         }
-                        // A second companion that cannot pair (the primary's
-                        // own path overlaps it everywhere) must be refused
-                        // without disturbing the one on show.
+                        // "Same as primary": the companion takes the primary's
+                        // displayed range and its colour bar goes away.
+                        auto* follow = window.findChild<QCheckBox*>(
+                            QStringLiteral("companionFollowPrimary"));
+                        if (follow == nullptr || !window.companionColorBarVisibleForTest()) {
+                            fail("the companion's follow box or colour bar is missing");
+                            return;
+                        }
                         *phase = 3;
-                        window.openCompanion(upper);
+                        follow->click();
                     });
                 window.setSlicePositionForTest(2, -0.1);
             });

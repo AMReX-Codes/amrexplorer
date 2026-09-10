@@ -419,6 +419,15 @@ MainWindow::MainWindow(QWidget* parent)
     companion.range = new RangeController(this);
     companion.range->createToolbarWidgets(m_companionToolbar, QStringLiteral("companion"));
     companion.range->setLogarithmicVisible(false);
+    m_companionToolbar->addSeparator();
+    m_companionFollowBox = new QCheckBox(tr("Same as primary"), m_companionToolbar);
+    m_companionFollowBox->setObjectName(QStringLiteral("companionFollowPrimary"));
+    m_companionFollowBox->setToolTip(tr(
+        "Colour the companion with the primary's displayed range and show one "
+        "colour scale"));
+    m_companionToolbar->addWidget(m_companionFollowBox);
+    connect(m_companionFollowBox, &QCheckBox::toggled, this,
+        [this](bool checked) { setCompanionFollowsPrimary(checked); });
     m_companionToolbar->setVisible(false);
     connect(companion.fieldSelector, qOverload<int>(&QComboBox::currentIndexChanged),
         this, [this](int index) {
@@ -1288,10 +1297,12 @@ void MainWindow::syncActiveViewColorControls(const PlaneViewState& state)
         }
     };
     push(state);
-    // Each layer's widgets show its own raster on the active panel.
+    // Each layer's widgets show its own raster on the active panel; a
+    // companion following the primary has none on show.
     if (m_pair && m_viewDimension == 3) {
         for (const auto* other : statesForPanel(state.normal)) {
-            if (other != &state && other->plane->width > 0) {
+            if (other != &state && other->plane->width > 0
+                && !(other->layer == 1 && m_companionFollowsPrimary)) {
                 push(*other);
             }
         }
@@ -1504,6 +1515,7 @@ void MainWindow::applyDisplayStretches()
     if (m_pair) {
         updatePairLayouts();
         applyPairLayouts();
+        updatePairedIsoGeometry();
     }
     const bool remote = primary().session
         && std::dynamic_pointer_cast<remote::RemoteDatasetSession>(primary().session);
@@ -2242,7 +2254,11 @@ void MainWindow::refreshMetadataDisplay()
 
 void MainWindow::refreshPaletteDisplay()
 {
-    primary().colorBar->setPalette(&m_paletteController->palette());
+    for (auto& layer : m_layers) {
+        if (layer.colorBar != nullptr) {
+            layer.colorBar->setPalette(&m_paletteController->palette());
+        }
+    }
     syncDatasetWindowColors();
     scheduleSliceRequest();
     updateGridBoxes();

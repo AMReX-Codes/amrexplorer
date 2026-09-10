@@ -587,15 +587,31 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     request.sphericalDisplay = m_sphericalDisplay;
 
     const auto selection = layerFor(state).range->selection();
-    const auto rangeMode = effectiveRangeMode(dataset, request.field,
+    auto rangeMode = effectiveRangeMode(dataset, request.field,
         maximumLevel, composition, selection.mode);
     std::optional<std::pair<double, double>> userRange;
     if (rangeMode == RangeMode::User) {
         userRange = selection.userRange;
     }
+    if (m_pair && state.layer == 1 && m_companionFollowsPrimary) {
+        // "Same as primary": the primary's displayed range on this panel, as
+        // a fixed range; before the primary has rendered, its own File range.
+        const auto& primaryState
+            = primary().planeViews[static_cast<std::size_t>(state.normal)];
+        if (primaryState.plane->width > 0
+            && primaryState.displayMinimum < primaryState.displayMaximum) {
+            rangeMode = RangeMode::User;
+            userRange = std::pair{primaryState.displayMinimum,
+                primaryState.displayMaximum};
+        }
+    }
     const auto logarithmic = selection.logarithmic;
     const auto palette = m_paletteController->palette();
-    const auto displayMode = m_displayMode;
+    // The primary's vector field ids mean nothing in a companion's field
+    // list, so a companion renders its raster (and contours) without glyphs.
+    const auto displayMode = state.layer == 1
+            && m_displayMode == DisplayMode::VelocityVectors
+        ? DisplayMode::Raster : m_displayMode;
     // Each 3-D panel uses a different pair of vector components:
     //   XY (normal=2) → U,V   XZ (normal=1) → U,W   YZ (normal=0) → V,W
     // 2-D always uses U,V.
@@ -1427,10 +1443,17 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     state.contourPolylines = std::move(display.contourPolylines);
     const auto fieldName = QString::fromStdString(display.fieldName);
     state.fieldName = fieldName;
+    const bool rangeMoved = state.displayMinimum != display.minimum
+        || state.displayMaximum != display.maximum;
     state.displayMinimum = display.minimum;
     state.displayMaximum = display.maximum;
     state.displayLogarithmic = display.logarithmic;
     state.vectorSegments = std::move(display.vectors);
+    // A companion following the primary's range takes the new one.
+    if (m_pair && state.layer == 0 && m_companionFollowsPrimary && rangeMoved
+        && m_viewDimension == 3 && m_layers[1].active) {
+        scheduleSliceRequest(m_layers[1].planeViews[static_cast<std::size_t>(state.normal)]);
+    }
     if (display.slice.gridBoxesIncluded) {
         state.gridBoxes = std::move(display.slice.gridBoxes);
     }
@@ -1758,6 +1781,10 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
                         updateGridBoxes(*state);
                         updateOverlay(*state);
                         updateParticleOverlay(*state);
+                    }
+                    if (&layer == &primary() && m_pair && m_companionFollowsPrimary
+                        && m_layers[1].active) {
+                        scheduleSliceRequest(m_layers[1].planeViews[index]);
                     }
                     // This layer's raster on the active panel: the active
                     // view itself, or its counterpart when the active view

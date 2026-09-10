@@ -532,6 +532,22 @@ bool MainWindow::layerLogarithmicSelectedForTest(int layer) const
     return range != nullptr && range->logarithmic();
 }
 
+std::pair<double, double> MainWindow::layerDisplayRangeForTest(
+    int layer, int normal) const
+{
+    if (layer < 0 || layer > 1 || normal < 0 || normal > 2) {
+        return {0.0, 0.0};
+    }
+    const auto& state = m_layers[static_cast<std::size_t>(layer)]
+        .planeViews[static_cast<std::size_t>(normal)];
+    return {state.displayMinimum, state.displayMaximum};
+}
+
+bool MainWindow::companionColorBarVisibleForTest() const
+{
+    return m_layers[1].colorBar != nullptr && m_layers[1].colorBar->isVisibleTo(this);
+}
+
 void MainWindow::setCompanionPerpendicularScaleForTest(double factor)
 {
     m_layers[1].perpendicularScale = factor;

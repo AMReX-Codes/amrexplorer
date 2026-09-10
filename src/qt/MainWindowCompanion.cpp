@@ -84,6 +84,9 @@ void MainWindow::openCompanion(const std::filesystem::path& path)
     spec.displayMode = m_displayMode;
     spec.includeGridBoxes = m_boxesAction->isChecked();
     spec.contourCount = m_contourCount;
+    if (spec.displayMode == DisplayMode::VelocityVectors) {
+        spec.displayMode = DisplayMode::Raster;  // see requestSlice
+    }
     // Log is shared with the primary; the range mode starts at File.
     spec.logarithmic = primary().range->logarithmic();
     spec.slicePositions = m_slicePosition3d;
@@ -128,7 +131,7 @@ void MainWindow::openCompanion(const std::filesystem::path& path)
             watcher->deleteLater();
         });
     watcher->setFuture(QtConcurrent::run(
-        [path, spec = std::move(spec), cancellation, generation,
+        [path, spec = std::move(spec), cancellation, generation, companionGeneration,
             primaryMetadata]() mutable {
             CompanionLoad load;
             load.metadata = readDatasetMetadata(path, cancellation);
@@ -146,10 +149,12 @@ void MainWindow::openCompanion(const std::filesystem::path& path)
                 spec.outputSizes.push_back(
                     finestNativeOutputSize(metadata, bounds, normal));
             }
-            // A dataset id no primary load can produce: the high bit marks
-            // the companion, the low bits tie it to the primary generation
-            // it was opened beside.
-            const DatasetId id{generation | (std::uint64_t{1} << 63)};
+            // A dataset id no primary load can produce, and one no earlier
+            // companion used: the high bit marks the companion, the middle
+            // bits count companion opens, the low bits carry the primary
+            // generation it was opened beside.
+            const DatasetId id{(std::uint64_t{1} << 63)
+                | (companionGeneration << 40) | (generation & ((std::uint64_t{1} << 40) - 1))};
             // The data root a plain open resolves to: the plotfile directory
             // itself (a Header path's parent otherwise).
             auto root = std::filesystem::is_directory(path) ? path : path.parent_path();
@@ -197,10 +202,8 @@ void MainWindow::installCompanion(
         return;
     }
     configureCompanionControls();
-    m_isoWidget->setPairedGeometry(
-        primary().session->metadata(), layer.session->metadata());
-    publishSlicePositions();
     updatePairLayouts();
+    updatePairedIsoGeometry();
     // The primary's tiles move from the raster-at-origin scene onto the shared
     // canvas before the companion's land beside them.
     applyPairLayouts();
@@ -223,13 +226,16 @@ void MainWindow::installCompanion(
     updateWindowTitle();
     refreshMetadataDisplay();
     m_companionToolbar->setVisible(true);
-    layer.colorBar->setVisible(true);
+    layer.colorBar->setVisible(!m_companionFollowsPrimary);
     statusBar()->showMessage(tr("Companion %1 opened").arg(layer.name), 5000);
     emit companionOpenFinished(true);
 }
 
 void MainWindow::closeCompanion()
 {
+    // A load still running for a replacement must not install after this.
+    ++m_companionGeneration;
+    m_companionStopSource.request_stop();
     auto& layer = m_layers[1];
     if (!layer.active) {
         return;
@@ -272,6 +278,9 @@ void MainWindow::closeCompanion()
     layer.visibleSyncRerun = false;
     layer.pendingRangeStore.reset();
     m_pair.reset();
+    // The range cache is keyed by dataset id; the next companion beside this
+    // primary must not read this one's cached union.
+    m_displayCoordinator.invalidateRangeCache();
     if (layer.range != nullptr) {
         layer.range->reset();
         layer.range->setControlsReady(false);
@@ -283,6 +292,11 @@ void MainWindow::closeCompanion()
         layer.colorBar->clearRange();
         layer.colorBar->setVisible(false);
     }
+    if (m_companionFollowBox != nullptr) {
+        const QSignalBlocker blocker(m_companionFollowBox);
+        m_companionFollowBox->setChecked(false);
+    }
+    m_companionFollowsPrimary = false;
     // Back to one tile per panel in the classic scene.
     applyPairLayouts();
     for (auto* state : primaryViews()) {
@@ -343,7 +357,7 @@ void MainWindow::configureCompanionControls()
     // (see the toolbar construction) and mirrors it.
     layer.range->setSelection({RangeMode::File, std::nullopt,
         primary().range->logarithmic()});
-    layer.range->setControlsReady(true);
+    layer.range->setControlsReady(!m_companionFollowsPrimary);
     layer.range->setNumberFormat(m_displayFormat);
     layer.colorBar->setPalette(&m_paletteController->palette());
     layer.colorBar->setNumberFormat(m_numberFormat);
@@ -433,6 +447,46 @@ void MainWindow::updateShownLayers()
                 setActiveView(*state);
                 break;
             }
+        }
+    }
+}
+
+void MainWindow::updatePairedIsoGeometry()
+{
+    const auto& companion = m_layers[1];
+    if (!m_pair || !primary().session || !companion.session) {
+        return;
+    }
+    // The isometric view in the panels' proportions: with the ocean 30 times
+    // shallower than the atmosphere is tall and both 70 km wide, physical
+    // units would flatten the ocean to a line.
+    const PairDisplayMap map(*m_pair, m_aspectMode, m_axisScale,
+        {m_layers[0].perpendicularScale, companion.perpendicularScale});
+    m_isoWidget->setPairedGeometry(primary().session->metadata(),
+        companion.session->metadata(),
+        [map](std::size_t dataset, const Real3& point) {
+            return map.displayFromPhysical(dataset, point);
+        });
+    publishSlicePositions();
+}
+
+void MainWindow::setCompanionFollowsPrimary(bool follows)
+{
+    if (m_companionFollowsPrimary == follows) {
+        return;
+    }
+    m_companionFollowsPrimary = follows;
+    auto& layer = m_layers[1];
+    if (layer.range != nullptr) {
+        layer.range->setControlsReady(!follows && layer.active);
+    }
+    if (layer.colorBar != nullptr) {
+        layer.colorBar->setVisible(layer.active && !follows);
+    }
+    if (layer.active) {
+        scheduleLayerSliceRequests(layer);
+        if (m_activeView != nullptr) {
+            syncActiveViewColorControls(*m_activeView);
         }
     }
 }

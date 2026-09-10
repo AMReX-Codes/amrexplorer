@@ -198,7 +198,8 @@ The main controls are:
    Units...** to identify the plotfile coordinate unit, or **View > Scale Bar**
    to show or hide the annotation. It is omitted when the horizontal coordinate
    is an angle (the spherical theta-r view), and the option is disabled when
-   cell sizes are anisotropic.
+   the screen does not show the same length per pixel along both axes (see
+   [Aspect ratio and axis scaling](#aspect-ratio-and-axis-scaling)).
 6. **Isometric view** shows the domain, grid boxes, and current slice planes;
    **View > Volume Rendering...** opens the same view with the field
    ray-cast into it.
@@ -271,7 +272,39 @@ screen pixels per finest-level cell. A very wide local domain cannot be shown
 at finest resolution all at once, so the requested factor may not be reachable;
 the Scale button then reports what it applied, such as `32x→16x`. Rubber-band
 zoom is unaffected: selecting a subregion re-reads that region at finest
-resolution.
+resolution. When the display is stretched (see
+[Aspect ratio and axis scaling](#aspect-ratio-and-axis-scaling)), the factor
+applies along the less stretched axis and the other axis gets more pixels per
+cell.
+
+## Aspect ratio and axis scaling
+
+By default a slice panel draws one square screen pixel per finest-level cell,
+so its shape is the region's extent in cells. Plotfiles whose cells are not
+square (dx differs from dy or dz) then look stretched relative to the physical
+domain. **View > Aspect Ratio** offers two proportions:
+
+- **Cell Counts** — the default described above.
+- **Physical Size** — each axis is scaled by its finest-level cell size, so the
+  panel has the physical aspect of the region it shows. A domain a thousand
+  times taller than wide becomes a thin strip; use axis scaling to widen it.
+
+**View > Aspect Ratio > Axis Scaling...** stretches the X, Y, and Z axes by
+factors of your own, on top of the chosen proportion. Each 3-D panel applies
+the factors of the two axes it shows. The factors reset to 1 when you open a
+new dataset or sequence and are kept while stepping through a sequence's
+frames; the proportion persists across sessions.
+
+The stretch is applied on screen only. The slice raster keeps one sample per
+finest cell, readouts and overlays follow the stretch, and image and animation
+exports reproduce it. The scale bar is offered while the screen shows the same
+length per pixel along both axes: in Cell Counts mode that requires square
+cells, in Physical Size mode equal axis factors. Vector glyphs are drawn in
+cell units, so a stretched display skews their arrows.
+
+The controls are unavailable for 2-D spherical plotfiles, whose R-Z view is
+already physical, and Physical Size is unavailable for standalone FABs and
+MultiFabs, which carry no cell sizes.
 
 The line-plot window can accumulate curves, which is useful when comparing
 variables, levels, or positions. Its horizontal axis uses physical coordinates
@@ -591,7 +624,8 @@ between palettes.
 Press **B** or choose **View > Boxes** to show AMR grid boundaries.
 
 Choose **View > Scale Bar** to show or hide the length annotation. The option
-is unavailable when cell sizes are anisotropic. Plotfiles do not declare their
+is unavailable when the screen does not show the same length per pixel along
+both axes, as with non-square cells in Cell Counts mode. Plotfiles do not declare their
 length unit, so AMReXplorer leaves it unset by default and displays native
 coordinate values in scientific notation. Choose **View > Length Units...** to
 identify the unit used by the plotfile; AMReXplorer can then label the bar in a
@@ -707,8 +741,9 @@ Transparency is available only for PNG, not MP4.
 
 The **View** menu controls these optional panels:
 
-- **Dataset Metadata** shows plotfile geometry, levels, variables, and related
-  metadata.
+- **Dataset Metadata** shows the plotfile's format, time, coordinate system,
+  physical domain, fields, and for each level its grid count, cell counts,
+  index domain, cell sizes, refinement ratio, and step.
 - **Color Scale** shows the current numeric range and palette.
 - **Diagnostics** reports request, I/O, and cache activity.
 - **Animation** contains plane-sweep and sequence controls.
@@ -724,7 +759,8 @@ their neutral gray under every skin, so a colormap looks the same whichever
 one you pick.
 
 Window geometry, logarithmic mapping, palette, skin, number format,
-animation speed, and the isosurface color persist across sessions.
+animation speed, aspect ratio proportion, and the isosurface color persist
+across sessions.
 
 Each open dataset has a 1 GiB data cache by default, and volume rendering fills
 a second cache of the same size with the grids it samples the field into (an

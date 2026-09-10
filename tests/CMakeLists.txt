@@ -1201,6 +1201,36 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_remote_cell_aspect_smoke PROPERTIES TIMEOUT 30)
 
+    # View > Aspect Ratio on the same 64:1 cells: Physical Size stretches the
+    # view by the cell aspect and leaves the raster at the cell aspect; the
+    # scale bar follows the on-screen isotropy; a fixed scale is stated along
+    # the less stretched axis.
+    add_test(
+        NAME qt_physical_aspect_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_tall"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_physical_aspect"
+            -DMODE=physical-aspect
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_physical_aspect_smoke PROPERTIES TIMEOUT 30)
+
+    # A remote Fit raster sized for the viewport must be re-fetched at native
+    # width when a stretch puts its few columns across the whole viewport.
+    add_test(
+        NAME qt_remote_physical_aspect_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_tall"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_physical_aspect"
+            -DMODE=remote-physical-aspect
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_remote_physical_aspect_smoke PROPERTIES TIMEOUT 30)
+
     add_test(
         NAME qt_remote_rubber_aspect_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
@@ -1294,6 +1324,15 @@ if(TARGET amrexplorer_qt)
         PRIVATE amrexplorer::core amrexplorer::warnings Qt6::Core
     )
     add_test(NAME plane_mapping COMMAND test_plane_mapping)
+
+    add_executable(test_aspect_mode unit/test_aspect_mode.cpp)
+    target_include_directories(test_aspect_mode
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
+    )
+    target_link_libraries(test_aspect_mode
+        PRIVATE amrexplorer::core amrexplorer::warnings
+    )
+    add_test(NAME aspect_mode COMMAND test_aspect_mode)
 
     add_executable(test_scientific_double_spin_box
         unit/test_scientific_double_spin_box.cpp

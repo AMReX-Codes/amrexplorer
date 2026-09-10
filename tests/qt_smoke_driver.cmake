@@ -23,7 +23,8 @@
 #                 sequence-density-preserve |
 #                 sequence-equal-size-transform-preserve |
 #                 sequence-geometry-refit | sequence-noop | sequence-failure |
-#                 remote-canvas-wheel | remote-cell-aspect | volume |
+#                 remote-canvas-wheel | remote-cell-aspect |
+#                 physical-aspect | remote-physical-aspect | volume |
 #                 derived-field | derived-field-sequence |
 #                 derived-field-frames | derived-field-playback |
 #                 scale-state | effective-scale |
@@ -220,6 +221,13 @@ elseif(MODE STREQUAL "scale-state")
 elseif(MODE STREQUAL "remote-cell-aspect")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --remote-cell-aspect-smoke-test
+        "${WORK}/plt")
+elseif(MODE STREQUAL "physical-aspect")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --physical-aspect-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "remote-physical-aspect")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --remote-physical-aspect-smoke-test
         "${WORK}/plt")
 elseif(MODE STREQUAL "remote-canvas-wheel")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")

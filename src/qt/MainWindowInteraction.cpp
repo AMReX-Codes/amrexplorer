@@ -232,6 +232,107 @@ void MainWindow::resetLengthUnit()
     updateScaleBars();
 }
 
+void MainWindow::showAxisScalingDialog()
+{
+    if (m_axisScalingDialog != nullptr) {
+        m_axisScalingDialog->raise();
+        m_axisScalingDialog->activateWindow();
+        return;
+    }
+    auto* dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(tr("Axis Scaling"));
+    dialog->setWindowFlags(Qt::Window);
+
+    auto* explanation = new QLabel(tr(
+        "Stretch each axis of the slice views by a factor. Factors apply on "
+        "top of the Aspect Ratio mode and reset when a dataset is opened."),
+        dialog);
+    explanation->setWordWrap(true);
+    const int dimension = m_dataset ? m_dataset->metadata().dimension : 3;
+    auto* form = new QFormLayout;
+    std::array<QDoubleSpinBox*, 3> spins{nullptr, nullptr, nullptr};
+    const std::array<QString, 3> names{tr("X"), tr("Y"), tr("Z")};
+    const std::array<const char*, 3> objectNames{
+        "axisScaleSpinX", "axisScaleSpinY", "axisScaleSpinZ"};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        auto* spin = new QDoubleSpinBox(dialog);
+        spin->setObjectName(QLatin1String(objectNames[axis]));
+        spin->setDecimals(3);
+        spin->setRange(0.01, 100.0);
+        spin->setSingleStep(0.1);
+        spin->setValue(m_axisScale[axis]);
+        spin->setEnabled(static_cast<int>(axis) < dimension);
+        form->addRow(names[axis], spin);
+        spins[axis] = spin;
+    }
+    const auto readFactors = [spins] {
+        std::array<double, 3> factors{1.0, 1.0, 1.0};
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            factors[axis] = spins[axis]->value();
+        }
+        return factors;
+    };
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok
+        | QDialogButtonBox::Apply | QDialogButtonBox::Reset
+        | QDialogButtonBox::Cancel, dialog);
+    auto* layout = new QVBoxLayout(dialog);
+    layout->addWidget(explanation);
+    layout->addLayout(form);
+    layout->addWidget(buttons);
+
+    connect(buttons, &QDialogButtonBox::clicked, dialog,
+        [this, dialog, spins, readFactors, buttons](QAbstractButton* button) {
+            const auto role = buttons->buttonRole(button);
+            if (role == QDialogButtonBox::AcceptRole
+                || role == QDialogButtonBox::ApplyRole) {
+                applyAxisScale(readFactors());
+                if (role == QDialogButtonBox::AcceptRole) {
+                    dialog->accept();
+                }
+            } else if (role == QDialogButtonBox::ResetRole) {
+                for (auto* spin : spins) {
+                    spin->setValue(1.0);
+                }
+                applyAxisScale({1.0, 1.0, 1.0});
+            } else if (role == QDialogButtonBox::RejectRole) {
+                dialog->reject();
+            }
+        });
+    connect(dialog, &QDialog::finished, this, [this] {
+        m_axisScalingDialog = nullptr;
+    });
+    m_axisScalingDialog = dialog;
+    dialog->show();
+}
+
+void MainWindow::applyAxisScale(const std::array<double, 3>& axisScale)
+{
+    std::array<double, 3> sane{1.0, 1.0, 1.0};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const auto value = axisScale[axis];
+        sane[axis] = std::isfinite(value) && value > 0.0 ? value : 1.0;
+    }
+    if (sane == m_axisScale) {
+        return;
+    }
+    m_axisScale = sane;
+    applyDisplayStretches();
+}
+
+void MainWindow::resetAxisScale()
+{
+    // Axis factors belong to this dataset, including any unapplied edit.
+    if (m_axisScalingDialog != nullptr) {
+        m_axisScalingDialog->reject();
+    }
+    m_axisScale = {1.0, 1.0, 1.0};
+    // No views hold a raster of the new dataset yet; showSlice installs the
+    // stretch with the first one. The scale-bar gate is re-evaluated when the
+    // controls are enabled for the dataset.
+}
+
 void MainWindow::validateVectorMode()
 {
     if (m_displayMode != DisplayMode::VelocityVectors) {
@@ -1727,6 +1828,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
     if (m_lengthUnitsDialog != nullptr) {
         auto* dialog = m_lengthUnitsDialog;
         m_lengthUnitsDialog = nullptr;
+        dialog->close();
+    }
+    if (m_axisScalingDialog != nullptr) {
+        auto* dialog = m_axisScalingDialog;
+        m_axisScalingDialog = nullptr;
         dialog->close();
     }
     if (m_userGuideDialog != nullptr) {

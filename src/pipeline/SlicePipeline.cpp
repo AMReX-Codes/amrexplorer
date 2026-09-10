@@ -71,13 +71,15 @@ std::array<int, 2> viewportBoundedOutputSize(
         viewportSize[1], 1, maxSliceOutputDimension);
     const auto axes = slicePlaneAxes(metadata.dimension, normal);
     // The aspect is the region's extent in finest cells, not in physical
-    // units: the display draws one square pixel per finest cell (that is
-    // what finestNativeOutputSize and the view's logical size use), so a
-    // raster fitted to the physical aspect would be squeezed whenever the
-    // cells are not square -- to a one-pixel strip on a domain whose dy is
-    // a hundred times its dx -- and, for spherical data, radius and angle
-    // do not even share units. Fractional cell edges are kept: a rubber-band
-    // region's exact aspect survives.
+    // units: the raster's unit is one sample per finest cell (that is what
+    // finestNativeOutputSize and the view's logical size use), so a raster
+    // fitted to the physical aspect would be squeezed whenever the cells are
+    // not square -- to a one-pixel strip on a domain whose dy is a hundred
+    // times its dx -- and, for spherical data, radius and angle do not even
+    // share units. Physical proportion is the view's business: it stretches
+    // the raster on screen (ImageView::setDisplayStretch) and enlarges the
+    // bound it hands in here along the axis it stretches less. Fractional
+    // cell edges are kept: a rubber-band region's exact aspect survives.
     const auto& finest = metadata.levels[static_cast<std::size_t>(
         std::max(0, metadata.finestLevel))];
     const auto extentX = (region.upper[static_cast<std::size_t>(axes[0])]

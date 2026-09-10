@@ -6,9 +6,13 @@
 #include <QKeyEvent>
 #include <QPoint>
 #include <QPointF>
+#include <QRectF>
 #include <QScrollBar>
+#include <QSizeF>
 #include <QTransform>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <vector>
@@ -452,9 +456,87 @@ void tearingDownTheSceneForgetsThePointTally()
 
 } // namespace
 
+bool nearly(double actual, double expected, double relative = 1e-9)
+{
+    return std::abs(actual - expected) <= relative * std::max(1.0, std::abs(expected));
+}
+
+void displayStretchLivesInTheViewTransform()
+{
+    amrvis::qt::ImageView view;
+    view.resize(400, 400);
+    view.show();
+    QApplication::processEvents();
+    view.setImage(solidImage(100, 50));
+    QApplication::processEvents();
+    const auto unstretched = view.transform();
+    require(nearly(unstretched.m22() / unstretched.m11(), 1.0),
+        "an unstretched Fit is not isotropic");
+
+    // Fit: the 100x50 raster shown 1:4 is 100x200 in display units, so the
+    // horizontal axis binds and the vertical is four times as tall.
+    view.setDisplayStretch(1.0, 4.0);
+    const auto fitted = view.transform();
+    require(nearly(fitted.m22() / fitted.m11(), 4.0),
+        "Fit did not apply the vertical stretch");
+    require(fitted.m11() < unstretched.m11(),
+        "the stretched Fit did not shrink to keep the raster inside the view");
+    require(nearly(view.isotropicScale(), fitted.m11()),
+        "the isotropic scale is not m11 when the horizontal stretch is one");
+    require(view.displaySize() == QSizeF(100.0, 200.0),
+        "displaySize does not multiply the raster by the stretch");
+    require(view.composedImageSize(1.0) == QSize(100, 200),
+        "the export size ignores the stretch");
+    // The raster still fits: both device-space extents are within the view.
+    const auto footprint
+        = view.mapFromScene(view.imageSceneRect()).boundingRect();
+    require(footprint.width() <= 400 && footprint.height() <= 400,
+        "the stretched raster overflows the viewport");
+
+    // Fixed scale: N is pixels per raster pixel along the less stretched axis.
+    view.setFixedScale(2);
+    require(nearly(view.transform().m11(), 2.0)
+            && nearly(view.transform().m22(), 8.0),
+        "a fixed scale did not multiply each axis by its stretch");
+    require(nearly(view.isotropicScale(), 2.0),
+        "isotropicScale is not the fixed factor");
+
+    // Custom: rubber-band zoom keeps the ratio too.
+    view.zoomToRect(QRectF(10.0, 10.0, 20.0, 20.0));
+    require(view.transformMode() == amrvis::qt::ImageView::TransformMode::Custom,
+        "zoomToRect left the view out of Custom mode");
+    require(nearly(view.transform().m22() / view.transform().m11(), 4.0),
+        "zoomToRect flattened the stretch");
+    // Changing the stretch in Custom mode keeps the zoom and the centre (the
+    // raster must still overflow the viewport on both axes for the centre to
+    // be the view's to keep; a smaller raster is centred by alignment).
+    const auto zoom = view.isotropicScale();
+    const auto centre
+        = view.mapToScene(view.viewport()->rect()).boundingRect().center();
+    view.setDisplayStretch(1.0, 2.0);
+    require(nearly(view.transform().m22() / view.transform().m11(), 2.0),
+        "a Custom-mode stretch change did not update the ratio");
+    require(nearly(view.isotropicScale(), zoom),
+        "a Custom-mode stretch change altered the zoom");
+    const auto after
+        = view.mapToScene(view.viewport()->rect()).boundingRect().center();
+    require(std::abs(after.x() - centre.x()) < 1.0
+            && std::abs(after.y() - centre.y()) < 1.0,
+        "a Custom-mode stretch change moved the viewport centre");
+
+    // An equal stretch is a no-op on the transform, and bad values mean one.
+    const auto before = view.transform();
+    view.setDisplayStretch(1.0, 2.0);
+    require(before == view.transform(), "an equal stretch touched the view");
+    view.setDisplayStretch(0.0, -3.0);
+    require(view.displayStretch() == QPointF(1.0, 1.0),
+        "non-positive stretch factors were not treated as one");
+}
+
 int main(int argc, char* argv[])
 {
     QApplication application(argc, argv);
+    displayStretchLivesInTheViewTransform();
     scaleBarUsesNativeOrExplicitUnits();
     scaleBarIsPaintedOverTheSlice();
     scaleBarIsPaintedIntoExportedComposition();

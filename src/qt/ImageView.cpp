@@ -665,13 +665,16 @@ QSize ImageView::composedImageSize(qreal scaleFactor) const {
     if (m_image.isNull()) {
         return {};
     }
-    const auto baseWidth = m_image.width();
-    const auto baseHeight = m_image.height();
+    // The on-screen footprint, not the raster: a stretched display exports
+    // with the aspect it shows.
+    const auto base = displaySize();
+    const auto baseWidth = base.width();
+    const auto baseHeight = base.height();
     // Cap the longer output axis so a large zoom on big data can't allocate a
     // gigabyte image; reduce the factor (preserving aspect) when it would.
     constexpr int maxAxis = 8192;
     const auto cap = static_cast<qreal>(maxAxis)
-        / static_cast<qreal>(std::max(baseWidth, baseHeight));
+        / std::max(baseWidth, baseHeight);
     const auto effective = std::clamp(scaleFactor, 1.0, std::max(1.0, cap));
     const auto outWidth = std::max(1,
         static_cast<int>(std::round(baseWidth * effective)));
@@ -776,7 +779,7 @@ void ImageView::zoomToRect(const QRectF& imageRect, bool confineScene)
     if (confineScene) {
         m_scene->setSceneRect(sceneTarget);
     }
-    fitInView(sceneTarget, Qt::KeepAspectRatio);
+    fitSceneRect(sceneTarget);
 }
 
 void ImageView::panViewport(const QPoint& delta)
@@ -1125,8 +1128,76 @@ void ImageView::fitImage()
 {
     if (m_item != nullptr) {
         resetTransform();
-        fitInView(m_item, Qt::KeepAspectRatio);
+        fitSceneRect(m_item->sceneBoundingRect());
     }
+}
+
+void ImageView::fitSceneRect(const QRectF& rect)
+{
+    if (viewport() == nullptr) {
+        return;
+    }
+    constexpr int margin = 2;
+    const QRectF viewRect
+        = viewport()->rect().adjusted(margin, margin, -margin, -margin);
+    if (viewRect.isEmpty() || rect.isEmpty()) {
+        return;
+    }
+    const auto scale = std::min(
+        viewRect.width() / (rect.width() * m_stretch.x()),
+        viewRect.height() / (rect.height() * m_stretch.y()));
+    setTransform(QTransform::fromScale(
+        scale * m_stretch.x(), scale * m_stretch.y()));
+    centerOn(rect.center());
+}
+
+void ImageView::setDisplayStretch(qreal sx, qreal sy)
+{
+    const auto sane = [](qreal value) {
+        return std::isfinite(value) && value > 0.0 ? value : 1.0;
+    };
+    const QPointF stretch(sane(sx), sane(sy));
+    if (stretch == m_stretch) {
+        // Re-applying an equal transform would recenter a virtual canvas.
+        return;
+    }
+    const auto previous = m_stretch;
+    m_stretch = stretch;
+    if (!hasImage()) {
+        return;
+    }
+    switch (m_transformMode) {
+    case TransformMode::Fit:
+        fitImage();
+        break;
+    case TransformMode::FixedScale:
+        applyFixedScale();
+        break;
+    case TransformMode::Custom: {
+        // Keep the zoom and what is under the viewport centre; only the
+        // ratio of the axes changes.
+        const auto centre
+            = mapToScene(viewport()->rect()).boundingRect().center();
+        setTransform(QTransform::fromScale(
+            m_stretch.x() / previous.x(), m_stretch.y() / previous.y()), true);
+        centerOn(centre);
+        break;
+    }
+    }
+    emit viewportMoved();
+}
+
+qreal ImageView::isotropicScale() const
+{
+    return transform().m11() / m_stretch.x();
+}
+
+QSizeF ImageView::displaySize() const
+{
+    if (m_image.isNull()) {
+        return {};
+    }
+    return {m_image.width() * m_stretch.x(), m_image.height() * m_stretch.y()};
 }
 
 void ImageView::applyFixedScale()
@@ -1140,13 +1211,15 @@ void ImageView::applyFixedScale()
         // Virtual canvas: scene units are finest cells and the item transform
         // already maps raster pixels onto cells, so the view scales cells to
         // screen pixels directly.
-        desired = QTransform::fromScale(factor, factor);
+        desired = QTransform::fromScale(
+            factor * m_stretch.x(), factor * m_stretch.y());
     } else {
         const auto logicalWidth = std::max(1, m_logicalSize.width());
         const auto logicalHeight = std::max(1, m_logicalSize.height());
         desired = QTransform::fromScale(
-            factor * logicalWidth / std::max(1, m_image.width()),
-            factor * logicalHeight / std::max(1, m_image.height()));
+            factor * m_stretch.x() * logicalWidth / std::max(1, m_image.width()),
+            factor * m_stretch.y() * logicalHeight
+                / std::max(1, m_image.height()));
     }
     // Equal-transform replacements must not touch the view: re-setting the
     // same matrix would recenter the scroll position on a virtual canvas.

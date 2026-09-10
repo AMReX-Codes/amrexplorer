@@ -108,6 +108,8 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
+#include <QDoubleSpinBox>
+#include <QAbstractButton>
 #include <QtConcurrentRun>
 #include <QtDebug>
 

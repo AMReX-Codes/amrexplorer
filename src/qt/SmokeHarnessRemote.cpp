@@ -502,6 +502,59 @@ Outcome dispatchRemote(Context& context)
             });
     } else if (argc == 3
         && std::string_view(argv[1])
+            == "--remote-physical-aspect-smoke-test") {
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        // A remote Fit raster is sized to the viewport at the cell aspect.
+        // Stretching the 64-cell-wide axis of plotfile_2d_tall by 64 puts
+        // those columns across the whole viewport width, so the raster must
+        // be re-fetched with every native column rather than shown at the
+        // 30-odd the unstretched fit needed: the stretch change re-requests,
+        // and the arrival is native along that axis and still at the cell
+        // aspect.
+        auto phase = std::make_shared<int>(0);
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished, &application,
+            [&window, &application, phase](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                if (window.activeViewImageWidthForTest() >= 64) {
+                    qCritical("the unstretched Fit raster is already native, "
+                              "so this proves nothing");
+                    application.exit(3);
+                    return;
+                }
+                QObject::connect(&window,
+                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [&window, &application, phase] {
+                        if ((*phase)++ != 0) {
+                            return;
+                        }
+                        const auto width = window.activeViewImageWidthForTest();
+                        if (width != 64) {
+                            qCritical("the stretched Fit raster has %d columns, "
+                                      "not the 64 native ones", width);
+                            application.exit(1);
+                            return;
+                        }
+                        application.exit(
+                            window.activeViewRasterHasCellAspectForTest()
+                                ? 0 : 1);
+                    });
+                window.setAxisScaleForTest({64.0, 1.0, 1.0});
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(path);
+            });
+    } else if (argc == 3
+        && std::string_view(argv[1])
             == "--remote-canvas-wheel-smoke-test") {
         smokeServer = std::make_shared<amrvis::remote::Server>();
         smokeServerThread.emplace(

@@ -477,6 +477,20 @@ bool MainWindow::scaleBarActionEnabledForTest() const
     return m_scaleBarAction->isEnabled();
 }
 
+bool MainWindow::aspectMenuEnabledForTest() const
+{
+    return m_aspectMenu != nullptr && m_aspectMenu->isEnabled();
+}
+
+double MainWindow::activeViewStretchRatioForTest() const
+{
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return 0.0;
+    }
+    const auto transform = m_activeView->view->transform();
+    return transform.m11() > 0.0 ? transform.m22() / transform.m11() : 0.0;
+}
+
 std::size_t MainWindow::activeViewGridBoxCountForTest() const
 {
     return m_activeView == nullptr
@@ -722,7 +736,7 @@ bool MainWindow::fixedScaleStateMatchesForTest(int factor) const
     const auto* view = m_activeView->view;
     return view->transformMode() == ImageView::TransformMode::FixedScale
         && view->fixedScaleFactor() == factor
-        && std::fabs(view->transform().m11() - factor) <= 1.0e-12
+        && std::fabs(view->isotropicScale() - factor) <= 1.0e-12
         && m_scaleButton->text() == expectedButton && checkedText == wanted;
 }
 

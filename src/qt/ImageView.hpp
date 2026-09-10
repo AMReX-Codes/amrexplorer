@@ -171,6 +171,25 @@ public:
     {
         return m_fixedScaleFactor;
     }
+    // Per-axis display stretch, applied in the view transform on top of the
+    // isotropic zoom. The raster and the scene are untouched: one raster pixel
+    // is still one finest cell and overlays keep their raster coordinates;
+    // the screen simply shows each scene unit sx wide and sy tall. Callers
+    // normalize so the smaller factor is one, which makes a fixed scale N
+    // mean N screen pixels per cell along the less stretched axis. Fit and
+    // fixed scale are re-applied; a custom zoom is rescaled about the viewport
+    // centre. Non-positive or non-finite factors are treated as one.
+    void setDisplayStretch(qreal sx, qreal sy);
+    [[nodiscard]] QPointF displayStretch() const noexcept
+    {
+        return m_stretch;
+    }
+    // The isotropic part of the view transform: screen pixels per scene unit
+    // along the less stretched axis. Equals m11 when the stretch is unity.
+    [[nodiscard]] qreal isotropicScale() const;
+    // The raster's on-screen footprint at unit zoom: raster size times the
+    // stretch. This is the aspect an export reproduces.
+    [[nodiscard]] QSizeF displaySize() const;
     [[nodiscard]] const QImage& image() const noexcept;
     [[nodiscard]] std::size_t gridBoxCount() const noexcept
     {
@@ -274,6 +293,13 @@ protected:
 
 private:
     void fitImage();
+    // Fit a scene rect into the viewport with the current stretch: the
+    // isotropic scale is the smaller of the two per-axis ratios, then each
+    // axis is multiplied by its stretch. QGraphicsView::fitInView cannot be
+    // used because it resets the transform to 1:1 per axis and so flattens
+    // any stretch already in force. Mirrors fitInView's 2-pixel margin and
+    // final centerOn so an unstretched fit is pixel-for-pixel what it was.
+    void fitSceneRect(const QRectF& rect);
     void applyFixedScale();
     void applyPlacement();
     void showLineGuide(const QPoint& viewPosition);
@@ -320,6 +346,7 @@ private:
     bool m_lineToolEnabled = true;
     TransformMode m_transformMode = TransformMode::Fit;
     int m_fixedScaleFactor = 1;
+    QPointF m_stretch{1.0, 1.0};
 };
 
 } // namespace amrvis::qt

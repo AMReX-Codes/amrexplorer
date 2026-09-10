@@ -67,6 +67,75 @@ Outcome dispatchZoom(Context& context)
         });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
+        && std::string_view(argv[1]) == "--physical-aspect-smoke-test") {
+        // View > Aspect Ratio on a dataset whose cells are 64 times taller
+        // than wide (plotfile_2d_tall). Cell Counts draws one square pixel
+        // per cell and withholds the scale bar; Physical Size stretches the
+        // vertical axis by the cell aspect in the view transform, leaving the
+        // raster itself at the cell aspect, and the scale bar becomes
+        // truthful; an unequal axis factor takes it away again; a fixed scale
+        // states its factor along the less stretched axis.
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                const auto near = [](double actual, double expected) {
+                    return std::abs(actual - expected) <= 0.02 * expected;
+                };
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                if (!window.aspectMenuEnabledForTest()
+                    || !near(window.activeViewStretchRatioForTest(), 1.0)
+                    || !window.activeViewRasterHasCellAspectForTest()
+                    || window.scaleBarActionEnabledForTest()) {
+                    qCritical("Cell Counts did not start square and barless");
+                    application.exit(1);
+                    return;
+                }
+                auto* physical = window.findChild<QAction*>(
+                    QStringLiteral("aspectPhysicalSizeAction"));
+                if (physical == nullptr || !physical->isEnabled()) {
+                    qCritical("Physical Size is not offered for a plotfile");
+                    application.exit(1);
+                    return;
+                }
+                physical->trigger();
+                if (!near(window.activeViewStretchRatioForTest(), 64.0)
+                    || !window.activeViewRasterHasCellAspectForTest()
+                    || !window.scaleBarActionEnabledForTest()) {
+                    qCritical("Physical Size did not stretch the view by the "
+                              "cell aspect with the raster left alone");
+                    application.exit(1);
+                    return;
+                }
+                window.setAxisScaleForTest({2.0, 1.0, 1.0});
+                if (!near(window.activeViewStretchRatioForTest(), 32.0)
+                    || window.scaleBarActionEnabledForTest()) {
+                    qCritical("an axis factor did not rescale one axis and "
+                              "withdraw the scale bar");
+                    application.exit(1);
+                    return;
+                }
+                window.selectFixedScaleForTest(2);
+                if (!window.fixedScaleStateMatchesForTest(2)
+                    || !near(window.activeViewStretchRatioForTest(), 32.0)) {
+                    qCritical("a fixed scale under a stretch is not the factor "
+                              "along the less stretched axis");
+                    application.exit(1);
+                    return;
+                }
+                window.setAspectModeForTest(amrvis::qt::AspectMode::CellCounts);
+                // Cells again, but X still doubled: half as tall as wide.
+                application.exit(
+                    near(window.activeViewStretchRatioForTest(), 0.5)
+                        && window.fixedScaleStateMatchesForTest(2)
+                        ? 0 : 1);
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--spherical-supersample-smoke-test") {
         // Zoom-preserve regression for the 2-D spherical supersample control:
         // after zooming a spherical view (view-only, no re-slice), changing the

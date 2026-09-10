@@ -27,19 +27,6 @@ void populateLevelCombo(QComboBox* combo, int finestLevel)
     }
 }
 
-bool hasIsotropicCellSizes(const DatasetMetadata& metadata)
-{
-    for (const auto& level : metadata.levels) {
-        for (int axis = 1; axis < metadata.dimension; ++axis) {
-            if (level.cellSize[static_cast<std::size_t>(axis)]
-                != level.cellSize[0]) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
 } // namespace
 
 void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
@@ -49,13 +36,8 @@ void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
     m_levelSelector->setEnabled(true);
     m_range->setControlsReady(true);
     m_boxesAction->setEnabled(true);
-    const bool scaleBarAvailable = metadata.hasPhysicalGeometry
-        && hasIsotropicCellSizes(metadata);
-    {
-        const QSignalBlocker blocker(m_scaleBarAction);
-        m_scaleBarAction->setChecked(scaleBarAvailable && m_scaleBarVisible);
-    }
-    m_scaleBarAction->setEnabled(scaleBarAvailable);
+    updateAspectControls();
+    updateScaleBarAvailability();
     m_slicePlanesAction->setEnabled(metadata.dimension == 3);
     rebuildLevelMenu();
     m_levelMenu->setEnabled(true);
@@ -962,6 +944,21 @@ void MainWindow::updateScaleBars()
     }
 }
 
+void MainWindow::updateScaleBarAvailability()
+{
+    // A horizontal bar states one length per screen pixel; it is offered
+    // only while that holds vertically too. The saved preference survives a
+    // dataset or aspect setting on which the bar is withheld.
+    const bool available = m_dataset
+        && displayIsPhysicallyIsotropic(
+            m_dataset->metadata(), displayStretchPerAxis());
+    {
+        const QSignalBlocker blocker(m_scaleBarAction);
+        m_scaleBarAction->setChecked(available && m_scaleBarVisible);
+    }
+    m_scaleBarAction->setEnabled(available);
+}
+
 void MainWindow::updateCrosshairs(PlaneViewState& state)
 {
     std::optional<QLineF> vertical;
@@ -1019,12 +1016,55 @@ void MainWindow::showMetadata(
     // AMR hierarchy, so those rows (and the per-level listing below) would
     // show invented values; they are skipped for such data.
     const bool standalone = !metadata.hasPhysicalGeometry;
+    const auto dimension = static_cast<std::size_t>(
+        std::clamp(metadata.dimension, 1, 3));
+    // Per-axis values as one space-separated row, so a domain corner or a
+    // cell size reads as the vector it is.
+    const auto realTriple = [dimension](const auto& values) {
+        QStringList parts;
+        for (std::size_t axis = 0; axis < dimension; ++axis) {
+            parts << QString::number(values[axis], 'g', 17);
+        }
+        return parts.join(QLatin1Char(' '));
+    };
+    const auto intTriple = [dimension](const auto& values) {
+        QStringList parts;
+        for (std::size_t axis = 0; axis < dimension; ++axis) {
+            parts << QString::number(values[axis]);
+        }
+        return parts.join(QLatin1Char(' '));
+    };
     addValue(tr("Dataset"), QString::fromStdString(path.string()));
     addValue(tr("Format"), QString::fromStdString(result.fileVersion));
     addValue(tr("Dimension"), QString::number(metadata.dimension));
     if (!standalone) {
         addValue(tr("Time"), QString::number(metadata.time, 'g', 17));
         addValue(tr("Finest level"), QString::number(metadata.finestLevel));
+        QString coordinates;
+        switch (static_cast<CoordinateSystem>(metadata.coordinateSystem)) {
+        case CoordinateSystem::Cartesian: coordinates = tr("Cartesian"); break;
+        case CoordinateSystem::Cylindrical:
+            coordinates = tr("Cylindrical (R-Z)");
+            break;
+        case CoordinateSystem::Spherical:
+            coordinates = tr("Spherical (r-%1)").arg(QChar(0x03B8));
+            break;
+        }
+        if (coordinates.isEmpty()) {
+            coordinates = QString::number(metadata.coordinateSystem);
+        }
+        addValue(tr("Coordinate system"), coordinates);
+        Real3 extent;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            extent[axis] = metadata.physicalDomain.upper[axis]
+                - metadata.physicalDomain.lower[axis];
+        }
+        auto* domain = new QTreeWidgetItem(m_metadataTree,
+            {tr("Domain"), realTriple(extent)});
+        new QTreeWidgetItem(domain,
+            {tr("Lower"), realTriple(metadata.physicalDomain.lower)});
+        new QTreeWidgetItem(domain,
+            {tr("Upper"), realTriple(metadata.physicalDomain.upper)});
     }
 
     auto* fields = new QTreeWidgetItem(
@@ -1055,12 +1095,44 @@ void MainWindow::showMetadata(
     } else {
         auto* levels = new QTreeWidgetItem(m_metadataTree,
             {tr("Levels"), QString::number(metadata.levels.size())});
-        for (const auto& level : metadata.levels) {
-            new QTreeWidgetItem(levels, {
+        for (std::size_t index = 0; index < metadata.levels.size(); ++index) {
+            const auto& level = metadata.levels[index];
+            auto* item = new QTreeWidgetItem(levels, {
                 tr("Level %1").arg(level.level),
                 tr("%1 grid(s), %2").arg(level.boxes.size()).arg(
                     QString::fromStdString(level.dataPath))
             });
+            Int3 cells;
+            Int3 lower = level.domain.lower;
+            Int3 upper = level.domain.upper;
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                // The index domain is cell-centred in a plotfile Header; a
+                // nodal axis holds one more index than it has cells.
+                cells[axis] = upper[axis] - lower[axis] + 1
+                    - (level.domain.centering[axis] != 0 ? 1 : 0);
+            }
+            new QTreeWidgetItem(item, {tr("Cells"), intTriple(cells)});
+            new QTreeWidgetItem(item, {tr("Index domain"),
+                tr("(%1) to (%2)").arg(intTriple(lower), intTriple(upper))});
+            new QTreeWidgetItem(item,
+                {tr("Cell size"), realTriple(level.cellSize)});
+            if (index > 0) {
+                // The Header's ratios are one integer per level; the ratio of
+                // cell sizes gives the same thing per axis.
+                const auto& coarser = metadata.levels[index - 1];
+                Int3 ratio;
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    const auto fine = level.cellSize[axis];
+                    ratio[axis] = fine > 0.0
+                        ? static_cast<int>(std::lround(
+                            coarser.cellSize[axis] / fine))
+                        : 0;
+                }
+                new QTreeWidgetItem(item,
+                    {tr("Refinement ratio"), intTriple(ratio)});
+            }
+            new QTreeWidgetItem(item,
+                {tr("Step"), QString::number(level.step)});
         }
     }
     m_metadataTree->expandAll();
@@ -1199,6 +1271,9 @@ std::optional<QRectF> MainWindow::sphericalReframe(
 void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     std::uint64_t sessionEpoch)
 {
+    // Before the raster is installed, so a Fit is computed once, with the
+    // stretch the raster was sized for.
+    applyDisplayStretch(state);
     if (!display.rasterUnchanged) {
         if (!display.image.valid()) {
             throw std::runtime_error("renderer produced an invalid image");
@@ -1319,8 +1394,9 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     // grid but not on the warped R-Z view.
     state.view->setLineToolEnabled(!displayIsSphericalWarp());
     // The 2-D Spherical menu (and, within it, Supersampling only in R-Z mode)
-    // is available only for spherical datasets.
+    // is available only for spherical datasets; Aspect Ratio for the others.
     updateSphericalControls();
+    updateAspectControls();
     if (m_viewDimension == 2) {
         // The 2-D view carries no axis indicator normally; spherical labels its
         // horizontal/vertical axes per display mode (R-Z, r-theta, or theta-r).
@@ -1768,6 +1844,7 @@ void MainWindow::prepareSequence(std::size_t frameCount)
     closeSequence();
     resetRangeState();
     resetLengthUnit();
+    resetAxisScale();
     m_fabNavigator->reset();
     m_particleController->cancel();
     m_particleController->clearSamples();

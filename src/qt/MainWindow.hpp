@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AspectMode.hpp"
 #include "DatasetWindow.hpp"
 #include "ExportFrame.hpp"
 #include "ImageView.hpp"
@@ -286,9 +287,10 @@ public:
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;
     // Test-only: the active view's raster has the aspect of the region it
-    // covers measured in finest cells -- the display's unit, one square pixel
-    // per cell -- rather than in physical units. The two differ only when
-    // the cells are not square (see remote-fit-anisotropic-cells).
+    // covers measured in finest cells -- the raster's unit, one sample per
+    // cell -- rather than in physical units. The two differ only when the
+    // cells are not square (see remote-fit-anisotropic-cells); a physical
+    // proportion is a view-side stretch and leaves the raster alone.
     [[nodiscard]] bool activeViewRasterHasCellAspectForTest() const;
     // Test-only: a second independent top-level window, made exactly as the
     // "Open New Window" menu action makes it, for the close-window test to
@@ -431,6 +433,16 @@ public:
     [[nodiscard]] bool scaleBarActionEnabledForTest() const;
     [[nodiscard]] bool activeViewHasScaleBarForTest() const;
     [[nodiscard]] bool activeViewFitsWindowForTest() const;
+    // Test-only: the Aspect Ratio controls, driven as the menu and the Axis
+    // Scaling dialog drive them, and the stretch they leave on the active
+    // view: its vertical screen pixels per scene unit over its horizontal.
+    void setAspectModeForTest(AspectMode mode) { setAspectMode(mode); }
+    void setAxisScaleForTest(const std::array<double, 3>& axisScale)
+    {
+        applyAxisScale(axisScale);
+    }
+    [[nodiscard]] bool aspectMenuEnabledForTest() const;
+    [[nodiscard]] double activeViewStretchRatioForTest() const;
 
     // Test-only: shrink the open dataset's cache budget to force cache-pressure
     // fallback on the next non-cache slice, and read the current resident bytes
@@ -748,6 +760,21 @@ private:
     void pushDisplayFormat();
     void showLengthUnitsDialog();
     void applyLengthUnit(const QString& unitId);
+    // View > Aspect Ratio: the per-axis display stretch (see AspectMode.hpp).
+    // The dialog edits m_axisScale; applyAxisScale installs a new set and
+    // resetAxisScale returns to unit factors when a dataset is opened.
+    void showAxisScalingDialog();
+    void applyAxisScale(const std::array<double, 3>& axisScale);
+    void resetAxisScale();
+    void setAspectMode(AspectMode mode);
+    [[nodiscard]] std::array<double, 3> displayStretchPerAxis() const;
+    // Push the current stretch to one view (showSlice, before the raster is
+    // installed) or to every view after an option change, when a remote view
+    // also re-requests a raster sized for the new stretch.
+    void applyDisplayStretch(PlaneViewState& state);
+    void applyDisplayStretches();
+    // Enable/disable the Aspect Ratio submenu for the current dataset.
+    void updateAspectControls();
     void validateVectorMode();
     void ensureVectorFieldDefaults();
     void showDatasetWindow();
@@ -906,6 +933,10 @@ private:
     void updateGridBoxes();
     void updateScaleBar(PlaneViewState& state);
     void updateScaleBars();
+    // The scale bar is offered only while the screen has one pixel density
+    // per physical unit on both in-plane axes, which depends on the dataset's
+    // cell sizes and on the aspect settings; re-evaluated when either changes.
+    void updateScaleBarAvailability();
     void resetLengthUnit();
     void updateCrosshairs(PlaneViewState& state);
     void updateCrosshairs();
@@ -1063,6 +1094,7 @@ private:
     SetContoursDialog* m_contoursDialog = nullptr;
     QDialog* m_numberFormatDialog = nullptr;
     QDialog* m_lengthUnitsDialog = nullptr;
+    QDialog* m_axisScalingDialog = nullptr;
     UserGuideDialog* m_userGuideDialog = nullptr;
     QComboBox* m_fieldSelector = nullptr;
     QComboBox* m_levelSelector = nullptr;
@@ -1172,6 +1204,11 @@ private:
     QActionGroup* m_sphericalDisplayGroup = nullptr;
     QMenu* m_sphericalSupersampleMenu = nullptr;
     QActionGroup* m_sphericalSupersampleGroup = nullptr;
+    // View > Aspect Ratio: disabled for 2-D spherical data; the Physical
+    // Size radio is further disabled without physical geometry.
+    QMenu* m_aspectMenu = nullptr;
+    QActionGroup* m_aspectGroup = nullptr;
+    QAction* m_aspectPhysicalAction = nullptr;
     QActionGroup* m_scaleGroup = nullptr;
     QActionGroup* m_levelGroup = nullptr;
     QActionGroup* m_variableGroup = nullptr;
@@ -1217,6 +1254,10 @@ private:
     int m_sphericalSupersample = 4;
     // 2-D spherical display layout (see SliceRequest::sphericalDisplay).
     SphericalDisplay m_sphericalDisplay = SphericalDisplay::RZ;
+    // Persisted preference; the per-axis factors belong to the open dataset
+    // and reset to one with each new one (they survive sequence frames).
+    AspectMode m_aspectMode = AspectMode::CellCounts;
+    std::array<double, 3> m_axisScale{1.0, 1.0, 1.0};
     int m_contourColor = contourColorBlack;
     int m_vectorUField = -1;
     int m_vectorVField = -1;

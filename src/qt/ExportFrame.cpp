@@ -266,15 +266,15 @@ ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
     return layout;
 }
 
-bool exportAspectMatches(QSize rasterSize, const ExportLayout& layout) {
+bool exportAspectMatches(QSizeF rasterSize, const ExportLayout& layout) {
     // Both output dimensions are rounded independently after applying one
     // scale. Allow half an output pixel on each axis: eliminating the scale
     // gives |h * W - w * H| <= (w + h) / 2. This also handles portrait rasters
     // without amplifying width rounding into a false aspect-ratio change.
     return !rasterSize.isEmpty() && !layout.dataRect.isEmpty() &&
-           std::abs(static_cast<double>(rasterSize.height()) * layout.dataRect.width() -
-                    static_cast<double>(rasterSize.width()) * layout.dataRect.height()) <=
-               0.5 * (static_cast<double>(rasterSize.width()) + rasterSize.height());
+           std::abs(rasterSize.height() * layout.dataRect.width() -
+                    rasterSize.width() * layout.dataRect.height()) <=
+               0.5 * (rasterSize.width() + rasterSize.height());
 }
 
 QImage composeExportImage(const QImage& raster, const std::array<ExportAxis, 2>& axes,

@@ -217,6 +217,17 @@ void MainWindow::restoreSettings()
             }
         }
     }
+    if (m_aspectGroup != nullptr) {
+        const auto stored = settings.value(QStringLiteral("aspect/mode"),
+            static_cast<int>(m_aspectMode)).toInt();
+        for (auto* action : m_aspectGroup->actions()) {
+            if (action->data().toInt() == stored) {
+                m_aspectMode = static_cast<AspectMode>(stored);
+                action->setChecked(true);
+                break;
+            }
+        }
+    }
     applySpeed();
 
     const auto geometry = settings.value(QStringLiteral("geometry")).toByteArray();
@@ -251,6 +262,8 @@ void MainWindow::saveSettings()
         m_sphericalSupersample);
     settings.setValue(QStringLiteral("spherical/display"),
         static_cast<int>(m_sphericalDisplay));
+    settings.setValue(QStringLiteral("aspect/mode"),
+        static_cast<int>(m_aspectMode));
 }
 
 void MainWindow::updateWindowTitle()
@@ -466,8 +479,7 @@ void MainWindow::exportImage()
             return;
         }
         for (const auto& [panelView, outPath] : outputs) {
-            const qreal scale = std::max(1.0,
-                panelView->transform().m11());
+            const qreal scale = std::max(1.0, panelView->isotropicScale());
             const QImage composite = composeExportFrame(panelView, options, scale);
             if (composite.isNull() || !composite.save(outPath, "PNG")) {
                 QMessageBox::critical(this, tr("Cannot export image"),
@@ -478,7 +490,7 @@ void MainWindow::exportImage()
         if (!confirmExportTargets(this, chosen, {filename}, formatName)) {
             return;
         }
-        const qreal exportScale = std::max(1.0, view->transform().m11());
+        const qreal exportScale = std::max(1.0, view->isotropicScale());
         const QImage composite = composeExportFrame(view, options, exportScale);
         if (composite.isNull()) {
             QMessageBox::critical(this, tr("Cannot export image"),
@@ -537,7 +549,7 @@ QImage MainWindow::composeExportFrame(const ImageView* view, const ExportOptions
     if (layout.dataRect.isEmpty()) {
         layout = makeExportLayout(view->composedImageSize(scaleFactor), options, axes, &colorBar,
                                   frozenLayout != nullptr);
-    } else if (!exportAspectMatches(view->image().size(), layout)) {
+    } else if (!exportAspectMatches(view->displaySize(), layout)) {
         throw std::runtime_error(
             tr("The aspect ratio of panel %1 changed. "
                "Export stopped to preserve the fixed image rectangle without stretching.")
@@ -595,7 +607,7 @@ void MainWindow::beginAnimationExport(const QString& path, const ExportOptions& 
     }
     // Freeze zoom and styling now; each panel's pixel layout is established
     // by frame 0 and retained for the complete animation.
-    const auto scale = std::max(1.0, view->transform().m11());
+    const auto scale = std::max(1.0, view->isotropicScale());
     std::vector<QString> suffixes;
     if (m_viewDimension == 3) {
         suffixes = {QStringLiteral("_yz"), QStringLiteral("_xz"),
@@ -863,6 +875,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     closeSequence();
     resetRangeState();
     resetLengthUnit();
+    resetAxisScale();
     // The new dataset arrives fitted -- setPlaceholder below puts every view
     // back to Fit -- so the scale report has to come back with it. Without
     // this the toolbar kept claiming the previous dataset's "4x" over a fitted

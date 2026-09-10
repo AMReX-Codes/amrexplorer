@@ -9,6 +9,7 @@
 #include <QKeySequence>
 #include <QRunnable>
 #include <QThreadPool>
+#include <QTreeWidget>
 #include <QTimer>
 
 #include <atomic>
@@ -39,8 +40,25 @@ Outcome dispatchLifecycle(Context& context)
     if (argc == 3 && std::string_view(argv[1]) == "--smoke-test") {
         const std::filesystem::path path(argv[2]);
         QObject::connect(&window, &amrvis::qt::MainWindow::datasetOpenFinished,
-            &application, [&application](bool success) {
-                application.exit(success ? 0 : 1);
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(1);
+                    return;
+                }
+                // The Dataset Metadata dock is filled before the open is
+                // reported, geometry rows included for a plotfile.
+                auto* metadataTree = window.findChild<QTreeWidget*>(
+                    QStringLiteral("metadataTree"));
+                const bool geometryShown = metadataTree != nullptr
+                    && !metadataTree->findItems(QStringLiteral("Cell size"),
+                        Qt::MatchExactly | Qt::MatchRecursive).isEmpty()
+                    && !metadataTree->findItems(
+                        QStringLiteral("Coordinate system"),
+                        Qt::MatchExactly | Qt::MatchRecursive).isEmpty();
+                if (!geometryShown) {
+                    qCritical("the metadata dock lists no geometry");
+                }
+                application.exit(geometryShown ? 0 : 1);
             });
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path, true); });

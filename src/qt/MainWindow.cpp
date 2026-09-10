@@ -1103,7 +1103,26 @@ std::array<int, 2> MainWindow::sliceOutputSize(
     if (!m_openMetadata || m_openMetadata->levels.empty()) {
         return {1, 1};
     }
-    const auto viewportPixels = viewportPixelSize(state);
+    auto viewportPixels = viewportPixelSize(state);
+    // The raster keeps the cell aspect; the view stretches it. A raster sized
+    // to fill the viewport along its binding axis would then be shown with
+    // more screen pixels than raster pixels along the stretched axis. Sizing
+    // it for a viewport enlarged along the less stretched axis by the ratio
+    // keeps a raster pixel no larger than a screen pixel on both axes; the
+    // native and frame-budget bounds below still cap it.
+    {
+        const auto stretch = displayStretchPerAxis();
+        const auto axes = displayAxes(state.normal);
+        const auto sx = stretch[static_cast<std::size_t>(axes[0])];
+        const auto sy = stretch[static_cast<std::size_t>(axes[1])];
+        const auto largest = std::max(sx, sy);
+        const auto enlarge = [](int pixels, double factor) {
+            return std::clamp(static_cast<int>(std::lround(pixels * factor)),
+                1, maxSliceOutputDimension);
+        };
+        viewportPixels = {enlarge(viewportPixels[0], largest / sx),
+            enlarge(viewportPixels[1], largest / sy)};
+    }
     const auto target = state.visibleRegion.value_or(
         datasetSampleBounds(*m_openMetadata));
     std::array<int, 2> outputSize{};
@@ -1174,6 +1193,80 @@ void MainWindow::updateSphericalControls()
         m_sphericalSupersampleMenu->setEnabled(
             spherical && m_sphericalDisplay == SphericalDisplay::RZ);
     }
+}
+
+void MainWindow::updateAspectControls()
+{
+    if (m_aspectMenu == nullptr) {
+        return;
+    }
+    const bool hasDataset = m_dataset != nullptr;
+    m_aspectMenu->setEnabled(hasDataset && !displayIsSpherical());
+    if (m_aspectPhysicalAction != nullptr) {
+        m_aspectPhysicalAction->setEnabled(
+            hasDataset && m_dataset->metadata().hasPhysicalGeometry);
+    }
+}
+
+std::array<double, 3> MainWindow::displayStretchPerAxis() const
+{
+    if (!m_dataset) {
+        return {1.0, 1.0, 1.0};
+    }
+    return amrvis::qt::displayStretchPerAxis(m_dataset->metadata(),
+        m_aspectMode, m_axisScale, displayIsSpherical());
+}
+
+void MainWindow::applyDisplayStretch(PlaneViewState& state)
+{
+    if (state.view == nullptr) {
+        return;
+    }
+    const auto stretch = displayStretchPerAxis();
+    const auto axes = displayAxes(state.normal);
+    state.view->setDisplayStretch(
+        stretch[static_cast<std::size_t>(axes[0])],
+        stretch[static_cast<std::size_t>(axes[1])]);
+}
+
+void MainWindow::applyDisplayStretches()
+{
+    const bool remote = m_dataset
+        && std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_dataset);
+    for (auto* state : currentViews()) {
+        applyDisplayStretch(*state);
+        if (!remote || !state->view->hasImage()) {
+            continue;
+        }
+        // A remote raster is sized for the screen it fills, and the stretch
+        // just changed how much of the screen each axis fills: the same
+        // follow-up a viewport resize gets (see the viewportResized handler).
+        if (remoteDemandCanvas(*state)) {
+            updateRemoteFixedScaleDemand(*state);
+        } else if (state->hasCachedRequest
+            && state->cachedRequest.outputSize != sliceOutputSize(*state)) {
+            scheduleSliceRequest(*state);
+        }
+    }
+    updateScaleBarAvailability();
+    updateScaleBars();
+    refreshScaleReport();
+}
+
+void MainWindow::setAspectMode(AspectMode mode)
+{
+    if (mode != m_aspectMode) {
+        m_aspectMode = mode;
+        saveSettings();
+    }
+    if (m_aspectGroup != nullptr) {
+        for (auto* action : m_aspectGroup->actions()) {
+            if (action->data().toInt() == static_cast<int>(mode)) {
+                action->setChecked(true);
+            }
+        }
+    }
+    applyDisplayStretches();
 }
 
 std::array<QString, 2> MainWindow::sphericalAxisLabels(SphericalDisplay mode)
@@ -1369,6 +1462,38 @@ void MainWindow::createMenus()
     }
     m_sphericalMenu->addMenu(m_sphericalSupersampleMenu);
 
+    // "Aspect Ratio": whether a panel is proportioned by cell counts (one
+    // square pixel per finest cell) or by physical size, plus per-axis
+    // factors. Enabled per dataset in updateAspectControls.
+    m_aspectMenu = new QMenu(tr("Aspect Ratio"), this);
+    m_aspectMenu->setEnabled(false);
+    m_aspectGroup = new QActionGroup(this);
+    const std::array<std::pair<AspectMode, QString>, 2> aspectModes{
+        std::pair{AspectMode::CellCounts, tr("Cell Counts")},
+        std::pair{AspectMode::PhysicalSize, tr("Physical Size")}};
+    for (const auto& [mode, label] : aspectModes) {
+        auto* action = new QAction(label, m_aspectMenu);
+        action->setObjectName(mode == AspectMode::CellCounts
+            ? QStringLiteral("aspectCellCountsAction")
+            : QStringLiteral("aspectPhysicalSizeAction"));
+        action->setCheckable(true);
+        action->setActionGroup(m_aspectGroup);
+        action->setData(static_cast<int>(mode));
+        action->setChecked(mode == m_aspectMode);
+        connect(action, &QAction::triggered, this,
+            [this, mode] { setAspectMode(mode); });
+        m_aspectMenu->addAction(action);
+        if (mode == AspectMode::PhysicalSize) {
+            m_aspectPhysicalAction = action;
+        }
+    }
+    m_aspectMenu->addSeparator();
+    auto* axisScalingAction = new QAction(tr("Axis Scaling..."), this);
+    axisScalingAction->setObjectName(QStringLiteral("axisScalingAction"));
+    connect(axisScalingAction, &QAction::triggered, this,
+        [this] { showAxisScalingDialog(); });
+    m_aspectMenu->addAction(axisScalingAction);
+
     m_levelMenu = new QMenu(tr("&Level"), this);
     m_levelGroup = new QActionGroup(this);
     m_levelMenu->setEnabled(false);
@@ -1449,6 +1574,7 @@ void MainWindow::createMenus()
     viewMenu->addAction(m_volumeController->createAction(this));
     viewMenu->addMenu(paletteMenu);
     viewMenu->addSeparator();
+    viewMenu->addMenu(m_aspectMenu);
     viewMenu->addMenu(m_sphericalMenu);
     viewMenu->addSeparator();
     viewMenu->addAction(m_contoursAction);

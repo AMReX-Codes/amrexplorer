@@ -64,7 +64,9 @@ exportAxes(const RealBox& displayRegion, int dimension, int normal, int coordina
                                             const std::array<ExportAxis, 2>& axes = {},
                                             const ColorBarWidget* colorBar = nullptr,
                                             bool reserveLabelGrowth = true);
-[[nodiscard]] bool exportAspectMatches(QSize rasterSize, const ExportLayout& layout);
+// rasterSize is the frame's on-screen footprint (raster times any display
+// stretch), which is what the frozen layout was measured from.
+[[nodiscard]] bool exportAspectMatches(QSizeF rasterSize, const ExportLayout& layout);
 [[nodiscard]] QImage composeExportImage(const QImage& raster, const std::array<ExportAxis, 2>& axes,
                                         const ExportOptions& options, const ExportLayout& layout,
                                         const ColorBarWidget* colorBar);

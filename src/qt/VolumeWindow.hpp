@@ -67,9 +67,10 @@ public:
     void setSamplingSelectable(bool selectable);
     // The fields an isosurface may be taken from -- the main window's list,
     // id and display name -- and the one to select while the user has not
-    // chosen (the volume's own field). A chosen field is kept by name across
-    // refills, since ids shift when derived fields come and go. Silent: the
-    // host that pushes the list schedules its own render.
+    // chosen (the host's pick: a volume fraction, else the volume's own
+    // field). A chosen field is kept by name across refills, since ids shift
+    // when derived fields come and go. Silent: the host that pushes the list
+    // schedules its own render.
     void setIsosurfaceFields(
         const std::vector<std::pair<FieldId, QString>>& fields, FieldId fallback);
     // The isosurface field's value range: the slider's span, and the default

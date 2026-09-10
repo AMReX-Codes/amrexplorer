@@ -546,6 +546,9 @@ int main(int argc, char** argv)
     rangeSelection.mode = amrvis::RangeMode::User;
     rangeSelection.userRange = std::pair{0.0, 4.0};
     amrvis::LevelSelection level{amrvis::CompositionPolicy::FinestAvailable, 1};
+    std::vector<std::pair<amrvis::FieldId, QString>> fieldList{
+        {amrvis::FieldId{0}, QString("density")},
+        {amrvis::FieldId{1}, QString("pressure")}};
     const auto& palette = amrvis::builtinPalette(amrvis::BuiltinPalette::Rainbow);
     const auto hooks = [&] {
         return VolumeController::Hooks{
@@ -563,11 +566,7 @@ int main(int argc, char** argv)
                     viewRegions);
             },
             [&playingSequence] { return playingSequence; },
-            [] {
-                return std::vector<std::pair<amrvis::FieldId, QString>>{
-                    {amrvis::FieldId{0}, QString("density")},
-                    {amrvis::FieldId{1}, QString("pressure")}};
-            },
+            [&fieldList] { return fieldList; },
         };
     };
 
@@ -2034,6 +2033,49 @@ int main(int argc, char** argv)
                 && !showVolume->isEnabled() && showVolume->isChecked(),
             "unticking the isosurface left the volume hidden");
         controller.closeWindow();
+    }
+
+    // --- a volume fraction is the isosurface's first choice ------------------
+    // An embedded-boundary plotfile's vfrac at 0.5 is the geometry, so with
+    // such a field in the list the surface starts there rather than on the
+    // volume's field; without one it starts on the volume's field. Matched by
+    // name, case-insensitively, exact before prefix.
+    {
+        using amrvis::qt::volumeFractionField;
+        using Fields = std::vector<std::pair<amrvis::FieldId, QString>>;
+        require(!volumeFractionField(fieldList).has_value(),
+            "a list without a volume fraction reported one");
+        require(volumeFractionField(Fields{{amrvis::FieldId{0}, "density"},
+                    {amrvis::FieldId{3}, "vfrac"}})
+                == amrvis::FieldId{3},
+            "vfrac was not picked");
+        require(volumeFractionField(Fields{{amrvis::FieldId{0}, "density"},
+                    {amrvis::FieldId{2}, "VolFrac"}})
+                == amrvis::FieldId{2},
+            "VolFrac was not picked case-insensitively");
+        require(volumeFractionField(Fields{{amrvis::FieldId{0}, "vfrac_x"},
+                    {amrvis::FieldId{1}, "density"}, {amrvis::FieldId{2}, "vfrac"}})
+                == amrvis::FieldId{2},
+            "an exact vfrac lost to a prefix match");
+        require(volumeFractionField(Fields{{amrvis::FieldId{0}, "density"},
+                    {amrvis::FieldId{1}, "vfrac_x"}})
+                == amrvis::FieldId{1},
+            "a prefix match was not picked when nothing matched exactly");
+
+        fieldList.push_back({amrvis::FieldId{2}, QString("vfrac")});
+        VolumeController controller(hooks());
+        Observed observed;
+        observe(controller, observed);
+        controller.showWindow(nullptr);
+        waitFor(application, [&] { return observed.frames == 1; },
+            "the opening frame was not displayed");
+        auto* const fieldCombo = volumeWindow()->findChild<QComboBox*>(
+            QStringLiteral("volumeIsosurfaceFieldCombo"));
+        require(fieldCombo != nullptr && fieldCombo->count() == 3
+                && fieldCombo->currentText() == QStringLiteral("vfrac"),
+            "the isosurface did not start on the volume fraction");
+        controller.closeWindow();
+        fieldList.pop_back();
     }
 
     // --- the range fetch neither lags nor latches ----------------------------

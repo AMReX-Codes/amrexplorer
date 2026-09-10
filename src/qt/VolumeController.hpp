@@ -76,6 +76,15 @@ class VolumeWindow;
 [[nodiscard]] RealBox volumeVisibleRegion(const RealBox& domain,
     const std::array<std::optional<RealBox>, 3>& viewRegions) noexcept;
 
+// The field an isosurface should start on when the host's list has a volume
+// fraction in it: a field named vfrac or volfrac (case-insensitive), or
+// failing an exact match one whose name starts that way. An embedded-boundary
+// plotfile's fraction at 0.5 is the geometry, which is what an isosurface is
+// most often opened to see. nullopt when the list has none, and the surface
+// starts on the volume's own field instead.
+[[nodiscard]] std::optional<FieldId> volumeFractionField(
+    const std::vector<std::pair<FieldId, QString>>& fields);
+
 // The volume view's state machine, extracted from MainWindow the way the
 // other collaborators are: it owns the Volume Rendering... action and the
 // Volume window, decides when a render is due -- a camera move, a changed

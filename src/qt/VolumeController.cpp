@@ -61,6 +61,29 @@ RealBox volumeVisibleRegion(const RealBox& domain,
     return region;
 }
 
+std::optional<FieldId> volumeFractionField(
+    const std::vector<std::pair<FieldId, QString>>& fields)
+{
+    const auto isFraction = [](const QString& name, bool exact) {
+        for (const auto* candidate : {"vfrac", "volfrac"}) {
+            const auto wanted = QLatin1String(candidate);
+            if (exact ? name.compare(wanted, Qt::CaseInsensitive) == 0
+                      : name.startsWith(wanted, Qt::CaseInsensitive)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (const bool exact : {true, false}) {
+        for (const auto& [field, name] : fields) {
+            if (isFraction(name, exact)) {
+                return field;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 VolumeController::VolumeController(Hooks hooks, QObject* parent)
     : QObject(parent)
     , m_hooks(std::move(hooks))
@@ -298,9 +321,12 @@ void VolumeController::pushFields()
     if (!m_window || !m_hooks.fields) {
         return;
     }
+    const auto fields = m_hooks.fields();
+    // A volume fraction, when the plotfile has one, else the volume's field.
+    const auto fraction = volumeFractionField(fields);
     const auto field = m_hooks.field ? m_hooks.field() : std::nullopt;
     m_window->setIsosurfaceFields(
-        m_hooks.fields(), field ? field->first : FieldId{});
+        fields, fraction ? *fraction : (field ? field->first : FieldId{}));
 }
 
 bool VolumeController::sameKey(

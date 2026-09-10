@@ -408,8 +408,11 @@ match. Its own controls set the opacity:
   surface hides what is behind it. Tick the group to turn it on. **Field** is
   the field the surface is taken from, and it need not be the one the volume
   shows: a density isosurface inside a temperature volume is the usual reason
-  to want one. It starts as the volume's field and follows it until you pick
-  another. **Value** is the iso-value in the field's own units; the slider
+  to want one. It starts on a volume-fraction field (`vfrac` or `volfrac`)
+  when the plotfile has one, since that surface at 0.5 is an embedded
+  boundary's geometry; otherwise it starts on the volume's field and follows
+  it until you pick another. **Value** is the iso-value in the field's own
+  units; the slider
   under it runs over the field's range and starts in the middle, or type a
   value. **Color** and **Opacity** are the surface's own -- the palette plays
   no part in it. Dragging a slider shows drafts like a moving camera does.

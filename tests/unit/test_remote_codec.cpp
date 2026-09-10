@@ -836,11 +836,15 @@ int main()
             require(narrowToFloat(-value) == -largest,
                 "a double that rounds to -FLT_MAX was reported as infinite");
         }
-        require(std::isinf(narrowToFloat(floatOverflowThreshold))
-                && narrowToFloat(floatOverflowThreshold) > 0.0F,
+        // Through a volatile, not the constant itself: MSVC inlines the helper,
+        // folds the cast in the branch the guard never reaches, and reports
+        // the overflow it would have had as an error (C4756).
+        volatile double threshold = floatOverflowThreshold;
+        require(std::isinf(narrowToFloat(threshold))
+                && narrowToFloat(threshold) > 0.0F,
             "a double at the overflow threshold was not +infinity");
-        require(std::isinf(narrowToFloat(-floatOverflowThreshold))
-                && narrowToFloat(-floatOverflowThreshold) < 0.0F,
+        require(std::isinf(narrowToFloat(-threshold))
+                && narrowToFloat(-threshold) < 0.0F,
             "a double at the negative threshold was not -infinity");
         require(std::isnan(narrowToFloat(
                     std::numeric_limits<double>::quiet_NaN())),

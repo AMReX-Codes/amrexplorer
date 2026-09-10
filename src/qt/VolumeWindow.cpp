@@ -479,16 +479,22 @@ void VolumeWindow::setIsosurfaceColor(const QColor& color)
 
 void VolumeWindow::chooseIsosurfaceColor()
 {
-    // Parented to the main window for the reason exportImage gives: this
-    // window can be closed under a modal by an async dataset switch.
-    const QPointer<VolumeWindow> alive(this);
-    const auto chosen = QColorDialog::getColor(
-        m_isosurfaceColorValue, parentWidget(), tr("Isosurface Color"));
-    if (alive.isNull() || !chosen.isValid()) {
-        return;
-    }
-    setIsosurfaceColor(chosen);
-    emit isosurfaceChanged();
+    // Parented here, so this window is the one that comes back to the front
+    // when the dialog closes, and opened without a nested event loop: an
+    // async dataset switch can close this window while the dialog is up, and
+    // a heap dialog owned by it simply dies with it, where the blocking
+    // getColor's stack-owned dialog would be freed under its own call (the
+    // hazard exportImage parents its prompts to the main window to avoid).
+    auto* dialog = new QColorDialog(m_isosurfaceColorValue, this);
+    dialog->setWindowTitle(tr("Isosurface Color"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &QColorDialog::colorSelected, this, [this](const QColor& chosen) {
+        if (chosen.isValid()) {
+            setIsosurfaceColor(chosen);
+            emit isosurfaceChanged();
+        }
+    });
+    dialog->open();
 }
 
 void VolumeWindow::setIsosurfaceValueFromSlider(int position)

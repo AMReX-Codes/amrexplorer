@@ -441,7 +441,9 @@ void VolumeWindow::setIsosurfaceValueRange(std::optional<ValueRange> range)
         // middle, where a surface most likely exists. Silently through the
         // spin box, then say so once if the surface is on, since the picture
         // changes.
-        const auto middle = 0.5 * (range->minimum + range->maximum);
+        // In halves: the sum of two bounds near the top of the double range
+        // overflows where each half does not.
+        const auto middle = 0.5 * range->minimum + 0.5 * range->maximum;
         const bool changed = m_isosurfaceValue->value() != middle;
         {
             const QSignalBlocker blocker(m_isosurfaceValue);
@@ -504,8 +506,10 @@ void VolumeWindow::setIsosurfaceValueFromSlider(int position)
     }
     const auto fraction = static_cast<double>(position)
         / static_cast<double>(m_isosurfaceSlider->maximum());
-    const auto value = m_isosurfaceRange->minimum
-        + fraction * (m_isosurfaceRange->maximum - m_isosurfaceRange->minimum);
+    // Weighted rather than through the span, which overflows for a range
+    // spanning most of the double line; each term is bounded by its bound.
+    const auto value = (1.0 - fraction) * m_isosurfaceRange->minimum
+        + fraction * m_isosurfaceRange->maximum;
     {
         const QSignalBlocker blocker(m_isosurfaceValue);
         m_isosurfaceValue->setValue(value);
@@ -523,8 +527,10 @@ void VolumeWindow::syncIsosurfaceSlider()
     if (!m_isosurfaceRange) {
         return;
     }
-    const auto span = m_isosurfaceRange->maximum - m_isosurfaceRange->minimum;
-    const auto fraction = (m_isosurfaceValue->value() - m_isosurfaceRange->minimum) / span;
+    // Halves again, so neither difference can overflow.
+    const auto halfSpan = 0.5 * m_isosurfaceRange->maximum - 0.5 * m_isosurfaceRange->minimum;
+    const auto fraction
+        = (0.5 * m_isosurfaceValue->value() - 0.5 * m_isosurfaceRange->minimum) / halfSpan;
     const auto position = static_cast<int>(std::lround(std::clamp(fraction, 0.0, 1.0)
         * static_cast<double>(m_isosurfaceSlider->maximum())));
     const QSignalBlocker blocker(m_isosurfaceSlider);

@@ -142,6 +142,11 @@ public:
         if (static_cast<int>(request.field.value) == rangeFailingField) {
             throw std::runtime_error("synthetic range failure");
         }
+        // The second field spans most of the double line, so arithmetic on
+        // its bounds that goes through their sum or difference overflows.
+        if (request.field.value == 1) {
+            return amrvis::ValueRange{-1.0e308, 1.0e308};
+        }
         // Level-dependent on purpose: level 0 spans to 10, level 1 to 20, so
         // a range resolved for the level that was asked for instead of the
         // one that rendered shows up as the wrong maximum.
@@ -1954,6 +1959,8 @@ int main(int argc, char** argv)
 
         // Another field: the request names it, and once its range arrives the
         // value defaults again -- the typed 15 belonged to the other field.
+        // This field spans [-1e308, 1e308], so the midpoint is 0 only if it
+        // is not taken through the bounds' sum.
         QMetaObject::invokeMethod(
             window, [fieldCombo] { fieldCombo->setCurrentIndex(1); });
         waitFor(application, [&] {
@@ -1963,8 +1970,27 @@ int main(int argc, char** argv)
             const auto request = session->requestsSoFar().back();
             return request.isosurface.has_value()
                 && request.isosurface->field == amrvis::FieldId{1}
-                && request.isosurface->value == 10.0;
+                && request.isosurface->value == 0.0;
         }, "the new field did not render at its range's midpoint");
+        // And three quarters of the way along it is 5e307, not the overflow
+        // of its span.
+        before = session->requests.load();
+        QMetaObject::invokeMethod(window, [valueSlider] {
+            valueSlider->setSliderDown(true);
+            valueSlider->setValue(750);
+        });
+        waitFor(application, [&] { return session->requests == before + 1; },
+            "the slider drag over the huge range did not draft");
+        require(std::abs(valueSpin->value() - 5.0e307) <= 1.0e293
+                && valueSlider->value() == 750,
+            "a slider position over a huge range did not map to its value");
+        QMetaObject::invokeMethod(window, [valueSlider] {
+            valueSlider->setSliderDown(false);
+            emit valueSlider->sliderReleased();
+        });
+        waitFor(application,
+            [&] { return session->requests == before + 2 && !controller.renderInFlight(); },
+            "the release over the huge range did not render");
 
         // A session that cannot be asked: the group is disabled, the request
         // is the volume alone, and the tick and the hidden volume come back

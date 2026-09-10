@@ -87,7 +87,7 @@ struct RaycastSettings {
 // Entry 0 at or below the minimum, the last at or above the maximum,
 // truncation between; nullopt for a value the range cannot map
 // (non-finite, or non-positive under a logarithmic range) and for a range
-// that can map nothing (a non-finite bound, an empty or infinite span, or a
+// that can map nothing (a non-finite bound, an empty span, or a
 // logarithmic range reaching to zero).
 [[nodiscard]] std::optional<int> transferEntryFor(double value,
     const VolumeRange& range, int entryCount) noexcept;

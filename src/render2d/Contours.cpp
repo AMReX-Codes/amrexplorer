@@ -51,10 +51,9 @@ std::vector<double> contourValues(
     if (!(minimum < maximum)) {
         throw std::invalid_argument("contour range must have positive extent");
     }
-    if (!std::isfinite(minimum) || !std::isfinite(maximum)
-        || !std::isfinite(maximum - minimum)) {
+    if (!std::isfinite(minimum) || !std::isfinite(maximum)) {
         throw std::invalid_argument(
-            "contour range must be finite with a finite span");
+            "contour range must have finite bounds");
     }
     if (logarithmic && !(minimum > 0.0)) {
         throw std::invalid_argument("logarithmic contour range must be positive");
@@ -62,10 +61,13 @@ std::vector<double> contourValues(
     std::vector<double> values(static_cast<std::size_t>(count));
     const double rangeMinimum = logarithmic ? std::log(minimum) : minimum;
     const double rangeMaximum = logarithmic ? std::log(maximum) : maximum;
-    const double span = rangeMaximum - rangeMinimum;
+    const bool wide = rangeMinimum < 0.0
+        && rangeMaximum > std::numeric_limits<double>::max() + rangeMinimum;
+    const double span = wide ? 0.0 : rangeMaximum - rangeMinimum;
     for (int i = 0; i < count; ++i) {
-        const auto value = rangeMinimum
-            + (0.5 + static_cast<double>(i)) / count * span;
+        const auto fraction = (0.5 + static_cast<double>(i)) / count;
+        const auto value = wide ? std::lerp(rangeMinimum, rangeMaximum, fraction)
+                                : rangeMinimum + fraction * span;
         values[static_cast<std::size_t>(i)] =
             logarithmic ? std::exp(value) : value;
     }

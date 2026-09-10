@@ -118,10 +118,9 @@ std::vector<std::string> validateVolumeRenderRequest(
     if (request.range) {
         const auto& range = *request.range;
         if (!std::isfinite(range.minimum) || !std::isfinite(range.maximum)
-            || !(range.minimum < range.maximum)
-            || !std::isfinite(range.maximum - range.minimum)) {
+            || !(range.minimum < range.maximum)) {
             errors.emplace_back(
-                "range must be finite with minimum < maximum and a finite span");
+                "range must be finite with minimum < maximum");
         } else if (range.logarithmic && !(range.minimum > 0.0)) {
             errors.emplace_back("a logarithmic range must be strictly positive");
         } else if (!resolveValueRange(

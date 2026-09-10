@@ -50,11 +50,14 @@ std::optional<ValueRange> metadataValueRange(
 std::pair<double, double> paddedIfDegenerate(
     double minimum, double maximum, bool logarithmic) noexcept
 {
-    if (minimum != maximum) {
+    if (minimum != maximum || !std::isfinite(minimum)) {
         return {minimum, maximum};
     }
+    constexpr auto largest = std::numeric_limits<double>::max();
     if (logarithmic && minimum > 0.0) {
-        return {minimum / (1.0 + 1.0e-6), maximum * (1.0 + 1.0e-6)};
+        return {minimum / (1.0 + 1.0e-6),
+            maximum > largest / (1.0 + 1.0e-6)
+                ? largest : maximum * (1.0 + 1.0e-6)};
     }
     // Relative to the value, not an absolute floor. The old
     // max(abs(minimum), 1.0) * 1e-6 padded a uniform plane of 1e-7 by 1e-6 --
@@ -79,7 +82,9 @@ std::pair<double, double> paddedIfDegenerate(
     const auto padding = magnitude > 0.0
         ? std::max(magnitude * relative, std::numeric_limits<double>::min())
         : relative;
-    return {minimum - padding, maximum + padding};
+    // At either finite limit the padding is necessarily one-sided.
+    return {minimum < -largest + padding ? -largest : minimum - padding,
+        maximum > largest - padding ? largest : maximum + padding};
 }
 
 } // namespace amrvis

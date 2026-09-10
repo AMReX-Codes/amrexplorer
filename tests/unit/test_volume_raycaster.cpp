@@ -409,10 +409,15 @@ int main()
                     5.0, amrvis::VolumeRange{-1.0, 10.0, true}, 253).has_value()
                 && !amrvis::transferEntryFor(
                     5.0, amrvis::VolumeRange{1.0, 1.0, false}, 253).has_value()
-                && !amrvis::transferEntryFor(
-                    5.0, amrvis::VolumeRange{-huge, huge, false}, 253).has_value()
                 && !amrvis::transferEntryFor(5.0, linear, 0).has_value(),
             "a range that can map nothing returned an entry");
+        const amrvis::VolumeRange wide{-huge, huge, false};
+        require(amrvis::transferEntryFor(-huge, wide, 253) == 0
+                && amrvis::transferEntryFor(-huge / 2.0, wide, 253) == 63
+                && amrvis::transferEntryFor(0.0, wide, 253) == 126
+                && amrvis::transferEntryFor(huge / 2.0, wide, 253) == 189
+                && amrvis::transferEntryFor(huge, wide, 253) == 252,
+            "an overflowing span did not preserve transfer-function slots");
         // The renderer honours a logarithmic range: value 10 in [1, 100]
         // takes the middle entry's colour.
         auto grid = uniformGrid(4, 10.0F);
@@ -805,10 +810,10 @@ int main()
         auto bad = settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F));
         bad.range = {1.0, 1.0, false};
         require(rejects(bad), "an empty range was accepted");
-        // An infinite span would map every value to the bottom entry.
+        // A finite range may span more than DBL_MAX; mapping scales it safely.
         bad.range = {-std::numeric_limits<double>::max(),
             std::numeric_limits<double>::max(), false};
-        require(rejects(bad), "a range with an infinite span was accepted");
+        require(!rejects(bad), "a finite range with an overflowing span was refused");
         bad = settingsFor(amrvis::orthoPresetXY, 0, twoEntries(0xFFU, 1.0F));
         require(rejects(bad), "a zero-size output was accepted");
         bad = settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F));

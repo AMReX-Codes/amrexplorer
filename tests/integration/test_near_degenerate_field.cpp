@@ -5,6 +5,8 @@
 // to one value and the image came out flat.
 
 #include <amrexplorer/data/DatasetPage.hpp>
+#include <amrexplorer/data/LocalDatasetSession.hpp>
+#include <amrexplorer/data/SessionValidation.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/pipeline/SliceRangeResolver.hpp>
 #include <amrexplorer/query/LineQuery.hpp>
@@ -12,20 +14,25 @@
 #include <amrexplorer/query/VolumeQuery.hpp>
 #include <amrexplorer/render2d/Palette.hpp>
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
+#include <amrexplorer/render2d/Contours.hpp>
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -74,7 +81,8 @@ void writeFab(const std::filesystem::path& path, std::string_view box,
 
 // 2 x 2 cells over [0,1]^2. The low value fills the bottom row, the high one
 // the top, so a slice, a line along y and a page all see both.
-std::filesystem::path write2dFixture(const std::filesystem::path& root)
+std::filesystem::path write2dFixture(const std::filesystem::path& root,
+    double low = muLow, double high = muHigh)
 {
     std::filesystem::create_directories(root / "Level_0");
     writeText(root / "Header",
@@ -95,14 +103,15 @@ std::filesystem::path write2dFixture(const std::filesystem::path& root)
         "1\nFabOnDisk: Cell_D_00000 0\n\n"
         "1,1\n1.25663706212e-06,\n\n"
         "1,1\n1.25663706213e-06,\n\n");
-    const std::array<double, 4> values{muLow, muLow, muHigh, muHigh};
+    const std::array<double, 4> values{low, low, high, high};
     writeFab(root / "Level_0" / "Cell_D_00000", "((0,0) (1,1) (0,0))", 2,
         std::span<const double>(values));
     return root;
 }
 
 // The same pair over 2 x 2 x 2 cells, for the volume path.
-std::filesystem::path write3dFixture(const std::filesystem::path& root)
+std::filesystem::path write3dFixture(const std::filesystem::path& root,
+    double low = muLow, double high = muHigh)
 {
     std::filesystem::create_directories(root / "Level_0");
     writeText(root / "Header",
@@ -125,7 +134,7 @@ std::filesystem::path write3dFixture(const std::filesystem::path& root)
         "1,1\n1.25663706213e-06,\n\n");
     std::array<double, 8> values{};
     for (std::size_t index = 0; index < values.size(); ++index) {
-        values[index] = index < 4 ? muLow : muHigh;
+        values[index] = index < 4 ? low : high;
     }
     writeFab(root / "Level_0" / "Cell_D_00000", "((0,0,0) (1,1,1) (0,0,0))", 3,
         std::span<const double>(values));
@@ -231,6 +240,79 @@ int main()
         sampled.grid.values.begin(), sampled.grid.values.end());
     require(lowest == muLow && highest == muHigh,
         "the volume grid narrowed the pair to one value");
+
+    // Visible ranges must remain renderable even when their span or the
+    // padding of a constant would overflow. Exercise real slice/volume reads.
+    const auto huge = std::numeric_limits<double>::max();
+    int caseIndex = 0;
+    for (const auto [low, high] : {std::pair{-1.0e308, 1.0e308},
+             std::pair{-huge, huge}, std::pair{huge, huge},
+             std::pair{-huge, -huge}}) {
+        const auto caseRoot = scratch / std::to_string(caseIndex++);
+        amrvis::PlotfileDataset extreme2d(
+            write2dFixture(caseRoot / "plane", low, high),
+            amrvis::DatasetId{3}, 1024 * 1024);
+        auto extremeSliceRequest = sliceRequest;
+        extremeSliceRequest.dataset = extreme2d.id();
+        const auto extremeSlice
+            = amrvis::SliceQuery(extreme2d).execute(extremeSliceRequest);
+        auto extreme3d = std::make_shared<amrvis::PlotfileDataset>(
+            write3dFixture(caseRoot / "volume", low, high),
+            amrvis::DatasetId{4}, 1024 * 1024);
+        amrvis::LocalDatasetSession session(extreme3d);
+        for (const bool logarithmic : {false, true}) {
+            const auto visible = amrvis::resolveDisplayRange({}, amrvis::FieldId{0},
+                0, amrvis::CompositionPolicy::FinestAvailable,
+                amrvis::RangeMode::Visible, std::nullopt, logarithmic,
+                extremeSlice.plane);
+            require(std::isfinite(visible.minimum) && std::isfinite(visible.maximum)
+                    && visible.minimum < visible.maximum
+                    && visible.minimum <= low && visible.maximum >= high,
+                "an extreme Visible range lost its finite bounds or clipped the data");
+            auto extremeSettings = settings;
+            extremeSettings.minimum = visible.minimum;
+            extremeSettings.maximum = visible.maximum;
+            extremeSettings.logarithmic = visible.logarithmic;
+            const auto rendered
+                = amrvis::renderScalarPlane(extremeSlice.plane, extremeSettings);
+            require(rendered.rgba.size() == 4,
+                "an extreme Visible range failed to render a slice");
+            if (low < high) {
+                require(rendered.rgba.front() == palette.slotArgb(amrvis::Palette::paletteStart)
+                        && rendered.rgba.back() == palette.slotArgb(
+                            amrvis::Palette::paletteStart + amrvis::Palette::colorSlots - 1),
+                    "an extreme Visible range did not span the palette");
+            }
+            const auto levels = amrvis::contourValues(
+                visible.minimum, visible.maximum, 4, visible.logarithmic);
+            require(std::all_of(levels.begin(), levels.end(),
+                        [](double value) { return std::isfinite(value); }),
+                "an extreme Visible range produced non-finite contour levels");
+
+            amrvis::VolumeRenderRequest renderRequest;
+            renderRequest.dataset = session.id();
+            renderRequest.field = amrvis::FieldId{0};
+            renderRequest.region = extreme3d->metadata().physicalDomain;
+            renderRequest.maximumVoxels = 64;
+            renderRequest.outputSize = {16, 16};
+            renderRequest.logarithmic = logarithmic;
+            renderRequest.transfer.colors = {0xFF0000U, 0x0000FFU};
+            renderRequest.transfer.opacities = {1.0F, 1.0F};
+            const auto frame = session.renderVolume(renderRequest);
+            amrvis::validateSessionVolumeResult(
+                session.metadata(), renderRequest, frame);
+            require(std::any_of(frame.pixels.begin(), frame.pixels.end(),
+                        [](std::uint32_t pixel) { return (pixel >> 24U) != 0; }),
+                "an extreme Visible range rendered a transparent volume");
+            require(frame.usedRange.minimum == visible.minimum
+                    && frame.usedRange.maximum == visible.maximum
+                    && frame.usedRange.logarithmic == visible.logarithmic,
+                "slice and volume resolved different extreme Visible ranges");
+            renderRequest.range = frame.usedRange;
+            require(session.renderVolume(renderRequest).pixels == frame.pixels,
+                "reusing an extreme volume range changed the rendered frame");
+        }
+    }
 
     std::filesystem::remove_all(scratch);
     return 0;

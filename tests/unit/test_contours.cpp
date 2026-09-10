@@ -146,15 +146,15 @@ int main()
         threw = true;
     }
     require(threw, "contourValues accepted a non-positive logarithmic range");
-    threw = false;
-    try {
-        (void)amrvis::contourValues(
-            -std::numeric_limits<double>::max(),
-            std::numeric_limits<double>::max(), 4, false);
-    } catch (const std::invalid_argument&) {
-        threw = true;
+    const auto huge = std::numeric_limits<double>::max();
+    const auto wideLevels = amrvis::contourValues(-huge, huge, 4, false);
+    const std::vector<double> fractions{-0.75, -0.25, 0.25, 0.75};
+    for (std::size_t index = 0; index < fractions.size(); ++index) {
+        require(std::isfinite(wideLevels[index])
+                && std::abs(wideLevels[index] / huge - fractions[index])
+                    <= 2.0 * std::numeric_limits<double>::epsilon(),
+            "contour levels across an overflowing span were not evenly spaced");
     }
-    require(threw, "contourValues accepted a range whose span overflows to infinity");
     threw = false;
     try {
         (void)amrvis::contourValues(

@@ -256,15 +256,9 @@ std::optional<VolumeRange> resolveVolumeRange(
         throw std::runtime_error(
             std::string(source) + " scalar range must have positive extent");
     }
-    // Checked here rather than left to the renderer: this function decides
-    // the range, so a range the renderer must refuse -- a span so wide it is
-    // infinite, which validateVolumeRenderRequest rejects -- is this
-    // function's error to report, not an invalid_argument out of the middle
-    // of a render.
-    if (!std::isfinite(minimum) || !std::isfinite(maximum)
-        || !std::isfinite(maximum - minimum)) {
+    if (!std::isfinite(minimum) || !std::isfinite(maximum)) {
         throw std::runtime_error(
-            std::string(source) + " scalar range must be finite with a finite span");
+            std::string(source) + " scalar range must have finite bounds");
     }
     VolumeRange resolved{minimum, maximum, false};
     if (logarithmic && minimum > 0.0) {

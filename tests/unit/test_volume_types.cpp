@@ -133,7 +133,7 @@ int main()
         request.range = amrvis::VolumeRange{
             -std::numeric_limits<double>::max(),
             std::numeric_limits<double>::max(), false};
-        require(rejected(request), "a range with an infinite span was accepted");
+        require(!rejected(request), "finite range bounds with an overflowing span were refused");
     }
     {
         auto request = validRequest();

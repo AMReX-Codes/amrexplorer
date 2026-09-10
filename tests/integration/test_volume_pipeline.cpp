@@ -602,6 +602,12 @@ int main()
             std::pair{2.0, 2.0}, false);
         require(degenerate && degenerate->minimum < 2.0 && degenerate->maximum > 2.0,
             "a degenerate User range was not padded");
+        const auto wide = amrvis::resolveVolumeRange(dataset, field, 1,
+            amrvis::CompositionPolicy::FinestAvailable, amrvis::RangeMode::User,
+            std::pair{-1.0e308, 1.0e308}, true);
+        require(wide && !wide->logarithmic && wide->minimum == -1.0e308
+                && wide->maximum == 1.0e308,
+            "an overflowing User span was not preserved for linear mapping");
         {
             const auto huge = 1.0e300;
             std::string narrow;

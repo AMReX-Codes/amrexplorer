@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <limits>
 #include <optional>
 
 namespace amrvis {
@@ -23,14 +24,14 @@ namespace amrvis {
 // only place std::log of the bounds happens: it sets errno, so a compiler
 // cannot hoist it out of a pixel or sample loop on its own.
 struct ResolvedValueRange {
-    double minimum = 0.0;   // already logarithmic when `logarithmic`
+    double minimum = 0.0;   // already logarithmic or scaled
     double span = 1.0;      // maximum - minimum, in the same terms
     bool logarithmic = false;
+    double scale = 1.0;     // 0.5 when an unscaled linear span would overflow
 };
 
 // nullopt for a range no value can be mapped through: a non-finite bound, an
-// empty or unordered span, a span so wide it is infinite (every value would
-// land in slot 0), or a logarithmic range reaching to zero.
+// empty or unordered span, or a logarithmic range reaching to zero.
 [[nodiscard]] inline std::optional<ResolvedValueRange> resolveValueRange(
     double minimum, double maximum, bool logarithmic) noexcept
 {
@@ -39,12 +40,20 @@ struct ResolvedValueRange {
     // std::log of a negative maximum raises FE_INVALID and sets errno. The
     // span test below would reject the range anyway -- but not before a build
     // running with feenableexcept(FE_INVALID) had taken SIGFPE.
-    if (!std::isfinite(minimum) || !std::isfinite(maximum)
+    if (!std::isfinite(minimum) || !std::isfinite(maximum) || !(minimum < maximum)
         || (logarithmic && !(minimum > 0.0 && maximum > 0.0))) {
         return std::nullopt;
     }
     ResolvedValueRange resolved;
     resolved.logarithmic = logarithmic;
+    // Test before subtracting so even an enabled overflow trap is harmless.
+    // Halving only these ranges preserves ordinary and subnormal arithmetic.
+    if (!logarithmic && minimum < 0.0
+        && maximum > std::numeric_limits<double>::max() + minimum) {
+        resolved.scale = 0.5;
+        minimum *= resolved.scale;
+        maximum *= resolved.scale;
+    }
     resolved.minimum = logarithmic ? std::log(minimum) : minimum;
     const auto top = logarithmic ? std::log(maximum) : maximum;
     resolved.span = top - resolved.minimum;
@@ -100,7 +109,7 @@ struct ResolvedValueRange {
 [[nodiscard]] inline int valueSlot(double value, const ResolvedValueRange& range,
     int slotCount) noexcept
 {
-    const auto mapped = range.logarithmic ? std::log(value) : value;
+    const auto mapped = range.logarithmic ? std::log(value) : value * range.scale;
     const auto normalized = (mapped - range.minimum) / range.span;
     if (!(normalized > 0.0)) {
         return 0;

@@ -11,12 +11,14 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <ranges>
 #include <cerrno>
@@ -650,6 +652,89 @@ int main(int argc, char* argv[])
         require(codec::inspect(*olderEnvelope).payload
                 == PayloadKind::DatasetOpened,
             "the refusal closed a session that should have survived it");
+    }
+
+    // Pin the actual fields sent by a negotiated server, including narrowing
+    // and overflow for a 1.4 peer. A matching encoder/decoder bug must not be
+    // able to hide behind a successful round trip.
+    for (const auto minor : std::array<std::uint16_t, 2>{4, 5}) {
+        auto valueSocket = connectTo("127.0.0.1", server.port());
+        auto valueHello = helloRequest(server.token());
+        valueHello.maximumMinorVersion = minor;
+        auto reply = exchange(valueSocket, 1, codec::toWire(valueHello),
+            defaultMaximumFrameBytes, minor);
+        require(codec::inspect(*reply).payload == PayloadKind::HelloResponse,
+            "server rejected the value-vector handshake");
+        const auto info = codec::fromWire(*reply->payload.AsHelloResponse());
+        require(info.selectedMinorVersion == minor,
+            "server did not negotiate the value-vector version");
+        reply = exchange(valueSocket, 2, codec::toWire(OpenDatasetData{
+            std::filesystem::path(argv[1]).string(), 16ULL * 1024ULL * 1024ULL,
+            {{"precise", "1.0000000000000002"},
+                {"positive", "1e200"}, {"negative", "-1e200"}}}),
+            info.maximumFrameBytes, minor);
+        require(codec::inspect(*reply).payload == PayloadKind::DatasetOpened,
+            "server did not open the value-vector dataset");
+        const auto valueDataset = codec::fromWire(*reply->payload.AsDatasetOpened());
+        require(valueDataset.derivedFieldCount == 3,
+            "server did not install the value-vector fixture fields");
+        std::uint64_t requestId = 3;
+        for (std::uint32_t index = 0; index < 3; ++index) {
+            const auto field = FieldId{static_cast<std::uint32_t>(storedFields) + index};
+            const double expected = index == 0 ? std::nextafter(1.0, 2.0)
+                : index == 1 ? 1.0e200 : -1.0e200;
+            const double narrowed = index == 0 ? 1.0
+                : index == 1 ? std::numeric_limits<double>::infinity()
+                             : -std::numeric_limits<double>::infinity();
+            const auto checkValues = [&](const auto& wire, const auto& values) {
+                require(reply->protocol_minor_version == minor,
+                    "server stamped the wrong value-vector version");
+                require(minor == 4
+                        ? !wire.values.empty() && wire.values_f64.empty()
+                        : wire.values.empty() && !wire.values_f64.empty(),
+                    "server populated the wrong wire value vector");
+                const auto wanted = minor == 4 ? narrowed : expected;
+                require(!values.empty() && std::all_of(values.begin(), values.end(),
+                            [wanted](double value) { return value == wanted; }),
+                    "negotiated value samples lost precision or narrowed incorrectly");
+                require(minor == 4
+                        ? std::all_of(wire.values.begin(), wire.values.end(),
+                            [wanted](float value) { return value == wanted; })
+                        : std::all_of(wire.values_f64.begin(), wire.values_f64.end(),
+                            [wanted](double value) { return value == wanted; }),
+                    "wire samples differ from the expected encoded values");
+            };
+            auto valueSlice = request;
+            valueSlice.dataset = valueDataset.id;
+            valueSlice.field = field;
+            valueSlice.outputSize = {8, 6};
+            reply = exchange(valueSocket, requestId++, codec::toWire(valueSlice),
+                info.maximumFrameBytes, minor);
+            require(codec::inspect(*reply).payload == PayloadKind::SliceViewResponse,
+                "server rejected a negotiated slice request");
+            const auto& wireSlice = *reply->payload.AsSliceViewResponse();
+            checkValues(wireSlice, codec::fromWire(wireSlice).plane.values);
+
+            auto valueLine = flatLine;
+            valueLine.query.dataset = valueDataset.id;
+            valueLine.query.field = field;
+            reply = exchange(valueSocket, requestId++, codec::toWire(valueLine),
+                info.maximumFrameBytes, minor);
+            require(codec::inspect(*reply).payload == PayloadKind::LineViewResponse,
+                "server rejected a negotiated line request");
+            const auto& wireLine = *reply->payload.AsLineViewResponse();
+            checkValues(wireLine, codec::fromWire(wireLine).line.values);
+
+            auto valuePage = smallPage;
+            valuePage.dataset = valueDataset.id;
+            valuePage.field = field;
+            reply = exchange(valueSocket, requestId++, codec::toWire(valuePage),
+                info.maximumFrameBytes, minor);
+            require(codec::inspect(*reply).payload == PayloadKind::DatasetPageResponse,
+                "server rejected a negotiated page request");
+            const auto& wirePage = *reply->payload.AsDatasetPageResponse();
+            checkValues(wirePage, codec::fromWire(wirePage).values);
+        }
     }
 
     ServerOptions duplicateOptions;

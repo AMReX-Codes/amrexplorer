@@ -101,17 +101,23 @@ int main()
     }
     require(threw, "renderer accepted an unrepresentable row stride");
 
-    // An extreme but finite range (±DBL_MAX) overflows the span to infinity;
-    // the renderer must reject it instead of normalizing every value to zero.
+    // Finite endpoints still map to opposite palette ends when their span
+    // cannot be represented. Include interior fractions and the exact middle.
     settings.minimum = -std::numeric_limits<double>::max();
     settings.maximum = std::numeric_limits<double>::max();
-    threw = false;
-    try {
-        (void)amrvis::renderScalarPlane(plane, settings);
-    } catch (const std::invalid_argument&) {
-        threw = true;
+    amrvis::ScalarPlane extreme;
+    extreme.width = 5;
+    extreme.height = 1;
+    extreme.values = {settings.minimum, settings.minimum / 2.0, 0.0,
+        settings.maximum / 2.0, settings.maximum};
+    extreme.valid.assign(5, 1);
+    const auto extremeImage = amrvis::renderScalarPlane(extreme, settings);
+    const auto& extremePalette = amrvis::builtinPalette(amrvis::BuiltinPalette::Rainbow);
+    for (std::size_t index = 0; index < 5; ++index) {
+        require(extremeImage.rgba[index] == extremePalette.slotArgb(
+                    amrvis::Palette::paletteStart + static_cast<int>(index) * 63),
+            "an overflowing span mapped a sample to the wrong palette slot");
     }
-    require(threw, "renderer accepted a range whose span overflows to infinity");
 
     // Non-finite endpoints are also rejected: ±inf where the ordering still
     // holds fails the span check, and NaN fails the ordering check outright.

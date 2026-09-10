@@ -39,7 +39,7 @@ double tickValue(double minimum, double maximum, bool logarithmic, double fracti
 {
     return logarithmic
         ? minimum * std::pow(maximum / minimum, 1.0 - fraction)
-        : maximum + fraction * (minimum - maximum);
+        : std::lerp(maximum, minimum, fraction);
 }
 
 // Pixel width of the widest tick label for the format/range. Because it

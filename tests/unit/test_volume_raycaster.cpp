@@ -980,12 +980,12 @@ int main()
         const auto ramp = rampGrid(8, 2);
         auto both = settingsFor(amrvis::orthoPresetXY, 64, twoEntries(0x0000FFU, 0.3F));
         both.isosurface = isosurface(0.875, 0xCC0000U, 1.0F);
-        const auto inFront = amrvis::raycastVolume(
+        const auto nearer = amrvis::raycastVolume(
             amrvis::RaycastGrids{&slab, &ramp}, both);
         const auto alone = amrvis::raycastVolume(
             amrvis::RaycastGrids{nullptr, &ramp},
             isoOnlySettings(amrvis::orthoPresetXY, 64, *both.isosurface));
-        require(inFront.pixels == alone.pixels,
+        require(nearer.pixels == alone.pixels,
             "a volume behind an opaque isosurface showed through");
         both.isosurface->value = 0.125;
         const auto behind = amrvis::raycastVolume(

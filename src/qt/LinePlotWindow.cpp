@@ -26,6 +26,7 @@
 #include <cmath>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace amrvis::qt {
 namespace {
@@ -361,21 +362,39 @@ void LinePlotWidget::paintEvent(QPaintEvent* /*event*/)
             tick += step;
         }
     } else {
-        int maximumWidth = 0;
-        for (int tick = 0; tick < tickCount; ++tick) {
-            const auto value = std::lerp(xMinimum, xMaximum,
-                static_cast<double>(tick) / (tickCount - 1));
-            maximumWidth = std::max(maximumWidth,
-                painter.fontMetrics().horizontalAdvance(formatNumber(value, xFormat)));
+        const auto ticksFor = [&](int count) {
+            std::vector<std::pair<double, QString>> ticks;
+            for (int tick = 0; tick < count; ++tick) {
+                // When even the endpoint labels would overlap, keep one tick
+                // centered in the plot without reducing its precision.
+                const auto fraction = count == 1 ? 0.5
+                    : static_cast<double>(tick) / (count - 1);
+                const auto value = std::lerp(xMinimum, xMaximum, fraction);
+                ticks.emplace_back(value, formatNumber(value, xFormat));
+            }
+            return ticks;
+        };
+        // Measured where the labels actually land, not on an even division of
+        // the plot: a count draws its own values, and a range a few ULPs wide
+        // quantizes them to uneven pixels. Take the most ticks that clear.
+        auto ticks = ticksFor(1);
+        for (int count = tickCount; count > 1; --count) {
+            const auto candidate = ticksFor(count);
+            bool clears = true;
+            auto previousRight = std::numeric_limits<double>::lowest();
+            for (const auto& [value, label] : candidate) {
+                const auto half
+                    = painter.fontMetrics().horizontalAdvance(label) / 2.0;
+                clears = clears && mapX(value) - half >= previousRight + 12.0;
+                previousRight = mapX(value) + half;
+            }
+            if (clears) {
+                ticks = candidate;
+                break;
+            }
         }
-        const int count = std::clamp(plot.width() / (maximumWidth + 12) + 1, 1, tickCount);
-        for (int tick = 0; tick < count; ++tick) {
-            // When even the endpoint labels would overlap, keep one tick
-            // centered in the plot without reducing its precision.
-            const auto fraction = count == 1 ? 0.5
-                : static_cast<double>(tick) / (count - 1);
-            const auto xValue = std::lerp(xMinimum, xMaximum, fraction);
-            drawXTick(xValue, formatNumber(xValue, xFormat));
+        for (const auto& [value, label] : ticks) {
+            drawXTick(value, label);
         }
     }
     for (int tick = 0; tick < tickCount; ++tick) {

@@ -1960,6 +1960,9 @@ int main(int argc, char** argv)
         latest = session->requestsSoFar().back();
         require(std::abs(latest.isosurface->opacity - 0.4F) < 1.0e-6F,
             "the opacity did not reach the request");
+        // Never zero: with the volume hidden that would be a blank frame.
+        require(opacitySlider->minimum() == 1,
+            "the opacity slider allows an invisible surface");
         before = session->requests.load();
         QMetaObject::invokeMethod(window, [window] {
             window->setIsosurfaceColor(QColor(0x40, 0xC0, 0xFF));

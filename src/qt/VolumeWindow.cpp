@@ -314,7 +314,10 @@ void VolumeWindow::buildIsosurfaceControls(QVBoxLayout* layout, QWidget* panel)
     form->addRow(tr("Color:"), m_isosurfaceColor);
     m_isosurfaceOpacity = new QSlider(Qt::Horizontal, m_isosurfaceGroup);
     m_isosurfaceOpacity->setObjectName(QStringLiteral("volumeIsosurfaceOpacitySlider"));
-    m_isosurfaceOpacity->setRange(0, 100);
+    // From one, not zero: a surface at zero opacity draws nothing, and with
+    // the volume hidden the frame would be blank under a status line naming
+    // a surface. Nothing invisible is worth asking for.
+    m_isosurfaceOpacity->setRange(1, 100);
     m_isosurfaceOpacity->setValue(100);
     m_isosurfaceOpacity->setToolTip(
         tr("How opaque the surface is: less than full lets the volume and "

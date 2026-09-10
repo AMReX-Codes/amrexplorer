@@ -924,6 +924,15 @@ int main()
         require(opaque.metrics.gridDims == grid.dims
                 && opaque.metrics.coveredVoxels == grid.coveredVoxels,
             "an isosurface-only frame does not describe its grid");
+        // The default white surface, half opaque: the headlight terms sum past
+        // 1 head-on, and a premultiplied channel must not exceed its alpha.
+        const auto white = amrvis::raycastVolume(
+            amrvis::RaycastGrids{nullptr, &grid},
+            isoOnlySettings(amrvis::orthoPresetXY, 64, isosurface(0.5, 0xFFFFFFU, 0.5F)));
+        const auto half = pixelAt(white, 32, 32);
+        require(alphaOf(half) == 128 && redOf(half) == 128 && greenOf(half) == 128
+                && blueOf(half) == 128,
+            "a half-opaque white surface wrote a channel above its alpha");
     }
 
     // --- a plane seen edge-on is invisible -----------------------------------

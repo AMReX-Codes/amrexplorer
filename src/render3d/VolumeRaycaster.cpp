@@ -862,10 +862,17 @@ VolumeFrame raycastVolume(const RaycastGrids& grids,
                             const auto lit = isosurfaceAmbient + isosurfaceDiffuse * cosTheta;
                             const auto highlight = isosurfaceSpecular
                                 * integerPower(cosTheta, isosurfaceShininess);
+                            // Each channel clamped before the weight: lit +
+                            // highlight peaks at 1.1, and a channel above the
+                            // weight added to alpha is not a premultiplied
+                            // pixel -- Qt's unpremultiply wraps it dark.
+                            const auto shade = [lit, highlight](double channel) {
+                                return std::min(1.0, channel * lit + highlight);
+                            };
                             const auto weight = (1.0 - alpha) * iso.opacity;
-                            red += weight * (iso.red * lit + highlight);
-                            green += weight * (iso.green * lit + highlight);
-                            blue += weight * (iso.blue * lit + highlight);
+                            red += weight * shade(iso.red);
+                            green += weight * shade(iso.green);
+                            blue += weight * shade(iso.blue);
                             alpha += weight;
                             if (alpha >= opaqueEnough) {
                                 break;

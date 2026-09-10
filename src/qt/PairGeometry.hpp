@@ -50,9 +50,9 @@ struct PairGeometry {
     std::array<Real3, 2> finestCellSize;
 
     [[nodiscard]] std::size_t lowerLayer() const noexcept { return 1 - upperLayer; }
-    // The layer a position along the perpendicular axis belongs to. The
-    // interface itself belongs to the upper layer, as do positions past
-    // either end.
+    // The layer a position along the perpendicular axis belongs to: the
+    // upper layer from its lower bound up (the interface included, and
+    // anything above), the lower layer below that.
     [[nodiscard]] std::size_t layerAt(double position) const noexcept
     {
         const auto p = static_cast<std::size_t>(perpendicularAxis);
@@ -344,62 +344,6 @@ public:
         const auto right = std::max(a.right(), b.right());
         const auto bottom = std::max(a.bottom(), b.bottom());
         return {left, top, right - left, bottom - top};
-    }
-
-    struct ScenePosition {
-        std::size_t layer = 0;
-        Real3 position;
-    };
-
-    // The layer and physical position under a scene point. Along the
-    // perpendicular axis the band decides the layer; when the panel does not
-    // show that axis the caller's layer stands. The normal axis is left at
-    // zero for the caller to fill in.
-    [[nodiscard]] ScenePosition physicalFromScene(
-        double x, double y, std::size_t shownLayer) const noexcept
-    {
-        ScenePosition result;
-        result.layer = shownLayer;
-        const auto p = m_geometry.perpendicularAxis;
-        if (showsPerpendicular()) {
-            const bool vertical = m_axes[1] == p;
-            const auto along = vertical ? y : x;
-            const auto upper = m_geometry.upperLayer;
-            const auto lower = m_geometry.lowerLayer();
-            // Whichever band the coordinate falls in; past the ends, the
-            // nearer layer.
-            const auto first = vertical ? upper : lower;
-            const auto second = vertical ? lower : upper;
-            result.layer = along < m_bandStart[second] ? first : second;
-        }
-        for (const auto axis : m_axes) {
-            const auto a = static_cast<std::size_t>(axis);
-            const bool vertical = axis == m_axes[1];
-            const auto scene = vertical ? y : x;
-            if (axis == p) {
-                const auto& bounds = m_geometry.bounds[result.layer];
-                const auto k = m_perpendicularUnitsPerLength[result.layer];
-                result.position[a] = vertical
-                    ? bounds.upper[a] - (scene - m_bandStart[result.layer]) / k
-                    : bounds.lower[a] + (scene - m_bandStart[result.layer]) / k;
-            } else {
-                const auto& union_ = m_geometry.unionBounds;
-                const auto k = m_sharedUnitsPerLength[a];
-                result.position[a] = vertical ? union_.upper[a] - scene / k
-                                              : union_.lower[a] + scene / k;
-            }
-        }
-        return result;
-    }
-
-    // Scene units per raster pixel of a layer along a displayed axis: one for
-    // the tightest, more for the others.
-    [[nodiscard]] double unitsPerPixel(std::size_t layer, int axis) const noexcept
-    {
-        const auto a = static_cast<std::size_t>(axis);
-        const auto perLength = axis == m_geometry.perpendicularAxis
-            ? m_perpendicularUnitsPerLength[layer] : m_sharedUnitsPerLength[a];
-        return perLength * m_geometry.finestCellSize[layer][a];
     }
 
 private:

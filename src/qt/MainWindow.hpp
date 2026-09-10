@@ -662,8 +662,9 @@ private:
         // re-sliced, so no view keeps a raster from a session that is no
         // longer installed.
         std::uint64_t sessionEpoch = 0;
-        // Display stretch factor along the axis perpendicular to the plane
-        // two paired datasets share (see PairGeometry); unused alone.
+        // A companion's display stretch along the axis perpendicular to the
+        // plane it shares with the primary (see PairGeometry). The primary's
+        // own factor is m_axisScale on that axis, as with one dataset.
         double perpendicularScale = 1.0;
         std::array<PlaneViewState, 3> planeViews;
         // The 3-D visible-range sync's single-flight state (see
@@ -901,10 +902,10 @@ private:
     // The dialog edits m_axisScale; applyAxisScale installs a new set and
     // resetAxisScale returns to unit factors when a dataset is opened.
     void showAxisScalingDialog();
-    // The shared-axis factors, and with a companion each layer's factor along
-    // the perpendicular axis.
+    // The per-axis factors (the primary's along every axis) and, with a
+    // companion, the companion's factor along the perpendicular axis.
     void applyAxisScale(const std::array<double, 3>& axisScale,
-        std::optional<std::array<double, 2>> perpendicularScale = std::nullopt);
+        std::optional<double> companionPerpendicularScale = std::nullopt);
     void resetAxisScale();
     void setAspectMode(AspectMode mode);
     [[nodiscard]] std::array<double, 3> displayStretchPerAxis() const;

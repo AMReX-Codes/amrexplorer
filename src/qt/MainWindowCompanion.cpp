@@ -381,8 +381,11 @@ void MainWindow::updatePairLayouts()
     if (!m_pair) {
         return;
     }
+    // The primary's perpendicular factor is its axis factor, the companion's
+    // its own.
+    const auto p = static_cast<std::size_t>(m_pair->perpendicularAxis);
     const std::array<double, 2> perpendicular{
-        m_layers[0].perpendicularScale, m_layers[1].perpendicularScale};
+        m_axisScale[p], m_layers[1].perpendicularScale};
     for (int normal = 0; normal < 3; ++normal) {
         m_pairLayouts[static_cast<std::size_t>(normal)] = PairLayout(
             *m_pair, normal, m_aspectMode, m_axisScale, perpendicular);
@@ -460,7 +463,8 @@ void MainWindow::updatePairedIsoGeometry()
     // shallower than the atmosphere is tall and both 70 km wide, physical
     // units would flatten the ocean to a line.
     const PairDisplayMap map(*m_pair, m_aspectMode, m_axisScale,
-        {m_layers[0].perpendicularScale, companion.perpendicularScale});
+        {m_axisScale[static_cast<std::size_t>(m_pair->perpendicularAxis)],
+            companion.perpendicularScale});
     m_isoWidget->setPairedGeometry(primary().session->metadata(),
         companion.session->metadata(),
         [map](std::size_t dataset, const Real3& point) {

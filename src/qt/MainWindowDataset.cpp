@@ -426,11 +426,21 @@ void MainWindow::exportImage()
             std::vector<std::pair<std::shared_ptr<const ScalarPlane>, QString>>
                 outputs;
             for (std::size_t normal = 0; normal < primary().planeViews.size(); ++normal) {
-                const auto& state = primary().planeViews[normal];
-                if (state.plane->width <= 0 || state.plane->height <= 0) {
-                    continue;
+                // With a companion, the panel normal to the shared plane
+                // shows one layer and that one is written; a stacked panel
+                // writes both, the companion under its own name.
+                for (const auto* state : statesForPanel(static_cast<int>(normal))) {
+                    if (state->plane->width <= 0 || state->plane->height <= 0
+                        || !stateShown(*state)) {
+                        continue;
+                    }
+                    auto outPath = panelPath(normal);
+                    if (state->layer == 1) {
+                        outPath.insert(outPath.size() - extension.size(),
+                            QStringLiteral("_") + m_layers[1].name);
+                    }
+                    outputs.emplace_back(state->plane, outPath);
                 }
-                outputs.emplace_back(state.plane, panelPath(normal));
             }
             QStringList targets;
             for (const auto& [plane, outPath] : outputs) {

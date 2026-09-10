@@ -1450,7 +1450,8 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     const auto fieldName = QString::fromStdString(display.fieldName);
     state.fieldName = fieldName;
     const bool rangeMoved = state.displayMinimum != display.minimum
-        || state.displayMaximum != display.maximum;
+        || state.displayMaximum != display.maximum
+        || state.displayLogarithmic != display.logarithmic;
     state.displayMinimum = display.minimum;
     state.displayMaximum = display.maximum;
     state.displayLogarithmic = display.logarithmic;
@@ -2161,8 +2162,8 @@ void MainWindow::displayFrameResult(InitialSliceResult& result,
         // cannot alias.
         m_displayCoordinator.invalidateRangeCache();
         for (auto& layer : m_layers) {
-        layer.pendingRangeStore.reset();
-    }
+            layer.pendingRangeStore.reset();
+        }
         m_remoteSequenceConnectionGeneration = result.connectionGeneration;
     }
     const auto previousVectorFields = vectorFieldNames();

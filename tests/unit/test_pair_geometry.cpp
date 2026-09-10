@@ -159,21 +159,12 @@ void cellCountsLayoutStacksRasters()
     require(nearly(xz.tileRect(1), {20.0, 48.0, 50.0, 40.0}),
         "the REMORA tile is not stacked under the ERF tile");
     require(nearly(xz.canvasRect(), {0.0, 0.0, 70.0, 88.0}), "the canvas is not the union");
-    require(nearly(xz.unitsPerPixel(0, 0), 1.0) && nearly(xz.unitsPerPixel(1, 2), 1.0),
-        "cell counts did not give one unit per pixel");
-
-    // Round trips across the interface.
-    const auto air = xz.physicalFromScene(30.0, 10.0, 0);
-    require(air.layer == 0 && nearly(air.position[0], 10000.0)
-            && nearly(air.position[2], 9000.0 - 10.0 * 187.5),
-        "a scene point in the upper band did not map into the atmosphere");
-    const auto water = xz.physicalFromScene(30.0, 60.0, 0);
-    require(water.layer == 1 && nearly(water.position[0], 10000.0)
-            && nearly(water.position[2], -12.0 * 7.5),
-        "a scene point in the lower band did not map into the ocean");
+    // Points across the interface: 12 ocean rows down from the surface, and
+    // 30 atmosphere columns in from the union's west edge.
     require(nearly(xz.sceneFromPhysical(1, 2, -90.0), 60.0)
+            && nearly(xz.sceneFromPhysical(0, 2, 9000.0 - 10.0 * 187.5), 10.0)
             && nearly(xz.sceneFromPhysical(0, 0, 10000.0), 30.0),
-        "sceneFromPhysical does not invert physicalFromScene");
+        "sceneFromPhysical does not place points in their bands");
 
     // The XY panel (normal z) shows one layer at a time over the same x, y map.
     const amrvis::qt::PairLayout xy(geometry, 2, amrvis::qt::AspectMode::CellCounts,
@@ -182,9 +173,8 @@ void cellCountsLayoutStacksRasters()
     require(nearly(xy.tileRect(0), {0.0, 0.0, 70.0, 20.0})
             && nearly(xy.tileRect(1), {20.0, 0.0, 50.0, 20.0}),
         "the XY tiles are not aligned over the union");
-    const auto surface = xy.physicalFromScene(30.0, 5.0, 1);
-    require(surface.layer == 1 && nearly(surface.position[1], 15000.0),
-        "the XY panel did not keep the shown layer");
+    require(nearly(xy.sceneFromPhysical(1, 1, 15000.0), 5.0),
+        "the XY panel's vertical axis does not count down from the union's top");
 }
 
 void physicalLayoutStretchesEachLayerOnItsOwn()
@@ -195,10 +185,8 @@ void physicalLayoutStretchesEachLayerOnItsOwn()
     // unit; ERF rows are 25 units tall and a 1000 m column 133.3 wide.
     const amrvis::qt::PairLayout physical(geometry, 1,
         amrvis::qt::AspectMode::PhysicalSize, unit, {1.0, 1.0});
-    require(nearly(physical.unitsPerPixel(1, 2), 1.0)
-            && nearly(physical.unitsPerPixel(0, 2), 25.0)
-            && nearly(physical.unitsPerPixel(0, 0), 1000.0 / 7.5),
-        "physical size did not normalize to the tightest pixel");
+    // Normalized to the tightest pixel: a REMORA row is one unit, so ERF's
+    // 48 rows span 1200 and its 70 columns 70000 / 7.5.
     require(nearly(physical.tileRect(0), {0.0, 0.0, 70000.0 / 7.5, 1200.0})
             && nearly(physical.tileRect(1), {20000.0 / 7.5, 1200.0, 50000.0 / 7.5, 40.0}),
         "the physical tiles are not in proportion");

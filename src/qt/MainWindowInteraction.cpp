@@ -260,9 +260,10 @@ void MainWindow::showAxisScalingDialog()
     const int dimension = primary().session ? primary().session->metadata().dimension : 3;
     auto* form = new QFormLayout;
     std::array<QDoubleSpinBox*, 3> spins{nullptr, nullptr, nullptr};
-    // With a companion, the axis perpendicular to the shared plane has one
-    // factor per dataset, so each can be stretched on its own.
-    std::array<QDoubleSpinBox*, 2> perpendicularSpins{nullptr, nullptr};
+    // With a companion, the axis perpendicular to the shared plane has a
+    // second factor for the companion, so each dataset can be stretched on
+    // its own; the primary's is the ordinary axis factor.
+    QDoubleSpinBox* companionSpin = nullptr;
     const std::array<QString, 3> names{tr("X"), tr("Y"), tr("Z")};
     const std::array<const char*, 3> objectNames{
         "axisScaleSpinX", "axisScaleSpinY", "axisScaleSpinZ"};
@@ -277,41 +278,32 @@ void MainWindow::showAxisScalingDialog()
         return spin;
     };
     for (std::size_t axis = 0; axis < 3; ++axis) {
-        if (m_pair && static_cast<int>(axis) == m_pair->perpendicularAxis) {
-            const std::array<const char*, 2> perpendicularNames{
-                "axisScaleSpinPrimary", "axisScaleSpinCompanion"};
-            for (std::size_t layer = 0; layer < 2; ++layer) {
-                auto* spin = makeSpin(perpendicularNames[layer],
-                    m_layers[layer].perpendicularScale, true);
-                form->addRow(tr("%1 (%2)").arg(names[axis],
-                    layer == 0 ? QString::fromStdString(
-                                     m_datasetPath.filename().string())
-                               : m_layers[1].name), spin);
-                perpendicularSpins[layer] = spin;
-            }
-            continue;
-        }
+        const bool perpendicular
+            = m_pair && static_cast<int>(axis) == m_pair->perpendicularAxis;
         auto* spin = makeSpin(objectNames[axis], m_axisScale[axis],
             static_cast<int>(axis) < dimension);
-        form->addRow(names[axis], spin);
+        form->addRow(perpendicular
+                ? tr("%1 (%2)").arg(names[axis],
+                    QString::fromStdString(m_datasetPath.filename().string()))
+                : names[axis],
+            spin);
         spins[axis] = spin;
+        if (perpendicular) {
+            companionSpin = makeSpin("axisScaleSpinCompanion",
+                m_layers[1].perpendicularScale, true);
+            form->addRow(tr("%1 (%2)").arg(names[axis], m_layers[1].name), companionSpin);
+        }
     }
     const auto readFactors = [spins] {
         std::array<double, 3> factors{1.0, 1.0, 1.0};
         for (std::size_t axis = 0; axis < 3; ++axis) {
-            if (spins[axis] != nullptr) {
-                factors[axis] = spins[axis]->value();
-            }
+            factors[axis] = spins[axis]->value();
         }
         return factors;
     };
-    const auto readPerpendicular = [perpendicularSpins]()
-        -> std::optional<std::array<double, 2>> {
-        if (perpendicularSpins[0] == nullptr || perpendicularSpins[1] == nullptr) {
-            return std::nullopt;
-        }
-        return std::array<double, 2>{
-            perpendicularSpins[0]->value(), perpendicularSpins[1]->value()};
+    const auto readCompanion = [companionSpin]() -> std::optional<double> {
+        return companionSpin != nullptr ? std::optional{companionSpin->value()}
+                                        : std::nullopt;
     };
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok
@@ -323,27 +315,23 @@ void MainWindow::showAxisScalingDialog()
     layout->addWidget(buttons);
 
     connect(buttons, &QDialogButtonBox::clicked, dialog,
-        [this, dialog, spins, perpendicularSpins, readFactors, readPerpendicular,
+        [this, dialog, spins, companionSpin, readFactors, readCompanion,
             buttons](QAbstractButton* button) {
             const auto role = buttons->buttonRole(button);
             if (role == QDialogButtonBox::AcceptRole
                 || role == QDialogButtonBox::ApplyRole) {
-                applyAxisScale(readFactors(), readPerpendicular());
+                applyAxisScale(readFactors(), readCompanion());
                 if (role == QDialogButtonBox::AcceptRole) {
                     dialog->accept();
                 }
             } else if (role == QDialogButtonBox::ResetRole) {
                 for (auto* spin : spins) {
-                    if (spin != nullptr) {
-                        spin->setValue(1.0);
-                    }
+                    spin->setValue(1.0);
                 }
-                for (auto* spin : perpendicularSpins) {
-                    if (spin != nullptr) {
-                        spin->setValue(1.0);
-                    }
+                if (companionSpin != nullptr) {
+                    companionSpin->setValue(1.0);
                 }
-                applyAxisScale({1.0, 1.0, 1.0}, std::array<double, 2>{1.0, 1.0});
+                applyAxisScale({1.0, 1.0, 1.0}, 1.0);
             } else if (role == QDialogButtonBox::RejectRole) {
                 dialog->reject();
             }
@@ -356,7 +344,7 @@ void MainWindow::showAxisScalingDialog()
 }
 
 void MainWindow::applyAxisScale(const std::array<double, 3>& axisScale,
-    std::optional<std::array<double, 2>> perpendicularScale)
+    std::optional<double> companionPerpendicularScale)
 {
     const auto sane = [](double value) {
         return std::isfinite(value) && value > 0.0 ? value : 1.0;
@@ -367,12 +355,10 @@ void MainWindow::applyAxisScale(const std::array<double, 3>& axisScale,
     }
     bool changed = factors != m_axisScale;
     m_axisScale = factors;
-    if (perpendicularScale) {
-        for (std::size_t layer = 0; layer < 2; ++layer) {
-            const auto value = sane((*perpendicularScale)[layer]);
-            changed = changed || value != m_layers[layer].perpendicularScale;
-            m_layers[layer].perpendicularScale = value;
-        }
+    if (companionPerpendicularScale) {
+        const auto value = sane(*companionPerpendicularScale);
+        changed = changed || value != m_layers[1].perpendicularScale;
+        m_layers[1].perpendicularScale = value;
     }
     if (changed) {
         applyDisplayStretches();
@@ -386,7 +372,6 @@ void MainWindow::resetAxisScale()
         m_axisScalingDialog->reject();
     }
     m_axisScale = {1.0, 1.0, 1.0};
-    primary().perpendicularScale = 1.0;
     // The views still show the outgoing dataset, and keep showing it if the
     // new one fails to load, so they take the unit factors now. No remote
     // re-request: that dataset is on its way out.

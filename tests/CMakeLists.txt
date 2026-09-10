@@ -677,6 +677,21 @@ if(TARGET amrexplorer_qt)
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
             "$<TARGET_FILE:test_dataset_selected_cell>")
 
+    add_executable(test_dataset_column_width
+        unit/test_dataset_column_width.cpp
+        "${PROJECT_SOURCE_DIR}/src/qt/DatasetWindow.cpp"
+        "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp")
+    set_target_properties(test_dataset_column_width PROPERTIES AUTOMOC ON)
+    target_include_directories(test_dataset_column_width
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt")
+    target_link_libraries(test_dataset_column_width PRIVATE
+        amrexplorer::data amrexplorer::pipeline amrexplorer::warnings
+        Qt6::Concurrent Qt6::Test Qt6::Widgets)
+    add_test(NAME dataset_column_width
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:test_dataset_column_width>")
+    set_tests_properties(dataset_column_width PROPERTIES TIMEOUT 30)
+
     add_executable(test_palette_controller
         unit/test_palette_controller.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/PaletteController.cpp"

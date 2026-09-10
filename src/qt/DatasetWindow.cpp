@@ -14,6 +14,7 @@
 #include <QCloseEvent>
 #include <QColor>
 #include <QFutureWatcher>
+#include <QHeaderView>
 #include <QHBoxLayout>
 #include <QItemSelection>
 #include <QItemSelectionModel>
@@ -21,6 +22,7 @@
 #include <QModelIndex>
 #include <QPalette>
 #include <QPushButton>
+#include <QStyleOptionViewItem>
 #include <QTabWidget>
 #include <QTableView>
 #include <QVariant>
@@ -376,6 +378,23 @@ void DatasetWindow::populateTabs()
         auto* model
             = new LevelTableModel(extract, m_coloring, levelFormat, table);
         table->setModel(model);
+        // Reserve the resolved digits once per level, without asking every
+        // cell for a size hint. The extrema cover fixed notation; scientific
+        // samples also leave room when the extrema themselves round to short
+        // strings. Include the style's cell padding and the grid line.
+        QStyleOptionViewItem cell;
+        cell.initFrom(table);
+        cell.font = table->font();
+        cell.fontMetrics = table->fontMetrics();
+        cell.features = QStyleOptionViewItem::HasDisplay;
+        int columnWidth = table->horizontalHeader()->defaultSectionSize();
+        for (const double value : {extract.minimum, extract.maximum,
+                 -1.2345678901234567e-308, -1.2345678901234567e308}) {
+            cell.text = formatNumber(value, levelFormat);
+            columnWidth = std::max(columnWidth, table->style()->sizeFromContents(
+                QStyle::CT_ItemViewItem, &cell, QSize(), table).width() + 1);
+        }
+        table->horizontalHeader()->setDefaultSectionSize(columnWidth);
         auto* pageLayout = new QVBoxLayout(page);
         pageLayout->addWidget(info);
         pageLayout->addWidget(table, 1);

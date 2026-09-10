@@ -242,8 +242,14 @@ ExportLayout makeExportLayout(QSize rasterSize, const ExportOptions& options,
             width = std::max(width, layout.colorBarRect.right() + 1);
         }
         layout.canvasSize = QSize(width, top + rasterSize.height() + bottom);
+        // Long labels need wider margins, but must not keep enlarging the
+        // font that those margins were measured with. Limit their contribution
+        // to the reference width to the data's longer side. Ordinary layouts
+        // retain their sizing, and high precision can grow the canvas without
+        // making the text overwhelm the data.
+        const int dataLength = std::max(rasterSize.width(), rasterSize.height());
         const int referenceWidth =
-            std::max(rasterSize.width(), rasterSize.height()) + width - rasterSize.width();
+            dataLength + std::min(width - rasterSize.width(), dataLength);
         const int nextFontPixels =
             std::max(12, static_cast<int>(std::lround(referenceWidth * 11.0 / (72.0 * 7.0))));
         if (nextFontPixels == fontPixels) {

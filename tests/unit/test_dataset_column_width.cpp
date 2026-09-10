@@ -95,11 +95,22 @@ void checkCells(QTabWidget& tabs, bool distinct)
             option.textElideMode = table->textElideMode();
             table->itemDelegate()->paint(&painter, option, index);
             painter.end();
-            require(device.text().size() == 1 && device.text().front().value == expected,
-                "dataset cell elided digits or the exponent");
-            require(device.text().front().bounds.left() >= -0.5
-                    && device.text().front().bounds.right() <= width - 0.5,
-                "dataset cell text escaped its column");
+            // Font fallback and script changes can split one label into
+            // several text draws. Check every glyph run and the complete
+            // string, rather than requiring a single paint-engine call.
+            QString painted;
+            for (const auto& run : device.text()) {
+                painted += run.value;
+                require(run.bounds.left() >= -0.5 && run.bounds.right() <= width - 0.5,
+                    "dataset cell text escaped its column");
+            }
+            if (painted != expected) {
+                std::cerr << "style=" << table->style()->objectName().toStdString()
+                          << " font=" << table->font().family().toStdString()
+                          << " expected=" << expected.toStdString()
+                          << " painted=" << painted.toStdString() << '\n';
+            }
+            require(painted == expected, "dataset cell elided digits or the exponent");
             if (distinct && column > 0) {
                 require(expected != table->model()->index(0, column - 1).data().toString(),
                     "adaptive dataset values lost their distinguishing digits");
@@ -131,6 +142,10 @@ int main(int argc, char** argv)
             window.setNumberFormat("%.3e");
             checkCells(*tabs, false);
             window.setNumberFormat("rho=%.17g kg/m3");
+            checkCells(*tabs, true);
+            // Greek and Latin text exercise multiple glyph runs even when
+            // the platform's default font covers the entire numeric label.
+            window.setNumberFormat(QStringLiteral("\u03c1=%.17g kg/m3"));
             checkCells(*tabs, true);
             window.setNumberFormat("%g");
             checkCells(*tabs, true);

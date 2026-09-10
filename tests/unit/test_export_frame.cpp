@@ -340,6 +340,31 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Font-dependent label widths must not feed back into ever-larger fonts.
+    // DejaVu Sans reproduces the Linux CI failure; stretching also exercises
+    // wide glyphs on systems where that family is unavailable.
+    for (const auto& family : {QString("Sans Serif"), QString("DejaVu Sans")}) {
+        for (const int stretch : {100, 150}) {
+            auto wideOptions = options;
+            wideOptions.font = QFont(family);
+            wideOptions.font.setStretch(stretch);
+            for (const auto& format : {QString("%g"), QString("%.17g"),
+                     QString("%.2000g")}) {
+                wideOptions.numberFormat = format;
+                const std::array<ExportAxis, 2> narrowAxes{{{"x", narrowLow, narrowHigh},
+                    {"y", narrowLow, narrowHigh}}};
+                const auto wide = makeExportLayout(QSize(600, 400), wideOptions,
+                    narrowAxes, &adaptiveBar, true);
+                require(wide.font.pixelSize() < 40 && wide.canvasSize.width() < 4096,
+                    "wide high-precision labels inflated the export font or canvas");
+                require(wide.dataRect.size() == QSize(600, 400),
+                    "bounding annotation size changed the exported data dimensions");
+                require(formatDigits(wide.axisFormats[0]) >= 15,
+                    "bounding annotation size discarded the requested axis precision");
+            }
+        }
+    }
+
     const auto savedPalette = app.palette();
     QPalette hostile;
     hostile.setColor(QPalette::Window, Qt::black);

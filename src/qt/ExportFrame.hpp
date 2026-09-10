@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ColorBarWidget.hpp"
 #include <QFont>
 #include <QFontMetrics>
 #include <QImage>
@@ -7,6 +8,7 @@
 #include <QString>
 #include <amrexplorer/core/CoordinateSystem.hpp>
 #include <array>
+#include <optional>
 #include <vector>
 
 namespace amrvis::qt {
@@ -18,8 +20,8 @@ struct ExportOptions {
     bool transparentBackground = false;
     QFont font;
     QString numberFormat = QStringLiteral("%g");
-    // The authored color-bar format remains independent of the fixed axis
-    // precision, so residuals can use their own range. Empty uses numberFormat.
+    // Authored formats are resolved per axis and color bar in ExportLayout.
+    // Empty uses numberFormat.
     QString colorBarNumberFormat;
     QString lengthUnit;
 };
@@ -41,6 +43,8 @@ struct ExportLayout {
     QRect dataRect;
     QRect colorBarRect;
     QFont font;
+    std::array<QString, 2> axisFormats;
+    std::optional<ColorBarWidget::NumberPresentation> colorBarPresentation;
     int labelWidth = 0;
     int verticalLabelWidth = 0;
     int dotsPerMeter = 0;

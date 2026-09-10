@@ -213,6 +213,9 @@ void DatasetWindow::reload(DatasetRequest request)
 
 void DatasetWindow::setNumberFormat(QString format)
 {
+    if (format == m_numberFormat) {
+        return;
+    }
     m_numberFormat = std::move(format);
     // The loaded values are still on hand; re-rendering the tabs is cheap
     // compared to re-reading the dataset.

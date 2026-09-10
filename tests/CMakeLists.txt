@@ -798,8 +798,13 @@ if(TARGET amrexplorer_qt)
     set_tests_properties(widget_image_export PROPERTIES TIMEOUT 60)
 
     add_test(NAME qt_adaptive_precision
-        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
-            "$<TARGET_FILE:amrexplorer_qt>" --adaptive-precision-smoke-test)
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_adaptive_precision"
+            -DMODE=adaptive-precision
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake")
     set_tests_properties(qt_adaptive_precision PROPERTIES TIMEOUT 30)
 
     add_executable(test_color_bar_labels unit/test_color_bar_labels.cpp

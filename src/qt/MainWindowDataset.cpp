@@ -500,11 +500,9 @@ ExportOptions MainWindow::exportOptions(bool includeColorBar, bool includeAxes,
     options.transparentBackground = transparentBackground;
     options.font = QFont(QStringLiteral("Sans Serif"));
     options.font.setStyleHint(QFont::SansSerif);
-    // The resolved format, not the authored one. Resolving is idempotent, so
-    // handing it on already resolved freezes the digit count for every frame
-    // of an animation -- the layout is frozen after the first frame, and
-    // digits re-derived per frame would change label widths under it.
-    options.numberFormat = m_displayFormat;
+    // Each panel resolves its spatial axes and field values independently,
+    // then freezes their presentation with the first frame's layout.
+    options.numberFormat = m_numberFormat;
     options.colorBarNumberFormat = m_numberFormat;
     options.lengthUnit = m_lengthUnitId;
     return options;

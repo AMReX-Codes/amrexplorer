@@ -1,5 +1,7 @@
 #include "ColorBarWidget.hpp"
 #include "ExportFrame.hpp"
+#include "NumberFormat.hpp"
+#include "RecordingPaintDevice.hpp"
 
 #include <QApplication>
 #include <QTemporaryDir>
@@ -191,9 +193,85 @@ int main(int argc, char** argv) {
     }
     const QFontMetrics movieMetrics(movie.font);
     for (const auto& label : {QStringLiteral("-9e-308"), QStringLiteral("-9e+308")}) {
-        require(movie.verticalLabelWidth >= movieMetrics.horizontalAdvance(label),
+    require(movie.verticalLabelWidth >= movieMetrics.horizontalAdvance(label),
                 "compact movie layout cannot fit scientific notation");
     }
+    // Spatial precision follows each displayed coordinate range, independently
+    // of the scalar field and of the other coordinate axis.
+    constexpr double narrowLow = 1.25663706212e-6;
+    constexpr double narrowHigh = 1.25663706213e-6;
+    ColorBarWidget adaptiveBar;
+    adaptiveBar.setFieldRange("field", narrowLow, narrowHigh);
+    const std::array<ExportAxis, 2> mixedAxes{{{"x", 0.133333333333333, 1.0},
+        {"y", narrowLow, narrowHigh}}};
+    const auto adaptive = makeExportLayout(raster.size(), compactOptions, mixedAxes,
+        &adaptiveBar);
+    require(adaptive.axisFormats[0] == "%.6g"
+            && formatDigits(adaptive.axisFormats[1]) > minimumDisplayDigits,
+        "export axes did not resolve precision independently");
+    require(exportNumber(0.133333333333333, adaptive.axisFormats[0],
+                QFontMetrics(adaptive.font), adaptive.labelWidth) == "0.133333",
+        "a narrow field or y range added noise digits to the x axis");
+    auto explicitOptions = compactOptions;
+    explicitOptions.numberFormat = "%.8g";
+    const auto explicitLayout = makeExportLayout(raster.size(), explicitOptions, mixedAxes);
+    require(explicitLayout.axisFormats[0] == "%.8g"
+            && explicitLayout.axisFormats[1] == "%.8g",
+        "export overrode explicitly requested axis precision");
+
+    // Freeze residual precision and the offset line's presence. Later frames
+    // span ordinary ranges and huge exponents but still print all six digits,
+    // inside the first frame's rectangle.
+    require(adaptive.colorBarPresentation.has_value(), "color bar notation was not frozen");
+    const auto& presentation = *adaptive.colorBarPresentation;
+    require(presentation.offsetLine && presentation.tickFormat == "%.6g",
+        "first-frame residuals inherited full-value precision");
+    for (double magnitude : {1.23456789, 1.23456789e-200, 1.23456789e200}) {
+        adaptiveBar.setFieldRange("field", -magnitude, magnitude);
+        RecordingPaintDevice device(adaptive.canvasSize.width(), adaptive.canvasSize.height());
+        QPainter painter(&device);
+        painter.setFont(adaptive.font);
+        adaptiveBar.paintBar(&painter, adaptive.colorBarRect, true, true, &presentation);
+        painter.end();
+        require(device.text().size() >= 4, "a frozen color bar lost its offset or tick labels");
+        const auto tickCount = device.text().size() - 2;
+        require(device.text()[1].value == "+0",
+            "an ordinary frame lost its reserved offset line");
+        for (std::size_t tick = 0; tick < tickCount; ++tick) {
+            const double value = std::lerp(magnitude, -magnitude,
+                static_cast<double>(tick) / static_cast<double>(tickCount - 1));
+            require(device.text()[tick + 2].value == QString::number(value, 'g', 6),
+                "animation narrowed ticks below its frozen precision");
+            require(QRectF(adaptive.colorBarRect).adjusted(-1, -1, 1, 1)
+                    .contains(device.text()[tick + 2].bounds),
+                "animation tick text escaped its frozen color bar");
+        }
+        QImage expected(adaptive.canvasSize, QImage::Format_ARGB32_Premultiplied);
+        expected.fill(Qt::transparent);
+        QPainter expectedPainter(&expected);
+        expectedPainter.setFont(adaptive.font);
+        adaptiveBar.paintBar(&expectedPainter, adaptive.colorBarRect, true, true, &presentation);
+        expectedPainter.end();
+        auto transparentOptions = compactOptions;
+        transparentOptions.transparentBackground = true;
+        const auto frame = composeExportImage(raster, mixedAxes, transparentOptions,
+            adaptive, &adaptiveBar);
+        require(frame.copy(adaptive.colorBarRect) == expected.copy(adaptive.colorBarRect),
+            "frame composition did not use its frozen color bar presentation");
+    }
+    // An ordinary first frame must not acquire an offset line later.
+    adaptiveBar.setFieldRange("field", 0.0, 1.0);
+    const auto ordinary = makeExportLayout(raster.size(), compactOptions, xy, &adaptiveBar);
+    adaptiveBar.setFieldRange("field", narrowLow, narrowHigh);
+    RecordingPaintDevice ordinaryDevice(ordinary.canvasSize.width(), ordinary.canvasSize.height());
+    QPainter ordinaryPainter(&ordinaryDevice);
+    ordinaryPainter.setFont(ordinary.font);
+    adaptiveBar.paintBar(&ordinaryPainter, ordinary.colorBarRect, true, true,
+        &*ordinary.colorBarPresentation);
+    ordinaryPainter.end();
+    require(ordinaryDevice.text().size() == 9,
+        "a later narrow range added an offset line to an ordinary movie");
+
     const auto ticks = exportTicks({"y", -2.0, 2.0}, 400, 40, "%g", fm, layout.labelWidth);
     require(ticks.size() >= 3 && ticks.front().fraction == 0.0 && ticks.back().fraction == 1.0,
             "axis endpoints do not map bottom-to-top");

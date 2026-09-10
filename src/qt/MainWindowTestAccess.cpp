@@ -1,5 +1,9 @@
 #include "MainWindowInternal.hpp"
 
+#include <QElapsedTimer>
+#include <QTableView>
+#include <QTabWidget>
+
 namespace amrvis::qt {
 
 bool MainWindow::adaptivePrecisionForTest()
@@ -7,6 +11,36 @@ bool MainWindow::adaptivePrecisionForTest()
     constexpr double low = 1.25663706212e-6;
     constexpr double high = 1.25663706213e-6;
     applyNumberFormat("%g");
+    applyDisplayPrecision(0.0, 1.0);
+    showDatasetWindow();
+    if (m_datasetWindow == nullptr) {
+        return false;
+    }
+    auto* tabs = m_datasetWindow->findChild<QTabWidget*>();
+    QElapsedTimer timer;
+    timer.start();
+    while (tabs != nullptr && tabs->count() < 2 && timer.elapsed() < 5000) {
+        QApplication::processEvents();
+    }
+    if (tabs == nullptr || tabs->count() < 2) {
+        closeDatasetWindow();
+        return false;
+    }
+    tabs->setCurrentIndex(1);
+    QPointer<QTableView> table = tabs->currentWidget()->findChild<QTableView*>();
+    if (table == nullptr) {
+        closeDatasetWindow();
+        return false;
+    }
+    table->selectionModel()->select(table->model()->index(0, 0),
+        QItemSelectionModel::Select);
+    table->verticalScrollBar()->setValue(table->verticalScrollBar()->maximum());
+    const int scroll = table->verticalScrollBar()->value();
+    applyDisplayPrecision(low, high);
+    const bool datasetPreserved = table != nullptr && tabs->currentIndex() == 1
+        && table->selectionModel()->selectedIndexes().size() == 1
+        && table->verticalScrollBar()->value() == scroll;
+    closeDatasetWindow();
     applyDisplayPrecision(0.0, 1.0);
     LinePlotWindow child("adaptive precision");
     child.resize(800, 480);
@@ -28,11 +62,15 @@ bool MainWindow::adaptivePrecisionForTest()
     applyNumberFormat("%g");
     const bool defaultRestored = child.grab().toImage() == before;
     m_linePlotWindow = nullptr;
+    applyDisplayPrecision(low, high);
     const auto options = exportOptions(true, false, false);
     ColorBarWidget exported;
     exported.setNumberFormat(options.colorBarNumberFormat);
     exported.setFieldRange("narrow", low, high);
-    return rangePreserved && explicitChanged && defaultRestored
+    const auto layout = makeExportLayout(QSize(600, 400), options, {}, &exported);
+    return datasetPreserved && rangePreserved && explicitChanged && defaultRestored
+        && formatDigits(layout.axisFormats[0]) == minimumDisplayDigits
+        && formatDigits(layout.axisFormats[1]) == minimumDisplayDigits
         && formatDigits(exported.tickFormat()) == minimumDisplayDigits
         && formatDigits(exported.effectiveFormat()) > minimumDisplayDigits;
 }

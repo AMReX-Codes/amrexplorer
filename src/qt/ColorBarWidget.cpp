@@ -157,6 +157,11 @@ QString ColorBarWidget::effectiveFormat() const
 
 double ColorBarWidget::labelOffset() const
 {
+    return offsetForFormat(effectiveFormat());
+}
+
+double ColorBarWidget::offsetForFormat(const QString& format) const
+{
     const auto candidate = tickOffset(m_minimum, m_maximum, m_logarithmic);
     if (!candidate) {
         return 0.0;
@@ -165,7 +170,7 @@ double ColorBarWidget::labelOffset() const
     // the chosen format drops: that would misstate the entire range.
     bool ok = false;
     const auto printed = formatNumber(*candidate,
-        conversionSpecifier(effectiveFormat())).toDouble(&ok);
+        conversionSpecifier(format)).toDouble(&ok);
     const auto tolerance = (m_maximum - m_minimum) / 100.0;
     return ok && std::isfinite(printed) && printed <= m_minimum
             && std::abs(printed - *candidate) <= tolerance
@@ -203,7 +208,8 @@ struct ColorBarWidget::LabelLayout {
 };
 
 ColorBarWidget::LabelLayout ColorBarWidget::labelLayout(
-    const QFontMetrics& metrics, int height, bool bounded, int width) const
+    const QFontMetrics& metrics, int height, bool bounded, int width,
+    const NumberPresentation* presentation) const
 {
     const int labelHeight = metrics.height();
     LabelLayout result{};
@@ -215,26 +221,39 @@ ColorBarWidget::LabelLayout ColorBarWidget::labelLayout(
         : titleHeight;
     result.barWidth = bounded ? std::max(barWidth, labelHeight) : barWidth;
     result.gap = bounded ? std::max(margin, labelHeight / 4) : labelGap;
-    result.offset = labelOffset();
-    result.offsetText = offsetLabel(result.offset, effectiveFormat());
-    if (result.offset == 0.0 || result.titleBlock == 0
+    const auto valueFormat = presentation != nullptr
+        ? presentation->valueFormat : effectiveFormat();
+    result.offset = presentation != nullptr
+        ? (presentation->offsetLine ? offsetForFormat(valueFormat) : 0.0) : labelOffset();
+    result.offsetText = offsetLabel(result.offset, valueFormat);
+    bool offsetLine = presentation != nullptr ? presentation->offsetLine : result.offset != 0.0;
+    if (!offsetLine || result.titleBlock == 0
         || height < 4 * labelHeight + 2 * result.margin
         || (width > 0 && metrics.horizontalAdvance(result.offsetText)
                 > width - 2 * result.margin)) {
         result.offset = 0.0;
         result.offsetText.clear();
+        offsetLine = false;
     }
-    result.offsetHeight = result.offset == 0.0 ? 0 : labelHeight;
+    result.offsetHeight = offsetLine ? labelHeight : 0;
     result.barHeight = std::max(1,
         height - 2 * result.margin - result.titleBlock - result.offsetHeight);
     result.count = bounded
         ? std::clamp(result.barHeight / (labelHeight + 4), 0, labelCount) : labelCount;
-    result.format = result.offset == 0.0 ? effectiveFormat() : tickFormat();
+    result.format = !offsetLine ? valueFormat
+        : (presentation != nullptr ? presentation->tickFormat : tickFormat());
     return result;
 }
 
+ColorBarWidget::NumberPresentation ColorBarWidget::exportPresentation(
+    const QFontMetrics& metrics, const QRect& target) const
+{
+    const auto labels = labelLayout(metrics, target.height(), true, target.width());
+    return {effectiveFormat(), labels.format, labels.offsetHeight > 0};
+}
+
 void ColorBarWidget::paintBar(QPainter* painter, const QRect& target, bool transparentBackground,
-                              bool boundedLabels) const {
+                              bool boundedLabels, const NumberPresentation* presentation) const {
     painter->save();
     painter->translate(target.topLeft());
     const int w = target.width();
@@ -245,7 +264,7 @@ void ColorBarWidget::paintBar(QPainter* painter, const QRect& target, bool trans
     const QColor foreground = transparentBackground ? Qt::black : Qt::white;
     painter->setPen(foreground);
     const int labelHeight = painter->fontMetrics().height();
-    const auto labels = labelLayout(painter->fontMetrics(), h, boundedLabels, w);
+    const auto labels = labelLayout(painter->fontMetrics(), h, boundedLabels, w, presentation);
     const int paintMargin = labels.margin;
     const int titleBlock = labels.titleBlock;
     const int offsetHeight = labels.offsetHeight;

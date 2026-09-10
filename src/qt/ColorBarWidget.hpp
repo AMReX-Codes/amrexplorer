@@ -13,6 +13,12 @@ namespace amrvis::qt {
 
 class ColorBarWidget final : public QWidget {
 public:
+    struct NumberPresentation {
+        QString valueFormat;
+        QString tickFormat;
+        bool offsetLine = false;
+    };
+
     explicit ColorBarWidget(QWidget* parent = nullptr);
 
     // Fixed panel width (including labels); kept constant so exports of the
@@ -34,7 +40,13 @@ public:
     // Paints the color bar into an arbitrary rect (e.g. for image export),
     // using this widget's current palette/range/format state.
     void paintBar(QPainter* painter, const QRect& target, bool transparentBackground = false,
-                  bool boundedLabels = false) const;
+                  bool boundedLabels = false,
+                  const NumberPresentation* presentation = nullptr) const;
+
+    // Capture the first frame's notation and offset-line placement. Its value
+    // still follows the range, avoiding cancellation against a stale offset.
+    [[nodiscard]] NumberPresentation exportPresentation(
+        const QFontMetrics& metrics, const QRect& target) const;
 
     // Width that just fits the bar plus the widest current tick label, so the
     // export panel is as narrow as the number format/range require. Stable for
@@ -57,8 +69,10 @@ protected:
 
 private:
     struct LabelLayout;
+    [[nodiscard]] double offsetForFormat(const QString& format) const;
     [[nodiscard]] LabelLayout labelLayout(
-        const QFontMetrics& metrics, int height, bool bounded, int width) const;
+        const QFontMetrics& metrics, int height, bool bounded, int width,
+        const NumberPresentation* presentation = nullptr) const;
     // Resize to whichever is larger, panelWidth or what the current labels
     // need, after anything that can change their width.
     void applyPreferredWidth();

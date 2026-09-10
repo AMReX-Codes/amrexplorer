@@ -136,8 +136,13 @@ Outcome dispatchRange(Context& context)
     const int argc = context.argc;
     char** argv = context.argv;
 
-    if (argc == 2 && std::string_view(argv[1]) == "--adaptive-precision-smoke-test") {
-        return {true, window.adaptivePrecisionForTest() ? 0 : 1};
+    if (argc == 3 && std::string_view(argv[1]) == "--adaptive-precision-smoke-test") {
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                application.exit(success && window.adaptivePrecisionForTest() ? 0 : 1);
+            });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--missing-range-smoke-test") {
         const std::filesystem::path path(argv[2]);

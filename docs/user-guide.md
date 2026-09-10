@@ -435,9 +435,11 @@ and **Show volume** need protocol 1.6 for the same reason; against an older
 server the group is greyed out and says so, and the volume is drawn alone.
 
 The server's `--max-volume-voxels` and `--volume-cache-mib` options set how
-large one volume and one dataset's cache may get. They are per volume
+large one sampled grid and one dataset's cache may get. They are per grid
 and per dataset, not a total for the server, so sizing a host means multiplying
-them by how many datasets and connections you allow. `--max-volume-voxels`
+them by how many datasets and connections you allow -- and a render with an
+isosurface of a second field holds two grids, so a cache that fits only one
+re-samples the second on every camera move. `--max-volume-voxels`
 starts at the largest a client may ask for, so it is there to tighten a server
 rather than to open one up; a request wanting more than it permits is rendered
 at the lower detail rather than refused.

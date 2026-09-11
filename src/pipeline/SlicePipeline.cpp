@@ -2,6 +2,7 @@
 
 #include <amrexplorer/cache/ByteLruCache.hpp>
 #include <amrexplorer/data/LocalDatasetSession.hpp>
+#include <amrexplorer/io/PlotfileBlockReader.hpp>
 #include <amrexplorer/core/CoordinateSystem.hpp>
 #include <amrexplorer/core/ValueMapping.hpp>
 #include <amrexplorer/pipeline/DisplayCoordinator.hpp>
@@ -293,6 +294,14 @@ void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
             result.mappedGridFallback
                 = "node positions do not fit the " + cacheBudgetDescription(
                     dataset->cacheMetrics().budgetBytes) + " cache";
+            return;
+        } catch (const BlockReadError& error) {
+            // A damaged or missing Nu_nd data file: the Header promised
+            // nodes the plotfile cannot deliver. The open only checked the
+            // index, so this is where a bad grid becomes "no mapped grid",
+            // as the metadata reader already does for a bad Nu_nd_H.
+            result.mappedGridFallback
+                = std::string("node positions could not be read: ") + error.what();
             return;
         }
     }

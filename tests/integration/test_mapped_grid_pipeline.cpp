@@ -445,6 +445,44 @@ void testPlainPlotfile(const std::filesystem::path& mappedFixture,
     std::filesystem::remove_all(scratch);
 }
 
+// The Header and Nu_nd_H are intact but the node data file is damaged:
+// truncated to a few bytes, then missing. The field still slices; the warp
+// is given up with a reason, never the whole slice.
+void testDamagedNodeData(const std::filesystem::path& mappedFixture,
+    const std::filesystem::path& scratch)
+{
+    const amrvis::Palette palette;
+    const auto check = [&](const char* what) {
+        const auto session = std::make_shared<amrvis::LocalDatasetSession>(
+            scratch, amrvis::DatasetId{1}, 64ULL << 20U);
+        require(session->supportsMappedGrid(),
+            "an intact Nu_nd_H still announces the grid");
+        const auto result = amrvis::executeSlice(session, sliceRequest(true),
+            amrvis::RangeMode::File, std::nullopt, false, palette, {});
+        std::cerr << "  " << what << ": " << result.mappedGridFallback << '\n';
+        require(!result.mappedGrid, "damaged node data draws the logical grid");
+        require(result.image.width == 4 && result.image.height == 4,
+            "damaged node data keeps the field's raster");
+        require(result.displayRegion == result.displayPlane().physicalRegion,
+            "damaged node data frames the logical region");
+        require(result.mappedGridFallback.find("node positions") != std::string::npos,
+            "the reason names the node positions");
+    };
+    std::filesystem::remove_all(scratch);
+    std::filesystem::copy(mappedFixture, scratch,
+        std::filesystem::copy_options::recursive);
+    const auto nodeData = scratch / "Level_0" / "Nu_nd_D_00000";
+    require(std::filesystem::is_regular_file(nodeData), "the fixture has node data");
+    {
+        std::ofstream truncate(nodeData, std::ios::binary | std::ios::trunc);
+        truncate << "FAB ";
+    }
+    check("truncated");
+    std::filesystem::remove(nodeData);
+    check("missing");
+    std::filesystem::remove_all(scratch);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -459,6 +497,7 @@ int main(int argc, char** argv)
         testSharedRangeFrameLoad(argv[1]);
         testStarvedGridPool(argv[1]);
         testPlainPlotfile(argv[1], argv[2]);
+        testDamagedNodeData(argv[1], argv[2]);
     } catch (const std::exception& error) {
         std::cerr << "FAILED: unexpected exception: " << error.what() << '\n';
         return 1;

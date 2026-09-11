@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -109,8 +110,10 @@ MappedGridPlane queryMappedGridPlane(PlotfileDataset& data,
     // node answered by a coarser level is interpolated along the normal
     // between the two coarse layers bracketing the position. Layer queries
     // are cached per position within this call; a single-level dataset never
-    // needs a second one.
-    std::vector<std::pair<double, SliceQueryResult>> layers;
+    // needs a second one. A deque, not a vector: the loop below holds
+    // references to cached layers across further queryLayer calls, and a
+    // vector's push would move them out from under those references.
+    std::deque<std::pair<double, SliceQueryResult>> layers;
     const auto queryLayer = [&](double position) -> const SliceQueryResult& {
         for (const auto& [at, result] : layers) {
             if (at == position) {

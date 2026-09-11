@@ -151,6 +151,7 @@ Outcome dispatchZoom(Context& context)
         const std::filesystem::path path(argv[2]);
         auto phase = std::make_shared<int>(0);
         auto zoomedSize = std::make_shared<std::array<int, 2>>();
+        auto flatSize = std::make_shared<std::array<int, 2>>();
         const auto fail = [&application](const char* message) {
             qCritical("%s", message);
             application.exit(1);
@@ -175,7 +176,8 @@ Outcome dispatchZoom(Context& context)
             });
         QObject::connect(&window,
             &amrvis::qt::MainWindow::interactiveSlicesSettled,
-            &application, [&window, &application, phase, zoomedSize, fail] {
+            &application, [&window, &application, phase, zoomedSize, flatSize,
+                              fail] {
                 const auto size = window.activeViewImageSizeForTest();
                 switch (*phase) {
                 case 0: {
@@ -316,8 +318,7 @@ Outcome dispatchZoom(Context& context)
                     *phase = 6;
                     window.setMappedGridForTest(false);
                     break;
-                case 6:
-                default: {
+                case 6: {
                     // Off: the logical grid again, radios back.
                     if (window.displayIsMappedForTest()
                         || window.activeViewIsMappedForTest()
@@ -341,11 +342,48 @@ Outcome dispatchZoom(Context& context)
                     }
                     window.setAxisScaleForTest({1.0, 1.0, 1.0});
                     const auto reset = window.isoDomainDisplayBoxForTest();
-                    application.exit(
-                        std::abs((reset.upper[2] - reset.lower[2]) / isoWidth - 1.0) < 1e-9
-                            ? 0 : 3);
+                    if (std::abs((reset.upper[2] - reset.lower[2]) / isoWidth - 1.0)
+                        > 1e-9) {
+                        fail("resetting Axis Scaling did not restore the iso cube");
+                        return;
+                    }
+                    // On again with a cosmetic change in the same turn: the
+                    // pixmap must end up the warp with its source index, not
+                    // the logical raster flagged mapped. The view is still
+                    // zoomed, so the warp is known only relative to this
+                    // flat pixmap: 8x supersampling makes it far larger.
+                    *flatSize = size;
+                    *phase = 7;
+                    window.setMappedGridForTest(true);
+                    window.setDisplayModeForTest(
+                        amrvis::DisplayMode::RasterContours, 5);
                     break;
                 }
+                case 7: {
+                    const auto left = window.probeReadoutActiveViewForTest(
+                        0, size[1] - 1);
+                    if (!window.activeViewIsMappedForTest()
+                        || size[0] < 2 * (*flatSize)[0]
+                        || size[1] < 2 * (*flatSize)[1]
+                        || !left.contains(QStringLiteral("value"))
+                        || !left.contains(QStringLiteral("cell"))) {
+                        qCritical("phase 7: %d x %d over flat %d x %d, probe '%s'",
+                            size[0], size[1], (*flatSize)[0], (*flatSize)[1],
+                            qPrintable(left));
+                        fail("a refresh overtaking the mapped toggle left a "
+                             "flat pixmap flagged mapped");
+                        return;
+                    }
+                    *phase = 8;
+                    window.setDisplayModeForTest(amrvis::DisplayMode::Raster, 7);
+                    window.setMappedGridForTest(false);
+                    break;
+                }
+                case 8:
+                default:
+                    application.exit(window.activeViewIsMappedForTest()
+                            || window.displayIsMappedForTest() ? 3 : 0);
+                    break;
                 }
             });
         QTimer::singleShot(20000, &application,

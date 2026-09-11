@@ -702,6 +702,14 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                             != SphericalDisplay::RZ
                         && request.sphericalDisplay != SphericalDisplay::RZ))));
 
+    // Switching the mapped grid on or off changes the pixmap, and a mapped
+    // view whose warp never landed (a refresh overtook the request that
+    // carried it) still shows the logical raster: both need the raster
+    // drawn, whatever cosmetic change asked for this refresh.
+    rasterDirty = rasterDirty || request.mappedGrid != state.mappedGrid
+        || (request.mappedGrid && !state.displaySourceIndex
+            && state.view->hasImage());
+
     state.stopSource.request_stop();
     state.stopSource = StopSource{};
     const auto cancellation = state.stopSource.get_token();
@@ -1530,10 +1538,25 @@ std::optional<QRectF> MainWindow::mappedReframe(
 void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     std::uint64_t sessionEpoch)
 {
+    // A refresh that kept the pixmap (rasterUnchanged) can say "mapped" of a
+    // pixmap that is not the warp: the request carrying the warp was
+    // overtaken before it landed. Such an arrival is shown as the logical
+    // raster it sits on, and the warp is asked for again.
+    const bool flatPixmap = display.mappedGrid && display.rasterUnchanged
+        && !display.displaySourceIndex
+        && !(state.mappedGrid && state.displaySourceIndex);
+    if (flatPixmap) {
+        display.mappedGrid = false;
+        display.gridNodes.reset();
+        display.displayRegion = display.displayPlane().physicalRegion;
+    }
     // Before the raster is installed, so a Fit is computed once, with the
     // stretch the raster was sized for -- the arriving raster's, on a mapped
     // grid, whose pitch the stretch depends on.
     applyDisplayStretch(state, &display);
+    if (flatPixmap) {
+        scheduleSliceRequest(state, true);
+    }
     if (!display.rasterUnchanged) {
         if (!display.image.valid()) {
             throw std::runtime_error("renderer produced an invalid image");
@@ -1647,7 +1670,7 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     // A refresh that kept the pixmap (rasterUnchanged) drew nothing to
     // index, so the index of the pixmap still on screen stays as well.
     const bool keepIndex = display.mappedGrid && display.rasterUnchanged
-        && !display.displaySourceIndex && state.mappedGrid;
+        && !display.displaySourceIndex;
     state.mappedGrid = display.mappedGrid;
     state.gridNodes = display.mappedGrid
         ? (display.gridNodes ? display.gridNodes : state.gridNodes)

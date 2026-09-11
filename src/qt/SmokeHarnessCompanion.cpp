@@ -463,6 +463,28 @@ void armCompanionZoomChecks(amrvis::qt::MainWindow& window,
                     fail("panning past the ocean's edge shrank the window");
                     return;
                 }
+                // Up two steps: the window crosses the interface, one row of
+                // each layer under it.
+                *phase = 10;
+                window.panStepActiveViewForTest(QPointF(0.0, 1.0));
+                window.panStepActiveViewForTest(QPointF(0.0, 1.0));
+                return;
+            case 10:
+                if (!tilesAre(QRectF(2.0, 3.0, 2.0, 1.0), QRectF(2.0, 4.0, 2.0, 1.0),
+                        QSize(2, 1), QSize(2, 1))
+                    || !near(window.panelCanvasRectForTest(xz), QRectF(2.0, 3.0, 2.0, 2.0))) {
+                    qCritical("after crossing: upper %gx%g at (%g,%g), lower %gx%g at (%g,%g)",
+                        window.panelTileRectForTest(xz, 0).width(),
+                        window.panelTileRectForTest(xz, 0).height(),
+                        window.panelTileRectForTest(xz, 0).x(),
+                        window.panelTileRectForTest(xz, 0).y(),
+                        window.panelTileRectForTest(xz, 1).width(),
+                        window.panelTileRectForTest(xz, 1).height(),
+                        window.panelTileRectForTest(xz, 1).x(),
+                        window.panelTileRectForTest(xz, 1).y());
+                    fail("a pan did not cross the interface along the stacking axis");
+                    return;
+                }
                 *phase = 4;
                 window.resetZoomAllViewsForTest();
                 return;
@@ -655,8 +677,19 @@ void armMixedCompanionChecks(Context& context, const std::string& upper,
                     fail("a remote fixed scale's virtual canvas outlived the pair");
                     return;
                 }
+                // A fixed scale chosen over the pair has no virtual canvas;
+                // closing the companion puts the remote primary back on one.
+                window.selectFixedScaleForTest(1);
+                if (window.activeViewVirtualCanvasActiveForTest()) {
+                    fail("a fixed scale over a pair made a virtual canvas");
+                    return;
+                }
                 window.closeCompanion();
-                finish(window.companionOpen() ? 1 : 0);
+                if (window.companionOpen() || !window.activeViewVirtualCanvasActiveForTest()) {
+                    fail("closing the companion left the remote fixed scale off its canvas");
+                    return;
+                }
+                finish(0);
                 return;
             default:
                 return;
@@ -732,8 +765,10 @@ Outcome dispatchCompanion(Context& context)
                         return;
                     }
                     // Replacing the companion keeps "Same as primary" and the
-                    // position in the ocean; only Close resets them.
+                    // position in the ocean; only Close resets them. The z
+                    // factor is the replaced companion's own and does not carry.
                     *phase = 6;
+                    window.setCompanionPerpendicularScaleForTest(2.0);
                     window.openCompanion(lower);
                     return;
                 }
@@ -754,6 +789,10 @@ Outcome dispatchCompanion(Context& context)
                         || window.panelTileVisibleForTest(xy, 0)
                         || !window.panelTileVisibleForTest(xy, 1)) {
                         fail("replacing the companion moved the slice position");
+                        return;
+                    }
+                    if (!near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 4.0, 4.0))) {
+                        fail("replacing the companion kept the old one's z factor");
                         return;
                     }
                     window.closeCompanion();

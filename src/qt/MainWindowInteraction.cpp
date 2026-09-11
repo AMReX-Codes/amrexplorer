@@ -1676,19 +1676,25 @@ QRectF MainWindow::shiftedPairWindow(
         const QRectF tileRect(tile.x, tile.y, tile.width, tile.height);
         covered = covered ? covered->united(tileRect) : tileRect;
     }
-    if (!covered) {
-        const auto whole = layout.canvasRect();
-        covered = QRectF(whole.x, whole.y, whole.width, whole.height);
+    const auto whole = layout.canvasRect();
+    const QRectF canvas(whole.x, whole.y, whole.width, whole.height);
+    // Along the stacking axis the bands are contiguous, so a window in one
+    // may cross the interface into the other; along a shared axis it stops
+    // at the covered layers' edge.
+    const auto axes = layout.axes();
+    const auto horizontal = axes[0] == m_pair->perpendicularAxis || !covered
+        ? canvas : *covered;
+    const auto vertical = axes[1] == m_pair->perpendicularAxis || !covered
+        ? canvas : *covered;
+    if (shifted.left() < horizontal.left()) {
+        shifted.moveLeft(horizontal.left());
+    } else if (shifted.right() > horizontal.right()) {
+        shifted.moveRight(horizontal.right());
     }
-    if (shifted.left() < covered->left()) {
-        shifted.moveLeft(covered->left());
-    } else if (shifted.right() > covered->right()) {
-        shifted.moveRight(covered->right());
-    }
-    if (shifted.top() < covered->top()) {
-        shifted.moveTop(covered->top());
-    } else if (shifted.bottom() > covered->bottom()) {
-        shifted.moveBottom(covered->bottom());
+    if (shifted.top() < vertical.top()) {
+        shifted.moveTop(vertical.top());
+    } else if (shifted.bottom() > vertical.bottom()) {
+        shifted.moveBottom(vertical.bottom());
     }
     return shifted;
 }

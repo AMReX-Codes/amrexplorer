@@ -405,6 +405,11 @@ void MainWindow::installCompanion(const std::filesystem::path& path,
     if (m_layers[1].active) {
         tearDownCompanion(/*replacing=*/true);
     }
+    // A new companion starts at its own scale; only a reload keeps the one
+    // set for it (tearDownCompanion leaves it for either).
+    if (!restore) {
+        m_layers[1].perpendicularScale = 1.0;
+    }
     // The Dataset window tabulates the active view's dataset at its slice
     // position; with two datasets on the panels it would mix them, so it is
     // closed as an open does (it is unavailable while a companion is shown).
@@ -614,6 +619,18 @@ void MainWindow::tearDownCompanion(bool replacing)
         updatePairedModeControls();
         configureSlicePositionControls();
         applyDisplayStretches();
+        if (!replacing) {
+            // A remote primary's fixed scale rides a demand-driven virtual
+            // canvas, which the pair displaced (installCompanion); back on
+            // it now that the pair is gone, else scrolling fetches nothing.
+            for (auto* state : primaryViews()) {
+                if (state->view != nullptr
+                    && state->view->transformMode() == ImageView::TransformMode::FixedScale) {
+                    applyFixedScale(state->view->fixedScaleFactor());
+                    break;
+                }
+            }
+        }
         updateCrosshairs();
         updateWindowTitle();
         refreshMetadataDisplay();

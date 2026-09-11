@@ -1569,7 +1569,12 @@ void MainWindow::resliceReplacedViews()
         return;
     }
     for (auto* state : currentViews()) {
-        if (state->planeSessionEpoch != layerFor(*state).sessionEpoch) {
+        // A companion's views too: a primary reload stopped and dropped
+        // their requests along with the primary's (reloadCurrentDataset),
+        // though its session stayed, so a position moved just before the
+        // Apply would otherwise never reach them.
+        if (state->planeSessionEpoch != layerFor(*state).sessionEpoch
+            || (state->layer == 1 && m_layers[1].active)) {
             scheduleSliceRequest(*state);
         }
     }

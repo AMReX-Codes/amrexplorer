@@ -252,9 +252,9 @@ void RemoteSessionController::promptCompanion(QWidget* parent, bool sameServer)
     // over, and its datasets with it.
     if (sameServer && !matches) {
         QMessageBox::warning(parent, dialog.windowTitle(),
-            tr("The open plotfile came over the session on %1; its companion "
+            tr("A plotfile on show came over the session on %1; a companion "
                "must come from the same server, so keep that destination and "
-               "server executable.")
+               "server executable (or close the companion first).")
                 .arg(sessionDestination()));
         return;
     }

@@ -79,10 +79,10 @@ public:
     void promptOpen(QWidget* parent, bool sequence);
     // The Open Remote Companion Plotfile dialog, modal on `parent`: a
     // plotfile on a server to show beside the open one, handed back through
-    // companionRequested(). With `sameServer` the open plotfile came over the
-    // live session and its companion must too, so changed connection fields
-    // are refused; otherwise a new destination starts a session first, as
-    // promptOpen does, and the pick comes once it is ready.
+    // companionRequested(). With `sameServer` a plotfile on show came over
+    // the live session and the companion must too, so changed connection
+    // fields are refused; otherwise a new destination starts a session first,
+    // as promptOpen does, and the pick comes once it is ready.
     void promptCompanion(QWidget* parent, bool sameServer);
     // The remote directory browser over the live connection, modal on
     // `parent`; what it picks goes out through openRequested(). Starts at the

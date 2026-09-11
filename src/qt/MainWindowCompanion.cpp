@@ -75,7 +75,14 @@ void MainWindow::chooseRemoteCompanion()
                 .arg(datasetDisplayName(m_datasetPath)));
         return;
     }
-    m_remoteSession->promptCompanion(this, remote != nullptr);
+    // Likewise while a remote companion is on show: starting a session on
+    // another server would end the one it rides before the replacement has
+    // paired, and a refusal must leave it as it was.
+    const auto companion
+        = std::dynamic_pointer_cast<remote::RemoteDatasetSession>(m_layers[1].session);
+    const bool sameServer = remote != nullptr
+        || (companion && companion->connection() == m_remoteSession->connection());
+    m_remoteSession->promptCompanion(this, sameServer);
 }
 
 void MainWindow::openCompanion(const std::filesystem::path& path)
@@ -440,6 +447,13 @@ void MainWindow::installCompanion(const std::filesystem::path& path,
     layer.name = datasetDisplayName(path);
     layer.active = true;
     m_pair = load.geometry;
+    // A reload's regions go back before the layouts are updated: the framed
+    // windows are rebuilt from the regions on show then (updatePairLayouts),
+    // and with only the primary's left they would shrink to its part.
+    for (std::size_t index = 0; index < layer.planeViews.size(); ++index) {
+        layer.planeViews[index].visibleRegion
+            = live ? live->regions[index] : std::nullopt;
+    }
     if (load.result.displays.size() != layer.planeViews.size()) {
         closeCompanion();
         reportBackgroundError(
@@ -477,7 +491,6 @@ void MainWindow::installCompanion(const std::filesystem::path& path,
     applyPairLayouts();
     for (std::size_t index = 0; index < layer.planeViews.size(); ++index) {
         auto& state = layer.planeViews[index];
-        state.visibleRegion = live ? live->regions[index] : std::nullopt;
         state.planeSessionEpoch = layer.sessionEpoch;
         showSlice(state, std::move(load.result.displays[index]), layer.sessionEpoch);
         // Following the primary's range from the start when a replaced

@@ -214,6 +214,21 @@ void armCompanionDerivedChecks(amrvis::qt::MainWindow& window,
                     fail("the reload dropped the pair's zoom or the companion's z factor");
                     return;
                 }
+                // The framed window covers both parts still, and so does the
+                // export: not rebuilt from the primary's part alone while the
+                // companion's regions were being put back.
+                if (!near(window.panelCanvasRectForTest(xz), QRectF(1.0, 2.0, 4.0, 6.0))
+                    || window.panelExportSizeForTest(xz) != QSize(4, 6)) {
+                    qCritical("after reload: canvas %gx%g at (%g,%g), export %dx%d",
+                        window.panelCanvasRectForTest(xz).width(),
+                        window.panelCanvasRectForTest(xz).height(),
+                        window.panelCanvasRectForTest(xz).x(),
+                        window.panelCanvasRectForTest(xz).y(),
+                        window.panelExportSizeForTest(xz).width(),
+                        window.panelExportSizeForTest(xz).height());
+                    fail("the reload rebuilt the framed window from the primary alone");
+                    return;
+                }
                 window.setCompanionPerpendicularScaleForTest(1.0);
                 window.resetZoomAllViewsForTest();
                 // A definition the companion can no longer resolve: greyed,

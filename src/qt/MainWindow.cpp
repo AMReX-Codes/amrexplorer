@@ -1069,19 +1069,27 @@ void MainWindow::wirePanelSignals(ImageView* view, int normal)
                 return;  // the scene form below handles two datasets
             }
             if (auto* state = leading()) {
+                if (state->mappedGrid) {
+                    return;  // and a mapped view's physical canvas
+                }
                 rubberBandZoom(*state, sceneRect);
             }
         });
     // Over two datasets a selection may span both tiles: each layer gets
     // the part inside its own domain and re-slices for it (pairRubberBandZoom).
+    // Over a mapped view the scene is the physical canvas the tile sits on
+    // (mappedRubberBandZoom).
     connect(view, &ImageView::rubberBandSelectedScene, this,
         [this, leading](const QRectF& sceneRect) {
-            if (!m_pair) {
+            auto* state = leading();
+            if (state == nullptr) {
                 return;
             }
-            if (auto* state = leading()) {
+            if (m_pair) {
                 setActiveView(*state);
                 pairRubberBandZoom(state->normal, sceneRect);
+            } else if (state->mappedGrid) {
+                mappedRubberBandZoom(*state, sceneRect);
             }
         });
     connect(view, &ImageView::panDragBegan, this, [this, leading] {
@@ -1155,6 +1163,15 @@ void MainWindow::wirePanelSignals(ImageView* view, int normal)
     // canvas, so a local fixed-scale scroll emitted nothing at all.
     connect(view, &ImageView::viewportMoved, this,
         [this] { m_volumeController->regionChanged(); });
+    // Whatever moved the scene under the screen -- zoom, fit, scale, stretch,
+    // scroll, resize -- a mapped view's warp is drawn for the screen, so it
+    // is asked for again (a no-op for every other view).
+    connect(view, &ImageView::viewChanged, this,
+        [this, states] {
+            for (auto* state : states()) {
+                updateMappedDemand(*state);
+            }
+        });
     connect(view, &ImageView::panStepRequested, this,
         [this, leading](const QPointF& direction) {
             ++m_panStepRequests;
@@ -1412,9 +1429,10 @@ std::array<int, 2> MainWindow::viewportPixelSize(
 QSize MainWindow::logicalImageSize(const PlaneViewState& state,
     const ScalarPlane& plane, const QImage& image) const
 {
-    // A spherical or mapped pixmap is physical, not one pixel per cell.
+    // A spherical pixmap is physical, not one pixel per cell. (A mapped one
+    // never comes through here: it is placed on its canvas by setTileImage.)
     if (!layerFor(state).openMetadata || layerFor(state).openMetadata->levels.empty()
-        || displayIsSpherical() || state.mappedGrid) {
+        || displayIsSpherical()) {
         return image.size();
     }
     const auto native = finestNativeOutputSize(
@@ -1450,9 +1468,6 @@ void MainWindow::updateMappedGridControls()
     }
     const bool available = mappedGridAvailable();
     m_mappedGridMenu->setEnabled(available);
-    if (m_mappedGridSupersampleMenu != nullptr) {
-        m_mappedGridSupersampleMenu->setEnabled(available && m_mappedGrid);
-    }
     // Say why the menu is off; a disabled menu on its own explains nothing.
     QString reason;
     if (!available && primary().session) {
@@ -1523,17 +1538,17 @@ std::array<double, 3> MainWindow::displayStretchPerAxis() const
     if (!primary().session) {
         return {1.0, 1.0, 1.0};
     }
-    // A mapped-grid raster is drawn at the raster's own pitch per axis, so
-    // it takes the Physical Size stretch like any Cartesian raster; the
-    // preference is left alone (updateAspectControls shows the mode in
-    // effect). Only the spherical R-Z warp is physical in its pixels.
+    // A mapped grid is laid out in these Physical Size proportions
+    // (MappedLayout applies the same factors); the preference is left alone
+    // (updateAspectControls shows the mode in effect). Only the spherical R-Z
+    // warp is physical in its pixels.
     const auto mode = displayIsMapped() ? AspectMode::PhysicalSize : m_aspectMode;
     return amrvis::qt::displayStretchPerAxis(primary().session->metadata(),
         mode, m_axisScale, displayIsSpherical());
 }
 
 std::array<double, 2> MainWindow::displayStretchFor(
-    const PlaneViewState& state, const SliceDisplayResult* arriving) const
+    const PlaneViewState& state) const
 {
     // Normalized over the dataset's axes, not the panel's own two: at a
     // fixed scale every panel then shows an axis at the same pixels per
@@ -1556,35 +1571,37 @@ std::array<double, 2> MainWindow::displayStretchFor(
         panel[0] /= smallest;
         panel[1] /= smallest;
     }
-    // A mapped pixmap is drawn at the raster's pitch, which is the finest
-    // cell unless the output cap coarsened one axis; the Physical Size
-    // factors above assume the cell, so a capped axis is widened to match.
-    const bool mapped = arriving ? arriving->mappedGrid : state.mappedGrid;
-    const ScalarPlane* plane = arriving ? &arriving->displayPlane() : state.plane.get();
-    if (mapped && plane != nullptr && primary().session) {
-        const auto ratio = amrvis::qt::rasterPitchOverCell(
-            primary().session->metadata(), plane->physicalRegion,
-            plane->width, plane->height, axes);
-        panel[0] *= ratio[0];
-        panel[1] *= ratio[1];
-    }
     return panel;
 }
 
-void MainWindow::applyDisplayStretch(PlaneViewState& state,
-    const SliceDisplayResult* arriving)
+void MainWindow::applyDisplayStretch(PlaneViewState& state)
 {
     if (state.view == nullptr) {
         return;
     }
-    if (m_pair) {
-        // Two datasets: each tile's stretch is baked into its placement (see
-        // PairLayout), so the view itself stretches nothing.
+    if (m_pair || state.mappedGrid) {
+        // Two datasets, or a mapped grid: the tile's stretch is baked into
+        // its placement (PairLayout, MappedLayout), so the view itself
+        // stretches nothing.
         state.view->setDisplayStretch(1.0, 1.0);
         return;
     }
-    const auto stretch = displayStretchFor(state, arriving);
+    const auto stretch = displayStretchFor(state);
     state.view->setDisplayStretch(stretch[0], stretch[1]);
+}
+
+std::optional<MappedLayout> MainWindow::mappedLayout(
+    const PlaneViewState& state) const
+{
+    const auto& session = layerFor(state).session;
+    if (!state.mappedCanvasBounds || !session || session->metadata().levels.empty()) {
+        return std::nullopt;
+    }
+    const auto& metadata = session->metadata();
+    const auto& finest = metadata.levels[static_cast<std::size_t>(
+        std::max(0, metadata.finestLevel))];
+    return MappedLayout(*state.mappedCanvasBounds, displayAxes(state.normal),
+        m_axisScale, finest.cellSize, metadata.dimension);
 }
 
 void MainWindow::applyDisplayStretches()
@@ -1605,6 +1622,18 @@ void MainWindow::applyDisplayStretches()
             continue;
         }
         applyDisplayStretch(*state);
+        if (state->mappedGrid && state->view->hasTileImage(state->tile)) {
+            // The axis factors are the layout: the tile and its canvas move
+            // to the new one, and the warp is drawn again for what the
+            // viewport then shows.
+            if (const auto layout = mappedLayout(*state)) {
+                state->view->placeTile(state->tile,
+                    toQRectF(layout->sceneRectForRegion(state->displayRegion)),
+                    toQRectF(layout->canvasRect()));
+                updateMappedDemand(*state);
+            }
+            continue;
+        }
         if (!layerIsRemote(*state) || !state->view->hasImage()) {
             continue;
         }
@@ -1682,10 +1711,10 @@ RealBox MainWindow::volumeRegionOfInterest() const
             }
             const auto& plane = *state.plane;
             const QRectF planeRect(
-                bounds->plane.left() * plane.width,
-                bounds->plane.top() * plane.height,
-                bounds->plane.width() * plane.width,
-                bounds->plane.height() * plane.height);
+                bounds->left() * plane.width,
+                bounds->top() * plane.height,
+                bounds->width() * plane.width,
+                bounds->height() * plane.height);
             regions[index] = physicalRegionForRasterRect(
                 plane.physicalRegion, static_cast<double>(plane.width),
                 static_cast<double>(plane.height), planeRect,
@@ -1937,30 +1966,6 @@ void MainWindow::createMenus()
         }
     });
     m_mappedGridMenu->addAction(m_mappedGridAction);
-    // Warp resolution, as for the spherical warp: finer output pixels trace
-    // the stretched cell edges more closely at the cost of a larger raster.
-    m_mappedGridSupersampleGroup = new QActionGroup(this);
-    m_mappedGridSupersampleMenu = new QMenu(tr("&Supersampling"), this);
-    for (const auto factor : supersampleFactors) {
-        auto* action = new QAction(
-            tr("%1x").arg(factor), m_mappedGridSupersampleMenu);
-        action->setCheckable(true);
-        action->setActionGroup(m_mappedGridSupersampleGroup);
-        action->setData(factor);
-        action->setChecked(factor == m_mappedGridSupersample);
-        connect(action, &QAction::triggered, this, [this, factor] {
-            if (factor == m_mappedGridSupersample) {
-                return;
-            }
-            m_mappedGridSupersample = factor;
-            saveSettings();
-            if (displayIsMapped() && m_controlsReady) {
-                scheduleSliceRequest(true);
-            }
-        });
-        m_mappedGridSupersampleMenu->addAction(action);
-    }
-    m_mappedGridMenu->addMenu(m_mappedGridSupersampleMenu);
 
     // "Aspect Ratio": whether a panel is proportioned by cell counts (one
     // square pixel per finest cell) or by physical size, plus per-axis

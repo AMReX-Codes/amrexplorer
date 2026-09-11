@@ -1511,6 +1511,15 @@ if(TARGET amrexplorer_qt)
     )
     add_test(NAME pair_geometry COMMAND test_pair_geometry)
 
+    add_executable(test_mapped_layout unit/test_mapped_layout.cpp)
+    target_include_directories(test_mapped_layout
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
+    )
+    target_link_libraries(test_mapped_layout
+        PRIVATE amrexplorer::core amrexplorer::warnings
+    )
+    add_test(NAME mapped_layout COMMAND test_mapped_layout)
+
     add_executable(test_scientific_double_spin_box
         unit/test_scientific_double_spin_box.cpp
         "${PROJECT_SOURCE_DIR}/src/qt/NumberFormat.cpp"

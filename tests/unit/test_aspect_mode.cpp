@@ -164,10 +164,9 @@ void isoWireframeFollowsTheAxisFactors()
         "unit factors changed a point");
 }
 
-// A mapped pixmap is drawn at the raster's pitch: one finest cell per
-// sample unless the per-axis output cap coarsened the raster, in which case
-// that axis's Physical Size factor must grow by the same ratio.
-void mappedStretchFollowsTheRasterPitch()
+// One finest cell per sample unless the per-axis output cap coarsened the
+// raster: what tells a mapped view to re-slice a narrower region.
+void rasterPitchOverCellReportsTheCap()
 {
     const auto metadata = tallMetadata();
     amrvis::RealBox region;
@@ -208,7 +207,7 @@ void mappedStretchFollowsTheRasterPitch()
 
 int main()
 {
-    mappedStretchFollowsTheRasterPitch();
+    rasterPitchOverCellReportsTheCap();
     isoWireframeFollowsTheAxisFactors();
     physicalModeStretchesByTheFinestCellSize();
     axisFactorsMultiplyAndNormalize();

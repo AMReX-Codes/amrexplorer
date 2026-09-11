@@ -132,8 +132,17 @@ public:
     // The tile's footprint in scene units (empty when it has no image).
     [[nodiscard]] QRectF tileSceneRect(std::size_t tile) const;
     // Enter or leave the virtual canvas for the raster already on display,
-    // repositioning it without waiting for the next render.
+    // repositioning it without waiting for the next render. Leaving when no
+    // virtual canvas is active is a no-op: an explicit canvas from
+    // setTileImage is not the virtual one and stays.
     void setVirtualCanvas(const std::optional<VirtualPlacement>& placement);
+    // How pixmaps are resampled when the view scales them: nearest-neighbour
+    // (the default, one crisp raster pixel per cell) or smooth. A raster
+    // drawn at the screen's own resolution is only ever scaled for the
+    // moment between a view change and its re-render, and smooth resampling
+    // keeps that moment from flickering into a staircase. Applies to every
+    // tile on display and to those installed afterwards.
+    void setSmoothPixmapTransformation(bool smooth);
     [[nodiscard]] bool virtualCanvasActive() const noexcept
     {
         return m_placement.has_value();
@@ -333,6 +342,15 @@ signals:
     // without going through the owner first.
     void zoomChanged();
     void viewportResized(const QSize& size);
+    // The mapping from scene to screen changed in any way -- a zoom, fit,
+    // fixed scale, stretch, scroll or resize -- so a raster drawn for what the
+    // viewport showed is now drawn for something else. One signal for the
+    // owner that re-renders on demand (the mapped-grid warp), where the
+    // three above each cover only their own path. Emitted only when the
+    // transform, scroll position or viewport size actually differ from the
+    // last emission: replacing a tile on an unchanged canvas emits nothing,
+    // so a demand render cannot re-trigger itself.
+    void viewChanged();
     // An arrow key pressed while this view has focus, as a unit direction in
     // pan terms (+x scrolls the data right, +y scrolls it up). Panning is a
     // view action, so it belongs to the focused view rather than to the window:
@@ -416,6 +434,12 @@ private:
     void fitSceneRect(const QRectF& rect);
     void applyFixedScale();
     void applyPlacement();
+    // Compare the view's scene-to-screen state with the last emission of
+    // viewChanged and emit it when anything differs. Called at the end of
+    // every path that can change the transform, the scroll position or the
+    // viewport size.
+    void noteViewChanged();
+    void applyPixmapTransformationMode(Tile& tile);
     void showLineGuide(const QPoint& viewPosition);
     void updateLineGuide(const QPoint& viewPosition);
     void applyCrosshairs(Tile& tile);
@@ -445,6 +469,16 @@ private:
     TransformMode m_transformMode = TransformMode::Fit;
     int m_fixedScaleFactor = 1;
     QPointF m_stretch{1.0, 1.0};
+    bool m_smoothPixmaps = false;
+    // The scene-to-screen state viewChanged last reported.
+    struct ViewSnapshot {
+        QTransform transform;
+        int horizontalScroll = 0;
+        int verticalScroll = 0;
+        QSize viewportSize;
+        friend bool operator==(const ViewSnapshot&, const ViewSnapshot&) = default;
+    };
+    ViewSnapshot m_notedView;
 };
 
 } // namespace amrvis::qt

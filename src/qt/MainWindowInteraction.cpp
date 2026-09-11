@@ -751,8 +751,14 @@ double MainWindow::effectiveFixedScale(int factor) const
         || !layerFor(*m_activeView).openMetadata
         || layerFor(*m_activeView).openMetadata->levels.empty() || factor <= 0
         || m_activeView->view->virtualCanvasActive()
-        || displayIsSphericalWarp() || m_activeView->mappedGrid) {
+        || displayIsSphericalWarp()) {
         return 0.0;
+    }
+    if (m_activeView->mappedGrid) {
+        // A mapped warp is drawn for the screen at whatever scale is set:
+        // one scene unit (the tightest finest cell) is `factor` pixels, with
+        // no raster cap in between.
+        return static_cast<double>(factor);
     }
     // The active view's own layer: with a companion it may be the one on show.
     const auto& metadata = *layerFor(*m_activeView).openMetadata;
@@ -1253,60 +1259,98 @@ void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
         setScaleUiState(ScaleUiState::Custom);
         return;
     }
-    QRectF normalizedRect;
-    std::optional<QRectF> mappedSelection;
     if (state.mappedGrid) {
-        // The scene is the physical warp, so the selection is a set of
-        // display pixels rather than plane pixels. The plane cells drawn in
-        // it (the warp's source index) give the logical bounding box to
-        // re-slice; with none drawn there (a lift above the terrain) the
-        // zoom is view-only, as for spherical.
-        const auto bounds = mappedPlaneBounds(state, sceneRect);
-        if (!bounds) {
-            const QRectF pixmap(0.0, 0.0,
-                static_cast<double>(state.view->image(state.tile).width()),
-                static_cast<double>(state.view->image(state.tile).height()));
-            const auto selection = sceneRect.normalized().intersected(pixmap);
-            if (selection.width() < 1.0 || selection.height() < 1.0) {
-                return;
-            }
-            state.view->zoomToRect(selection);
-            setScaleUiState(ScaleUiState::Custom);
-            return;
-        }
-        normalizedRect = bounds->plane;
-        mappedSelection = bounds->selection;
-    } else {
-        const auto clamped = sceneRect.normalized().intersected(
-            QRectF(0.0, 0.0, static_cast<double>(plane.width),
-                static_cast<double>(plane.height)));
-        if (clamped.width() < 1.0 || clamped.height() < 1.0) {
-            return;
-        }
-        normalizedRect = QRectF(
-            clamped.left() / static_cast<double>(plane.width),
-            clamped.top() / static_cast<double>(plane.height),
-            clamped.width() / static_cast<double>(plane.width),
-            clamped.height() / static_cast<double>(plane.height));
+        // The selection arrives in scene coordinates (the physical canvas);
+        // see mappedRubberBandZoom, wired from rubberBandSelectedScene.
+        return;
     }
+    const auto clamped = sceneRect.normalized().intersected(
+        QRectF(0.0, 0.0, static_cast<double>(plane.width),
+            static_cast<double>(plane.height)));
+    if (clamped.width() < 1.0 || clamped.height() < 1.0) {
+        return;
+    }
+    const QRectF normalizedRect(
+        clamped.left() / static_cast<double>(plane.width),
+        clamped.top() / static_cast<double>(plane.height),
+        clamped.width() / static_cast<double>(plane.width),
+        clamped.height() / static_cast<double>(plane.height));
     const auto views = currentViews();
     const bool synchronize = m_syncRubberBandZoomAction != nullptr
         && m_syncRubberBandZoomAction->isChecked()
         && views.size() > 1;
     if (synchronize) {
         for (auto* target : views) {
-            applyRubberBandZoom(*target, normalizedRect,
-                target == &state ? mappedSelection : std::nullopt);
+            applyRubberBandZoom(*target, normalizedRect);
         }
     } else {
-        applyRubberBandZoom(state, normalizedRect, mappedSelection);
+        applyRubberBandZoom(state, normalizedRect);
     }
     setScaleUiState(views.size() > 1 && !synchronize
             ? ScaleUiState::Mixed
             : ScaleUiState::Custom);
 }
 
-std::optional<MainWindow::MappedSelection> MainWindow::mappedPlaneBounds(
+void MainWindow::mappedRubberBandZoom(
+    PlaneViewState& state, const QRectF& sceneRect)
+{
+    setActiveView(state);
+    const auto layout = mappedLayout(state);
+    if (!layout || !layerFor(state).session || state.view == nullptr
+        || !state.view->hasImage()) {
+        return;
+    }
+    // The zoom is the view's alone: the tile stays where the canvas puts it
+    // and updateMappedDemand draws the warp for the window the view then
+    // shows (re-slicing the plane only when the one on hand cannot serve
+    // it). The canvas keeps its scroll bars: they are the navigation here.
+    const auto canvas = toQRectF(layout->canvasRect());
+    const auto selection = sceneRect.normalized().intersected(canvas);
+    const auto tiny = [](double span, double whole) {
+        return !(span > 1.0e-9 * std::abs(whole));
+    };
+    if (tiny(selection.width(), canvas.width())
+        || tiny(selection.height(), canvas.height())) {
+        return;
+    }
+    state.view->zoomToSceneRect(selection);
+    const auto views = currentViews();
+    const bool synchronize = m_syncRubberBandZoomAction != nullptr
+        && m_syncRubberBandZoomAction->isChecked() && views.size() > 1
+        && m_viewDimension == 3;
+    if (synchronize) {
+        // Each other panel shares one axis with this one: it is zoomed to
+        // the selection's extent along that axis and keeps its other axis
+        // whole -- the physical form of the plane fractions a Cartesian sync
+        // carries (see rubberBandZoom), over that panel's own canvas.
+        const auto region = layout->regionForSceneRect(
+            {selection.x(), selection.y(), selection.width(), selection.height()});
+        for (auto* other : views) {
+            if (other == &state || !other->mappedGrid || other->view == nullptr
+                || !other->view->hasImage()) {
+                continue;
+            }
+            const auto otherLayout = mappedLayout(*other);
+            if (!otherLayout) {
+                continue;
+            }
+            const auto c = static_cast<std::size_t>(3 - state.normal - other->normal);
+            auto target = otherLayout->bounds();
+            const auto span = target.upper[c] - target.lower[c];
+            target.lower[c] = std::max(target.lower[c], region.lower[c]);
+            target.upper[c] = std::min(target.upper[c], region.upper[c]);
+            if (target.upper[c] - target.lower[c] > 1.0e-9 * std::abs(span)) {
+                other->view->zoomToSceneRect(
+                    toQRectF(otherLayout->sceneRectForRegion(target)));
+            }
+        }
+    }
+    setScaleUiState(views.size() > 1 && !synchronize
+            ? ScaleUiState::Mixed
+            : ScaleUiState::Custom);
+}
+
+std::optional<QRectF> MainWindow::mappedPlaneBounds(
     const PlaneViewState& state, const QRectF& sceneRect) const
 {
     if (!state.mappedGrid || !state.displaySourceIndex
@@ -1375,18 +1419,16 @@ std::optional<MainWindow::MappedSelection> MainWindow::mappedPlaneBounds(
         return std::nullopt;
     }
     // Plane rows count up from the bottom; the normalized rect is top-down
-    // over the plane, as applyRubberBandZoom expects.
+    // over the plane, as physicalRegionForRasterRect expects.
     const auto planeW = static_cast<double>(planeWidth);
     const auto planeH = static_cast<double>(state.plane->height);
-    const QRectF plane(
+    return QRectF(
         colMin / planeW, (planeH - (rowMax + 1)) / planeH,
         (colMax + 1 - colMin) / planeW, (rowMax + 1 - rowMin) / planeH);
-    return MappedSelection{plane, selection};
 }
 
 void MainWindow::applyRubberBandZoom(
-    PlaneViewState& state, const QRectF& normalizedRect,
-    const std::optional<QRectF>& feedbackScene)
+    PlaneViewState& state, const QRectF& normalizedRect)
 {
     const auto& plane = *state.plane;
     if (!layerFor(state).session || plane.width <= 0 || plane.height <= 0) {
@@ -1434,37 +1476,13 @@ void MainWindow::applyRubberBandZoom(
     // domain-spanning scroll bars, so the feedback zoom must not raise them
     // either — transient scroll bars shrink the viewport, and the remote
     // request would be sized to the stolen pixels and re-fetched (and
-    // re-framed, visibly) once they vanish.
-    //
-    // On a mapped grid the scene is the physical warp, not the plane, so the
-    // plane-linear rect below would misframe it. The panel the user dragged
-    // in has its own selection (already clamped to the pixmap) as feedback;
-    // a panel zoomed in sympathy walks the snapped region's plane rectangle
-    // through its own node map instead.
-    std::optional<QRectF> mappedScene = feedbackScene;
-    if (!mappedScene && state.mappedGrid && state.gridNodes
-        && state.view->hasImage()) {
-        const auto colLo = (visible.lower[xAxis] - region.lower[xAxis]) / xExtent * width;
-        const auto colHi = (visible.upper[xAxis] - region.lower[xAxis]) / xExtent * width;
-        // Plane rows count up from the bottom, as the node map does.
-        const auto rowLo = (visible.lower[yAxis] - region.lower[yAxis]) / yExtent * height;
-        const auto rowHi = (visible.upper[yAxis] - region.lower[yAxis]) / yExtent * height;
-        const auto image = state.view->image(state.tile);
-        const auto walked = mappedCellPath(
-            planeMapping(state), colLo, colHi, rowLo, rowHi).boundingRect();
-        const auto clampedScene = walked.intersected(
-            QRectF(0.0, 0.0, image.width(), image.height()));
-        if (clampedScene.width() >= 1.0 && clampedScene.height() >= 1.0) {
-            mappedScene = clampedScene;
-        }
-    }
-    const QRectF requestedScene = mappedScene
-        ? *mappedScene
-        : QRectF(
-            QPointF((visible.lower[xAxis] - region.lower[xAxis]) / xExtent * width,
-                (region.upper[yAxis] - visible.upper[yAxis]) / yExtent * height),
-            QPointF((visible.upper[xAxis] - region.lower[xAxis]) / xExtent * width,
-                (region.upper[yAxis] - visible.lower[yAxis]) / yExtent * height));
+    // re-framed, visibly) once they vanish. (A mapped view never comes here:
+    // its scene is the physical canvas, see mappedRubberBandZoom.)
+    const QRectF requestedScene(
+        QPointF((visible.lower[xAxis] - region.lower[xAxis]) / xExtent * width,
+            (region.upper[yAxis] - visible.upper[yAxis]) / yExtent * height),
+        QPointF((visible.upper[xAxis] - region.lower[xAxis]) / xExtent * width,
+            (region.upper[yAxis] - visible.lower[yAxis]) / yExtent * height));
     state.view->zoomToRect(requestedScene.normalized(), true);
     scheduleSliceRequest(state);
 }
@@ -1488,26 +1506,16 @@ void MainWindow::beginPanDrag(PlaneViewState& state)
         }
         return;
     }
-    // A virtual canvas pans by scrolling (which fetches on its own); the
-    // region-shifting refresh is for classic rasters of a zoomed subregion.
+    // A virtual canvas pans by scrolling (which fetches on its own), and so
+    // does a mapped grid's canvas (updateMappedDemand re-draws the warp for
+    // what scrolls into view); the region-shifting refresh is for classic
+    // rasters of a zoomed subregion.
     m_panDataRefresh = state.visibleRegion.has_value()
-        && !state.view->virtualCanvasActive();
+        && !state.view->virtualCanvasActive() && !state.mappedGrid;
     if (m_panDataRefresh) {
         m_panStartRegion = *state.visibleRegion;
         m_panPlaneWidth = state.plane->width;
         m_panPlaneHeight = state.plane->height;
-        // On a mapped grid the drag is measured in pixels of the physical
-        // warp, not the plane: sizing the shift by the pixmap moves the
-        // logical region by the same fraction the pointer moved on screen
-        // (exact along the unstretched axes, proportional along the
-        // stretched one).
-        if (state.mappedGrid && state.view->hasImage()) {
-            const auto image = state.view->image(state.tile);
-            if (image.width() > 0 && image.height() > 0) {
-                m_panPlaneWidth = image.width();
-                m_panPlaneHeight = image.height();
-            }
-        }
     }
 }
 
@@ -1791,6 +1799,186 @@ void MainWindow::updateRemoteFixedScaleDemand(PlaneViewState& state)
     }
 }
 
+bool MainWindow::hasMappedWindow(const PlaneViewState& state) const
+{
+    const auto axes = displayAxes(state.normal);
+    const auto& window = state.mappedWindow;
+    return std::all_of(axes.begin(), axes.end(), [&window](int axis) {
+        const auto a = static_cast<std::size_t>(axis);
+        return window.upper[a] > window.lower[a];
+    });
+}
+
+void MainWindow::updateMappedDemand(PlaneViewState& state)
+{
+    // A no-op unless the view shows a mapped raster on a known canvas, and
+    // never while an arrival is being installed (showSlice asks afterwards).
+    if (m_applyingArrival || !state.mappedGrid || !state.mappedCanvasBounds
+        || state.view == nullptr || state.view->viewport() == nullptr
+        || !state.view->hasTileImage(state.tile) || !layerFor(state).session
+        || !state.plane || state.plane->width <= 0 || state.plane->height <= 0) {
+        return;
+    }
+    const auto layout = mappedLayout(state);
+    if (!layout) {
+        return;
+    }
+    const auto& metadata = layerFor(state).session->metadata();
+    if (metadata.levels.empty()) {
+        return;
+    }
+    const auto axes = displayAxes(state.normal);
+    const auto h = static_cast<std::size_t>(axes[0]);
+    const auto v = static_cast<std::size_t>(axes[1]);
+
+    // The canvas as the viewport shows it, in whole device pixels (one more
+    // on each side where it runs past the viewport): drawn at that many
+    // pixels for the scene rect they span, the warp lands on the screen one
+    // to one. The rect may reach a fraction of a pixel past the canvas.
+    const auto ratio = state.view->devicePixelRatioF();
+    const auto toViewport = state.view->viewportTransform();
+    const auto area = toViewport.mapRect(toQRectF(layout->canvasRect()));
+    const auto* viewport = state.view->viewport();
+    const auto deviceWidth = std::ceil(viewport->width() * ratio);
+    const auto deviceHeight = std::ceil(viewport->height() * ratio);
+    const auto left = std::clamp(std::floor(area.left() * ratio), -1.0, deviceWidth + 1.0);
+    const auto right = std::clamp(std::ceil(area.right() * ratio), -1.0, deviceWidth + 1.0);
+    const auto top = std::clamp(std::floor(area.top() * ratio), -1.0, deviceHeight + 1.0);
+    const auto bottom = std::clamp(std::ceil(area.bottom() * ratio), -1.0, deviceHeight + 1.0);
+    if (!(right > left) || !(bottom > top)) {
+        return;
+    }
+    const auto shown = toViewport.inverted().mapRect(QRectF(
+        QPointF(left / ratio, top / ratio), QPointF(right / ratio, bottom / ratio)));
+    const auto window = layout->regionForSceneRect(
+        {shown.x(), shown.y(), shown.width(), shown.height()});
+    if (!(window.upper[h] > window.lower[h]) || !(window.upper[v] > window.lower[v])) {
+        return;
+    }
+    const auto count = [](double span) {
+        return static_cast<int>(std::min(span, static_cast<double>(maxSliceOutputDimension)));
+    };
+    const std::array<int, 2> pixels{count(right - left), count(bottom - top)};
+
+    // The plane on hand serves the window when it holds every cell in it at
+    // native resolution. It does not along an axis the output cap coarsened
+    // (rasterPitchOverCell > 1) while the window shows only part of the plane
+    // there -- a narrower region would be native -- nor on a side where the
+    // window reaches past the plane's nodes and the plane stops short of the
+    // domain. The plane is then re-sliced along that axis: to the cells on
+    // show plus half their extent per side, and to the domain edge on a side
+    // the window has run past. Once it is that region the check settles, so
+    // the next pan or step needs no re-slice.
+    const auto& region = state.plane->physicalRegion;
+    const auto domain = datasetSampleBounds(metadata);
+    const auto& finest = metadata.levels[static_cast<std::size_t>(
+        std::max(0, metadata.finestLevel))];
+    const auto pitch = amrvis::qt::rasterPitchOverCell(metadata, region,
+        state.plane->width, state.plane->height, axes);
+    const auto room = [&](std::size_t axis, bool upperSide) {
+        const auto cell = finest.cellSize[axis];
+        return upperSide ? region.upper[axis] < domain.upper[axis] - 1e-6 * cell
+                         : region.lower[axis] > domain.lower[axis] + 1e-6 * cell;
+    };
+    // The plane's nodes on the canvas; within two device pixels of them the
+    // window only rounds to whole pixels. Per panel axis, scene left/right
+    // are the first axis' lower and upper bounds, bottom/top the second's.
+    const auto& nodes = state.mappedNodeBounds;
+    const bool haveNodes = nodes.upper[h] > nodes.lower[h] && nodes.upper[v] > nodes.lower[v];
+    const auto planeRect = toQRectF(layout->sceneRectForRegion(nodes));
+    const auto& transform = state.view->transform();
+    const auto slackX = 2.0 / (std::abs(transform.m11()) * ratio);
+    const auto slackY = 2.0 / (std::abs(transform.m22()) * ratio);
+    const std::array<bool, 2> pastLower{
+        haveNodes && shown.left() < planeRect.left() - slackX && room(h, false),
+        haveNodes && shown.bottom() > planeRect.bottom() + slackY && room(v, false)};
+    const std::array<bool, 2> pastUpper{
+        haveNodes && shown.right() > planeRect.right() + slackX && room(h, true),
+        haveNodes && shown.top() < planeRect.top() - slackY && room(v, true)};
+    const std::array<bool, 2> partial{
+        haveNodes && (shown.left() > planeRect.left() + slackX
+            || shown.right() < planeRect.right() - slackX),
+        haveNodes && (shown.top() > planeRect.top() + slackY
+            || shown.bottom() < planeRect.bottom() - slackY)};
+    std::array<bool, 2> shrink{};
+    bool reslice = false;
+    for (std::size_t i = 0; i < 2; ++i) {
+        shrink[i] = pitch[i] > 1.0 + 1e-9 && partial[i];
+        reslice = reslice || shrink[i] || pastLower[i] || pastUpper[i];
+    }
+    if (reslice) {
+        // The logical extent of the cells on screen, through the warp's
+        // source index; none when no cell of the plane is on screen.
+        std::optional<RealBox> cells;
+        if (const auto drawn
+            = mappedPlaneBounds(state, state.view->visibleImageRect(state.tile))) {
+            const auto width = static_cast<double>(state.plane->width);
+            const auto height = static_cast<double>(state.plane->height);
+            cells = physicalRegionForRasterRect(region, width, height,
+                QRectF(drawn->left() * width, drawn->top() * height,
+                    drawn->width() * width, drawn->height() * height),
+                axes);
+        }
+        auto target = region;
+        for (std::size_t i = 0; i < 2; ++i) {
+            const auto a = static_cast<std::size_t>(axes[i]);
+            if (!cells) {
+                if (pastLower[i] || pastUpper[i]) {
+                    // Nothing of the plane on screen to measure from: the
+                    // whole axis, narrowed again by the next ask if capped.
+                    target.lower[a] = domain.lower[a];
+                    target.upper[a] = domain.upper[a];
+                }
+                continue;
+            }
+            const auto extent = cells->upper[a] - cells->lower[a];
+            // Narrowed only when that cuts the plane by a fifth or more: a
+            // capped plane near that size would otherwise chase its samples.
+            const bool narrower
+                = shrink[i] && region.upper[a] - region.lower[a] > 2.5 * extent;
+            if (pastLower[i]) {
+                target.lower[a] = domain.lower[a];
+            } else if (narrower) {
+                target.lower[a] = std::max(domain.lower[a], cells->lower[a] - 0.5 * extent);
+            }
+            if (pastUpper[i]) {
+                target.upper[a] = domain.upper[a];
+            } else if (narrower) {
+                target.upper[a] = std::min(domain.upper[a], cells->upper[a] + 0.5 * extent);
+            }
+        }
+        target = snapToCellBoundaries(target, domain, finest.cellSize, axes);
+        const bool changed = target.lower[h] != region.lower[h]
+            || target.upper[h] != region.upper[h]
+            || target.lower[v] != region.lower[v]
+            || target.upper[v] != region.upper[v];
+        if (changed) {
+            const bool whole = target.lower[h] == domain.lower[h]
+                && target.upper[h] == domain.upper[h]
+                && target.lower[v] == domain.lower[v]
+                && target.upper[v] == domain.upper[v];
+            if (whole) {
+                state.visibleRegion.reset();
+            } else {
+                state.visibleRegion = target;
+            }
+            state.mappedWindow = window;
+            state.mappedWindowPixels = pixels;
+            scheduleSliceRequest(state);
+            return;
+        }
+    }
+    // The plane serves: only the warp of it is re-drawn, and only when the
+    // window or its pixels differ from what is on screen (the cheap
+    // cached-planes path; both are display-only fields of the request).
+    if (!state.hasCachedRequest || state.cachedRequest.displayWindow != window
+        || state.cachedRequest.displayPixels != pixels) {
+        state.mappedWindow = window;
+        state.mappedWindowPixels = pixels;
+        scheduleSliceRequest(state, true);
+    }
+}
+
 void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
 {
     if (!state.view->hasImage() || state.plane->width <= 0 || state.plane->height <= 0) {
@@ -1815,6 +2003,22 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
             return;
         }
         // Not zoomed: the view pans as one dataset's does below.
+    }
+    if (state.mappedGrid) {
+        // The tile sits on the physical canvas and the view scrolls over it
+        // (updateMappedDemand then draws the warp for what it shows): a
+        // twentieth of the viewport, at least one pixel, as the scroll bars
+        // would move it.
+        const auto* viewport = state.view->viewport();
+        if (viewport == nullptr) {
+            return;
+        }
+        state.view->panViewport(QPoint(
+            static_cast<int>(std::round(direction.x()
+                * std::max(1.0, viewport->width() * 0.05))),
+            static_cast<int>(std::round(direction.y()
+                * std::max(1.0, viewport->height() * 0.05)))));
+        return;
     }
     const auto stepX = std::max(1.0, static_cast<double>(state.plane->width) * 0.05);
     const auto stepY = std::max(1.0, static_cast<double>(state.plane->height) * 0.05);

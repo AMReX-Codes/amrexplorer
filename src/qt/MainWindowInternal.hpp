@@ -263,6 +263,12 @@ inline QPainterPath sphericalSectorPath(const PlaneMapping& mapping,
     return path;
 }
 
+// A scene rect from the Qt-free layouts (PairLayout, MappedLayout).
+inline QRectF toQRectF(const SceneRect& rect)
+{
+    return QRectF(rect.x, rect.y, rect.width, rect.height);
+}
+
 // Scene-space outline of a plane-pixel rectangle on a mapped grid: each edge
 // is walked in steps of at most one plane pixel through the node positions,
 // so a box outline follows the stretched cell edges exactly (the bilinear map

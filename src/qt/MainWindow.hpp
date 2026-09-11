@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AspectMode.hpp"
+#include "MappedGeometry.hpp"
 #include "PairGeometry.hpp"
 #include "DatasetWindow.hpp"
 #include "ExportFrame.hpp"
@@ -645,6 +646,19 @@ private:
         bool mappedGrid = false;
         std::shared_ptr<const MappedGridPlane> gridNodes;
         std::shared_ptr<const std::vector<std::int32_t>> displaySourceIndex;
+        // The canvas a mapped view is laid out on: the node bounding box of
+        // the whole domain on this panel's axes, grown by every arrival's
+        // bounds and never shrunk, so the anchor of the scene (MappedLayout)
+        // holds still while the slice, the region and the window change.
+        std::optional<RealBox> mappedCanvasBounds;
+        // The physical window and device-pixel size the demand loop last
+        // asked the warp for (SliceRequest::displayWindow / displayPixels);
+        // the window is empty until it has asked.
+        RealBox mappedWindow;
+        std::array<int, 2> mappedWindowPixels{0, 0};
+        // The node bounding box of the plane on hand
+        // (SliceDisplayResult::mappedBounds): how far it can serve a window.
+        RealBox mappedNodeBounds;
         std::optional<DisplayCoordinator::RasterGeometry> rasterGeometry;
         double displayMinimum = 0.0;
         double displayMaximum = 1.0;
@@ -1089,13 +1103,9 @@ private:
     void resetAxisScale();
     void setAspectMode(AspectMode mode);
     [[nodiscard]] std::array<double, 3> displayStretchPerAxis() const;
-    // The two factors a panel shows, normalized so the smaller is one. On a
-    // mapped grid the pixmap has the raster's own pitch, so the factors also
-    // carry rasterPitchOverCell; `arriving`, when given, is the result about
-    // to be installed and supplies that raster instead of the state's.
+    // The two factors a panel shows, normalized so the smaller is one.
     [[nodiscard]] std::array<double, 2> displayStretchFor(
-        const PlaneViewState& state,
-        const SliceDisplayResult* arriving = nullptr) const;
+        const PlaneViewState& state) const;
     // viewportPixelSize enlarged along the less stretched axis, the bound a
     // remote raster is sized to (see sliceOutputSize and the sequence spec).
     [[nodiscard]] std::array<int, 2> stretchedViewportPixelSize(
@@ -1103,9 +1113,25 @@ private:
     // Push the current stretch to one view (showSlice, before the raster is
     // installed) or to every view after an option change, when a remote view
     // also re-requests a raster sized for the new stretch.
-    void applyDisplayStretch(PlaneViewState& state,
-        const SliceDisplayResult* arriving = nullptr);
+    void applyDisplayStretch(PlaneViewState& state);
     void applyDisplayStretches();
+    // The scene layout of a mapped view: its canvas on this panel's axes at
+    // the current axis factors. Nothing until the first mapped arrival has
+    // brought the canvas bounds.
+    [[nodiscard]] std::optional<MappedLayout> mappedLayout(
+        const PlaneViewState& state) const;
+    // Ask the warp for what the viewport shows: the visible physical window
+    // at the viewport's own device pixels, re-sliced first when the plane on
+    // hand cannot serve it (capped below native resolution, or not covering
+    // the window). Runs on every view change; a no-op unless the view shows
+    // a mapped raster on a known canvas.
+    void updateMappedDemand(PlaneViewState& state);
+    // Whether the demand loop has asked the view's warp for a window yet.
+    [[nodiscard]] bool hasMappedWindow(const PlaneViewState& state) const;
+    // A frame spec's per-view mapped windows and pixels, from what each view
+    // shows now (FrameSliceSpec::displayWindows).
+    void fillMappedDisplays(FrameSliceSpec& spec,
+        const std::vector<PlaneViewState*>& views) const;
     // Enable/disable the Aspect Ratio submenu for the current dataset.
     void updateAspectControls();
     void validateVectorMode();
@@ -1231,19 +1257,19 @@ private:
     [[nodiscard]] QString probeReadout(
         const PlaneViewState& state, int x, int displayY) const;
     void rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect);
-    // A mapped-grid rubber band: the normalized plane rect (top-down) of the
-    // raster cells drawn inside a scene selection, and that selection clamped
-    // to the pixmap (the feedback zoom, since the scene is the physical warp
-    // rather than the plane). Nothing when no cell was drawn in it.
-    struct MappedSelection {
-        QRectF plane;
-        QRectF selection;
-    };
-    [[nodiscard]] std::optional<MappedSelection> mappedPlaneBounds(
-        const PlaneViewState& state, const QRectF& sceneRect) const;
+    // A rubber band over a mapped view: the scene is the physical canvas, so
+    // the selection is a physical window and the zoom is the view's alone
+    // (updateMappedDemand draws the warp for what it then shows). With sync
+    // on, each other 3-D panel is zoomed to the selection's extent along the
+    // axis it shares with this one, over its own canvas.
+    void mappedRubberBandZoom(PlaneViewState& state, const QRectF& sceneRect);
+    // The normalized plane rect (top-down) of the raster cells drawn inside a
+    // pixmap-pixel rect of a mapped view, found through the source index.
+    // Nothing when no cell was drawn in it.
+    [[nodiscard]] std::optional<QRectF> mappedPlaneBounds(
+        const PlaneViewState& state, const QRectF& pixmapRect) const;
     void applyRubberBandZoom(
-        PlaneViewState& state, const QRectF& normalizedRect,
-        const std::optional<QRectF>& feedbackScene = std::nullopt);
+        PlaneViewState& state, const QRectF& normalizedRect);
     void beginPanDrag(PlaneViewState& state);
     void updatePanDrag(PlaneViewState& state, const QPointF& totalSceneDelta,
         const QPoint& viewportDelta);
@@ -1291,12 +1317,6 @@ private:
     // nullopt when a plain refit is correct (first frame, dataset/domain
     // change, or no resolution change).
     [[nodiscard]] std::optional<QRectF> sphericalReframe(
-        const PlaneViewState& state, const SliceDisplayResult& display) const;
-    // The mapped-grid counterpart, for any mapped arrival on a zoomed view
-    // (a zoom or pan re-slice, a supersample change): the visible physical
-    // window carried from the old warp's displayRegion and pixmap to the new
-    // ones, clamped to the new pixmap. Nothing when the view should refit.
-    [[nodiscard]] std::optional<QRectF> mappedReframe(
         const PlaneViewState& state, const SliceDisplayResult& display) const;
     // By value, and callers move into it: the planes are the largest thing an
     // arrival carries -- at the 4096 output cap a ScalarPlane is around 117 MB
@@ -1590,8 +1610,6 @@ private:
     // nodal positions and no companion is open (updateMappedGridControls).
     QMenu* m_mappedGridMenu = nullptr;
     QAction* m_mappedGridAction = nullptr;
-    QMenu* m_mappedGridSupersampleMenu = nullptr;
-    QActionGroup* m_mappedGridSupersampleGroup = nullptr;
     QActionGroup* m_scaleGroup = nullptr;
     QActionGroup* m_levelGroup = nullptr;
     QActionGroup* m_variableGroup = nullptr;
@@ -1669,7 +1687,6 @@ private:
     // it carries one (see SliceRequest::mappedGrid). A persisted preference
     // that applies whenever the open dataset can honour it.
     bool m_mappedGrid = false;
-    int m_mappedGridSupersample = 4;
     // Persisted preference; the per-axis factors belong to the open dataset
     // and reset to one with each new one (they survive sequence frames).
     AspectMode m_aspectMode = AspectMode::CellCounts;
@@ -1709,6 +1726,10 @@ private:
     double m_lastDisplayMinimum = 0.0;
     double m_lastDisplayMaximum = 1.0;
     bool m_controlsReady = false;
+    // Set while showSlice installs an arrival: the view changes it makes
+    // (a Fit, a stretch) must not ask the warp for a window against the
+    // request that is being replaced; showSlice asks once itself afterwards.
+    bool m_applyingArrival = false;
     std::uint64_t m_generation = 0;
     bool m_closing = false;
     // Owns the Diagnostics panel's counters (background requests, stale

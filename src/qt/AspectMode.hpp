@@ -69,11 +69,9 @@ enum class AspectMode : int {
 
 // How far a slice raster's pitch exceeds the finest cell along each panel
 // axis: one, except where the output cap (maxSliceOutputDimension, per axis)
-// coarsened the raster along that axis. A mapped-grid pixmap inherits the
-// raster's pitch, so its Physical Size stretch is multiplied by this;
-// without it a capped axis would be drawn squeezed by the same factor. A
-// dataset without physical geometry, an empty plane, or a non-finite ratio
-// counts as one.
+// coarsened the raster along that axis; a mapped view then re-slices a
+// narrower region (updateMappedDemand). A dataset without physical geometry,
+// an empty plane, or a non-finite ratio counts as one.
 [[nodiscard]] inline std::array<double, 2> rasterPitchOverCell(
     const DatasetMetadata& metadata, const RealBox& logicalRegion,
     int planeWidth, int planeHeight, std::array<int, 2> axes)

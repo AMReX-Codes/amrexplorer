@@ -358,6 +358,7 @@ void ImageView::setImage(
     m_placeholderText.clear();
     tile0.logicalSize = logicalSize.isValid() ? logicalSize : image.size();
     tile0.item = m_scene->addPixmap(QPixmap::fromImage(tile0.image));
+    applyPixmapTransformationMode(tile0);
     m_placement = placement;
     applyPlacement();
     setBackgroundBrush(viewportBackground());
@@ -390,6 +391,7 @@ void ImageView::setTileImage(std::size_t index, const QImage& image,
     tile.sceneRect = sceneRect;
     tile.visible = true;
     tile.item = m_scene->addPixmap(QPixmap::fromImage(tile.image));
+    applyPixmapTransformationMode(tile);
     if (canvasRect.has_value()) {
         m_canvasRect = canvasRect;
     }
@@ -485,11 +487,51 @@ void ImageView::setVirtualCanvas(
         m_placement.reset();
         return;
     }
+    if (!placement.has_value() && !m_placement.has_value()) {
+        // Nothing to leave. applyPlacement would also drop an explicit
+        // canvas from setTileImage and snap its tile back to the origin,
+        // which is not what "no virtual canvas" asks for.
+        return;
+    }
     m_placement = placement;
     applyPlacement();
     if (m_transformMode == TransformMode::FixedScale) {
         applyFixedScale();
     }
+    noteViewChanged();
+}
+
+void ImageView::setSmoothPixmapTransformation(bool smooth)
+{
+    if (m_smoothPixmaps == smooth) {
+        return;
+    }
+    m_smoothPixmaps = smooth;
+    for (auto& tile : m_tiles) {
+        applyPixmapTransformationMode(tile);
+    }
+}
+
+void ImageView::applyPixmapTransformationMode(Tile& tile)
+{
+    if (tile.item != nullptr) {
+        tile.item->setTransformationMode(
+            m_smoothPixmaps ? Qt::SmoothTransformation : Qt::FastTransformation);
+    }
+}
+
+void ImageView::noteViewChanged()
+{
+    ViewSnapshot now;
+    now.transform = transform();
+    now.horizontalScroll = horizontalScrollBar()->value();
+    now.verticalScroll = verticalScrollBar()->value();
+    now.viewportSize = viewport() != nullptr ? viewport()->size() : QSize();
+    if (now == m_notedView) {
+        return;
+    }
+    m_notedView = now;
+    emit viewChanged();
 }
 
 QRectF ImageView::imageSceneRect() const
@@ -1048,6 +1090,7 @@ void ImageView::zoomBy(qreal factor)
     scale(factor, factor);
     m_transformMode = TransformMode::Custom;
     emit zoomChanged();
+    noteViewChanged();
 }
 
 void ImageView::zoomToRect(const QRectF& imageRect, bool confineScene)
@@ -1078,6 +1121,7 @@ void ImageView::showSceneWindow(const QRectF& sceneRect)
     }
     m_scene->setSceneRect(sceneRect);
     centerOn(sceneRect.center());
+    noteViewChanged();
 }
 
 void ImageView::panViewport(const QPoint& delta)
@@ -1297,6 +1341,7 @@ void ImageView::resizeEvent(QResizeEvent* event)
     // A resize changes how much of the raster is on screen even when nothing
     // moved, and in Fit mode fitImage above has just changed the transform.
     emit viewportMoved();
+    noteViewChanged();
 }
 
 void ImageView::changeEvent(QEvent* event)
@@ -1321,6 +1366,7 @@ void ImageView::scrollContentsBy(int dx, int dy)
     // raster under the viewport with no placement set, which moves what is
     // visible just as much.
     emit viewportMoved();
+    noteViewChanged();
 }
 
 void ImageView::keyPressEvent(QKeyEvent* event)
@@ -1498,6 +1544,7 @@ void ImageView::fitSceneRect(const QRectF& rect)
     setTransform(QTransform::fromScale(
         scale * m_stretch.x(), scale * m_stretch.y()));
     centerOn(rect.center());
+    noteViewChanged();
 }
 
 void ImageView::setDisplayStretch(qreal sx, qreal sy)
@@ -1534,6 +1581,7 @@ void ImageView::setDisplayStretch(qreal sx, qreal sy)
     }
     }
     emit viewportMoved();
+    noteViewChanged();
 }
 
 qreal ImageView::isotropicScale() const
@@ -1588,6 +1636,7 @@ void ImageView::applyFixedScale()
     if (transform() != desired) {
         setTransform(desired);
     }
+    noteViewChanged();
 }
 
 } // namespace amrvis::qt

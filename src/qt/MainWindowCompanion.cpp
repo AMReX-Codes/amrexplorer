@@ -15,11 +15,6 @@ namespace amrvis::qt {
 
 namespace {
 
-QRectF toQRectF(const SceneRect& rect)
-{
-    return QRectF(rect.x, rect.y, rect.width, rect.height);
-}
-
 bool sameRegion(const std::optional<RealBox>& a, const std::optional<RealBox>& b)
 {
     if (a.has_value() != b.has_value()) {
@@ -790,7 +785,9 @@ void MainWindow::applyPairLayouts()
                 toQRectF(layout.sceneRectForRegion(state->layer,
                     state->plane->physicalRegion)),
                 toQRectF(pairCanvasRect(state->normal)));
-        } else {
+        } else if (!state->mappedGrid) {
+            // A mapped tile stays on its own canvas (MappedLayout); the
+            // others go back to the classic raster-at-origin scene.
             const auto& image = view->image(state->tile);
             view->placeTile(state->tile,
                 QRectF(QPointF(0.0, 0.0), QSizeF(image.size())), std::nullopt);

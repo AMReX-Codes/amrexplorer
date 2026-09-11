@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -676,9 +677,62 @@ void displayStretchLivesInTheViewTransform()
         "non-positive stretch factors were not treated as one");
 }
 
+void viewChangedReportsEveryMoveAndNoReplacement()
+{
+    amrvis::qt::ImageView view;
+    view.resize(400, 300);
+    view.show();
+    QApplication::processEvents();
+    int changes = 0;
+    QObject::connect(&view, &amrvis::qt::ImageView::viewChanged,
+        &view, [&changes] { ++changes; });
+    // A tile on a canvas, as a mapped warp's window is placed.
+    const QRectF canvas(0.0, 0.0, 200.0, 100.0);
+    view.setTileImage(0, solidImage(100, 50), QRectF(0.0, 0.0, 200.0, 100.0),
+        canvas, amrvis::qt::ImageTransformPolicy::GeometryAware);
+    QApplication::processEvents();
+    require(changes > 0, "installing and fitting the first tile reported no view change");
+
+    // Replacing the tile on the unchanged canvas, Preserve: the transform,
+    // the scroll position and the viewport are as they were, so nothing is
+    // reported -- the guard that keeps a demand render from re-triggering.
+    changes = 0;
+    view.setTileImage(0, solidImage(120, 60), QRectF(50.0, 25.0, 100.0, 50.0),
+        canvas, amrvis::qt::ImageTransformPolicy::Preserve);
+    QApplication::processEvents();
+    require(changes == 0, "replacing a tile on an unchanged canvas reported a view change");
+
+    // A wheel zoom, a scroll, a resize: each is reported.
+    changes = 0;
+    view.zoomBy(2.0);
+    QApplication::processEvents();
+    require(changes >= 1, "a zoom reported no view change");
+    changes = 0;
+    auto* bar = view.horizontalScrollBar();
+    require(bar->maximum() > 0, "the zoomed view did not scroll, so this proves nothing");
+    bar->setValue(bar->maximum() / 2);
+    QApplication::processEvents();
+    require(changes >= 1, "a scroll reported no view change");
+    changes = 0;
+    view.resize(300, 200);
+    QApplication::processEvents();
+    require(changes >= 1, "a resize reported no view change");
+
+    // Leaving a virtual canvas that was never entered leaves the explicit
+    // canvas and the tile alone.
+    changes = 0;
+    const auto placed = view.tileSceneRect(0);
+    view.setVirtualCanvas(std::nullopt);
+    QApplication::processEvents();
+    require(view.tileSceneRect(0) == placed && view.sceneRect() == canvas,
+        "leaving an absent virtual canvas displaced the tile or dropped the canvas");
+    require(changes == 0, "leaving an absent virtual canvas reported a view change");
+}
+
 int main(int argc, char* argv[])
 {
     QApplication application(argc, argv);
+    viewChangedReportsEveryMoveAndNoReplacement();
     displayStretchLivesInTheViewTransform();
     scaleBarUsesNativeOrExplicitUnits();
     scaleBarIsPaintedOverTheSlice();

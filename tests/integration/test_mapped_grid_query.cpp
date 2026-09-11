@@ -216,6 +216,110 @@ void testMappedFixture(const std::filesystem::path& fixture)
     }
 }
 
+// The two-level fixture (tests/data/plotfile_3d_mapped_refined): the same
+// terrain, stored on level 0 everywhere and on level 1 (dx = 0.125) for
+// x < 0.5 only. In physical position the recipe is
+//   nu_z(x, y, z) = 0.125 * (1 - z) * (x + y) / 2
+// which every level reproduces at its own nodes, and which is bilinear in
+// each in-plane pair and linear along a slice normal, so the interpolated
+// node positions must match it exactly wherever a coarse level alone covers
+// a node.
+double nuZAt(double x, double y, double z)
+{
+    return 0.125 * (1.0 - z) * (x + y) / 2.0;
+}
+
+void testRefinedFixture(const std::filesystem::path& fixture)
+{
+    amrvis::LocalDatasetSession session(
+        fixture, amrvis::DatasetId{1}, 64ULL << 20U);
+    require(session.supportsMappedGrid(), "the refined fixture has a grid");
+    require(session.metadata().finestLevel == 1, "the refined fixture has two levels");
+    constexpr double fine = 0.125;
+    const auto atLevel1 = [](int normal, double position) {
+        auto request = fullRequest(normal, position, 8, 8);
+        request.maximumLevel = 1;
+        return request;
+    };
+
+    // y-normal slice through fine cell j = 3 (y in [0.375, 0.5]): the two
+    // fine node layers y = 0.375 and 0.5 straddle coarse layer 1.5. For
+    // x >= 0.5 only level 0 answers; without normal interpolation both layers
+    // snap to the coarse node at y = 0.5.
+    {
+        const auto plane = session.requestMappedGridPlane(atLevel1(1, 0.4375));
+        require(plane.width == 9 && plane.height == 9, "8x8 raster at level 1");
+        bool ok = true;
+        for (int row = 0; row <= 8; ++row) {
+            for (int column = 0; column <= 8; ++column) {
+                const auto n = node(plane, column, row);
+                const double x = fine * column;
+                const double z = fine * row;
+                const double expected = z
+                    + 0.5 * (nuZAt(x, 0.375, z) + nuZAt(x, 0.5, z));
+                ok = ok && near(plane.a[n], x) && near(plane.b[n], expected);
+            }
+        }
+        require(ok, "y-normal nodes in the coarse half interpolate along y");
+    }
+
+    // x-normal slice through fine cell i = 5 (x in [0.625, 0.75]), covered by
+    // level 0 alone: layers x = 0.625 and 0.75 bracket coarse layer 2.5.
+    {
+        const auto plane = session.requestMappedGridPlane(atLevel1(0, 0.6875));
+        bool ok = true;
+        for (int row = 0; row <= 8; ++row) {
+            for (int column = 0; column <= 8; ++column) {
+                const auto n = node(plane, column, row);
+                const double y = fine * column;
+                const double z = fine * row;
+                const double expected = z
+                    + 0.5 * (nuZAt(0.625, y, z) + nuZAt(0.75, y, z));
+                ok = ok && near(plane.a[n], y) && near(plane.b[n], expected);
+            }
+        }
+        require(ok, "x-normal nodes in the coarse-only half are interpolated");
+    }
+
+    // The same slice in the refined half (fine cell i = 1) is exact from
+    // level 1's own nodes.
+    {
+        const auto plane = session.requestMappedGridPlane(atLevel1(0, 0.1875));
+        bool ok = true;
+        for (int row = 0; row <= 8; ++row) {
+            for (int column = 0; column <= 8; ++column) {
+                const auto n = node(plane, column, row);
+                const double y = fine * column;
+                const double z = fine * row;
+                const double expected = z
+                    + 0.5 * (nuZAt(0.125, y, z) + nuZAt(0.25, y, z));
+                ok = ok && near(plane.a[n], y) && near(plane.b[n], expected);
+            }
+        }
+        require(ok, "x-normal nodes in the refined half are exact");
+    }
+
+    // Showing level 0 only: the fine raster interpolates in-plane, and the
+    // layers are level 0's own, so nothing is interpolated along the normal.
+    {
+        auto request = fullRequest(1, 0.375, 8, 8);
+        request.maximumLevel = 0;
+        const auto plane = session.requestMappedGridPlane(request);
+        bool ok = true;
+        for (int row = 0; row <= 8; ++row) {
+            for (int column = 0; column <= 8; ++column) {
+                const auto n = node(plane, column, row);
+                const double x = fine * column;
+                const double z = fine * row;
+                const double expected = z
+                    + 0.5 * (nuZAt(x, 0.25, z) + nuZAt(x, 0.5, z));
+                ok = ok && near(plane.b[n], expected);
+            }
+        }
+        require(ok, "level 0 alone averages its own layers 1 and 2");
+    }
+}
+
 void testPlainPlotfile(const std::filesystem::path& plotfile)
 {
     amrvis::LocalDatasetSession session(
@@ -236,14 +340,15 @@ void testPlainPlotfile(const std::filesystem::path& plotfile)
 
 int main(int argc, char** argv)
 {
-    if (argc < 3) {
+    if (argc < 4) {
         std::cerr << "usage: test_mapped_grid_query <materialized mapped fixture>"
-                     " <plain plotfile>\n";
+                     " <plain plotfile> <materialized refined mapped fixture>\n";
         return 2;
     }
     try {
         testMappedFixture(argv[1]);
         testPlainPlotfile(argv[2]);
+        testRefinedFixture(argv[3]);
     } catch (const std::exception& error) {
         std::cerr << "FAILED: unexpected exception: " << error.what() << '\n';
         return 1;

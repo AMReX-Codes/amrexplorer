@@ -51,10 +51,28 @@ struct FixtureHeader {
     int dimension = 0;
     std::size_t timeLine = 0;
     std::size_t physicalUpperLine = 0;
+    // The physical domain and each level's cell size, which place a node
+    // index in space for the mapped-grid recipe.
+    std::array<double, 3> physicalLower{0.0, 0.0, 0.0};
+    std::array<double, 3> physicalUpper{1.0, 1.0, 1.0};
+    std::vector<std::array<double, 3>> cellSize;
 };
 
+std::array<double, 3> readTriple(const std::string& line, int dimension,
+    const char* what)
+{
+    std::istringstream input(line);
+    std::array<double, 3> values{0.0, 0.0, 0.0};
+    for (int axis = 0; axis < dimension; ++axis) {
+        input >> values[static_cast<std::size_t>(axis)];
+    }
+    require(static_cast<bool>(input), what);
+    return values;
+}
+
 // Plotfile Header layout: version, field count, one line per field name,
-// dimension, time, ...
+// dimension, time, finest level, physical lower, physical upper, refinement
+// ratios, level domains, level steps, one cell-size line per level, ...
 FixtureHeader readHeader(const std::filesystem::path& path)
 {
     std::ifstream input(path);
@@ -77,6 +95,20 @@ FixtureHeader readHeader(const std::filesystem::path& path)
     header.physicalUpperLine = header.timeLine + 3;
     require(header.dimension == 2 || header.dimension == 3,
         "the fixture is neither 2-D nor 3-D");
+    const auto finestLevel = std::stoi(header.lines[header.timeLine + 1]);
+    const auto cellSizeLine = header.timeLine + 7;
+    require(finestLevel >= 0
+            && header.lines.size() > cellSizeLine + static_cast<std::size_t>(finestLevel),
+        "the fixture Header is missing its cell-size lines");
+    header.physicalLower = readTriple(header.lines[header.timeLine + 2],
+        header.dimension, "could not parse the Header physical lower bound");
+    header.physicalUpper = readTriple(header.lines[header.physicalUpperLine],
+        header.dimension, "could not parse the Header physical upper bound");
+    for (int level = 0; level <= finestLevel; ++level) {
+        header.cellSize.push_back(readTriple(
+            header.lines[cellSizeLine + static_cast<std::size_t>(level)],
+            header.dimension, "could not parse a Header cell-size line"));
+    }
     return header;
 }
 
@@ -174,36 +206,44 @@ ValueRecipe fieldRecipe(int dimension, bool nonFiniteValues, double scale)
 }
 
 // The mapped-grid (Nu_nd) recipe: a terrain that is highest at the far
-// (i, j) corner and flattens out towards the top of the domain, with no
-// horizontal displacement. In node indices, with imax/jmax/kmax the largest
-// node index of the level on each axis (from the Nu_nd_H box array):
+// (x, y) corner and flattens out towards the top of the domain, with no
+// horizontal displacement. A function of the node's physical position
+// (lower + index * cell size of the level storing it), so every level of a
+// refined fixture describes the same terrain. With the domain [lo, hi] and
+// fractions X = (x - xlo) / (xhi - xlo) etc.:
 //
 //   nu_x = nu_y = 0
-//   nu_z(i, j, k) = 0.125 * (1 - k / kmax) * (i + j) / (imax + jmax)   (3-D)
-//   nu_y(i, j)    = 0.125 * (1 - j / jmax) * i / imax                  (2-D)
+//   nu_z(x, y, z) = 0.125 * (1 - Z) * (X + Y) / 2      (3-D)
+//   nu_y(x, y)    = 0.125 * (1 - Y) * X                (2-D)
 //
-// Every factor is exact in binary for the fixtures' small index ranges, so
-// a test can recompute the value from (i, j, k) and compare exactly. Keep
-// in sync with test_mapped_grid_query.cpp.
-ValueRecipe mappedGridRecipe(int dimension, int imax, int jmax, int kmax)
+// On the unit-domain fixtures every factor is exact in binary, so a test
+// can recompute the value and compare exactly; bilinear in each in-plane
+// pair, so linear interpolation between stored nodes reproduces it. Keep in
+// sync with test_mapped_grid_query.cpp.
+ValueRecipe mappedGridRecipe(const FixtureHeader& header,
+    const std::array<double, 3>& cellSize)
 {
-    return [dimension, imax, jmax, kmax](
+    const auto dimension = header.dimension;
+    const auto lower = header.physicalLower;
+    const auto upper = header.physicalUpper;
+    return [dimension, lower, upper, cellSize](
                int component, int i, int j, int k, std::size_t) {
         constexpr double amplitude = 0.125;
+        const auto fraction = [&](int axis, int index) {
+            const auto a = static_cast<std::size_t>(axis);
+            return static_cast<double>(index) * cellSize[a] / (upper[a] - lower[a]);
+        };
         if (dimension == 3) {
             if (component != 2) {
                 return 0.0;
             }
-            return amplitude
-                * (1.0 - static_cast<double>(k) / static_cast<double>(kmax))
-                * static_cast<double>(i + j) / static_cast<double>(imax + jmax);
+            return amplitude * (1.0 - fraction(2, k))
+                * (fraction(0, i) + fraction(1, j)) / 2.0;
         }
         if (component != 1) {
             return 0.0;
         }
-        return amplitude
-            * (1.0 - static_cast<double>(j) / static_cast<double>(jmax))
-            * static_cast<double>(i) / static_cast<double>(imax);
+        return amplitude * (1.0 - fraction(1, j)) * fraction(0, i);
     };
 }
 
@@ -409,6 +449,7 @@ int main(int argc, char* argv[])
             require(static_cast<bool>(input),
                 "could not parse the Header physical upper bound");
             upper[0] = *domainUpperX;
+            header.physicalUpper[0] = *domainUpperX;
             std::ostringstream output;
             output << std::setprecision(17);
             for (std::size_t axis = 0; axis < upper.size(); ++axis) {
@@ -460,20 +501,10 @@ int main(int argc, char* argv[])
         const auto nodalHeader = levelDir / "Nu_nd_H";
         if (std::filesystem::is_regular_file(nodalHeader)) {
             auto nodalBlocks = readCellHeader(nodalHeader, header.dimension);
-            std::array<int, 3> maxIndex{0, 0, 0};
-            for (const auto& block : nodalBlocks) {
-                for (int axis = 0; axis < header.dimension; ++axis) {
-                    maxIndex[static_cast<std::size_t>(axis)] = std::max(
-                        maxIndex[static_cast<std::size_t>(axis)],
-                        block.indices[static_cast<std::size_t>(
-                            header.dimension + axis)]);
-                }
-            }
-            require(maxIndex[0] > 0 && maxIndex[1] > 0
-                    && (header.dimension == 2 || maxIndex[2] > 0),
-                "the Nu_nd_H box array spans no nodes");
+            require(static_cast<std::size_t>(level) < header.cellSize.size(),
+                "the Header lists no cell size for a Nu_nd level");
             const auto nodalRecipe = mappedGridRecipe(
-                header.dimension, maxIndex[0], maxIndex[1], maxIndex[2]);
+                header, header.cellSize[static_cast<std::size_t>(level)]);
             for (auto& block : nodalBlocks) {
                 writeFab(levelDir / block.fileName, block,
                     header.dimension, header.dimension, nodalRecipe);

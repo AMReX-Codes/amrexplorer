@@ -577,6 +577,17 @@ add_test(NAME mapped_grid_fixture
 set_tests_properties(mapped_grid_fixture PROPERTIES
     FIXTURES_SETUP mapped_grid_materialized)
 
+# The two-level variant: level 1 refines the x < 0.5 half, so the other half
+# is covered by level 0 alone (FIXTURES_REQUIRED mapped_grid_refined_materialized).
+set(mapped_grid_refined_fixture_dir
+    "${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_grid_refined")
+add_test(NAME mapped_grid_refined_fixture
+    COMMAND "$<TARGET_FILE:fixture_materializer>"
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped_refined"
+        "${mapped_grid_refined_fixture_dir}")
+set_tests_properties(mapped_grid_refined_fixture PROPERTIES
+    FIXTURES_SETUP mapped_grid_refined_materialized)
+
 # Node positions through the local session, against the recipe the
 # materializer wrote; the plain 3-D fixture must report no grid.
 add_executable(test_mapped_grid_query integration/test_mapped_grid_query.cpp)
@@ -586,9 +597,10 @@ target_link_libraries(
 add_test(NAME mapped_grid_query
     COMMAND test_mapped_grid_query
         "${mapped_grid_fixture_dir}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d")
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+        "${mapped_grid_refined_fixture_dir}")
 set_tests_properties(mapped_grid_query PROPERTIES
-    FIXTURES_REQUIRED mapped_grid_materialized)
+    FIXTURES_REQUIRED "mapped_grid_materialized;mapped_grid_refined_materialized")
 
 add_executable(test_mapped_grid_pipeline integration/test_mapped_grid_pipeline.cpp)
 target_link_libraries(

@@ -4,10 +4,12 @@
 #include <amrexplorer/query/SliceQuery.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace amrvis {
@@ -99,6 +101,35 @@ MappedGridPlane queryMappedGridPlane(PlotfileDataset& data,
         nodeRequest.visibleRegion.upper[axis] += 0.5 * pitch[inPlane];
     }
 
+    // The node query interpolates in-plane only. A layer position is a node
+    // layer of the display level; where a coarser level is all that covers a
+    // node, the layer falls between that level's node layers, and the
+    // sample would snap to one of them -- both of the slice's layers can
+    // snap to the same one, which places the cell by a single node. So a
+    // node answered by a coarser level is interpolated along the normal
+    // between the two coarse layers bracketing the position. Layer queries
+    // are cached per position within this call; a single-level dataset never
+    // needs a second one.
+    std::vector<std::pair<double, SliceQueryResult>> layers;
+    const auto queryLayer = [&](double position) -> const SliceQueryResult& {
+        for (const auto& [at, result] : layers) {
+            if (at == position) {
+                return result;
+            }
+        }
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
+        nodeRequest.physicalPosition = position;
+        layers.emplace_back(
+            position, SliceQuery(grid).execute(nodeRequest, cancellation));
+        return layers.back().second;
+    };
+    const auto normal = request.normalDirection;
+    const auto nodalDomainOf = [&](int level) -> const IntBox& {
+        return gridMetadata.levels[static_cast<std::size_t>(level)].domain;
+    };
+
     std::vector<double> displacement(nodeCount);
     std::vector<std::uint8_t> covered(nodeCount);
     for (std::size_t inPlane = 0; inPlane < 2; ++inPlane) {
@@ -106,18 +137,46 @@ MappedGridPlane queryMappedGridPlane(PlotfileDataset& data,
         auto& coordinates = inPlane == 0 ? plane.a : plane.b;
         std::fill(displacement.begin(), displacement.end(), 0.0);
         std::fill(covered.begin(), covered.end(), std::uint8_t{0});
+        layers.clear();
         nodeRequest.field = FieldId{static_cast<std::uint32_t>(axis)};
         for (const auto position : layerPositions) {
-            if (cancellation.stop_requested()) {
-                throw ReadCancelled();
-            }
-            nodeRequest.physicalPosition = position;
-            const auto layer = SliceQuery(grid).execute(nodeRequest, cancellation);
+            const auto& direct = queryLayer(position);
             for (std::size_t node = 0; node < nodeCount; ++node) {
-                if (layer.plane.valid[node] != 0) {
-                    displacement[node] += layer.plane.values[node];
-                    ++covered[node];
+                if (direct.plane.valid[node] == 0) {
+                    continue;
                 }
+                auto value = direct.plane.values[node];
+                const int level = direct.plane.sourceLevel[node];
+                if (metadata.dimension == 3 && level >= 0
+                    && level < maximumLevel) {
+                    const auto& gridLevel
+                        = gridMetadata.levels[static_cast<std::size_t>(level)];
+                    const auto n = static_cast<std::size_t>(normal);
+                    const auto spacing = gridLevel.cellSize[n];
+                    const auto offset
+                        = (position - gridLevel.indexOrigin[n]) / spacing;
+                    const auto lowerLayer = std::floor(offset);
+                    const auto weight = offset - lowerLayer;
+                    constexpr double onLayer = 1e-9;
+                    if (weight > onLayer && weight < 1.0 - onLayer) {
+                        const auto& domain = nodalDomainOf(level);
+                        const auto low = std::clamp(static_cast<int>(lowerLayer),
+                            domain.lower[n], domain.upper[n]);
+                        const auto high = std::clamp(static_cast<int>(lowerLayer) + 1,
+                            domain.lower[n], domain.upper[n]);
+                        const auto& below = queryLayer(
+                            samplePosition(gridLevel, normal, low));
+                        const auto& above = queryLayer(
+                            samplePosition(gridLevel, normal, high));
+                        const auto valueBelow = below.plane.valid[node] != 0
+                            ? below.plane.values[node] : value;
+                        const auto valueAbove = above.plane.valid[node] != 0
+                            ? above.plane.values[node] : value;
+                        value = (1.0 - weight) * valueBelow + weight * valueAbove;
+                    }
+                }
+                displacement[node] += value;
+                ++covered[node];
             }
         }
         for (std::size_t row = 0; row < height; ++row) {

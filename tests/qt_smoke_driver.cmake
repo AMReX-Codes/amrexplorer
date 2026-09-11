@@ -25,6 +25,7 @@
 #                 sequence-geometry-refit | sequence-noop | sequence-failure |
 #                 remote-canvas-wheel | remote-cell-aspect |
 #                 physical-aspect | physical-fixed-scale | mapped-grid |
+#                 mapped-grid-sequence | mapped-grid-cap |
 #                 remote-physical-aspect | companion |
 #                 remote-companion | companion-derived | companion-zoom |
 #                 mixed-companion |
@@ -239,6 +240,14 @@ elseif(MODE STREQUAL "physical-fixed-scale")
 elseif(MODE STREQUAL "mapped-grid")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --mapped-grid-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "mapped-grid-sequence")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00000")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt00010" "2.5")
+    run_or_die("${AMREXPLORER_QT}" --mapped-grid-sequence-smoke-test
+        "${WORK}/plt00000" "${WORK}/plt00010")
+elseif(MODE STREQUAL "mapped-grid-cap")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --mapped-grid-cap-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "remote-physical-aspect")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --remote-physical-aspect-smoke-test

@@ -488,10 +488,37 @@ public:
     // Test-only: View > Mapped Grid, driven as the menu drives it, and what
     // the active view shows: mapped (the physical warp) or the logical grid.
     void setMappedGridForTest(bool enabled);
-    void setMappedGridSupersampleForTest(int factor);
     [[nodiscard]] bool mappedGridMenuEnabledForTest() const;
     [[nodiscard]] bool displayIsMappedForTest() const;
     [[nodiscard]] bool activeViewIsMappedForTest() const;
+    // The physical window the active view's mapped warp was last requested
+    // for, on the panel's two axes (x = first in-plane axis); empty until
+    // the demand loop has asked for one.
+    [[nodiscard]] QRectF activeViewMappedWindowForTest() const;
+    // Test-only: a 3-D panel's mapped warp, read without making the panel
+    // active (its border would resize the view): mapped, Fit, re-sliced; the
+    // window drawn (as above); the image; the tile on screen in device
+    // pixels; the tile, canvas and visible rect in scene units; the scale.
+    struct MappedPanelForTest {
+        bool mapped = false;
+        bool fit = false;
+        bool resliced = false;
+        QRectF window;
+        QSize image;
+        QRectF tileDevice;
+        QRectF tile;
+        QRectF canvas;
+        QRectF visible;
+        double scale = 0.0;
+    };
+    [[nodiscard]] MappedPanelForTest mappedPanelForTest(int normal) const;
+    // Test-only: the active view's transform scale and scroll position
+    // {m11, m22, h, v}; a scroll by viewport pixels, as a drag or the scroll
+    // bars would; and the physical region of the plane it holds (x = first
+    // in-plane axis).
+    [[nodiscard]] std::array<double, 4> activeViewTransformAndScrollForTest() const;
+    void scrollActiveViewForTest(int dx, int dy);
+    [[nodiscard]] QRectF activeViewPlaneRegionForTest() const;
     // Test-only: make the 3-D panel with this normal the active view.
     void setActiveViewForTest(int normal);
     // Test-only: the probe readout for a pixmap pixel of the active view

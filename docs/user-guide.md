@@ -795,18 +795,19 @@ logical grid as for any other plotfile.
 **View > Mapped Grid > Show on Mapped Grid** (off by default; the choice
 persists across sessions) draws each cell as the quadrilateral its four
 corners define instead. In a 3-D slice at cell index c along the normal, the
-corners are the average of node layers c and c+1. **View > Mapped Grid >
-Supersampling** (1x–16x) sets how finely the stretched cells are traced, as
-for the spherical R-Z view. The menu is available only when the open plotfile
-carries the node positions; the Dataset Metadata panel lists them under
-**Mapped grid**.
+corners are the average of node layers c and c+1. The cells are drawn at the
+screen's resolution with smoothed edges and redrawn shortly after each zoom
+or pan, so slanted edges stay straight at any zoom. The menu is available
+only when the open plotfile carries the node positions; the Dataset Metadata
+panel lists them under **Mapped grid**.
 
 While the mapped grid is shown the display is physical: **View > Aspect
 Ratio** shows Physical Size in effect (the persisted proportion is left as it
-was) and **Axis Scaling...** still stretches the axes. The probe reports the
-physical position under the cursor and the logical cell it belongs to;
-rubber-band zoom selects the cells under the rectangle; grid boxes, contours,
-vector glyphs and particles follow the warp; the scale bar and exports do too.
+was), **Axis Scaling...** still stretches the axes, and fixed scales work as
+in Physical Size. The probe reports the physical position under the cursor
+and the logical cell it belongs to; rubber-band zoom frames the rectangle;
+grid boxes, contours, vector glyphs, particles and the scale bar follow the
+warp. An exported image holds the part of the slice the panel shows.
 
 Limits: remote datasets are not supported yet, and the menu says so. Line
 plots, volume rendering and a companion plotfile use the logical grid: the
@@ -864,8 +865,8 @@ their neutral gray under every skin, so a colormap looks the same whichever
 one you pick.
 
 Window geometry, logarithmic mapping, palette, skin, number format,
-animation speed, aspect ratio proportion, the mapped-grid display and its
-supersampling, and the isosurface color persist across sessions.
+animation speed, aspect ratio proportion, the mapped-grid display, and the
+isosurface color persist across sessions.
 
 Each open dataset has a 1 GiB data cache by default, and volume rendering fills
 a second cache of the same size with the grids it samples the field into (an

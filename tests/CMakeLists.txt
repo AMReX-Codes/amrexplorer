@@ -1290,10 +1290,11 @@ if(TARGET amrexplorer_qt)
     set_tests_properties(qt_physical_fixed_scale_smoke PROPERTIES TIMEOUT 30)
 
     # View > Mapped Grid on a plotfile carrying Nu_nd node positions: off by
-    # default, the physical warp on the x-z panel when on (Physical Size
-    # pinned, preference kept, probe following the warp), a rubber band that
-    # re-slices and stays zoomed, a finer supersample that keeps the framing,
-    # and the logical grid back when off.
+    # default; on, the warp is drawn for the window on screen at the panel's
+    # pixels (Physical Size pinned, probe following the warp) and drawn again
+    # after a wheel zoom, a rubber band (synced panels too) and a scroll that
+    # leaves the view where it is; contours keep the probe; off returns the
+    # logical grid.
     add_test(
         NAME qt_mapped_grid_smoke
         COMMAND "${CMAKE_COMMAND}"
@@ -1305,6 +1306,33 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_mapped_grid_smoke PROPERTIES TIMEOUT 30)
+    # A mapped-grid sequence: the view's ask for its window once a frame lands
+    # must not restart that frame, so each frame is displayed once.
+    add_test(
+        NAME qt_mapped_grid_sequence_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_grid_sequence"
+            -DMODE=mapped-grid-sequence
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_mapped_grid_sequence_smoke PROPERTIES TIMEOUT 30)
+    # A mapped plane wider than the output cap: zoomed in, the view re-slices
+    # the cells on show; a scroll within that plane only re-draws, and one far
+    # past it re-slices where the view went.
+    add_test(
+        NAME qt_mapped_grid_cap_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped_wide"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_grid_cap"
+            -DMODE=mapped-grid-cap
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_mapped_grid_cap_smoke PROPERTIES TIMEOUT 30)
 
     # A remote Fit raster sized for the viewport must be re-fetched at native
     # width when a stretch puts its few columns across the whole viewport.

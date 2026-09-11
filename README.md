@@ -23,7 +23,7 @@ FAB and MultiFab data.
 - 2-D spherical (r, θ) plotfiles rendered in physical R–Z, or as the logical
   r–θ / θ–r grid
 - Mapped (terrain-following, stretched) grids drawn from the node positions
-  ERF and REMORA plotfiles store
+  ERF and REMORA plotfiles store, at screen resolution with smooth cell edges
 - Plotfile-sequence and plane-sweep animation
 - Remote plotfiles and sequences: the client runs its server on the remote
   machine through ssh, no ports or tunnels involved

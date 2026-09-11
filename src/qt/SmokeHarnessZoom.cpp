@@ -6,8 +6,10 @@
 #include <QApplication>
 #include <QKeyEvent>
 #include <QSignalBlocker>
+#include <QStyle>
 #include <QTimer>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -16,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 // Zoom: the zoom / pan / scale scenarios: raster and rubber-band zoom, pan,
 // spherical supersample, fixed and effective scale and its report, arrow-key
@@ -140,21 +143,374 @@ Outcome dispatchZoom(Context& context)
         && std::string_view(argv[1]) == "--mapped-grid-smoke-test") {
         // View > Mapped Grid on plotfile_3d_mapped (4^3 cells, dx = 0.25,
         // Nu_nd lifting the bottom nodes by nu_z = 0.125*(1 - k/4)*(i+j)/8):
-        // off by default with the menu offered; on, the x-z panel shows the
-        // physical warp (the lifted bottom-right corner is drawn nowhere, the
-        // unlifted bottom-left still holds data), Aspect Ratio shows Physical
-        // Size with the preference untouched, and the scale bar is truthful; a
-        // rubber band re-slices and stays zoomed; a finer supersample enlarges
-        // the warp and keeps the framing; off again returns the logical grid.
-        // interactiveSlicesSettled fires once per re-slice batch, so each
-        // phase is one settle.
+        // off by default with the menu offered. On, each panel's warp is drawn
+        // for the window it shows at its own pixels: at Fit the tile is the
+        // canvas (Physical Size pinned, probe, volume ROI, boxes); a wheel
+        // zoom and a synced rubber band zoom the views and the warps follow
+        // without a re-slice; a scroll moves the window and its arrival leaves
+        // the view put; contours keep the probe; off returns the logical
+        // grid, and on again with a cosmetic change ends on the warp.
         const std::filesystem::path path(argv[2]);
-        auto phase = std::make_shared<int>(0);
-        auto zoomedSize = std::make_shared<std::array<int, 2>>();
-        auto flatSize = std::make_shared<std::array<int, 2>>();
+        struct Progress {
+            int phase = 0;
+            std::array<QRectF, 3> fitWindows;  // per normal, at Fit
+            double fitScale = 0.0;
+            QRectF zoomWindow;
+            std::array<double, 4> scrolled{};
+            QRectF scrolledFrom;
+            QRectF tileBefore;
+            std::array<int, 2> flatSize{};
+        };
+        auto progress = std::make_shared<Progress>();
         const auto fail = [&application](const char* message) {
             qCritical("%s", message);
             application.exit(1);
+        };
+        // A panel shows a warp drawn for its window (physical, x the first
+        // panel axis) one to one: as many pixels as its tile covers on screen,
+        // at whole device pixels.
+        const auto drawnForScreen = [&window](int normal) {
+            const auto panel = window.mappedPanelForTest(normal);
+            const auto& tile = panel.tileDevice;
+            const auto whole = [](double value) {
+                return std::abs(value - std::round(value)) < 1e-6;
+            };
+            const bool ok = panel.mapped && !panel.window.isEmpty()
+                && std::abs(tile.width() - panel.image.width()) < 1e-6
+                && std::abs(tile.height() - panel.image.height()) < 1e-6
+                && whole(tile.left()) && whole(tile.top());
+            if (!ok) {
+                qCritical("panel %d: warp %d x %d on a tile of %g x %g device pixels "
+                          "at (%g, %g)", normal, panel.image.width(),
+                    panel.image.height(), tile.width(), tile.height(), tile.left(),
+                    tile.top());
+            }
+            return ok;
+        };
+        // A panel's tile covers its whole canvas, reaching past each edge by
+        // less than a device pixel (the window is whole device pixels).
+        const auto coversCanvas = [&window](int normal) {
+            const auto panel = window.mappedPanelForTest(normal);
+            const auto pixel = 1.0 / (panel.scale * window.devicePixelRatioF());
+            const auto& tile = panel.tile;
+            const auto& canvas = panel.canvas;
+            const bool ok = !canvas.isEmpty()
+                && tile.left() <= canvas.left() + 1e-9 && tile.left() > canvas.left() - pixel
+                && tile.top() <= canvas.top() + 1e-9 && tile.top() > canvas.top() - pixel
+                && tile.right() >= canvas.right() - 1e-9
+                && tile.right() < canvas.right() + pixel
+                && tile.bottom() >= canvas.bottom() - 1e-9
+                && tile.bottom() < canvas.bottom() + pixel;
+            if (!ok) {
+                qCritical("panel %d: tile %g x %g at (%g, %g), canvas %g x %g at (%g, %g)",
+                    normal, tile.width(), tile.height(), tile.left(), tile.top(),
+                    canvas.width(), canvas.height(), canvas.left(), canvas.top());
+            }
+            return ok;
+        };
+        const auto probeCentre = [&window] {
+            const auto size = window.activeViewImageSizeForTest();
+            const auto readout
+                = window.probeReadoutActiveViewForTest(size[0] / 2, size[1] / 2);
+            return readout.contains(QStringLiteral("value"))
+                && readout.contains(QStringLiteral("cell"));
+        };
+        // A panel frames a physical target as a zoom to it does: all of it on
+        // screen, filling the viewport along one axis, give or take the Fit
+        // margin and the scroll bars the zoom raises. The target is placed in
+        // the scene through the tile, which spans the window the warp was
+        // drawn for.
+        const auto frames = [&window](int normal, const QRectF& target) {
+            const auto panel = window.mappedPanelForTest(normal);
+            const auto& shown = panel.window;
+            const auto& tile = panel.tile;
+            const auto& visible = panel.visible;
+            if (shown.isEmpty() || tile.isEmpty() || visible.isEmpty()
+                || !(panel.scale > 0.0)) {
+                return false;
+            }
+            // Physical (x, up) to scene (x, down).
+            const auto toScene = [&shown, &tile](double x, double y) {
+                return QPointF(
+                    tile.left() + (x - shown.left()) * tile.width() / shown.width(),
+                    tile.top() + (shown.bottom() - y) * tile.height() / shown.height());
+            };
+            const QRectF wanted(toScene(target.left(), target.bottom()),
+                toScene(target.right(), target.top()));
+            const auto slack = static_cast<double>(
+                QApplication::style()->pixelMetric(QStyle::PM_ScrollBarExtent) + 6)
+                / panel.scale;
+            const bool covers = visible.left() <= wanted.left() + slack
+                && visible.right() >= wanted.right() - slack
+                && visible.top() <= wanted.top() + slack
+                && visible.bottom() >= wanted.bottom() - slack;
+            const bool fills = std::abs(visible.width() - wanted.width()) <= slack
+                || std::abs(visible.height() - wanted.height()) <= slack;
+            if (!covers || !fills) {
+                qCritical("panel %d shows [%g, %g] x [%g, %g] for [%g, %g] x [%g, %g]",
+                    normal, visible.left(), visible.right(), visible.top(),
+                    visible.bottom(), wanted.left(), wanted.right(), wanted.top(),
+                    wanted.bottom());
+            }
+            return covers && fills;
+        };
+        const auto runPhase = [&window, &application, progress, fail, coversCanvas,
+                                  drawnForScreen, probeCentre, frames] {
+            // A settle can leave the view's own ask for its window queued
+            // behind it: read the state once no slice is on its way.
+            if (window.sliceRequestPendingForTest()
+                || window.slicesInFlightForTest() > 0) {
+                return;
+            }
+            // The x-z panel stays the active one: making another panel active
+            // resizes both views (the active border).
+            window.setActiveViewForTest(1);
+            const auto size = window.activeViewImageSizeForTest();
+            switch (progress->phase) {
+            case 0: {
+                // On: every panel shows the warp of its whole canvas.
+                for (const int normal : {0, 1, 2}) {
+                    if (!drawnForScreen(normal) || !coversCanvas(normal)) {
+                        fail("at Fit a mapped panel is not the warp of its canvas");
+                        return;
+                    }
+                    progress->fitWindows[static_cast<std::size_t>(normal)]
+                        = window.mappedPanelForTest(normal).window;
+                }
+                if (!window.displayIsMappedForTest() || size[0] <= 16 || size[1] <= 16) {
+                    qCritical("mapped pixmap %d x %d", size[0], size[1]);
+                    fail("the mapped grid did not replace the raster");
+                    return;
+                }
+                if (window.aspectMenuCheckedModeForTest()
+                        != amrvis::qt::AspectMode::PhysicalSize
+                    || window.aspectRadiosEnabledForTest()
+                    || window.aspectModePreferenceForTest()
+                        != amrvis::qt::AspectMode::CellCounts
+                    || !window.aspectMenuEnabledForTest()
+                    || !window.scaleBarActionEnabledForTest()) {
+                    fail("mapped display did not pin Physical Size with "
+                         "the preference kept and the scale bar offered");
+                    return;
+                }
+                // Bottom-left: the x = 0 nodes are never lifted, so the lowest
+                // row there holds cell (0, 0); bottom-right: the x = 1 bottom
+                // node is lifted by about 0.06 above the canvas bottom, so
+                // nothing is drawn there.
+                const auto left = window.probeReadoutActiveViewForTest(0, size[1] - 1);
+                const auto right = window.probeReadoutActiveViewForTest(
+                    size[0] - 1, size[1] - 1);
+                if (!left.contains(QStringLiteral("value"))
+                    || !left.contains(QStringLiteral("cell"))
+                    || right != QObject::tr("no data")) {
+                    qCritical("left '%s' right '%s'", qPrintable(left), qPrintable(right));
+                    fail("the probe does not follow the warp");
+                    return;
+                }
+                // The volume's visible-region box is logical: with the whole
+                // warp on screen it is the whole domain, bottom included,
+                // although the lowest drawn node sits above it.
+                const auto roi = window.volumeRegionOfInterestForTest();
+                if (std::abs(roi.lower[2]) > 1e-9 || std::abs(roi.upper[2] - 1.0) > 1e-9
+                    || std::abs(roi.lower[0]) > 1e-9 || std::abs(roi.upper[0] - 1.0) > 1e-9) {
+                    qCritical("volume ROI z [%g, %g] x [%g, %g]", roi.lower[2],
+                        roi.upper[2], roi.lower[0], roi.upper[0]);
+                    fail("the volume region of interest followed the warp, "
+                         "not the logical grid");
+                    return;
+                }
+                if (window.activeViewGridBoxCountForTest() == 0) {
+                    fail("the grid boxes are missing from the warp");
+                    return;
+                }
+                progress->fitScale = window.activeViewTransformAndScrollForTest()[0];
+                progress->phase = 1;
+                for (int notch = 0; notch < 3; ++notch) {
+                    window.wheelActiveViewForTest(1);
+                }
+                break;
+            }
+            case 1: {
+                // Three notches in: the view zoomed over the canvas and the
+                // warp is the part of it on screen. The plane is native, so
+                // nothing was re-sliced.
+                const auto xz = window.mappedPanelForTest(1);
+                const bool smaller = xz.tile.width() < xz.canvas.width() - 1e-6
+                    || xz.tile.height() < xz.canvas.height() - 1e-6;
+                // The window may reach a device pixel past the canvas edges.
+                const auto margin = 1.0 / (xz.scale * window.devicePixelRatioF());
+                if (!drawnForScreen(1) || xz.fit || xz.resliced
+                    || std::abs(xz.scale / progress->fitScale - 1.15 * 1.15 * 1.15) > 1e-6
+                    || !smaller
+                    || !xz.canvas.adjusted(-margin, -margin, margin, margin).contains(xz.tile)
+                    || !probeCentre() || window.activeViewGridBoxCountForTest() == 0) {
+                    qCritical("scale %g over %g, tile %gx%g of canvas %gx%g", xz.scale,
+                        progress->fitScale, xz.tile.width(), xz.tile.height(),
+                        xz.canvas.width(), xz.canvas.height());
+                    fail("a wheel zoom did not draw the warp for the window it shows");
+                    return;
+                }
+                progress->zoomWindow = xz.window;
+                progress->phase = 2;
+                window.rubberBandZoomActiveViewForTest();
+                break;
+            }
+            case 2: {
+                // The rubber band took the central half of that window: the
+                // view frames it and the warp follows, still without a
+                // re-slice. Sync is on by default: the y-z panel frames the
+                // selection's z over its whole y, the x-y panel its x over its
+                // whole y.
+                const auto& zoom = progress->zoomWindow;
+                const QRectF selection(zoom.left() + 0.25 * zoom.width(),
+                    zoom.top() + 0.25 * zoom.height(), 0.5 * zoom.width(),
+                    0.5 * zoom.height());
+                const auto xz = window.mappedPanelForTest(1);
+                if (!drawnForScreen(1) || xz.fit || xz.resliced || !probeCentre()
+                    || !frames(1, selection)) {
+                    fail("a mapped rubber band did not frame its selection");
+                    return;
+                }
+                const auto& yz = progress->fitWindows[0];
+                const auto& xy = progress->fitWindows[2];
+                const std::array<std::pair<int, QRectF>, 2> synced{
+                    std::pair{0,
+                        QRectF(QPointF(yz.left(), std::max(yz.top(), selection.top())),
+                            QPointF(yz.right(), std::min(yz.bottom(), selection.bottom())))},
+                    std::pair{2,
+                        QRectF(QPointF(std::max(xy.left(), selection.left()), xy.top()),
+                            QPointF(std::min(xy.right(), selection.right()), xy.bottom()))}};
+                for (const auto& [normal, target] : synced) {
+                    const auto panel = window.mappedPanelForTest(normal);
+                    if (!drawnForScreen(normal) || panel.fit || panel.resliced
+                        || !frames(normal, target)) {
+                        qCritical("panel %d", normal);
+                        fail("a synced panel did not frame the selection along "
+                             "the axis it shares");
+                        return;
+                    }
+                }
+                const auto before = window.activeViewTransformAndScrollForTest();
+                progress->scrolledFrom = xz.window;
+                progress->tileBefore = xz.tile;
+                window.scrollActiveViewForTest(-24, -24);
+                progress->scrolled = window.activeViewTransformAndScrollForTest();
+                if (progress->scrolled == before) {
+                    fail("the zoomed x-z panel had nowhere to scroll");
+                    return;
+                }
+                progress->phase = 3;
+                break;
+            }
+            case 3: {
+                // The scroll moved the window; the warp drawn for it landed
+                // with the view exactly where the scroll left it.
+                const auto now = window.activeViewTransformAndScrollForTest();
+                if (now != progress->scrolled) {
+                    qCritical("scale %g, %g scroll %g, %g; scrolled to %g, %g scroll %g, %g",
+                        now[0], now[1], now[2], now[3], progress->scrolled[0],
+                        progress->scrolled[1], progress->scrolled[2],
+                        progress->scrolled[3]);
+                    fail("a mapped arrival moved the view");
+                    return;
+                }
+                const auto xz = window.mappedPanelForTest(1);
+                if (!drawnForScreen(1) || xz.resliced || xz.window == progress->scrolledFrom
+                    || xz.tile == progress->tileBefore || !probeCentre()) {
+                    fail("a scroll did not draw the warp for the window it moved to");
+                    return;
+                }
+                progress->phase = 4;
+                window.setDisplayModeForTest(amrvis::DisplayMode::RasterContours, 3);
+                break;
+            }
+            case 4:
+            case 5:
+            case 6: {
+                // Into contours (a fresh slice), a new contour count (the
+                // cache path with the pixmap kept, rasterUnchanged), then the
+                // raster again: the probe reads the cells under it and the
+                // view stays where it is throughout.
+                if (!window.activeViewIsMappedForTest() || !probeCentre()
+                    || window.activeViewTransformAndScrollForTest() != progress->scrolled) {
+                    qCritical("phase %d", progress->phase);
+                    fail("a contour refresh lost the mapped source index or "
+                         "moved the view");
+                    return;
+                }
+                if (progress->phase == 4) {
+                    window.setDisplayModeForTest(amrvis::DisplayMode::RasterContours, 7);
+                } else if (progress->phase == 5) {
+                    window.setDisplayModeForTest(amrvis::DisplayMode::Raster, 7);
+                } else {
+                    window.setMappedGridForTest(false);
+                }
+                ++progress->phase;
+                break;
+            }
+            case 7: {
+                // Off: the logical grid again, radios back.
+                if (window.displayIsMappedForTest()
+                    || window.activeViewIsMappedForTest()
+                    || !window.aspectRadiosEnabledForTest()
+                    || window.aspectMenuCheckedModeForTest()
+                        != amrvis::qt::AspectMode::CellCounts) {
+                    fail("switching the mapped grid off did not restore "
+                         "the logical grid and the aspect radios");
+                    return;
+                }
+                // The iso wireframe follows Axis Scaling: the unit cube's
+                // outline becomes four times as tall as it is wide.
+                window.setAxisScaleForTest({1.0, 1.0, 4.0});
+                const auto iso = window.isoDomainDisplayBoxForTest();
+                const auto isoWidth = iso.upper[0] - iso.lower[0];
+                const auto isoHeight = iso.upper[2] - iso.lower[2];
+                if (!(isoWidth > 0.0) || std::abs(isoHeight / isoWidth - 4.0) > 1e-9) {
+                    qCritical("iso domain %g x %g", isoWidth, isoHeight);
+                    fail("the iso wireframe did not follow the z axis factor");
+                    return;
+                }
+                window.setAxisScaleForTest({1.0, 1.0, 1.0});
+                const auto reset = window.isoDomainDisplayBoxForTest();
+                if (std::abs((reset.upper[2] - reset.lower[2]) / isoWidth - 1.0) > 1e-9) {
+                    fail("resetting Axis Scaling did not restore the iso cube");
+                    return;
+                }
+                // On again with a cosmetic change in the same turn: the pixmap
+                // must end up the warp with its source index, not the logical
+                // raster flagged mapped.
+                progress->flatSize = size;
+                progress->phase = 8;
+                window.setMappedGridForTest(true);
+                window.setDisplayModeForTest(amrvis::DisplayMode::RasterContours, 5);
+                break;
+            }
+            case 8: {
+                // The toggle refitted: the warp of the whole canvas, far larger
+                // than the few-cell raster, with the probe reading its cells.
+                const auto left = window.probeReadoutActiveViewForTest(0, size[1] - 1);
+                if (!drawnForScreen(1) || !coversCanvas(1)
+                    || size[0] < 2 * progress->flatSize[0]
+                    || size[1] < 2 * progress->flatSize[1]
+                    || !left.contains(QStringLiteral("value"))
+                    || !left.contains(QStringLiteral("cell"))) {
+                    qCritical("phase 8: %d x %d over flat %d x %d, probe '%s'",
+                        size[0], size[1], progress->flatSize[0],
+                        progress->flatSize[1], qPrintable(left));
+                    fail("a refresh overtaking the mapped toggle left a "
+                         "flat pixmap flagged mapped");
+                    return;
+                }
+                progress->phase = 9;
+                window.setDisplayModeForTest(amrvis::DisplayMode::Raster, 7);
+                window.setMappedGridForTest(false);
+                break;
+            }
+            default:
+                application.exit(window.activeViewIsMappedForTest()
+                        || window.displayIsMappedForTest() ? 3 : 0);
+                break;
+            }
         };
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
             &application, [&window, &application, fail](bool success) {
@@ -176,215 +532,114 @@ Outcome dispatchZoom(Context& context)
             });
         QObject::connect(&window,
             &amrvis::qt::MainWindow::interactiveSlicesSettled,
-            &application, [&window, &application, phase, zoomedSize, flatSize,
-                              fail] {
-                const auto size = window.activeViewImageSizeForTest();
-                switch (*phase) {
-                case 0: {
-                    // On: the pixmap is the warp -- the plane is 4 x 4 and the
-                    // 4x supersample spans each cell with four pixels, so 16
-                    // wide; the z span runs from the least-lifted bottom node
-                    // (x = 0, the j = 2.5 layer average: 0.125 * 2.5 / 8) to
-                    // the unlifted top, 0.96 over a 1/16 pitch, so 15 tall.
-                    if (!window.displayIsMappedForTest()
-                        || !window.activeViewIsMappedForTest()
-                        || size[0] != 16 || size[1] < 14 || size[1] > 16) {
-                        qCritical("mapped pixmap %d x %d", size[0], size[1]);
-                        fail("the mapped grid did not replace the raster");
-                        return;
-                    }
-                    if (window.aspectMenuCheckedModeForTest()
-                            != amrvis::qt::AspectMode::PhysicalSize
-                        || window.aspectRadiosEnabledForTest()
-                        || window.aspectModePreferenceForTest()
-                            != amrvis::qt::AspectMode::CellCounts
-                        || !window.aspectMenuEnabledForTest()
-                        || !window.scaleBarActionEnabledForTest()) {
-                        fail("mapped display did not pin Physical Size with "
-                             "the preference kept and the scale bar offered");
-                        return;
-                    }
-                    // Bottom-left: the x = 0 nodes are never lifted, so the
-                    // lowest row there holds cell (0, 0); bottom-right: the
-                    // x = 1 bottom node is lifted by about 0.1, above the
-                    // lowest pixel row (0.0625 tall), so nothing is drawn.
-                    const auto left = window.probeReadoutActiveViewForTest(
-                        0, size[1] - 1);
-                    const auto right = window.probeReadoutActiveViewForTest(
-                        size[0] - 1, size[1] - 1);
-                    if (!left.contains(QStringLiteral("value"))
-                        || !left.contains(QStringLiteral("cell"))
-                        || right != QObject::tr("no data")) {
-                        qCritical("left '%s' right '%s'",
-                            qPrintable(left), qPrintable(right));
-                        fail("the probe does not follow the warp");
-                        return;
-                    }
-                    // The volume's visible-region box is logical: with the
-                    // whole warp on screen it is the whole domain, bottom
-                    // included, although the lowest drawn node sits above it.
-                    const auto roi = window.volumeRegionOfInterestForTest();
-                    if (std::abs(roi.lower[2]) > 1e-9 || std::abs(roi.upper[2] - 1.0) > 1e-9
-                        || std::abs(roi.lower[0]) > 1e-9 || std::abs(roi.upper[0] - 1.0) > 1e-9) {
-                        qCritical("volume ROI z [%g, %g] x [%g, %g]", roi.lower[2],
-                            roi.upper[2], roi.lower[0], roi.upper[0]);
-                        fail("the volume region of interest followed the warp, "
-                             "not the logical grid");
-                        return;
-                    }
-                    *phase = 1;
-                    window.setDisplayModeForTest(
-                        amrvis::DisplayMode::RasterContours, 3);
-                    break;
+            &application, [&window, runPhase] {
+                QTimer::singleShot(0, &window, runPhase);
+            });
+        QTimer::singleShot(20000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window, [&window, path] {
+            window.setGridBoxesVisibleForTest(true);
+            window.openDataset(path);
+        });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--mapped-grid-cap-smoke-test") {
+        // View > Mapped Grid on plotfile_3d_mapped_wide, whose x-z plane
+        // (4200 x 4 cells) is past the 4096 output cap. At Fit it is drawn
+        // whole; zoomed to a fixed scale, the cells on show are re-sliced with
+        // a margin; a scroll within that margin only re-draws the warp, and
+        // one far past the plane re-slices where the view went.
+        const std::filesystem::path path(argv[2]);
+        struct Progress {
+            int phase = 0;
+            QRectF plane;
+            QRectF shown;
+        };
+        auto progress = std::make_shared<Progress>();
+        const auto runPhase = [&window, &application, progress] {
+            // Read once nothing is on its way (see --mapped-grid-smoke-test).
+            if (window.sliceRequestPendingForTest()
+                || window.slicesInFlightForTest() > 0) {
+                return;
+            }
+            window.setActiveViewForTest(1);  // the x-z panel
+            const auto plane = window.activeViewPlaneRegionForTest();
+            const auto shown = window.activeViewMappedWindowForTest();
+            const auto size = window.activeViewImageSizeForTest();
+            const auto probe
+                = window.probeReadoutActiveViewForTest(size[0] / 2, size[1] / 2);
+            const bool drawn = window.activeViewIsMappedForTest() && !shown.isEmpty()
+                && probe.contains(QStringLiteral("value"));
+            const bool holdsWindow
+                = plane.left() <= shown.left() && plane.right() >= shown.right();
+            const auto fail = [&](const char* message) {
+                qCritical("phase %d: plane x [%g, %g], window x [%g, %g], probe '%s'",
+                    progress->phase, plane.left(), plane.right(), shown.left(),
+                    shown.right(), qPrintable(probe));
+                qCritical("%s", message);
+                application.exit(1);
+            };
+            switch (progress->phase) {
+            case 0:
+                // At Fit the plane is under a pixel tall, so a pixel centre
+                // may miss it and the probe is not asked.
+                if (!window.activeViewIsMappedForTest() || shown.isEmpty()
+                    || window.activeViewIsZoomedForTest()) {
+                    fail("the capped plane was not drawn whole at Fit");
+                    return;
                 }
-                case 1:
-                case 2:
-                case 3: {
-                    // Into contours (a fresh slice), then a new contour count
-                    // -- the cache path with the pixmap kept (rasterUnchanged)
-                    // -- then back to the raster: the probe must read the
-                    // cells under it throughout.
-                    const auto left = window.probeReadoutActiveViewForTest(
-                        0, size[1] - 1);
-                    if (!window.activeViewIsMappedForTest() || size[0] != 16
-                        || !left.contains(QStringLiteral("value"))
-                        || !left.contains(QStringLiteral("cell"))) {
-                        qCritical("phase %d: %d x %d, probe '%s'", *phase,
-                            size[0], size[1], qPrintable(left));
-                        fail("a contour refresh lost the mapped source index");
-                        return;
-                    }
-                    if (*phase == 1) {
-                        window.setDisplayModeForTest(
-                            amrvis::DisplayMode::RasterContours, 7);
-                    } else if (*phase == 2) {
-                        window.setDisplayModeForTest(
-                            amrvis::DisplayMode::Raster, 7);
-                    } else {
-                        window.rubberBandZoomActiveViewForTest();
-                    }
-                    ++*phase;
-                    break;
+                progress->phase = 1;
+                window.setActiveViewScaleForTest(8);
+                break;
+            case 1:
+                // Eight pixels per cell: the cells on show and a margin,
+                // re-sliced at native resolution.
+                if (!drawn || !window.activeViewIsZoomedForTest()
+                    || !(plane.width() < 1000.0) || !holdsWindow) {
+                    fail("zooming in did not re-slice the cells on show");
+                    return;
                 }
-                case 4: {
-                    // The rubber band re-sliced the cells under it (a zoom,
-                    // not the spherical view-only zoom) and kept the warp.
-                    if (!window.activeViewIsZoomedForTest()
-                        || window.activeViewFitsWindowForTest()
-                        || !window.activeViewIsMappedForTest()) {
-                        fail("a mapped rubber band did not re-slice zoomed");
-                        return;
-                    }
-                    // The other two panels zoomed in sympathy (sync is on by
-                    // default) and were framed through their own warps: the
-                    // re-sliced pixmap fills most of each viewport, not a
-                    // corner of it.
-                    for (const int normal : {0, 2}) {
-                        window.setActiveViewForTest(normal);
-                        const auto other = window.activeViewImageSizeForTest();
-                        const auto shown = window.activeViewVisibleImageRectForTest();
-                        const double coverage = shown.width() * shown.height()
-                            / std::max(1.0, static_cast<double>(other[0] * other[1]));
-                        if (!window.activeViewIsZoomedForTest()
-                            || window.activeViewFitsWindowForTest()
-                            || coverage < 0.5) {
-                            qCritical("panel %d: pixmap %d x %d, shown %g x %g",
-                                normal, other[0], other[1], shown.width(),
-                                shown.height());
-                            fail("a synced mapped panel was framed by the "
-                                 "plane, not its warp");
-                            window.setActiveViewForTest(1);
-                            return;
-                        }
-                    }
-                    window.setActiveViewForTest(1);
-                    *zoomedSize = size;
-                    *phase = 5;
-                    window.setMappedGridSupersampleForTest(8);
-                    break;
+                progress->plane = plane;
+                progress->shown = shown;
+                progress->phase = 2;
+                window.scrollActiveViewForTest(-40, 0);
+                break;
+            case 2:
+                // Five cells along, within the margin: the warp is drawn again
+                // from the same plane.
+                if (!drawn || plane != progress->plane || shown == progress->shown) {
+                    fail("a scroll within the plane re-sliced it");
+                    return;
                 }
-                case 5:
-                    // 8x doubles the warp's resolution; the framing survives.
-                    if (size[0] <= (*zoomedSize)[0] || size[1] <= (*zoomedSize)[1]
-                        || !window.activeViewIsZoomedForTest()
-                        || window.activeViewFitsWindowForTest()
-                        || !window.activeViewIsMappedForTest()) {
-                        qCritical("zoomed %d x %d, resampled %d x %d",
-                            (*zoomedSize)[0], (*zoomedSize)[1], size[0], size[1]);
-                        fail("a finer supersample did not enlarge the warp "
-                             "and keep the zoom");
-                        return;
-                    }
-                    *phase = 6;
-                    window.setMappedGridForTest(false);
-                    break;
-                case 6: {
-                    // Off: the logical grid again, radios back.
-                    if (window.displayIsMappedForTest()
-                        || window.activeViewIsMappedForTest()
-                        || !window.aspectRadiosEnabledForTest()
-                        || window.aspectMenuCheckedModeForTest()
-                            != amrvis::qt::AspectMode::CellCounts) {
-                        fail("switching the mapped grid off did not restore "
-                             "the logical grid and the aspect radios");
-                        return;
-                    }
-                    // The iso wireframe follows Axis Scaling: the unit cube's
-                    // outline becomes four times as tall as it is wide.
-                    window.setAxisScaleForTest({1.0, 1.0, 4.0});
-                    const auto iso = window.isoDomainDisplayBoxForTest();
-                    const auto isoWidth = iso.upper[0] - iso.lower[0];
-                    const auto isoHeight = iso.upper[2] - iso.lower[2];
-                    if (!(isoWidth > 0.0) || std::abs(isoHeight / isoWidth - 4.0) > 1e-9) {
-                        qCritical("iso domain %g x %g", isoWidth, isoHeight);
-                        fail("the iso wireframe did not follow the z axis factor");
-                        return;
-                    }
-                    window.setAxisScaleForTest({1.0, 1.0, 1.0});
-                    const auto reset = window.isoDomainDisplayBoxForTest();
-                    if (std::abs((reset.upper[2] - reset.lower[2]) / isoWidth - 1.0)
-                        > 1e-9) {
-                        fail("resetting Axis Scaling did not restore the iso cube");
-                        return;
-                    }
-                    // On again with a cosmetic change in the same turn: the
-                    // pixmap must end up the warp with its source index, not
-                    // the logical raster flagged mapped. The view is still
-                    // zoomed, so the warp is known only relative to this
-                    // flat pixmap: 8x supersampling makes it far larger.
-                    *flatSize = size;
-                    *phase = 7;
-                    window.setMappedGridForTest(true);
-                    window.setDisplayModeForTest(
-                        amrvis::DisplayMode::RasterContours, 5);
-                    break;
+                progress->phase = 3;
+                window.scrollActiveViewForTest(-4000, 0);
+                break;
+            case 3:
+                // Five hundred cells along, far past the plane: re-sliced
+                // where the view went, and drawn there.
+                if (!drawn || !window.activeViewIsZoomedForTest() || !holdsWindow
+                    || !(shown.left() > progress->plane.right())) {
+                    fail("a scroll past the plane did not re-slice where the view went");
+                    return;
                 }
-                case 7: {
-                    const auto left = window.probeReadoutActiveViewForTest(
-                        0, size[1] - 1);
-                    if (!window.activeViewIsMappedForTest()
-                        || size[0] < 2 * (*flatSize)[0]
-                        || size[1] < 2 * (*flatSize)[1]
-                        || !left.contains(QStringLiteral("value"))
-                        || !left.contains(QStringLiteral("cell"))) {
-                        qCritical("phase 7: %d x %d over flat %d x %d, probe '%s'",
-                            size[0], size[1], (*flatSize)[0], (*flatSize)[1],
-                            qPrintable(left));
-                        fail("a refresh overtaking the mapped toggle left a "
-                             "flat pixmap flagged mapped");
-                        return;
-                    }
-                    *phase = 8;
-                    window.setDisplayModeForTest(amrvis::DisplayMode::Raster, 7);
-                    window.setMappedGridForTest(false);
-                    break;
+                application.exit(0);
+                break;
+            default:
+                break;
+            }
+        };
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
                 }
-                case 8:
-                default:
-                    application.exit(window.activeViewIsMappedForTest()
-                            || window.displayIsMappedForTest() ? 3 : 0);
-                    break;
-                }
+                window.setActiveViewForTest(1);
+                window.setMappedGridForTest(true);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, runPhase] {
+                QTimer::singleShot(0, &window, runPhase);
             });
         QTimer::singleShot(20000, &application,
             [&application] { application.exit(4); });

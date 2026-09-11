@@ -16,13 +16,34 @@ struct Point {
     double y = 0.0;
 };
 
-// Fills every output pixel whose centre lies inside (or on) the triangle.
-// Edge functions are normalised by the triangle's orientation so either
-// winding works; a zero-area triangle covers nothing and is skipped. Pixels
-// on a shared edge are written by both neighbours, which is harmless: both
-// write a colour that belongs there.
+// Subsamples per pixel edge: 3x3 positions at (n + (k + 0.5) / 3), the
+// middle one being the pixel centre, which is what the source index records.
+constexpr int subsamples = 3;
+constexpr int centreSubsample = 1;
+constexpr int samplesPerPixel = subsamples * subsamples;
+
+// Per output pixel: the colour channels summed over the subsamples cells
+// covered, how many they covered, and the cell covering the centre.
+struct Coverage {
+    int width = 0;
+    int height = 0;
+    std::vector<std::uint32_t> red;
+    std::vector<std::uint32_t> green;
+    std::vector<std::uint32_t> blue;
+    std::vector<std::uint16_t> count;
+    std::vector<std::int32_t> centre;
+};
+
+// Accumulates the triangle into every subsample it covers (inside or on an
+// edge). Edge functions are normalised by the triangle's orientation so
+// either winding works; a zero-area triangle covers nothing and is skipped.
+// A subsample on a shared edge counts for both cells rather than neither:
+// the sum then holds two colours that both belong there, and the count
+// exceeds the nominal nine, which the final division absorbs. A transparent
+// source cell (an invalid sample) records its index at the centre but adds
+// no colour, so the pixel stays as clear as the cell.
 void fillTriangle(Point p0, Point p1, Point p2, std::uint32_t colour,
-    std::int32_t index, ImageBuffer& image, std::vector<std::int32_t>& source)
+    std::int32_t index, Coverage& out)
 {
     const double area = (p1.x - p0.x) * (p2.y - p0.y)
         - (p2.x - p0.x) * (p1.y - p0.y);
@@ -34,39 +55,90 @@ void fillTriangle(Point p0, Point p1, Point p2, std::uint32_t colour,
     const double xHi = std::max({p0.x, p1.x, p2.x});
     const double yLo = std::min({p0.y, p1.y, p2.y});
     const double yHi = std::max({p0.y, p1.y, p2.y});
-    // Pixel centres are at integer + 0.5, so pixel n covers [n, n+1).
-    const int colStart = std::max(0, static_cast<int>(std::floor(xLo - 0.5)));
-    const int colEnd = std::min(image.width - 1,
-        static_cast<int>(std::ceil(xHi - 0.5)));
-    const int rowStart = std::max(0, static_cast<int>(std::floor(yLo - 0.5)));
-    const int rowEnd = std::min(image.height - 1,
-        static_cast<int>(std::ceil(yHi - 0.5)));
-    // Tolerance so a centre on a shared edge counts for both cells rather
-    // than neither.
+    // Pixel n covers [n, n+1); its subsamples lie strictly inside.
+    const int colStart = std::max(0, static_cast<int>(std::floor(xLo)));
+    const int colEnd = std::min(out.width - 1, static_cast<int>(std::floor(xHi)));
+    const int rowStart = std::max(0, static_cast<int>(std::floor(yLo)));
+    const int rowEnd = std::min(out.height - 1, static_cast<int>(std::floor(yHi)));
+    if (colStart > colEnd || rowStart > rowEnd) {
+        return;
+    }
     const double epsilon = 1e-9 * std::abs(area);
+    const bool opaque = ((colour >> 24U) & 0xFFU) != 0U;
+    const auto r = (colour >> 16U) & 0xFFU;
+    const auto g = (colour >> 8U) & 0xFFU;
+    const auto b = colour & 0xFFU;
+    const auto inside = [&](double cx, double cy) {
+        const double e0 = orientation
+            * ((p1.x - p0.x) * (cy - p0.y) - (cx - p0.x) * (p1.y - p0.y));
+        const double e1 = orientation
+            * ((p2.x - p1.x) * (cy - p1.y) - (cx - p1.x) * (p2.y - p1.y));
+        const double e2 = orientation
+            * ((p0.x - p2.x) * (cy - p2.y) - (cx - p2.x) * (p0.y - p2.y));
+        return !(e0 < -epsilon || e1 < -epsilon || e2 < -epsilon);
+    };
+    constexpr double step = 1.0 / subsamples;
     for (int row = rowStart; row <= rowEnd; ++row) {
-        const double cy = static_cast<double>(row) + 0.5;
         for (int col = colStart; col <= colEnd; ++col) {
-            const double cx = static_cast<double>(col) + 0.5;
-            const double e0 = orientation
-                * ((p1.x - p0.x) * (cy - p0.y) - (cx - p0.x) * (p1.y - p0.y));
-            const double e1 = orientation
-                * ((p2.x - p1.x) * (cy - p1.y) - (cx - p1.x) * (p2.y - p1.y));
-            const double e2 = orientation
-                * ((p0.x - p2.x) * (cy - p2.y) - (cx - p2.x) * (p0.y - p2.y));
-            if (e0 < -epsilon || e1 < -epsilon || e2 < -epsilon) {
+            const auto offset = static_cast<std::size_t>(row)
+                    * static_cast<std::size_t>(out.width)
+                + static_cast<std::size_t>(col);
+            unsigned covered = 0;
+            for (int sy = 0; sy < subsamples; ++sy) {
+                const double cy = static_cast<double>(row) + (sy + 0.5) * step;
+                for (int sx = 0; sx < subsamples; ++sx) {
+                    const double cx = static_cast<double>(col) + (sx + 0.5) * step;
+                    if (!inside(cx, cy)) {
+                        continue;
+                    }
+                    ++covered;
+                    if (sx == centreSubsample && sy == centreSubsample) {
+                        out.centre[offset] = index;
+                    }
+                }
+            }
+            if (covered == 0 || !opaque) {
                 continue;
             }
-            const auto offset = static_cast<std::size_t>(row)
-                    * static_cast<std::size_t>(image.width)
-                + static_cast<std::size_t>(col);
-            image.rgba[offset] = colour;
-            source[offset] = index;
+            out.red[offset] += r * covered;
+            out.green[offset] += g * covered;
+            out.blue[offset] += b * covered;
+            out.count[offset] = static_cast<std::uint16_t>(
+                std::min<unsigned>(out.count[offset] + covered, 0xFFFFU));
         }
     }
 }
 
+// A box on the two in-plane axes: ordered and finite on both.
+bool validOnAxes(const RealBox& box, std::array<int, 2> axes)
+{
+    for (const auto axis : axes) {
+        const auto i = static_cast<std::size_t>(axis);
+        if (!std::isfinite(box.lower[i]) || !std::isfinite(box.upper[i])
+            || !(box.lower[i] < box.upper[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
+
+std::optional<RealBox> mappedGridWindow(const MappedGridPlane& nodes,
+    std::array<int, 2> axes, const RealBox& window)
+{
+    const auto bounds = mappedGridDisplayBounds(nodes, axes);
+    if (!bounds || !validOnAxes(window, axes)) {
+        return bounds;
+    }
+    RealBox drawn = *bounds;
+    for (const auto axis : axes) {
+        const auto i = static_cast<std::size_t>(axis);
+        drawn.lower[i] = window.lower[i];
+        drawn.upper[i] = window.upper[i];
+    }
+    return drawn;
+}
 
 std::optional<RealBox> mappedGridDisplayBounds(
     const MappedGridPlane& nodes, std::array<int, 2> axes)
@@ -108,75 +180,63 @@ std::optional<RealBox> mappedGridDisplayBounds(
 }
 
 MappedWarpedRaster warpMappedGrid(const ImageBuffer& src,
-    const MappedGridPlane& nodes, std::array<int, 2> axes, int maxDimension,
-    int supersample)
+    const MappedGridPlane& nodes, std::array<int, 2> axes,
+    const RealBox& window, std::array<int, 2> pixels)
 {
     MappedWarpedRaster out;
     const auto fallback = [&]() {
         out.image = src;
         out.displayRegion = nodes.physicalRegion;
+        out.mappedBounds = nodes.physicalRegion;
         out.sourceIndex.reset();
         return out;
     };
 
     const int srcW = src.width;
     const int srcH = src.height;
-    if (srcW <= 0 || srcH <= 0 || maxDimension < 1
-        || nodes.width != srcW + 1 || nodes.height != srcH + 1) {
+    if (srcW <= 0 || srcH <= 0 || nodes.width != srcW + 1
+        || nodes.height != srcH + 1) {
         return fallback();
     }
     const auto bounds = mappedGridDisplayBounds(nodes, axes);
+    const auto drawn = mappedGridWindow(nodes, axes, window);
     const auto pixelCount = static_cast<std::size_t>(srcW)
         * static_cast<std::size_t>(srcH);
-    if (!bounds || src.rgba.size() < pixelCount) {
+    if (!bounds || !drawn || src.rgba.size() < pixelCount) {
         return fallback();
     }
     const auto axisA = static_cast<std::size_t>(axes[0]);
     const auto axisB = static_cast<std::size_t>(axes[1]);
-    const double minA = bounds->lower[axisA];
-    const double minB = bounds->lower[axisB];
-    const double spanA = bounds->upper[axisA] - minA;
-    const double spanB = bounds->upper[axisB] - minB;
-    const auto& logical = nodes.physicalRegion;
-    const double pitchA = (logical.upper[axisA] - logical.lower[axisA])
-        / static_cast<double>(srcW);
-    const double pitchB = (logical.upper[axisB] - logical.lower[axisB])
-        / static_cast<double>(srcH);
-    if (!(pitchA > 0.0) || !(pitchB > 0.0) || !std::isfinite(pitchA)
-        || !std::isfinite(pitchB)) {
-        return fallback();
-    }
+    const double minA = drawn->lower[axisA];
+    const double minB = drawn->lower[axisB];
+    const double spanA = drawn->upper[axisA] - minA;
+    const double spanB = drawn->upper[axisB] - minB;
 
-    // Output pitch per axis: that axis's raster pitch over the supersample
-    // factor, so each raster cell spans `supersample` output pixels along
-    // each axis at its uniform size and its stretched edges are traced
-    // rather than quantised. Anisotropic on purpose: a square pitch would
-    // spend the pixel budget on the long axis of a thin domain (an ocean
-    // 50 km wide and 300 m deep) and starve the short one. A display pixel
-    // is therefore the same physical shape as a native raster cell, and the
-    // view applies the Physical Size stretch exactly as it does to a
-    // Cartesian raster. maxDimension caps both dimensions by one factor.
-    const int factor = std::max(1, supersample);
-    const double outPitchA = pitchA / static_cast<double>(factor);
-    const double outPitchB = pitchB / static_cast<double>(factor);
-    int width = std::max(1, static_cast<int>(std::lround(spanA / outPitchA)));
-    int height = std::max(1, static_cast<int>(std::lround(spanB / outPitchB)));
-    if (width > maxDimension || height > maxDimension) {
-        const double scale = static_cast<double>(maxDimension)
-            / static_cast<double>(std::max(width, height));
-        width = std::max(1, static_cast<int>(std::lround(width * scale)));
-        height = std::max(1, static_cast<int>(std::lround(height * scale)));
-    }
+    // The output is the caller's screen window: its pixel count is given,
+    // and the pitch follows from the window. A zero count means the raster's
+    // own size along that axis. Bounded so a corrupt request cannot ask for
+    // an image no display would show.
+    constexpr int maximumPixels = 16384;
+    const int width = std::clamp(pixels[0] > 0 ? pixels[0] : srcW, 1, maximumPixels);
+    const int height = std::clamp(pixels[1] > 0 ? pixels[1] : srcH, 1, maximumPixels);
 
-    out.displayRegion = *bounds;
-
+    out.displayRegion = *drawn;
+    out.mappedBounds = *bounds;
     out.image.width = width;
     out.image.height = height;
     out.image.strideBytes = width * static_cast<int>(sizeof(std::uint32_t));
     const auto outCount = static_cast<std::size_t>(width)
         * static_cast<std::size_t>(height);
     out.image.rgba.assign(outCount, 0U);
-    auto source = std::make_shared<std::vector<std::int32_t>>(outCount, -1);
+
+    Coverage coverage;
+    coverage.width = width;
+    coverage.height = height;
+    coverage.red.assign(outCount, 0U);
+    coverage.green.assign(outCount, 0U);
+    coverage.blue.assign(outCount, 0U);
+    coverage.count.assign(outCount, 0U);
+    coverage.centre.assign(outCount, -1);
 
     const double scaleA = static_cast<double>(width) / spanA;
     const double scaleB = static_cast<double>(height) / spanB;
@@ -184,6 +244,8 @@ MappedWarpedRaster warpMappedGrid(const ImageBuffer& src,
         return Point{(nodes.a[node] - minA) * scaleA, (nodes.b[node] - minB) * scaleB};
     };
     const auto stride = static_cast<std::size_t>(nodes.width);
+    const double maxX = static_cast<double>(width);
+    const double maxY = static_cast<double>(height);
     for (int row = 0; row < srcH; ++row) {
         for (int col = 0; col < srcW; ++col) {
             const auto n00 = static_cast<std::size_t>(row) * stride
@@ -192,16 +254,42 @@ MappedWarpedRaster warpMappedGrid(const ImageBuffer& src,
             const auto p10 = toPixel(n00 + 1);
             const auto p01 = toPixel(n00 + stride);
             const auto p11 = toPixel(n00 + stride + 1);
+            // Cells outside the window are skipped without touching a pixel.
+            const double xLo = std::min({p00.x, p10.x, p01.x, p11.x});
+            const double xHi = std::max({p00.x, p10.x, p01.x, p11.x});
+            const double yLo = std::min({p00.y, p10.y, p01.y, p11.y});
+            const double yHi = std::max({p00.y, p10.y, p01.y, p11.y});
+            if (xHi < 0.0 || yHi < 0.0 || xLo > maxX || yLo > maxY) {
+                continue;
+            }
             const auto pixel = static_cast<std::size_t>(row)
                     * static_cast<std::size_t>(srcW)
                 + static_cast<std::size_t>(col);
             const auto colour = src.rgba[pixel];
             const auto index = static_cast<std::int32_t>(pixel);
-            fillTriangle(p00, p10, p11, colour, index, out.image, *source);
-            fillTriangle(p00, p11, p01, colour, index, out.image, *source);
+            fillTriangle(p00, p10, p11, colour, index, coverage);
+            fillTriangle(p00, p11, p01, colour, index, coverage);
         }
     }
-    out.sourceIndex = std::move(source);
+
+    for (std::size_t offset = 0; offset < outCount; ++offset) {
+        const unsigned count = coverage.count[offset];
+        if (count == 0) {
+            continue;
+        }
+        const auto channel = [count](std::uint32_t sum) {
+            return static_cast<std::uint32_t>(
+                std::min<std::uint32_t>(255U, (sum + count / 2) / count));
+        };
+        const auto alpha = static_cast<std::uint32_t>(std::min<unsigned>(
+            255U, (count * 255U + samplesPerPixel / 2) / samplesPerPixel));
+        out.image.rgba[offset] = (alpha << 24U)
+            | (channel(coverage.red[offset]) << 16U)
+            | (channel(coverage.green[offset]) << 8U)
+            | channel(coverage.blue[offset]);
+    }
+    out.sourceIndex = std::make_shared<const std::vector<std::int32_t>>(
+        std::move(coverage.centre));
     return out;
 }
 

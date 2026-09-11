@@ -123,9 +123,18 @@ int main()
         require(amrvis::sameSliceSpec(base, other),
             "a mapped-grid toggle must not invalidate the cached slice");
         other = base;
-        other.mappedGridSupersample = base.mappedGridSupersample + 3;
+        other.displayWindow.lower = {{0.25, 0.25, 0.25}};
+        other.displayWindow.upper = {{0.75, 0.75, 0.75}};
         require(amrvis::sameSliceSpec(base, other),
-            "a mapped-grid supersample change must not invalidate the cached slice");
+            "a display-window change must not invalidate the cached slice");
+        other = base;
+        other.displayPixels = {640, 480};
+        require(amrvis::sameSliceSpec(base, other),
+            "a display-pixel change must not invalidate the cached slice");
+        other = base;
+        other.wantMappedDomainBounds = !base.wantMappedDomainBounds;
+        require(amrvis::sameSliceSpec(base, other),
+            "asking for the domain bounds must not invalidate the cached slice");
     }
     {
         auto other = base;

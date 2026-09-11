@@ -248,8 +248,9 @@ namespace {
 // Draws the raster on the dataset's mapped grid when the request asks for it
 // and the session has one: the node positions of the plane's cells are
 // fetched and each cell is placed by its corners (render2d/MappedGridWarp).
-// The display region becomes the node bounding box, set even when no raster
-// was rendered (contour-only refresh) so overlays keep their frame. A session
+// The display region becomes the requested window (the node bounding box
+// without one), set even when no raster was rendered (contour-only refresh)
+// so overlays keep their frame. A session
 // without a mapped grid -- a sequence frame that lacks Nu_nd, or a remote
 // peer for now -- leaves the Cartesian display and reports mappedGrid false
 // rather than failing the slice. Cancellation propagates like the slice's.
@@ -262,6 +263,8 @@ void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
     result.gridNodes.reset();
     result.displaySourceIndex.reset();
     result.mappedGridFallback.clear();
+    result.mappedBounds = RealBox{};
+    result.mappedDomainBounds.reset();
     if (!result.request.mappedGrid || !dataset->supportsMappedGrid()) {
         return;
     }
@@ -308,14 +311,15 @@ void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
     const auto axes = slicePlaneAxes(
         dataset->metadata().dimension, request.normalDirection);
     const auto bounds = mappedGridDisplayBounds(*nodes, axes);
-    if (!bounds) {
+    const auto window = mappedGridWindow(*nodes, axes, request.displayWindow);
+    if (!bounds || !window) {
         return;  // unusable node plane: stay Cartesian
     }
     const bool haveImage = result.image.width > 0 && result.image.height > 0
         && !result.image.rgba.empty();
     if (haveImage) {
         auto warped = warpMappedGrid(result.image, *nodes, axes,
-            maxSliceOutputDimension, request.mappedGridSupersample);
+            request.displayWindow, request.displayPixels);
         if (!warped.sourceIndex) {
             return;  // the warp fell back: stay Cartesian
         }
@@ -323,7 +327,28 @@ void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
         result.displayRegion = warped.displayRegion;
         result.displaySourceIndex = std::move(warped.sourceIndex);
     } else {
-        result.displayRegion = *bounds;
+        result.displayRegion = *window;
+    }
+    result.mappedBounds = *bounds;
+    if (request.wantMappedDomainBounds) {
+        // The whole domain's node bounding box on this plane, from a coarse
+        // level-0 sampling: the canvas a view anchors to, so a slice of one
+        // region lands where it belongs beside the next. A coarse sampling
+        // can miss a finer level's extreme; the view widens its canvas by
+        // each arrival's own bounds, so the estimate only has to be close.
+        MappedGridPlaneRequest domainRequest = nodeRequest;
+        domainRequest.visibleRegion = datasetSampleBounds(dataset->metadata());
+        domainRequest.maximumLevel = 0;
+        domainRequest.outputSize = {64, 64};
+        try {
+            const auto domainNodes
+                = dataset->requestMappedGridPlane(domainRequest, cancellation);
+            result.mappedDomainBounds = mappedGridDisplayBounds(domainNodes, axes);
+        } catch (const CacheBudgetExceeded&) {
+            result.mappedDomainBounds.reset();
+        } catch (const BlockReadError&) {
+            result.mappedDomainBounds.reset();
+        }
     }
     result.gridNodes = std::move(nodes);
     result.mappedAxes = axes;
@@ -625,13 +650,14 @@ void rewarpMappedImage(SliceDisplayResult& result)
         return;
     }
     auto warped = warpMappedGrid(result.image, *result.gridNodes,
-        result.mappedAxes, maxSliceOutputDimension,
-        result.request.mappedGridSupersample);
+        result.mappedAxes, result.request.displayWindow,
+        result.request.displayPixels);
     if (!warped.sourceIndex) {
         return;  // cannot happen for nodes that warped once; keep the raster
     }
     result.image = std::move(warped.image);
     result.displayRegion = warped.displayRegion;
+    result.mappedBounds = warped.mappedBounds;
     result.displaySourceIndex = std::move(warped.sourceIndex);
 }
 
@@ -806,7 +832,19 @@ InitialSliceResult executeSessionFrameLoad(
                 request.sphericalSupersample = spec.sphericalSupersample;
                 request.sphericalDisplay = spec.sphericalDisplay;
                 request.mappedGrid = spec.mappedGrid;
-                request.mappedGridSupersample = spec.mappedGridSupersample;
+                if (spec.mappedGrid) {
+                    // Drawn for what the view shows (see displayWindows); the
+                    // domain bounds let a view without a canvas build one.
+                    request.displayWindow = entry < spec.displayWindows.size()
+                        ? spec.displayWindows[entry] : RealBox{};
+                    request.displayPixels = entry < spec.displayPixels.size()
+                        ? spec.displayPixels[entry]
+                        : (entry < spec.outputSizes.size()
+                                ? spec.outputSizes[entry]
+                                : (hasOutputSize ? spec.outputSizes.back()
+                                                 : std::array<int, 2>{0, 0}));
+                    request.wantMappedDomainBounds = true;
+                }
                 if (metadata.dimension == 3) {
                     request.physicalPosition = positions[static_cast<std::size_t>(normal)];
                 }

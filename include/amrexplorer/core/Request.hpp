@@ -74,7 +74,19 @@ struct SliceRequest {
     // sameSliceSpec so a toggle re-warps the cached planes without a new
     // query. Ignored by a session without a mapped grid.
     bool mappedGrid = false;
-    int mappedGridSupersample = 4;
+    // The part of physical display space the warp is drawn for, on the
+    // slice's in-plane axes, and the device-pixel size it is drawn at: the
+    // view's visible window at the screen's own resolution, so cell edges
+    // are rasterized where they are seen rather than resampled from a
+    // fixed-pitch image. An invalid window (the default) means the whole
+    // node bounding box; zero pixels mean the raster's own size. Named for
+    // any display warp, so the spherical view can take them up as well.
+    RealBox displayWindow{};
+    std::array<int, 2> displayPixels{0, 0};
+    // Ask for the node bounding box of the whole domain on this slice's
+    // plane (SliceDisplayResult::mappedDomainBounds): what a view anchors
+    // its canvas to, wanted once per view rather than with every warp.
+    bool wantMappedDomainBounds = false;
 };
 
 struct LineRequest {

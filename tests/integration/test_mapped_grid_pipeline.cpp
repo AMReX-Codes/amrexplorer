@@ -14,6 +14,7 @@
 #include <amrexplorer/render2d/MappedGridWarp.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -147,7 +148,20 @@ amrvis::SliceRequest sliceRequest(bool mappedGrid)
     request.maximumLevel = 0;
     request.outputSize = {4, 4};
     request.mappedGrid = mappedGrid;
-    request.mappedGridSupersample = 4;
+    // Drawn at 16 x 16 display pixels over the whole node box (the window is
+    // left empty), four per cell along x.
+    request.displayPixels = {16, 16};
+    return request;
+}
+
+// The same request drawn for one window of the plane.
+amrvis::SliceRequest windowedRequest(
+    double x0, double x1, double z0, double z1, std::array<int, 2> pixels)
+{
+    auto request = sliceRequest(true);
+    request.displayWindow.lower = {{x0, 0.0, z0}};
+    request.displayWindow.upper = {{x1, 1.0, z1}};
+    request.displayPixels = pixels;
     return request;
 }
 
@@ -188,9 +202,12 @@ void testMappedFixture(const std::filesystem::path& fixture)
     require(mapped.displaySourceIndex->size() == pixelCount,
         "the source index is parallel to the display image");
     require(mapped.image.rgba.size() == pixelCount, "the image storage matches its size");
-    // Pitch per axis = dx/4 = dz/4 = 0.0625: 16 columns over x in [0, 1]; the
-    // z span runs from the lowest node (i = 0, k = 0) to the top layer at z = 1.
-    require(mapped.image.width == 16, "the warped raster spans x at the supersampled pitch");
+    require(mapped.image.width == 16 && mapped.image.height == 16,
+        "the warp is drawn at the requested display pixels");
+    require(mapped.mappedBounds == mapped.displayRegion,
+        "an empty window draws the whole node box");
+    require(!mapped.mappedDomainBounds,
+        "the domain bounds come only when asked for");
     require(mapped.displayPlane().width == 4 && mapped.displayPlane().height == 4,
         "the logical plane is untouched by the warp");
 
@@ -216,9 +233,11 @@ void testMappedFixture(const std::filesystem::path& fixture)
     require(near(mapped.gridNodes->b[0], sliceNodeZ(0, 0)),
         "the node plane carries the averaged layers");
 
-    // Every opaque display pixel names a raster pixel whose column matches
-    // its x position (x is unstretched) and whose row brackets its z between
-    // that cell's node rows.
+    // Every display pixel with a source names a raster pixel whose column
+    // matches its x position (x is unstretched) and whose row brackets its z
+    // between that cell's node rows. Coverage antialiasing: a pixel whose
+    // centre no cell covers is at most partly covered, and one a cell's
+    // centre owns is at least partly drawn.
     const auto& index = *mapped.displaySourceIndex;
     std::size_t opaque = 0;
     for (int row = 0; row < mapped.image.height; ++row) {
@@ -228,13 +247,13 @@ void testMappedFixture(const std::filesystem::path& fixture)
                 + static_cast<std::size_t>(col);
             const auto source = index[pixel];
             if (source < 0) {
-                require((mapped.image.rgba[pixel] >> 24U) == 0U,
-                    "a pixel without a source is transparent");
+                require((mapped.image.rgba[pixel] >> 24U) < 0xFFU,
+                    "a pixel without a source is not fully covered");
                 continue;
             }
             ++opaque;
-            require((mapped.image.rgba[pixel] >> 24U) == 0xFFU,
-                "a pixel with a source is opaque");
+            require((mapped.image.rgba[pixel] >> 24U) > 0U,
+                "a pixel with a source is drawn");
             const int sourceCol = source % 4;
             const int sourceRow = source / 4;
             const double x = region.lower[0]
@@ -266,8 +285,95 @@ void testMappedFixture(const std::filesystem::path& fixture)
         const auto pixel = static_cast<std::size_t>(row)
             * static_cast<std::size_t>(mapped.image.width) + static_cast<std::size_t>(col);
         require(index[pixel] == 0, "the lowest pixel of column 0 shows cell (0, 0)");
-        require(mapped.image.rgba[pixel] == flat.image.rgba[0],
+        require((mapped.image.rgba[pixel] & 0x00FFFFFFU) == (flat.image.rgba[0] & 0x00FFFFFFU),
             "the warp carries the cell's rendered colour");
+    }
+
+    // --- a window of the plane at its own pixels -------------------------
+    {
+        const auto windowed = amrvis::executeSlice(session,
+            windowedRequest(0.25, 0.75, 0.3, 0.8, {10, 20}),
+            amrvis::RangeMode::File, std::nullopt, false, palette, {});
+        require(windowed.mappedGrid, "a windowed request is drawn on the grid");
+        require(windowed.image.width == 10 && windowed.image.height == 20,
+            "a window is drawn at its requested pixels");
+        require(near(windowed.displayRegion.lower[0], 0.25)
+                && near(windowed.displayRegion.upper[0], 0.75)
+                && near(windowed.displayRegion.lower[2], 0.3)
+                && near(windowed.displayRegion.upper[2], 0.8),
+            "the display region is the window");
+        require(windowed.mappedBounds == mapped.displayRegion,
+            "the plane's node box is carried beside the window");
+        require(windowed.displaySourceIndex
+                && windowed.displaySourceIndex->size() == 200U,
+            "the window's source index matches its pixels");
+        // Interior of the domain: every pixel is covered by some cell.
+        bool allDrawn = true;
+        for (const auto colour : windowed.image.rgba) {
+            allDrawn = allDrawn && (colour >> 24U) == 0xFFU;
+        }
+        require(allDrawn, "a window inside the domain is fully covered");
+        // The cell under the window's centre is the one the plane puts at
+        // x = 0.5, z = 0.55 on the slice: column 2, and the row whose node
+        // rows bracket 0.55 at that column.
+        const auto centre = (*windowed.displaySourceIndex)[10 * 10 + 5];
+        require(centre >= 0 && centre % 4 == 2, "the window centre names column 2");
+        if (centre >= 0) {
+            const int sourceRow = centre / 4;
+            require(0.55 >= std::min(sliceNodeZ(2, sourceRow), sliceNodeZ(3, sourceRow)) - 1e-9
+                    && 0.55 <= std::max(sliceNodeZ(2, sourceRow + 1), sliceNodeZ(3, sourceRow + 1)) + 1e-9,
+                "the window centre's cell brackets z = 0.55");
+        }
+
+        auto asking = windowedRequest(0.25, 0.75, 0.3, 0.8, {10, 20});
+        asking.wantMappedDomainBounds = true;
+        const auto withBounds = amrvis::executeSlice(session, asking,
+            amrvis::RangeMode::File, std::nullopt, false, palette, {});
+        require(withBounds.mappedDomainBounds.has_value(),
+            "the domain bounds are answered when asked for");
+        if (withBounds.mappedDomainBounds) {
+            const auto& domain = *withBounds.mappedDomainBounds;
+            bool same = true;
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                same = same && near(domain.lower[axis], mapped.mappedBounds.lower[axis], 1e-9)
+                    && near(domain.upper[axis], mapped.mappedBounds.upper[axis], 1e-9);
+            }
+            require(same,
+                "on a whole-domain slice the domain bounds are the plane's node box");
+        }
+    }
+
+    // --- a window reaching past the nodes, and one off them --------------
+    {
+        // x in [0.5, 1.5] at 20 pixels: the half past x = 1 stays clear and
+        // the other half is drawn at the window's own pitch.
+        const auto past = amrvis::executeSlice(session,
+            windowedRequest(0.5, 1.5, 0.3, 0.8, {20, 10}),
+            amrvis::RangeMode::File, std::nullopt, false, palette, {});
+        bool split = past.mappedGrid && past.image.width == 20
+            && past.image.height == 10 && past.image.rgba.size() == 200U;
+        for (int row = 0; split && row < 10; ++row) {
+            const auto alpha = [&past, row](int col) {
+                return past.image.rgba[static_cast<std::size_t>(row * 20 + col)] >> 24U;
+            };
+            split = alpha(9) == 0xFFU && alpha(10) == 0U;
+        }
+        require(split && near(past.displayRegion.upper[0], 1.5),
+            "a window past the nodes keeps its extent and draws only its cells");
+        // Below the lowest node: still a warp of that window, transparent and
+        // naming no cell, not the logical raster.
+        const auto below = amrvis::executeSlice(session,
+            windowedRequest(0.0, 1.0, -0.5, -0.1, {8, 4}),
+            amrvis::RangeMode::File, std::nullopt, false, palette, {});
+        bool clear = below.mappedGrid && below.image.rgba.size() == 32U
+            && below.displaySourceIndex && below.displaySourceIndex->size() == 32U;
+        for (std::size_t pixel = 0; clear && pixel < 32U; ++pixel) {
+            clear = below.image.rgba[pixel] == 0U
+                && (*below.displaySourceIndex)[pixel] == -1;
+        }
+        require(clear && near(below.displayRegion.lower[2], -0.5)
+                && near(below.displayRegion.upper[2], -0.1),
+            "a window off the nodes is a transparent warp of that window");
     }
 
     // --- refreshCachedSlice re-warps from the cached plane ---------------
@@ -320,6 +426,18 @@ void testMappedFixture(const std::filesystem::path& fixture)
         require(kept.mappedGrid && kept.gridNodes == mapped.gridNodes
                 && kept.displayRegion == mapped.displayRegion,
             "an undirty refresh with cached nodes keeps the frame");
+        // A new window at new pixels is a re-warp of the same nodes: no
+        // query, the window's region and pixels.
+        const auto moved = amrvis::refreshCachedSlice(counting,
+            windowedRequest(0.0, 0.5, 0.2, 0.9, {7, 9}),
+            plane, {}, {}, mapped.gridNodes, amrvis::RangeMode::File, std::nullopt,
+            false, palette, amrvis::DisplayMode::Raster, 0, 0, 10, true);
+        require(counting->nodeRequests == 0,
+            "a re-warp for another window asks for no node plane");
+        require(moved.mappedGrid && moved.image.width == 7 && moved.image.height == 9
+                && near(moved.displayRegion.upper[0], 0.5)
+                && near(moved.displayRegion.lower[2], 0.2),
+            "a re-warp for another window draws that window at its pixels");
         static_cast<void>(amrvis::refreshCachedSlice(counting, sliceRequest(true),
             plane, {}, {}, nullptr, amrvis::RangeMode::File, std::nullopt,
             false, palette, amrvis::DisplayMode::Raster, 0, 0, 10, true));
@@ -375,7 +493,10 @@ void testSharedRangeFrameLoad(const std::filesystem::path& fixture)
     amrvis::FrameSliceSpec spec;
     spec.rangeMode = amrvis::RangeMode::Visible;
     spec.mappedGrid = true;
-    spec.mappedGridSupersample = 4;
+    // Viewport bounds: the planes stay native (4 x 4) while the warps are
+    // drawn at these pixels over the whole node box.
+    spec.outputSizes = {{20, 12}, {20, 12}, {20, 12}};
+    spec.outputSizesAreViewportBounds = true;
     const auto result = amrvis::executeFrameLoad(
         fixture, amrvis::DatasetId{1}, spec, 64ULL << 20U, {});
     require(result.displays.size() == 3, "a 3-D frame load yields three panels");
@@ -389,19 +510,51 @@ void testSharedRangeFrameLoad(const std::filesystem::path& fixture)
                         * static_cast<std::size_t>(image.height),
             "the shared-range raster carries a source index of its own size");
         const auto& plane = display.displayPlane();
-        // Supersample 4 on a 4x4 raster: at least the unstretched axis is
-        // four pixels per cell, so the flat raster (4x4) cannot be what is
-        // shown.
-        require(image.width >= 4 * plane.width || image.height >= 4 * plane.height,
-            "the shared-range raster is the warped one, not the flat plane");
+        require(plane.width == 4 && plane.height == 4,
+            "viewport bounds leave the plane native");
+        require(image.width == 20 && image.height == 12,
+            "the shared-range raster is the warp at the viewport pixels, not the plane");
         const auto bounds = amrvis::mappedGridDisplayBounds(
             *display.gridNodes, display.mappedAxes);
         require(bounds && display.displayRegion == *bounds,
             "the shared-range display region is the node bounding box");
+        require(display.mappedDomainBounds.has_value(),
+            "a mapped frame load carries the domain bounds for the canvas");
         require(display.minimum == result.displays.front().minimum
                 && display.maximum == result.displays.front().maximum,
             "all three panels share one range");
     }
+}
+
+// A frame drawn for what each view shows: the window and pixels its spec
+// carries per view; a view without a window gets the whole node box.
+void testFrameLoadDrawsTheViewWindows(const std::filesystem::path& fixture)
+{
+    amrvis::FrameSliceSpec spec;
+    spec.mappedGrid = true;
+    amrvis::RealBox window;
+    window.lower = {{0.25, 0.0, 0.3}};
+    window.upper = {{0.75, 1.0, 0.8}};
+    spec.displayWindows = {amrvis::RealBox{}, window, amrvis::RealBox{}};
+    spec.displayPixels = {{30, 20}, {10, 20}, {24, 24}};
+    const auto result = amrvis::executeFrameLoad(
+        fixture, amrvis::DatasetId{1}, spec, 64ULL << 20U, {});
+    require(result.displays.size() == 3, "a 3-D frame load yields three panels");
+    const auto& xz = result.displays[1];
+    require(xz.mappedGrid && xz.image.width == 10 && xz.image.height == 20
+            && near(xz.displayRegion.lower[0], 0.25)
+            && near(xz.displayRegion.upper[0], 0.75)
+            && near(xz.displayRegion.lower[2], 0.3)
+            && near(xz.displayRegion.upper[2], 0.8),
+        "a frame is drawn for the window its view shows, at its pixels");
+    const auto& yz = result.displays[0];
+    std::optional<amrvis::RealBox> yzBounds;
+    if (yz.gridNodes) {
+        yzBounds = amrvis::mappedGridDisplayBounds(*yz.gridNodes, yz.mappedAxes);
+    }
+    require(yz.mappedGrid && yz.image.width == 30 && yz.image.height == 20
+            && yzBounds && yz.displayRegion == *yzBounds,
+        "a view without a window gets the whole node box at its pixels");
 }
 
 void testPlainPlotfile(const std::filesystem::path& mappedFixture,
@@ -495,6 +648,7 @@ int main(int argc, char** argv)
     try {
         testMappedFixture(argv[1]);
         testSharedRangeFrameLoad(argv[1]);
+        testFrameLoadDrawsTheViewWindows(argv[1]);
         testStarvedGridPool(argv[1]);
         testPlainPlotfile(argv[1], argv[2]);
         testDamagedNodeData(argv[1], argv[2]);

@@ -414,12 +414,64 @@ void testDeepZoomInsideOneCell()
     require(full, "a window deep inside one cell shows that cell in every pixel");
 }
 
+void testDeepZoomAcrossASlantedEdge()
+{
+    // Two cells whose shared edge slopes, under a 100 x 100 window a
+    // hundred-millionth of a unit wide sitting on that edge. Every pixel more
+    // than two from the edge must show the cell it falls in: the edge
+    // tolerance is a fraction of a pixel, not of the (by now enormous)
+    // triangle.
+    const auto src = indexedRaster(1, 2);
+    amrvis::MappedGridPlane nodes;
+    nodes.width = 2;
+    nodes.height = 3;
+    nodes.physicalRegion.lower = {{0.0, 0.0, 0.0}};
+    nodes.physicalRegion.upper = {{1.0, 2.0, 1.0}};
+    for (int j = 0; j < 3; ++j) {
+        for (int i = 0; i < 2; ++i) {
+            nodes.a.push_back(static_cast<double>(i));
+            nodes.b.push_back(static_cast<double>(j) + 0.5 * i);
+        }
+    }
+    // The shared edge is b = 1 + 0.5 a, so it passes through (0.5, 1.25).
+    constexpr double half = 5.0e-9;
+    constexpr int pixels = 100;
+    const auto warped = amrvis::warpMappedGrid(src, nodes, {0, 1},
+        windowOn(0.5 - half, 0.5 + half, 1.25 - half, 1.25 + half),
+        {pixels, pixels});
+    require(warped.sourceIndex != nullptr, "the deep-zoom warp carries a source index");
+    if (!warped.sourceIndex) {
+        return;
+    }
+    const double span = 2.0 * half;
+    const double perUnit = pixels / span;  // pixels per unit, both axes
+    int wrong = 0;
+    for (int row = 0; row < pixels; ++row) {
+        for (int column = 0; column < pixels; ++column) {
+            const double a = (0.5 - half) + (column + 0.5) / pixels * span;
+            const double b = (1.25 - half) + (row + 0.5) / pixels * span;
+            const double side = b - (1.0 + 0.5 * a);
+            if (std::abs(side) * perUnit / std::sqrt(1.25) <= 2.0) {
+                continue;  // on the edge itself: either cell will do
+            }
+            const auto offset = static_cast<std::size_t>(row * pixels + column);
+            const auto expected = static_cast<std::size_t>(side > 0.0 ? 1 : 0);
+            if ((*warped.sourceIndex)[offset] != static_cast<std::int32_t>(expected)
+                || warped.image.rgba[offset] != src.rgba[expected]) {
+                ++wrong;
+            }
+        }
+    }
+    require(wrong == 0, "deep zoom put pixels in the wrong cell along a slanted edge");
+}
+
 } // namespace
 
 int main()
 {
     testIdentity();
     testDeepZoomInsideOneCell();
+    testDeepZoomAcrossASlantedEdge();
     testVerticalStretch();
     testWindowClipsToTheCellsUnderIt();
     testWindowHelper();

@@ -751,7 +751,8 @@ particle is drawn only where it falls inside the cell the plane cuts, so each
 panel shows one cell's thickness of particles and follows the plane as you move
 it. The thickness is the cell actually drawn at that point, so a region shown at
 a coarse level keeps its thicker cell rather than losing particles to a finer
-level's spacing; where a panel shows no data it shows no particles either.
+level's spacing, and on a mapped grid it is the cell's own faces, which follow
+the terrain; where a panel shows no data it shows no particles either.
 
 Particle settings are not saved between sessions. Species selection, colors,
 subset percentage, seed, point size, and the slice-cell filter all reset when a

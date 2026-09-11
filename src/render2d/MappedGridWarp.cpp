@@ -71,7 +71,16 @@ void fillTriangle(Point p0, Point p1, Point p2, std::uint32_t colour,
     const int colEnd = last(xHi, out.width);
     const int rowStart = first(yLo);
     const int rowEnd = last(yHi, out.height);
-    const double epsilon = 1e-9 * std::abs(area);
+    // A thousandth of a pixel of slack perpendicular to each edge, so a
+    // subsample on a shared edge still counts for both cells. Scaled by the
+    // edge's length, not the area, which deep zoom blows up to whole pixels.
+    constexpr double edgeSlack = 1e-3;
+    const auto slack = [](Point from, Point to) {
+        return edgeSlack * std::hypot(to.x - from.x, to.y - from.y);
+    };
+    const double tol0 = slack(p0, p1);
+    const double tol1 = slack(p1, p2);
+    const double tol2 = slack(p2, p0);
     const bool opaque = ((colour >> 24U) & 0xFFU) != 0U;
     const auto r = (colour >> 16U) & 0xFFU;
     const auto g = (colour >> 8U) & 0xFFU;
@@ -83,7 +92,7 @@ void fillTriangle(Point p0, Point p1, Point p2, std::uint32_t colour,
             * ((p2.x - p1.x) * (cy - p1.y) - (cx - p1.x) * (p2.y - p1.y));
         const double e2 = orientation
             * ((p0.x - p2.x) * (cy - p2.y) - (cx - p2.x) * (p0.y - p2.y));
-        return !(e0 < -epsilon || e1 < -epsilon || e2 < -epsilon);
+        return !(e0 < -tol0 || e1 < -tol1 || e2 < -tol2);
     };
     constexpr double step = 1.0 / subsamples;
     for (int row = rowStart; row <= rowEnd; ++row) {

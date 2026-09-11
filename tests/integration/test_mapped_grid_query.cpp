@@ -90,6 +90,14 @@ void testMappedFixture(const std::filesystem::path& fixture)
             }
         }
         require(ok, "y-normal nodes are x uniform and z averaged over layers 1,2");
+        require(plane.normalLower.size() == 25 && plane.normalUpper.size() == 25,
+            "normal faces match the node count");
+        bool faces = true;
+        for (std::size_t n = 0; n < 25; ++n) {
+            faces = faces && near(plane.normalLower[n], dx)
+                && near(plane.normalUpper[n], 2 * dx);
+        }
+        require(faces, "y-normal faces are layers 1 and 2, which nu_y leaves put");
         require(plane.physicalRegion.upper[0] == 1.0,
             "plane keeps the logical region");
     }
@@ -123,6 +131,18 @@ void testMappedFixture(const std::filesystem::path& fixture)
             }
         }
         require(ok, "z-normal nodes are the uniform x-y grid");
+        // The slice is through cell k = 0, so its faces are node layers 0 and
+        // 1, both displaced by the terrain: the cell at x = y = 0.875 spans
+        // [0.109375, 0.33203125), not its logical [0, 0.25).
+        bool faces = true;
+        for (int j = 0; j <= 4; ++j) {
+            for (int i = 0; i <= 4; ++i) {
+                const auto n = node(plane, i, j);
+                faces = faces && near(plane.normalLower[n], nuZ(i, j, 0))
+                    && near(plane.normalUpper[n], dx + nuZ(i, j, 1));
+            }
+        }
+        require(faces, "z-normal faces carry the terrain of layers 0 and 1");
     }
 
     // A raster coarser than the grid (2x2 over the whole domain): nodes at

@@ -251,6 +251,15 @@ int main()
         require(amrvis::qt::mappedParticlePoint(mapping, plane, 3.0, 4.5, 0.5, slab)
                 && !amrvis::qt::mappedParticlePoint(mapping, plane, 3.0, 4.5, 1.5, slab),
             "mapped particles: the slab of the cell drawn there was not applied");
+        // Displaced faces outrank that logical slab: terrain lifts the cell to
+        // [1, 2), so the normal that was inside the slab is out of the cell and
+        // the one that was outside is in it.
+        nodes->normalLower.assign(25, 1.0);
+        nodes->normalUpper.assign(25, 2.0);
+        require(!amrvis::qt::mappedParticlePoint(mapping, plane, 3.0, 4.5, 0.5, slab)
+                && amrvis::qt::mappedParticlePoint(mapping, plane, 3.0, 4.5, 1.5, slab)
+                       .has_value(),
+            "mapped particles: the cell's displaced faces were not used");
         require(!mapping.planePixelFromScene(1.0e30, 2.0)
                 && !mapping.planePixelFromScene(2.0, -1.0e30),
             "mapped: scene points far off the pixmap have no plane pixel");

@@ -40,6 +40,13 @@ struct MappedGridPlane {
     // terrain-following grid and the cell's mid-plane otherwise.
     std::vector<double> a;
     std::vector<double> b;
+    // The cell's two faces along the normal, in physical units, one value per
+    // node (3-D only; empty in 2-D). A slice at cell index c takes node layer
+    // c for `normalLower` and c + 1 for `normalUpper`, so a point is in the
+    // cell its faces bracket -- which the logical slab bounds do not say on a
+    // terrain-following grid.
+    std::vector<double> normalLower;
+    std::vector<double> normalUpper;
 };
 
 [[nodiscard]] std::vector<std::string> validateMappedGridPlaneRequest(

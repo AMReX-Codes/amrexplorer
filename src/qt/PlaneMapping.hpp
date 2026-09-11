@@ -264,11 +264,41 @@ struct PlaneMapping {
     }
 };
 
+// The physical faces of a mapped plane cell along the slice normal, averaged
+// over its four corner nodes. Nothing when the node plane carries no normal
+// coordinates: a 2-D slice, which has no normal to be in or out of.
+[[nodiscard]] inline std::optional<std::array<double, 2>> mappedCellFaces(
+    const MappedGridPlane& nodes, int column, int row)
+{
+    const auto count = static_cast<std::size_t>(std::max(0, nodes.width))
+        * static_cast<std::size_t>(std::max(0, nodes.height));
+    if (column < 0 || row < 0 || column + 1 >= nodes.width
+        || row + 1 >= nodes.height || nodes.normalLower.size() != count
+        || nodes.normalUpper.size() != count) {
+        return std::nullopt;
+    }
+    const auto corners = [&](const std::vector<double>& face) {
+        double sum = 0.0;
+        for (const int downRow : {0, 1}) {
+            for (const int alongRow : {0, 1}) {
+                sum += face[static_cast<std::size_t>(row + downRow)
+                        * static_cast<std::size_t>(nodes.width)
+                    + static_cast<std::size_t>(column + alongRow)];
+            }
+        }
+        return 0.25 * sum;
+    };
+    const double lower = corners(nodes.normalLower);
+    const double upper = corners(nodes.normalUpper);
+    return std::array<double, 2>{
+        std::min(lower, upper), std::max(lower, upper)};
+}
+
 // A particle on a mapped view: the tile point its physical in-plane position
 // (a, b) lands on, kept only over a cell the warp drew -- the plane's logical
-// bounds play no part, since the grid can reach past them. With slabs (one per
-// level, see sliceCellSlabs) the normal coordinate must also lie in the slab
-// of that cell's level.
+// bounds play no part, since the grid can reach past them. With slabs (see
+// sliceCellSlabs) the normal coordinate must also lie in that cell: between
+// its displaced faces where the nodes carry them, else in its level's slab.
 [[nodiscard]] inline std::optional<QPointF> mappedParticlePoint(
     const PlaneMapping& mapping, const ScalarPlane& plane, double a, double b,
     double normal, std::span<const SliceCellSlab> levelSlabs)
@@ -282,6 +312,18 @@ struct PlaneMapping {
         return std::nullopt;
     }
     if (!levelSlabs.empty()) {
+        // The drawn cell's own faces where the node plane carries them: the
+        // level's slab is logical, and a terrain-following cell is not there.
+        const auto faces = mapping.nodes
+            ? mappedCellFaces(*mapping.nodes, (*pixel)[0], (*pixel)[1])
+            : std::optional<std::array<double, 2>>{};
+        if (faces) {
+            // Half-open, as the slice picks its cell.
+            if (!(normal >= (*faces)[0]) || !(normal < (*faces)[1])) {
+                return std::nullopt;
+            }
+            return scene;
+        }
         const auto offset = static_cast<std::size_t>((*pixel)[0])
             + static_cast<std::size_t>(std::max(0, plane.width))
                 * static_cast<std::size_t>((*pixel)[1]);

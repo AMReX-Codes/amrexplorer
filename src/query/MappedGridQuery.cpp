@@ -135,52 +135,64 @@ MappedGridPlane queryMappedGridPlane(PlotfileDataset& data,
 
     std::vector<double> displacement(nodeCount);
     std::vector<std::uint8_t> covered(nodeCount);
+    // One node layer of the field in hand, added into the accumulator where
+    // it covers a node.
+    const auto addLayer = [&](double position) {
+        const auto& direct = queryLayer(position);
+        for (std::size_t node = 0; node < nodeCount; ++node) {
+            if (direct.plane.valid[node] == 0) {
+                continue;
+            }
+            auto value = direct.plane.values[node];
+            const int level = direct.plane.sourceLevel[node];
+            if (metadata.dimension == 3 && level >= 0
+                && level < maximumLevel) {
+                const auto& gridLevel
+                    = gridMetadata.levels[static_cast<std::size_t>(level)];
+                const auto n = static_cast<std::size_t>(normal);
+                const auto spacing = gridLevel.cellSize[n];
+                const auto offset
+                    = (position - gridLevel.indexOrigin[n]) / spacing;
+                const auto lowerLayer = std::floor(offset);
+                const auto weight = offset - lowerLayer;
+                constexpr double onLayer = 1e-9;
+                if (weight > onLayer && weight < 1.0 - onLayer) {
+                    const auto& domain = nodalDomainOf(level);
+                    const auto low = std::clamp(static_cast<int>(lowerLayer),
+                        domain.lower[n], domain.upper[n]);
+                    const auto high = std::clamp(static_cast<int>(lowerLayer) + 1,
+                        domain.lower[n], domain.upper[n]);
+                    const auto& below = queryLayer(
+                        samplePosition(gridLevel, normal, low));
+                    const auto& above = queryLayer(
+                        samplePosition(gridLevel, normal, high));
+                    const auto valueBelow = below.plane.valid[node] != 0
+                        ? below.plane.values[node] : value;
+                    const auto valueAbove = above.plane.valid[node] != 0
+                        ? above.plane.values[node] : value;
+                    value = (1.0 - weight) * valueBelow + weight * valueAbove;
+                }
+            }
+            displacement[node] += value;
+            ++covered[node];
+        }
+    };
+    const auto clearAccumulator = [&]() {
+        std::fill(displacement.begin(), displacement.end(), 0.0);
+        std::fill(covered.begin(), covered.end(), std::uint8_t{0});
+    };
+    // The layer cache holds one field's layers, so switching fields drops it.
+    const auto useField = [&](std::size_t axis) {
+        layers.clear();
+        nodeRequest.field = FieldId{static_cast<std::uint32_t>(axis)};
+    };
     for (std::size_t inPlane = 0; inPlane < 2; ++inPlane) {
         const auto axis = static_cast<std::size_t>(axes[inPlane]);
         auto& coordinates = inPlane == 0 ? plane.a : plane.b;
-        std::fill(displacement.begin(), displacement.end(), 0.0);
-        std::fill(covered.begin(), covered.end(), std::uint8_t{0});
-        layers.clear();
-        nodeRequest.field = FieldId{static_cast<std::uint32_t>(axis)};
+        clearAccumulator();
+        useField(axis);
         for (const auto position : layerPositions) {
-            const auto& direct = queryLayer(position);
-            for (std::size_t node = 0; node < nodeCount; ++node) {
-                if (direct.plane.valid[node] == 0) {
-                    continue;
-                }
-                auto value = direct.plane.values[node];
-                const int level = direct.plane.sourceLevel[node];
-                if (metadata.dimension == 3 && level >= 0
-                    && level < maximumLevel) {
-                    const auto& gridLevel
-                        = gridMetadata.levels[static_cast<std::size_t>(level)];
-                    const auto n = static_cast<std::size_t>(normal);
-                    const auto spacing = gridLevel.cellSize[n];
-                    const auto offset
-                        = (position - gridLevel.indexOrigin[n]) / spacing;
-                    const auto lowerLayer = std::floor(offset);
-                    const auto weight = offset - lowerLayer;
-                    constexpr double onLayer = 1e-9;
-                    if (weight > onLayer && weight < 1.0 - onLayer) {
-                        const auto& domain = nodalDomainOf(level);
-                        const auto low = std::clamp(static_cast<int>(lowerLayer),
-                            domain.lower[n], domain.upper[n]);
-                        const auto high = std::clamp(static_cast<int>(lowerLayer) + 1,
-                            domain.lower[n], domain.upper[n]);
-                        const auto& below = queryLayer(
-                            samplePosition(gridLevel, normal, low));
-                        const auto& above = queryLayer(
-                            samplePosition(gridLevel, normal, high));
-                        const auto valueBelow = below.plane.valid[node] != 0
-                            ? below.plane.values[node] : value;
-                        const auto valueAbove = above.plane.valid[node] != 0
-                            ? above.plane.values[node] : value;
-                        value = (1.0 - weight) * valueBelow + weight * valueAbove;
-                    }
-                }
-                displacement[node] += value;
-                ++covered[node];
-            }
+            addLayer(position);
         }
         for (std::size_t row = 0; row < height; ++row) {
             for (std::size_t column = 0; column < width; ++column) {
@@ -192,6 +204,24 @@ MappedGridPlane queryMappedGridPlane(PlotfileDataset& data,
                     value += displacement[node] / static_cast<double>(covered[node]);
                 }
                 coordinates[node] = value;
+            }
+        }
+    }
+    // The cell's two faces along the normal, each layer kept as it is rather
+    // than averaged into a mid-plane: only these say whether a physical point
+    // lies in the cell the slice drew.
+    if (metadata.dimension == 3 && layerPositions.size() == 2) {
+        useField(static_cast<std::size_t>(normal));
+        for (std::size_t layer = 0; layer < 2; ++layer) {
+            clearAccumulator();
+            addLayer(layerPositions[layer]);
+            auto& face = layer == 0 ? plane.normalLower : plane.normalUpper;
+            face.assign(nodeCount, layerPositions[layer]);
+            for (std::size_t node = 0; node < nodeCount; ++node) {
+                if (covered[node] != 0) {
+                    face[node] += displacement[node]
+                        / static_cast<double>(covered[node]);
+                }
             }
         }
     }

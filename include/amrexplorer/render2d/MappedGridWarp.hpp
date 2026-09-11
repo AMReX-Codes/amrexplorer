@@ -41,9 +41,11 @@ struct MappedWarpedRaster {
 // into a physically uniform output whose pitch along each axis is that
 // axis's raster pitch over `supersample` (clamped to at least 1), capped at
 // maxDimension. The pitch is anisotropic like the raster's own, so a
-// display pixel has the physical shape of a native cell and the view's
-// Physical Size stretch applies to it unchanged; a thin domain keeps its
-// short axis resolved. Forward filling needs no inverse of the mapping and
+// display pixel has the physical shape of a raster cell -- the finest cell,
+// unless the slice output cap coarsened the raster along an axis -- and the
+// view's Physical Size stretch applies to it with that ratio (see
+// rasterPitchOverCell in the GUI); a thin domain keeps its short axis
+// resolved. Forward filling needs no inverse of the mapping and
 // leaves no gap between cells however thin they are. `axes` are the dataset
 // axes of nodes.a and nodes.b. Degenerate input (a node plane that does not fit the raster,
 // non-finite or zero-extent node bounds) hands back the source raster with

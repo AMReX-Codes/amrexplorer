@@ -164,10 +164,51 @@ void isoWireframeFollowsTheAxisFactors()
         "unit factors changed a point");
 }
 
+// A mapped pixmap is drawn at the raster's pitch: one finest cell per
+// sample unless the per-axis output cap coarsened the raster, in which case
+// that axis's Physical Size factor must grow by the same ratio.
+void mappedStretchFollowsTheRasterPitch()
+{
+    const auto metadata = tallMetadata();
+    amrvis::RealBox region;
+    region.lower = {{0.0, 0.0, 0.0}};
+    region.upper = {{1.0, 1024.0, 0.0}};
+    const std::array<int, 2> axes{0, 1};
+    // Native: 64 x 1024 samples over the domain, one per cell.
+    const auto native = amrvis::qt::rasterPitchOverCell(
+        metadata, region, 64, 1024, axes);
+    require(nearly(native[0], 1.0) && nearly(native[1], 1.0),
+        "a native raster has the cell's pitch on both axes");
+    // Capped along y to 512 samples: each sample spans two cells there.
+    const auto capped = amrvis::qt::rasterPitchOverCell(
+        metadata, region, 64, 512, axes);
+    require(nearly(capped[0], 1.0) && nearly(capped[1], 2.0),
+        "a capped axis reports the raster pitch over the cell");
+    // Half the domain at native pitch is still one.
+    amrvis::RealBox half = region;
+    half.upper[1] = 512.0;
+    const auto zoomed = amrvis::qt::rasterPitchOverCell(
+        metadata, half, 64, 512, axes);
+    require(nearly(zoomed[0], 1.0) && nearly(zoomed[1], 1.0),
+        "a zoomed native raster is not mistaken for a capped one");
+    // No physical geometry, an empty plane: one, never a division by zero.
+    auto fab = metadata;
+    fab.hasPhysicalGeometry = false;
+    const auto noGeometry = amrvis::qt::rasterPitchOverCell(
+        fab, region, 64, 512, axes);
+    require(nearly(noGeometry[0], 1.0) && nearly(noGeometry[1], 1.0),
+        "no physical geometry means no correction");
+    const auto empty = amrvis::qt::rasterPitchOverCell(
+        metadata, region, 0, 512, axes);
+    require(nearly(empty[0], 1.0) && nearly(empty[1], 1.0),
+        "an empty plane means no correction");
+}
+
 } // namespace
 
 int main()
 {
+    mappedStretchFollowsTheRasterPitch();
     isoWireframeFollowsTheAxisFactors();
     physicalModeStretchesByTheFinestCellSize();
     axisFactorsMultiplyAndNormalize();

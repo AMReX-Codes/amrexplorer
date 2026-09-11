@@ -1089,9 +1089,13 @@ private:
     void resetAxisScale();
     void setAspectMode(AspectMode mode);
     [[nodiscard]] std::array<double, 3> displayStretchPerAxis() const;
-    // The two factors a panel shows, normalized so the smaller is one.
+    // The two factors a panel shows, normalized so the smaller is one. On a
+    // mapped grid the pixmap has the raster's own pitch, so the factors also
+    // carry rasterPitchOverCell; `arriving`, when given, is the result about
+    // to be installed and supplies that raster instead of the state's.
     [[nodiscard]] std::array<double, 2> displayStretchFor(
-        const PlaneViewState& state) const;
+        const PlaneViewState& state,
+        const SliceDisplayResult* arriving = nullptr) const;
     // viewportPixelSize enlarged along the less stretched axis, the bound a
     // remote raster is sized to (see sliceOutputSize and the sequence spec).
     [[nodiscard]] std::array<int, 2> stretchedViewportPixelSize(
@@ -1099,7 +1103,8 @@ private:
     // Push the current stretch to one view (showSlice, before the raster is
     // installed) or to every view after an option change, when a remote view
     // also re-requests a raster sized for the new stretch.
-    void applyDisplayStretch(PlaneViewState& state);
+    void applyDisplayStretch(PlaneViewState& state,
+        const SliceDisplayResult* arriving = nullptr);
     void applyDisplayStretches();
     // Enable/disable the Aspect Ratio submenu for the current dataset.
     void updateAspectControls();

@@ -1067,9 +1067,26 @@ void MainWindow::updateScaleBarAvailability()
     // only while that holds vertically too. The saved preference survives a
     // dataset or aspect setting on which the bar is withheld.
     // Withheld over two datasets: the bar would speak for one of them.
-    const bool available = primary().session && !m_pair
+    bool available = primary().session && !m_pair
         && displayIsPhysicallyIsotropic(
             primary().session->metadata(), displayStretchPerAxis());
+    // A mapped pixmap drawn at a capped raster's pitch is denser along the
+    // other axis: no single length per pixel to state.
+    if (available && displayIsMapped()) {
+        for (const auto* state : currentViews()) {
+            if (!state->mappedGrid || !state->plane) {
+                continue;
+            }
+            const auto ratio = amrvis::qt::rasterPitchOverCell(
+                primary().session->metadata(), state->plane->physicalRegion,
+                state->plane->width, state->plane->height,
+                displayAxes(state->normal));
+            if (std::abs(ratio[0] - ratio[1]) > 1.0e-9) {
+                available = false;
+                break;
+            }
+        }
+    }
     {
         const QSignalBlocker blocker(m_scaleBarAction);
         m_scaleBarAction->setChecked(available && m_scaleBarVisible);
@@ -1514,8 +1531,9 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     std::uint64_t sessionEpoch)
 {
     // Before the raster is installed, so a Fit is computed once, with the
-    // stretch the raster was sized for.
-    applyDisplayStretch(state);
+    // stretch the raster was sized for -- the arriving raster's, on a mapped
+    // grid, whose pitch the stretch depends on.
+    applyDisplayStretch(state, &display);
     if (!display.rasterUnchanged) {
         if (!display.image.valid()) {
             throw std::runtime_error("renderer produced an invalid image");

@@ -67,6 +67,41 @@ enum class AspectMode : int {
     return stretch;
 }
 
+// How far a slice raster's pitch exceeds the finest cell along each panel
+// axis: one, except where the output cap (maxSliceOutputDimension, per axis)
+// coarsened the raster along that axis. A mapped-grid pixmap inherits the
+// raster's pitch, so its Physical Size stretch is multiplied by this;
+// without it a capped axis would be drawn squeezed by the same factor. A
+// dataset without physical geometry, an empty plane, or a non-finite ratio
+// counts as one.
+[[nodiscard]] inline std::array<double, 2> rasterPitchOverCell(
+    const DatasetMetadata& metadata, const RealBox& logicalRegion,
+    int planeWidth, int planeHeight, std::array<int, 2> axes)
+{
+    std::array<double, 2> ratio{1.0, 1.0};
+    if (!metadata.hasPhysicalGeometry || metadata.levels.empty()
+        || planeWidth <= 0 || planeHeight <= 0) {
+        return ratio;
+    }
+    const auto& finest = metadata.levels[static_cast<std::size_t>(
+        std::clamp(metadata.finestLevel, 0,
+            static_cast<int>(metadata.levels.size()) - 1))];
+    const std::array<int, 2> dims{planeWidth, planeHeight};
+    for (std::size_t i = 0; i < 2; ++i) {
+        if (axes[i] < 0 || axes[i] > 2) {
+            continue;
+        }
+        const auto axis = static_cast<std::size_t>(axes[i]);
+        const auto pitch = (logicalRegion.upper[axis] - logicalRegion.lower[axis])
+            / static_cast<double>(dims[i]);
+        const auto value = pitch / finest.cellSize[axis];
+        if (std::isfinite(value) && value > 0.0) {
+            ratio[i] = value;
+        }
+    }
+    return ratio;
+}
+
 // The user's axis factors alone, sanitized (non-positive or non-finite count
 // as one) and normalized so the smallest is one -- the convention
 // displayStretchPerAxis uses, without the cell-size term.

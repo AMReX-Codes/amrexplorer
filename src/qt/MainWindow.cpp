@@ -1533,7 +1533,7 @@ std::array<double, 3> MainWindow::displayStretchPerAxis() const
 }
 
 std::array<double, 2> MainWindow::displayStretchFor(
-    const PlaneViewState& state) const
+    const PlaneViewState& state, const SliceDisplayResult* arriving) const
 {
     // Normalized over the dataset's axes, not the panel's own two: at a
     // fixed scale every panel then shows an axis at the same pixels per
@@ -1556,10 +1556,23 @@ std::array<double, 2> MainWindow::displayStretchFor(
         panel[0] /= smallest;
         panel[1] /= smallest;
     }
+    // A mapped pixmap is drawn at the raster's pitch, which is the finest
+    // cell unless the output cap coarsened one axis; the Physical Size
+    // factors above assume the cell, so a capped axis is widened to match.
+    const bool mapped = arriving ? arriving->mappedGrid : state.mappedGrid;
+    const ScalarPlane* plane = arriving ? &arriving->displayPlane() : state.plane.get();
+    if (mapped && plane != nullptr && primary().session) {
+        const auto ratio = amrvis::qt::rasterPitchOverCell(
+            primary().session->metadata(), plane->physicalRegion,
+            plane->width, plane->height, axes);
+        panel[0] *= ratio[0];
+        panel[1] *= ratio[1];
+    }
     return panel;
 }
 
-void MainWindow::applyDisplayStretch(PlaneViewState& state)
+void MainWindow::applyDisplayStretch(PlaneViewState& state,
+    const SliceDisplayResult* arriving)
 {
     if (state.view == nullptr) {
         return;
@@ -1570,7 +1583,7 @@ void MainWindow::applyDisplayStretch(PlaneViewState& state)
         state.view->setDisplayStretch(1.0, 1.0);
         return;
     }
-    const auto stretch = displayStretchFor(state);
+    const auto stretch = displayStretchFor(state, arriving);
     state.view->setDisplayStretch(stretch[0], stretch[1]);
 }
 

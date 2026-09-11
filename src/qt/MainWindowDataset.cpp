@@ -138,6 +138,7 @@ void MainWindow::cancelInFlight()
     m_metadataStopSource.request_stop();
     m_sequenceController->cancelActiveWork();
     m_linePlotStopSource.request_stop();
+    m_companionStopSource.request_stop();
     m_particleController->cancel();
     m_volumeController->cancel();
     for (auto* state : allViewStates()) {

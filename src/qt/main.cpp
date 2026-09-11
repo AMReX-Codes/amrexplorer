@@ -40,12 +40,13 @@ void printUsage(std::FILE* output)
 {
     std::fprintf(output,
         "usage: amrexplorer [PLOTFILE...] [--companion PLOTFILE]\n"
-        "       amrexplorer --ssh SSH_DESTINATION [--server PATH] [--] "
-        "[REMOTE_PLOTFILE...]\n\n"
+        "       amrexplorer --ssh SSH_DESTINATION [--server PATH] "
+        "[--companion REMOTE_PLOTFILE] [--] [REMOTE_PLOTFILE...]\n\n"
         "Open one plotfile directory, or several to play them as a\n"
         "sequence, or none for an empty window.\n\n"
         "  --companion PLOTFILE   show a second 3-D plotfile beside the first;\n"
-        "                         the two must share a plane\n"
+        "                         the two must share a plane (after --ssh, a\n"
+        "                         plotfile on the same server)\n"
         "  --ssh SSH_DESTINATION  run amrexplorer-server on the destination\n"
         "                         through ssh and open the remote plotfile\n"
         "                         paths there; with no paths, only establish\n"
@@ -451,6 +452,16 @@ int main(int argc, char* argv[])
         if (!parsed.request) {
             qCritical("%s", parsed.error.c_str());
             return 2;
+        }
+        // A companion after --ssh is a plotfile on the same server, opened
+        // beside the one path once its slices are up, as the local form does.
+        if (!parsed.request->companion.empty()) {
+            QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+                &window, [&window, companion = parsed.request->companion](bool success) {
+                    if (success) {
+                        window.openRemoteCompanion(companion);
+                    }
+                }, Qt::SingleShotConnection);
         }
         QTimer::singleShot(0, &window,
             [&window, request = std::move(*parsed.request)] {

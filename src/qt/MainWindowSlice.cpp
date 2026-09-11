@@ -4,6 +4,19 @@
 
 namespace amrvis::qt {
 
+namespace {
+
+// The display-range cache is keyed by dataset id, and a companion's id can
+// collide with the primary's: a local primary's is the window's generation, a
+// remote companion's the server's counter, both small numbers. The
+// companion's key is salted so the two layers never share an entry.
+[[nodiscard]] DatasetId rangeCacheDataset(std::size_t layer, DatasetId id) noexcept
+{
+    return layer == 1 ? DatasetId{id.value ^ (std::uint64_t{1} << 62)} : id;
+}
+
+} // namespace
+
 void MainWindow::enableDatasetControls(const DatasetMetadata& metadata)
 {
     m_controlsReady = true;
@@ -60,29 +73,34 @@ void MainWindow::configureSliceControls()
     if (isThreeDimensional) {
         m_isoWidget->setGeometry(metadata);
         publishSlicePositions();
+        // A primary reload under a companion: the isometric view keeps
+        // outlining both domains, whether or not the companion reloads too.
+        if (m_pair && m_layers[1].active) {
+            updatePairedIsoGeometry();
+        }
     }
     ensureVectorFieldDefaults();
 }
 
 bool MainWindow::addUnavailableFieldItem(
-    const QString& name, const QString& tooltip)
+    QComboBox* selector, const QString& name, const QString& tooltip)
 {
     // Through the model, because a combo box has no per-item enable of its
     // own: an item that is not selectable is skipped by the keyboard and drawn
     // greyed by the style. Without one there is no way to add this row safely,
     // so it is not added -- leaving a definition off a list says less than
     // showing it greyed out, but far less than offering a broken selection.
-    auto* model = qobject_cast<QStandardItemModel*>(primary().fieldSelector->model());
+    auto* model = qobject_cast<QStandardItemModel*>(selector->model());
     if (model == nullptr) {
         return false;
     }
-    const auto row = primary().fieldSelector->count();
+    const auto row = selector->count();
     // No field id: nothing that reads item data can mistake it for one.
-    primary().fieldSelector->addItem(name);
-    primary().fieldSelector->setItemData(row, tooltip, Qt::ToolTipRole);
+    selector->addItem(name);
+    selector->setItemData(row, tooltip, Qt::ToolTipRole);
     auto* item = model->item(row);
     if (item == nullptr) {
-        primary().fieldSelector->removeItem(row);
+        selector->removeItem(row);
         return false;
     }
     item->setFlags(
@@ -90,16 +108,17 @@ bool MainWindow::addUnavailableFieldItem(
     return true;
 }
 
-std::size_t MainWindow::storedFieldCount() const
+std::size_t MainWindow::storedFieldCount(const DatasetLayer& layer) const
 {
-    if (!primary().session) {
+    if (!layer.session) {
         return 0;
     }
     return std::min(
-        primary().session->storedFieldCount(), primary().session->metadata().fields.size());
+        layer.session->storedFieldCount(), layer.session->metadata().fields.size());
 }
 
-std::vector<MainWindow::DerivedFieldRow> MainWindow::derivedFieldRows() const
+std::vector<MainWindow::DerivedFieldRow> MainWindow::derivedFieldRows(
+    const DatasetLayer& layer) const
 {
     std::vector<DerivedFieldRow> rows;
     // Nothing at all where no definition could ever apply: a remote session
@@ -107,14 +126,14 @@ std::vector<MainWindow::DerivedFieldRow> MainWindow::derivedFieldRows() const
     // for this dataset" beside an editor saying derived fields need a local
     // one -- two explanations of the same fact, and clutter that cannot
     // become usable while this session is open.
-    if (!primary().session || !primary().session->supportsDerivedFields()
-        || primary().session->metadata().isFab) {
+    if (!layer.session || !layer.session->supportsDerivedFields()
+        || layer.session->metadata().isFab) {
         return rows;
     }
-    const auto& fields = primary().session->metadata().fields;
-    const auto stored = storedFieldCount();
+    const auto& fields = layer.session->metadata().fields;
+    const auto stored = storedFieldCount(layer);
     const auto& definitions = m_derivedFields->definitions();
-    const auto skipped = primary().session->skippedDerivedFields();
+    const auto skipped = layer.session->skippedDerivedFields();
     rows.reserve(definitions.size());
     for (const auto& definition : definitions) {
         DerivedFieldRow row;
@@ -157,7 +176,7 @@ std::vector<MainWindow::DerivedFieldRow> MainWindow::derivedFieldRows() const
     return rows;
 }
 
-void MainWindow::selectFieldItem(int index)
+void MainWindow::selectFieldItem(DatasetLayer& layer, int index)
 {
     // Not every row is a field: the separator between the stored and the
     // derived ones carries no item data, and neither does a definition this
@@ -167,9 +186,9 @@ void MainWindow::selectFieldItem(int index)
     // row's name. So the caller's index is where to start looking rather than
     // what to select: the selection goes to the first field at or after it,
     // and failing that to the nearest one before it.
-    const auto count = primary().fieldSelector->count();
-    const auto isField = [this](int row) {
-        return primary().fieldSelector->itemData(row).isValid();
+    const auto count = layer.fieldSelector->count();
+    const auto isField = [&layer](int row) {
+        return layer.fieldSelector->itemData(row).isValid();
     };
     auto selected = -1;
     for (auto row = std::max(index, 0); row < count; ++row) {
@@ -186,19 +205,20 @@ void MainWindow::selectFieldItem(int index)
     }
     // -1 when the list holds no field at all, which leaves nothing selected
     // rather than naming a row that is not one.
-    primary().fieldSelector->setCurrentIndex(selected);
+    layer.fieldSelector->setCurrentIndex(selected);
 }
 
-void MainWindow::populateFieldSelector(const std::vector<DerivedFieldRow>& rows)
+void MainWindow::populateFieldSelector(
+    DatasetLayer& layer, const std::vector<DerivedFieldRow>& rows)
 {
-    primary().fieldSelector->clear();
-    if (!primary().session) {
+    layer.fieldSelector->clear();
+    if (!layer.session) {
         return;
     }
-    const auto& fields = primary().session->metadata().fields;
-    const auto stored = storedFieldCount();
+    const auto& fields = layer.session->metadata().fields;
+    const auto stored = storedFieldCount(layer);
     for (std::size_t field = 0; field < stored; ++field) {
-        primary().fieldSelector->addItem(QString::fromStdString(fields[field].name),
+        layer.fieldSelector->addItem(QString::fromStdString(fields[field].name),
             static_cast<unsigned int>(field));
     }
 
@@ -208,16 +228,16 @@ void MainWindow::populateFieldSelector(const std::vector<DerivedFieldRow>& rows)
     // The computed fields are a different kind of thing from the ones the
     // plotfile holds; the rule is worth showing rather than leaving to be
     // inferred from the order.
-    primary().fieldSelector->insertSeparator(primary().fieldSelector->count());
+    layer.fieldSelector->insertSeparator(layer.fieldSelector->count());
     for (const auto& row : rows) {
         if (!row.field) {
-            static_cast<void>(addUnavailableFieldItem(row.name, row.tooltip));
+            static_cast<void>(addUnavailableFieldItem(layer.fieldSelector, row.name, row.tooltip));
             continue;
         }
-        const auto index = primary().fieldSelector->count();
-        primary().fieldSelector->addItem(
+        const auto index = layer.fieldSelector->count();
+        layer.fieldSelector->addItem(
             row.name, static_cast<unsigned int>(*row.field));
-        primary().fieldSelector->setItemData(index, row.tooltip, Qt::ToolTipRole);
+        layer.fieldSelector->setItemData(index, row.tooltip, Qt::ToolTipRole);
     }
 }
 
@@ -230,8 +250,14 @@ bool MainWindow::openSessionHasCurrentDefinitions() const
 
 void MainWindow::reloadIfDefinitionsMoved()
 {
-    if (m_closing || !m_derivedFields->available()
-        || openSessionHasCurrentDefinitions()) {
+    if (m_closing || !m_derivedFields->available()) {
+        return;
+    }
+    // The primary first: its reload bumps the generation a companion load
+    // checks, so the companion is asked once the primary has the list -- from
+    // the reload's completion, which lands here again.
+    if (openSessionHasCurrentDefinitions()) {
+        reloadCompanionIfDefinitionsMoved();
         return;
     }
     // Once per list per session. This is asked on every frame a sequence
@@ -750,8 +776,8 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                     const bool isFullDomain = result.request.visibleRegion
                         == datasetSampleBounds(dataset->metadata());
                     const DisplayCoordinator::RangeKey rangeKey{
-                        result.request.dataset, result.request.field,
-                        result.request.maximumLevel,
+                        rangeCacheDataset(state.layer, result.request.dataset),
+                        result.request.field, result.request.maximumLevel,
                         result.request.composition};
                     const auto cachedRange = !isFullDomain
                         && rangeMode == RangeMode::Visible
@@ -1393,7 +1419,7 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
                 const auto& layout = pairLayout(state.normal);
                 const auto region = display.displayPlane().physicalRegion;
                 const auto rect = layout.sceneRectForRegion(state.layer, region);
-                const auto canvas = layout.canvasRect();
+                const auto canvas = pairCanvasRect(state.normal);
                 state.view->setTileImage(state.tile, image,
                     QRectF(rect.x, rect.y, rect.width, rect.height),
                     QRectF(canvas.x, canvas.y, canvas.width, canvas.height),
@@ -1786,7 +1812,7 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
                             const auto& layout = pairLayout(state->normal);
                             const auto rect = layout.sceneRectForRegion(
                                 state->layer, state->plane->physicalRegion);
-                            const auto canvas = layout.canvasRect();
+                            const auto canvas = pairCanvasRect(state->normal);
                             state->view->setTileImage(state->tile,
                                 outcome.images[index],
                                 QRectF(rect.x, rect.y, rect.width, rect.height),
@@ -1856,8 +1882,9 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
                         decodeLevelData(layer.levelSelector->currentData().toInt(),
                             layer.session->metadata().finestLevel);
                     const DisplayCoordinator::RangeKey liveKey{
-                        layer.session->id(), liveField, liveMaximumLevel,
-                        liveComposition};
+                        rangeCacheDataset(&layer == &m_layers[1] ? 1 : 0,
+                            layer.session->id()),
+                        liveField, liveMaximumLevel, liveComposition};
                     if (*layer.pendingRangeStore == liveKey) {
                         m_displayCoordinator.storeFullDomainRange(
                             *layer.pendingRangeStore, outcome.sync->range);

@@ -46,9 +46,13 @@ crosshairs and the probe, and the menus and docks. Everything about one
 dataset lives in a `DatasetLayer` (session, catalog, field and level
 selectors, range controls, colour bar, and three plane view states); the
 window holds two, the primary and an optional companion plotfile that shares
-a plane with it (`PairGeometry`, `MainWindowCompanion.cpp`). Each
-`ImageView` draws one tile per layer in a shared scene, so a companion adds
-states and tiles rather than panels. Everything else the window does is
+a plane with it (`PairGeometry`, `MainWindowCompanion.cpp`). A layer's session
+may be local or remote in any combination; a remote companion rides the
+primary's own connection, or the window's remote session beside a local
+primary. Each `ImageView` draws one tile per layer in a shared scene, so a
+companion adds states and tiles rather than panels, and a paired zoom is a
+scene window that each layer maps back to its own region (`PairLayout`).
+Everything else the window does is
 delegated to an **owned collaborator**, each a `QObject` created by the
 window, wired to it in one of two ways:
 

@@ -311,6 +311,57 @@ public:
                         : (position - union_.lower[a]) * k;
     }
 
+    // The physical position under a scene coordinate along a displayed axis:
+    // sceneFromPhysical's inverse, with each layer's band extended past its
+    // edges so a rect can be cut to the layer's domain afterwards.
+    [[nodiscard]] double physicalFromScene(
+        std::size_t layer, int axis, double scene) const noexcept
+    {
+        const auto a = static_cast<std::size_t>(axis);
+        const bool vertical = axis == m_axes[1];
+        if (axis == m_geometry.perpendicularAxis) {
+            const auto& bounds = m_geometry.bounds[layer];
+            const auto k = m_perpendicularUnitsPerLength[layer];
+            return vertical
+                ? bounds.upper[a] - (scene - m_bandStart[layer]) / k
+                : bounds.lower[a] + (scene - m_bandStart[layer]) / k;
+        }
+        const auto& union_ = m_geometry.unionBounds;
+        const auto k = m_sharedUnitsPerLength[a];
+        return vertical ? union_.upper[a] - scene / k
+                        : union_.lower[a] + scene / k;
+    }
+
+    // The part of a layer's domain under a scene rect: the rect through the
+    // layer's maps, cut to its bounds, the normal axis whole. Nothing when
+    // the rect misses the layer, or meets it within the pairing tolerance
+    // only (a selection ending at the interface belongs to one side).
+    [[nodiscard]] std::optional<RealBox> regionForSceneRect(
+        std::size_t layer, const SceneRect& rect) const noexcept
+    {
+        const auto& bounds = m_geometry.bounds[layer];
+        const auto h = m_axes[0];
+        const auto v = m_axes[1];
+        const auto hs = static_cast<std::size_t>(h);
+        const auto vs = static_cast<std::size_t>(v);
+        RealBox region = bounds;
+        region.lower[hs] = std::max(bounds.lower[hs], physicalFromScene(layer, h, rect.x));
+        region.upper[hs]
+            = std::min(bounds.upper[hs], physicalFromScene(layer, h, rect.right()));
+        // Vertical scene coordinates count down: the rect's top is the
+        // region's upper bound.
+        region.upper[vs] = std::min(bounds.upper[vs], physicalFromScene(layer, v, rect.y));
+        region.lower[vs]
+            = std::max(bounds.lower[vs], physicalFromScene(layer, v, rect.bottom()));
+        for (const auto axis : {hs, vs}) {
+            const auto span = bounds.upper[axis] - bounds.lower[axis];
+            if (!(region.upper[axis] - region.lower[axis] > 1e-9 * span)) {
+                return std::nullopt;
+            }
+        }
+        return region;
+    }
+
     // The scene rect a layer's raster over a physical region occupies.
     [[nodiscard]] SceneRect sceneRectForRegion(
         std::size_t layer, const RealBox& region) const noexcept

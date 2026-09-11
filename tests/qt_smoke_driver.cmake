@@ -25,6 +25,8 @@
 #                 sequence-geometry-refit | sequence-noop | sequence-failure |
 #                 remote-canvas-wheel | remote-cell-aspect |
 #                 physical-aspect | remote-physical-aspect | companion |
+#                 remote-companion | companion-derived | companion-zoom |
+#                 mixed-companion |
 #                 volume |
 #                 derived-field | derived-field-sequence |
 #                 derived-field-frames | derived-field-playback |
@@ -238,6 +240,27 @@ elseif(MODE STREQUAL "companion")
     # it; its name must still be the directory's.
     run_or_die("${AMREXPLORER_QT}" --companion-smoke-test
         "${WORK}/upper" "${WORK}/lower/")
+elseif(MODE STREQUAL "remote-companion")
+    # The same pair, both served by the in-process loopback server.
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    run_or_die("${AMREXPLORER_QT}" --remote-companion-smoke-test
+        "${WORK}/upper" "${WORK}/lower")
+elseif(MODE STREQUAL "companion-derived")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    run_or_die("${AMREXPLORER_QT}" --companion-derived-smoke-test
+        "${WORK}/upper" "${WORK}/lower")
+elseif(MODE STREQUAL "companion-zoom")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    run_or_die("${AMREXPLORER_QT}" --companion-zoom-smoke-test
+        "${WORK}/upper" "${WORK}/lower")
+elseif(MODE STREQUAL "mixed-companion")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/upper")
+    run_or_die("${MATERIALIZER}" "${SOURCE2}" "${WORK}/lower")
+    run_or_die("${AMREXPLORER_QT}" --mixed-companion-smoke-test
+        "${WORK}/upper" "${WORK}/lower")
 elseif(MODE STREQUAL "remote-canvas-wheel")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --remote-canvas-wheel-smoke-test

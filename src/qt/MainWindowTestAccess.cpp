@@ -548,6 +548,74 @@ bool MainWindow::companionColorBarVisibleForTest() const
     return m_layers[1].colorBar != nullptr && m_layers[1].colorBar->isVisibleTo(this);
 }
 
+void MainWindow::selectLayerFieldItemForTest(int layer, int index)
+{
+    if (layer < 0 || layer > 1) {
+        return;
+    }
+    selectFieldItem(m_layers[static_cast<std::size_t>(layer)], index);
+}
+
+QString MainWindow::layerSelectedFieldForTest(int layer) const
+{
+    if (layer < 0 || layer > 1) {
+        return {};
+    }
+    const auto* selector = m_layers[static_cast<std::size_t>(layer)].fieldSelector;
+    return selector == nullptr ? QString() : selector->currentText();
+}
+
+void MainWindow::rubberBandZoomPanelSceneForTest(int normal, const QRectF& sceneRect)
+{
+    if (normal < 0 || normal > 2) {
+        return;
+    }
+    setActiveView(primary().planeViews[static_cast<std::size_t>(normal)]);
+    pairRubberBandZoom(normal, sceneRect);
+}
+
+QSize MainWindow::panelTileImageSizeForTest(int normal, int tile) const
+{
+    if (normal < 0 || normal > 2 || tile < 0) {
+        return {};
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    return view == nullptr ? QSize() : view->image(static_cast<std::size_t>(tile)).size();
+}
+
+QSize MainWindow::panelExportSizeForTest(int normal) const
+{
+    if (normal < 0 || normal > 2) {
+        return {};
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    return view == nullptr ? QSize() : view->composedImageSize(1.0);
+}
+
+void MainWindow::panStepActiveViewForTest(const QPointF& direction)
+{
+    if (m_activeView != nullptr) {
+        applyPanStep(*m_activeView, direction);
+    }
+}
+
+QRectF MainWindow::panelCanvasRectForTest(int normal) const
+{
+    if (normal < 0 || normal > 2) {
+        return {};
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    return view == nullptr ? QRectF() : view->sceneRect();
+}
+
+bool MainWindow::layerSessionIsRemoteForTest(int layer) const
+{
+    if (layer < 0 || layer > 1) {
+        return false;
+    }
+    return layerIsRemote(m_layers[static_cast<std::size_t>(layer)].planeViews[0]);
+}
+
 void MainWindow::setCompanionPerpendicularScaleForTest(double factor)
 {
     m_layers[1].perpendicularScale = factor;

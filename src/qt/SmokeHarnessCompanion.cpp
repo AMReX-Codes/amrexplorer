@@ -1,11 +1,17 @@
 #include "SmokeHarnessInternal.hpp"
 
+#include "DerivedFieldStore.hpp"
 #include "MainWindow.hpp"
+
+#include <amrexplorer/core/DerivedField.hpp>
+#include <amrexplorer/remote/Server.hpp>
 
 #include <QAction>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QLabel>
 #include <QRectF>
+#include <QSize>
 #include <QTimer>
 #include <QTreeWidget>
 
@@ -34,6 +40,548 @@ bool near(const QRectF& actual, const QRectF& expected)
     return near(actual.x(), expected.x()) && near(actual.y(), expected.y())
         && near(actual.width(), expected.width())
         && near(actual.height(), expected.height());
+}
+
+// A selector row that is a field carries its id as item data; a greyed
+// definition and the separator carry none.
+bool rowIsField(const QComboBox& selector, const QString& name)
+{
+    const auto row = selector.findText(name);
+    return row >= 0 && selector.itemData(row).isValid();
+}
+
+bool rowIsGreyed(const QComboBox& selector, const QString& name)
+{
+    const auto row = selector.findText(name);
+    return row >= 0 && !selector.itemData(row).isValid()
+        && selector.itemData(row, Qt::ToolTipRole).toString().contains(
+            QStringLiteral("unavailable"));
+}
+
+// Derived fields over a pair: the window's list reaches the companion, each
+// layer resolves what it can and greys the rest, Apply reloads both, and a
+// reload keeps the companion's field by name.
+void armCompanionDerivedChecks(amrvis::qt::MainWindow& window,
+    QApplication& application, const std::filesystem::path& upper,
+    const std::filesystem::path& lower)
+{
+    using amrvis::DerivedFieldDefinition;
+    constexpr int xz = 1;
+    auto phase = std::make_shared<int>(0);
+    auto loads = std::make_shared<int>(0);
+    auto companionOpens = std::make_shared<int>(0);
+    auto ticks = std::make_shared<int>(0);
+    auto quietSince = std::make_shared<int>(0);
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [&window, &application, loads, lower](bool success) {
+            if (!success) {
+                application.exit(2);
+                return;
+            }
+            if (++*loads == 1) {
+                window.openCompanion(lower);
+            }
+        });
+    QObject::connect(&window, &amrvis::qt::MainWindow::companionOpenFinished,
+        &application, [&application, companionOpens](bool success) {
+            if (!success) {
+                qCritical("a companion open or reload failed");
+                application.exit(2);
+                return;
+            }
+            ++*companionOpens;
+        });
+
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, loads, companionOpens, ticks, quietSince,
+            timer] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            const auto fail = [finish](const char* message) {
+                qCritical("%s", message);
+                finish(1);
+            };
+            ++*ticks;
+            const bool settled = window.slicesInFlightForTest() == 0
+                && !window.sliceRequestPendingForTest();
+            auto* companionSelector = window.findChild<QComboBox*>(
+                QStringLiteral("companionFieldSelector"));
+            auto* primarySelector
+                = window.findChild<QComboBox*>(QStringLiteral("fieldSelector"));
+            auto* editor = window.findChild<QAction*>(
+                QStringLiteral("expressionEditorAction"));
+            if (companionSelector == nullptr || primarySelector == nullptr
+                || editor == nullptr) {
+                fail("the window is missing a selector or the editor action");
+                return;
+            }
+            switch (*phase) {
+            case 0:
+                // The pair is up. The editor is available over it (the v1
+                // cut lifted); a list reaches both layers.
+                if (*companionOpens < 1 || !settled) {
+                    return;
+                }
+                if (!window.companionOpen() || window.panelTileCountForTest(xz) != 2) {
+                    fail("the companion did not open");
+                    return;
+                }
+                if (!editor->isEnabled()) {
+                    fail("the Expression Editor is unavailable with a companion open");
+                    return;
+                }
+                *phase = 1;
+                amrvis::qt::DerivedFieldStore::session().set(
+                    {DerivedFieldDefinition{"wet", "water*2"},
+                        DerivedFieldDefinition{"dry", "air*2"}});
+                return;
+            case 1:
+                // The primary reloaded, then the companion: each lists what
+                // it resolves and greys the other's definition.
+                if (*loads < 2 || *companionOpens < 2 || !settled) {
+                    return;
+                }
+                if (!rowIsField(*companionSelector, QStringLiteral("wet"))
+                    || !rowIsGreyed(*companionSelector, QStringLiteral("dry"))) {
+                    fail("the companion did not list wet as a field and dry greyed");
+                    return;
+                }
+                if (!rowIsField(*primarySelector, QStringLiteral("dry"))
+                    || !rowIsGreyed(*primarySelector, QStringLiteral("wet"))) {
+                    fail("the primary did not list dry as a field and wet greyed");
+                    return;
+                }
+                if (window.panelTileCountForTest(xz) != 2
+                    || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 4.0, 4.0))
+                    || window.backgroundErrorCountForTest() != 0) {
+                    fail("the reloads disturbed the pair");
+                    return;
+                }
+                *phase = 2;
+                window.selectLayerFieldItemForTest(
+                    1, companionSelector->findText(QStringLiteral("wet")));
+                return;
+            case 2:
+                if (!settled) {
+                    return;
+                }
+                if (window.layerFieldNameForTest(1, xz) != QStringLiteral("wet")) {
+                    fail("the companion did not slice its derived field");
+                    return;
+                }
+                // A changed definition reloads again; the field stays, by
+                // name, across the reinstalled list -- and so do the pair's
+                // zoom (this panel alone) and the companion's z factor.
+                if (auto* sync = window.findChild<QAction*>(
+                        QStringLiteral("syncRubberBandZoomAction"))) {
+                    sync->setChecked(false);
+                }
+                window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 2.0, 4.0, 4.0));
+                window.setCompanionPerpendicularScaleForTest(2.0);
+                *phase = 3;
+                amrvis::qt::DerivedFieldStore::session().set(
+                    {DerivedFieldDefinition{"wet", "water*3"},
+                        DerivedFieldDefinition{"dry", "air*2"}});
+                return;
+            case 3:
+                if (*loads < 3 || *companionOpens < 3 || !settled) {
+                    return;
+                }
+                if (window.layerSelectedFieldForTest(1) != QStringLiteral("wet")
+                    || window.layerFieldNameForTest(1, xz) != QStringLiteral("wet")) {
+                    fail("the reload did not keep the companion's field by name");
+                    return;
+                }
+                // Two ocean rows at twice their height under two atmosphere
+                // rows: the zoom and the factor both survived the reload.
+                if (window.rubberBandZoomedViewCountForTest() != 2
+                    || !near(window.panelTileRectForTest(xz, 0), QRectF(1.0, 2.0, 4.0, 2.0))
+                    || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 3.0, 4.0))) {
+                    qCritical("XZ after reload: upper %gx%g at (%g,%g), lower %gx%g at (%g,%g), %zu zoomed",
+                        window.panelTileRectForTest(xz, 0).width(),
+                        window.panelTileRectForTest(xz, 0).height(),
+                        window.panelTileRectForTest(xz, 0).x(),
+                        window.panelTileRectForTest(xz, 0).y(),
+                        window.panelTileRectForTest(xz, 1).width(),
+                        window.panelTileRectForTest(xz, 1).height(),
+                        window.panelTileRectForTest(xz, 1).x(),
+                        window.panelTileRectForTest(xz, 1).y(),
+                        window.rubberBandZoomedViewCountForTest());
+                    fail("the reload dropped the pair's zoom or the companion's z factor");
+                    return;
+                }
+                window.setCompanionPerpendicularScaleForTest(1.0);
+                window.resetZoomAllViewsForTest();
+                // A definition the companion can no longer resolve: greyed,
+                // and the selection falls back to a field it has.
+                *phase = 4;
+                amrvis::qt::DerivedFieldStore::session().set(
+                    {DerivedFieldDefinition{"wet", "nonesuch"}});
+                return;
+            case 4:
+                if (*loads < 4 || *companionOpens < 4 || !settled) {
+                    return;
+                }
+                if (!rowIsGreyed(*companionSelector, QStringLiteral("wet"))
+                    || !companionSelector->currentData().isValid()
+                    || window.layerFieldNameForTest(1, xz) != QStringLiteral("water")) {
+                    fail("an unresolvable definition did not fall back to a stored field");
+                    return;
+                }
+                // The same list again moves nothing: no reload of either.
+                *phase = 5;
+                *quietSince = *ticks;
+                amrvis::qt::DerivedFieldStore::session().set(
+                    {DerivedFieldDefinition{"wet", "nonesuch"}});
+                return;
+            case 5:
+                if (*loads != 4 || *companionOpens != 4) {
+                    fail("an unchanged list reloaded a layer");
+                    return;
+                }
+                if (*ticks - *quietSince < 20) {
+                    return;
+                }
+                finish(0);
+                return;
+            default:
+                return;
+            }
+        });
+    timer->start();
+    QTimer::singleShot(20000, &application, [&application] {
+        qCritical("companion derived-field smoke test timed out");
+        application.exit(4);
+    });
+    QTimer::singleShot(0, &window, [&window, upper] { window.openDataset(upper); });
+}
+
+// Real zoom over a pair: a selection straddling the interface gives each
+// layer the part in its own domain, both re-slice for it and land at their
+// places, the panel frames the selection, and Reset Zoom puts both back.
+void armCompanionZoomChecks(amrvis::qt::MainWindow& window,
+    QApplication& application, const std::filesystem::path& upper,
+    const std::filesystem::path& lower)
+{
+    constexpr int yz = 0;
+    constexpr int xz = 1;
+    constexpr int xy = 2;
+    auto phase = std::make_shared<int>(0);
+    auto companionOpens = std::make_shared<int>(0);
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [&window, &application, lower](bool success) {
+            if (!success) {
+                application.exit(2);
+                return;
+            }
+            window.openCompanion(lower);
+        });
+    QObject::connect(&window, &amrvis::qt::MainWindow::companionOpenFinished,
+        &application, [&application, companionOpens](bool success) {
+            if (!success) {
+                qCritical("the companion did not open");
+                application.exit(2);
+                return;
+            }
+            ++*companionOpens;
+        });
+    const auto tilesAre = [&window](const QRectF& upperRect, const QRectF& lowerRect,
+                              const QSize& upperSize, const QSize& lowerSize) {
+        return near(window.panelTileRectForTest(xz, 0), upperRect)
+            && near(window.panelTileRectForTest(xz, 1), lowerRect)
+            && window.panelTileImageSizeForTest(xz, 0) == upperSize
+            && window.panelTileImageSizeForTest(xz, 1) == lowerSize;
+    };
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, companionOpens, tilesAre, timer] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            const auto fail = [finish](const char* message) {
+                qCritical("%s", message);
+                finish(1);
+            };
+            const bool settled = window.slicesInFlightForTest() == 0
+                && !window.sliceRequestPendingForTest();
+            if (*companionOpens < 1 || !settled) {
+                return;
+            }
+            auto* sync = window.findChild<QAction*>(
+                QStringLiteral("syncRubberBandZoomAction"));
+            if (sync == nullptr || !sync->isEnabled()) {
+                fail("Sync Rubber-band Zoom is missing or disabled over a pair");
+                return;
+            }
+            switch (*phase) {
+            case 0:
+                // The pair at rest: whole-domain tiles, one raster pixel per
+                // cell, the canvas their union.
+                if (!tilesAre(QRectF(0.0, 0.0, 6.0, 4.0), QRectF(2.0, 4.0, 4.0, 4.0),
+                        QSize(6, 4), QSize(4, 4))
+                    || !near(window.panelCanvasRectForTest(xz), QRectF(0.0, 0.0, 6.0, 8.0))) {
+                    fail("the pair did not start at whole-domain tiles");
+                    return;
+                }
+                // Two atmosphere rows above the interface and two ocean rows
+                // below, four columns wide, starting west of the ocean. This
+                // panel alone first.
+                *phase = 1;
+                sync->setChecked(false);
+                window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 2.0, 4.0, 4.0));
+                return;
+            case 1:
+                if (!tilesAre(QRectF(1.0, 2.0, 4.0, 2.0), QRectF(2.0, 4.0, 3.0, 2.0),
+                        QSize(4, 2), QSize(3, 2))) {
+                    qCritical("XZ tiles: upper %gx%g at (%g,%g) %dx%d, lower %gx%g at (%g,%g) %dx%d",
+                        window.panelTileRectForTest(xz, 0).width(),
+                        window.panelTileRectForTest(xz, 0).height(),
+                        window.panelTileRectForTest(xz, 0).x(),
+                        window.panelTileRectForTest(xz, 0).y(),
+                        window.panelTileImageSizeForTest(xz, 0).width(),
+                        window.panelTileImageSizeForTest(xz, 0).height(),
+                        window.panelTileRectForTest(xz, 1).width(),
+                        window.panelTileRectForTest(xz, 1).height(),
+                        window.panelTileRectForTest(xz, 1).x(),
+                        window.panelTileRectForTest(xz, 1).y(),
+                        window.panelTileImageSizeForTest(xz, 1).width(),
+                        window.panelTileImageSizeForTest(xz, 1).height());
+                    fail("the selection did not re-slice each layer within its domain");
+                    return;
+                }
+                if (!near(window.panelCanvasRectForTest(xz), QRectF(1.0, 2.0, 4.0, 4.0))
+                    || window.rubberBandZoomedViewCountForTest() != 2
+                    || !window.panelTileVisibleForTest(xz, 0)
+                    || !window.panelTileVisibleForTest(xz, 1)) {
+                    fail("the panel did not frame the selection over both tiles");
+                    return;
+                }
+                // A selection inside the atmosphere alone: the ocean, missed,
+                // goes back to its whole domain beside the framed window, and
+                // an export renders the window, not the union of both tiles.
+                *phase = 6;
+                window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 1.0, 2.0, 2.0));
+                return;
+            case 6:
+                if (!tilesAre(QRectF(1.0, 1.0, 2.0, 2.0), QRectF(2.0, 4.0, 4.0, 4.0),
+                        QSize(2, 2), QSize(4, 4))
+                    || window.panelExportSizeForTest(xz) != QSize(2, 2)) {
+                    qCritical("export footprint %dx%d",
+                        window.panelExportSizeForTest(xz).width(),
+                        window.panelExportSizeForTest(xz).height());
+                    fail("a zoomed pair's export was not cut to the framed window");
+                    return;
+                }
+                // Synchronized: the other panels take the selection's extent
+                // along the axis they share with this one -- x for XY, z for
+                // YZ -- and keep their other axis whole.
+                *phase = 2;
+                sync->setChecked(true);
+                window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 2.0, 4.0, 4.0));
+                return;
+            case 2:
+                if (!near(window.panelTileRectForTest(xy, 0), QRectF(1.0, 0.0, 4.0, 4.0))
+                    || !near(window.panelTileRectForTest(xy, 1), QRectF(2.0, 0.0, 3.0, 4.0))
+                    || window.panelTileImageSizeForTest(xy, 0) != QSize(4, 4)
+                    || !near(window.panelTileRectForTest(yz, 0), QRectF(0.0, 2.0, 4.0, 2.0))
+                    || !near(window.panelTileRectForTest(yz, 1), QRectF(0.0, 4.0, 4.0, 2.0))
+                    || window.rubberBandZoomedViewCountForTest() != 6) {
+                    fail("the synchronized selection did not reach the other panels");
+                    return;
+                }
+                // An arrow step moves the framed window one scene unit -- one
+                // cell of either layer here -- and both follow within their
+                // domains: the ocean, which the window had entered two columns
+                // in, now shows four.
+                *phase = 3;
+                window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 2.0, 4.0, 4.0));
+                window.panStepActiveViewForTest(QPointF(-1.0, 0.0));
+                return;
+            case 3:
+                if (!tilesAre(QRectF(2.0, 2.0, 4.0, 2.0), QRectF(2.0, 4.0, 4.0, 2.0),
+                        QSize(4, 2), QSize(4, 2))
+                    || !near(window.panelCanvasRectForTest(xz), QRectF(2.0, 2.0, 4.0, 4.0))) {
+                    qCritical("XZ after a step: upper %gx%g at (%g,%g), lower %gx%g at (%g,%g)",
+                        window.panelTileRectForTest(xz, 0).width(),
+                        window.panelTileRectForTest(xz, 0).height(),
+                        window.panelTileRectForTest(xz, 0).x(),
+                        window.panelTileRectForTest(xz, 0).y(),
+                        window.panelTileRectForTest(xz, 1).width(),
+                        window.panelTileRectForTest(xz, 1).height(),
+                        window.panelTileRectForTest(xz, 1).x(),
+                        window.panelTileRectForTest(xz, 1).y());
+                    fail("an arrow step did not shift the window for both layers");
+                    return;
+                }
+                *phase = 4;
+                window.resetZoomAllViewsForTest();
+                return;
+            case 4:
+                if (!tilesAre(QRectF(0.0, 0.0, 6.0, 4.0), QRectF(2.0, 4.0, 4.0, 4.0),
+                        QSize(6, 4), QSize(4, 4))
+                    || !near(window.panelCanvasRectForTest(xz), QRectF(0.0, 0.0, 6.0, 8.0))
+                    || window.rubberBandZoomedViewCountForTest() != 0) {
+                    fail("Reset Zoom did not put both layers back");
+                    return;
+                }
+                finish(0);
+                return;
+            default:
+                return;
+            }
+        });
+    timer->start();
+    QTimer::singleShot(20000, &application, [&application] {
+        qCritical("companion zoom smoke test timed out");
+        application.exit(4);
+    });
+    QTimer::singleShot(0, &window, [&window, upper] { window.openDataset(upper); });
+}
+
+// The mixed pairs: a remote companion beside a local primary over the
+// window's remote session, then a local companion beside a remote primary.
+// Each layer is asked which it is; the pair lays out and zooms the same.
+void armMixedCompanionChecks(Context& context, const std::string& upper,
+    const std::string& lower)
+{
+    auto& window = context.window;
+    auto& application = context.application;
+    constexpr int xz = 1;
+    auto phase = std::make_shared<int>(0);
+    auto loads = std::make_shared<int>(0);
+    auto companionOpens = std::make_shared<int>(0);
+    context.server = std::make_shared<amrvis::remote::Server>();
+    context.serverThread.emplace([server = context.server] { server->run(); });
+    QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+        &application, [&application, loads](bool success) {
+            if (!success) {
+                application.exit(2);
+                return;
+            }
+            ++*loads;
+        });
+    QObject::connect(&window, &amrvis::qt::MainWindow::companionOpenFinished,
+        &application, [&application, companionOpens](bool success) {
+            if (!success) {
+                qCritical("a mixed companion did not open");
+                application.exit(2);
+                return;
+            }
+            ++*companionOpens;
+        });
+    auto* timer = new QTimer(&window);
+    timer->setInterval(25);
+    QObject::connect(timer, &QTimer::timeout, &application,
+        [&window, &application, phase, loads, companionOpens, timer, upper, lower] {
+            const auto finish = [&application, timer](int code) {
+                timer->stop();
+                application.exit(code);
+            };
+            const auto fail = [finish](const char* message) {
+                qCritical("%s", message);
+                finish(1);
+            };
+            const bool settled = window.slicesInFlightForTest() == 0
+                && !window.sliceRequestPendingForTest();
+            if (!settled) {
+                return;
+            }
+            const auto* remoteAction = window.findChild<QAction*>(
+                QStringLiteral("openRemoteCompanionAction"));
+            switch (*phase) {
+            case 0:
+                // A local primary: both companion actions are offered; the
+                // remote one opens over the window's remote session.
+                if (*loads < 1) {
+                    return;
+                }
+                if (remoteAction == nullptr || !remoteAction->isEnabled()) {
+                    fail("Open Remote Companion Plotfile is not offered for a local plotfile");
+                    return;
+                }
+                *phase = 1;
+                window.openRemoteCompanion(lower);
+                return;
+            case 1:
+                if (*companionOpens < 1) {
+                    return;
+                }
+                if (!window.companionOpen() || window.panelTileCountForTest(xz) != 2
+                    || window.layerSessionIsRemoteForTest(0)
+                    || !window.layerSessionIsRemoteForTest(1)
+                    || !near(window.panelTileRectForTest(xz, 0), QRectF(0.0, 0.0, 6.0, 4.0))
+                    || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 4.0, 4.0))
+                    || window.layerFieldNameForTest(1, xz) != QStringLiteral("water")) {
+                    fail("a remote companion did not open beside the local primary");
+                    return;
+                }
+                // A selection across the interface: the local layer snaps to
+                // its cells, the remote one keeps the exact window; here both
+                // land on cell edges.
+                if (auto* sync = window.findChild<QAction*>(
+                        QStringLiteral("syncRubberBandZoomAction"))) {
+                    sync->setChecked(false);
+                }
+                *phase = 2;
+                window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 2.0, 4.0, 4.0));
+                return;
+            case 2:
+                if (!near(window.panelTileRectForTest(xz, 0), QRectF(1.0, 2.0, 4.0, 2.0))
+                    || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 3.0, 2.0))
+                    || window.panelTileImageSizeForTest(xz, 0) != QSize(4, 2)) {
+                    fail("a mixed pair did not zoom each layer within its domain");
+                    return;
+                }
+                // The other way round: a remote primary (which closes the
+                // companion, as any open does) and a local companion.
+                *phase = 3;
+                window.openRemoteDataset(upper);
+                return;
+            case 3:
+                if (*loads < 2) {
+                    return;
+                }
+                if (window.companionOpen()) {
+                    fail("opening another dataset kept the companion");
+                    return;
+                }
+                *phase = 4;
+                window.openCompanion(std::filesystem::path(lower));
+                return;
+            case 4:
+                if (*companionOpens < 2) {
+                    return;
+                }
+                if (!window.companionOpen() || window.panelTileCountForTest(xz) != 2
+                    || !window.layerSessionIsRemoteForTest(0)
+                    || window.layerSessionIsRemoteForTest(1)
+                    || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 4.0, 4.0))
+                    || window.backgroundErrorCountForTest() != 0) {
+                    fail("a local companion did not open beside the remote primary");
+                    return;
+                }
+                window.closeCompanion();
+                finish(window.companionOpen() ? 1 : 0);
+                return;
+            default:
+                return;
+            }
+        });
+    timer->start();
+    QTimer::singleShot(20000, &application, [&application] {
+        qCritical("mixed companion smoke test timed out");
+        application.exit(4);
+    });
+    QTimer::singleShot(0, &window, [&window, upper, server = context.server] {
+        attachSmokeServer(window, server);
+        window.openDataset(std::filesystem::path(upper));
+    });
 }
 
 } // namespace
@@ -76,9 +624,9 @@ Outcome dispatchCompanion(Context& context)
                     application.exit(1);
                     return;
                 }
-                // Zoom the active (XY) panel first: opening a companion must
-                // put its raster back to the whole domain, since zoom is
-                // view-only with two datasets.
+                // Zoom the active (XY) panel first: opening a companion starts
+                // both datasets at the whole domain, so the raster's region
+                // must go (a pair's zoom is the panel's; see the zoom smoke).
                 QObject::connect(&window,
                     &amrvis::qt::MainWindow::interactiveSlicesSettled, &application,
                     [&window, lower] { window.openCompanion(lower); },
@@ -205,7 +753,7 @@ Outcome dispatchCompanion(Context& context)
                             // Both tiles on the XZ panel, the ocean directly
                             // under the atmosphere and two cells in from its
                             // left edge; the zoom made before the open is
-                            // gone, so the rasters cover their whole domains.
+                            // gone, so both rasters cover their whole domains.
                             if (!near(window.panelTileRectForTest(xz, 0), QRectF(0.0, 0.0, 6.0, 4.0))
                                 || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 4.0, 4.0))
                                 || !near(window.panelTileRectForTest(xy, 0), QRectF(0.0, 0.0, 6.0, 4.0))) {
@@ -339,6 +887,202 @@ Outcome dispatchCompanion(Context& context)
             return {true, 1};
         }
         QTimer::singleShot(0, &window, [&window, upper] { window.openDataset(upper); });
+        return {true, std::nullopt};
+    }
+    if (argc == 4 && std::string_view(argv[1]) == "--mixed-companion-smoke-test") {
+        armMixedCompanionChecks(context, argv[2], argv[3]);
+        return {true, std::nullopt};
+    }
+    if (argc == 4 && std::string_view(argv[1]) == "--companion-zoom-smoke-test") {
+        armCompanionZoomChecks(window, application,
+            std::filesystem::path(argv[2]), std::filesystem::path(argv[3]));
+        return {true, std::nullopt};
+    }
+    if (argc == 4 && std::string_view(argv[1]) == "--companion-derived-smoke-test") {
+        armCompanionDerivedChecks(window, application,
+            std::filesystem::path(argv[2]), std::filesystem::path(argv[3]));
+        return {true, std::nullopt};
+    }
+    if (argc == 4 && std::string_view(argv[1]) == "--remote-companion-smoke-test") {
+        // Both plotfiles over the in-process loopback server: a remote primary
+        // takes a companion from the same server, over its own connection,
+        // and the pair behaves as the local one does; a local path against it
+        // is refused and leaves the companion on show.
+        const std::string upper = argv[2];
+        const std::string lower = argv[3];
+        constexpr int xz = 1;
+        constexpr int xy = 2;
+        auto phase = std::make_shared<int>(0);
+        auto loads = std::make_shared<int>(0);
+        auto errorsBefore = std::make_shared<int>(0);
+        const auto fail = [&application](const char* message) {
+            qCritical("%s", message);
+            application.exit(1);
+        };
+        context.server = std::make_shared<amrvis::remote::Server>();
+        context.serverThread.emplace(
+            [server = context.server] { server->run(); });
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, loads, lower](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                // Only the first load opens the companion; a derived-field
+                // reload of the primary lands here too.
+                if (++*loads != 1) {
+                    return;
+                }
+                const auto* openAction = window.findChild<QAction*>(
+                    QStringLiteral("openCompanionAction"));
+                if (openAction == nullptr || !openAction->isEnabled()) {
+                    qCritical("Open Companion Plotfile is not offered for a remote plotfile");
+                    application.exit(1);
+                    return;
+                }
+                window.openRemoteCompanion(lower);
+            });
+        QObject::connect(&window, &amrvis::qt::MainWindow::companionOpenFinished,
+            &application,
+            [&window, &application, fail, phase, errorsBefore, lower](bool success) {
+                if (*phase == 0) {
+                    if (!success || !window.companionOpen()
+                        || window.panelTileCountForTest(xz) != 2) {
+                        fail("the remote companion did not open");
+                        return;
+                    }
+                    // The layout is geometry, not raster size: the same rects
+                    // as the local pair, over viewport-bounded rasters.
+                    if (!near(window.panelTileRectForTest(xz, 0), QRectF(0.0, 0.0, 6.0, 4.0))
+                        || !near(window.panelTileRectForTest(xz, 1),
+                            QRectF(2.0, 4.0, 4.0, 4.0))) {
+                        fail("the remote tiles are not at their physical positions");
+                        return;
+                    }
+                    if (window.layerFieldNameForTest(0, xz) != QStringLiteral("air")
+                        || window.layerFieldNameForTest(1, xz) != QStringLiteral("water")) {
+                        fail("the remote layers do not show their own fields");
+                        return;
+                    }
+                    if (!window.layerSessionIsRemoteForTest(0)
+                        || !window.layerSessionIsRemoteForTest(1)) {
+                        fail("the companion did not open as a remote session");
+                        return;
+                    }
+                    *phase = 1;
+                    QObject::connect(&window,
+                        &amrvis::qt::MainWindow::interactiveSlicesSettled, &application,
+                        [&window, fail, phase, errorsBefore, lower] {
+                            // In the ocean the XY panel shows the companion.
+                            if (window.panelTileVisibleForTest(xy, 0)
+                                || !window.panelTileVisibleForTest(xy, 1)) {
+                                fail("the XY panel did not switch to the remote companion");
+                                return;
+                            }
+                            // A fixed scale keeps both tiles on the pair's
+                            // canvas: no demand-driven virtual canvas over two
+                            // datasets.
+                            window.selectFixedScaleForTest(2);
+                            if (window.panelTileCountForTest(xz) != 2
+                                || !near(window.panelTileRectForTest(xz, 1),
+                                    QRectF(2.0, 4.0, 4.0, 4.0))
+                                || window.activeViewVirtualCanvasActiveForTest()) {
+                                fail("a fixed scale moved the remote pair off its canvas");
+                                return;
+                            }
+                            // The same directory as a local path: a local
+                            // companion beside the remote primary replaces the
+                            // remote one.
+                            *phase = 2;
+                            *errorsBefore = window.backgroundErrorCountForTest();
+                            window.openCompanion(std::filesystem::path(lower));
+                        },
+                        Qt::SingleShotConnection);
+                    window.setSlicePositionForTest(2, -0.1);
+                    return;
+                }
+                if (*phase == 2) {
+                    if (!success || !window.companionOpen()
+                        || window.panelTileCountForTest(xz) != 2
+                        || window.layerSessionIsRemoteForTest(1)
+                        || !window.layerSessionIsRemoteForTest(0)
+                        || window.backgroundErrorCountForTest() != *errorsBefore) {
+                        fail("a local companion did not open beside the remote primary");
+                        return;
+                    }
+                    // Back to a remote companion for the rest.
+                    *phase = 5;
+                    window.openRemoteCompanion(lower);
+                    return;
+                }
+                if (*phase == 5) {
+                    if (!success || !window.layerSessionIsRemoteForTest(1)) {
+                        fail("the remote companion did not come back");
+                        return;
+                    }
+                    // A definition ships to the second server dataset too:
+                    // the primary reloads, then the companion, which lists it.
+                    *phase = 3;
+                    amrvis::qt::DerivedFieldStore::session().set(
+                        {amrvis::DerivedFieldDefinition{"wet", "water*2"}});
+                    return;
+                }
+                if (*phase != 3) {
+                    return;
+                }
+                const auto* companionSelector = window.findChild<QComboBox*>(
+                    QStringLiteral("companionFieldSelector"));
+                if (!success || companionSelector == nullptr
+                    || !rowIsField(*companionSelector, QStringLiteral("wet"))
+                    || !window.layerSessionIsRemoteForTest(1)) {
+                    fail("the derived field did not reach the remote companion");
+                    return;
+                }
+                // A selection straddling the interface over remote layers:
+                // each keeps the exact window within its domain, the panel
+                // frames it without scroll bars, and one round of slices
+                // settles it -- no re-fetch from a viewport that shrank.
+                *phase = 4;
+                auto* sync = window.findChild<QAction*>(
+                    QStringLiteral("syncRubberBandZoomAction"));
+                if (sync != nullptr) {
+                    sync->setChecked(false);
+                }
+                auto settles = std::make_shared<int>(0);
+                QObject::connect(&window, &amrvis::qt::MainWindow::interactiveSlicesSettled,
+                    &application, [settles] { ++*settles; });
+                window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 2.0, 4.0, 4.0));
+                QTimer::singleShot(800, &application,
+                    [&window, &application, fail, settles, errorsBefore] {
+                        if (*settles != 1) {
+                            qCritical("%d settles after a remote paired zoom", *settles);
+                            fail("a remote paired zoom did not settle in one round");
+                            return;
+                        }
+                        if (!near(window.panelTileRectForTest(xz, 0), QRectF(1.0, 2.0, 4.0, 2.0))
+                            || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 3.0, 2.0))
+                            || window.rubberBandZoomedViewCountForTest() != 2
+                            || window.activeViewScrollBarsVisibleForTest()
+                            || window.backgroundErrorCountForTest() != *errorsBefore) {
+                            fail("a remote paired zoom did not land both layers in place");
+                            return;
+                        }
+                        window.closeCompanion();
+                        if (window.companionOpen() || window.panelTileCountForTest(xz) != 1) {
+                            fail("closing the remote companion did not restore one tile");
+                            return;
+                        }
+                        QTimer::singleShot(0, &application, [&application] { application.exit(0); });
+                    });
+            });
+        QTimer::singleShot(30000, &application, [&application] {
+            qCritical("remote companion smoke test timed out");
+            application.exit(4);
+        });
+        QTimer::singleShot(0, &window, [&window, upper, server = context.server] {
+            attachSmokeServer(window, server);
+            window.openRemoteDataset(upper);
+        });
         return {true, std::nullopt};
     }
     return {false, std::nullopt};

@@ -434,7 +434,10 @@ MainWindow::MainWindow(QWidget* parent)
     connect(companion.fieldSelector, qOverload<int>(&QComboBox::currentIndexChanged),
         this, [this](int index) {
             auto& layer = m_layers[1];
-            if (!layer.active || index < 0) {
+            // The separator and a greyed definition carry no field id; only
+            // a row that does is a field switch (see selectFieldItem).
+            if (!layer.active || index < 0
+                || !layer.fieldSelector->itemData(index).isValid()) {
                 return;
             }
             layer.range->switchField(layer.fieldSelector->itemText(index));
@@ -556,6 +559,8 @@ MainWindow::MainWindow(QWidget* parent)
                 openRemoteDataset(paths.front());
             }
         });
+    connect(m_remoteSession, &RemoteSessionController::companionRequested, this,
+        [this](std::string path) { openRemoteCompanion(std::move(path)); });
     connect(m_remoteSession, &RemoteSessionController::statusMessage, this,
         [this](const QString& message, int timeoutMs) {
             statusBar()->showMessage(message, timeoutMs);
@@ -1088,23 +1093,17 @@ void MainWindow::wirePanelSignals(ImageView* view, int normal)
                 rubberBandZoom(*state, sceneRect);
             }
         });
-    // Over two datasets a selection may span both tiles, and the rasters are
-    // whole-domain at native resolution, so the zoom is the view's alone: no
-    // region is re-sliced.
+    // Over two datasets a selection may span both tiles: each layer gets
+    // the part inside its own domain and re-slices for it (pairRubberBandZoom).
     connect(view, &ImageView::rubberBandSelectedScene, this,
-        [this, view, leading](const QRectF& sceneRect) {
+        [this, leading](const QRectF& sceneRect) {
             if (!m_pair) {
                 return;
             }
             if (auto* state = leading()) {
                 setActiveView(*state);
+                pairRubberBandZoom(state->normal, sceneRect);
             }
-            if (sceneRect.width() < 1.0e-9 || sceneRect.height() < 1.0e-9) {
-                return;
-            }
-            view->zoomToSceneRect(sceneRect);
-            setScaleUiState(ScaleUiState::Custom);
-            m_volumeController->regionChanged();
         });
     connect(view, &ImageView::panDragBegan, this, [this, leading] {
         if (auto* state = leading()) {
@@ -1338,19 +1337,42 @@ std::array<int, 2> MainWindow::nativeOutputSize(
         *layerFor(state).openMetadata, target, state.normal);
 }
 
+bool MainWindow::layerIsRemote(const PlaneViewState& state) const
+{
+    return std::dynamic_pointer_cast<remote::RemoteDatasetSession>(
+               layerFor(state).session)
+        != nullptr;
+}
+
 std::array<int, 2> MainWindow::sliceOutputSize(
     const PlaneViewState& state, bool forceRemote) const
 {
-    if (!forceRemote
-        && !std::dynamic_pointer_cast<remote::RemoteDatasetSession>(layerFor(state).session)) {
+    if (!forceRemote && !layerIsRemote(state)) {
         return nativeOutputSize(state);
     }
     if (!layerFor(state).openMetadata || layerFor(state).openMetadata->levels.empty()) {
         return {1, 1};
     }
-    const auto viewportPixels = stretchedViewportPixelSize(state);
+    auto viewportPixels = stretchedViewportPixelSize(state);
     const auto target = state.visibleRegion.value_or(
         datasetSampleBounds(*layerFor(state).openMetadata));
+    if (m_pair && state.visibleRegion.has_value()) {
+        // Over a pair a zoomed layer fills only its share of the framed
+        // window -- a selection straddling the interface splits the height
+        // between the two -- so its raster is bounded by that share of the
+        // viewport rather than fetched as if it filled the whole of it.
+        const auto rect = pairLayout(state.normal).sceneRectForRegion(state.layer, target);
+        const auto canvas = pairCanvasRect(state.normal);
+        const auto share = [](double part, double whole) {
+            return whole > 0.0 ? std::clamp(part / whole, 0.0, 1.0) : 1.0;
+        };
+        for (std::size_t axis = 0; axis < 2; ++axis) {
+            const auto fraction = axis == 0 ? share(rect.width, canvas.width)
+                                            : share(rect.height, canvas.height);
+            viewportPixels[axis] = std::max(1,
+                static_cast<int>(std::ceil(viewportPixels[axis] * fraction)));
+        }
+    }
     std::array<int, 2> outputSize{};
     if (state.view->transformMode() == ImageView::TransformMode::FixedScale) {
         outputSize = finestNativeOutputSize(
@@ -1519,14 +1541,12 @@ void MainWindow::applyDisplayStretches()
         applyPairLayouts();
         updatePairedIsoGeometry();
     }
-    const bool remote = primary().session
-        && std::dynamic_pointer_cast<remote::RemoteDatasetSession>(primary().session);
     for (auto* state : currentViews()) {
         if (state->view == nullptr) {
             continue;
         }
         applyDisplayStretch(*state);
-        if (!remote || !state->view->hasImage()) {
+        if (!layerIsRemote(*state) || !state->view->hasImage()) {
             continue;
         }
         // A remote raster is sized for the screen it fills, and the stretch
@@ -1625,6 +1645,16 @@ void MainWindow::createMenus()
     connect(openRemoteSequenceAction, &QAction::triggered, this,
         [this] { m_remoteSession->promptOpen(this, true); });
 
+    // The remote form of Open Companion Plotfile: a plotfile on a server,
+    // beside a local or a remote primary.
+    m_openRemoteCompanionAction = new QAction(
+        tr("Open Remo&te Companion Plotfile..."), this);
+    m_openRemoteCompanionAction->setObjectName(
+        QStringLiteral("openRemoteCompanionAction"));
+    m_openRemoteCompanionAction->setEnabled(false);
+    connect(m_openRemoteCompanionAction, &QAction::triggered, this,
+        [this] { chooseRemoteCompanion(); });
+
     auto* openFabAction = new QAction(tr("Open &FAB..."), this);
     connect(openFabAction, &QAction::triggered, this,
         [this] { chooseStandaloneDataset(tr("Open AMReX FAB"), true); });
@@ -1666,6 +1696,7 @@ void MainWindow::createMenus()
     fileMenu->addSeparator();
     fileMenu->addAction(openRemoteAction);
     fileMenu->addAction(openRemoteSequenceAction);
+    fileMenu->addAction(m_openRemoteCompanionAction);
     fileMenu->addSeparator();
     fileMenu->addAction(openFabAction);
     fileMenu->addAction(openMultiFabAction);

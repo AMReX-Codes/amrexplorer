@@ -393,6 +393,11 @@ private:
     // Union of the visible tiles' footprints; the scene rect when no canvas is
     // set, and what Fit and export frame.
     [[nodiscard]] QRectF tilesRect() const;
+    // What an export renders: the visible tiles' footprint, cut to a pair
+    // canvas confined by a zoom (the other layer's whole tile lies outside
+    // the framed window then). A virtual canvas is not a cut: the tile sits
+    // at its cell offset and the export follows it.
+    [[nodiscard]] QRectF exportSceneRect() const;
     void updateSceneRect();
     void fitImage();
     // Fit a scene rect into the viewport with the current stretch: the

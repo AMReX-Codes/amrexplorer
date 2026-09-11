@@ -179,6 +179,7 @@ struct Observed {
     int sessionChanges = 0;
     std::vector<std::vector<std::string>> opens;
     std::vector<bool> openAsSequence;
+    std::vector<std::string> companions;
     QStringList statuses;
     QStringList errors;
 };
@@ -194,6 +195,9 @@ void observe(amrvis::qt::RemoteSessionController& controller, Observed& observed
             observed.opens.push_back(paths);
             observed.openAsSequence.push_back(sequence);
         });
+    QObject::connect(&controller,
+        &amrvis::qt::RemoteSessionController::companionRequested, &controller,
+        [&observed](const std::string& path) { observed.companions.push_back(path); });
     QObject::connect(&controller,
         &amrvis::qt::RemoteSessionController::statusMessage, &controller,
         [&observed](const QString& message, int) {
@@ -594,6 +598,119 @@ int main(int argc, char* argv[])
                         .toString()
                     == QString::fromStdString(home.string()),
                 "the browsed directory was not remembered per destination");
+        }
+        {
+            // chooseRemotePlotfile: the same browser over a given connection,
+            // handing the pick back instead of asking the host to open it
+            // (a companion rides the primary's own connection). Cancel is an
+            // empty pick; a dead or missing connection is an error.
+            const auto pick = [](QDialogButtonBox::StandardButton button) {
+                return [button] {
+                    auto* browser = visibleDialog<amrvis::qt::RemoteFileDialog>();
+                    if (browser == nullptr) {
+                        return false;
+                    }
+                    auto* entries = browser->findChild<QTreeWidget*>();
+                    for (int index = 0; index < entries->topLevelItemCount();
+                         ++index) {
+                        auto* item = entries->topLevelItem(index);
+                        if (item->text(0) == QStringLiteral("plt00000")) {
+                            item->setSelected(true);
+                            browser->findChild<QDialogButtonBox*>()
+                                ->button(button)
+                                ->click();
+                            return true;
+                        }
+                    }
+                    return false;
+                };
+            };
+            const auto opensBefore = observed.opens.size();
+            const auto errorsBefore = observed.errors.size();
+            Driver open(pick(QDialogButtonBox::Open));
+            const auto picked
+                = controller.chooseRemotePlotfile(nullptr, controller.connection());
+            require(open.done() && picked == (home / "plt00000").string()
+                    && observed.opens.size() == opensBefore,
+                "chooseRemotePlotfile did not hand back the picked plotfile");
+            Driver cancel(pick(QDialogButtonBox::Cancel));
+            const auto cancelled
+                = controller.chooseRemotePlotfile(nullptr, controller.connection());
+            require(cancel.done() && cancelled.empty()
+                    && observed.errors.size() == errorsBefore,
+                "a cancelled browser did not come back empty");
+            require(controller.chooseRemotePlotfile(nullptr, nullptr).empty()
+                    && observed.errors.size() == errorsBefore + 1
+                    && observed.opens.size() == opensBefore,
+                "a missing connection was not reported");
+        }
+        {
+            // promptCompanion: a typed path over the live session comes back
+            // through companionRequested, nothing is opened and no session
+            // starts; with sameServer a changed destination is refused with a
+            // warning; Browse... hands the browser's pick back.
+            const auto opensBefore = observed.opens.size();
+            const auto statusesAtCompanion = observed.statuses.size();
+            Driver typed([] {
+                auto* dialog = visibleDialog<RemoteOpenDialog>();
+                if (dialog == nullptr) {
+                    return false;
+                }
+                dialog->findChildren<QLineEdit*>()[2]->setText(
+                    QStringLiteral("/scratch/ocean"));
+                buttonNamed(*dialog, QStringLiteral("Open"))->click();
+                return true;
+            });
+            controller.promptCompanion(nullptr, true);
+            require(typed.done() && observed.companions.size() == 1
+                    && observed.companions.back() == "/scratch/ocean"
+                    && observed.opens.size() == opensBefore
+                    && observed.statuses.size() == statusesAtCompanion,
+                "a typed companion path was not handed back over the live session");
+            Driver changed([] {
+                if (auto* warning = visibleDialog<QMessageBox>()) {
+                    warning->buttons().first()->click();
+                    return true;
+                }
+                auto* dialog = visibleDialog<RemoteOpenDialog>();
+                if (dialog == nullptr) {
+                    return false;
+                }
+                const auto edits = dialog->findChildren<QLineEdit*>();
+                edits[0]->setText(QStringLiteral("third-destination"));
+                edits[2]->setText(QStringLiteral("/scratch/ocean"));
+                buttonNamed(*dialog, QStringLiteral("Open"))->click();
+                return false;
+            });
+            controller.promptCompanion(nullptr, true);
+            require(changed.done() && observed.companions.size() == 1
+                    && observed.statuses.size() == statusesAtCompanion,
+                "a companion from another server was accepted beside a remote primary");
+            Driver browsed([] {
+                if (auto* browser = visibleDialog<amrvis::qt::RemoteFileDialog>()) {
+                    auto* entries = browser->findChild<QTreeWidget*>();
+                    for (int index = 0; index < entries->topLevelItemCount(); ++index) {
+                        auto* item = entries->topLevelItem(index);
+                        if (item->text(0) == QStringLiteral("plt00000")) {
+                            item->setSelected(true);
+                            browser->findChild<QDialogButtonBox*>()
+                                ->button(QDialogButtonBox::Open)
+                                ->click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                if (auto* dialog = visibleDialog<RemoteOpenDialog>()) {
+                    buttonNamed(*dialog, QStringLiteral("Browse..."))->click();
+                }
+                return false;
+            });
+            controller.promptCompanion(nullptr, false);
+            require(browsed.done() && observed.companions.size() == 2
+                    && observed.companions.back() == (home / "plt00000").string()
+                    && observed.opens.size() == opensBefore,
+                "Browse... did not hand the companion pick back");
         }
         controller.shutdown();
         require(controller.diagnosticsLines().contains(

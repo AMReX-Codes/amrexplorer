@@ -1248,6 +1248,67 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_companion_smoke PROPERTIES TIMEOUT 30)
 
+    # The same pair over the in-process loopback server: a remote primary
+    # takes a companion from its own server, a local path is refused.
+    add_test(
+        NAME qt_remote_companion_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_companion"
+            -DMODE=remote-companion
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_remote_companion_smoke PROPERTIES TIMEOUT 60)
+
+    # Derived fields over a pair: the list reaches the companion, each layer
+    # greys what it cannot resolve, Apply reloads both, the companion keeps
+    # its field by name, and an unchanged list reloads nothing.
+    add_test(
+        NAME qt_companion_derived_field_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_companion_derived"
+            -DMODE=companion-derived
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_companion_derived_field_smoke PROPERTIES TIMEOUT 60)
+
+    # Real zoom over a pair: a selection straddling the interface re-slices
+    # each layer within its own domain, the panel frames it, Reset restores.
+    add_test(
+        NAME qt_companion_zoom_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_companion_zoom"
+            -DMODE=companion-zoom
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_companion_zoom_smoke PROPERTIES TIMEOUT 60)
+
+    # The mixed pairs over the loopback server: a remote companion beside a
+    # local primary, then a local companion beside a remote primary.
+    add_test(
+        NAME qt_mixed_companion_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_upper"
+            "-DSOURCE2=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_mixed_companion"
+            -DMODE=mixed-companion
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_mixed_companion_smoke PROPERTIES TIMEOUT 60)
+
     add_test(
         NAME qt_remote_rubber_aspect_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen

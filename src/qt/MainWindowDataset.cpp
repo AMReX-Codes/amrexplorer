@@ -994,6 +994,9 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     if (m_openCompanionAction != nullptr) {
         m_openCompanionAction->setEnabled(false);
     }
+    if (m_openRemoteCompanionAction != nullptr) {
+        m_openRemoteCompanionAction->setEnabled(false);
+    }
     setSlicePositionControlsVisible(false);
     m_animationPanel->setSweepVisible(false);
     m_levelMenu->setEnabled(false);

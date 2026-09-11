@@ -914,12 +914,13 @@ void MainWindow::setScaleUiState(ScaleUiState state, int factor)
 
 void MainWindow::resetViewZoom(PlaneViewState& state)
 {
-    state.visibleRegion.reset();
     if (m_pair) {
-        // The rasters are whole-domain already; only the view moved.
-        state.view->fitToWindow();
+        // Both layers on the panel at once; asked once per layer state by
+        // resetZoomAllViews, the second call finds nothing left to reset.
+        resetPairPanelZoom(state.normal);
         return;
     }
+    state.visibleRegion.reset();
     state.view->setVirtualCanvas(std::nullopt);
     state.view->fitToWindow();
     scheduleSliceRequest(state);
@@ -1254,7 +1255,7 @@ void MainWindow::applyRubberBandZoom(
     // Local slices use one output pixel per finest cell, so their edges land
     // on cell boundaries. Remote slices are viewport-resampled; retaining the
     // exact selection keeps an arbitrary rubber-band aspect ratio intact.
-    if (!std::dynamic_pointer_cast<remote::RemoteDatasetSession>(layerFor(state).session)) {
+    if (!layerIsRemote(state)) {
         const auto& metadata = layerFor(state).session->metadata();
         const auto& finest = metadata.levels[static_cast<std::size_t>(
             std::max(0, metadata.finestLevel))];
@@ -1288,10 +1289,23 @@ void MainWindow::beginPanDrag(PlaneViewState& state)
     m_panView = &state;
     m_panSceneDelta = QPointF();
     m_panLastScheduledDelta = QPointF();
+    if (m_pair) {
+        // Over a pair the zoomed window is the panel's, not one raster's: the
+        // drag shifts the framed window and each layer follows within its
+        // own domain (flushPanDrag). Nothing to shift until a layer is zoomed.
+        const auto panel = statesForPanel(state.normal);
+        m_panDataRefresh = std::any_of(panel.begin(), panel.end(),
+            [](const PlaneViewState* other) { return other->visibleRegion.has_value(); });
+        if (m_panDataRefresh) {
+            const auto window = pairCanvasRect(state.normal);
+            m_panStartSceneWindow = QRectF(window.x, window.y, window.width, window.height);
+        }
+        return;
+    }
     // A virtual canvas pans by scrolling (which fetches on its own); the
     // region-shifting refresh is for classic rasters of a zoomed subregion.
     m_panDataRefresh = state.visibleRegion.has_value()
-        && !state.view->virtualCanvasActive() && !m_pair;
+        && !state.view->virtualCanvasActive();
     if (m_panDataRefresh) {
         m_panStartRegion = *state.visibleRegion;
         m_panPlaneWidth = state.plane->width;
@@ -1344,6 +1358,17 @@ void MainWindow::flushPanDrag(bool finalize)
         return;
     }
     if (!finalize && m_panSceneDelta == m_panLastScheduledDelta) {
+        return;
+    }
+    if (m_pair) {
+        // The window moves against the drag -- the content by the delta, as
+        // shiftedPanRegion has it -- and stays inside the whole canvas by
+        // translation, so a layer that runs out of domain while the other
+        // does not still gets the right part of the shifted window.
+        m_panLastScheduledDelta = m_panSceneDelta;
+        applyPairZoomWindow(m_panView->normal,
+            shiftedPairWindow(m_panView->normal, m_panStartSceneWindow, m_panSceneDelta),
+            PairSnap::Nearest);
         return;
     }
     const auto region = shiftedPanRegion(*m_panView, m_panStartRegion,
@@ -1408,9 +1433,9 @@ std::array<double, 2> MainWindow::viewCenterInData(
 
 bool MainWindow::remoteDemandCanvas(const PlaneViewState& state) const
 {
-    return primary().session != nullptr
-        && std::dynamic_pointer_cast<remote::RemoteDatasetSession>(primary().session)
-            != nullptr
+    // Never over a pair: its tiles sit on the pair's canvas, which a virtual
+    // canvas would displace (see applyFixedScale).
+    return layerIsRemote(state) && !m_pair
         && !displayIsSpherical() && state.view != nullptr
         && state.view->virtualCanvasActive();
 }
@@ -1480,11 +1505,10 @@ void MainWindow::applyFixedScale(int factor)
     for (const auto* state : views) {
         centers.push_back(viewCenterInData(*state));
     }
-    const bool demandDriven = std::dynamic_pointer_cast<
-            remote::RemoteDatasetSession>(primary().session) != nullptr
-        && !displayIsSpherical();
     for (std::size_t index = 0; index < views.size(); ++index) {
         auto& state = *views[index];
+        const bool demandDriven
+            = layerIsRemote(state) && !displayIsSpherical() && !m_pair;
         if (demandDriven) {
             // Host the raster on a whole-domain virtual canvas so the scroll
             // bars span the domain exactly as they do for a local fixed
@@ -1575,6 +1599,25 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
         return;
     }
     setActiveView(state);
+    if (m_pair) {
+        const auto panel = statesForPanel(state.normal);
+        if (std::any_of(panel.begin(), panel.end(), [](const PlaneViewState* other) {
+                return other->visibleRegion.has_value();
+            })) {
+            // A twentieth of the framed window, at least one scene unit (the
+            // tightest raster pixel), the analogue of the pixel floor below.
+            const auto canvas = pairCanvasRect(state.normal);
+            const QRectF window(canvas.x, canvas.y, canvas.width, canvas.height);
+            const QPointF sceneDelta(
+                direction.x() * std::max(1.0, window.width() * 0.05),
+                direction.y() * std::max(1.0, window.height() * 0.05));
+            applyPairZoomWindow(state.normal,
+                shiftedPairWindow(state.normal, window, sceneDelta), PairSnap::Nearest);
+            refreshScaleReport();
+            return;
+        }
+        // Not zoomed: the view pans as one dataset's does below.
+    }
     const auto stepX = std::max(1.0, static_cast<double>(state.plane->width) * 0.05);
     const auto stepY = std::max(1.0, static_cast<double>(state.plane->height) * 0.05);
     const QPointF sceneDelta(direction.x() * stepX, direction.y() * stepY);
@@ -1611,6 +1654,27 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
     state.view->panViewport(QPoint(
         static_cast<int>(std::round(sceneDelta.x() * transform.m11())),
         static_cast<int>(std::round(sceneDelta.y() * transform.m22()))));
+}
+
+QRectF MainWindow::shiftedPairWindow(
+    int normal, const QRectF& window, const QPointF& sceneDelta) const
+{
+    auto shifted = window.translated(-sceneDelta);
+    const auto whole = pairLayout(normal).canvasRect();
+    const QRectF canvas(whole.x, whole.y, whole.width, whole.height);
+    if (shifted.left() < canvas.left()) {
+        shifted.moveLeft(canvas.left());
+    }
+    if (shifted.right() > canvas.right()) {
+        shifted.moveRight(canvas.right());
+    }
+    if (shifted.top() < canvas.top()) {
+        shifted.moveTop(canvas.top());
+    }
+    if (shifted.bottom() > canvas.bottom()) {
+        shifted.moveBottom(canvas.bottom());
+    }
+    return shifted;
 }
 
 std::optional<RealBox> MainWindow::shiftedPanRegion(

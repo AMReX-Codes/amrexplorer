@@ -260,6 +260,7 @@ void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
     result.mappedGrid = false;
     result.gridNodes.reset();
     result.displaySourceIndex.reset();
+    result.mappedGridFallback.clear();
     if (!result.request.mappedGrid || !dataset->supportsMappedGrid()) {
         return;
     }
@@ -283,8 +284,17 @@ void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
     if (!nodes || nodes->width != plane.width + 1
         || nodes->height != plane.height + 1
         || nodes->physicalRegion != plane.physicalRegion) {
-        nodes = std::make_shared<const MappedGridPlane>(
-            dataset->requestMappedGridPlane(nodeRequest, cancellation));
+        try {
+            nodes = std::make_shared<const MappedGridPlane>(
+                dataset->requestMappedGridPlane(nodeRequest, cancellation));
+        } catch (const CacheBudgetExceeded&) {
+            // The field itself fit, so the slice stands; only the warp is
+            // given up, and the result says why.
+            result.mappedGridFallback
+                = "node positions do not fit the " + cacheBudgetDescription(
+                    dataset->cacheMetrics().budgetBytes) + " cache";
+            return;
+        }
     }
     const auto axes = slicePlaneAxes(
         dataset->metadata().dimension, request.normalDirection);

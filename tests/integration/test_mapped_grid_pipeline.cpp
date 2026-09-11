@@ -337,6 +337,35 @@ void testMappedFixture(const std::filesystem::path& fixture)
         "a refresh without mappedGrid frames the logical region");
 }
 
+// A budget the two field blocks (32 cells each) fit but the two node blocks
+// (75 nodes each) do not: the slice stands and the warp is given up with a
+// reason, instead of the whole slice failing on the cache.
+void testStarvedGridPool(const std::filesystem::path& fixture)
+{
+    {
+        amrvis::PlotfileDataset dataset(fixture, amrvis::DatasetId{1}, 64ULL << 20U);
+        require(dataset.mappedGrid() != nullptr, "the fixture has a grid dataset");
+        require(dataset.mappedGrid()->cacheMetrics().budgetBytes == (64ULL << 20U),
+            "the grid pool takes the whole block budget");
+    }
+    const auto session = std::make_shared<amrvis::LocalDatasetSession>(
+        fixture, amrvis::DatasetId{1}, 1000);
+    const amrvis::Palette palette;
+    const auto result = amrvis::executeSlice(session, sliceRequest(true),
+        amrvis::RangeMode::File, std::nullopt, false, palette, {});
+    require(!result.mappedGrid, "a starved grid pool draws the logical grid");
+    require(result.image.width == 4 && result.image.height == 4,
+        "a starved grid pool keeps the field's raster");
+    require(!result.mappedGridFallback.empty(),
+        "a starved grid pool says why the warp is missing");
+    require(result.mappedGridFallback.find("cache") != std::string::npos,
+        "the reason names the cache");
+    const auto plain = amrvis::executeSlice(session, sliceRequest(false),
+        amrvis::RangeMode::File, std::nullopt, false, palette, {});
+    require(plain.mappedGridFallback.empty(),
+        "a Cartesian request carries no fallback reason");
+}
+
 // The same fixture with the trailing Nu_nd block cut from its Header: data
 // to slice, but no node positions.
 // A 3-D frame load in Visible range mode re-renders all three panels with the
@@ -428,6 +457,7 @@ int main(int argc, char** argv)
     try {
         testMappedFixture(argv[1]);
         testSharedRangeFrameLoad(argv[1]);
+        testStarvedGridPool(argv[1]);
         testPlainPlotfile(argv[1], argv[2]);
     } catch (const std::exception& error) {
         std::cerr << "FAILED: unexpected exception: " << error.what() << '\n';

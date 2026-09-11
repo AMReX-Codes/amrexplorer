@@ -82,6 +82,11 @@ struct SliceDisplayResult {
     // a re-colouring of the plane can be warped the same way without asking
     // the dataset again (DisplayCoordinator::realignArrivalToRange).
     std::array<int, 2> mappedAxes{0, 1};
+    // Why a requested mapped grid was not drawn although the session has
+    // one (plain untranslated text, empty otherwise): today, node blocks
+    // that do not fit the cache budget. The display is then Cartesian, and
+    // the GUI says so rather than let the flat raster pass for the warp.
+    std::string mappedGridFallback;
     std::vector<VectorSegment> vectors;
     // Contour modes only: the plane the contours were traced on (at contour
     // resolution, which since #56 removed supersampling is the plane the

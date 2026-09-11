@@ -1706,6 +1706,9 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
         // than let a logical raster pass for the mapped one.
         statusBar()->showMessage(
             tr("Mapped grid display is off: this server does not support it"));
+    } else if (state.layer == 0 && !display.mappedGridFallback.empty()) {
+        statusBar()->showMessage(tr("Mapped grid display is off: %1")
+                .arg(QString::fromStdString(display.mappedGridFallback)));
     } else {
         statusBar()->clearMessage();
     }

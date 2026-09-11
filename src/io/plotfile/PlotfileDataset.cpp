@@ -133,11 +133,11 @@ PlotfileDataset::PlotfileDataset(MappedGridTag, std::filesystem::path root,
 std::uint64_t PlotfileDataset::mappedGridCacheBudget(
     std::uint64_t cacheBudgetBytes) noexcept
 {
-    // Node positions are a few planes of doubles per view, small next to the
-    // field blocks; an eighth of the budget, and never less than a slice of
-    // a large domain's worth, keeps them resident without starving fields.
-    constexpr std::uint64_t minimumBytes = std::uint64_t{16} << 20U;
-    return std::max(minimumBytes, cacheBudgetBytes / 8);
+    // The whole block budget, as the volume-grid pool takes it: a node block
+    // is as large as a field block of the same box, so a smaller pool would
+    // refuse node positions for exactly the plotfiles whose fields fit. The
+    // pool only fills while the mapped grid is shown.
+    return cacheBudgetBytes;
 }
 
 std::shared_ptr<PlotfileDataset> PlotfileDataset::makeMappedGrid(

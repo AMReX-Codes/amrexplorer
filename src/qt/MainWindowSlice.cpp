@@ -715,11 +715,13 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             displayPlane = state.plane,
             contourPlane = state.contourPlane,
             vectors = state.vectorSegments,
+            gridNodes = state.gridNodes,
             rangeMode, userRange, logarithmic, palette, displayMode,
             vectorUField, vectorVField, contourCount, rasterDirty,
             cancellation]() mutable {
             return refreshCachedSlice(dataset, request, std::move(displayPlane),
-                *contourPlane, std::move(vectors), rangeMode, userRange,
+                *contourPlane, std::move(vectors), std::move(gridNodes),
+                rangeMode, userRange,
                 logarithmic, palette, displayMode, vectorUField, vectorVField,
                 contourCount, rasterDirty, cancellation);
         });
@@ -1604,10 +1606,18 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     state.displayRegion = display.displayRegion;
     // Likewise the mapped-grid warp: the pixmap is physical over
     // displayRegion, and these place plane pixels on it and back.
+    // A refresh that kept the pixmap (rasterUnchanged) drew nothing to
+    // index, so the index of the pixmap still on screen stays as well.
+    const bool keepIndex = display.mappedGrid && display.rasterUnchanged
+        && !display.displaySourceIndex && state.mappedGrid;
     state.mappedGrid = display.mappedGrid;
-    state.gridNodes = display.mappedGrid ? display.gridNodes : nullptr;
-    state.displaySourceIndex
-        = display.mappedGrid ? display.displaySourceIndex : nullptr;
+    state.gridNodes = display.mappedGrid
+        ? (display.gridNodes ? display.gridNodes : state.gridNodes)
+        : nullptr;
+    if (!keepIndex) {
+        state.displaySourceIndex
+            = display.mappedGrid ? display.displaySourceIndex : nullptr;
+    }
     // The plotfile does not declare a length unit. The selected interpretation
     // is applied only while formatting the annotation; this width stays in
     // native coordinates. Theta-r puts an angle on the horizontal axis, so a

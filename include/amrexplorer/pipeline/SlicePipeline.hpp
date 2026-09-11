@@ -325,6 +325,9 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
 // Re-render-from-cache: only palette/log/range/contour-count cosmetics
 // changed (the request still matches the view's cache key), so the cached
 // planes are re-ranged, re-rendered, and re-contoured without any SliceQuery.
+// gridNodes are the view's cached mapped-grid nodes (null when it has none):
+// a mapped refresh warps through them instead of asking the session again,
+// and the same request spec guarantees they still fit the plane.
 // With rasterDirty false the raster is known unchanged and the image is not
 // re-rendered; SliceDisplayResult::rasterUnchanged tells the GUI to keep
 // the view's pixmap. Vector glyphs are reused from the cache: they do not
@@ -334,6 +337,7 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
     const SliceRequest& request,
     std::shared_ptr<const ScalarPlane> displayPlanePtr,
     ScalarPlane contourPlane, std::vector<VectorSegment> vectors,
+    std::shared_ptr<const MappedGridPlane> gridNodes,
     RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,

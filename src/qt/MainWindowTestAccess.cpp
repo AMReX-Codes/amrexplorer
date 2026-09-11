@@ -203,6 +203,16 @@ void MainWindow::configureContourSyncForTest(
     scheduleSliceRequest(false);
 }
 
+void MainWindow::setDisplayModeForTest(DisplayMode mode, int contourCount)
+{
+    if (!primary().session) {
+        return;
+    }
+    m_displayMode = mode;
+    m_contourCount = contourCount;
+    scheduleSliceRequest(false);
+}
+
 std::vector<MainWindow::ContourViewProbe>
 MainWindow::contourViewProbesForTest()
 {

@@ -224,6 +224,9 @@ public:
     // when that batch finishes.
     void configureContourSyncForTest(
         int count, bool logarithmic, std::array<double, 3> slicePositions);
+    // Test-only: change the display mode and contour count alone (range and
+    // positions untouched) and re-render every view through the cache path.
+    void setDisplayModeForTest(DisplayMode mode, int contourCount);
 
     // Test-only: drive the visible-range sync staleness guard deterministically.
     // Gate a sync mid-flight, re-render every panel through the cache path

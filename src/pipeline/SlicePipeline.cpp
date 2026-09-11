@@ -253,7 +253,9 @@ namespace {
 // peer for now -- leaves the Cartesian display and reports mappedGrid false
 // rather than failing the slice. Cancellation propagates like the slice's.
 void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
-    SliceDisplayResult& result, StopToken cancellation)
+    SliceDisplayResult& result,
+    const std::shared_ptr<const MappedGridPlane>& cachedNodes,
+    StopToken cancellation)
 {
     result.mappedGrid = false;
     result.gridNodes.reset();
@@ -274,8 +276,16 @@ void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
     nodeRequest.maximumLevel = request.maximumLevel;
     nodeRequest.composition = request.composition;
     nodeRequest.outputSize = {plane.width, plane.height};
-    auto nodes = std::make_shared<const MappedGridPlane>(
-        dataset->requestMappedGridPlane(nodeRequest, cancellation));
+    // The cache path hands back the nodes the view already holds; the same
+    // request spec means the same nodes, so only a plane of another size
+    // (a caller bug) sends the query again.
+    auto nodes = cachedNodes;
+    if (!nodes || nodes->width != plane.width + 1
+        || nodes->height != plane.height + 1
+        || nodes->physicalRegion != plane.physicalRegion) {
+        nodes = std::make_shared<const MappedGridPlane>(
+            dataset->requestMappedGridPlane(nodeRequest, cancellation));
+    }
     const auto axes = slicePlaneAxes(
         dataset->metadata().dimension, request.normalDirection);
     const auto bounds = mappedGridDisplayBounds(*nodes, axes);
@@ -309,14 +319,16 @@ void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
 // intentionally not rendered (contour-only refresh): the display region still
 // updates from the plane's bounds.
 void applyDisplayCoordinates(const std::shared_ptr<DatasetSession>& dataset,
-    SliceDisplayResult& result, StopToken cancellation)
+    SliceDisplayResult& result,
+    const std::shared_ptr<const MappedGridPlane>& cachedNodes,
+    StopToken cancellation)
 {
     const auto& metadata = dataset->metadata();
     result.coordinateSystem = metadata.coordinateSystem;
     const auto& logical = result.displayPlane().physicalRegion;  // (r, theta)
     if (!isSpherical2D(metadata)) {
         result.displayRegion = logical;
-        applyMappedGrid(dataset, result, cancellation);
+        applyMappedGrid(dataset, result, cachedNodes, cancellation);
         return;
     }
     result.sphericalDisplay = result.request.sphericalDisplay;
@@ -376,7 +388,7 @@ SliceDisplayResult executeSlice(const std::shared_ptr<DatasetSession>& dataset,
             .logarithmic = range.logarithmic,
             .palette = &palette
         });
-    applyDisplayCoordinates(dataset, result, cancellation);
+    applyDisplayCoordinates(dataset, result, nullptr, cancellation);
     return result;
 }
 
@@ -529,6 +541,7 @@ SliceDisplayResult refreshCachedSlice(
     const SliceRequest& request,
     std::shared_ptr<const ScalarPlane> displayPlanePtr,
     ScalarPlane contourPlane, std::vector<VectorSegment> vectors,
+    std::shared_ptr<const MappedGridPlane> gridNodes,
     RangeMode rangeMode,
     const std::optional<std::pair<double, double>>& userRange,
     bool logarithmic, const Palette& palette, DisplayMode displayMode,
@@ -582,7 +595,7 @@ SliceDisplayResult refreshCachedSlice(
     if (displayMode == DisplayMode::VelocityVectors) {
         result.vectors = std::move(vectors);
     }
-    applyDisplayCoordinates(dataset, result, cancellation);
+    applyDisplayCoordinates(dataset, result, gridNodes, cancellation);
     return result;
 }
 

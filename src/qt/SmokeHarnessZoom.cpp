@@ -219,10 +219,40 @@ Outcome dispatchZoom(Context& context)
                         return;
                     }
                     *phase = 1;
-                    window.rubberBandZoomActiveViewForTest();
+                    window.setDisplayModeForTest(
+                        amrvis::DisplayMode::RasterContours, 3);
                     break;
                 }
                 case 1:
+                case 2:
+                case 3: {
+                    // Into contours (a fresh slice), then a new contour count
+                    // -- the cache path with the pixmap kept (rasterUnchanged)
+                    // -- then back to the raster: the probe must read the
+                    // cells under it throughout.
+                    const auto left = window.probeReadoutActiveViewForTest(
+                        0, size[1] - 1);
+                    if (!window.activeViewIsMappedForTest() || size[0] != 16
+                        || !left.contains(QStringLiteral("value"))
+                        || !left.contains(QStringLiteral("cell"))) {
+                        qCritical("phase %d: %d x %d, probe '%s'", *phase,
+                            size[0], size[1], qPrintable(left));
+                        fail("a contour refresh lost the mapped source index");
+                        return;
+                    }
+                    if (*phase == 1) {
+                        window.setDisplayModeForTest(
+                            amrvis::DisplayMode::RasterContours, 7);
+                    } else if (*phase == 2) {
+                        window.setDisplayModeForTest(
+                            amrvis::DisplayMode::Raster, 7);
+                    } else {
+                        window.rubberBandZoomActiveViewForTest();
+                    }
+                    ++*phase;
+                    break;
+                }
+                case 4:
                     // The rubber band re-sliced the cells under it (a zoom,
                     // not the spherical view-only zoom) and kept the warp.
                     if (!window.activeViewIsZoomedForTest()
@@ -232,10 +262,10 @@ Outcome dispatchZoom(Context& context)
                         return;
                     }
                     *zoomedSize = size;
-                    *phase = 2;
+                    *phase = 5;
                     window.setMappedGridSupersampleForTest(8);
                     break;
-                case 2:
+                case 5:
                     // 8x doubles the warp's resolution; the framing survives.
                     if (size[0] <= (*zoomedSize)[0] || size[1] <= (*zoomedSize)[1]
                         || !window.activeViewIsZoomedForTest()
@@ -247,10 +277,10 @@ Outcome dispatchZoom(Context& context)
                              "and keep the zoom");
                         return;
                     }
-                    *phase = 3;
+                    *phase = 6;
                     window.setMappedGridForTest(false);
                     break;
-                case 3:
+                case 6:
                 default:
                     // Off: the logical grid again, radios back.
                     application.exit(!window.displayIsMappedForTest()

@@ -52,6 +52,87 @@ bool near(double a, double b, double tolerance = 1e-12)
     return std::abs(a - b) <= tolerance;
 }
 
+// Forwards to a real session and counts how often the node plane is asked
+// for: the cache path must reuse the nodes it is handed.
+class CountingSession final : public amrvis::DatasetSession {
+public:
+    explicit CountingSession(std::shared_ptr<amrvis::DatasetSession> inner)
+        : m_inner(std::move(inner))
+    {
+    }
+    int nodeRequests = 0;
+
+    [[nodiscard]] amrvis::DatasetId id() const noexcept override { return m_inner->id(); }
+    [[nodiscard]] const amrvis::DatasetMetadata& metadata() const noexcept override
+    {
+        return m_inner->metadata();
+    }
+    [[nodiscard]] const amrvis::MetadataReadMetrics& metadataReadMetrics()
+        const noexcept override
+    {
+        return m_inner->metadataReadMetrics();
+    }
+    [[nodiscard]] const std::string& fileVersion() const noexcept override
+    {
+        return m_inner->fileVersion();
+    }
+    [[nodiscard]] const std::vector<amrvis::ParticleSpeciesMetadata>&
+    particleSpecies() const noexcept override
+    {
+        return m_inner->particleSpecies();
+    }
+    [[nodiscard]] amrvis::ViewDataResult requestView(
+        const amrvis::ViewDataRequest& request, amrvis::StopToken cancellation) override
+    {
+        return m_inner->requestView(request, cancellation);
+    }
+    [[nodiscard]] amrvis::DatasetPage requestDatasetPage(
+        const amrvis::DatasetPageRequest& request, amrvis::StopToken cancellation) override
+    {
+        return m_inner->requestDatasetPage(request, cancellation);
+    }
+    [[nodiscard]] std::optional<amrvis::ValueRange> requestRange(
+        const amrvis::RangeRequest& request, amrvis::StopToken cancellation) override
+    {
+        return m_inner->requestRange(request, cancellation);
+    }
+    [[nodiscard]] bool rangeAvailable(
+        const amrvis::RangeRequest& request) const noexcept override
+    {
+        return m_inner->rangeAvailable(request);
+    }
+    [[nodiscard]] amrvis::ParticleSample requestParticleSample(
+        const std::string& species, double fraction, std::uint64_t seed,
+        amrvis::StopToken cancellation) override
+    {
+        return m_inner->requestParticleSample(species, fraction, seed, cancellation);
+    }
+    [[nodiscard]] bool supportsMappedGrid() const noexcept override
+    {
+        return m_inner->supportsMappedGrid();
+    }
+    [[nodiscard]] amrvis::MappedGridPlane requestMappedGridPlane(
+        const amrvis::MappedGridPlaneRequest& request,
+        amrvis::StopToken cancellation) override
+    {
+        ++nodeRequests;
+        return m_inner->requestMappedGridPlane(request, cancellation);
+    }
+    [[nodiscard]] amrvis::CacheMetrics cacheMetrics() const override
+    {
+        return m_inner->cacheMetrics();
+    }
+    [[nodiscard]] bool setCacheBudget(std::uint64_t bytes) override
+    {
+        return m_inner->setCacheBudget(bytes);
+    }
+    void clearUnpinnedCache() override { m_inner->clearUnpinnedCache(); }
+    void close() noexcept override { m_inner->close(); }
+
+private:
+    std::shared_ptr<amrvis::DatasetSession> m_inner;
+};
+
 // The y-normal slice through cell j = 1 over the whole domain at one raster
 // sample per cell: the plane spans x (columns) and z (rows).
 amrvis::SliceRequest sliceRequest(bool mappedGrid)
@@ -192,7 +273,7 @@ void testMappedFixture(const std::filesystem::path& fixture)
     // --- refreshCachedSlice re-warps from the cached plane ---------------
     const auto plane = std::make_shared<const amrvis::ScalarPlane>(mapped.slice.plane);
     const auto refreshed = amrvis::refreshCachedSlice(session, sliceRequest(true),
-        plane, {}, {}, amrvis::RangeMode::File, std::nullopt, false, palette,
+        plane, {}, {}, {}, amrvis::RangeMode::File, std::nullopt, false, palette,
         amrvis::DisplayMode::Raster, 0, 0, 10, true);
     require(refreshed.mappedGrid, "a dirty refresh draws on the grid");
     require(refreshed.image.width == mapped.image.width
@@ -207,7 +288,7 @@ void testMappedFixture(const std::filesystem::path& fixture)
         "a dirty refresh reproduces the source index");
 
     const auto unchanged = amrvis::refreshCachedSlice(session, sliceRequest(true),
-        plane, {}, {}, amrvis::RangeMode::File, std::nullopt, false, palette,
+        plane, {}, {}, {}, amrvis::RangeMode::File, std::nullopt, false, palette,
         amrvis::DisplayMode::Raster, 0, 0, 10, false);
     require(unchanged.rasterUnchanged, "an undirty refresh keeps the raster");
     require(unchanged.mappedGrid, "an undirty refresh still reports the grid");
@@ -217,9 +298,38 @@ void testMappedFixture(const std::filesystem::path& fixture)
     require(!unchanged.displaySourceIndex,
         "an undirty refresh draws nothing to index");
 
+    // Handed the view's nodes, a refresh asks the session for nothing and
+    // carries the very same nodes back, dirty or not.
+    {
+        const auto counting = std::make_shared<CountingSession>(session);
+        const auto reused = amrvis::refreshCachedSlice(counting, sliceRequest(true),
+            plane, {}, {}, mapped.gridNodes, amrvis::RangeMode::File, std::nullopt,
+            false, palette, amrvis::DisplayMode::Raster, 0, 0, 10, true);
+        require(counting->nodeRequests == 0,
+            "a dirty refresh with cached nodes asks for no node plane");
+        require(reused.gridNodes == mapped.gridNodes,
+            "a refresh with cached nodes carries those nodes");
+        require(reused.displaySourceIndex
+                && *reused.displaySourceIndex == *mapped.displaySourceIndex,
+            "a refresh with cached nodes reproduces the source index");
+        const auto kept = amrvis::refreshCachedSlice(counting, sliceRequest(true),
+            plane, {}, {}, mapped.gridNodes, amrvis::RangeMode::File, std::nullopt,
+            false, palette, amrvis::DisplayMode::Raster, 0, 0, 10, false);
+        require(counting->nodeRequests == 0,
+            "an undirty refresh with cached nodes asks for no node plane");
+        require(kept.mappedGrid && kept.gridNodes == mapped.gridNodes
+                && kept.displayRegion == mapped.displayRegion,
+            "an undirty refresh with cached nodes keeps the frame");
+        static_cast<void>(amrvis::refreshCachedSlice(counting, sliceRequest(true),
+            plane, {}, {}, nullptr, amrvis::RangeMode::File, std::nullopt,
+            false, palette, amrvis::DisplayMode::Raster, 0, 0, 10, true));
+        require(counting->nodeRequests == 1,
+            "a refresh without cached nodes asks for the node plane once");
+    }
+
     // Switching the display off on the cache path returns to Cartesian.
     const auto back = amrvis::refreshCachedSlice(session, sliceRequest(false),
-        plane, {}, {}, amrvis::RangeMode::File, std::nullopt, false, palette,
+        plane, {}, {}, {}, amrvis::RangeMode::File, std::nullopt, false, palette,
         amrvis::DisplayMode::Raster, 0, 0, 10, true);
     require(!back.mappedGrid && back.image.width == 4 && back.image.height == 4,
         "a refresh without mappedGrid draws the logical raster");

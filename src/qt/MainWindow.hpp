@@ -699,6 +699,9 @@ private:
         InitialSliceResult result;
     };
     void installCompanion(const std::filesystem::path& path, CompanionLoad load);
+    // closeCompanion's body; a replacement keeps follow mode and the shared
+    // slice position for the companion about to take the slot.
+    void tearDownCompanion(bool replacing);
     void configureCompanionControls();
     // Which views a companion's controls and states reach.
     void scheduleLayerSliceRequests(DatasetLayer& layer);

@@ -380,6 +380,7 @@ private:
     // The tile list always holds tile 0; tile(index) grows it on demand.
     [[nodiscard]] Tile& tile(std::size_t index);
     [[nodiscard]] const Tile* tileIfPresent(std::size_t index) const noexcept;
+    [[nodiscard]] Tile* tileIfPresent(std::size_t index) noexcept;
     // Drop a tile's item and everything parented to it.
     void clearTileItems(Tile& tile);
     // Place a tile's item over its scene rect and refresh the scene rect.

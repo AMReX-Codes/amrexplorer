@@ -540,6 +540,54 @@ void tilesShareOnePlacedScene()
         "setImage did not reduce the view to one tile");
 }
 
+void clearingAnAbsentTileLeavesTheViewAlone()
+{
+    amrvis::qt::ImageView view;
+    view.resize(400, 400);
+    view.show();
+    QApplication::processEvents();
+    // A remote raster over a 40x20 cell window of a 100x100 domain: the tile
+    // rect is in cells, the raster in pixels, so a footprint measurement
+    // would differ from the raster size.
+    view.setImage(solidImage(80, 40), amrvis::qt::ImageTransformPolicy::GeometryAware,
+        {}, amrvis::qt::ImageView::VirtualPlacement{
+            QRectF(10.0, 10.0, 40.0, 20.0), QSizeF(100.0, 100.0)});
+    require(view.displaySize() == QSizeF(80.0, 40.0),
+        "a placed single raster does not report its pixel size");
+    // Clearing overlays on a tile that was never placed is a no-op.
+    view.setCellHighlight(std::nullopt, 1);
+    view.setCellHighlightPath(std::nullopt, 1);
+    view.setGridBoxes({}, 1);
+    view.setOverlaySegments({}, 1);
+    view.setOverlayPaths({}, 1);
+    view.setPointOverlays({}, 1);
+    require(view.tileCount() == 1, "clearing an absent tile grew the tile list");
+    require(view.displaySize() == QSizeF(80.0, 40.0),
+        "clearing an absent tile changed displaySize");
+}
+
+void fitFramesTheCanvasNotTheTilesOnShow()
+{
+    amrvis::qt::ImageView view;
+    view.resize(400, 400);
+    view.show();
+    QApplication::processEvents();
+    // Two layers on a panel that shows one at a time: the canvas is their
+    // union and Fit must frame it whichever tile is visible.
+    view.setTileImage(0, solidImage(100, 50), QRectF(0.0, 0.0, 100.0, 50.0),
+        QRectF(0.0, 0.0, 100.0, 50.0), amrvis::qt::ImageTransformPolicy::GeometryAware);
+    view.setTileImage(1, solidImage(40, 50), QRectF(30.0, 0.0, 40.0, 50.0));
+    QApplication::processEvents();
+    const auto both = view.transform();
+    view.setTileVisible(0, false);
+    view.fitToWindow();
+    require(view.transform() == both, "Fit re-framed the one tile on show");
+    view.setTileVisible(0, true);
+    view.setTileVisible(1, false);
+    view.fitToWindow();
+    require(view.transform() == both, "Fit re-framed the other tile on show");
+}
+
 } // namespace
 
 bool nearly(double actual, double expected, double relative = 1e-9)
@@ -642,5 +690,7 @@ int main(int argc, char* argv[])
     arrowKeysRequestPanOnlyWhenFocusedWithAnImage();
     tearingDownTheSceneForgetsThePointTally();
     tilesShareOnePlacedScene();
+    clearingAnAbsentTileLeavesTheViewAlone();
+    fitFramesTheCanvasNotTheTilesOnShow();
     return 0;
 }

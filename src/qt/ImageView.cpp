@@ -219,6 +219,11 @@ const ImageView::Tile* ImageView::tileIfPresent(std::size_t index) const noexcep
     return index < m_tiles.size() ? &m_tiles[index] : nullptr;
 }
 
+ImageView::Tile* ImageView::tileIfPresent(std::size_t index) noexcept
+{
+    return index < m_tiles.size() ? &m_tiles[index] : nullptr;
+}
+
 void ImageView::clearTileItems(Tile& tile)
 {
     // Deleting the pixmap item takes every child overlay with it; the lists
@@ -516,12 +521,17 @@ void ImageView::applyPlacement()
 void ImageView::setGridBoxes(const std::vector<GridBoxOverlay>& boxes,
     std::size_t index)
 {
-    auto& tile = this->tile(index);
-    deleteItems(m_scene, tile.gridItems);
-    if (tile.item == nullptr) {
+    // A tile that was never placed has nothing to clear and nothing to draw
+    // on; looking it up must not grow the tile list (see displaySize).
+    auto* tile = tileIfPresent(index);
+    if (tile == nullptr) {
         return;
     }
-    tile.gridItems.reserve(boxes.size());
+    deleteItems(m_scene, tile->gridItems);
+    if (tile->item == nullptr) {
+        return;
+    }
+    tile->gridItems.reserve(boxes.size());
     // All overlays are children of the raster item: their raster-pixel
     // coordinates then hold on a virtual canvas, where the item carries the
     // pixel-to-cell transform and its offset within the domain.
@@ -534,83 +544,92 @@ void ImageView::setGridBoxes(const std::vector<GridBoxOverlay>& boxes,
             // view default) so the arcs stay smooth; the crisp-rect trick only
             // helps axis-aligned edges.
             auto* item = m_scene->addPath(box.path, pen);
-            item->setParentItem(tile.item);
+            item->setParentItem(tile->item);
             item->setBrush(Qt::NoBrush);
             item->setZValue(1.0);
-            tile.gridItems.push_back(item);
+            tile->gridItems.push_back(item);
             continue;
         }
-        auto* item = new CrispRectItem(box.rectangle, tile.item);
+        auto* item = new CrispRectItem(box.rectangle, tile->item);
         item->setPen(pen);
         item->setBrush(Qt::NoBrush);
         item->setZValue(1.0);
-        tile.gridItems.push_back(item);
+        tile->gridItems.push_back(item);
     }
 }
 
 void ImageView::setOverlaySegments(const std::vector<OverlaySegment>& segments,
     std::size_t index)
 {
-    auto& tile = this->tile(index);
-    deleteItems(m_scene, tile.overlayItems);
-    if (tile.item == nullptr) {
+    auto* tile = tileIfPresent(index);
+    if (tile == nullptr) {
         return;
     }
-    tile.overlayItems.reserve(segments.size());
+    deleteItems(m_scene, tile->overlayItems);
+    if (tile->item == nullptr) {
+        return;
+    }
+    tile->overlayItems.reserve(segments.size());
     for (const auto& segment : segments) {
         QPen pen(segment.color);
         pen.setCosmetic(true);
         pen.setWidthF(segment.width);
         auto* item = m_scene->addLine(segment.line, pen);
-        item->setParentItem(tile.item);
+        item->setParentItem(tile->item);
         item->setZValue(2.0);
-        tile.overlayItems.push_back(item);
+        tile->overlayItems.push_back(item);
     }
 }
 
 void ImageView::setOverlayPaths(const std::vector<OverlayPath>& paths,
     std::size_t index)
 {
-    auto& tile = this->tile(index);
-    deleteItems(m_scene, tile.pathItems);
-    if (tile.item == nullptr) {
+    auto* tile = tileIfPresent(index);
+    if (tile == nullptr) {
         return;
     }
-    tile.pathItems.reserve(paths.size());
+    deleteItems(m_scene, tile->pathItems);
+    if (tile->item == nullptr) {
+        return;
+    }
+    tile->pathItems.reserve(paths.size());
     for (const auto& overlay : paths) {
         QPen pen(overlay.color);
         pen.setCosmetic(true);
         pen.setWidthF(overlay.width);
         auto* item = m_scene->addPath(overlay.path, pen);
-        item->setParentItem(tile.item);
+        item->setParentItem(tile->item);
         item->setZValue(2.0);
-        tile.pathItems.push_back(item);
+        tile->pathItems.push_back(item);
     }
 }
 
 void ImageView::setPointOverlays(const std::vector<PointOverlay>& overlays,
     std::size_t index)
 {
-    auto& tile = this->tile(index);
-    deleteItems(m_scene, tile.pointItems);
-    tile.pointOverlayColors.clear();
-    tile.pointOverlayPointCount = 0;
-    if (tile.item == nullptr) {
+    auto* tile = tileIfPresent(index);
+    if (tile == nullptr) {
         return;
     }
-    tile.pointItems.reserve(overlays.size());
+    deleteItems(m_scene, tile->pointItems);
+    tile->pointOverlayColors.clear();
+    tile->pointOverlayPointCount = 0;
+    if (tile->item == nullptr) {
+        return;
+    }
+    tile->pointItems.reserve(overlays.size());
     for (const auto& overlay : overlays) {
         if (overlay.points.empty()) {
             continue;
         }
         auto* item = new PointCloudItem(
-            overlay.points, tile.item->boundingRect(), overlay.color,
+            overlay.points, tile->item->boundingRect(), overlay.color,
             overlay.size);
-        item->setParentItem(tile.item);
+        item->setParentItem(tile->item);
         item->setZValue(3.0);
-        tile.pointItems.push_back(item);
-        tile.pointOverlayColors.push_back(overlay.color);
-        tile.pointOverlayPointCount += overlay.points.size();
+        tile->pointItems.push_back(item);
+        tile->pointOverlayColors.push_back(overlay.color);
+        tile->pointOverlayPointCount += overlay.points.size();
     }
 }
 
@@ -693,43 +712,49 @@ void ImageView::applyCrosshairs(Tile& tile)
 void ImageView::setCellHighlight(const std::optional<QRectF>& sceneRect,
     std::size_t index)
 {
-    auto& tile = this->tile(index);
-    if (tile.cellHighlightItem != nullptr) {
-        m_scene->removeItem(tile.cellHighlightItem);
-        delete tile.cellHighlightItem;
-        tile.cellHighlightItem = nullptr;
+    auto* tile = tileIfPresent(index);
+    if (tile == nullptr) {
+        return;
     }
-    if (!sceneRect.has_value() || tile.item == nullptr) {
+    if (tile->cellHighlightItem != nullptr) {
+        m_scene->removeItem(tile->cellHighlightItem);
+        delete tile->cellHighlightItem;
+        tile->cellHighlightItem = nullptr;
+    }
+    if (!sceneRect.has_value() || tile->item == nullptr) {
         return;
     }
     QPen pen(Qt::red);
     pen.setCosmetic(true);
     pen.setWidth(2);
     auto* item = m_scene->addRect(*sceneRect, pen, Qt::NoBrush);
-    item->setParentItem(tile.item);
+    item->setParentItem(tile->item);
     item->setZValue(4.0);
-    tile.cellHighlightItem = item;
+    tile->cellHighlightItem = item;
 }
 
 void ImageView::setCellHighlightPath(const std::optional<QPainterPath>& scenePath,
     std::size_t index)
 {
-    auto& tile = this->tile(index);
-    if (tile.cellHighlightItem != nullptr) {
-        m_scene->removeItem(tile.cellHighlightItem);
-        delete tile.cellHighlightItem;
-        tile.cellHighlightItem = nullptr;
+    auto* tile = tileIfPresent(index);
+    if (tile == nullptr) {
+        return;
     }
-    if (!scenePath.has_value() || tile.item == nullptr) {
+    if (tile->cellHighlightItem != nullptr) {
+        m_scene->removeItem(tile->cellHighlightItem);
+        delete tile->cellHighlightItem;
+        tile->cellHighlightItem = nullptr;
+    }
+    if (!scenePath.has_value() || tile->item == nullptr) {
         return;
     }
     QPen pen(Qt::red);
     pen.setCosmetic(true);
     pen.setWidth(2);
     auto* item = m_scene->addPath(*scenePath, pen, Qt::NoBrush);
-    item->setParentItem(tile.item);
+    item->setParentItem(tile->item);
     item->setZValue(4.0);
-    tile.cellHighlightItem = item;
+    tile->cellHighlightItem = item;
 }
 
 void ImageView::setAxisIndicator(const QString& horizontal,
@@ -1415,8 +1440,16 @@ void ImageView::clearLineGuide()
 
 void ImageView::fitImage()
 {
-    if (hasImage()) {
-        resetTransform();
+    if (!hasImage()) {
+        return;
+    }
+    resetTransform();
+    // A pair layout's canvas is what Fit frames, so the panel showing one
+    // layer at a time keeps one zoom as the shown layer changes. A remote
+    // virtual canvas keeps framing the fetched window, as it always has.
+    if (m_canvasRect.has_value() && !m_placement.has_value()) {
+        fitSceneRect(*m_canvasRect);
+    } else {
         fitSceneRect(tilesRect());
     }
 }
@@ -1491,8 +1524,13 @@ QSizeF ImageView::displaySize() const
     if (!hasImage()) {
         return {};
     }
-    if (m_tiles.size() == 1) {
-        const auto& tile0 = m_tiles.front();
+    // Counted by rasters on show, not list length: a cleared overlay slot
+    // must not turn a single raster into a footprint measurement.
+    const auto placed = std::count_if(m_tiles.begin(), m_tiles.end(),
+        [](const Tile& tile) { return tile.item != nullptr && !tile.image.isNull(); });
+    if (placed == 1) {
+        const auto& tile0 = *std::find_if(m_tiles.begin(), m_tiles.end(),
+            [](const Tile& tile) { return tile.item != nullptr && !tile.image.isNull(); });
         return {tile0.image.width() * m_stretch.x(),
             tile0.image.height() * m_stretch.y()};
     }

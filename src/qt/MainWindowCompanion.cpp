@@ -170,7 +170,7 @@ void MainWindow::installCompanion(
     const std::filesystem::path& path, CompanionLoad load)
 {
     if (m_layers[1].active) {
-        closeCompanion();
+        tearDownCompanion(/*replacing=*/true);
     }
     // The Dataset window tabulates the active view's dataset at its slice
     // position; with two datasets on the panels it would mix them, so it is
@@ -204,6 +204,18 @@ void MainWindow::installCompanion(
     configureCompanionControls();
     updatePairLayouts();
     updatePairedIsoGeometry();
+    // Kept from a replaced companion, the shared position may lie outside
+    // the new union: back to its edge, and the primary's panel there follows.
+    for (int axis = 0; axis < 3; ++axis) {
+        const auto a = static_cast<std::size_t>(axis);
+        const auto& union_ = m_pair->unionBounds;
+        const auto clamped = std::clamp(m_slicePosition3d[a], union_.lower[a],
+            std::nextafter(union_.upper[a], union_.lower[a]));
+        if (clamped != m_slicePosition3d[a]) {
+            m_slicePosition3d[a] = clamped;
+            scheduleSliceRequest(primary().planeViews[a]);
+        }
+    }
     // The primary's tiles move from the raster-at-origin scene onto the shared
     // canvas before the companion's land beside them.
     applyPairLayouts();
@@ -212,6 +224,13 @@ void MainWindow::installCompanion(
         state.visibleRegion.reset();
         state.planeSessionEpoch = layer.sessionEpoch;
         showSlice(state, std::move(load.result.displays[index]), layer.sessionEpoch);
+        // Following the primary's range from the start when a replaced
+        // companion did: the load rendered the file range.
+        if (m_companionFollowsPrimary) {
+            const auto& lead = primary().planeViews[index];
+            refreshFollowingCompanion(index, lead.displayMinimum,
+                lead.displayMaximum, lead.displayLogarithmic);
+        }
     }
     updateShownLayers();
     updatePairedModeControls();
@@ -232,6 +251,11 @@ void MainWindow::installCompanion(
 }
 
 void MainWindow::closeCompanion()
+{
+    tearDownCompanion(/*replacing=*/false);
+}
+
+void MainWindow::tearDownCompanion(bool replacing)
 {
     // A load still running for a replacement must not install after this.
     ++m_companionGeneration;
@@ -295,11 +319,13 @@ void MainWindow::closeCompanion()
         layer.colorBar->clearRange();
         layer.colorBar->setVisible(false);
     }
-    if (m_companionFollowBox != nullptr) {
-        const QSignalBlocker blocker(m_companionFollowBox);
-        m_companionFollowBox->setChecked(false);
+    if (!replacing) {
+        if (m_companionFollowBox != nullptr) {
+            const QSignalBlocker blocker(m_companionFollowBox);
+            m_companionFollowBox->setChecked(false);
+        }
+        m_companionFollowsPrimary = false;
     }
-    m_companionFollowsPrimary = false;
     // Back to one tile per panel in the classic scene.
     applyPairLayouts();
     for (auto* state : primaryViews()) {
@@ -310,15 +336,18 @@ void MainWindow::closeCompanion()
         if (metadata.dimension == 3) {
             m_isoWidget->setGeometry(metadata);
             // The shared position may sit in the companion's part of the
-            // union; back inside the primary, and that panel re-sliced.
-            const auto bounds = datasetSampleBounds(metadata);
-            for (int axis = 0; axis < 3; ++axis) {
-                const auto a = static_cast<std::size_t>(axis);
-                const auto clamped = std::clamp(m_slicePosition3d[a],
-                    bounds.lower[a], std::nextafter(bounds.upper[a], bounds.lower[a]));
-                if (clamped != m_slicePosition3d[a]) {
-                    m_slicePosition3d[a] = clamped;
-                    scheduleSliceRequest(primary().planeViews[a]);
+            // union; back inside the primary, and that panel re-sliced. A
+            // replacement keeps it for the new union (see installCompanion).
+            if (!replacing) {
+                const auto bounds = datasetSampleBounds(metadata);
+                for (int axis = 0; axis < 3; ++axis) {
+                    const auto a = static_cast<std::size_t>(axis);
+                    const auto clamped = std::clamp(m_slicePosition3d[a],
+                        bounds.lower[a], std::nextafter(bounds.upper[a], bounds.lower[a]));
+                    if (clamped != m_slicePosition3d[a]) {
+                        m_slicePosition3d[a] = clamped;
+                        scheduleSliceRequest(primary().planeViews[a]);
+                    }
                 }
             }
             publishSlicePositions();

@@ -86,7 +86,7 @@ Outcome dispatchCompanion(Context& context)
                 window.rubberBandZoomActiveViewForTest();
             });
         QObject::connect(&window, &amrvis::qt::MainWindow::companionOpenFinished,
-            &application, [&window, &application, fail, phase, quietSettles, upper](bool success) {
+            &application, [&window, &application, fail, phase, quietSettles, upper, lower](bool success) {
                 if (*phase == 5) {
                     // The refused second companion: the first stays.
                     if (success || !window.companionOpen()
@@ -94,7 +94,36 @@ Outcome dispatchCompanion(Context& context)
                         fail("a refused companion did not leave the first in place");
                         return;
                     }
+                    // Replacing the companion keeps "Same as primary" and the
+                    // position in the ocean; only Close resets them.
+                    *phase = 6;
+                    window.openCompanion(lower);
+                    return;
+                }
+                if (*phase == 6) {
+                    const auto* follow = window.findChild<QCheckBox*>(
+                        QStringLiteral("companionFollowPrimary"));
+                    if (!success || !window.companionOpen()
+                        || window.panelTileCountForTest(xz) != 2) {
+                        fail("the replacement companion did not open");
+                        return;
+                    }
+                    if (follow == nullptr || !follow->isChecked()
+                        || window.companionColorBarVisibleForTest()) {
+                        fail("replacing the companion dropped Same as primary");
+                        return;
+                    }
+                    if (!near(window.slicePositionForTest(2), -0.1)
+                        || window.panelTileVisibleForTest(xy, 0)
+                        || !window.panelTileVisibleForTest(xy, 1)) {
+                        fail("replacing the companion moved the slice position");
+                        return;
+                    }
                     window.closeCompanion();
+                    if (follow->isChecked()) {
+                        fail("closing the companion left Same as primary ticked");
+                        return;
+                    }
                     if (window.companionOpen() || window.panelTileCountForTest(xz) != 1
                         || !window.panelTileVisibleForTest(xy, 0)) {
                         fail("closing the companion did not restore one tile");

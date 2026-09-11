@@ -3,6 +3,8 @@
 #include <amrexplorer/core/CoordinateSystem.hpp>
 #include <amrexplorer/core/Geometry.hpp>
 #include <amrexplorer/core/MappedGrid.hpp>
+#include <amrexplorer/core/Result.hpp>
+#include <amrexplorer/pipeline/ParticleProjection.hpp>
 #include <amrexplorer/render2d/MappedGridWarp.hpp>
 
 #include <QPointF>
@@ -14,6 +16,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace amrvis::qt {
@@ -221,13 +224,15 @@ struct PlaneMapping {
             }
             const auto width = static_cast<int>(std::lround(sceneWidth));
             const auto height = static_cast<int>(std::lround(sceneHeight));
+            // Checked as doubles before the cast: a point far off the pixmap
+            // (a particle at deep zoom) is past any int.
+            if (!(px >= 0.0) || !(py >= 0.0) || !(px < width) || !(py < height)) {
+                return std::nullopt;
+            }
             const auto column = static_cast<int>(std::floor(px));
             // The pixmap is flipped for display: scene row 0 is the top,
             // source-index row 0 the bottom.
             const auto row = height - 1 - static_cast<int>(std::floor(py));
-            if (column < 0 || column >= width || row < 0 || row >= height) {
-                return std::nullopt;
-            }
             const auto offset = static_cast<std::size_t>(row)
                     * static_cast<std::size_t>(width)
                 + static_cast<std::size_t>(column);
@@ -249,16 +254,51 @@ struct PlaneMapping {
         if (!(spanX > 0.0) || !(spanY > 0.0)) {
             return std::nullopt;
         }
-        const auto col = static_cast<int>(std::floor(
-            (logical[0] - logicalRegion.lower[x0]) / spanX * planeWidth));
-        const auto row = static_cast<int>(std::floor(
-            (logical[1] - logicalRegion.lower[y0]) / spanY * planeHeight));
-        if (col < 0 || row < 0 || col >= static_cast<int>(planeWidth)
-            || row >= static_cast<int>(planeHeight)) {
+        const auto col = (logical[0] - logicalRegion.lower[x0]) / spanX * planeWidth;
+        const auto row = (logical[1] - logicalRegion.lower[y0]) / spanY * planeHeight;
+        if (!(col >= 0.0) || !(row >= 0.0) || !(col < std::floor(planeWidth))
+            || !(row < std::floor(planeHeight))) {
             return std::nullopt;
         }
-        return std::array<int, 2>{col, row};
+        return std::array<int, 2>{static_cast<int>(col), static_cast<int>(row)};
     }
 };
+
+// A particle on a mapped view: the tile point its physical in-plane position
+// (a, b) lands on, kept only over a cell the warp drew -- the plane's logical
+// bounds play no part, since the grid can reach past them. With slabs (one per
+// level, see sliceCellSlabs) the normal coordinate must also lie in the slab
+// of that cell's level.
+[[nodiscard]] inline std::optional<QPointF> mappedParticlePoint(
+    const PlaneMapping& mapping, const ScalarPlane& plane, double a, double b,
+    double normal, std::span<const SliceCellSlab> levelSlabs)
+{
+    if (!std::isfinite(a) || !std::isfinite(b)) {
+        return std::nullopt;
+    }
+    const auto scene = mapping.sceneFromDisplay(a, b);
+    const auto pixel = mapping.planePixelFromScene(scene.x(), scene.y());
+    if (!pixel) {
+        return std::nullopt;
+    }
+    if (!levelSlabs.empty()) {
+        const auto offset = static_cast<std::size_t>((*pixel)[0])
+            + static_cast<std::size_t>(std::max(0, plane.width))
+                * static_cast<std::size_t>((*pixel)[1]);
+        if (offset >= plane.sourceLevel.size()) {
+            return std::nullopt;
+        }
+        const auto level = plane.sourceLevel[offset];
+        if (level < 0 || static_cast<std::size_t>(level) >= levelSlabs.size()) {
+            return std::nullopt;
+        }
+        // Half-open, as the slice picks its cell.
+        const auto& slab = levelSlabs[static_cast<std::size_t>(level)];
+        if (!(normal >= slab.lower) || !(normal < slab.upper)) {
+            return std::nullopt;
+        }
+    }
+    return scene;
+}
 
 } // namespace amrvis::qt

@@ -396,11 +396,30 @@ void testDisplayPosition()
     require(near(p[0], 0.0) && near(p[1], 3.0), "positions clamp to the plane");
 }
 
+void testDeepZoomInsideOneCell()
+{
+    // A 100 x 100 window a hundred-millionth of a unit wide inside one unit
+    // cell: the cell's corners land some 1e10 pixels out, past any int, and
+    // every pixel must still show that cell.
+    const auto src = indexedRaster(1, 1);
+    const auto nodes = planeWithRows(1, 1, {0.0, 1.0});
+    const auto warped = amrvis::warpMappedGrid(src, nodes, {0, 1},
+        windowOn(0.5, 0.50000001, 0.5, 0.50000001), {100, 100});
+    bool full = warped.image.rgba.size() == 10000U && warped.sourceIndex
+        && warped.sourceIndex->size() == 10000U;
+    for (std::size_t pixel = 0; full && pixel < 10000U; ++pixel) {
+        full = warped.image.rgba[pixel] == src.rgba[0]
+            && (*warped.sourceIndex)[pixel] == 0;
+    }
+    require(full, "a window deep inside one cell shows that cell in every pixel");
+}
+
 } // namespace
 
 int main()
 {
     testIdentity();
+    testDeepZoomInsideOneCell();
     testVerticalStretch();
     testWindowClipsToTheCellsUnderIt();
     testWindowHelper();

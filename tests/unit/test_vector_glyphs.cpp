@@ -342,5 +342,36 @@ int main()
         }
     }
 
+    // Mapped-grid glyphs on a grid sheared by z' = z + 0.5 x: a horizontal
+    // (1, 0) arrow keeps pointing along +x at its length (two physical units
+    // per plane pixel here); only its base moves with the nodes.
+    {
+        amrvis::MappedGridPlane nodes;
+        nodes.width = 3;
+        nodes.height = 3;
+        for (int j = 0; j < 3; ++j) {
+            for (int i = 0; i < 3; ++i) {
+                nodes.a.push_back(static_cast<double>(i));
+                nodes.b.push_back(static_cast<double>(j) + 0.5 * i);
+            }
+        }
+        // generateVectorGlyphs' triple for base (0.5, 0.5), components (1, 0),
+        // then the start of a second arrow with no head.
+        const std::vector<amrvis::VectorSegment> logical{
+            {0.5F, 0.5F, 1.5F, 0.5F}, {1.5F, 0.5F, 1.25F, 0.625F},
+            {1.5F, 0.5F, 1.25F, 0.375F}, {0.5F, 0.5F, 1.0F, 1.0F}};
+        const auto arrows = amrvis::mappedVectorGlyphs(nodes, logical, 2.0);
+        const auto near = [](double a, double b) { return std::abs(a - b) <= 1e-9; };
+        require(arrows.size() == 3, "a mapped arrow without its head was kept");
+        // The base (0.5, 0.5) lies at (0.5, 0.75) on the sheared grid.
+        require(arrows.size() == 3 && near(arrows[0].x0, 0.5) && near(arrows[0].y0, 0.75)
+                && near(arrows[0].x1, 2.5) && near(arrows[0].y1, 0.75),
+            "a mapped arrow bent or scaled with the grid");
+        require(arrows.size() == 3 && near(arrows[1].x0, 2.5) && near(arrows[1].y0, 0.75)
+                && near(arrows[1].x1, 2.0) && near(arrows[1].y1, 1.0)
+                && near(arrows[2].x1, 2.0) && near(arrows[2].y1, 0.5),
+            "a mapped arrow's head did not follow its shaft");
+    }
+
     return 0;
 }

@@ -199,6 +199,63 @@ int main()
             "mapped: sceneFromDisplay inverts displayFromScene");
     }
 
+    // Mapped particles: a 4 x 4 plane over [0, 4]^2 sheared by y' = y + 0.5 x,
+    // warped whole at one pixel per unit. A particle at (3, 4.5) lies over the
+    // grid though past its logical bounds, and is kept; one at (3, 1) lies
+    // below the sheared bottom and is not. With a slab, the normal decides.
+    {
+        auto nodes = std::make_shared<amrvis::MappedGridPlane>();
+        nodes->width = 5;
+        nodes->height = 5;
+        nodes->physicalRegion.upper = {{4.0, 4.0, 1.0}};
+        for (int j = 0; j <= 4; ++j) {
+            for (int i = 0; i <= 4; ++i) {
+                nodes->a.push_back(static_cast<double>(i));
+                nodes->b.push_back(static_cast<double>(j) + 0.5 * i);
+            }
+        }
+        amrvis::ImageBuffer raster;
+        raster.width = 4;
+        raster.height = 4;
+        raster.strideBytes = 16;
+        raster.rgba.assign(16, 0xFF808080U);
+        const auto warped = amrvis::warpMappedGrid(
+            raster, *nodes, {0, 1}, amrvis::RealBox{}, {4, 6});
+        require(warped.sourceIndex != nullptr, "mapped particles: the grid did not warp");
+
+        amrvis::ScalarPlane plane;
+        plane.width = 4;
+        plane.height = 4;
+        plane.physicalRegion = nodes->physicalRegion;
+        plane.sourceLevel.assign(16, 0);
+
+        amrvis::qt::PlaneMapping mapping;
+        mapping.mapped = true;
+        mapping.axes = {0, 1};
+        mapping.nodes = nodes;
+        mapping.sourceIndex = warped.sourceIndex;
+        mapping.logicalRegion = plane.physicalRegion;
+        mapping.displayRegion = warped.displayRegion;
+        mapping.planeWidth = 4.0;
+        mapping.planeHeight = 4.0;
+        mapping.sceneWidth = 4.0;
+        mapping.sceneHeight = 6.0;
+
+        const std::vector<amrvis::SliceCellSlab> noSlabs;
+        require(amrvis::qt::mappedParticlePoint(mapping, plane, 3.0, 4.5, 0.5, noSlabs)
+                .has_value(),
+            "mapped particles: one over the grid past the logical bounds was dropped");
+        require(!amrvis::qt::mappedParticlePoint(mapping, plane, 3.0, 1.0, 0.5, noSlabs),
+            "mapped particles: one below the sheared grid was kept");
+        const std::vector<amrvis::SliceCellSlab> slab{{0.0, 1.0}};
+        require(amrvis::qt::mappedParticlePoint(mapping, plane, 3.0, 4.5, 0.5, slab)
+                && !amrvis::qt::mappedParticlePoint(mapping, plane, 3.0, 4.5, 1.5, slab),
+            "mapped particles: the slab of the cell drawn there was not applied");
+        require(!mapping.planePixelFromScene(1.0e30, 2.0)
+                && !mapping.planePixelFromScene(2.0, -1.0e30),
+            "mapped: scene points far off the pixmap have no plane pixel");
+    }
+
     std::cout << "plane_mapping OK\n";
     return 0;
 }

@@ -55,14 +55,22 @@ void fillTriangle(Point p0, Point p1, Point p2, std::uint32_t colour,
     const double xHi = std::max({p0.x, p1.x, p2.x});
     const double yLo = std::min({p0.y, p1.y, p2.y});
     const double yHi = std::max({p0.y, p1.y, p2.y});
-    // Pixel n covers [n, n+1); its subsamples lie strictly inside.
-    const int colStart = std::max(0, static_cast<int>(std::floor(xLo)));
-    const int colEnd = std::min(out.width - 1, static_cast<int>(std::floor(xHi)));
-    const int rowStart = std::max(0, static_cast<int>(std::floor(yLo)));
-    const int rowEnd = std::min(out.height - 1, static_cast<int>(std::floor(yHi)));
-    if (colStart > colEnd || rowStart > rowEnd) {
+    // Pixel n covers [n, n+1); its subsamples lie strictly inside. Clamped as
+    // doubles before the cast: a window deep inside a cell puts the cell's
+    // corners beyond any int.
+    if (xHi < 0.0 || yHi < 0.0 || xLo >= out.width || yLo >= out.height) {
         return;
     }
+    const auto first = [](double lo) {
+        return static_cast<int>(std::max(0.0, std::floor(lo)));
+    };
+    const auto last = [](double hi, int size) {
+        return static_cast<int>(std::min(static_cast<double>(size - 1), std::floor(hi)));
+    };
+    const int colStart = first(xLo);
+    const int colEnd = last(xHi, out.width);
+    const int rowStart = first(yLo);
+    const int rowEnd = last(yHi, out.height);
     const double epsilon = 1e-9 * std::abs(area);
     const bool opaque = ((colour >> 24U) & 0xFFU) != 0U;
     const auto r = (colour >> 16U) & 0xFFU;

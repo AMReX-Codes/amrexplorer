@@ -480,20 +480,37 @@ void MainWindow::updateOverlay(PlaneViewState& state)
         const bool spherical = displayIsSpherical();
         const bool sphericalRZ = spherical
             && state.sphericalDisplay == SphericalDisplay::RZ;
-        // Mapped-grid glyphs are plane pixels too: each endpoint lands where
-        // its cell was drawn.
-        const bool mapped = state.mappedGrid;
         const auto mapping = planeMapping(state);
-        for (const auto& segment : state.vectorSegments) {
-            const auto line = sphericalRZ
-                ? QLineF(mapping.sceneFromDisplay(segment.x0, segment.y0),
-                    mapping.sceneFromDisplay(segment.x1, segment.y1))
-                : (spherical || mapped)
-                ? QLineF(mapping.sceneFromPlanePixel(segment.x0, segment.y0),
-                    mapping.sceneFromPlanePixel(segment.x1, segment.y1))
-                : planeSegmentToScene(state,
-                    segment.x0, segment.y0, segment.x1, segment.y1);
-            overlays.push_back({line, vectorColor, 1.0F});
+        if (state.mappedGrid && mapping.nodes) {
+            // Mapped-grid glyphs are plane pixels with Cartesian components:
+            // each base lands where its cell was drawn and the arrow keeps its
+            // direction, at one physical length per plane pixel (the node
+            // box's longest side over the plane's).
+            const auto axes = displayAxes(state.normal);
+            const auto& box = state.mappedNodeBounds;
+            const auto h = static_cast<std::size_t>(axes[0]);
+            const auto v = static_cast<std::size_t>(axes[1]);
+            const auto extent = std::max(
+                box.upper[h] - box.lower[h], box.upper[v] - box.lower[v]);
+            const auto pixels = std::max(state.plane->width, state.plane->height);
+            for (const auto& arrow : mappedVectorGlyphs(
+                     *mapping.nodes, state.vectorSegments, extent / pixels)) {
+                overlays.push_back({QLineF(mapping.sceneFromDisplay(arrow.x0, arrow.y0),
+                                        mapping.sceneFromDisplay(arrow.x1, arrow.y1)),
+                    vectorColor, 1.0F});
+            }
+        } else {
+            for (const auto& segment : state.vectorSegments) {
+                const auto line = sphericalRZ
+                    ? QLineF(mapping.sceneFromDisplay(segment.x0, segment.y0),
+                        mapping.sceneFromDisplay(segment.x1, segment.y1))
+                    : (spherical || state.mappedGrid)
+                    ? QLineF(mapping.sceneFromPlanePixel(segment.x0, segment.y0),
+                        mapping.sceneFromPlanePixel(segment.x1, segment.y1))
+                    : planeSegmentToScene(state,
+                        segment.x0, segment.y0, segment.x1, segment.y1);
+                overlays.push_back({line, vectorColor, 1.0F});
+            }
         }
         state.view->setOverlaySegments(overlays, state.tile);
         state.view->setOverlayPaths(paths, state.tile);
@@ -583,10 +600,8 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
     const bool spherical = displayIsSpherical();
     const bool mapped = state.mappedGrid;
     const auto mapping = planeMapping(state);
-    const auto planeWidth = static_cast<double>(state.plane->width);
     const auto planeHeight = static_cast<double>(state.plane->height);
     const auto axes = displayAxes(state.normal);
-    const auto& region = state.plane->physicalRegion;
     // The cells this plane cuts, when the filter is on. Taken from the
     // request that produced the plane on show, not m_slicePosition3d, which
     // has already moved ahead whenever a slice is in flight: the overlay
@@ -617,15 +632,35 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
         }
     }
     const auto& samples = m_particleController->samples();
+    const auto dimension = primary().session->metadata().dimension;
     overlays.reserve(samples.size());
     for (const auto& sample : samples) {
         PointOverlay overlay;
         overlay.color = m_particleController->colorFor(sample.species.name);
         overlay.size
             = static_cast<float>(m_particleController->settings().pointSize);
+        if (mapped) {
+            // A particle's position is physical, as the mapped pixmap is: it
+            // is placed linearly and kept over any cell the warp drew, past
+            // the plane's logical bounds too (see mappedParticlePoint).
+            // Pushing it through the node positions would move it with the
+            // terrain a second time.
+            const auto xAxis = static_cast<std::size_t>(axes[0]);
+            const auto yAxis = static_cast<std::size_t>(axes[1]);
+            const auto normalAxis
+                = static_cast<std::size_t>(dimension == 3 ? state.normal : 2);
+            for (const auto& particle : sample.points) {
+                if (const auto point = mappedParticlePoint(mapping, *state.plane,
+                        particle.position[xAxis], particle.position[yAxis],
+                        particle.position[normalAxis], levelSlabs)) {
+                    overlay.points.emplace_back(point->x(), point->y());
+                }
+            }
+            overlays.push_back(std::move(overlay));
+            continue;
+        }
         const auto projected = projectParticlePoints(
-            sample.points, *state.plane,
-            primary().session->metadata().dimension, state.normal, levelSlabs);
+            sample.points, *state.plane, dimension, state.normal, levelSlabs);
         overlay.points.reserve(projected.size());
         for (const auto& point : projected) {
             if (spherical) {
@@ -634,20 +669,6 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
                 // the active layout (identity for r-theta, transposed otherwise).
                 const auto scene = mapping.sceneFromPlanePixel(
                     point.x, planeHeight - point.y);
-                overlay.points.emplace_back(scene.x(), scene.y());
-            } else if (mapped) {
-                // A particle's position is physical already, and the mapped
-                // pixmap is physical: recover the position from the projected
-                // plane pixel and place it linearly. Pushing it through the
-                // node positions would move it with the terrain a second time.
-                const auto xAxis = static_cast<std::size_t>(axes[0]);
-                const auto yAxis = static_cast<std::size_t>(axes[1]);
-                const auto u = region.lower[xAxis] + point.x / planeWidth
-                    * (region.upper[xAxis] - region.lower[xAxis]);
-                const auto v = region.lower[yAxis]
-                    + (planeHeight - point.y) / planeHeight
-                        * (region.upper[yAxis] - region.lower[yAxis]);
-                const auto scene = mapping.sceneFromDisplay(u, v);
                 overlay.points.emplace_back(scene.x(), scene.y());
             } else {
                 overlay.points.emplace_back(point.x, point.y);

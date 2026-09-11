@@ -1718,15 +1718,7 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
 
     m_diagnosticsModel->setSliceMetrics(display.slice.metrics.blocksRead,
         display.slice.metrics.cacheHits, display.slice.metrics.payloadBytesRead);
-    if (m_mappedGrid && state.layer == 0 && !mappedGridAvailable()
-        && layerIsRemote(state) && primary().session
-        && primary().session->metadata().hasMappedGrid) {
-        // The plotfile has the grid and the user asked for it, but this
-        // server cannot draw it: say so where the load message was, rather
-        // than let a logical raster pass for the mapped one.
-        statusBar()->showMessage(
-            tr("Mapped grid display is off: this server does not support it"));
-    } else if (state.layer == 0 && !display.mappedGridFallback.empty()) {
+    if (state.layer == 0 && !display.mappedGridFallback.empty()) {
         statusBar()->showMessage(tr("Mapped grid display is off: %1")
                 .arg(QString::fromStdString(display.mappedGridFallback)));
     } else {

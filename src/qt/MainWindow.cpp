@@ -1458,9 +1458,10 @@ void MainWindow::updateMappedGridControls()
     if (!available && primary().session) {
         if (m_pair || m_layers[1].active) {
             reason = tr("Not available while a companion is open");
-        } else if (layerIsRemote(primary().planeViews.front())
-            && primary().session->metadata().hasMappedGrid) {
-            reason = tr("This server does not support mapped-grid slices");
+        } else if (layerIsRemote(primary().planeViews.front())) {
+            // The catalog does not yet say whether a remote plotfile carries
+            // node positions, so the honest answer is the feature's status.
+            reason = tr("Mapped grid display is not available for remote datasets yet");
         } else {
             reason = tr("This dataset carries no mapped-grid node positions");
         }

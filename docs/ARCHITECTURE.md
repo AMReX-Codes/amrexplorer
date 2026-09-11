@@ -18,10 +18,10 @@ whole compute path can run — and be tested — headless.
  pipeline      render2d       data          pipeline: SlicePipeline, VolumePipeline, DisplayCoordinator,
    |             |             |                       SliceRangeResolver, ParticleProjection
  query           |          (LocalDatasetSession,     render2d: ScalarRenderer, Contours,
-   |             |           RemoteDatasetSession,               VectorGlyphs, SphericalWarp, Palette
+   |             |           RemoteDatasetSession,               VectorGlyphs, SphericalWarp, MappedGridWarp, Palette
   io            core         SessionValidation, ...)   render3d: VolumeRaycaster (data links it:
    |             |             |             |                    a session samples and renders)
-  core         cache         core          remote      query:   SliceQuery, LineQuery, VolumeQuery
+  core         cache         core          remote      query:   SliceQuery, LineQuery, VolumeQuery, MappedGridQuery
    |                          |                         io:      plotfile readers, FitsWriter
 expression               expression                     core:    Geometry, Metadata, Request, Result,
                                                                  Volume, OrthoProjection, DerivedField
@@ -107,6 +107,10 @@ implementations, interchangeable to everything above them:
   to a server that itself runs a `LocalDatasetSession`.
 
 The GUI opens one or the other and is otherwise agnostic to where the data lives.
+Capabilities a session may lack are asked for before they are offered
+(`supportsVolumeRendering`, `supportsDerivedFields`, `supportsMappedGrid`); a
+mapped-grid plotfile's node positions come through `requestMappedGridPlane`,
+which only the local session answers today.
 
 ## Threading model
 
@@ -158,6 +162,7 @@ either should preserve its invariants.
 | A slice request end to end | `src/pipeline/SlicePipeline.cpp` → `src/query/SliceQuery.cpp` |
 | A volume frame end to end | `src/pipeline/VolumePipeline.cpp` → `src/data/LocalDatasetSession.cpp` (`renderVolume`) → `src/query/VolumeQuery.cpp` → `src/render3d/VolumeRaycaster.cpp`; the camera math both the view and the caster use is `include/amrexplorer/core/OrthoProjection.hpp` |
 | Plotfile reading / hardening | `src/io/plotfile/`, `include/amrexplorer/io/detail/FabHeaderParsing.hpp` |
+| A mapped-grid slice end to end | `src/pipeline/SlicePipeline.cpp` (`applyMappedGrid`) → `src/query/MappedGridQuery.cpp` (node positions for the slice) → `src/render2d/MappedGridWarp.cpp` (forward-rasterized quads, display region, source index) → `src/qt/PlaneMapping.hpp` (overlays and the probe map through it) |
 | A derived field end to end | `include/amrexplorer/core/DerivedField.hpp` (resolve a definition against a dataset) → `src/io/plotfile/PlotfileDataset.cpp` (`readDerivedBlock`) → `src/expression/Expression.cpp`. Installed when the dataset is opened, so above `PlotfileDataset` a derived field is an ordinary `FieldId` |
 | The remote protocol | `src/remote/Codec.hpp`, `Frame.cpp` (Channel/Socket), `Server.cpp`, `Connection.cpp` |
 | Response validation | `src/data/SessionValidation.cpp` |

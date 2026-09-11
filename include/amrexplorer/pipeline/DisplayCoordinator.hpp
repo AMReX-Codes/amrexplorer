@@ -33,6 +33,9 @@ public:
         int coordinateSystem = 0;
         int normalDirection = 0;
         SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
+        // Whether the raster is drawn on the dataset's mapped grid: a toggle
+        // changes the picture's shape like a spherical layout switch does.
+        bool mappedGrid = false;
 
         friend bool operator==(const RasterGeometry&, const RasterGeometry&)
             = default;

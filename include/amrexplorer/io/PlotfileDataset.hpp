@@ -93,11 +93,32 @@ public:
     [[nodiscard]] BlockAccess requestBlock(
         const BlockRequest& request, StopToken cancellation = {});
 
+    // The mapped-grid (nodal Nu_nd) hierarchy as a dataset of its own, or
+    // null when the plotfile carries none. It shares this dataset's id, so a
+    // request built for one is valid for the other, and reads through its
+    // own block cache (a fixed slice of this dataset's budget) so node
+    // positions do not evict field blocks. It carries no particles, no
+    // derived fields and no nested grid.
+    [[nodiscard]] std::shared_ptr<PlotfileDataset> mappedGrid() const noexcept;
+
+    // The block pool this dataset reports; the mapped grid's pool follows the
+    // budget (setCacheBudget) and the clear, but is not part of the metrics.
     [[nodiscard]] CacheMetrics cacheMetrics() const;
     [[nodiscard]] bool setCacheBudget(std::uint64_t bytes);
     void clearUnpinnedCache();
 
 private:
+    struct MappedGridTag {};
+    // The mapped-grid sub-dataset: metadata only, no particle discovery.
+    PlotfileDataset(MappedGridTag, std::filesystem::path root, DatasetId id,
+        std::uint64_t cacheBudgetBytes,
+        std::shared_ptr<const DatasetMetadata> metadata);
+    [[nodiscard]] static std::shared_ptr<PlotfileDataset> makeMappedGrid(
+        const std::filesystem::path& root, DatasetId id,
+        std::uint64_t cacheBudgetBytes, const PlotfileMetadataResult& source);
+    [[nodiscard]] static std::uint64_t mappedGridCacheBudget(
+        std::uint64_t cacheBudgetBytes) noexcept;
+
     // The field list this dataset presents: the stored metadata with one field
     // appended per derived definition, the programs that produce them, and
     // where the stored fields end (so a field id says which it is). Built once,
@@ -126,6 +147,7 @@ private:
     std::vector<ParticleSpeciesMetadata> m_particleSpecies;
     PlotfileBlockReader m_blockReader;
     BlockCache m_cache;
+    std::shared_ptr<PlotfileDataset> m_mappedGrid;
     // Serializes this dataset's block reads so concurrent misses of the same
     // block read it once (see the double-checked lookup in requestBlock).
     // Per-dataset, not global: unrelated datasets read in parallel. Acquired

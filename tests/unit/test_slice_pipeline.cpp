@@ -116,6 +116,18 @@ int main()
         require(!amrvis::sameSliceSpec(base, other), "sampling difference missed");
     }
     {
+        // Mapped-grid display parameters re-warp the cached planes; they are
+        // not part of the key, like the spherical ones.
+        auto other = base;
+        other.mappedGrid = !base.mappedGrid;
+        require(amrvis::sameSliceSpec(base, other),
+            "a mapped-grid toggle must not invalidate the cached slice");
+        other = base;
+        other.mappedGridSupersample = base.mappedGridSupersample + 3;
+        require(amrvis::sameSliceSpec(base, other),
+            "a mapped-grid supersample change must not invalidate the cached slice");
+    }
+    {
         auto other = base;
         other.composition = amrvis::CompositionPolicy::ExactLevel;
         require(!amrvis::sameSliceSpec(base, other), "composition difference missed");

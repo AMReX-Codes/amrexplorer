@@ -463,6 +463,27 @@ public:
     }
     [[nodiscard]] bool aspectMenuEnabledForTest() const;
     [[nodiscard]] double activeViewStretchRatioForTest() const;
+    // Test-only: the Aspect Ratio radio shown checked (the mode in effect,
+    // which a mapped grid pins to Physical Size without touching the
+    // preference) and whether both radios are offered.
+    [[nodiscard]] AspectMode aspectMenuCheckedModeForTest() const;
+    [[nodiscard]] bool aspectRadiosEnabledForTest() const;
+    [[nodiscard]] AspectMode aspectModePreferenceForTest() const noexcept
+    {
+        return m_aspectMode;
+    }
+    // Test-only: View > Mapped Grid, driven as the menu drives it, and what
+    // the active view shows: mapped (the physical warp) or the logical grid.
+    void setMappedGridForTest(bool enabled);
+    void setMappedGridSupersampleForTest(int factor);
+    [[nodiscard]] bool mappedGridMenuEnabledForTest() const;
+    [[nodiscard]] bool displayIsMappedForTest() const;
+    [[nodiscard]] bool activeViewIsMappedForTest() const;
+    // Test-only: make the 3-D panel with this normal the active view.
+    void setActiveViewForTest(int normal);
+    // Test-only: the probe readout for a pixmap pixel of the active view
+    // (x from the left, y from the top), as the status bar would show it.
+    [[nodiscard]] QString probeReadoutActiveViewForTest(int x, int y) const;
     // Test-only: the companion (paired) display. Tiles are indexed by layer;
     // rects are in the panel's scene units.
     [[nodiscard]] int panelTileCountForTest(int normal) const;
@@ -603,6 +624,15 @@ private:
         int coordinateSystem = 0;
         SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
         RealBox displayRegion;
+        // The raster on screen was drawn on the mapped (stretched) grid: the
+        // pixmap is physical and uniform over displayRegion while `plane`
+        // stays logical. gridNodes places plane pixels (bilinear), and
+        // displaySourceIndex, parallel to the pixmap with row 0 at the
+        // bottom, says which plane pixel each pixmap pixel came from. Both
+        // shared with the arrival that produced them, never copied.
+        bool mappedGrid = false;
+        std::shared_ptr<const MappedGridPlane> gridNodes;
+        std::shared_ptr<const std::vector<std::int32_t>> displaySourceIndex;
         std::optional<DisplayCoordinator::RasterGeometry> rasterGeometry;
         double displayMinimum = 0.0;
         double displayMaximum = 1.0;
@@ -1153,6 +1183,16 @@ private:
     // Enable/disable and re-check the 2-D Spherical menus for the current
     // dataset and display mode (Supersampling applies only to the R-Z warp).
     void updateSphericalControls();
+    // Whether the primary dataset can be drawn on its mapped grid: its
+    // session carries the nodal positions and no companion is open (a pair's
+    // tiles are placed affinely, which a physically uniform pixmap of a
+    // stretched grid does not satisfy).
+    [[nodiscard]] bool mappedGridAvailable() const;
+    // The View > Mapped Grid choice as it applies now: on, and available.
+    [[nodiscard]] bool displayIsMapped() const;
+    // Enable/disable the Mapped Grid menu for the current dataset, with a
+    // tooltip saying why it is off.
+    void updateMappedGridControls();
     // Horizontal and vertical axis names for a spherical layout ({"R","Z"},
     // {"r","theta"}, or {"theta","r"}). Callers pass the displayed view
     // state's mode so labels always describe the raster on screen.
@@ -1167,8 +1207,19 @@ private:
     [[nodiscard]] QString probeReadout(
         const PlaneViewState& state, int x, int displayY) const;
     void rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect);
+    // A mapped-grid rubber band: the normalized plane rect (top-down) of the
+    // raster cells drawn inside a scene selection, and that selection clamped
+    // to the pixmap (the feedback zoom, since the scene is the physical warp
+    // rather than the plane). Nothing when no cell was drawn in it.
+    struct MappedSelection {
+        QRectF plane;
+        QRectF selection;
+    };
+    [[nodiscard]] std::optional<MappedSelection> mappedPlaneBounds(
+        const PlaneViewState& state, const QRectF& sceneRect) const;
     void applyRubberBandZoom(
-        PlaneViewState& state, const QRectF& normalizedRect);
+        PlaneViewState& state, const QRectF& normalizedRect,
+        const std::optional<QRectF>& feedbackScene = std::nullopt);
     void beginPanDrag(PlaneViewState& state);
     void updatePanDrag(PlaneViewState& state, const QPointF& totalSceneDelta,
         const QPoint& viewportDelta);
@@ -1216,6 +1267,12 @@ private:
     // nullopt when a plain refit is correct (first frame, dataset/domain
     // change, or no resolution change).
     [[nodiscard]] std::optional<QRectF> sphericalReframe(
+        const PlaneViewState& state, const SliceDisplayResult& display) const;
+    // The mapped-grid counterpart, for any mapped arrival on a zoomed view
+    // (a zoom or pan re-slice, a supersample change): the visible physical
+    // window carried from the old warp's displayRegion and pixmap to the new
+    // ones, clamped to the new pixmap. Nothing when the view should refit.
+    [[nodiscard]] std::optional<QRectF> mappedReframe(
         const PlaneViewState& state, const SliceDisplayResult& display) const;
     // By value, and callers move into it: the planes are the largest thing an
     // arrival carries -- at the 4096 output cap a ScalarPlane is around 117 MB
@@ -1503,7 +1560,14 @@ private:
     // Size radio is further disabled without physical geometry.
     QMenu* m_aspectMenu = nullptr;
     QActionGroup* m_aspectGroup = nullptr;
+    QAction* m_aspectCellCountsAction = nullptr;
     QAction* m_aspectPhysicalAction = nullptr;
+    // View > Mapped Grid: enabled only while the primary dataset carries
+    // nodal positions and no companion is open (updateMappedGridControls).
+    QMenu* m_mappedGridMenu = nullptr;
+    QAction* m_mappedGridAction = nullptr;
+    QMenu* m_mappedGridSupersampleMenu = nullptr;
+    QActionGroup* m_mappedGridSupersampleGroup = nullptr;
     QActionGroup* m_scaleGroup = nullptr;
     QActionGroup* m_levelGroup = nullptr;
     QActionGroup* m_variableGroup = nullptr;
@@ -1577,6 +1641,11 @@ private:
     int m_sphericalSupersample = 4;
     // 2-D spherical display layout (see SliceRequest::sphericalDisplay).
     SphericalDisplay m_sphericalDisplay = SphericalDisplay::RZ;
+    // View > Mapped Grid: draw slices on the plotfile's stretched grid when
+    // it carries one (see SliceRequest::mappedGrid). A persisted preference
+    // that applies whenever the open dataset can honour it.
+    bool m_mappedGrid = false;
+    int m_mappedGridSupersample = 4;
     // Persisted preference; the per-axis factors belong to the open dataset
     // and reset to one with each new one (they survive sequence frames).
     AspectMode m_aspectMode = AspectMode::CellCounts;

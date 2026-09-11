@@ -263,6 +263,35 @@ inline QPainterPath sphericalSectorPath(const PlaneMapping& mapping,
     return path;
 }
 
+// Scene-space outline of a plane-pixel rectangle on a mapped grid: each edge
+// is walked in steps of at most one plane pixel through the node positions,
+// so a box outline follows the stretched cell edges exactly (the bilinear map
+// is exact along a cell edge). Used for the mapped grid-box outlines and the
+// picked-cell highlight.
+inline QPainterPath mappedCellPath(const PlaneMapping& mapping,
+    double col0, double col1, double row0, double row1)
+{
+    const auto walk = [&mapping](QPainterPath& path, double fromCol,
+                          double fromRow, double toCol, double toRow) {
+        const auto steps = std::clamp(static_cast<int>(std::ceil(
+            std::max(std::abs(toCol - fromCol), std::abs(toRow - fromRow)))),
+            1, 4096);
+        for (int i = 1; i <= steps; ++i) {
+            const double t = static_cast<double>(i) / steps;
+            path.lineTo(mapping.sceneFromPlanePixel(
+                fromCol + (toCol - fromCol) * t, fromRow + (toRow - fromRow) * t));
+        }
+    };
+    QPainterPath path;
+    path.moveTo(mapping.sceneFromPlanePixel(col0, row0));
+    walk(path, col0, row0, col1, row0);
+    walk(path, col1, row0, col1, row1);
+    walk(path, col1, row1, col0, row1);
+    walk(path, col0, row1, col0, row0);
+    path.closeSubpath();
+    return path;
+}
+
 #ifdef AMREXPLORER_QT_TEST_ACCESS
 // A gate the visible-range sync worker waits on when armed, so the staleness
 // regression test can hold a sync mid-flight, invalidate a panel, then release

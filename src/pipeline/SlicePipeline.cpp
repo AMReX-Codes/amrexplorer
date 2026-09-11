@@ -6,6 +6,7 @@
 #include <amrexplorer/core/ValueMapping.hpp>
 #include <amrexplorer/pipeline/DisplayCoordinator.hpp>
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
+#include <amrexplorer/render2d/MappedGridWarp.hpp>
 #include <amrexplorer/render2d/SphericalWarp.hpp>
 
 #include <algorithm>
@@ -243,19 +244,79 @@ std::string cacheBudgetDescription(std::uint64_t bytes)
 
 namespace {
 
+// Draws the raster on the dataset's mapped grid when the request asks for it
+// and the session has one: the node positions of the plane's cells are
+// fetched and each cell is placed by its corners (render2d/MappedGridWarp).
+// The display region becomes the node bounding box, set even when no raster
+// was rendered (contour-only refresh) so overlays keep their frame. A session
+// without a mapped grid -- a sequence frame that lacks Nu_nd, or a remote
+// peer for now -- leaves the Cartesian display and reports mappedGrid false
+// rather than failing the slice. Cancellation propagates like the slice's.
+void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
+    SliceDisplayResult& result, StopToken cancellation)
+{
+    result.mappedGrid = false;
+    result.gridNodes.reset();
+    result.displaySourceIndex.reset();
+    if (!result.request.mappedGrid || !dataset->supportsMappedGrid()) {
+        return;
+    }
+    const auto& plane = result.displayPlane();
+    if (plane.width <= 0 || plane.height <= 0) {
+        return;
+    }
+    const auto& request = result.request;
+    MappedGridPlaneRequest nodeRequest;
+    nodeRequest.dataset = request.dataset;
+    nodeRequest.normalDirection = request.normalDirection;
+    nodeRequest.physicalPosition = request.physicalPosition;
+    nodeRequest.visibleRegion = plane.physicalRegion;
+    nodeRequest.maximumLevel = request.maximumLevel;
+    nodeRequest.composition = request.composition;
+    nodeRequest.outputSize = {plane.width, plane.height};
+    auto nodes = std::make_shared<const MappedGridPlane>(
+        dataset->requestMappedGridPlane(nodeRequest, cancellation));
+    const auto axes = slicePlaneAxes(
+        dataset->metadata().dimension, request.normalDirection);
+    const auto bounds = mappedGridDisplayBounds(*nodes, axes);
+    if (!bounds) {
+        return;  // unusable node plane: stay Cartesian
+    }
+    const bool haveImage = result.image.width > 0 && result.image.height > 0
+        && !result.image.rgba.empty();
+    if (haveImage) {
+        auto warped = warpMappedGrid(result.image, *nodes, axes,
+            maxSliceOutputDimension, request.mappedGridSupersample);
+        if (!warped.sourceIndex) {
+            return;  // the warp fell back: stay Cartesian
+        }
+        result.image = std::move(warped.image);
+        result.displayRegion = warped.displayRegion;
+        result.displaySourceIndex = std::move(warped.sourceIndex);
+    } else {
+        result.displayRegion = *bounds;
+    }
+    result.gridNodes = std::move(nodes);
+    result.mappedAxes = axes;
+    result.mappedGrid = true;
+}
+
 // Records the dataset's coordinate system on the result and, for 2-D spherical
 // data, replaces the logical (r, theta) raster with one warped into physical
 // (R, Z) display space. Non-spherical data keeps its raster untouched and its
-// display region equal to the plane's logical bounds. Safe to call when the
-// raster was intentionally not rendered (contour-only refresh): the display
-// region still updates from the plane's bounds.
-void applyDisplayCoordinates(
-    const DatasetMetadata& metadata, SliceDisplayResult& result)
+// display region equal to the plane's logical bounds, unless the request asks
+// for the mapped grid (applyMappedGrid). Safe to call when the raster was
+// intentionally not rendered (contour-only refresh): the display region still
+// updates from the plane's bounds.
+void applyDisplayCoordinates(const std::shared_ptr<DatasetSession>& dataset,
+    SliceDisplayResult& result, StopToken cancellation)
 {
+    const auto& metadata = dataset->metadata();
     result.coordinateSystem = metadata.coordinateSystem;
     const auto& logical = result.displayPlane().physicalRegion;  // (r, theta)
     if (!isSpherical2D(metadata)) {
         result.displayRegion = logical;
+        applyMappedGrid(dataset, result, cancellation);
         return;
     }
     result.sphericalDisplay = result.request.sphericalDisplay;
@@ -315,7 +376,7 @@ SliceDisplayResult executeSlice(const std::shared_ptr<DatasetSession>& dataset,
             .logarithmic = range.logarithmic,
             .palette = &palette
         });
-    applyDisplayCoordinates(dataset->metadata(), result);
+    applyDisplayCoordinates(dataset, result, cancellation);
     return result;
 }
 
@@ -521,7 +582,7 @@ SliceDisplayResult refreshCachedSlice(
     if (displayMode == DisplayMode::VelocityVectors) {
         result.vectors = std::move(vectors);
     }
-    applyDisplayCoordinates(dataset->metadata(), result);
+    applyDisplayCoordinates(dataset, result, cancellation);
     return result;
 }
 
@@ -695,6 +756,8 @@ InitialSliceResult executeSessionFrameLoad(
                 request.maximumLevel = attemptMaximumLevel;
                 request.sphericalSupersample = spec.sphericalSupersample;
                 request.sphericalDisplay = spec.sphericalDisplay;
+                request.mappedGrid = spec.mappedGrid;
+                request.mappedGridSupersample = spec.mappedGridSupersample;
                 if (metadata.dimension == 3) {
                     request.physicalPosition = positions[static_cast<std::size_t>(normal)];
                 }

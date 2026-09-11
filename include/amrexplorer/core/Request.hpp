@@ -68,6 +68,13 @@ struct SliceRequest {
     // 2-D spherical display layout (R-Z warp, r-theta, or theta-r). Also a pure
     // display parameter, excluded from sameSliceSpec.
     SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
+    // Mapped-grid display only: draw the raster on the plotfile's stretched
+    // node positions (core/MappedGrid.hpp) when the session has them. Pure
+    // display parameters like the spherical ones above, excluded from
+    // sameSliceSpec so a toggle re-warps the cached planes without a new
+    // query. Ignored by a session without a mapped grid.
+    bool mappedGrid = false;
+    int mappedGridSupersample = 4;
 };
 
 struct LineRequest {

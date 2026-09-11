@@ -1,5 +1,7 @@
 #include <amrexplorer/core/Request.hpp>
 
+#include <amrexplorer/core/MappedGrid.hpp>
+
 #include <cmath>
 #include <cstddef>
 
@@ -50,6 +52,32 @@ std::vector<std::string> validateSliceRequest(
     }
     if (!request.visibleRegion.valid(datasetDimension)) {
         errors.emplace_back("visible region must have positive extent");
+    }
+    return errors;
+}
+
+std::vector<std::string> validateMappedGridPlaneRequest(
+    const MappedGridPlaneRequest& request, int datasetDimension)
+{
+    std::vector<std::string> errors;
+    if (request.dataset.value == 0) {
+        errors.emplace_back("dataset id must be nonzero");
+    }
+    if (datasetDimension < 2 || datasetDimension > 3) {
+        errors.emplace_back("mapped-grid requests require a 2-D or 3-D dataset");
+    }
+    if (request.normalDirection < 0 || request.normalDirection >= datasetDimension) {
+        errors.emplace_back("normal direction is outside the dataset dimension");
+    }
+    if (request.maximumLevel < 0) {
+        errors.emplace_back("maximum level must be non-negative");
+    }
+    if (request.outputSize[0] <= 0 || request.outputSize[1] <= 0) {
+        errors.emplace_back("output dimensions must be positive");
+    }
+    if (!request.visibleRegion.valid(datasetDimension)
+        || !request.visibleRegion.finiteSpan(datasetDimension)) {
+        errors.emplace_back("visible region must have positive finite extent");
     }
     return errors;
 }

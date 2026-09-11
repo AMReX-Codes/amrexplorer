@@ -222,6 +222,12 @@ void MainWindow::openCompanionImpl(
         refuse(tr("a plotfile sequence cannot take a companion"));
         return;
     }
+    if (displayIsMapped()) {
+        // A pair places its tiles affinely, which a stretched grid's
+        // physically uniform pixmap does not fit.
+        refuse(tr("switch off View > Mapped Grid first"));
+        return;
+    }
     if (!canOpenCompanion()) {
         refuse(tr("the open dataset is not a three-dimensional plotfile"));
         return;
@@ -508,6 +514,7 @@ void MainWindow::installCompanion(const std::filesystem::path& path,
     }
     updateShownLayers();
     updatePairedModeControls();
+    updateMappedGridControls();
     configureSlicePositionControls();
     updateCrosshairs();
     updateScaleBarAvailability();
@@ -636,8 +643,15 @@ void MainWindow::tearDownCompanion(bool replacing)
             publishSlicePositions();
         }
         updatePairedModeControls();
+        updateMappedGridControls();
+        updateAspectControls();
         configureSlicePositionControls();
         applyDisplayStretches();
+        if (!replacing && displayIsMapped()) {
+            // The pair kept the primary on its logical grid; the choice
+            // that was waiting applies again.
+            scheduleSliceRequest(true);
+        }
         if (!replacing) {
             // A remote primary's fixed scale rides a demand-driven virtual
             // canvas, which the pair displaced (installCompanion); each panel
@@ -646,6 +660,7 @@ void MainWindow::tearDownCompanion(bool replacing)
             for (auto* state : primaryViews()) {
                 auto* view = state->view;
                 if (view == nullptr || !layerIsRemote(*state) || displayIsSpherical()
+                    || state->mappedGrid
                     || view->transformMode() != ImageView::TransformMode::FixedScale) {
                     continue;
                 }

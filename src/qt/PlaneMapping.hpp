@@ -2,11 +2,19 @@
 
 #include <amrexplorer/core/CoordinateSystem.hpp>
 #include <amrexplorer/core/Geometry.hpp>
+#include <amrexplorer/core/MappedGrid.hpp>
+#include <amrexplorer/render2d/MappedGridWarp.hpp>
 
 #include <QPointF>
 #include <QRectF>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <vector>
 
 namespace amrvis::qt {
 
@@ -43,20 +51,36 @@ namespace amrvis::qt {
     return region;
 }
 
-// Converts between a view's logical in-plane physical coordinates (dataset
-// axes 0 and 1 -- (x, y) for Cartesian, (r, theta) for 2-D spherical) and
-// scene (pixmap-pixel) coordinates, absorbing the spherical layout: the R-Z
-// warp, or the r-theta / theta-r logical (optionally axis-swapped) placements.
-// Scene y is top-down because the displayed raster is flipped vertically, so
-// plane row 0 maps to the bottom of the scene.
+// Converts between a view's logical in-plane physical coordinates and scene
+// (pixmap-pixel) coordinates, absorbing the display that is not the logical
+// grid: the 2-D spherical layouts (the R-Z warp, or the r-theta / theta-r
+// logical, optionally axis-swapped, placements) and the mapped-grid warp,
+// where every raster cell is drawn as the quadrilateral of its node
+// positions. Scene y is top-down because the displayed raster is flipped
+// vertically, so plane row 0 maps to the bottom of the scene.
 //
-// For non-spherical data displayRegion == logicalRegion and every mapping is
-// the plain linear one the overlay call sites used inline; the struct is only
-// built and used on the spherical path, so those sites keep their exact prior
-// behavior.
+// The logical axes are `axes` of the dataset (0 and 1 for a 2-D view: (x, y)
+// for Cartesian, (r, theta) for spherical; the two in-plane axes of a 3-D
+// panel). For a plain Cartesian display displayRegion == logicalRegion and
+// every mapping is the linear one the overlay call sites use inline; the
+// struct is only built and used on the spherical and mapped paths, so those
+// sites keep their exact prior behavior.
+//
+// On the mapped path the pixmap is physical and uniform, so display <-> scene
+// stays linear over displayRegion; what changes is plane pixel -> display
+// (bilinear through the node positions) and its inverse, which is a lookup in
+// the warp's per-pixel source index rather than arithmetic.
 struct PlaneMapping {
     bool spherical = false;
     SphericalDisplay mode = SphericalDisplay::RZ;
+    // Mapped-grid warp: plane pixels map to the scene through `nodes`, and
+    // scene pixels back to plane pixels through `sourceIndex` (both from the
+    // SliceDisplayResult that produced the pixmap; sourceIndex is parallel to
+    // the pixmap with row 0 at the bottom).
+    bool mapped = false;
+    std::array<int, 2> axes{0, 1};
+    std::shared_ptr<const MappedGridPlane> nodes;
+    std::shared_ptr<const std::vector<std::int32_t>> sourceIndex;
     RealBox logicalRegion;  // plane.physicalRegion: (x, y) or (r, theta)
     RealBox displayRegion;  // pixmap display bounds (== logicalRegion if !spherical)
     double sceneWidth = 1.0;
@@ -65,6 +89,9 @@ struct PlaneMapping {
     double planeHeight = 1.0;
 
     // Logical (r, theta) -> display axes (u, v) matching displayRegion/pixmap.
+    // Not meaningful on the mapped path (a logical position has no single
+    // display position without its plane pixel): callers use
+    // sceneFromPlanePixel there.
     [[nodiscard]] std::array<double, 2> displayFromLogical(
         double r, double theta) const
     {
@@ -83,6 +110,8 @@ struct PlaneMapping {
     }
 
     // Inverse of displayFromLogical: display axes (u, v) -> logical (r, theta).
+    // On the mapped path display is physical and the logical position is
+    // found through planePixelFromScene instead; this returns (u, v).
     [[nodiscard]] std::array<double, 2> logicalFromDisplay(
         double u, double v) const
     {
@@ -100,48 +129,135 @@ struct PlaneMapping {
         }
     }
 
-    // Logical (x, y)/(r, theta) -> scene point.
+    // Logical (x, y)/(r, theta) -> scene point. On the mapped path the
+    // logical position is converted to its fractional plane pixel first, so
+    // the node positions place it.
     [[nodiscard]] QPointF sceneFromLogical(double a, double b) const
     {
+        if (mapped) {
+            const auto x0 = static_cast<std::size_t>(axes[0]);
+            const auto y0 = static_cast<std::size_t>(axes[1]);
+            const double spanA = logicalRegion.upper[x0] - logicalRegion.lower[x0];
+            const double spanB = logicalRegion.upper[y0] - logicalRegion.lower[y0];
+            const double col = spanA != 0.0
+                ? (a - logicalRegion.lower[x0]) / spanA * planeWidth : 0.0;
+            const double row = spanB != 0.0
+                ? (b - logicalRegion.lower[y0]) / spanB * planeHeight : 0.0;
+            return sceneFromPlanePixel(col, row);
+        }
         const auto display = displayFromLogical(a, b);
         return sceneFromDisplay(display[0], display[1]);
     }
 
     // Display-space (u, v) -> scene point: the linear map over displayRegion
     // every layout shares. Used directly for overlays already expressed in
-    // display coordinates (the R-Z vector glyphs).
+    // display coordinates (the R-Z vector glyphs, mapped-grid particles).
     [[nodiscard]] QPointF sceneFromDisplay(double u, double v) const
     {
-        const double spanX = displayRegion.upper[0] - displayRegion.lower[0];
-        const double spanY = displayRegion.upper[1] - displayRegion.lower[1];
+        const auto x0 = static_cast<std::size_t>(axes[0]);
+        const auto y0 = static_cast<std::size_t>(axes[1]);
+        const double spanX = displayRegion.upper[x0] - displayRegion.lower[x0];
+        const double spanY = displayRegion.upper[y0] - displayRegion.lower[y0];
         const double x = spanX != 0.0
-            ? (u - displayRegion.lower[0]) / spanX * sceneWidth : 0.0;
+            ? (u - displayRegion.lower[x0]) / spanX * sceneWidth : 0.0;
         const double y = spanY != 0.0
-            ? sceneHeight - (v - displayRegion.lower[1]) / spanY * sceneHeight
+            ? sceneHeight - (v - displayRegion.lower[y0]) / spanY * sceneHeight
             : 0.0;
         return {x, y};
     }
 
-    // Scene point -> logical (x, y)/(r, theta). Inverse of sceneFromLogical.
+    // Scene point -> display-space (u, v): the inverse of sceneFromDisplay.
+    [[nodiscard]] std::array<double, 2> displayFromScene(
+        double px, double py) const
+    {
+        const auto x0 = static_cast<std::size_t>(axes[0]);
+        const auto y0 = static_cast<std::size_t>(axes[1]);
+        const double spanX = displayRegion.upper[x0] - displayRegion.lower[x0];
+        const double spanY = displayRegion.upper[y0] - displayRegion.lower[y0];
+        const double u = displayRegion.lower[x0] + px / sceneWidth * spanX;
+        const double v = displayRegion.lower[y0]
+            + (sceneHeight - py) / sceneHeight * spanY;
+        return {u, v};
+    }
+
+    // Scene point -> logical (x, y)/(r, theta). Inverse of sceneFromLogical
+    // on the spherical layouts; on the mapped path this is the physical
+    // display position (see logicalFromDisplay).
     [[nodiscard]] std::array<double, 2> logicalFromScene(double px, double py) const
     {
-        const double spanX = displayRegion.upper[0] - displayRegion.lower[0];
-        const double spanY = displayRegion.upper[1] - displayRegion.lower[1];
-        const double u = displayRegion.lower[0] + px / sceneWidth * spanX;
-        const double v = displayRegion.lower[1]
-            + (sceneHeight - py) / sceneHeight * spanY;
-        return logicalFromDisplay(u, v);
+        const auto display = displayFromScene(px, py);
+        return logicalFromDisplay(display[0], display[1]);
     }
 
     // Plane-pixel (col, row; row 0 = bottom) -> scene point. Used to re-project
-    // contour polylines, which are traced in the logical (r, theta) raster.
+    // contour polylines, which are traced in the logical raster, and on the
+    // mapped path everything anchored in raster pixels (glyphs, box outlines).
     [[nodiscard]] QPointF sceneFromPlanePixel(double col, double row) const
     {
-        const double spanX = logicalRegion.upper[0] - logicalRegion.lower[0];
-        const double spanY = logicalRegion.upper[1] - logicalRegion.lower[1];
-        const double a = logicalRegion.lower[0] + col / planeWidth * spanX;
-        const double b = logicalRegion.lower[1] + row / planeHeight * spanY;
+        if (mapped && nodes) {
+            const auto display = mappedDisplayPosition(*nodes, col, row);
+            return sceneFromDisplay(display[0], display[1]);
+        }
+        const auto x0 = static_cast<std::size_t>(axes[0]);
+        const auto y0 = static_cast<std::size_t>(axes[1]);
+        const double spanX = logicalRegion.upper[x0] - logicalRegion.lower[x0];
+        const double spanY = logicalRegion.upper[y0] - logicalRegion.lower[y0];
+        const double a = logicalRegion.lower[x0] + col / planeWidth * spanX;
+        const double b = logicalRegion.lower[y0] + row / planeHeight * spanY;
         return sceneFromLogical(a, b);
+    }
+
+    // Scene point -> the plane pixel (col, row; row 0 = bottom) drawn there,
+    // or nothing where no cell was drawn (outside the stretched domain).
+    // Mapped path only: the warp records which raster pixel each display
+    // pixel came from, which is the inverse no formula gives. Elsewhere the
+    // linear inverse over logicalRegion applies.
+    [[nodiscard]] std::optional<std::array<int, 2>> planePixelFromScene(
+        double px, double py) const
+    {
+        if (mapped) {
+            if (!sourceIndex) {
+                return std::nullopt;
+            }
+            const auto width = static_cast<int>(std::lround(sceneWidth));
+            const auto height = static_cast<int>(std::lround(sceneHeight));
+            const auto column = static_cast<int>(std::floor(px));
+            // The pixmap is flipped for display: scene row 0 is the top,
+            // source-index row 0 the bottom.
+            const auto row = height - 1 - static_cast<int>(std::floor(py));
+            if (column < 0 || column >= width || row < 0 || row >= height) {
+                return std::nullopt;
+            }
+            const auto offset = static_cast<std::size_t>(row)
+                    * static_cast<std::size_t>(width)
+                + static_cast<std::size_t>(column);
+            if (offset >= sourceIndex->size()) {
+                return std::nullopt;
+            }
+            const auto source = (*sourceIndex)[offset];
+            if (source < 0) {
+                return std::nullopt;
+            }
+            const auto planeW = std::max(1, static_cast<int>(std::lround(planeWidth)));
+            return std::array<int, 2>{source % planeW, source / planeW};
+        }
+        const auto logical = logicalFromScene(px, py);
+        const auto x0 = static_cast<std::size_t>(axes[0]);
+        const auto y0 = static_cast<std::size_t>(axes[1]);
+        const double spanX = logicalRegion.upper[x0] - logicalRegion.lower[x0];
+        const double spanY = logicalRegion.upper[y0] - logicalRegion.lower[y0];
+        if (!(spanX > 0.0) || !(spanY > 0.0)) {
+            return std::nullopt;
+        }
+        const auto col = static_cast<int>(std::floor(
+            (logical[0] - logicalRegion.lower[x0]) / spanX * planeWidth));
+        const auto row = static_cast<int>(std::floor(
+            (logical[1] - logicalRegion.lower[y0]) / spanY * planeHeight));
+        if (col < 0 || row < 0 || col >= static_cast<int>(planeWidth)
+            || row >= static_cast<int>(planeHeight)) {
+            return std::nullopt;
+        }
+        return std::array<int, 2>{col, row};
     }
 };
 

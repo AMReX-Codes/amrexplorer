@@ -22,7 +22,18 @@ struct PlotfileMetadataResult {
     std::shared_ptr<const DatasetMetadata> metadata;
     MetadataReadMetrics metrics;
     std::string fileVersion;
+    // The mapped-grid (nodal "Nu_nd") hierarchy when the plotfile Header
+    // declares one and every level's _H checks out: the same geometry as
+    // `metadata` with nodal level domains, one Node field per space
+    // dimension (amrexvec_nu_x, _y, _z) and the Nu_nd boxes and blocks. Null
+    // otherwise; metadata->hasMappedGrid says which.
+    std::shared_ptr<const DatasetMetadata> mappedGrid;
 };
+
+// Component names that identify the mapped-grid block among a Header's
+// trailing extra-MultiFab sets.
+inline constexpr const char* mappedGridComponentNames[3]
+    = {"amrexvec_nu_x", "amrexvec_nu_y", "amrexvec_nu_z"};
 
 class MetadataReadError : public std::runtime_error {
 public:

@@ -482,6 +482,74 @@ bool MainWindow::aspectMenuEnabledForTest() const
     return m_aspectMenu != nullptr && m_aspectMenu->isEnabled();
 }
 
+AspectMode MainWindow::aspectMenuCheckedModeForTest() const
+{
+    if (m_aspectGroup != nullptr) {
+        if (const auto* checked = m_aspectGroup->checkedAction()) {
+            return static_cast<AspectMode>(checked->data().toInt());
+        }
+    }
+    return m_aspectMode;
+}
+
+bool MainWindow::aspectRadiosEnabledForTest() const
+{
+    return m_aspectCellCountsAction != nullptr && m_aspectPhysicalAction != nullptr
+        && m_aspectCellCountsAction->isEnabled()
+        && m_aspectPhysicalAction->isEnabled();
+}
+
+void MainWindow::setMappedGridForTest(bool enabled)
+{
+    if (m_mappedGridAction != nullptr) {
+        m_mappedGridAction->setChecked(enabled);
+    }
+}
+
+void MainWindow::setMappedGridSupersampleForTest(int factor)
+{
+    if (m_mappedGridSupersampleGroup == nullptr) {
+        return;
+    }
+    for (auto* action : m_mappedGridSupersampleGroup->actions()) {
+        if (action->data().toInt() == factor) {
+            action->trigger();
+            return;
+        }
+    }
+}
+
+bool MainWindow::mappedGridMenuEnabledForTest() const
+{
+    return m_mappedGridMenu != nullptr && m_mappedGridMenu->isEnabled();
+}
+
+bool MainWindow::displayIsMappedForTest() const
+{
+    return displayIsMapped();
+}
+
+bool MainWindow::activeViewIsMappedForTest() const
+{
+    return m_activeView != nullptr && m_activeView->mappedGrid;
+}
+
+void MainWindow::setActiveViewForTest(int normal)
+{
+    if (m_viewDimension != 3 || normal < 0 || normal > 2) {
+        return;
+    }
+    setActiveView(primary().planeViews[static_cast<std::size_t>(normal)]);
+}
+
+QString MainWindow::probeReadoutActiveViewForTest(int x, int y) const
+{
+    if (m_activeView == nullptr || !m_activeView->plane) {
+        return {};
+    }
+    return probeReadout(*m_activeView, x, y);
+}
+
 int MainWindow::panelTileCountForTest(int normal) const
 {
     if (normal < 0 || normal > 2) {

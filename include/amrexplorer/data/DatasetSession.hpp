@@ -2,6 +2,7 @@
 
 #include <amrexplorer/cache/CacheMetrics.hpp>
 #include <amrexplorer/core/DerivedField.hpp>
+#include <amrexplorer/core/MappedGrid.hpp>
 #include <amrexplorer/core/Metadata.hpp>
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Statistics.hpp>
@@ -103,6 +104,25 @@ public:
         static_cast<void>(cancellation);
         throw std::runtime_error(
             "volume rendering is not supported by this session");
+    }
+
+    // Whether slices can be drawn on the plotfile's mapped (stretched) grid
+    // (core/MappedGrid.hpp): the dataset carries the nodal displacement
+    // MultiFab and this session can read it. False by default, so a remote
+    // peer that cannot be asked, and every test fake, says no.
+    [[nodiscard]] virtual bool supportsMappedGrid() const noexcept
+    {
+        return false;
+    }
+    // The node positions of a slice raster's cells; only meaningful when
+    // supportsMappedGrid() is true.
+    [[nodiscard]] virtual MappedGridPlane requestMappedGridPlane(
+        const MappedGridPlaneRequest& request, StopToken cancellation = {})
+    {
+        static_cast<void>(request);
+        static_cast<void>(cancellation);
+        throw std::runtime_error(
+            "mapped grid is not supported by this session");
     }
 
     // How many of metadata().fields the dataset stores rather than computes;

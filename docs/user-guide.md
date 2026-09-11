@@ -48,6 +48,8 @@ You can also start without a path and use the File menu:
 Cylindrical RZ and 3-D spherical plotfiles open normally but are displayed on
 their logical grid. **2-D spherical (r, θ)** plotfiles can also be shown in
 true physical space — see [2-D spherical coordinates](#2-d-spherical-coordinates).
+Plotfiles that store their cell corners' positions (ERF, REMORA) can be shown
+on that stretched grid — see [Mapped grids](#mapped-grids).
 
 ## Remote datasets
 
@@ -346,7 +348,9 @@ cell units, so a stretched display skews their arrows.
 
 The controls are unavailable for 2-D spherical plotfiles, whose R-Z view is
 already physical, and Physical Size is unavailable for standalone FABs and
-MultiFabs, which carry no cell sizes.
+MultiFabs, which carry no cell sizes. While a [mapped grid](#mapped-grids) is
+shown the display is physical too: the menu shows Physical Size in effect,
+Axis Scaling still applies, and the persisted proportion is untouched.
 
 ## Working with 3-D data
 
@@ -776,6 +780,39 @@ anchored at its physical position and the (v_r, v_θ) components are rotated
 into physical directions. Line plots and particle overlays are available in the
 r-θ and θ-r layouts but not in the R-Z view.
 
+## Mapped grids
+
+Some plotfiles store where their cell corners really are. ERF and REMORA write
+a nodal MultiFab (`Level_N/Nu_nd`, listed after the level paths in the Header)
+whose components `amrexvec_nu_x`, `_y`, `_z` give each corner's displacement
+from its uniform position: a corner sits at prob_lo + (i·dx, j·dy, k·dz) + nu.
+Terrain-following and stretched vertical grids are the usual case. The data
+itself stays cell-centered, and by default AMReXplorer draws it on the
+logical grid as for any other plotfile.
+
+**View > Mapped Grid > Show on Mapped Grid** (off by default; the choice
+persists across sessions) draws each cell as the quadrilateral its four
+corners define instead. In a 3-D slice at cell index c along the normal, the
+corners are the average of node layers c and c+1. **View > Mapped Grid >
+Supersampling** (1x–16x) sets how finely the stretched cells are traced, as
+for the spherical R-Z view. The menu is available only when the open plotfile
+carries the node positions; the Dataset Metadata panel lists them under
+**Mapped grid**.
+
+While the mapped grid is shown the display is physical: **View > Aspect
+Ratio** shows Physical Size in effect (the persisted proportion is left as it
+was) and **Axis Scaling...** still stretches the axes. The probe reports the
+physical position under the cursor and the logical cell it belongs to;
+rubber-band zoom selects the cells under the rectangle; grid boxes, contours,
+vector glyphs and particles follow the warp; the scale bar and exports do too.
+
+Limits: remote datasets are not supported yet, and the menu says so. Line
+plots, volume rendering and a companion plotfile use the logical grid: the
+line tool is unavailable while the mapped grid is shown, and a companion
+cannot be opened until it is switched off. In the two panels that show the
+stretched axis the crosshair guide along that axis is omitted, since a
+constant logical coordinate is a curve on screen.
+
 ## Plotfile sequences and animation
 
 Open two or more plotfile directories with **File > Open Plotfile
@@ -807,8 +844,9 @@ Transparency is available only for PNG, not MP4.
 The **View** menu controls these optional panels:
 
 - **Dataset Metadata** shows the plotfile's format, time, coordinate system,
-  physical domain, fields, and for each level its grid count, cell counts,
-  index domain, cell sizes, refinement ratio, and step.
+  physical domain, fields, whether it carries a [mapped grid](#mapped-grids),
+  and for each level its grid count, cell counts, index domain, cell sizes,
+  refinement ratio, and step.
 - **Color Scale** shows the current numeric range and palette.
 - **Diagnostics** reports request, I/O, and cache activity.
 - **Animation** contains plane-sweep and sequence controls.
@@ -824,8 +862,8 @@ their neutral gray under every skin, so a colormap looks the same whichever
 one you pick.
 
 Window geometry, logarithmic mapping, palette, skin, number format,
-animation speed, aspect ratio proportion, and the isosurface color persist
-across sessions.
+animation speed, aspect ratio proportion, the mapped-grid display and its
+supersampling, and the isosurface color persist across sessions.
 
 Each open dataset has a 1 GiB data cache by default, and volume rendering fills
 a second cache of the same size with the grids it samples the field into (an

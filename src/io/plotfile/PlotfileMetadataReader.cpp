@@ -462,6 +462,170 @@ IntBox physicalBoundsToCellBox(
     return box;
 }
 
+enum class BoxCountCheck {
+    // The Header's grid records already sized level.boxes; the _H must agree.
+    MatchHeader,
+    // Nothing sized the boxes yet (a mapped-grid level): take them from _H.
+    TakeFromIndex
+};
+
+// Reads every level's VisMF _H and fills its boxes and blocks. Shared by the
+// plotfile's own Cell hierarchy and the mapped-grid Nu_nd hierarchy, which
+// differ only in whether the Header announced the box count beforehand.
+void indexLevelBlocks(const std::filesystem::path& plotfile,
+    DatasetMetadata& metadata, int componentCount, BoxCountCheck boxCount,
+    MetadataReadMetrics& metrics, StopToken cancellation)
+{
+    for (auto& level : metadata.levels) {
+        if (cancellation.stop_requested()) {
+            throw ReadCancelled();
+        }
+        const auto dataPrefix = plotfile / level.dataPath;
+        const auto indexPath = std::filesystem::path(dataPrefix.string() + "_H");
+        const auto visMf = detail::readVisMfIndex(indexPath, metadata.dimension, cancellation);
+        ++metrics.filesRead;
+        metrics.bytesRead += visMf.bytesRead;
+        if (visMf.components != componentCount) {
+            throw MetadataReadError("VisMF component count does not match plotfile Header");
+        }
+        if (boxCount == BoxCountCheck::MatchHeader
+            && visMf.boxes.size() != level.boxes.size()) {
+            throw MetadataReadError("VisMF BoxArray does not match plotfile grid count");
+        }
+
+        level.boxes = visMf.boxes;
+        level.ghostWidth = visMf.ghostWidth;
+        level.storedComponents = visMf.components;
+        level.visMfHeaderVersion = visMf.version;
+        level.realDescriptor = visMf.realDescriptor;
+        level.blocks.clear();
+        level.blocks.reserve(visMf.boxes.size());
+        for (std::size_t block = 0; block < visMf.boxes.size(); ++block) {
+            BlockMetadata blockMetadata;
+            blockMetadata.box = visMf.boxes[block];
+            blockMetadata.filePath = (
+                std::filesystem::path(level.dataPath).parent_path()
+                / visMf.fileNames[block]).generic_string();
+            blockMetadata.fileOffset = visMf.fileOffsets[block];
+            if (visMf.hasPerBlockStatistics
+                && visMf.minimum.size() == visMf.boxes.size()
+                && visMf.maximum.size() == visMf.boxes.size()) {
+                blockMetadata.statistics = BlockStatistics{
+                    visMf.minimum[block], visMf.maximum[block]};
+            }
+            level.blocks.push_back(std::move(blockMetadata));
+        }
+    }
+}
+
+// Builds the mapped-grid hierarchy from the Nu_nd paths: the plotfile's
+// geometry with nodal level domains, one Node field per component, and the
+// boxes and blocks of each level's Nu_nd_H. Throws MetadataReadError when
+// anything about it is not the nodal displacement MultiFab it claims to be.
+std::shared_ptr<const DatasetMetadata> buildMappedGrid(
+    const std::filesystem::path& plotfile, const DatasetMetadata& base,
+    std::vector<std::string> componentNames,
+    const std::vector<std::string>& levelPaths, MetadataReadMetrics& metrics,
+    StopToken cancellation)
+{
+    auto grid = std::make_shared<DatasetMetadata>(base);
+    grid->hasMappedGrid = false;
+    grid->fields.clear();
+    for (auto& name : componentNames) {
+        grid->fields.push_back({name, Centering::Node, {std::move(name)}});
+    }
+    for (std::size_t levelIndex = 0; levelIndex < grid->levels.size(); ++levelIndex) {
+        auto& level = grid->levels[levelIndex];
+        for (int axis = 0; axis < grid->dimension; ++axis) {
+            const auto i = static_cast<std::size_t>(axis);
+            if (level.domain.upper[i] == std::numeric_limits<int>::max()) {
+                throw MetadataReadError("mapped-grid nodal domain exceeds integer range");
+            }
+            level.domain.centering[i] = 1;
+            level.domain.upper[i] += 1;
+        }
+        level.boxes.clear();
+        level.blocks.clear();
+        level.dataPath = levelPaths[levelIndex];
+    }
+    indexLevelBlocks(plotfile, *grid, static_cast<int>(grid->fields.size()),
+        BoxCountCheck::TakeFromIndex, metrics, cancellation);
+    for (const auto& level : grid->levels) {
+        if (level.boxes.empty()) {
+            throw MetadataReadError("mapped-grid level has no boxes");
+        }
+        for (const auto& box : level.boxes) {
+            for (int axis = 0; axis < grid->dimension; ++axis) {
+                if (box.centering[static_cast<std::size_t>(axis)] != 1) {
+                    throw MetadataReadError("mapped-grid boxes must be nodal");
+                }
+            }
+        }
+    }
+    const auto issues = validateMetadata(*grid);
+    if (!issues.empty()) {
+        throw MetadataReadError("invalid mapped-grid metadata at "
+            + issues.front().path + ": " + issues.front().message);
+    }
+    return grid;
+}
+
+// Parses the extra-MultiFab sets that may follow the level data paths and
+// returns the mapped grid they describe, or null when there is none. The
+// leading count is read but not trusted (REMORA writes 1 and then appends
+// more sets); sets are consumed until the file ends. Any malformed content
+// simply ends the search: this part of the Header is optional and has never
+// been the reader's to reject. Cancellation still propagates.
+std::shared_ptr<const DatasetMetadata> readMappedGrid(std::istream& input,
+    const std::filesystem::path& plotfile, const DatasetMetadata& metadata,
+    MetadataReadMetrics& metrics, StopToken cancellation)
+{
+    const auto dimension = static_cast<std::size_t>(metadata.dimension);
+    const auto levelCount = metadata.levels.size();
+    try {
+        // The count itself; its absence is the common case (no extra sets).
+        static_cast<void>(readRequired<int>(input, "extra MultiFab set count"));
+        for (;;) {
+            if (cancellation.stop_requested()) {
+                throw ReadCancelled();
+            }
+            const auto componentCount = readRequired<int>(
+                input, "extra MultiFab component count");
+            if (componentCount < 1 || componentCount > maximumComponents) {
+                return nullptr;
+            }
+            input.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            std::vector<std::string> names;
+            names.reserve(static_cast<std::size_t>(std::min(componentCount, 16)));
+            for (int component = 0; component < componentCount; ++component) {
+                if (cancellation.stop_requested()) {
+                    throw ReadCancelled();
+                }
+                names.push_back(readNonEmptyLine(
+                    input, "extra MultiFab component name", cancellation));
+            }
+            std::vector<std::string> paths;
+            paths.reserve(levelCount);
+            for (std::size_t level = 0; level < levelCount; ++level) {
+                auto path = readRequired<std::string>(
+                    input, "extra MultiFab level path");
+                requireContainedPath(path, "plotfile extra MultiFab path");
+                paths.push_back(std::move(path));
+            }
+            bool isMappedGrid = names.size() == dimension;
+            for (std::size_t axis = 0; isMappedGrid && axis < dimension; ++axis) {
+                isMappedGrid = names[axis] == mappedGridComponentNames[axis];
+            }
+            if (isMappedGrid) {
+                return buildMappedGrid(plotfile, metadata, std::move(names),
+                    paths, metrics, cancellation);
+            }
+        }
+    } catch (const MetadataReadError&) {
+        return nullptr;
+    }
+}
+
 } // namespace
 
 PlotfileMetadataResult PlotfileMetadataReader::read(
@@ -615,45 +779,8 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
     }
 
     MetadataReadMetrics metrics{1, headerSize, 0, 0};
-    for (auto& level : metadata->levels) {
-        if (cancellation.stop_requested()) {
-            throw ReadCancelled();
-        }
-        const auto dataPrefix = plotfile / level.dataPath;
-        const auto indexPath = std::filesystem::path(dataPrefix.string() + "_H");
-        const auto visMf = detail::readVisMfIndex(indexPath, metadata->dimension, cancellation);
-        ++metrics.filesRead;
-        metrics.bytesRead += visMf.bytesRead;
-        if (visMf.components != componentCount) {
-            throw MetadataReadError("VisMF component count does not match plotfile Header");
-        }
-        if (visMf.boxes.size() != level.boxes.size()) {
-            throw MetadataReadError("VisMF BoxArray does not match plotfile grid count");
-        }
-
-        level.boxes = visMf.boxes;
-        level.ghostWidth = visMf.ghostWidth;
-        level.storedComponents = visMf.components;
-        level.visMfHeaderVersion = visMf.version;
-        level.realDescriptor = visMf.realDescriptor;
-        level.blocks.clear();
-        level.blocks.reserve(visMf.boxes.size());
-        for (std::size_t block = 0; block < visMf.boxes.size(); ++block) {
-            BlockMetadata blockMetadata;
-            blockMetadata.box = visMf.boxes[block];
-            blockMetadata.filePath = (
-                std::filesystem::path(level.dataPath).parent_path()
-                / visMf.fileNames[block]).generic_string();
-            blockMetadata.fileOffset = visMf.fileOffsets[block];
-            if (visMf.hasPerBlockStatistics
-                && visMf.minimum.size() == visMf.boxes.size()
-                && visMf.maximum.size() == visMf.boxes.size()) {
-                blockMetadata.statistics = BlockStatistics{
-                    visMf.minimum[block], visMf.maximum[block]};
-            }
-            level.blocks.push_back(std::move(blockMetadata));
-        }
-    }
+    indexLevelBlocks(plotfile, *metadata, componentCount,
+        BoxCountCheck::MatchHeader, metrics, cancellation);
 
     const auto indexedIssues = validateMetadata(*metadata);
     if (!indexedIssues.empty()) {
@@ -661,10 +788,23 @@ PlotfileMetadataResult PlotfileMetadataReader::read(
             + indexedIssues.front().path + ": " + indexedIssues.front().message);
     }
 
+    // The Header may go on: ERF and REMORA append extra MultiFab sets after
+    // the level data paths (a count, then per set a component count, the
+    // names, and one path per level). Only the nodal displacement set is
+    // used; the rest is skipped. Best effort by design -- trailing content
+    // this reader does not understand has never failed an open, and a
+    // malformed Nu_nd block must not start to.
+    auto mappedGrid = readMappedGrid(
+        input, plotfile, *metadata, metrics, cancellation);
+    if (mappedGrid) {
+        metadata->hasMappedGrid = true;
+    }
+
     return {
         std::shared_ptr<const DatasetMetadata>(std::move(metadata)),
         metrics,
-        fileVersion
+        fileVersion,
+        std::move(mappedGrid)
     };
 }
 

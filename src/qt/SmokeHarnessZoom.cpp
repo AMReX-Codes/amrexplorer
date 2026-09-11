@@ -8,6 +8,7 @@
 #include <QSignalBlocker>
 #include <QTimer>
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -133,6 +134,135 @@ Outcome dispatchZoom(Context& context)
                         ? 0 : 1);
             });
         QTimer::singleShot(15000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--mapped-grid-smoke-test") {
+        // View > Mapped Grid on plotfile_3d_mapped (4^3 cells, dx = 0.25,
+        // Nu_nd lifting the bottom nodes by nu_z = 0.125*(1 - k/4)*(i+j)/8):
+        // off by default with the menu offered; on, the x-z panel shows the
+        // physical warp (the lifted bottom-right corner is drawn nowhere, the
+        // unlifted bottom-left still holds data), Aspect Ratio shows Physical
+        // Size with the preference untouched, and the scale bar is truthful; a
+        // rubber band re-slices and stays zoomed; a finer supersample enlarges
+        // the warp and keeps the framing; off again returns the logical grid.
+        // interactiveSlicesSettled fires once per re-slice batch, so each
+        // phase is one settle.
+        const std::filesystem::path path(argv[2]);
+        auto phase = std::make_shared<int>(0);
+        auto zoomedSize = std::make_shared<std::array<int, 2>>();
+        const auto fail = [&application](const char* message) {
+            qCritical("%s", message);
+            application.exit(1);
+        };
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, fail](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                window.setActiveViewForTest(1);  // the x-z panel
+                if (!window.mappedGridMenuEnabledForTest()
+                    || window.displayIsMappedForTest()
+                    || window.activeViewIsMappedForTest()
+                    || window.aspectMenuCheckedModeForTest()
+                        != amrvis::qt::AspectMode::CellCounts
+                    || !window.aspectRadiosEnabledForTest()) {
+                    fail("Mapped Grid is not offered, or is on by default");
+                    return;
+                }
+                window.setMappedGridForTest(true);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, &application, phase, zoomedSize, fail] {
+                const auto size = window.activeViewImageSizeForTest();
+                switch (*phase) {
+                case 0: {
+                    // On: the pixmap is the warp -- the plane is 4 x 4 and the
+                    // 4x supersample spans each cell with four pixels, so 16
+                    // wide; the z span runs from the least-lifted bottom node
+                    // (x = 0, the j = 2.5 layer average: 0.125 * 2.5 / 8) to
+                    // the unlifted top, 0.96 over a 1/16 pitch, so 15 tall.
+                    if (!window.displayIsMappedForTest()
+                        || !window.activeViewIsMappedForTest()
+                        || size[0] != 16 || size[1] < 14 || size[1] > 16) {
+                        qCritical("mapped pixmap %d x %d", size[0], size[1]);
+                        fail("the mapped grid did not replace the raster");
+                        return;
+                    }
+                    if (window.aspectMenuCheckedModeForTest()
+                            != amrvis::qt::AspectMode::PhysicalSize
+                        || window.aspectRadiosEnabledForTest()
+                        || window.aspectModePreferenceForTest()
+                            != amrvis::qt::AspectMode::CellCounts
+                        || !window.aspectMenuEnabledForTest()
+                        || !window.scaleBarActionEnabledForTest()) {
+                        fail("mapped display did not pin Physical Size with "
+                             "the preference kept and the scale bar offered");
+                        return;
+                    }
+                    // Bottom-left: the x = 0 nodes are never lifted, so the
+                    // lowest row there holds cell (0, 0); bottom-right: the
+                    // x = 1 bottom node is lifted by about 0.1, above the
+                    // lowest pixel row (0.0625 tall), so nothing is drawn.
+                    const auto left = window.probeReadoutActiveViewForTest(
+                        0, size[1] - 1);
+                    const auto right = window.probeReadoutActiveViewForTest(
+                        size[0] - 1, size[1] - 1);
+                    if (!left.contains(QStringLiteral("value"))
+                        || !left.contains(QStringLiteral("cell"))
+                        || right != QObject::tr("no data")) {
+                        qCritical("left '%s' right '%s'",
+                            qPrintable(left), qPrintable(right));
+                        fail("the probe does not follow the warp");
+                        return;
+                    }
+                    *phase = 1;
+                    window.rubberBandZoomActiveViewForTest();
+                    break;
+                }
+                case 1:
+                    // The rubber band re-sliced the cells under it (a zoom,
+                    // not the spherical view-only zoom) and kept the warp.
+                    if (!window.activeViewIsZoomedForTest()
+                        || window.activeViewFitsWindowForTest()
+                        || !window.activeViewIsMappedForTest()) {
+                        fail("a mapped rubber band did not re-slice zoomed");
+                        return;
+                    }
+                    *zoomedSize = size;
+                    *phase = 2;
+                    window.setMappedGridSupersampleForTest(8);
+                    break;
+                case 2:
+                    // 8x doubles the warp's resolution; the framing survives.
+                    if (size[0] <= (*zoomedSize)[0] || size[1] <= (*zoomedSize)[1]
+                        || !window.activeViewIsZoomedForTest()
+                        || window.activeViewFitsWindowForTest()
+                        || !window.activeViewIsMappedForTest()) {
+                        qCritical("zoomed %d x %d, resampled %d x %d",
+                            (*zoomedSize)[0], (*zoomedSize)[1], size[0], size[1]);
+                        fail("a finer supersample did not enlarge the warp "
+                             "and keep the zoom");
+                        return;
+                    }
+                    *phase = 3;
+                    window.setMappedGridForTest(false);
+                    break;
+                case 3:
+                default:
+                    // Off: the logical grid again, radios back.
+                    application.exit(!window.displayIsMappedForTest()
+                            && !window.activeViewIsMappedForTest()
+                            && window.aspectRadiosEnabledForTest()
+                            && window.aspectMenuCheckedModeForTest()
+                                == amrvis::qt::AspectMode::CellCounts
+                        ? 0 : 3);
+                    break;
+                }
+            });
+        QTimer::singleShot(20000, &application,
             [&application] { application.exit(4); });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3

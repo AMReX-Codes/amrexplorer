@@ -382,6 +382,17 @@ int main()
                 geometry, incompatible)
                 == ImageTransformPolicy::Refit,
             "a displayed-orientation change should refit");
+
+        incompatible = geometry;
+        incompatible.mappedGrid = true;
+        require(DisplayCoordinator::rasterTransformPolicy(
+                geometry, incompatible)
+                == ImageTransformPolicy::Refit,
+            "a mapped-grid toggle should refit");
+        require(DisplayCoordinator::rasterTransformPolicy(
+                incompatible, incompatible)
+                == ImageTransformPolicy::Preserve,
+            "a mapped-grid refresh should preserve");
     }
 
     // --- a shared range whose bounds share a logarithm ---------------------

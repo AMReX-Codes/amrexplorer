@@ -1,6 +1,7 @@
 #pragma once
 
 #include <amrexplorer/core/DerivedField.hpp>
+#include <amrexplorer/core/MappedGrid.hpp>
 #include <amrexplorer/core/Metadata.hpp>
 #include <amrexplorer/core/Request.hpp>
 #include <amrexplorer/core/Result.hpp>
@@ -64,8 +65,23 @@ struct SliceDisplayResult {
     // Physical bounds of `image` in display space: slice.plane.physicalRegion
     // for non-spherical data, the (R, Z) sector bounding box for 2-D spherical
     // R-Z, or the (possibly axis-swapped) logical bounds for r-theta / theta-r.
-    // Overlays and the probe map through this.
+    // Overlays and the probe map through this. For a mapped-grid display it
+    // is the node bounding box, indexed on the dataset axes like the
+    // Cartesian case.
     RealBox displayRegion;
+    // Set when `image` was drawn on the dataset's mapped grid
+    // (request.mappedGrid on a session that supportsMappedGrid()): the node
+    // positions the raster cells were placed by, and, parallel to image.rgba
+    // (row 0 = bottom, before displayImageFor's flip), the raster pixel each
+    // display pixel shows or -1. Overlays anchored in raster-pixel space map
+    // forward through gridNodes; the probe maps back through the index.
+    bool mappedGrid = false;
+    std::shared_ptr<const MappedGridPlane> gridNodes;
+    std::shared_ptr<const std::vector<std::int32_t>> displaySourceIndex;
+    // The dataset axes gridNodes.a and .b run along (slicePlaneAxes), kept so
+    // a re-colouring of the plane can be warped the same way without asking
+    // the dataset again (DisplayCoordinator::realignArrivalToRange).
+    std::array<int, 2> mappedAxes{0, 1};
     std::vector<VectorSegment> vectors;
     // Contour modes only: the plane the contours were traced on (at contour
     // resolution, which since #56 removed supersampling is the plane the
@@ -153,6 +169,11 @@ struct FrameSliceSpec {
     int sphericalSupersample = 4;
     // 2-D spherical display layout carried across frame loads.
     SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
+    // Mapped-grid display carried across frame loads (see
+    // SliceRequest::mappedGrid). A frame without node positions draws its
+    // logical grid and says so on SliceDisplayResult::mappedGrid.
+    bool mappedGrid = false;
+    int mappedGridSupersample = 4;
     bool defaultPositions = true;
     std::array<double, 3> slicePositions{0.0, 0.0, 0.0};
     std::vector<std::optional<RealBox>> visibleRegions;  // per view, normal order

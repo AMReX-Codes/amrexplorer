@@ -121,6 +121,12 @@ public:
     // it is false only while a pinned grid still exceeds it.
     [[nodiscard]] bool setVolumeGridCacheBudget(std::uint64_t bytes);
 
+    // A plotfile whose Header lists the Nu_nd displacement MultiFab.
+    [[nodiscard]] bool supportsMappedGrid() const noexcept override;
+    [[nodiscard]] MappedGridPlane requestMappedGridPlane(
+        const MappedGridPlaneRequest& request,
+        StopToken cancellation = {}) override;
+
     // Locally there is nothing between the definitions and the dataset that
     // opens with them.
     [[nodiscard]] bool supportsDerivedFields() const noexcept override

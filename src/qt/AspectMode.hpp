@@ -26,18 +26,20 @@ enum class AspectMode : int {
 // so the smallest factor over the dataset's dimensions is one, which makes a
 // fixed scale N mean N screen pixels per cell along the least stretched axis.
 // Physical proportion is skipped when the dataset has no physical geometry
-// (standalone FABs and MultiFabs carry unit cells anyway) and for 2-D
-// spherical data, where the R-Z warp is already physical and r and theta do
-// not share a unit. Non-positive or non-finite inputs count as one.
+// (standalone FABs and MultiFabs carry unit cells anyway) and when the raster
+// is already physical (`physicalRaster`: the 2-D spherical R-Z warp, where r
+// and theta do not share a unit). A mapped-grid raster is not one of those:
+// its pixels have the raster's own per-axis pitch, so the caller passes
+// PhysicalSize for it. Non-positive or non-finite inputs count as one.
 [[nodiscard]] inline std::array<double, 3> displayStretchPerAxis(
     const DatasetMetadata& metadata, AspectMode mode,
-    const std::array<double, 3>& axisScale, bool spherical)
+    const std::array<double, 3>& axisScale, bool physicalRaster)
 {
     const auto sane = [](double value) {
         return std::isfinite(value) && value > 0.0 ? value : 1.0;
     };
     const bool physical = mode == AspectMode::PhysicalSize
-        && metadata.hasPhysicalGeometry && !spherical
+        && metadata.hasPhysicalGeometry && !physicalRaster
         && !metadata.levels.empty();
     // Indexed only once levels is known non-empty (physical implies it).
     const LevelMetadata* finest = physical

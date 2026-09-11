@@ -5,6 +5,7 @@
 #include <amrexplorer/data/SessionValidation.hpp>
 #include <amrexplorer/io/PlotfileDataset.hpp>
 #include <amrexplorer/query/LineQuery.hpp>
+#include <amrexplorer/query/MappedGridQuery.hpp>
 #include <amrexplorer/query/SliceQuery.hpp>
 #include <amrexplorer/query/VolumeQuery.hpp>
 #include <amrexplorer/render3d/VolumeRaycaster.hpp>
@@ -324,6 +325,40 @@ LocalDatasetSession::derivedFieldDefinitions() const
 bool LocalDatasetSession::supportsVolumeRendering() const noexcept
 {
     return datasetSupportsVolumeRendering(m_metadata);
+}
+
+bool LocalDatasetSession::supportsMappedGrid() const noexcept
+{
+    if (!m_metadata.hasMappedGrid) {
+        return false;
+    }
+    std::scoped_lock lock(m_mutex);
+    return m_dataset && m_dataset->mappedGrid() != nullptr;
+}
+
+MappedGridPlane LocalDatasetSession::requestMappedGridPlane(
+    const MappedGridPlaneRequest& request, StopToken cancellation)
+{
+    const auto dataset = requireDataset();
+    const auto grid = dataset->mappedGrid();
+    if (!m_metadata.hasMappedGrid || !grid) {
+        throw std::runtime_error(
+            "mapped grid is not supported by this session");
+    }
+    if (request.dataset != m_id) {
+        throw std::invalid_argument(
+            "mapped-grid request uses the wrong dataset");
+    }
+    if (request.maximumLevel > m_metadata.finestLevel) {
+        throw std::invalid_argument(
+            "mapped-grid request level exceeds the finest level");
+    }
+    const auto errors
+        = validateMappedGridPlaneRequest(request, m_metadata.dimension);
+    if (!errors.empty()) {
+        throw std::invalid_argument(errors.front());
+    }
+    return queryMappedGridPlane(*dataset, *grid, request, cancellation);
 }
 
 VolumeFrame LocalDatasetSession::renderVolume(

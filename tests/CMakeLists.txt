@@ -136,6 +136,11 @@ target_link_libraries(test_spherical_coords
     PRIVATE amrexplorer::core amrexplorer::render2d amrexplorer::warnings)
 add_test(NAME spherical_coords COMMAND test_spherical_coords)
 
+add_executable(test_mapped_grid_warp unit/test_mapped_grid_warp.cpp)
+target_link_libraries(test_mapped_grid_warp
+    PRIVATE amrexplorer::core amrexplorer::render2d amrexplorer::warnings)
+add_test(NAME mapped_grid_warp COMMAND test_mapped_grid_warp)
+
 add_executable(test_vector_glyphs unit/test_vector_glyphs.cpp)
 target_link_libraries(test_vector_glyphs PRIVATE amrexplorer::render2d amrexplorer::warnings)
 add_test(NAME vector_glyphs COMMAND test_vector_glyphs)
@@ -430,6 +435,7 @@ add_test(
         "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d"
         "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_nonuniform"
         "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped"
 )
 
 add_executable(test_selective_block_read integration/test_selective_block_read.cpp)
@@ -554,6 +560,46 @@ add_test(NAME tool_dataset_inspect_json
     COMMAND dataset_inspect --json "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d")
 set_tests_properties(tool_dataset_inspect_json PROPERTIES
     PASS_REGULAR_EXPRESSION "\"dimension\": 2")
+# The mapped-grid fixture reports its Nu_nd hierarchy.
+add_test(NAME tool_dataset_inspect_mapped
+    COMMAND dataset_inspect "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped")
+set_tests_properties(tool_dataset_inspect_mapped PROPERTIES
+    PASS_REGULAR_EXPRESSION "mapped_grid: 3 components")
+
+# The mapped-grid fixture with its Cell and Nu_nd payloads, for the tests that
+# read node positions (FIXTURES_REQUIRED mapped_grid_materialized).
+set(mapped_grid_fixture_dir
+    "${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_grid")
+add_test(NAME mapped_grid_fixture
+    COMMAND "$<TARGET_FILE:fixture_materializer>"
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped"
+        "${mapped_grid_fixture_dir}")
+set_tests_properties(mapped_grid_fixture PROPERTIES
+    FIXTURES_SETUP mapped_grid_materialized)
+
+# Node positions through the local session, against the recipe the
+# materializer wrote; the plain 3-D fixture must report no grid.
+add_executable(test_mapped_grid_query integration/test_mapped_grid_query.cpp)
+target_link_libraries(
+    test_mapped_grid_query PRIVATE amrexplorer::data amrexplorer::warnings
+)
+add_test(NAME mapped_grid_query
+    COMMAND test_mapped_grid_query
+        "${mapped_grid_fixture_dir}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d")
+set_tests_properties(mapped_grid_query PROPERTIES
+    FIXTURES_REQUIRED mapped_grid_materialized)
+
+add_executable(test_mapped_grid_pipeline integration/test_mapped_grid_pipeline.cpp)
+target_link_libraries(
+    test_mapped_grid_pipeline PRIVATE amrexplorer::pipeline amrexplorer::warnings
+)
+add_test(NAME mapped_grid_pipeline
+    COMMAND test_mapped_grid_pipeline
+        "${mapped_grid_fixture_dir}"
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_grid_plain")
+set_tests_properties(mapped_grid_pipeline PROPERTIES
+    FIXTURES_REQUIRED mapped_grid_materialized)
 
 add_test(NAME tool_query_benchmark
     COMMAND "${CMAKE_COMMAND}"
@@ -1231,6 +1277,23 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_physical_fixed_scale_smoke PROPERTIES TIMEOUT 30)
 
+    # View > Mapped Grid on a plotfile carrying Nu_nd node positions: off by
+    # default, the physical warp on the x-z panel when on (Physical Size
+    # pinned, preference kept, probe following the warp), a rubber band that
+    # re-slices and stays zoomed, a finer supersample that keeps the framing,
+    # and the logical grid back when off.
+    add_test(
+        NAME qt_mapped_grid_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_mapped_grid_smoke"
+            -DMODE=mapped-grid
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_mapped_grid_smoke PROPERTIES TIMEOUT 30)
+
     # A remote Fit raster sized for the viewport must be re-fetched at native
     # width when a stretch puts its few columns across the whole viewport.
     add_test(
@@ -1413,7 +1476,8 @@ if(TARGET amrexplorer_qt)
         PRIVATE "${PROJECT_SOURCE_DIR}/src/qt"
     )
     target_link_libraries(test_plane_mapping
-        PRIVATE amrexplorer::core amrexplorer::warnings Qt6::Core
+        PRIVATE amrexplorer::core amrexplorer::render2d amrexplorer::warnings
+            Qt6::Core
     )
     add_test(NAME plane_mapping COMMAND test_plane_mapping)
 

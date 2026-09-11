@@ -72,7 +72,7 @@ void MainWindow::configureSliceControls()
     updateAnimationDockVisibility();
     configureSlicePositionControls();
     if (isThreeDimensional) {
-        m_isoWidget->setGeometry(metadata);
+        updateIsoGeometry();
         publishSlicePositions();
         // A primary reload under a companion: the isometric view keeps
         // outlining both domains, whether or not the companion reloads too.
@@ -388,6 +388,26 @@ void MainWindow::restoreVectorFields(const std::array<std::string, 3>& names)
             ? static_cast<int>(std::distance(fields.begin(), found))
             : -1;
     }
+}
+
+void MainWindow::updateIsoGeometry()
+{
+    if (!primary().session) {
+        return;
+    }
+    const auto& metadata = primary().session->metadata();
+    if (metadata.dimension != 3) {
+        return;
+    }
+    // Physical proportions stretched by the user's factors, as the slice
+    // panels are: a 50 km by 300 m ocean is a line otherwise, and its boxes
+    // with it. Volume rendering keeps its own unscaled wireframe.
+    const auto domain = datasetSampleBounds(metadata);
+    const auto factors = normalizedAxisScale(m_axisScale);
+    m_isoWidget->setGeometry(metadata,
+        [domain, factors](std::size_t, const Real3& point) {
+            return axisScaledDisplayPoint(domain, factors, point);
+        });
 }
 
 void MainWindow::publishSlicePositions()
@@ -2499,7 +2519,7 @@ void MainWindow::configureSequenceControls(
                 : std::clamp(m_slicePosition3d[axis], domain.lower[axis],
                     std::nextafter(domain.upper[axis], domain.lower[axis]));
         }
-        m_isoWidget->setGeometry(metadata);
+        updateIsoGeometry();
         publishSlicePositions();
     }
     m_stack->setCurrentIndex(isThreeDimensional ? 1 : 0);

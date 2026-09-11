@@ -317,15 +317,35 @@ Outcome dispatchZoom(Context& context)
                     window.setMappedGridForTest(false);
                     break;
                 case 6:
-                default:
+                default: {
                     // Off: the logical grid again, radios back.
-                    application.exit(!window.displayIsMappedForTest()
-                            && !window.activeViewIsMappedForTest()
-                            && window.aspectRadiosEnabledForTest()
-                            && window.aspectMenuCheckedModeForTest()
-                                == amrvis::qt::AspectMode::CellCounts
-                        ? 0 : 3);
+                    if (window.displayIsMappedForTest()
+                        || window.activeViewIsMappedForTest()
+                        || !window.aspectRadiosEnabledForTest()
+                        || window.aspectMenuCheckedModeForTest()
+                            != amrvis::qt::AspectMode::CellCounts) {
+                        fail("switching the mapped grid off did not restore "
+                             "the logical grid and the aspect radios");
+                        return;
+                    }
+                    // The iso wireframe follows Axis Scaling: the unit cube's
+                    // outline becomes four times as tall as it is wide.
+                    window.setAxisScaleForTest({1.0, 1.0, 4.0});
+                    const auto iso = window.isoDomainDisplayBoxForTest();
+                    const auto isoWidth = iso.upper[0] - iso.lower[0];
+                    const auto isoHeight = iso.upper[2] - iso.lower[2];
+                    if (!(isoWidth > 0.0) || std::abs(isoHeight / isoWidth - 4.0) > 1e-9) {
+                        qCritical("iso domain %g x %g", isoWidth, isoHeight);
+                        fail("the iso wireframe did not follow the z axis factor");
+                        return;
+                    }
+                    window.setAxisScaleForTest({1.0, 1.0, 1.0});
+                    const auto reset = window.isoDomainDisplayBoxForTest();
+                    application.exit(
+                        std::abs((reset.upper[2] - reset.lower[2]) / isoWidth - 1.0) < 1e-9
+                            ? 0 : 3);
                     break;
+                }
                 }
             });
         QTimer::singleShot(20000, &application,

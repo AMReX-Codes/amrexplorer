@@ -38,16 +38,22 @@ public:
     explicit IsoWidget(QWidget* parent = nullptr);
 
     using QWidget::setGeometry;
-    void setGeometry(const DatasetMetadata& metadata);
+    // The map takes a dataset index and a physical point to the display
+    // coordinates the wireframe is drawn in, so the view keeps the panels'
+    // proportions rather than the physical ones; empty draws physical
+    // coordinates.
+    using DisplayMap = std::function<Real3(std::size_t dataset, const Real3& point)>;
+    // One dataset, drawn through the map when one is given (the main window
+    // passes its Axis Scaling factors; the volume window passes none so the
+    // wireframe lines up with the ray-cast backdrop).
+    void setGeometry(const DatasetMetadata& metadata, DisplayMap displayMap = {});
     // Two datasets sharing a plane: the outline and the projection span the
     // union of their domains, each domain is outlined on its own, and both
     // level box sets are drawn.
-    // The map takes a dataset index and a physical point to the display
-    // coordinates the wireframe is drawn in, so the view keeps the panels'
-    // proportions rather than the physical ones.
-    using DisplayMap = std::function<Real3(std::size_t dataset, const Real3& point)>;
     void setPairedGeometry(const DatasetMetadata& primary,
         const DatasetMetadata& companion, DisplayMap displayMap);
+    // The outlined domain in display coordinates (the union for two datasets).
+    [[nodiscard]] const RealBox& displayDomain() const noexcept { return m_domain; }
     void setSlicePositions(double x, double y, double z);
     void setSlicePlanesVisible(bool visible);
     void setColorPalette(const Palette* palette);
@@ -129,7 +135,7 @@ private:
     void setGeometries(const std::vector<const DatasetMetadata*>& metadata,
         DisplayMap displayMap);
     // A dataset's physical point in the coordinates the wireframe uses:
-    // physical for one dataset, the display map's for two.
+    // the display map's when one is set, physical otherwise.
     [[nodiscard]] Real3 toDisplay(std::size_t dataset, const Real3& point) const;
     [[nodiscard]] RealBox toDisplay(std::size_t dataset, const RealBox& box) const;
     [[nodiscard]] std::size_t datasetHolding(int axis, double position) const;

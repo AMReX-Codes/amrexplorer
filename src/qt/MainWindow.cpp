@@ -1579,6 +1579,12 @@ void MainWindow::applyDisplayStretches()
         updatePairLayouts();
         applyPairLayouts();
         updatePairedIsoGeometry();
+    } else {
+        // A new geometry resets the wireframe's planes to the domain centre;
+        // put them back where the slices are.
+        updateIsoGeometry();
+        m_isoWidget->setSlicePositions(m_slicePosition3d[0],
+            m_slicePosition3d[1], m_slicePosition3d[2]);
     }
     for (auto* state : currentViews()) {
         if (state->view == nullptr) {

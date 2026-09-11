@@ -624,7 +624,7 @@ void MainWindow::tearDownCompanion(bool replacing)
     if (m_controlsReady && primary().session) {
         const auto& metadata = primary().session->metadata();
         if (metadata.dimension == 3) {
-            m_isoWidget->setGeometry(metadata);
+            updateIsoGeometry();
             // The shared position may sit in the companion's part of the
             // union; back inside the primary, and that panel re-sliced. A
             // replacement keeps it for the new union (see installCompanion).

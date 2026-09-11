@@ -139,10 +139,36 @@ void isotropyFollowsTheScreenNotTheCells()
         "a dataset without physical geometry offered a physical scale bar");
 }
 
+// The iso wireframe follows the axis factors alone: physical proportions
+// stretched about the domain's lower corner, factors normalized to a smallest
+// of one, junk factors read as one.
+void isoWireframeFollowsTheAxisFactors()
+{
+    const auto factors = amrvis::qt::normalizedAxisScale({4.0, 0.0, 16.0});
+    require(factors[0] == 4.0 && factors[1] == 1.0 && factors[2] == 16.0,
+        "a junk axis factor did not read as one");
+    const auto scaled = amrvis::qt::normalizedAxisScale({4.0, 2.0, 16.0});
+    require(scaled[0] == 2.0 && scaled[1] == 1.0 && scaled[2] == 8.0,
+        "axis factors were not normalized to a smallest of one");
+    const amrvis::RealBox domain{amrvis::Real3{{-1.0, 0.0, 10.0}},
+        amrvis::Real3{{1.0, 2.0, 12.0}}};
+    const auto lower = amrvis::qt::axisScaledDisplayPoint(domain, factors, domain.lower);
+    require(lower[0] == -1.0 && lower[1] == 0.0 && lower[2] == 10.0,
+        "the domain's lower corner moved under a stretch");
+    const auto upper = amrvis::qt::axisScaledDisplayPoint(domain, factors, domain.upper);
+    require(upper[0] == 7.0 && upper[1] == 2.0 && upper[2] == 42.0,
+        "the domain's upper corner was not stretched per axis about the lower one");
+    const auto ones = amrvis::qt::normalizedAxisScale({1.0, 1.0, 1.0});
+    const auto same = amrvis::qt::axisScaledDisplayPoint(domain, ones, {{0.5, 1.5, 11.0}});
+    require(same[0] == 0.5 && same[1] == 1.5 && same[2] == 11.0,
+        "unit factors changed a point");
+}
+
 } // namespace
 
 int main()
 {
+    isoWireframeFollowsTheAxisFactors();
     physicalModeStretchesByTheFinestCellSize();
     axisFactorsMultiplyAndNormalize();
     physicalModeNeedsPhysicalGeometryAndNoSphere();

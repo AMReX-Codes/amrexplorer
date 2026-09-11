@@ -332,7 +332,9 @@ domain. **View > Aspect Ratio** offers two proportions:
 
 **View > Aspect Ratio > Axis Scaling...** stretches the X, Y, and Z axes by
 factors of your own, on top of the chosen proportion. Each 3-D panel applies
-the factors of the two axes it shows. With a [companion
+the factors of the two axes it shows, and the isometric wireframe in the
+lower-right panel is stretched by all three, so a shallow ocean's grid boxes
+stay visible there too. With a [companion
 plotfile](#companion-plotfiles) open, the axis perpendicular to the shared
 plane has one factor per dataset. The factors reset to 1 when you open a
 new dataset or sequence and are kept while stepping through a sequence's

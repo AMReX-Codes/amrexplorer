@@ -67,6 +67,40 @@ enum class AspectMode : int {
     return stretch;
 }
 
+// The user's axis factors alone, sanitized (non-positive or non-finite count
+// as one) and normalized so the smallest is one -- the convention
+// displayStretchPerAxis uses, without the cell-size term.
+[[nodiscard]] inline std::array<double, 3> normalizedAxisScale(
+    const std::array<double, 3>& axisScale)
+{
+    std::array<double, 3> factors{1.0, 1.0, 1.0};
+    double smallest = std::numeric_limits<double>::infinity();
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const auto value = axisScale[axis];
+        factors[axis] = std::isfinite(value) && value > 0.0 ? value : 1.0;
+        smallest = std::min(smallest, factors[axis]);
+    }
+    for (auto& factor : factors) {
+        factor /= smallest;
+    }
+    return factors;
+}
+
+// The isometric wireframe's display coordinates for one dataset: the
+// physical domain stretched about its lower corner by the axis factors, so
+// the 3-D panel follows Axis Scaling as the slice panels do while keeping
+// physical proportions otherwise, in either aspect mode.
+[[nodiscard]] inline Real3 axisScaledDisplayPoint(const RealBox& domain,
+    const std::array<double, 3>& factors, const Real3& point)
+{
+    Real3 display;
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        display[axis] = domain.lower[axis]
+            + (point[axis] - domain.lower[axis]) * factors[axis];
+    }
+    return display;
+}
+
 // Whether the screen shows the same number of pixels per physical unit along
 // every dataset axis, which is what a single horizontal scale bar needs to
 // be truthful. In CellCounts mode with unit factors this is "the finest cells

@@ -69,9 +69,9 @@ IsoWidget::IsoWidget(QWidget* parent)
     });
 }
 
-void IsoWidget::setGeometry(const DatasetMetadata& metadata)
+void IsoWidget::setGeometry(const DatasetMetadata& metadata, DisplayMap displayMap)
 {
-    setGeometries({&metadata}, {});
+    setGeometries({&metadata}, std::move(displayMap));
 }
 
 void IsoWidget::setPairedGeometry(const DatasetMetadata& primary,

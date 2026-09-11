@@ -1334,6 +1334,11 @@ void MainWindow::startAnimationExportForTest(const QString& path, bool includeCo
     beginAnimationExport(path, exportOptions(includeColorBar, includeAxes, transparentBackground));
 }
 
+RealBox MainWindow::isoDomainDisplayBoxForTest() const
+{
+    return m_isoWidget->displayDomain();
+}
+
 int MainWindow::backgroundErrorCountForTest() const
 {
     return m_diagnosticsModel->backgroundErrorCount();

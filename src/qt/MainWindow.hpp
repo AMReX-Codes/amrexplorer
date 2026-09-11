@@ -473,6 +473,8 @@ public:
     }
     [[nodiscard]] bool aspectMenuEnabledForTest() const;
     [[nodiscard]] double activeViewStretchRatioForTest() const;
+    // The isometric view's outlined domain in its display coordinates.
+    [[nodiscard]] RealBox isoDomainDisplayBoxForTest() const;
     // Test-only: the Aspect Ratio radio shown checked (the mode in effect,
     // which a mapped grid pins to Physical Size without touching the
     // preference) and whether both radios are offered.
@@ -845,6 +847,10 @@ private:
     // Whether the open dataset can take a companion: a 3-D plotfile with
     // physical geometry, local or remote, outside a sequence.
     [[nodiscard]] bool canOpenCompanion() const;
+    // Push the primary's geometry to the isometric view, stretched by the
+    // Axis Scaling factors as the slice panels are; physical proportions
+    // otherwise, in either aspect mode.
+    void updateIsoGeometry();
     // Push the pair geometry, in the panels' display proportions, to the
     // isometric view.
     void updatePairedIsoGeometry();

@@ -867,10 +867,20 @@ void MainWindow::useRemoteConnection(
 }
 
 void MainWindow::startSshRemoteSession(std::string destination,
-    std::string serverExecutable, std::vector<std::string> remotePaths)
+    std::string serverExecutable, std::vector<std::string> remotePaths,
+    std::string companion)
 {
+    // The ready handler runs after the paths were asked for, so the
+    // generation it records is the remote open's; a session that never
+    // becomes ready records nothing.
+    std::function<void()> onReady;
+    if (!companion.empty()) {
+        onReady = [this, companion = std::move(companion)] {
+            m_pendingRemoteCompanion = PendingRemoteCompanion{companion, m_generation};
+        };
+    }
     m_remoteSession->start(std::move(destination), std::move(serverExecutable),
-        std::move(remotePaths));
+        std::move(remotePaths), std::move(onReady));
 }
 
 void MainWindow::openRemoteDataset(std::string remotePath)
@@ -896,6 +906,8 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
     if (!preserveFabSelector) {
         m_fabNavigator->reset();
     }
+    // A companion waiting on an earlier remote open belongs to that open.
+    m_pendingRemoteCompanion.reset();
     // Opening a single dataset ends any plotfile sequence and stops playback
     // of either animation mode.
     setPlaybackMode(PlaybackMode::None);
@@ -1568,6 +1580,12 @@ void MainWindow::requestInitialSlice(
                             result.cacheFallbackToLevel));
                     }
                     emit initialSliceFinished(true);
+                    if (m_pendingRemoteCompanion
+                        && m_pendingRemoteCompanion->generation == m_generation) {
+                        auto companion = std::move(m_pendingRemoteCompanion->remotePath);
+                        m_pendingRemoteCompanion.reset();
+                        openRemoteCompanion(std::move(companion));
+                    }
                     // Emitted first: this load did finish, and what follows
                     // is a fresh one. A window counts as unable to take
                     // derived fields for the whole of an open, so a list
@@ -1616,6 +1634,7 @@ void MainWindow::requestInitialSlice(
                     // the installed session's. A reload dropped between the
                     // debounce and this failure would otherwise be lost.
                     resliceReplacedViews();
+                    m_pendingRemoteCompanion.reset();
                     emit initialSliceFinished(false);
                 } else {
                     m_diagnosticsModel->noteStaleResult();

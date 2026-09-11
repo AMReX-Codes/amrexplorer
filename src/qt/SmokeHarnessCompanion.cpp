@@ -616,6 +616,34 @@ void armCompanionZoomChecks(amrvis::qt::MainWindow& window,
                     fail("the layer coming on show did not take the framed window");
                     return;
                 }
+                // Back in the atmosphere, a window west of the ocean's domain;
+                // then into the ocean again: nothing of it lies under the
+                // window, and the export is the empty window, not its tile.
+                *phase = 16;
+                window.setSlicePositionForTest(2, 0.5);
+                return;
+            case 16:
+                *phase = 17;
+                window.rubberBandZoomPanelSceneForTest(xy, QRectF(0.0, 1.0, 1.0, 2.0));
+                return;
+            case 17:
+                if (!near(window.panelTileRectForTest(xy, 0), QRectF(0.0, 1.0, 1.0, 2.0))) {
+                    fail("a selection west of the ocean did not zoom the atmosphere");
+                    return;
+                }
+                *phase = 18;
+                window.setSlicePositionForTest(2, -0.1);
+                return;
+            case 18:
+                if (!window.panelTileVisibleForTest(xy, 1)
+                    || !near(window.panelTileRectForTest(xy, 1), QRectF(2.0, 0.0, 4.0, 4.0))
+                    || window.panelExportSizeForTest(xy) != QSize(1, 2)) {
+                    qCritical("empty window export %dx%d",
+                        window.panelExportSizeForTest(xy).width(),
+                        window.panelExportSizeForTest(xy).height());
+                    fail("an empty framed window exported the tile outside it");
+                    return;
+                }
                 finish(0);
                 return;
             default:

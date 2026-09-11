@@ -454,19 +454,12 @@ int main(int argc, char* argv[])
             return 2;
         }
         // A companion after --ssh is a plotfile on the same server, opened
-        // beside the one path once its slices are up, as the local form does.
-        if (!parsed.request->companion.empty()) {
-            QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-                &window, [&window, companion = parsed.request->companion](bool success) {
-                    if (success) {
-                        window.openRemoteCompanion(companion);
-                    }
-                }, Qt::SingleShotConnection);
-        }
+        // beside the one path once its slices are up; the window ties it to
+        // that load, so a startup that fails leaves nothing waiting.
         QTimer::singleShot(0, &window,
             [&window, request = std::move(*parsed.request)] {
                 window.startSshRemoteSession(request.destination,
-                    request.serverExecutable, request.paths);
+                    request.serverExecutable, request.paths, request.companion);
             });
     } else if (argc >= 2 && !std::string_view(argv[1]).starts_with("-")) {
         // One or more plotfile paths: a single path opens a dataset, two or

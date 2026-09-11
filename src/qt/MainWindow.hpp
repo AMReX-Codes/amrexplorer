@@ -118,8 +118,12 @@ public:
     // RemoteSessionController::install and ::start.
     void useRemoteConnection(
         std::shared_ptr<remote::Connection> connection, QString label);
+    // `companion` names a plotfile on the same server to show beside the
+    // one path once its slices are up (the --ssh ... --companion form);
+    // tied to that load, so a startup that fails leaves nothing waiting.
     void startSshRemoteSession(std::string destination,
-        std::string serverExecutable, std::vector<std::string> remotePaths);
+        std::string serverExecutable, std::vector<std::string> remotePaths,
+        std::string companion = {});
     // Open a server-visible path, or a sequence of them, over the installed
     // remote connection.
     void openRemoteDataset(std::string remotePath);
@@ -1544,6 +1548,13 @@ private:
     bool m_companionFollowsPrimary = false;
     QAction* m_openCompanionAction = nullptr;
     QAction* m_openRemoteCompanionAction = nullptr;
+    // A --companion given with --ssh, waiting for the load it belongs to
+    // (by generation) to finish; any other open drops it.
+    struct PendingRemoteCompanion {
+        std::string remotePath;
+        std::uint64_t generation = 0;
+    };
+    std::optional<PendingRemoteCompanion> m_pendingRemoteCompanion;
     QAction* m_closeCompanionAction = nullptr;
     QAction* m_volumeAction = nullptr;
     QAction* m_particlesAction = nullptr;

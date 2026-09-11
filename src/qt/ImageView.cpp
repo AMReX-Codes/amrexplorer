@@ -286,8 +286,10 @@ QRectF ImageView::exportSceneRect() const
 {
     const auto tiles = tilesRect();
     if (m_canvasRect.has_value() && !m_placement.has_value()) {
+        // A framed window with no tile under it (the layer on show lies
+        // elsewhere) exports as the empty window, not as the tile outside it.
         const auto cut = tiles.intersected(*m_canvasRect);
-        return cut.isEmpty() ? tiles : cut;
+        return cut.isEmpty() ? *m_canvasRect : cut;
     }
     return tiles;
 }

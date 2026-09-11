@@ -146,6 +146,32 @@ void testMappedFixture(const std::filesystem::path& fixture)
         require(ok, "a coarse raster samples every other node");
     }
 
+    // A raster finer than the grid (8x8 over the whole domain, as a coarse
+    // level is shown at the finest level's pitch): a node between two stored
+    // nodes takes the interpolated displacement. The recipe is bilinear in
+    // (i, k), so the interpolated value is the recipe at the half index.
+    {
+        const auto plane = session.requestMappedGridPlane(
+            fullRequest(1, 0.375, 8, 8));
+        require(plane.width == 9 && plane.height == 9, "an 8x8 raster has 9x9 nodes");
+        const auto nuAt = [](double i, int j, double k) {
+            return 0.125 * (1.0 - k / kmax) * (i + j) / (imax + jmax);
+        };
+        bool ok = true;
+        for (int row = 0; row <= 8; ++row) {
+            for (int column = 0; column <= 8; ++column) {
+                const auto n = node(plane, column, row);
+                const double i = 0.5 * column;
+                const double k = 0.5 * row;
+                ok = ok && near(plane.a[n], dx * i);
+                ok = ok
+                    && near(plane.b[n],
+                        dx * k + 0.5 * (nuAt(i, 1, k) + nuAt(i, 2, k)));
+            }
+        }
+        require(ok, "a fine raster interpolates between stored nodes");
+    }
+
     // A sub-region: x in [0.25, 0.75], z in [0, 1] at native resolution.
     {
         auto request = fullRequest(1, 0.375, 2, 4);

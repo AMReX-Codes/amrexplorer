@@ -77,15 +77,18 @@ MappedGridPlane queryMappedGridPlane(PlotfileDataset& data,
 
     // One node more than the raster per axis, over a region grown by half a
     // raster pitch: the sample centres then fall on lower + i*pitch, the
-    // nodes themselves at native resolution and the nearest stored node when
-    // the raster is coarser than the grid.
+    // nodes themselves at native resolution. Linear sampling, because the
+    // raster pitch is the finest level's while the nodes shown may be a
+    // coarser level's: a sample between two stored nodes takes the
+    // interpolated displacement, so a straight coarse edge stays straight
+    // instead of stepping. Where a sample lands on a node it is exact.
     SliceRequest nodeRequest;
     nodeRequest.dataset = request.dataset;
     nodeRequest.normalDirection = request.normalDirection;
     nodeRequest.visibleRegion = region;
     nodeRequest.maximumLevel = request.maximumLevel;
     nodeRequest.outputSize = {plane.width, plane.height};
-    nodeRequest.sampling = SamplingPolicy::PiecewiseConstant;
+    nodeRequest.sampling = SamplingPolicy::Linear;
     nodeRequest.composition = request.composition;
     std::array<double, 2> pitch{};
     for (std::size_t inPlane = 0; inPlane < 2; ++inPlane) {

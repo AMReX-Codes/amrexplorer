@@ -1437,10 +1437,29 @@ void MainWindow::applyRubberBandZoom(
     // re-framed, visibly) once they vanish.
     //
     // On a mapped grid the scene is the physical warp, not the plane, so the
-    // plane-linear rect below would misframe it; the user's own selection
-    // (already clamped to the pixmap) is the feedback there.
-    const QRectF requestedScene = feedbackScene
-        ? *feedbackScene
+    // plane-linear rect below would misframe it. The panel the user dragged
+    // in has its own selection (already clamped to the pixmap) as feedback;
+    // a panel zoomed in sympathy walks the snapped region's plane rectangle
+    // through its own node map instead.
+    std::optional<QRectF> mappedScene = feedbackScene;
+    if (!mappedScene && state.mappedGrid && state.gridNodes
+        && state.view->hasImage()) {
+        const auto colLo = (visible.lower[xAxis] - region.lower[xAxis]) / xExtent * width;
+        const auto colHi = (visible.upper[xAxis] - region.lower[xAxis]) / xExtent * width;
+        // Plane rows count up from the bottom, as the node map does.
+        const auto rowLo = (visible.lower[yAxis] - region.lower[yAxis]) / yExtent * height;
+        const auto rowHi = (visible.upper[yAxis] - region.lower[yAxis]) / yExtent * height;
+        const auto image = state.view->image(state.tile);
+        const auto walked = mappedCellPath(
+            planeMapping(state), colLo, colHi, rowLo, rowHi).boundingRect();
+        const auto clampedScene = walked.intersected(
+            QRectF(0.0, 0.0, image.width(), image.height()));
+        if (clampedScene.width() >= 1.0 && clampedScene.height() >= 1.0) {
+            mappedScene = clampedScene;
+        }
+    }
+    const QRectF requestedScene = mappedScene
+        ? *mappedScene
         : QRectF(
             QPointF((visible.lower[xAxis] - region.lower[xAxis]) / xExtent * width,
                 (region.upper[yAxis] - visible.upper[yAxis]) / yExtent * height),

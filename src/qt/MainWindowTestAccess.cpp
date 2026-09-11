@@ -1121,6 +1121,15 @@ void MainWindow::viewFabForTest(std::size_t index)
     m_fabNavigator->viewEntry(index);
 }
 
+QRectF MainWindow::activeViewVisibleImageRectForTest() const
+{
+    if (m_activeView == nullptr || m_activeView->view == nullptr
+        || !m_activeView->view->hasImage()) {
+        return {};
+    }
+    return m_activeView->view->visibleImageRect();
+}
+
 bool MainWindow::activeViewIsZoomedForTest() const
 {
     return m_activeView != nullptr && m_activeView->visibleRegion.has_value();

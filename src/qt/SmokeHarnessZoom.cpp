@@ -252,7 +252,7 @@ Outcome dispatchZoom(Context& context)
                     ++*phase;
                     break;
                 }
-                case 4:
+                case 4: {
                     // The rubber band re-sliced the cells under it (a zoom,
                     // not the spherical view-only zoom) and kept the warp.
                     if (!window.activeViewIsZoomedForTest()
@@ -261,10 +261,34 @@ Outcome dispatchZoom(Context& context)
                         fail("a mapped rubber band did not re-slice zoomed");
                         return;
                     }
+                    // The other two panels zoomed in sympathy (sync is on by
+                    // default) and were framed through their own warps: the
+                    // re-sliced pixmap fills most of each viewport, not a
+                    // corner of it.
+                    for (const int normal : {0, 2}) {
+                        window.setActiveViewForTest(normal);
+                        const auto other = window.activeViewImageSizeForTest();
+                        const auto shown = window.activeViewVisibleImageRectForTest();
+                        const double coverage = shown.width() * shown.height()
+                            / std::max(1.0, static_cast<double>(other[0] * other[1]));
+                        if (!window.activeViewIsZoomedForTest()
+                            || window.activeViewFitsWindowForTest()
+                            || coverage < 0.5) {
+                            qCritical("panel %d: pixmap %d x %d, shown %g x %g",
+                                normal, other[0], other[1], shown.width(),
+                                shown.height());
+                            fail("a synced mapped panel was framed by the "
+                                 "plane, not its warp");
+                            window.setActiveViewForTest(1);
+                            return;
+                        }
+                    }
+                    window.setActiveViewForTest(1);
                     *zoomedSize = size;
                     *phase = 5;
                     window.setMappedGridSupersampleForTest(8);
                     break;
+                }
                 case 5:
                     // 8x doubles the warp's resolution; the framing survives.
                     if (size[0] <= (*zoomedSize)[0] || size[1] <= (*zoomedSize)[1]

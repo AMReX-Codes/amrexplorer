@@ -422,6 +422,9 @@ public:
     [[nodiscard]] bool fixedScaleStateMatchesForTest(int factor) const;
     void wheelZoomAndPanActiveViewForTest();
     [[nodiscard]] QRectF activeViewVisibleDataWindowForTest() const;
+    // The part of the active view's pixmap inside the viewport, in pixmap
+    // pixels (the warp's own pixels on a mapped grid).
+    [[nodiscard]] QRectF activeViewVisibleImageRectForTest() const;
     void panActiveViewForTest(double sceneDeltaX, double sceneDeltaY);
     [[nodiscard]] qreal activeViewScaleForTest() const;
     // Test-only: compare the current transform with ImageView's own fitted

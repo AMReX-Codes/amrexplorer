@@ -206,6 +206,8 @@ void MainWindow::installCompanion(
     updatePairedIsoGeometry();
     // Kept from a replaced companion, the shared position may lie outside
     // the new union: back to its edge, and the primary's panel there follows.
+    // The 3-D view took the position above, so a clamp is published again.
+    bool positionClamped = false;
     for (int axis = 0; axis < 3; ++axis) {
         const auto a = static_cast<std::size_t>(axis);
         const auto& union_ = m_pair->unionBounds;
@@ -213,8 +215,12 @@ void MainWindow::installCompanion(
             std::nextafter(union_.upper[a], union_.lower[a]));
         if (clamped != m_slicePosition3d[a]) {
             m_slicePosition3d[a] = clamped;
+            positionClamped = true;
             scheduleSliceRequest(primary().planeViews[a]);
         }
+    }
+    if (positionClamped) {
+        publishSlicePositions();
     }
     // The primary's tiles move from the raster-at-origin scene onto the shared
     // canvas before the companion's land beside them.

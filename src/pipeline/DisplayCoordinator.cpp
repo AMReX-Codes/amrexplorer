@@ -1,7 +1,7 @@
 #include <amrexplorer/pipeline/DisplayCoordinator.hpp>
 
 #include <amrexplorer/core/ValueMapping.hpp>
-#include <amrexplorer/render2d/MappedGridWarp.hpp>
+#include <amrexplorer/pipeline/SlicePipeline.hpp>
 #include <amrexplorer/render2d/ScalarRenderer.hpp>
 
 #include <algorithm>
@@ -109,14 +109,9 @@ void DisplayCoordinator::realignArrivalToRange(SliceDisplayResult& result,
                 .logarithmic = result.logarithmic,
                 .palette = &palette
             });
-        if (result.mappedGrid && result.gridNodes) {
-            // The arrival's raster was the warp of its plane; the re-coloured
-            // plane is warped the same way, through the same nodes and
-            // factor, so its shape and source index carry over.
-            result.image = warpMappedGrid(result.image, *result.gridNodes,
-                result.mappedAxes, maxSliceOutputDimension,
-                result.request.mappedGridSupersample).image;
-        }
+        // The arrival's raster was the warp of its plane; the re-coloured
+        // plane is warped the same way.
+        rewarpMappedImage(result);
     }
     recomputeContourPolylines(result);
 }

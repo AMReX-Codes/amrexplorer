@@ -356,6 +356,13 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
 // current (possibly replaced) minimum/maximum. No-op outside contour modes.
 void recomputeContourPolylines(SliceDisplayResult& result);
 
+// Re-warps a mapped-grid display after its plane was re-coloured in place
+// (a shared 3-D Visible range, a range realignment): the fresh flat raster
+// is put through the same nodes, axes and supersample factor, and the image
+// and its source index are replaced together. No-op for a Cartesian display
+// or one without nodes.
+void rewarpMappedImage(SliceDisplayResult& result);
+
 // Loads the selected particle species in dataset discovery order. Unknown
 // names are ignored, matching the behavior needed when a plotfile sequence
 // frame does not contain every species selected on another frame.

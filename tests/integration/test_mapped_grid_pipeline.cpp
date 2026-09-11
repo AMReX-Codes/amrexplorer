@@ -11,6 +11,7 @@
 
 #include <amrexplorer/data/LocalDatasetSession.hpp>
 #include <amrexplorer/pipeline/SlicePipeline.hpp>
+#include <amrexplorer/render2d/MappedGridWarp.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -228,6 +229,42 @@ void testMappedFixture(const std::filesystem::path& fixture)
 
 // The same fixture with the trailing Nu_nd block cut from its Header: data
 // to slice, but no node positions.
+// A 3-D frame load in Visible range mode re-renders all three panels with the
+// shared range after they were warped; the fresh rasters must be warped too.
+void testSharedRangeFrameLoad(const std::filesystem::path& fixture)
+{
+    amrvis::FrameSliceSpec spec;
+    spec.rangeMode = amrvis::RangeMode::Visible;
+    spec.mappedGrid = true;
+    spec.mappedGridSupersample = 4;
+    const auto result = amrvis::executeFrameLoad(
+        fixture, amrvis::DatasetId{1}, spec, 64ULL << 20U, {});
+    require(result.displays.size() == 3, "a 3-D frame load yields three panels");
+    for (const auto& display : result.displays) {
+        require(display.mappedGrid, "every panel of a mapped frame load is mapped");
+        require(display.gridNodes != nullptr, "every mapped panel carries its nodes");
+        const auto& image = display.image;
+        require(display.displaySourceIndex != nullptr
+                && display.displaySourceIndex->size()
+                    == static_cast<std::size_t>(image.width)
+                        * static_cast<std::size_t>(image.height),
+            "the shared-range raster carries a source index of its own size");
+        const auto& plane = display.displayPlane();
+        // Supersample 4 on a 4x4 raster: at least the unstretched axis is
+        // four pixels per cell, so the flat raster (4x4) cannot be what is
+        // shown.
+        require(image.width >= 4 * plane.width || image.height >= 4 * plane.height,
+            "the shared-range raster is the warped one, not the flat plane");
+        const auto bounds = amrvis::mappedGridDisplayBounds(
+            *display.gridNodes, display.mappedAxes);
+        require(bounds && display.displayRegion == *bounds,
+            "the shared-range display region is the node bounding box");
+        require(display.minimum == result.displays.front().minimum
+                && display.maximum == result.displays.front().maximum,
+            "all three panels share one range");
+    }
+}
+
 void testPlainPlotfile(const std::filesystem::path& mappedFixture,
     const std::filesystem::path& scratch)
 {
@@ -280,6 +317,7 @@ int main(int argc, char** argv)
     }
     try {
         testMappedFixture(argv[1]);
+        testSharedRangeFrameLoad(argv[1]);
         testPlainPlotfile(argv[1], argv[2]);
     } catch (const std::exception& error) {
         std::cerr << "FAILED: unexpected exception: " << error.what() << '\n';

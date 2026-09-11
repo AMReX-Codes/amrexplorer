@@ -586,6 +586,23 @@ SliceDisplayResult refreshCachedSlice(
     return result;
 }
 
+void rewarpMappedImage(SliceDisplayResult& result)
+{
+    if (!result.mappedGrid || !result.gridNodes || result.image.width <= 0
+        || result.image.height <= 0 || result.image.rgba.empty()) {
+        return;
+    }
+    auto warped = warpMappedGrid(result.image, *result.gridNodes,
+        result.mappedAxes, maxSliceOutputDimension,
+        result.request.mappedGridSupersample);
+    if (!warped.sourceIndex) {
+        return;  // cannot happen for nodes that warped once; keep the raster
+    }
+    result.image = std::move(warped.image);
+    result.displayRegion = warped.displayRegion;
+    result.displaySourceIndex = std::move(warped.sourceIndex);
+}
+
 std::vector<ContourPolyline> recomputeContourPolylines(
     const ScalarPlane& plane, double minimum,
     double maximum, bool logarithmic, int contourCount,
@@ -825,6 +842,10 @@ InitialSliceResult executeSessionFrameLoad(
                             .logarithmic = sharedLog,
                             .palette = &spec.palette
                         });
+                    // The per-view render above was already warped; this
+                    // fresh raster must be too, or a mapped panel would show
+                    // the flat picture under warped overlays.
+                    rewarpMappedImage(d);
                     // Contours were extracted per view before the shared range
                     // was known; re-extract them so their levels match the
                     // shared colorbar (see contours-stale-after-visible-range).

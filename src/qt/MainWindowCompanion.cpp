@@ -332,11 +332,13 @@ void MainWindow::tearDownCompanion(bool replacing)
         }
         m_companionFollowsPrimary = false;
     }
-    // Back to one tile per panel in the classic scene.
-    applyPairLayouts();
+    // Back to one tile per panel in the classic scene. The primary's tile is
+    // shown first: hidden behind the companion's band, it would not count in
+    // the rect that placing it fits.
     for (auto* state : primaryViews()) {
         state->view->setTileVisible(state->tile, true);
     }
+    applyPairLayouts();
     if (m_controlsReady && primary().session) {
         const auto& metadata = primary().session->metadata();
         if (metadata.dimension == 3) {

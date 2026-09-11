@@ -425,6 +425,10 @@ public:
     // The part of the active view's pixmap inside the viewport, in pixmap
     // pixels (the warp's own pixels on a mapped grid).
     [[nodiscard]] QRectF activeViewVisibleImageRectForTest() const;
+    [[nodiscard]] RealBox volumeRegionOfInterestForTest() const
+    {
+        return volumeRegionOfInterest();
+    }
     void panActiveViewForTest(double sceneDeltaX, double sceneDeltaY);
     [[nodiscard]] qreal activeViewScaleForTest() const;
     // Test-only: compare the current transform with ImageView's own fitted
@@ -1185,6 +1189,9 @@ private:
     [[nodiscard]] bool displayIsSphericalWarp() const;
     // Coordinate mapper for a view: logical (x, y)/(r, theta) <-> scene pixels,
     // built from the plane, the warped display region, and the pixmap size.
+    // The volume's "limit to visible region" box: the part of the domain the
+    // three panels show, in the logical coordinates the volume samples.
+    [[nodiscard]] RealBox volumeRegionOfInterest() const;
     [[nodiscard]] PlaneMapping planeMapping(const PlaneViewState& state) const;
     // Enable/disable and re-check the 2-D Spherical menus for the current
     // dataset and display mode (Supersampling applies only to the R-Z warp).

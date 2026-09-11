@@ -787,40 +787,7 @@ MainWindow::MainWindow(QWidget* parent)
                 // anything. Reading it meant the box stayed at the whole
                 // domain after the most ordinary way of zooming in, so the
                 // check box appeared to do nothing.
-                const auto domain = primary().session
-                    ? datasetSampleBounds(primary().session->metadata())
-                    : RealBox{};
-                std::array<std::optional<RealBox>, 3> regions{};
-                for (std::size_t index = 0; index < primary().planeViews.size();
-                    ++index) {
-                    const auto& state = primary().planeViews[index];
-                    if (state.view == nullptr || !state.view->hasImage()
-                        || state.plane->width <= 0
-                        || state.plane->height <= 0) {
-                        continue;
-                    }
-                    const auto visible = state.view->visibleImageRect();
-                    if (visible.isEmpty()) {
-                        continue;
-                    }
-                    if (state.mappedGrid) {
-                        // The pixmap is physical over displayRegion, not one
-                        // pixel per plane cell.
-                        const auto image = state.view->image(state.tile);
-                        regions[index] = physicalRegionForRasterRect(
-                            state.displayRegion,
-                            static_cast<double>(std::max(1, image.width())),
-                            static_cast<double>(std::max(1, image.height())),
-                            visible, displayAxes(state.normal));
-                        continue;
-                    }
-                    regions[index] = physicalRegionForRasterRect(
-                        state.plane->physicalRegion,
-                        static_cast<double>(state.plane->width),
-                        static_cast<double>(state.plane->height), visible,
-                        displayAxes(state.normal));
-                }
-                return volumeVisibleRegion(domain, regions);
+                return volumeRegionOfInterest();
             },
             [this] { return m_playbackMode == PlaybackMode::Sequence; },
             [this] {
@@ -1664,6 +1631,54 @@ std::array<QString, 2> MainWindow::sphericalAxisLabels(SphericalDisplay mode)
     default:
         return {QStringLiteral("R"), QStringLiteral("Z")};
     }
+}
+
+RealBox MainWindow::volumeRegionOfInterest() const
+{
+    const auto domain = primary().session
+        ? datasetSampleBounds(primary().session->metadata())
+        : RealBox{};
+    std::array<std::optional<RealBox>, 3> regions{};
+    for (std::size_t index = 0; index < primary().planeViews.size();
+        ++index) {
+        const auto& state = primary().planeViews[index];
+        if (state.view == nullptr || !state.view->hasImage()
+            || state.plane->width <= 0
+            || state.plane->height <= 0) {
+            continue;
+        }
+        const auto visible = state.view->visibleImageRect();
+        if (visible.isEmpty()) {
+            continue;
+        }
+        if (state.mappedGrid) {
+            // The pixmap is the physical warp, but the volume samples the
+            // logical grid: find the plane cells on screen through the
+            // source index and box those, not the warp's physical bounds
+            // (which would cut the lowest cells under lifted terrain).
+            const auto bounds = mappedPlaneBounds(state, visible);
+            if (!bounds) {
+                continue;
+            }
+            const auto& plane = *state.plane;
+            const QRectF planeRect(
+                bounds->plane.left() * plane.width,
+                bounds->plane.top() * plane.height,
+                bounds->plane.width() * plane.width,
+                bounds->plane.height() * plane.height);
+            regions[index] = physicalRegionForRasterRect(
+                plane.physicalRegion, static_cast<double>(plane.width),
+                static_cast<double>(plane.height), planeRect,
+                displayAxes(state.normal));
+            continue;
+        }
+        regions[index] = physicalRegionForRasterRect(
+            state.plane->physicalRegion,
+            static_cast<double>(state.plane->width),
+            static_cast<double>(state.plane->height), visible,
+            displayAxes(state.normal));
+    }
+    return volumeVisibleRegion(domain, regions);
 }
 
 PlaneMapping MainWindow::planeMapping(const PlaneViewState& state) const

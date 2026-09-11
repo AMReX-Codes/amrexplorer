@@ -218,6 +218,18 @@ Outcome dispatchZoom(Context& context)
                         fail("the probe does not follow the warp");
                         return;
                     }
+                    // The volume's visible-region box is logical: with the
+                    // whole warp on screen it is the whole domain, bottom
+                    // included, although the lowest drawn node sits above it.
+                    const auto roi = window.volumeRegionOfInterestForTest();
+                    if (std::abs(roi.lower[2]) > 1e-9 || std::abs(roi.upper[2] - 1.0) > 1e-9
+                        || std::abs(roi.lower[0]) > 1e-9 || std::abs(roi.upper[0] - 1.0) > 1e-9) {
+                        qCritical("volume ROI z [%g, %g] x [%g, %g]", roi.lower[2],
+                            roi.upper[2], roi.lower[0], roi.upper[0]);
+                        fail("the volume region of interest followed the warp, "
+                             "not the logical grid");
+                        return;
+                    }
                     *phase = 1;
                     window.setDisplayModeForTest(
                         amrvis::DisplayMode::RasterContours, 3);

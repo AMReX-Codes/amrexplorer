@@ -181,23 +181,23 @@ void physicalLayoutStretchesEachLayerOnItsOwn()
 {
     const auto geometry = *amrvis::qt::pairGeometry(erf(), remora()).geometry;
     const std::array<double, 3> unit{1.0, 1.0, 1.0};
-    // Physical size: the tightest pixel is a 7.5 m REMORA row, so that is the
-    // unit; ERF rows are 25 units tall and a 1000 m column 133.3 wide.
+    // Physical size: the primary sets the unit, as it does alone -- its
+    // tightest pixel is a 187.5 m ERF row -- so opening the ocean beside it
+    // changes nothing about 1x. ERF is 48 rows tall and 70000 / 187.5 wide;
+    // the ocean's 7.5 m rows fall to 0.04 units each, 1.6 for all forty.
     const amrvis::qt::PairLayout physical(geometry, 1,
         amrvis::qt::AspectMode::PhysicalSize, unit, {1.0, 1.0});
-    // Normalized to the tightest pixel: a REMORA row is one unit, so ERF's
-    // 48 rows span 1200 and its 70 columns 70000 / 7.5.
-    require(nearly(physical.tileRect(0), {0.0, 0.0, 70000.0 / 7.5, 1200.0})
-            && nearly(physical.tileRect(1), {20000.0 / 7.5, 1200.0, 50000.0 / 7.5, 40.0}),
-        "the physical tiles are not in proportion");
+    require(nearly(physical.tileRect(0), {0.0, 0.0, 70000.0 / 187.5, 48.0})
+            && nearly(physical.tileRect(1),
+                {20000.0 / 187.5, 48.0, 50000.0 / 187.5, 300.0 / 187.5}),
+        "the physical tiles are not in the primary's units");
 
-    // Stretching the ocean tenfold makes its rows the tight axis no longer:
-    // a 75 m REMORA row is now the unit and the air shrinks accordingly.
+    // The ocean's own factor is what brings it out: thirty times taller it
+    // is 48 units, as tall as the air, whose tile does not move.
     const amrvis::qt::PairLayout deepOcean(geometry, 1,
-        amrvis::qt::AspectMode::PhysicalSize, unit, {1.0, 10.0});
-    require(nearly(deepOcean.tileRect(1).height, 40.0)
-            && nearly(deepOcean.tileRect(0).height, 120.0)
-            && nearly(deepOcean.tileRect(0).width, 70000.0 / 75.0),
+        amrvis::qt::AspectMode::PhysicalSize, unit, {1.0, 30.0});
+    require(nearly(deepOcean.tileRect(1).height, 48.0)
+            && nearly(deepOcean.tileRect(0), {0.0, 0.0, 70000.0 / 187.5, 48.0}),
         "a companion perpendicular factor did not rescale only the ocean band");
     // A shared-axis factor widens both tiles alike.
     const amrvis::qt::PairLayout wide(geometry, 1, amrvis::qt::AspectMode::CellCounts,

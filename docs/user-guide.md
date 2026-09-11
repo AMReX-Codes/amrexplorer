@@ -409,7 +409,10 @@ which may straddle the interface, re-slices each dataset for the part inside
 its own domain and frames the selection; Shift-drag and the arrow keys move
 that window and refresh both; **Sync Rubber-band Zoom** carries the selection's
 extents to the other panels along the axes they share. Wheel zoom and the
-fixed scales act on the view alone.
+fixed scales act on the view alone. A fixed scale means what it means for the
+open plotfile by itself: in Physical Size its tightest cell is one pixel at
+1x, and a companion with finer cells shows them smaller than a pixel until its
+own factor in **Axis Scaling...** stretches them.
 
 The Expression Editor's definitions reach the companion too, computed
 against its own stored fields: its **Field** list shows the ones it resolves,

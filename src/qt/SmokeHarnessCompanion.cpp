@@ -538,6 +538,24 @@ void armCompanionZoomChecks(amrvis::qt::MainWindow& window,
                     fail("Reset Zoom did not put both layers back");
                     return;
                 }
+                // Physical Size: the primary's cells (0.25 on every axis) set
+                // the unit, so at 1x its tile is as it was and the ocean's
+                // 0.0625 rows are a quarter unit each -- one unit for all four.
+                window.setAspectModeForTest(amrvis::qt::AspectMode::PhysicalSize);
+                window.selectFixedScaleForTest(1);
+                if (!near(window.panelTileRectForTest(xz, 0), QRectF(0.0, 0.0, 6.0, 4.0))
+                    || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 4.0, 1.0))
+                    || !near(window.panelTransformScaleForTest(xz).first, 1.0)
+                    || !near(window.panelTransformScaleForTest(xy).first, 1.0)) {
+                    qCritical("physical 1x: lower %gx%g, XZ scale %g, XY scale %g",
+                        window.panelTileRectForTest(xz, 1).width(),
+                        window.panelTileRectForTest(xz, 1).height(),
+                        window.panelTransformScaleForTest(xz).first,
+                        window.panelTransformScaleForTest(xy).first);
+                    fail("in Physical Size the primary does not set the pair's 1x");
+                    return;
+                }
+                window.setAspectModeForTest(amrvis::qt::AspectMode::CellCounts);
                 finish(0);
                 return;
             default:

@@ -81,6 +81,12 @@ public:
     // `parent`; what it picks goes out through openRequested(). Starts at the
     // directory last browsed on this destination, else the server's home.
     void browse(QWidget* parent, bool sequence);
+    // The remote directory browser for one plotfile over `connection` -- the
+    // primary's own connection, for a companion -- modal on `parent`. Returns
+    // the server-side path picked; empty when cancelled, or when the
+    // connection is not live (an error is reported then).
+    [[nodiscard]] std::string chooseRemotePlotfile(QWidget* parent,
+        const std::shared_ptr<remote::Connection>& connection);
     // The server executable to use for a destination: the one last used for
     // it, else "amrexplorer-server". Per destination only: an explicit path
     // is a property of one machine.
@@ -115,6 +121,11 @@ private:
         const QString& destination, const QString& executable) const;
     void rememberDestination(
         const QString& destination, const QString& executable);
+    // The browser over `connection`, starting at the directory last browsed
+    // on this destination; what it picked (empty when cancelled), with the
+    // directory remembered.
+    [[nodiscard]] std::vector<std::string> runBrowser(QWidget* parent,
+        const std::shared_ptr<remote::Connection>& connection, bool sequence);
 
     Hooks m_hooks;
     std::string m_softwareVersion;

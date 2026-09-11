@@ -37,7 +37,8 @@ You can also start without a path and use the File menu:
 - **Open MultiFab...** opens a standalone MultiFab header.
 - **Open Companion Plotfile...** shows a second 3-D plotfile in the same
   window beside the open one, when the two share a plane -- see
-  [Companion plotfiles](#companion-plotfiles). **Close Companion** removes it.
+  [Companion plotfiles](#companion-plotfiles). With a remote plotfile open it
+  browses the same server. **Close Companion** removes it.
 - **Open New Window** creates an independent viewer for side-by-side
   comparison.
 - **Close Window** (Ctrl+W, Cmd+W on macOS) closes only the current window;
@@ -377,6 +378,11 @@ the same window. The two domains must touch along exactly one axis and
 overlap along the other two; anything else is refused with a message and the
 open dataset stays as it was.
 
+A remote plotfile takes its companion from the same server: the browser
+runs over the session that opened it, and the command line form is
+`amrexplorer --ssh host /data/atmosphere_plt --companion /data/ocean_plt`. A
+local and a remote plotfile cannot be paired, nor plotfiles on two servers.
+
 In the two panels that show the perpendicular axis, both datasets are drawn
 stacked at their physical positions and aligned along the shared axis, each
 at one raster sample per finest cell. The panel normal to the shared plane
@@ -394,18 +400,24 @@ both. Velocity vectors are drawn on the primary only. Probing, right-click
 slice moves, and line plots work on whichever dataset is under the pointer.
 **View > Aspect Ratio > Axis Scaling...** offers one factor per dataset along
 the perpendicular axis, so a shallow ocean can be stretched under a tall
-atmosphere, and one factor for each shared axis. Rubber-band and wheel zoom,
-panning, and the fixed scales act on the view; the rasters stay at their
-native resolution.
+atmosphere, and one factor for each shared axis. A rubber-band selection,
+which may straddle the interface, re-slices each dataset for the part inside
+its own domain and frames the selection; Shift-drag and the arrow keys move
+that window and refresh both; **Sync Rubber-band Zoom** carries the selection's
+extents to the other panels along the axes they share. Wheel zoom and the
+fixed scales act on the view alone.
+
+The Expression Editor's definitions reach the companion too, computed
+against its own stored fields: its **Field** list shows the ones it resolves,
+and greys the rest with the reason. Applying a change reloads both datasets,
+and the companion keeps its selected field by name.
 
 While a companion is open the Dataset Metadata panel lists both plotfiles,
 the isometric view outlines both domains in the panels' proportions (so a
 shallow ocean under a tall atmosphere stays visible), and image export composes the
 stacked panels without axes (their two vertical scales differ). Volume
-rendering, particles, the Dataset window, sequences, remote datasets, the
-scale bar, synchronized rubber-band zoom, and derived fields for the
-companion are not available in this mode. Opening any other dataset closes
-the companion.
+rendering, particles, the Dataset window, sequences, and the scale bar are
+not available in this mode. Opening any other dataset closes the companion.
 
 ## Volume rendering
 

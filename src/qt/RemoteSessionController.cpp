@@ -234,30 +234,49 @@ void RemoteSessionController::browse(QWidget* parent, bool sequence)
                               "(File > Open Remote Plotfile...)."));
         return;
     }
+    auto paths = runBrowser(parent, m_connection, sequence);
+    if (paths.empty()) {
+        return;
+    }
+    // One plotfile picked in the sequence browser is just that plotfile.
+    const bool asSequence = paths.size() > 1;
+    emit openRequested(std::move(paths), asSequence);
+}
+
+std::string RemoteSessionController::chooseRemotePlotfile(QWidget* parent,
+    const std::shared_ptr<remote::Connection>& connection)
+{
+    if (!connection || !connection->connected()) {
+        emit errorReported(tr("The remote session that opened the plotfile "
+                              "has ended."));
+        return {};
+    }
+    auto paths = runBrowser(parent, connection, /*sequence=*/false);
+    return paths.empty() ? std::string{} : std::move(paths.front());
+}
+
+std::vector<std::string> RemoteSessionController::runBrowser(QWidget* parent,
+    const std::shared_ptr<remote::Connection>& connection, bool sequence)
+{
     // The last directory browsed is remembered per destination: a path is a
     // property of one machine, like the server executable.
     const auto destination
         = m_session ? sessionDestination() : m_label;
     const auto settingsKey
         = QStringLiteral("remote/lastDirectories/%1").arg(destination);
-    RemoteFileDialog dialog(m_connection,
+    RemoteFileDialog dialog(connection,
         m_hooks.settings()->value(settingsKey).toString(),
         sequence ? RemoteFileDialog::SelectionMode::PlotfileSequence
                  : RemoteFileDialog::SelectionMode::SinglePlotfile,
         parent);
     if (dialog.exec() != QDialog::Accepted) {
-        return;
+        return {};
     }
     auto paths = dialog.selectedPaths();
-    if (paths.empty()) {
-        return;
-    }
-    if (!dialog.currentDirectory().isEmpty()) {
+    if (!paths.empty() && !dialog.currentDirectory().isEmpty()) {
         m_hooks.settings()->setValue(settingsKey, dialog.currentDirectory());
     }
-    // One plotfile picked in the sequence browser is just that plotfile.
-    const bool asSequence = paths.size() > 1;
-    emit openRequested(std::move(paths), asSequence);
+    return paths;
 }
 
 QString RemoteSessionController::diagnosticsLines() const

@@ -595,6 +595,51 @@ int main(int argc, char* argv[])
                     == QString::fromStdString(home.string()),
                 "the browsed directory was not remembered per destination");
         }
+        {
+            // chooseRemotePlotfile: the same browser over a given connection,
+            // handing the pick back instead of asking the host to open it
+            // (a companion rides the primary's own connection). Cancel is an
+            // empty pick; a dead or missing connection is an error.
+            const auto pick = [](QDialogButtonBox::StandardButton button) {
+                return [button] {
+                    auto* browser = visibleDialog<amrvis::qt::RemoteFileDialog>();
+                    if (browser == nullptr) {
+                        return false;
+                    }
+                    auto* entries = browser->findChild<QTreeWidget*>();
+                    for (int index = 0; index < entries->topLevelItemCount();
+                         ++index) {
+                        auto* item = entries->topLevelItem(index);
+                        if (item->text(0) == QStringLiteral("plt00000")) {
+                            item->setSelected(true);
+                            browser->findChild<QDialogButtonBox*>()
+                                ->button(button)
+                                ->click();
+                            return true;
+                        }
+                    }
+                    return false;
+                };
+            };
+            const auto opensBefore = observed.opens.size();
+            const auto errorsBefore = observed.errors.size();
+            Driver open(pick(QDialogButtonBox::Open));
+            const auto picked
+                = controller.chooseRemotePlotfile(nullptr, controller.connection());
+            require(open.done() && picked == (home / "plt00000").string()
+                    && observed.opens.size() == opensBefore,
+                "chooseRemotePlotfile did not hand back the picked plotfile");
+            Driver cancel(pick(QDialogButtonBox::Cancel));
+            const auto cancelled
+                = controller.chooseRemotePlotfile(nullptr, controller.connection());
+            require(cancel.done() && cancelled.empty()
+                    && observed.errors.size() == errorsBefore,
+                "a cancelled browser did not come back empty");
+            require(controller.chooseRemotePlotfile(nullptr, nullptr).empty()
+                    && observed.errors.size() == errorsBefore + 1
+                    && observed.opens.size() == opensBefore,
+                "a missing connection was not reported");
+        }
         controller.shutdown();
         require(controller.diagnosticsLines().contains(
                     QStringLiteral("remote session: ssh other-destination")),

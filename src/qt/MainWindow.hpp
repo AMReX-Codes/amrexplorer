@@ -128,12 +128,14 @@ public:
     // the plotfile directories, sorted by name; requires at least two valid
     // plotfiles. Opening a single dataset closes the sequence again.
     void openSequence(const std::vector<std::filesystem::path>& frames);
-    // Show a second local 3-D plotfile beside the open one: the two must
-    // share a plane (see PairGeometry). The companion is a secondary load
-    // onto the installed dataset; it is closed again by closeCompanion, by
-    // any other open, and when its geometry cannot pair. Emits
-    // companionOpenFinished either way.
+    // Show a second 3-D plotfile beside the open one: the two must share a
+    // plane (see PairGeometry). The companion is a secondary load onto the
+    // installed dataset; it is closed again by closeCompanion, by any other
+    // open, and when its geometry cannot pair. Emits companionOpenFinished
+    // either way. A local plotfile pairs with a local primary; a plotfile on
+    // the primary's own server pairs with a remote one (openRemoteCompanion).
     void openCompanion(const std::filesystem::path& path);
+    void openRemoteCompanion(std::string remotePath);
     void closeCompanion();
     [[nodiscard]] bool companionOpen() const noexcept { return m_layers[1].active; }
     // Steps the open sequence by direction frames, wrapping at the ends; the
@@ -466,6 +468,15 @@ public:
     [[nodiscard]] std::pair<double, double> layerDisplayRangeForTest(
         int layer, int normal) const;
     [[nodiscard]] bool companionColorBarVisibleForTest() const;
+    [[nodiscard]] bool layerSessionIsRemoteForTest(int layer) const;
+    void selectLayerFieldItemForTest(int layer, int index);
+    [[nodiscard]] QString layerSelectedFieldForTest(int layer) const;
+    // Paired zoom: a scene-rect selection on a panel, that panel's tile
+    // raster sizes, and its scene rect (the pair canvas as framed).
+    void rubberBandZoomPanelSceneForTest(int normal, const QRectF& sceneRect);
+    [[nodiscard]] QSize panelTileImageSizeForTest(int normal, int tile) const;
+    [[nodiscard]] QRectF panelCanvasRectForTest(int normal) const;
+    void panStepActiveViewForTest(const QPointF& direction);
     void setSlicePositionForTest(int axis, double value)
     {
         setSlicePosition(axis, value);
@@ -688,6 +699,9 @@ private:
     {
         return m_layers[state.layer];
     }
+    // Whether a state's layer shows a remote dataset. Asked per layer, since
+    // a companion has a session of its own.
+    [[nodiscard]] bool layerIsRemote(const PlaneViewState& state) const;
 
     void chooseDataset();
     void chooseCompanion();
@@ -698,17 +712,58 @@ private:
         PairGeometry geometry;
         InitialSliceResult result;
     };
-    void installCompanion(const std::filesystem::path& path, CompanionLoad load);
+    // What a companion reload puts back once the new session is in: its
+    // selections, the field by name since a reinstalled list can move ids.
+    struct CompanionRestore {
+        QString fieldName;
+        int levelData = -1;
+        RangeMode rangeMode = RangeMode::File;
+        std::optional<std::pair<double, double>> userRange;
+    };
+    void installCompanion(const std::filesystem::path& path, CompanionLoad load,
+        const std::optional<CompanionRestore>& restore = std::nullopt);
     // closeCompanion's body; a replacement keeps follow mode and the shared
     // slice position for the companion about to take the slot.
     void tearDownCompanion(bool replacing);
-    void configureCompanionControls();
+    // Fills the companion's controls for its session; `loadedField` is the
+    // field the load rendered, which the selector then shows, and `restore`
+    // a reload's level and range.
+    void configureCompanionControls(std::optional<std::uint32_t> loadedField,
+        const std::optional<CompanionRestore>& restore);
     // Which views a companion's controls and states reach.
     void scheduleLayerSliceRequests(DatasetLayer& layer);
     // The per-panel layouts follow the pair geometry and the aspect settings;
     // applying them re-places every tile without re-rendering.
     void updatePairLayouts();
     void applyPairLayouts();
+    // The scene rect a panel's fetched regions occupy: what arrivals assert
+    // as the scene rect and Fit frames. The layout's whole canvas until a
+    // layer on the panel is zoomed; then the union of the zoomed regions'
+    // rects, so a confined zoom is not re-grown by the next arrival.
+    [[nodiscard]] SceneRect pairCanvasRect(int normal) const;
+    // Rubber-band zoom over two datasets: a scene window on a panel becomes
+    // each layer's region (the part of its domain under the window), the
+    // layers re-slice for them, and the view frames their union. Snapped per
+    // layer: outward to cell edges for a selection, to the nearest cell grid
+    // for a pan; a remote layer keeps the exact window.
+    enum class PairSnap { Expand, Nearest };
+    [[nodiscard]] RealBox snappedPairRegion(
+        std::size_t layer, int normal, const RealBox& region, PairSnap snap) const;
+    [[nodiscard]] std::array<std::optional<RealBox>, 2> pairRegionsForSceneWindow(
+        int normal, const QRectF& window, PairSnap snap) const;
+    // Sets the panel's layers to these regions (none: back to the whole
+    // domain), frames their union and re-slices. False when both are empty;
+    // nothing changes then.
+    bool applyPairRegions(
+        int normal, const std::array<std::optional<RealBox>, 2>& regions);
+    bool applyPairZoomWindow(int normal, const QRectF& window, PairSnap snap);
+    void pairRubberBandZoom(int normal, const QRectF& sceneRect);
+    // A pan over a pair: the framed window moved against the drag, kept
+    // inside the whole canvas by translation.
+    [[nodiscard]] QRectF shiftedPairWindow(
+        int normal, const QRectF& window, const QPointF& sceneDelta) const;
+    // Both layers on the panel back to their whole domains, fitted.
+    void resetPairPanelZoom(int normal);
     [[nodiscard]] const PairLayout& pairLayout(int normal) const noexcept
     {
         return m_pairLayouts[static_cast<std::size_t>(std::clamp(normal, 0, 2))];
@@ -720,8 +775,9 @@ private:
     // Actions that have no meaning with two datasets open are disabled while
     // a companion is, and restored when it closes.
     void updatePairedModeControls();
-    // Whether the open dataset can take a companion: a local 3-D plotfile
-    // with physical geometry, outside a sequence.
+    // Whether the open dataset can take a companion: a 3-D plotfile with
+    // physical geometry, local or remote, outside a sequence. A remote one
+    // takes a companion from its own server only.
     [[nodiscard]] bool canOpenCompanion() const;
     // Push the pair geometry, in the panels' display proportions, to the
     // isometric view.
@@ -741,6 +797,39 @@ private:
         std::filesystem::path dataRoot, bool preserveFabSelector,
         std::optional<FrameSliceSpec> initialSpec,
         std::optional<RemoteOpen> remoteOpen = std::nullopt);
+    // Where a companion comes from: a local plotfile, or one on the server
+    // the primary came from (`path` then carries the remote path, for its
+    // name and the metadata dock).
+    struct CompanionSource {
+        std::filesystem::path path;
+        std::optional<RemoteOpen> remote;
+    };
+    // Why the source cannot pair with the open dataset, if it cannot: local
+    // and remote do not mix, and a remote companion rides the primary's own
+    // connection, which must still be live.
+    [[nodiscard]] std::optional<QString> companionSourceRefusal(
+        const CompanionSource& source) const;
+    void openCompanionImpl(CompanionSource source,
+        std::optional<CompanionRestore> restore = std::nullopt);
+    // Whether the companion's session was opened with the list the editor now
+    // holds; true with no companion, or one that cannot take definitions.
+    [[nodiscard]] bool companionSessionHasCurrentDefinitions() const;
+    // The companion's reloadIfDefinitionsMoved, asked after the primary's
+    // own reload has landed (which is what bumps m_generation).
+    void reloadCompanionIfDefinitionsMoved();
+    // Reopens the companion with the list as it stands, keeping its
+    // selections. False when there is none to reload.
+    bool reloadCompanion();
+    // The worker halves of a companion open: read, pair, render. The local
+    // one makes the session from the path with the id given; the remote one
+    // opens a session on the primary's connection and takes the server's id.
+    [[nodiscard]] static CompanionLoad loadLocalCompanion(
+        const std::filesystem::path& path, FrameSliceSpec spec,
+        const DatasetMetadata& primaryMetadata, DatasetId id,
+        StopToken cancellation);
+    [[nodiscard]] static CompanionLoad loadRemoteCompanion(
+        const RemoteOpen& remote, FrameSliceSpec spec,
+        const DatasetMetadata& primaryMetadata, StopToken cancellation);
     // A fresh independent top-level window (WA_DeleteOnClose) for the
     // "Open New Window" menu action; it shares no view/cache state with this one.
     MainWindow* createNewWindow();
@@ -804,10 +893,16 @@ private:
     // `rows` is derivedFieldRows(), which the caller shares with
     // rebuildVariableMenu: the two views are the same list, and building it
     // twice per load means twice the work per sequence frame.
-    void populateFieldSelector(const std::vector<DerivedFieldRow>& rows);
+    void populateFieldSelector(
+        DatasetLayer& layer, const std::vector<DerivedFieldRow>& rows);
+    void populateFieldSelector(const std::vector<DerivedFieldRow>& rows)
+    {
+        populateFieldSelector(primary(), rows);
+    }
     // Selects a field entry: `index` is where to start looking, and the
     // selection comes to rest on the nearest row that is actually a field.
-    void selectFieldItem(int index);
+    void selectFieldItem(DatasetLayer& layer, int index);
+    void selectFieldItem(int index) { selectFieldItem(primary(), index); }
     // The session's definitions as rows to list, in the order they were
     // written. The field selector and the Variable menu are the same list
     // shown twice, and the comment saying so kept them in step by hand.
@@ -816,14 +911,24 @@ private:
     // independently -- the field selector, the Variable menu, the derived rows,
     // and both editor hooks -- and the clamp is what guards a session whose
     // count outruns the field list it carries.
-    [[nodiscard]] std::size_t storedFieldCount() const;
-    [[nodiscard]] std::vector<DerivedFieldRow> derivedFieldRows() const;
+    // Per layer: a companion has a session and a field list of its own.
+    [[nodiscard]] std::size_t storedFieldCount(const DatasetLayer& layer) const;
+    [[nodiscard]] std::size_t storedFieldCount() const
+    {
+        return storedFieldCount(primary());
+    }
+    [[nodiscard]] std::vector<DerivedFieldRow> derivedFieldRows(
+        const DatasetLayer& layer) const;
+    [[nodiscard]] std::vector<DerivedFieldRow> derivedFieldRows() const
+    {
+        return derivedFieldRows(primary());
+    }
     // Adds a listed-but-unchoosable row to the field selector. False when the
     // combo's model is not one whose item flags can be set, in which case no
     // row is added at all: a row that looks selectable but carries no field id
     // is read as field 0 by everything downstream.
-    [[nodiscard]] bool addUnavailableFieldItem(
-        const QString& name, const QString& tooltip);
+    [[nodiscard]] static bool addUnavailableFieldItem(
+        QComboBox* selector, const QString& name, const QString& tooltip);
     // Whether a load built from the window's state as it stands can install
     // derived fields. Deliberately not asked of primary().session: a sequence builds
     // its first spec while the *outgoing* dataset is still installed (see
@@ -1280,6 +1385,9 @@ private:
     QTimer* m_panDebounce = nullptr;
     PlaneViewState* m_panView = nullptr;
     RealBox m_panStartRegion{};
+    // Over a pair: the panel's framed window when the drag began, which the
+    // drag shifts (see flushPanDrag's paired arm).
+    QRectF m_panStartSceneWindow;
     int m_panPlaneWidth = 0;
     int m_panPlaneHeight = 0;
     QPointF m_panSceneDelta;
@@ -1328,6 +1436,10 @@ private:
     // which installs anything.
     std::optional<std::pair<std::vector<DerivedFieldDefinition>, std::uint64_t>>
         m_reloadAskedFor;
+    // The same memo for the companion's session (see
+    // reloadCompanionIfDefinitionsMoved).
+    std::optional<std::pair<std::vector<DerivedFieldDefinition>, std::uint64_t>>
+        m_companionReloadAskedFor;
     QTreeWidget* m_metadataTree = nullptr;
     QDockWidget* m_metadataDock = nullptr;
     QDockWidget* m_diagnosticsDock = nullptr;

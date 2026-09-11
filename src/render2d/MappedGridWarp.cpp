@@ -81,29 +81,29 @@ std::optional<RealBox> mappedGridDisplayBounds(
     if (nodes.a.size() != nodeCount || nodes.b.size() != nodeCount) {
         return std::nullopt;
     }
-    double aLo = std::numeric_limits<double>::infinity();
-    double aHi = -aLo;
-    double bLo = aLo;
-    double bHi = -aLo;
+    double minA = std::numeric_limits<double>::infinity();
+    double maxA = -minA;
+    double minB = minA;
+    double maxB = -minA;
     for (std::size_t node = 0; node < nodeCount; ++node) {
         const double a = nodes.a[node];
         const double b = nodes.b[node];
         if (!std::isfinite(a) || !std::isfinite(b)) {
             return std::nullopt;
         }
-        aLo = std::min(aLo, a);
-        aHi = std::max(aHi, a);
-        bLo = std::min(bLo, b);
-        bHi = std::max(bHi, b);
+        minA = std::min(minA, a);
+        maxA = std::max(maxA, a);
+        minB = std::min(minB, b);
+        maxB = std::max(maxB, b);
     }
-    if (!(aHi > aLo) || !(bHi > bLo)) {
+    if (!(maxA > minA) || !(maxB > minB)) {
         return std::nullopt;
     }
     RealBox bounds = nodes.physicalRegion;
-    bounds.lower[static_cast<std::size_t>(axes[0])] = aLo;
-    bounds.upper[static_cast<std::size_t>(axes[0])] = aHi;
-    bounds.lower[static_cast<std::size_t>(axes[1])] = bLo;
-    bounds.upper[static_cast<std::size_t>(axes[1])] = bHi;
+    bounds.lower[static_cast<std::size_t>(axes[0])] = minA;
+    bounds.upper[static_cast<std::size_t>(axes[0])] = maxA;
+    bounds.lower[static_cast<std::size_t>(axes[1])] = minB;
+    bounds.upper[static_cast<std::size_t>(axes[1])] = maxB;
     return bounds;
 }
 
@@ -133,10 +133,10 @@ MappedWarpedRaster warpMappedGrid(const ImageBuffer& src,
     }
     const auto axisA = static_cast<std::size_t>(axes[0]);
     const auto axisB = static_cast<std::size_t>(axes[1]);
-    const double aLo = bounds->lower[axisA];
-    const double bLo = bounds->lower[axisB];
-    const double spanA = bounds->upper[axisA] - aLo;
-    const double spanB = bounds->upper[axisB] - bLo;
+    const double minA = bounds->lower[axisA];
+    const double minB = bounds->lower[axisB];
+    const double spanA = bounds->upper[axisA] - minA;
+    const double spanB = bounds->upper[axisB] - minB;
     const auto& logical = nodes.physicalRegion;
     const double pitchA = (logical.upper[axisA] - logical.lower[axisA])
         / static_cast<double>(srcW);
@@ -181,7 +181,7 @@ MappedWarpedRaster warpMappedGrid(const ImageBuffer& src,
     const double scaleA = static_cast<double>(width) / spanA;
     const double scaleB = static_cast<double>(height) / spanB;
     const auto toPixel = [&](std::size_t node) {
-        return Point{(nodes.a[node] - aLo) * scaleA, (nodes.b[node] - bLo) * scaleB};
+        return Point{(nodes.a[node] - minA) * scaleA, (nodes.b[node] - minB) * scaleB};
     };
     const auto stride = static_cast<std::size_t>(nodes.width);
     for (int row = 0; row < srcH; ++row) {

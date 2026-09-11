@@ -172,6 +172,10 @@ void MainWindow::installCompanion(
     if (m_layers[1].active) {
         closeCompanion();
     }
+    // The Dataset window tabulates the active view's dataset at its slice
+    // position; with two datasets on the panels it would mix them, so it is
+    // closed as an open does (it is unavailable while a companion is shown).
+    closeDatasetWindow();
     // Zoom is view-only with a companion, so the primary's rasters must cover
     // their whole domain; a rubber-band selection made before is re-sliced.
     for (auto* state : primaryViews()) {
@@ -270,7 +274,10 @@ void MainWindow::closeCompanion()
     layer.path.clear();
     layer.name.clear();
     layer.perpendicularScale = 1.0;
-    layer.visibleSyncInFlight = false;
+    // A sync still on a worker keeps its in-flight flag: its completion
+    // clears it and drops the outcome (the session is gone), and a companion
+    // installed meanwhile queues behind it through the rerun flag rather
+    // than dispatching a second worker. Only the pending rerun is dropped.
     layer.visibleSyncRerun = false;
     layer.pendingRangeStore.reset();
     m_pair.reset();

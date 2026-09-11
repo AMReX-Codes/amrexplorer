@@ -1368,7 +1368,7 @@ void MainWindow::flushPanDrag(bool finalize)
         m_panLastScheduledDelta = m_panSceneDelta;
         applyPairZoomWindow(m_panView->normal,
             shiftedPairWindow(m_panView->normal, m_panStartSceneWindow, m_panSceneDelta),
-            PairSnap::Nearest);
+            PairSnap::Nearest, /*refit=*/false);
         return;
     }
     const auto region = shiftedPanRegion(*m_panView, m_panStartRegion,
@@ -1612,7 +1612,8 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
                 direction.x() * std::max(1.0, window.width() * 0.05),
                 direction.y() * std::max(1.0, window.height() * 0.05));
             applyPairZoomWindow(state.normal,
-                shiftedPairWindow(state.normal, window, sceneDelta), PairSnap::Nearest);
+                shiftedPairWindow(state.normal, window, sceneDelta), PairSnap::Nearest,
+                /*refit=*/false);
             refreshScaleReport();
             return;
         }
@@ -1660,19 +1661,34 @@ QRectF MainWindow::shiftedPairWindow(
     int normal, const QRectF& window, const QPointF& sceneDelta) const
 {
     auto shifted = window.translated(-sceneDelta);
-    const auto whole = pairLayout(normal).canvasRect();
-    const QRectF canvas(whole.x, whole.y, whole.width, whole.height);
-    if (shifted.left() < canvas.left()) {
-        shifted.moveLeft(canvas.left());
+    // Stopped at the edge of the domains the window covers, not cut to
+    // them: a window in one layer's band that ran past that layer's edge
+    // would otherwise lose a cell to the trim on every step (the next window
+    // is rebuilt from the regions) and zoom itself in.
+    const auto& layout = pairLayout(normal);
+    const SceneRect rect{window.x(), window.y(), window.width(), window.height()};
+    std::optional<QRectF> covered;
+    for (std::size_t layer = 0; layer < 2; ++layer) {
+        if (!m_layers[layer].session || !layout.regionForSceneRect(layer, rect)) {
+            continue;
+        }
+        const auto tile = layout.tileRect(layer);
+        const QRectF tileRect(tile.x, tile.y, tile.width, tile.height);
+        covered = covered ? covered->united(tileRect) : tileRect;
     }
-    if (shifted.right() > canvas.right()) {
-        shifted.moveRight(canvas.right());
+    if (!covered) {
+        const auto whole = layout.canvasRect();
+        covered = QRectF(whole.x, whole.y, whole.width, whole.height);
     }
-    if (shifted.top() < canvas.top()) {
-        shifted.moveTop(canvas.top());
+    if (shifted.left() < covered->left()) {
+        shifted.moveLeft(covered->left());
+    } else if (shifted.right() > covered->right()) {
+        shifted.moveRight(covered->right());
     }
-    if (shifted.bottom() > canvas.bottom()) {
-        shifted.moveBottom(canvas.bottom());
+    if (shifted.top() < covered->top()) {
+        shifted.moveTop(covered->top());
+    } else if (shifted.bottom() > covered->bottom()) {
+        shifted.moveBottom(covered->bottom());
     }
     return shifted;
 }

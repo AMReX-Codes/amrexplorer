@@ -413,13 +413,14 @@ void MainWindow::installCompanion(const std::filesystem::path& path,
     // does: a rubber-band selection made before is re-sliced whole. Its
     // region was one raster's; the pair's zoom is the panel's (see
     // pairRubberBandZoom). A reload keeps the pair's zoom.
-    if (!restore) {
-        for (auto* state : primaryViews()) {
-            if (state->visibleRegion.has_value()) {
-                state->visibleRegion.reset();
-                state->view->setVirtualCanvas(std::nullopt);
-                scheduleSliceRequest(*state);
-            }
+    for (auto* state : primaryViews()) {
+        // A pair never sits on a virtual canvas: a remote fixed scale's
+        // whole-domain canvas goes too, or the export would follow it past
+        // the pair's framed window.
+        state->view->setVirtualCanvas(std::nullopt);
+        if (!restore && state->visibleRegion.has_value()) {
+            state->visibleRegion.reset();
+            scheduleSliceRequest(*state);
         }
     }
     auto& layer = m_layers[1];
@@ -791,13 +792,14 @@ RealBox MainWindow::snappedPairRegion(
 }
 
 bool MainWindow::applyPairZoomWindow(
-    int normal, const QRectF& window, PairSnap snap)
+    int normal, const QRectF& window, PairSnap snap, bool refit)
 {
-    return applyPairRegions(normal, pairRegionsForSceneWindow(normal, window, snap));
+    return applyPairRegions(
+        normal, pairRegionsForSceneWindow(normal, window, snap), refit);
 }
 
-bool MainWindow::applyPairRegions(
-    int normal, const std::array<std::optional<RealBox>, 2>& regions)
+bool MainWindow::applyPairRegions(int normal,
+    const std::array<std::optional<RealBox>, 2>& regions, bool refit)
 {
     if (!regions[0] && !regions[1]) {
         return false;
@@ -817,9 +819,15 @@ bool MainWindow::applyPairRegions(
     }
     // Framed before the rasters arrive, confined so no scroll bars appear
     // meanwhile; each arrival lands at its region's rect on this canvas and
-    // a Custom transform keeps the frame (see showSlice's paired arm).
+    // the transform keeps the frame (see showSlice's paired arm). A pan
+    // keeps the scale -- a fixed one included -- and moves onto the window.
     auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
-    view->zoomToSceneRect(toQRectF(pairCanvasRect(normal)), /*confineScene=*/true);
+    const auto canvas = toQRectF(pairCanvasRect(normal));
+    if (refit) {
+        view->zoomToSceneRect(canvas, /*confineScene=*/true);
+    } else {
+        view->showSceneWindow(canvas);
+    }
     for (auto* state : changed) {
         scheduleSliceRequest(*state);
     }

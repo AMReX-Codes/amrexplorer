@@ -52,14 +52,16 @@ public:
 
     // The cached full-domain Visible range, if it was stored for exactly
     // this key; reused for zoomed (subregion) slices so the color bar stays
-    // stable during pan and zoom.
+    // stable during pan and zoom. A few keys are kept, one per dataset and
+    // field on show: two layers in Visible mode store theirs in turn, and
+    // one entry would have each evict the other's.
     [[nodiscard]] std::optional<std::pair<double, double>>
     cachedFullDomainRange(const RangeKey& key) const;
 
     void storeFullDomainRange(
         const RangeKey& key, std::pair<double, double> range);
 
-    // Drops the cached range (dataset change, slice-position move, range
+    // Drops the cached ranges (dataset change, slice-position move, range
     // state reset).
     void invalidateRangeCache();
 
@@ -151,8 +153,8 @@ public:
         std::array<int, 2> axes);
 
 private:
-    std::optional<RangeKey> m_rangeKey;
-    std::pair<double, double> m_range{0.0, 0.0};
+    // Oldest first; bounded so a long session cannot grow it.
+    std::vector<std::pair<RangeKey, std::pair<double, double>>> m_ranges;
 };
 
 } // namespace amrvis

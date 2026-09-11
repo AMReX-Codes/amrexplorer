@@ -89,9 +89,16 @@ int main()
         coordinator.storeFullDomainRange(key, {2.0, 4.0});
         require(nearlyEqual(coordinator.cachedFullDomainRange(key)->second, 4.0),
             "a second store did not overwrite the range");
+        // Another key is kept beside it: two layers in Visible mode store
+        // theirs in turn, and neither may evict the other's.
+        coordinator.storeFullDomainRange(other, {-1.0, 1.0});
+        require(nearlyEqual(coordinator.cachedFullDomainRange(key)->second, 4.0)
+                && nearlyEqual(coordinator.cachedFullDomainRange(other)->first, -1.0),
+            "a second key evicted the first");
         coordinator.invalidateRangeCache();
-        require(!coordinator.cachedFullDomainRange(key).has_value(),
-            "invalidation left the cached range behind");
+        require(!coordinator.cachedFullDomainRange(key).has_value()
+                && !coordinator.cachedFullDomainRange(other).has_value(),
+            "invalidation left a cached range behind");
     }
 
     // --- sharedVisibleRange -------------------------------------------------

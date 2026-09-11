@@ -1069,6 +1069,15 @@ void ImageView::zoomToSceneRect(const QRectF& sceneTarget, bool confineScene)
     fitSceneRect(sceneTarget);
 }
 
+void ImageView::showSceneWindow(const QRectF& sceneRect)
+{
+    if (!hasImage() || sceneRect.isEmpty()) {
+        return;
+    }
+    m_scene->setSceneRect(sceneRect);
+    centerOn(sceneRect.center());
+}
+
 void ImageView::panViewport(const QPoint& delta)
 {
     if (!hasImage() || (delta.x() == 0 && delta.y() == 0)) {

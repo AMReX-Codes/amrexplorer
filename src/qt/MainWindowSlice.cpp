@@ -1648,7 +1648,8 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
     const auto [composition, maximumLevel] = decodeLevelData(
         rawLevel, layer.session->metadata().finestLevel);
     const auto cachedRange = m_displayCoordinator.cachedFullDomainRange(
-        {layer.session->id(), currentField, maximumLevel, composition});
+        {rangeCacheDataset(&layer == &m_layers[1] ? 1 : 0, layer.session->id()),
+            currentField, maximumLevel, composition});
 
     struct PanelSnapshot {
         std::shared_ptr<const ScalarPlane> plane;

@@ -12,22 +12,34 @@ namespace amrvis {
 std::optional<std::pair<double, double>>
 DisplayCoordinator::cachedFullDomainRange(const RangeKey& key) const
 {
-    if (m_rangeKey && *m_rangeKey == key) {
-        return m_range;
+    const auto found = std::find_if(m_ranges.begin(), m_ranges.end(),
+        [&key](const auto& entry) { return entry.first == key; });
+    if (found == m_ranges.end()) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    return found->second;
 }
 
 void DisplayCoordinator::storeFullDomainRange(
     const RangeKey& key, std::pair<double, double> range)
 {
-    m_rangeKey = key;
-    m_range = range;
+    const auto found = std::find_if(m_ranges.begin(), m_ranges.end(),
+        [&key](const auto& entry) { return entry.first == key; });
+    if (found != m_ranges.end()) {
+        found->second = range;
+        return;
+    }
+    // Two layers, each with a field or two on show, fit with room to spare.
+    constexpr std::size_t maximumEntries = 8;
+    if (m_ranges.size() >= maximumEntries) {
+        m_ranges.erase(m_ranges.begin());
+    }
+    m_ranges.emplace_back(key, range);
 }
 
 void DisplayCoordinator::invalidateRangeCache()
 {
-    m_rangeKey.reset();
+    m_ranges.clear();
 }
 
 std::optional<std::pair<double, double>> DisplayCoordinator::sharedVisibleRange(

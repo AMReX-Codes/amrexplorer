@@ -419,6 +419,50 @@ void armCompanionZoomChecks(amrvis::qt::MainWindow& window,
                     fail("an arrow step did not shift the window for both layers");
                     return;
                 }
+                // A pan keeps the scale: at a fixed 2x a step moves the window
+                // back and the view stays at 2x rather than refitting.
+                *phase = 7;
+                window.selectFixedScaleForTest(2);
+                window.panStepActiveViewForTest(QPointF(1.0, 0.0));
+                return;
+            case 7:
+                if (!tilesAre(QRectF(1.0, 2.0, 4.0, 2.0), QRectF(2.0, 4.0, 3.0, 2.0),
+                        QSize(4, 2), QSize(3, 2))
+                    || !window.fixedScaleStateMatchesForTest(2)) {
+                    qCritical("scale after a fixed-scale pan: %g", window.activeViewScaleForTest());
+                    fail("a pan over a pair changed the fixed scale");
+                    return;
+                }
+                // A window in the ocean's band alone stops at the ocean's
+                // western edge with its size kept, instead of being cut a
+                // cell a step until nothing is left.
+                *phase = 8;
+                window.rubberBandZoomPanelSceneForTest(xz, QRectF(3.0, 5.0, 2.0, 2.0));
+                return;
+            case 8:
+                if (!near(window.panelTileRectForTest(xz, 1), QRectF(3.0, 5.0, 2.0, 2.0))
+                    || window.panelTileImageSizeForTest(xz, 1) != QSize(2, 2)
+                    || !near(window.panelTileRectForTest(xz, 0), QRectF(0.0, 0.0, 6.0, 4.0))) {
+                    fail("a selection in the ocean alone did not zoom the ocean only");
+                    return;
+                }
+                *phase = 9;
+                window.panStepActiveViewForTest(QPointF(1.0, 0.0));
+                window.panStepActiveViewForTest(QPointF(1.0, 0.0));
+                window.panStepActiveViewForTest(QPointF(1.0, 0.0));
+                return;
+            case 9:
+                if (!near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 5.0, 2.0, 2.0))
+                    || window.panelTileImageSizeForTest(xz, 1) != QSize(2, 2)
+                    || !near(window.panelCanvasRectForTest(xz), QRectF(2.0, 5.0, 2.0, 2.0))) {
+                    qCritical("ocean tile after steps: %gx%g at (%g,%g)",
+                        window.panelTileRectForTest(xz, 1).width(),
+                        window.panelTileRectForTest(xz, 1).height(),
+                        window.panelTileRectForTest(xz, 1).x(),
+                        window.panelTileRectForTest(xz, 1).y());
+                    fail("panning past the ocean's edge shrank the window");
+                    return;
+                }
                 *phase = 4;
                 window.resetZoomAllViewsForTest();
                 return;
@@ -521,6 +565,27 @@ void armMixedCompanionChecks(Context& context, const std::string& upper,
                     fail("a remote companion did not open beside the local primary");
                     return;
                 }
+                // Visible range on both, whole-domain first so each layer
+                // stores its own full-domain range: the layers' ids can
+                // coincide (a local primary's is the window's generation, a
+                // remote companion's the server's counter), and a zoomed
+                // slice must meet its own cached range, not the other's.
+                {
+                    auto* primaryMode = window.findChild<QComboBox*>(
+                        QStringLiteral("rangeModeSelector"));
+                    auto* companionMode = window.findChild<QComboBox*>(
+                        QStringLiteral("companionrangeModeSelector"));
+                    if (primaryMode == nullptr || companionMode == nullptr) {
+                        fail("a range mode selector is missing");
+                        return;
+                    }
+                    const auto visible = static_cast<int>(amrvis::RangeMode::Visible);
+                    primaryMode->setCurrentIndex(primaryMode->findData(visible));
+                    companionMode->setCurrentIndex(companionMode->findData(visible));
+                }
+                *phase = 6;
+                return;
+            case 6:
                 // A selection across the interface: the local layer snaps to
                 // its cells, the remote one keeps the exact window; here both
                 // land on cell edges.
@@ -531,11 +596,18 @@ void armMixedCompanionChecks(Context& context, const std::string& upper,
                 *phase = 2;
                 window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 2.0, 4.0, 4.0));
                 return;
-            case 2:
+            case 2: {
                 if (!near(window.panelTileRectForTest(xz, 0), QRectF(1.0, 2.0, 4.0, 2.0))
                     || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 3.0, 2.0))
                     || window.panelTileImageSizeForTest(xz, 0) != QSize(4, 2)) {
                     fail("a mixed pair did not zoom each layer within its domain");
+                    return;
+                }
+                const auto air = window.layerDisplayRangeForTest(0, xz);
+                const auto water = window.layerDisplayRangeForTest(1, xz);
+                if (air == water) {
+                    qCritical("both layers show [%g, %g]", air.first, air.second);
+                    fail("the companion took the primary's cached range");
                     return;
                 }
                 // The other way round: a remote primary (which closes the
@@ -543,6 +615,7 @@ void armMixedCompanionChecks(Context& context, const std::string& upper,
                 *phase = 3;
                 window.openRemoteDataset(upper);
                 return;
+            }
             case 3:
                 if (*loads < 2) {
                     return;
@@ -551,7 +624,10 @@ void armMixedCompanionChecks(Context& context, const std::string& upper,
                     fail("opening another dataset kept the companion");
                     return;
                 }
+                // A remote fixed scale first: its whole-domain virtual canvas
+                // must not survive into the pair (the export would follow it).
                 *phase = 4;
+                window.selectFixedScaleForTest(1);
                 window.openCompanion(std::filesystem::path(lower));
                 return;
             case 4:
@@ -564,6 +640,19 @@ void armMixedCompanionChecks(Context& context, const std::string& upper,
                     || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 4.0, 4.0))
                     || window.backgroundErrorCountForTest() != 0) {
                     fail("a local companion did not open beside the remote primary");
+                    return;
+                }
+                *phase = 5;
+                window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 1.0, 2.0, 2.0));
+                return;
+            case 5:
+                if (window.activeViewVirtualCanvasActiveForTest()
+                    || window.panelExportSizeForTest(xz) != QSize(2, 2)) {
+                    qCritical("export footprint %dx%d, virtual canvas %d",
+                        window.panelExportSizeForTest(xz).width(),
+                        window.panelExportSizeForTest(xz).height(),
+                        window.activeViewVirtualCanvasActiveForTest() ? 1 : 0);
+                    fail("a remote fixed scale's virtual canvas outlived the pair");
                     return;
                 }
                 window.closeCompanion();

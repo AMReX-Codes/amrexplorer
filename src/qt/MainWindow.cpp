@@ -1648,7 +1648,7 @@ void MainWindow::createMenus()
     // The remote form of Open Companion Plotfile: a plotfile on a server,
     // beside a local or a remote primary.
     m_openRemoteCompanionAction = new QAction(
-        tr("Open Remo&te Companion Plotfile..."), this);
+        tr("Open Remote Companion P&lotfile..."), this);
     m_openRemoteCompanionAction->setObjectName(
         QStringLiteral("openRemoteCompanionAction"));
     m_openRemoteCompanionAction->setEnabled(false);

@@ -770,12 +770,15 @@ private:
     // Sets the panel's layers to these regions (none: back to the whole
     // domain), frames their union and re-slices. False when both are empty;
     // nothing changes then.
-    bool applyPairRegions(
-        int normal, const std::array<std::optional<RealBox>, 2>& regions);
-    bool applyPairZoomWindow(int normal, const QRectF& window, PairSnap snap);
+    // `refit` frames the union (a selection); a pan keeps the view's scale
+    // and only moves it onto the shifted window.
+    bool applyPairRegions(int normal,
+        const std::array<std::optional<RealBox>, 2>& regions, bool refit = true);
+    bool applyPairZoomWindow(
+        int normal, const QRectF& window, PairSnap snap, bool refit = true);
     void pairRubberBandZoom(int normal, const QRectF& sceneRect);
-    // A pan over a pair: the framed window moved against the drag, kept
-    // inside the whole canvas by translation.
+    // A pan over a pair: the framed window moved against the drag, stopped
+    // at the edge of the domains it covers with its size kept.
     [[nodiscard]] QRectF shiftedPairWindow(
         int normal, const QRectF& window, const QPointF& sceneDelta) const;
     // Both layers on the panel back to their whole domains, fitted.

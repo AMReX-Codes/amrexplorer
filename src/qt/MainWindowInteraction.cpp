@@ -1368,7 +1368,7 @@ void MainWindow::flushPanDrag(bool finalize)
         m_panLastScheduledDelta = m_panSceneDelta;
         applyPairZoomWindow(m_panView->normal,
             shiftedPairWindow(m_panView->normal, m_panStartSceneWindow, m_panSceneDelta),
-            PairSnap::Nearest, /*refit=*/false);
+            /*refit=*/false);
         return;
     }
     const auto region = shiftedPanRegion(*m_panView, m_panStartRegion,
@@ -1612,8 +1612,7 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
                 direction.x() * std::max(1.0, window.width() * 0.05),
                 direction.y() * std::max(1.0, window.height() * 0.05));
             applyPairZoomWindow(state.normal,
-                shiftedPairWindow(state.normal, window, sceneDelta), PairSnap::Nearest,
-                /*refit=*/false);
+                shiftedPairWindow(state.normal, window, sceneDelta), /*refit=*/false);
             refreshScaleReport();
             return;
         }
@@ -1661,12 +1660,11 @@ QRectF MainWindow::shiftedPairWindow(
     int normal, const QRectF& window, const QPointF& sceneDelta) const
 {
     auto shifted = window.translated(-sceneDelta);
-    // Stopped at the edge of the domains the window covers, not cut to
-    // them: a window in one layer's band that ran past that layer's edge
-    // would otherwise lose a cell to the trim on every step (the next window
-    // is rebuilt from the regions) and zoom itself in.
+    // Stopped at the edge of the domains the shifted window would cover, its
+    // size kept: entering a narrower layer's band moves it inside that
+    // layer's edge rather than leaving a part to be cut off.
     const auto& layout = pairLayout(normal);
-    const SceneRect rect{window.x(), window.y(), window.width(), window.height()};
+    const SceneRect rect{shifted.x(), shifted.y(), shifted.width(), shifted.height()};
     std::optional<QRectF> covered;
     for (std::size_t layer = 0; layer < 2; ++layer) {
         if (!m_layers[layer].session || !layout.regionForSceneRect(layer, rect)) {

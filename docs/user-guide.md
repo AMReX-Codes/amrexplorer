@@ -278,8 +278,9 @@ the Scale button then reports what it applied, such as `32x→16x`. Rubber-band
 zoom is unaffected: selecting a subregion re-reads that region at finest
 resolution. When the display is stretched (see
 [Aspect ratio and axis scaling](#aspect-ratio-and-axis-scaling)), the factor
-applies along the less stretched axis and the other axis gets more pixels per
-cell.
+applies along the dataset's tightest axis and the others get more pixels per
+cell, the same number on every panel: in Physical Size a fixed scale shows x
+as wide on the XY panel as on the XZ panel beside it.
 
 The line-plot window can accumulate curves, which is useful when comparing
 variables, levels, or positions. Its horizontal axis uses physical coordinates

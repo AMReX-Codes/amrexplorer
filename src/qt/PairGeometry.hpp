@@ -212,9 +212,9 @@ struct PairGeometryResult {
 // units: a fixed scale N is N screen pixels per scene unit. Along a shared
 // axis both layers use one linear map anchored at the union's lower bound;
 // along the perpendicular axis each layer has its own band, the upper layer's
-// first (top, or left), and its own scale. The whole panel is normalized so
-// the tightest raster pixel of either layer is one scene unit, the same rule
-// displayStretchFor applies to a single dataset. The layout depends only on
+// first (top, or left), and its own scale. The panels are normalized so the
+// tightest raster pixel of either layer along any axis is one scene unit, the
+// same rule displayStretchFor applies to a single dataset. The layout depends only on
 // the geometry and the aspect settings, never on the current zoom, so pan and
 // zoom never move a tile.
 class PairLayout {
@@ -246,10 +246,11 @@ public:
             m_perpendicularUnitsPerLength[layer] = sane(perpendicularScale[layer])
                 * (physical ? 1.0 : 1.0 / geometry.finestCellSize[layer][p]);
         }
-        // Normalize: the smallest scene-units-per-raster-pixel over the
-        // displayed axes of both layers becomes one.
+        // Normalize: the smallest scene-units-per-raster-pixel over all
+        // three axes of both layers becomes one, so a fixed scale shows an
+        // axis at the same size on every panel (see displayStretchFor).
         double smallest = std::numeric_limits<double>::infinity();
-        for (const auto axis : m_axes) {
+        for (int axis = 0; axis < 3; ++axis) {
             const auto a = static_cast<std::size_t>(axis);
             for (std::size_t layer = 0; layer < 2; ++layer) {
                 const auto perPixel = axis == geometry.perpendicularAxis

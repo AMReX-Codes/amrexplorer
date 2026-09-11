@@ -1217,6 +1217,20 @@ if(TARGET amrexplorer_qt)
     )
     set_tests_properties(qt_physical_aspect_smoke PROPERTIES TIMEOUT 30)
 
+    # In Physical Size a fixed scale is the same pixels per length on every
+    # 3-D panel: x is as wide on the XY panel as on the XZ panel beside it.
+    add_test(
+        NAME qt_physical_fixed_scale_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_pair_lower"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_physical_fixed_scale"
+            -DMODE=physical-fixed-scale
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_physical_fixed_scale_smoke PROPERTIES TIMEOUT 30)
+
     # A remote Fit raster sized for the viewport must be re-fetched at native
     # width when a stretch puts its few columns across the whole viewport.
     add_test(

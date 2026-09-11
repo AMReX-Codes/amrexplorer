@@ -136,6 +136,62 @@ Outcome dispatchZoom(Context& context)
             [&application] { application.exit(4); });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
+        && std::string_view(argv[1]) == "--physical-fixed-scale-smoke-test") {
+        // A 3-D dataset whose cells are 0.25 in x and y and 0.0625 in z
+        // (plotfile_3d_pair_lower).
+        // In Physical Size a fixed scale means the same pixels per length on
+        // every panel: the tightest cell (z) is one pixel at 1x, so x and y
+        // are four pixels a cell whether the panel shows z beside them or
+        // not. Cell Counts keeps one pixel per cell everywhere.
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                const auto near = [](double actual, double expected) {
+                    return std::abs(actual - expected) <= 0.02 * expected;
+                };
+                const auto scales = [&window, near](double xzX, double xzY,
+                                        double xyX, double xyY, double yzX, double yzY) {
+                    const auto xz = window.panelTransformScaleForTest(1);
+                    const auto xy = window.panelTransformScaleForTest(2);
+                    const auto yz = window.panelTransformScaleForTest(0);
+                    return near(xz.first, xzX) && near(xz.second, xzY)
+                        && near(xy.first, xyX) && near(xy.second, xyY)
+                        && near(yz.first, yzX) && near(yz.second, yzY);
+                };
+                const auto report = [&window] {
+                    const auto xz = window.panelTransformScaleForTest(1);
+                    const auto xy = window.panelTransformScaleForTest(2);
+                    const auto yz = window.panelTransformScaleForTest(0);
+                    qCritical("XZ (%g, %g) XY (%g, %g) YZ (%g, %g)", xz.first, xz.second,
+                        xy.first, xy.second, yz.first, yz.second);
+                };
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                window.setAspectModeForTest(amrvis::qt::AspectMode::CellCounts);
+                window.selectFixedScaleForTest(1);
+                if (!scales(1.0, 1.0, 1.0, 1.0, 1.0, 1.0)) {
+                    report();
+                    qCritical("Cell Counts at 1x is not one pixel per cell on every panel");
+                    application.exit(1);
+                    return;
+                }
+                window.setAspectModeForTest(amrvis::qt::AspectMode::PhysicalSize);
+                if (!scales(4.0, 1.0, 4.0, 4.0, 4.0, 1.0)) {
+                    report();
+                    qCritical("Physical Size at 1x does not show x the same size on "
+                              "the XY and XZ panels");
+                    application.exit(1);
+                    return;
+                }
+                window.selectFixedScaleForTest(2);
+                application.exit(scales(8.0, 2.0, 8.0, 8.0, 8.0, 2.0) ? 0 : 1);
+            });
+        QTimer::singleShot(15000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--spherical-supersample-smoke-test") {
         // Zoom-preserve regression for the 2-D spherical supersample control:
         // after zooming a spherical view (view-only, no re-slice), changing the

@@ -485,6 +485,48 @@ void armCompanionZoomChecks(amrvis::qt::MainWindow& window,
                     fail("a pan did not cross the interface along the stacking axis");
                     return;
                 }
+                // A straddling window pushed down into the ocean's band alone,
+                // where the domain is narrower: it moves inside the ocean's
+                // edge at its size rather than losing a column, and coming
+                // back up it is as wide as it was.
+                *phase = 11;
+                window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 3.0, 4.0, 2.0));
+                return;
+            case 11:
+                if (!tilesAre(QRectF(1.0, 3.0, 4.0, 1.0), QRectF(2.0, 4.0, 3.0, 1.0),
+                        QSize(4, 1), QSize(3, 1))) {
+                    fail("a straddling one-row selection did not land");
+                    return;
+                }
+                *phase = 12;
+                window.panStepActiveViewForTest(QPointF(0.0, -1.0));
+                return;
+            case 12:
+                if (!near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 4.0, 2.0))
+                    || window.panelTileImageSizeForTest(xz, 1) != QSize(4, 2)
+                    || !near(window.panelCanvasRectForTest(xz), QRectF(2.0, 4.0, 4.0, 2.0))) {
+                    qCritical("into the ocean: lower %gx%g at (%g,%g), canvas %gx%g at (%g,%g)",
+                        window.panelTileRectForTest(xz, 1).width(),
+                        window.panelTileRectForTest(xz, 1).height(),
+                        window.panelTileRectForTest(xz, 1).x(),
+                        window.panelTileRectForTest(xz, 1).y(),
+                        window.panelCanvasRectForTest(xz).width(),
+                        window.panelCanvasRectForTest(xz).height(),
+                        window.panelCanvasRectForTest(xz).x(),
+                        window.panelCanvasRectForTest(xz).y());
+                    fail("panning into the narrower domain shrank the window");
+                    return;
+                }
+                *phase = 13;
+                window.panStepActiveViewForTest(QPointF(0.0, 1.0));
+                return;
+            case 13:
+                if (!tilesAre(QRectF(2.0, 3.0, 4.0, 1.0), QRectF(2.0, 4.0, 4.0, 1.0),
+                        QSize(4, 1), QSize(4, 1))
+                    || !near(window.panelCanvasRectForTest(xz), QRectF(2.0, 3.0, 4.0, 2.0))) {
+                    fail("panning back out of the narrower domain kept a shrunk window");
+                    return;
+                }
                 *phase = 4;
                 window.resetZoomAllViewsForTest();
                 return;
@@ -678,15 +720,27 @@ void armMixedCompanionChecks(Context& context, const std::string& upper,
                     return;
                 }
                 // A fixed scale chosen over the pair has no virtual canvas;
-                // closing the companion puts the remote primary back on one.
+                // then this panel zoomed again, so the other two are at the
+                // fixed scale and this one is not.
                 window.selectFixedScaleForTest(1);
                 if (window.activeViewVirtualCanvasActiveForTest()) {
                     fail("a fixed scale over a pair made a virtual canvas");
                     return;
                 }
+                *phase = 7;
+                window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 1.0, 2.0, 2.0));
+                return;
+            case 7:
+                // Closing the companion puts each panel still at the fixed
+                // scale back on its virtual canvas, and leaves the zoomed one
+                // zoomed.
                 window.closeCompanion();
-                if (window.companionOpen() || !window.activeViewVirtualCanvasActiveForTest()) {
-                    fail("closing the companion left the remote fixed scale off its canvas");
+                if (window.companionOpen() || !window.panelVirtualCanvasActiveForTest(0)
+                    || !window.panelVirtualCanvasActiveForTest(2)
+                    || window.panelVirtualCanvasActiveForTest(xz)
+                    || !window.activeViewIsZoomedForTest()) {
+                    fail("closing the companion did not restore the remote fixed scale "
+                         "per panel");
                     return;
                 }
                 finish(0);

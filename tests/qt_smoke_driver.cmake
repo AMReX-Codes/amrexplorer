@@ -24,7 +24,8 @@
 #                 sequence-equal-size-transform-preserve |
 #                 sequence-geometry-refit | sequence-noop | sequence-failure |
 #                 remote-canvas-wheel | remote-cell-aspect |
-#                 physical-aspect | remote-physical-aspect | companion |
+#                 physical-aspect | physical-fixed-scale |
+#                 remote-physical-aspect | companion |
 #                 remote-companion | companion-derived | companion-zoom |
 #                 mixed-companion |
 #                 volume |
@@ -228,6 +229,9 @@ elseif(MODE STREQUAL "remote-cell-aspect")
 elseif(MODE STREQUAL "physical-aspect")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --physical-aspect-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "physical-fixed-scale")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --physical-fixed-scale-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "remote-physical-aspect")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --remote-physical-aspect-smoke-test

@@ -480,6 +480,10 @@ public:
     [[nodiscard]] QRectF panelCanvasRectForTest(int normal) const;
     [[nodiscard]] QSize panelExportSizeForTest(int normal) const;
     void panStepActiveViewForTest(const QPointF& direction);
+    // A panel's view transform scale (m11, m22) and whether it sits on a
+    // virtual canvas, for panels other than the active one.
+    [[nodiscard]] std::pair<qreal, qreal> panelTransformScaleForTest(int normal) const;
+    [[nodiscard]] bool panelVirtualCanvasActiveForTest(int normal) const;
     void setSlicePositionForTest(int axis, double value)
     {
         setSlicePosition(axis, value);
@@ -752,30 +756,30 @@ private:
     // applying them re-places every tile without re-rendering.
     void updatePairLayouts();
     void applyPairLayouts();
-    // The scene rect a panel's fetched regions occupy: what arrivals assert
-    // as the scene rect and Fit frames. The layout's whole canvas until a
-    // layer on the panel is zoomed; then the union of the zoomed regions'
-    // rects, so a confined zoom is not re-grown by the next arrival.
+    // The scene rect a panel frames: what arrivals assert as the scene rect
+    // and Fit frames. The layout's whole canvas until a layer on the panel is
+    // zoomed; then the panel's framed window (m_pairWindows), so a confined
+    // zoom is not re-grown by the next arrival.
     [[nodiscard]] SceneRect pairCanvasRect(int normal) const;
     // Rubber-band zoom over two datasets: a scene window on a panel becomes
-    // each layer's region (the part of its domain under the window), the
-    // layers re-slice for them, and the view frames their union. Snapped per
-    // layer: outward to cell edges for a selection, to the nearest cell grid
-    // for a pan; a remote layer keeps the exact window.
-    enum class PairSnap { Expand, Nearest };
+    // each layer's region (the part of its domain under the window, grown
+    // out to a local layer's cell edges; a remote layer keeps the exact
+    // window), the layers re-slice for them, and the view frames the window.
     [[nodiscard]] RealBox snappedPairRegion(
-        std::size_t layer, int normal, const RealBox& region, PairSnap snap) const;
+        std::size_t layer, int normal, const RealBox& region) const;
     [[nodiscard]] std::array<std::optional<RealBox>, 2> pairRegionsForSceneWindow(
-        int normal, const QRectF& window, PairSnap snap) const;
+        int normal, const QRectF& window) const;
+    // The rect a panel's regions occupy, if any layer on it has one.
+    [[nodiscard]] std::optional<QRectF> pairRegionsRect(int normal) const;
     // Sets the panel's layers to these regions (none: back to the whole
-    // domain), frames their union and re-slices. False when both are empty;
-    // nothing changes then.
-    // `refit` frames the union (a selection); a pan keeps the view's scale
-    // and only moves it onto the shifted window.
+    // domain), records the framed window (`window`, else the regions' rect)
+    // and re-slices. `refit` frames the window (a selection); a pan keeps
+    // the view's scale and only moves it onto the window. False when both
+    // regions are empty; nothing changes then.
     bool applyPairRegions(int normal,
-        const std::array<std::optional<RealBox>, 2>& regions, bool refit = true);
-    bool applyPairZoomWindow(
-        int normal, const QRectF& window, PairSnap snap, bool refit = true);
+        const std::array<std::optional<RealBox>, 2>& regions,
+        std::optional<QRectF> window, bool refit);
+    bool applyPairZoomWindow(int normal, const QRectF& window, bool refit = true);
     void pairRubberBandZoom(int normal, const QRectF& sceneRect);
     // A pan over a pair: the framed window moved against the drag, stopped
     // at the edge of the domains it covers with its size kept.
@@ -1526,6 +1530,11 @@ private:
     // scene layout of each 3-D panel derived from it (index = normal).
     std::optional<PairGeometry> m_pair;
     std::array<PairLayout, 3> m_pairLayouts;
+    // Per panel, the window a zoom or pan framed, kept apart from the
+    // layers' regions: those are rounded to each layer's cells, and a window
+    // rebuilt from them would drift a cell per step where the cells of the
+    // two layers do not line up.
+    std::array<std::optional<QRectF>, 3> m_pairWindows;
     QToolBar* m_companionToolbar = nullptr;
     QLabel* m_companionLabel = nullptr;
     // "Same as primary": the companion's slices take the primary's displayed

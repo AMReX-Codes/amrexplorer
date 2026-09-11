@@ -4,6 +4,7 @@
 #include "CloseWindowAction.hpp"
 #include "CurrentRowBulletDelegate.hpp"
 
+#include <limits>
 #include <amrexplorer/core/Version.hpp>
 
 #include <QKeySequence>
@@ -1503,15 +1504,23 @@ std::array<double, 3> MainWindow::displayStretchPerAxis() const
 std::array<double, 2> MainWindow::displayStretchFor(
     const PlaneViewState& state) const
 {
-    // Normalized over the panel's own two axes, not the dataset's three: a
-    // 3-D panel that leaves out the smallest-cell axis would otherwise show
-    // neither of its axes at one screen pixel per cell at 1x.
+    // Normalized over the dataset's axes, not the panel's own two: at a
+    // fixed scale every panel then shows an axis at the same pixels per
+    // length, so the XY panel of a dataset with tall, thin cells is as wide
+    // at 1x as the XZ panel beside it. One screen pixel per cell at 1x goes
+    // to the tightest axis of the dataset, wherever it is shown.
     const auto stretch = displayStretchPerAxis();
     const auto axes = displayAxes(state.normal);
     std::array<double, 2> panel{
         stretch[static_cast<std::size_t>(axes[0])],
         stretch[static_cast<std::size_t>(axes[1])]};
-    const auto smallest = std::min(panel[0], panel[1]);
+    auto smallest = std::numeric_limits<double>::infinity();
+    const auto shown = m_viewDimension == 3 ? std::size_t{3} : std::size_t{2};
+    for (std::size_t axis = 0; axis < shown; ++axis) {
+        if (std::isfinite(stretch[axis]) && stretch[axis] > 0.0) {
+            smallest = std::min(smallest, stretch[axis]);
+        }
+    }
     if (std::isfinite(smallest) && smallest > 0.0) {
         panel[0] /= smallest;
         panel[1] /= smallest;

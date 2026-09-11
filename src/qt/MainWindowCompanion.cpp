@@ -428,6 +428,9 @@ void MainWindow::installCompanion(const std::filesystem::path& path,
             scheduleSliceRequest(*state);
         }
     }
+    if (!restore) {
+        m_pairWindows = {};
+    }
     auto& layer = m_layers[1];
     layer.session = load.result.dataset;
     ++layer.sessionEpoch;
@@ -567,6 +570,9 @@ void MainWindow::tearDownCompanion(bool replacing)
     layer.visibleSyncRerun = false;
     layer.pendingRangeStore.reset();
     m_pair.reset();
+    if (!replacing) {
+        m_pairWindows = {};
+    }
     // The range cache is keyed by dataset id; the next companion beside this
     // primary must not read this one's cached union.
     m_displayCoordinator.invalidateRangeCache();
@@ -621,13 +627,20 @@ void MainWindow::tearDownCompanion(bool replacing)
         applyDisplayStretches();
         if (!replacing) {
             // A remote primary's fixed scale rides a demand-driven virtual
-            // canvas, which the pair displaced (installCompanion); back on
-            // it now that the pair is gone, else scrolling fetches nothing.
+            // canvas, which the pair displaced (installCompanion); each panel
+            // still at a fixed scale goes back on its own, at its own factor,
+            // and a panel zoomed meanwhile is left as it is.
             for (auto* state : primaryViews()) {
-                if (state->view != nullptr
-                    && state->view->transformMode() == ImageView::TransformMode::FixedScale) {
-                    applyFixedScale(state->view->fixedScaleFactor());
-                    break;
+                auto* view = state->view;
+                if (view == nullptr || !layerIsRemote(*state) || displayIsSpherical()
+                    || view->transformMode() != ImageView::TransformMode::FixedScale) {
+                    continue;
+                }
+                view->setVirtualCanvas(
+                    virtualPlacementFor(*state, state->plane->physicalRegion));
+                view->setFixedScale(view->fixedScaleFactor());
+                if (remoteDemandCanvas(*state)) {
+                    updateRemoteFixedScaleDemand(*state);
                 }
             }
         }
@@ -701,6 +714,9 @@ void MainWindow::scheduleLayerSliceRequests(DatasetLayer& layer)
 
 void MainWindow::updatePairLayouts()
 {
+    // A window is in scene units, which the layout defines: after a change
+    // of aspect or axis scale it is the regions' rect under the new one.
+    const bool relayout = m_pair.has_value();
     if (!m_pair) {
         return;
     }
@@ -712,6 +728,13 @@ void MainWindow::updatePairLayouts()
     for (int normal = 0; normal < 3; ++normal) {
         m_pairLayouts[static_cast<std::size_t>(normal)] = PairLayout(
             *m_pair, normal, m_aspectMode, m_axisScale, perpendicular);
+    }
+    if (relayout) {
+        for (std::size_t normal = 0; normal < 3; ++normal) {
+            if (m_pairWindows[normal]) {
+                m_pairWindows[normal] = pairRegionsRect(static_cast<int>(normal));
+            }
+        }
     }
 }
 
@@ -744,29 +767,30 @@ void MainWindow::applyPairLayouts()
 
 SceneRect MainWindow::pairCanvasRect(int normal) const
 {
+    const auto& window = m_pairWindows[static_cast<std::size_t>(normal)];
+    if (window) {
+        return SceneRect{window->x(), window->y(), window->width(), window->height()};
+    }
+    return pairLayout(normal).canvasRect();
+}
+
+std::optional<QRectF> MainWindow::pairRegionsRect(int normal) const
+{
     const auto& layout = pairLayout(normal);
-    std::optional<SceneRect> canvas;
+    std::optional<QRectF> rect;
     for (const auto& layer : m_layers) {
         const auto& state = layer.planeViews[static_cast<std::size_t>(normal)];
         if (!layer.active || !state.visibleRegion) {
             continue;
         }
-        const auto rect = layout.sceneRectForRegion(state.layer, *state.visibleRegion);
-        if (!canvas) {
-            canvas = rect;
-            continue;
-        }
-        const auto left = std::min(canvas->x, rect.x);
-        const auto top = std::min(canvas->y, rect.y);
-        const auto right = std::max(canvas->right(), rect.right());
-        const auto bottom = std::max(canvas->bottom(), rect.bottom());
-        canvas = SceneRect{left, top, right - left, bottom - top};
+        const auto part = toQRectF(layout.sceneRectForRegion(state.layer, *state.visibleRegion));
+        rect = rect ? rect->united(part) : part;
     }
-    return canvas.value_or(layout.canvasRect());
+    return rect;
 }
 
 std::array<std::optional<RealBox>, 2> MainWindow::pairRegionsForSceneWindow(
-    int normal, const QRectF& window, PairSnap snap) const
+    int normal, const QRectF& window) const
 {
     std::array<std::optional<RealBox>, 2> regions;
     if (!m_pair || normal < 0 || normal > 2) {
@@ -781,18 +805,20 @@ std::array<std::optional<RealBox>, 2> MainWindow::pairRegionsForSceneWindow(
         }
         const auto region = layout.regionForSceneRect(layer, rect);
         if (region) {
-            regions[layer] = snappedPairRegion(layer, normal, *region, snap);
+            regions[layer] = snappedPairRegion(layer, normal, *region);
         }
     }
     return regions;
 }
 
 RealBox MainWindow::snappedPairRegion(
-    std::size_t layer, int normal, const RealBox& region, PairSnap snap) const
+    std::size_t layer, int normal, const RealBox& region) const
 {
-    // Local slices are one pixel per finest cell, so the region's edges land
-    // on this layer's cell edges; a remote raster is resampled and keeps the
-    // exact window (as applyRubberBandZoom does for one dataset).
+    // Local slices are one pixel per finest cell, so the region grows out to
+    // this layer's cell edges and covers the window whole; a remote raster
+    // is resampled and keeps the exact window (as applyRubberBandZoom does
+    // for one dataset). The framed window itself is kept apart from the
+    // regions (m_pairWindows), so their rounding never feeds back into it.
     const auto& dataset = m_layers[layer];
     if (!dataset.session
         || layerIsRemote(dataset.planeViews[static_cast<std::size_t>(normal)])) {
@@ -803,20 +829,20 @@ RealBox MainWindow::snappedPairRegion(
         = metadata.levels[static_cast<std::size_t>(std::max(0, metadata.finestLevel))];
     const auto domain = datasetSampleBounds(metadata);
     const auto axes = displayAxes(normal);
-    return snap == PairSnap::Expand
-        ? snapToCellBoundaries(region, domain, finest.cellSize, axes)
-        : snapToNearestCellGrid(region, domain, finest.cellSize, axes);
+    return snapToCellBoundaries(region, domain, finest.cellSize, axes);
 }
 
-bool MainWindow::applyPairZoomWindow(
-    int normal, const QRectF& window, PairSnap snap, bool refit)
+bool MainWindow::applyPairZoomWindow(int normal, const QRectF& window, bool refit)
 {
-    return applyPairRegions(
-        normal, pairRegionsForSceneWindow(normal, window, snap), refit);
+    // A selection frames what its snapped regions cover; a pan frames the
+    // shifted window itself, at its size.
+    return applyPairRegions(normal, pairRegionsForSceneWindow(normal, window),
+        refit ? std::nullopt : std::optional<QRectF>(window), refit);
 }
 
 bool MainWindow::applyPairRegions(int normal,
-    const std::array<std::optional<RealBox>, 2>& regions, bool refit)
+    const std::array<std::optional<RealBox>, 2>& regions,
+    std::optional<QRectF> window, bool refit)
 {
     if (!regions[0] && !regions[1]) {
         return false;
@@ -834,10 +860,14 @@ bool MainWindow::applyPairRegions(int normal,
             changed.push_back(state);
         }
     }
-    // Framed before the rasters arrive, confined so no scroll bars appear
-    // meanwhile; each arrival lands at its region's rect on this canvas and
-    // the transform keeps the frame (see showSlice's paired arm). A pan
-    // keeps the scale -- a fixed one included -- and moves onto the window.
+    // The framed window: the regions' union for a selection, the shifted
+    // window for a pan. Framed before the rasters arrive, confined so no
+    // scroll bars appear meanwhile; each arrival lands at its region's rect
+    // on this canvas and the transform keeps the frame (see showSlice's
+    // paired arm). A pan keeps the scale -- a fixed one included -- and
+    // moves onto the window.
+    m_pairWindows[static_cast<std::size_t>(normal)]
+        = window ? window : pairRegionsRect(normal);
     auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
     const auto canvas = toQRectF(pairCanvasRect(normal));
     if (refit) {
@@ -857,8 +887,8 @@ void MainWindow::pairRubberBandZoom(int normal, const QRectF& sceneRect)
     if (window.width() < 1.0e-9 || window.height() < 1.0e-9) {
         return;
     }
-    const auto regions = pairRegionsForSceneWindow(normal, window, PairSnap::Expand);
-    if (!applyPairRegions(normal, regions)) {
+    const auto regions = pairRegionsForSceneWindow(normal, window);
+    if (!applyPairRegions(normal, regions, std::nullopt, /*refit=*/true)) {
         return;
     }
     const bool synchronize = m_syncRubberBandZoomAction != nullptr
@@ -889,10 +919,10 @@ void MainWindow::pairRubberBandZoom(int normal, const QRectF& sceneRect)
                 region.upper[c] = std::min(region.upper[c], extent->second);
                 const auto span = m_pair->bounds[layer].upper[c] - m_pair->bounds[layer].lower[c];
                 if (region.upper[c] - region.lower[c] > 1.0e-9 * span) {
-                    targets[layer] = snappedPairRegion(layer, other, region, PairSnap::Expand);
+                    targets[layer] = snappedPairRegion(layer, other, region);
                 }
             }
-            applyPairRegions(other, targets);
+            applyPairRegions(other, targets, std::nullopt, /*refit=*/true);
         }
     }
     // One panel zoomed and the others as they were is Mixed (see rubberBandZoom).
@@ -910,6 +940,7 @@ void MainWindow::resetPairPanelZoom(int normal)
             zoomed.push_back(state);
         }
     }
+    m_pairWindows[static_cast<std::size_t>(normal)].reset();
     // With no region left the canvas is the layout's again; the tiles go
     // back to their whole-domain places on it and the view frames it.
     applyPairLayouts();

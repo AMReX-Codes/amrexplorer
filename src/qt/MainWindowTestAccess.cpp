@@ -592,6 +592,27 @@ QSize MainWindow::panelExportSizeForTest(int normal) const
     return view == nullptr ? QSize() : view->composedImageSize(1.0);
 }
 
+std::pair<qreal, qreal> MainWindow::panelTransformScaleForTest(int normal) const
+{
+    if (normal < 0 || normal > 2) {
+        return {0.0, 0.0};
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    if (view == nullptr) {
+        return {0.0, 0.0};
+    }
+    return {view->transform().m11(), view->transform().m22()};
+}
+
+bool MainWindow::panelVirtualCanvasActiveForTest(int normal) const
+{
+    if (normal < 0 || normal > 2) {
+        return false;
+    }
+    const auto* view = primary().planeViews[static_cast<std::size_t>(normal)].view;
+    return view != nullptr && view->virtualCanvasActive();
+}
+
 void MainWindow::panStepActiveViewForTest(const QPointF& direction)
 {
     if (m_activeView != nullptr) {

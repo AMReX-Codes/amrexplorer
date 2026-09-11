@@ -58,6 +58,7 @@ message(STATUS "exercising the LC_NUMERIC pin under ${commaLocale}")
 set(ENV{QT_QPA_PLATFORM} offscreen)
 file(REMOVE_RECURSE "${WORK}/config")
 set(ENV{XDG_CONFIG_HOME} "${WORK}/config")
+set(ENV{AMREXPLORER_SETTINGS_DIR} "${WORK}/config")
 
 execute_process(COMMAND "${MATERIALIZER}" "${SOURCE}" "${WORK}/plt"
     RESULT_VARIABLE materializeResult

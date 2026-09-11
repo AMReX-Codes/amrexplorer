@@ -47,10 +47,14 @@ set(ENV{QT_QPA_PLATFORM} offscreen)
 
 # Isolate QSettings per run: a fresh, empty config directory makes every smoke
 # test start from defaults, so persisted UI state (spherical display mode and
-# supersample factor, palette, log scale, ...) never leaks between runs or from
-# the developer's own config and skews an assertion.
+# supersample factor, palette, aspect mode, ...) never leaks between runs or
+# from the developer's own config and skews an assertion. XDG_CONFIG_HOME
+# does that on Linux alone; AMREXPLORER_SETTINGS_DIR makes the test binary
+# store its QSettings there on every platform (the registry and macOS
+# preferences ignore XDG).
 file(REMOVE_RECURSE "${WORK}/config")
 set(ENV{XDG_CONFIG_HOME} "${WORK}/config")
+set(ENV{AMREXPLORER_SETTINGS_DIR} "${WORK}/config")
 
 macro(run_or_die)
     execute_process(COMMAND ${ARGN}

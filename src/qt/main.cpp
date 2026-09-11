@@ -19,6 +19,7 @@
 #include <QLoggingCategory>
 #include <QMessageBox>
 #include <QProcess>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QTimer>
@@ -422,6 +423,18 @@ int main(int argc, char* argv[])
     icon.addFile(QStringLiteral(":/amrexplorer-256.png"));
     application.setWindowIcon(icon);
     ensureDesktopEntry();
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+    // The smoke drivers give each run its own settings directory so persisted
+    // UI state (aspect mode, palette, ...) never leaks between tests running
+    // side by side. XDG_CONFIG_HOME covers Linux only; the registry and
+    // CFPreferences ignore it, so an INI store under this directory is used
+    // on every platform.
+    const auto settingsDir = qEnvironmentVariable("AMREXPLORER_SETTINGS_DIR");
+    if (!settingsDir.isEmpty()) {
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDir);
+    }
+#endif
     amrvis::qt::MainWindow window;
     window.show();
     // The smoke-test harnesses (SmokeHarness*.cpp) claim their options first;

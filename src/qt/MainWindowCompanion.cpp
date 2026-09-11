@@ -727,9 +727,6 @@ void MainWindow::scheduleLayerSliceRequests(DatasetLayer& layer)
 
 void MainWindow::updatePairLayouts()
 {
-    // A window is in scene units, which the layout defines: after a change
-    // of aspect or axis scale it is the regions' rect under the new one.
-    const bool relayout = m_pair.has_value();
     if (!m_pair) {
         return;
     }
@@ -738,15 +735,24 @@ void MainWindow::updatePairLayouts()
     const auto p = static_cast<std::size_t>(m_pair->perpendicularAxis);
     const std::array<double, 2> perpendicular{
         m_axisScale[p], m_layers[1].perpendicularScale};
+    const auto previous = m_pairLayouts;
     for (int normal = 0; normal < 3; ++normal) {
         m_pairLayouts[static_cast<std::size_t>(normal)] = PairLayout(
             *m_pair, normal, m_aspectMode, m_axisScale, perpendicular);
     }
-    if (relayout) {
-        for (std::size_t normal = 0; normal < 3; ++normal) {
-            if (m_pairWindows[normal]) {
-                m_pairWindows[normal] = pairRegionsRect(static_cast<int>(normal));
-            }
+    // A window is in scene units, which the layout defines: after a change
+    // of aspect or axis scale it is the regions' rect under the new one. An
+    // unchanged layout (a reload) keeps it as framed: the regions are rounded
+    // out to cell edges, and a window rebuilt from them would grow.
+    for (std::size_t normal = 0; normal < 3; ++normal) {
+        if (!m_pairWindows[normal]) {
+            continue;
+        }
+        const auto& before = previous[normal];
+        const auto& after = m_pairLayouts[normal];
+        if (before.tileRect(0) != after.tileRect(0)
+            || before.tileRect(1) != after.tileRect(1)) {
+            m_pairWindows[normal] = pairRegionsRect(static_cast<int>(normal));
         }
     }
 }
@@ -793,7 +799,7 @@ std::optional<QRectF> MainWindow::pairRegionsRect(int normal) const
     std::optional<QRectF> rect;
     for (const auto& layer : m_layers) {
         const auto& state = layer.planeViews[static_cast<std::size_t>(normal)];
-        if (!layer.active || !state.visibleRegion) {
+        if (!layer.active || !state.visibleRegion || !stateShown(state)) {
             continue;
         }
         const auto part = toQRectF(layout.sceneRectForRegion(state.layer, *state.visibleRegion));
@@ -813,7 +819,11 @@ std::array<std::optional<RealBox>, 2> MainWindow::pairRegionsForSceneWindow(
     const SceneRect rect{window.x(), window.y(), window.width(), window.height()};
     for (std::size_t layer = 0; layer < 2; ++layer) {
         const auto& dataset = m_layers[layer];
-        if (!dataset.session) {
+        // On the panel normal to the shared plane the layers overlap and one
+        // is hidden; it takes no part (see updateShownLayers for when it comes
+        // on show).
+        if (!dataset.session
+            || !stateShown(dataset.planeViews[static_cast<std::size_t>(normal)])) {
             continue;
         }
         const auto region = layout.regionForSceneRect(layer, rect);
@@ -927,6 +937,10 @@ void MainWindow::pairRubberBandZoom(int normal, const QRectF& sceneRect)
             }
             std::array<std::optional<RealBox>, 2> targets;
             for (std::size_t layer = 0; layer < 2 && extent; ++layer) {
+                if (!m_layers[layer].session
+                    || !stateShown(m_layers[layer].planeViews[static_cast<std::size_t>(other)])) {
+                    continue;
+                }
                 auto region = m_pair->bounds[layer];
                 region.lower[c] = std::max(region.lower[c], extent->first);
                 region.upper[c] = std::min(region.upper[c], extent->second);
@@ -979,8 +993,23 @@ void MainWindow::updateShownLayers()
         return;
     }
     for (auto* state : currentViews()) {
-        if (state->view != nullptr) {
-            state->view->setTileVisible(state->tile, stateShown(*state));
+        if (state->view == nullptr) {
+            continue;
+        }
+        const bool shown = stateShown(*state);
+        const bool wasShown = state->view->isTileVisible(state->tile);
+        state->view->setTileVisible(state->tile, shown);
+        // Newly on show under a framed window, it takes the window's part of
+        // its domain and slices for it: crossing the interface keeps the
+        // zoom, though the hidden layer took no part in it.
+        const auto& window = m_pairWindows[static_cast<std::size_t>(state->normal)];
+        if (shown && !wasShown && window && m_pair) {
+            const SceneRect rect{window->x(), window->y(), window->width(), window->height()};
+            if (const auto region
+                = pairLayout(state->normal).regionForSceneRect(state->layer, rect)) {
+                state->visibleRegion = snappedPairRegion(state->layer, state->normal, *region);
+                scheduleSliceRequest(*state);
+            }
         }
     }
     // The colour controls follow the layer on show when the active panel is

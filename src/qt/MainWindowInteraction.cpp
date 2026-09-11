@@ -1667,7 +1667,9 @@ QRectF MainWindow::shiftedPairWindow(
     const SceneRect rect{shifted.x(), shifted.y(), shifted.width(), shifted.height()};
     std::optional<QRectF> covered;
     for (std::size_t layer = 0; layer < 2; ++layer) {
-        if (!m_layers[layer].session || !layout.regionForSceneRect(layer, rect)) {
+        if (!m_layers[layer].session
+            || !stateShown(m_layers[layer].planeViews[static_cast<std::size_t>(normal)])
+            || !layout.regionForSceneRect(layer, rect)) {
             continue;
         }
         const auto tile = layout.tileRect(layer);

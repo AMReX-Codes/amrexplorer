@@ -182,6 +182,9 @@ void armCompanionDerivedChecks(amrvis::qt::MainWindow& window,
                 }
                 window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 2.0, 4.0, 4.0));
                 window.setCompanionPerpendicularScaleForTest(2.0);
+                // One step up: the window is off the ocean's (now two-unit)
+                // row edges, so its regions round outward past it.
+                window.panStepActiveViewForTest(QPointF(0.0, 1.0));
                 *phase = 3;
                 amrvis::qt::DerivedFieldStore::session().set(
                     {DerivedFieldDefinition{"wet", "water*3"},
@@ -196,10 +199,11 @@ void armCompanionDerivedChecks(amrvis::qt::MainWindow& window,
                     fail("the reload did not keep the companion's field by name");
                     return;
                 }
-                // Two ocean rows at twice their height under two atmosphere
-                // rows: the zoom and the factor both survived the reload.
+                // Three atmosphere rows over two ocean rows at twice their
+                // height (the factor relaid the window out to the regions
+                // before the step): the zoom and the factor both survived.
                 if (window.rubberBandZoomedViewCountForTest() != 2
-                    || !near(window.panelTileRectForTest(xz, 0), QRectF(1.0, 2.0, 4.0, 2.0))
+                    || !near(window.panelTileRectForTest(xz, 0), QRectF(1.0, 1.0, 4.0, 3.0))
                     || !near(window.panelTileRectForTest(xz, 1), QRectF(2.0, 4.0, 3.0, 4.0))) {
                     qCritical("XZ after reload: upper %gx%g at (%g,%g), lower %gx%g at (%g,%g), %zu zoomed",
                         window.panelTileRectForTest(xz, 0).width(),
@@ -214,10 +218,11 @@ void armCompanionDerivedChecks(amrvis::qt::MainWindow& window,
                     fail("the reload dropped the pair's zoom or the companion's z factor");
                     return;
                 }
-                // The framed window covers both parts still, and so does the
-                // export: not rebuilt from the primary's part alone while the
-                // companion's regions were being put back.
-                if (!near(window.panelCanvasRectForTest(xz), QRectF(1.0, 2.0, 4.0, 6.0))
+                // The framed window is the panned one still, and so is the
+                // export: neither rebuilt from the primary's part alone while
+                // the companion's regions were being put back, nor from the
+                // regions' outward-rounded union under an unchanged layout.
+                if (!near(window.panelCanvasRectForTest(xz), QRectF(1.0, 1.0, 4.0, 6.0))
                     || window.panelExportSizeForTest(xz) != QSize(4, 6)) {
                     qCritical("after reload: canvas %gx%g at (%g,%g), export %dx%d",
                         window.panelCanvasRectForTest(xz).width(),
@@ -395,18 +400,19 @@ void armCompanionZoomChecks(amrvis::qt::MainWindow& window,
                 }
                 // Synchronized: the other panels take the selection's extent
                 // along the axis they share with this one -- x for XY, z for
-                // YZ -- and keep their other axis whole.
+                // YZ -- and keep their other axis whole. On XY only the layer
+                // on show (the atmosphere, z being in it) takes part.
                 *phase = 2;
                 sync->setChecked(true);
                 window.rubberBandZoomPanelSceneForTest(xz, QRectF(1.0, 2.0, 4.0, 4.0));
                 return;
             case 2:
                 if (!near(window.panelTileRectForTest(xy, 0), QRectF(1.0, 0.0, 4.0, 4.0))
-                    || !near(window.panelTileRectForTest(xy, 1), QRectF(2.0, 0.0, 3.0, 4.0))
+                    || !near(window.panelTileRectForTest(xy, 1), QRectF(2.0, 0.0, 4.0, 4.0))
                     || window.panelTileImageSizeForTest(xy, 0) != QSize(4, 4)
                     || !near(window.panelTileRectForTest(yz, 0), QRectF(0.0, 2.0, 4.0, 2.0))
                     || !near(window.panelTileRectForTest(yz, 1), QRectF(0.0, 4.0, 4.0, 2.0))
-                    || window.rubberBandZoomedViewCountForTest() != 6) {
+                    || window.rubberBandZoomedViewCountForTest() != 5) {
                     fail("the synchronized selection did not reach the other panels");
                     return;
                 }
@@ -571,6 +577,45 @@ void armCompanionZoomChecks(amrvis::qt::MainWindow& window,
                     return;
                 }
                 window.setAspectModeForTest(amrvis::qt::AspectMode::CellCounts);
+                // On the XY panel only the atmosphere is on show (z is in
+                // it): a selection there is its alone, the hidden ocean
+                // neither snaps the frame out nor re-slices.
+                *phase = 14;
+                sync->setChecked(false);
+                window.rubberBandZoomPanelSceneForTest(xy, QRectF(1.0, 1.0, 2.0, 2.0));
+                return;
+            case 14:
+                if (!near(window.panelTileRectForTest(xy, 0), QRectF(1.0, 1.0, 2.0, 2.0))
+                    || window.panelTileImageSizeForTest(xy, 0) != QSize(2, 2)
+                    || !near(window.panelTileRectForTest(xy, 1), QRectF(2.0, 0.0, 4.0, 4.0))
+                    || !near(window.panelCanvasRectForTest(xy), QRectF(1.0, 1.0, 2.0, 2.0))
+                    || window.rubberBandZoomedViewCountForTest() != 1) {
+                    qCritical("XY zoom: lower %gx%g at (%g,%g), %zu zoomed",
+                        window.panelTileRectForTest(xy, 1).width(),
+                        window.panelTileRectForTest(xy, 1).height(),
+                        window.panelTileRectForTest(xy, 1).x(),
+                        window.panelTileRectForTest(xy, 1).y(),
+                        window.rubberBandZoomedViewCountForTest());
+                    fail("the hidden layer took part in the XY panel's zoom");
+                    return;
+                }
+                // Into the ocean: coming on show under the framed window, it
+                // takes the window's part of its domain.
+                *phase = 15;
+                window.setSlicePositionForTest(2, -0.1);
+                return;
+            case 15:
+                if (!window.panelTileVisibleForTest(xy, 1)
+                    || !near(window.panelTileRectForTest(xy, 1), QRectF(2.0, 1.0, 1.0, 2.0))
+                    || window.panelTileImageSizeForTest(xy, 1) != QSize(1, 2)) {
+                    qCritical("XY after crossing: lower %gx%g at (%g,%g)",
+                        window.panelTileRectForTest(xy, 1).width(),
+                        window.panelTileRectForTest(xy, 1).height(),
+                        window.panelTileRectForTest(xy, 1).x(),
+                        window.panelTileRectForTest(xy, 1).y());
+                    fail("the layer coming on show did not take the framed window");
+                    return;
+                }
                 finish(0);
                 return;
             default:

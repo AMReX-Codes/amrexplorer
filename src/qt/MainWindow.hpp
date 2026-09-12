@@ -249,6 +249,10 @@ public:
     // completion's failure path can be driven: a current failure is reported,
     // a superseded one counted stale.
     void failNextVisibleSyncForTest();
+    // Test-only: hold every cache-path slice worker at a gate until released,
+    // so a refresh can be made to overtake a redraw still on its way.
+    void armSliceGateForTest();
+    void releaseSliceGateForTest();
     void adjustActiveRequestsForTest(int delta);
     [[nodiscard]] std::uint64_t activeViewRenderGenerationForTest() const;
     [[nodiscard]] bool visibleSyncWorkerWaitingForTest() const;
@@ -501,6 +505,7 @@ public:
         bool fit = false;
         bool resliced = false;
         QRectF window;
+        QRectF drawn;  // the window the pixmap on screen was drawn for
         QSize image;
         QRectF tileDevice;
         QRectF tile;
@@ -661,6 +666,9 @@ private:
         int coordinateSystem = 0;
         SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
         RealBox displayRegion;
+        // The display region the pixmap on screen was drawn for: displayRegion
+        // follows every arrival, this one only those that brought a raster.
+        RealBox pixmapRegion;
         // The raster on screen was drawn warped (DisplayWarp): the pixmap is
         // physical and uniform over displayRegion while `plane` stays
         // logical. displaySourceIndex, parallel to the pixmap with row 0 at

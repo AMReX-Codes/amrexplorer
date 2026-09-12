@@ -549,8 +549,10 @@ Outcome dispatchZoom(Context& context)
         // cell inside the sector and nothing outside it, and the grid boxes
         // on; a wheel zoom and a rubber band zoom the view and the warp
         // follows without a re-slice; a scroll moves the window and its
-        // arrival leaves the view put; contours keep the probe; r-theta is
-        // the flat raster again at Fit, and R-Z once more lands on the canvas.
+        // arrival leaves the view put; a contour change overtaking the
+        // redraw of a second scroll still ends on the warp of the new window;
+        // contours keep the probe; r-theta is the flat raster again at Fit,
+        // and R-Z once more lands on the canvas.
         const std::filesystem::path path(argv[2]);
         struct Progress {
             int phase = 0;
@@ -559,6 +561,7 @@ Outcome dispatchZoom(Context& context)
             std::array<double, 4> scrolled{};
             QRectF scrolledFrom;
             QRectF tileBefore;
+            bool contoursSent = false;
         };
         auto progress = std::make_shared<Progress>();
         const auto fail = [&application](const char* message) {
@@ -766,18 +769,56 @@ Outcome dispatchZoom(Context& context)
             case 4:
             case 5:
             case 6: {
-                // Into contours (a fresh slice), a new contour count (the
-                // cache path with the pixmap kept), then the raster again:
-                // the probe reads the cells under it and the view stays put.
-                if (!window.mappedPanelForTest(-1).warped || !probeCentre()
+                // Into contours (a fresh slice); then a second scroll whose
+                // redraw is held at the worker gate while a new contour
+                // count is sent and dispatched, cancelling it: that refresh,
+                // asked with the raster clean, must still draw the raster for
+                // the window it names rather than keep the one drawn for the
+                // old window; then the raster again. Throughout, the pixmap
+                // is the warp of the window on show, the probe reads the
+                // cells under it and the view stays put.
+                const auto panel = window.mappedPanelForTest(-1);
+                if (!panel.warped || !drawnForScreen() || panel.window != panel.drawn
+                    || !probeCentre()
                     || window.activeViewTransformAndScrollForTest() != progress->scrolled) {
-                    qCritical("phase %d", progress->phase);
-                    fail("a contour refresh lost the R-Z warp or moved the view");
+                    qCritical("phase %d: window [%g, %g] x [%g, %g], pixmap drawn for "
+                              "[%g, %g] x [%g, %g]", progress->phase, panel.window.left(),
+                        panel.window.right(), panel.window.top(), panel.window.bottom(),
+                        panel.drawn.left(), panel.drawn.right(), panel.drawn.top(),
+                        panel.drawn.bottom());
+                    fail("a contour refresh lost the R-Z warp, left the raster behind "
+                         "the window, or moved the view");
                     return;
                 }
                 if (progress->phase == 4) {
-                    window.setDisplayModeForTest(amrvis::DisplayMode::RasterContours, 7);
-                } else if (progress->phase == 5) {
+                    window.armSliceGateForTest();
+                    window.scrollActiveViewForTest(-16, -16);
+                    progress->scrolled = window.activeViewTransformAndScrollForTest();
+                    progress->phase = 5;
+                    auto* poll = new QTimer(&window);
+                    poll->setInterval(1);
+                    QObject::connect(poll, &QTimer::timeout, &window,
+                        [&window, progress, poll] {
+                            // The redraw is on its way (and held): send the
+                            // count; once its request is dispatched too, the
+                            // redraw is cancelled, and both may run.
+                            if (!progress->contoursSent
+                                && window.slicesInFlightForTest() > 0) {
+                                progress->contoursSent = true;
+                                window.setDisplayModeForTest(
+                                    amrvis::DisplayMode::RasterContours, 7);
+                            }
+                            if (progress->contoursSent
+                                && !window.sliceRequestPendingForTest()) {
+                                window.releaseSliceGateForTest();
+                                poll->stop();
+                                poll->deleteLater();
+                            }
+                        });
+                    poll->start();
+                    break;
+                }
+                if (progress->phase == 5) {
                     window.setDisplayModeForTest(amrvis::DisplayMode::Raster, 7);
                 } else {
                     window.selectSphericalDisplayForTest(1);  // r-theta

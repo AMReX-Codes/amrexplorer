@@ -168,6 +168,16 @@ void MainWindow::failNextVisibleSyncForTest()
     visible_sync_test::failNext.store(true);
 }
 
+void MainWindow::armSliceGateForTest()
+{
+    slice_worker_test::gateArmed.store(true);
+}
+
+void MainWindow::releaseSliceGateForTest()
+{
+    slice_worker_test::gateArmed.store(false);
+}
+
 bool MainWindow::visibleSyncWorkerWaitingForTest() const
 {
     return visible_sync_test::waiting.load() > 0;
@@ -577,6 +587,11 @@ MainWindow::MappedPanelForTest MainWindow::mappedPanelForTest(int normal) const
         if (drawn.upper[h] > drawn.lower[h] && drawn.upper[v] > drawn.lower[v]) {
             panel.window = QRectF(QPointF(drawn.lower[h], drawn.lower[v]),
                 QPointF(drawn.upper[h], drawn.upper[v]));
+        }
+        const auto& pixmap = state.pixmapRegion;
+        if (pixmap.upper[h] > pixmap.lower[h] && pixmap.upper[v] > pixmap.lower[v]) {
+            panel.drawn = QRectF(QPointF(pixmap.lower[h], pixmap.lower[v]),
+                QPointF(pixmap.upper[h], pixmap.upper[v]));
         }
     }
     panel.image = view->image(state.tile).size();

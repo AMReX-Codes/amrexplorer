@@ -711,13 +711,18 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                             != SphericalDisplay::RZ
                         && request.sphericalDisplay != SphericalDisplay::RZ))));
 
-    // Switching the mapped grid on or off changes the pixmap, and a mapped
-    // view whose warp never landed (a refresh overtook the request that
-    // carried it) still shows the logical raster: both need the raster
-    // drawn, whatever cosmetic change asked for this refresh.
+    // Switching the warp on or off changes the pixmap, a warped view whose
+    // warp never landed (a refresh overtook the request that carried it)
+    // still shows the logical raster, and a warped refresh for a window or
+    // pixel count other than the pixmap's (a contour change overtaking a
+    // redraw) would keep a raster drawn for somewhere else: all need the
+    // raster drawn, whatever cosmetic change asked for this refresh.
     rasterDirty = rasterDirty || wanted != state.warp
         || (isWarped(wanted) && !state.displaySourceIndex
-            && state.view->hasImage());
+            && state.view->hasImage())
+        || (isWarped(wanted) && state.hasCachedRequest
+            && (state.cachedRequest.displayWindow != request.displayWindow
+                || state.cachedRequest.displayPixels != request.displayPixels));
 
     state.stopSource.request_stop();
     state.stopSource = StopSource{};
@@ -756,6 +761,9 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             rangeMode, userRange, logarithmic, palette, displayMode,
             vectorUField, vectorVField, contourCount, rasterDirty,
             cancellation]() mutable {
+#ifdef AMREXPLORER_QT_TEST_ACCESS
+            slice_worker_test::waitAtGate();
+#endif
             return refreshCachedSlice(dataset, request, std::move(displayPlane),
                 *contourPlane, std::move(vectors), std::move(gridNodes),
                 rangeMode, userRange,
@@ -1583,6 +1591,9 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     state.coordinateSystem = display.coordinateSystem;
     state.sphericalDisplay = display.sphericalDisplay;
     state.displayRegion = display.displayRegion;
+    if (!display.rasterUnchanged) {
+        state.pixmapRegion = display.displayRegion;
+    }
     // Likewise a warp: the pixmap is physical over displayRegion, and these
     // place plane pixels on it and back. A refresh that kept the pixmap
     // (rasterUnchanged) drew nothing to index, so the index of the pixmap

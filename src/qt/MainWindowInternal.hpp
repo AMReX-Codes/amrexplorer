@@ -340,6 +340,23 @@ inline std::atomic<int> waiting{0};        // # of workers currently parked
 }
 
 } // namespace visible_sync_test
+
+// A gate the cache-path slice worker waits on while armed, so a smoke can
+// hold a warped view's redraw mid-flight until a later refresh has
+// cancelled it, then let both run (the held one lands stale). Bounded like
+// the sync gate, so a test that dies without releasing still exits.
+namespace slice_worker_test {
+
+inline std::atomic<bool> gateArmed{false};
+
+inline void waitAtGate()
+{
+    for (int waited = 0; waited < 10000 && gateArmed.load(); ++waited) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+} // namespace slice_worker_test
 #endif
 
 // Fill a level combo for a dataset with the given finest level: "Finest

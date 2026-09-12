@@ -958,6 +958,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         state->warp = DisplayWarp::None;
         state->gridNodes.reset();
         state->displaySourceIndex.reset();
+        state->pixmapRegion = RealBox{};
         state->mappedCanvasBounds.reset();
         state->mappedWindow = {};
         state->mappedWindowPixels = {0, 0};

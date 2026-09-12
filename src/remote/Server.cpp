@@ -872,6 +872,13 @@ private:
             throw RemoteError(ErrorCode::UnsupportedProtocol,
                 "isosurfaces require protocol 1.6");
         }
+        // And the orientation: a 1.7 client sends angles. On the wire flag,
+        // since the decoded camera cannot say which it came from.
+        if (payload->has_orientation
+            && m_selectedMinorVersion < cameraOrientationMinorVersion) {
+            throw RemoteError(ErrorCode::UnsupportedProtocol,
+                "free camera orientation requires protocol 1.8");
+        }
         validateVolumeBound(request);
         // The server's own voxel cap applies on top of the client's budget.
         request.maximumVoxels = std::min<std::uint64_t>(

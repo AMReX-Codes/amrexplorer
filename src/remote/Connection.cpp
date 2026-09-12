@@ -301,6 +301,11 @@ public:
     {
         return m_selectedMinorVersion >= isosurfaceMinorVersion;
     }
+    // And a 1.7 server reads the camera as two angles.
+    [[nodiscard]] bool supportsVolumeOrientation() const noexcept
+    {
+        return m_selectedMinorVersion >= cameraOrientationMinorVersion;
+    }
 
     // Likewise: a 1.3 server opens datasets perfectly well, it just cannot be
     // asked to compute a field from an expression.
@@ -376,9 +381,15 @@ public:
             && !supportsVolumeIsosurface()) {
             throw std::runtime_error(volumeIsosurfaceUnsupportedMessage);
         }
+        // And a camera with roll, which the angles a 1.7 peer reads cannot
+        // hold: toWire would send zeros, and the frame would come back
+        // turned the wrong way.
+        if (!orthoAnglesOf(request.camera) && !supportsVolumeOrientation()) {
+            throw std::runtime_error(volumeOrientationUnsupportedMessage);
+        }
         // Indefinite: the first render of a field samples the plotfile,
         // which can outlast the request timeout; the token still cancels it.
-        const auto response = transact(codec::toWire(request),
+        const auto response = transact(codec::toWire(request, m_selectedMinorVersion),
             PayloadKind::RenderedFrameResponse, cancellation,
             ResponseWait::Indefinite);
         const auto* payload = response->payload.AsRenderedFrameResponse();
@@ -869,6 +880,11 @@ bool Connection::supportsVolumeSampling() const noexcept
 bool Connection::supportsVolumeIsosurface() const noexcept
 {
     return m_impl->supportsVolumeIsosurface();
+}
+
+bool Connection::supportsVolumeOrientation() const noexcept
+{
+    return m_impl->supportsVolumeOrientation();
 }
 
 bool Connection::supportsDerivedFields() const noexcept

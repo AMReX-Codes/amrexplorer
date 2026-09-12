@@ -229,6 +229,10 @@ public:
     {
         return m_inner->supportsVolumeSampling();
     }
+    [[nodiscard]] bool supportsVolumeOrientation() const noexcept override
+    {
+        return m_inner->supportsVolumeOrientation();
+    }
     // The one that matters: render at one level coarser than asked and say
     // so, without ever throwing CacheBudgetExceeded at the pipeline.
     [[nodiscard]] amrvis::VolumeFrame renderVolume(
@@ -671,7 +675,7 @@ int main()
         request.field = field;
         request.maximumLevel = 1;
         request.region = amrvis::datasetSampleBounds(session->metadata());
-        request.camera = {0.6, 0.4, 1.0};
+        request.camera = amrvis::orthoCameraFromAngles(0.6, 0.4, 1.0);
         request.outputSize = {64, 48};
         request.range = amrvis::VolumeRange{1.0, 2.0, false};
         request.transfer = amrvis::makeVolumeTransferFunction(

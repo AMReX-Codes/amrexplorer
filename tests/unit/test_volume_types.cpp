@@ -26,7 +26,7 @@ amrvis::VolumeRenderRequest validRequest()
     request.maximumLevel = 1;
     request.region.lower = {{0.0, 0.0, 0.0}};
     request.region.upper = {{1.0, 2.0, 3.0}};
-    request.camera = {0.4, -0.3, 1.5};
+    request.camera = amrvis::orthoCameraFromAngles(0.4, -0.3, 1.5);
     request.outputSize = {320, 240};
     request.transfer.colors = {0x0000FFU, 0x00FF00U, 0xFF0000U};
     request.transfer.opacities = {0.0F, 0.5F, 1.0F};
@@ -102,11 +102,17 @@ int main()
     }
     {
         auto request = validRequest();
-        request.camera.azimuth = nan;
-        require(rejected(request), "a NaN azimuth was accepted");
+        request.camera.rotation.x = nan;
+        require(rejected(request), "a NaN orientation component was accepted");
         request = validRequest();
-        request.camera.elevation = infinity;
-        require(rejected(request), "an infinite elevation was accepted");
+        request.camera.rotation.w = infinity;
+        require(rejected(request), "an infinite orientation component was accepted");
+        request = validRequest();
+        request.camera.rotation = {2.0, 0.0, 0.0, 0.0};
+        require(rejected(request), "a non-unit orientation was accepted");
+        request = validRequest();
+        request.camera.rotation = {1.0, 1.0e-4, 0.0, 0.0};
+        require(!rejected(request), "an orientation a hair off unit length was rejected");
         request = validRequest();
         request.camera.zoom = 0.0;
         require(rejected(request), "a zero zoom was accepted");

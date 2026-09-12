@@ -748,26 +748,71 @@ int main()
     volume.maximumLevel = 1;
     volume.composition = CompositionPolicy::ExactLevel;
     volume.region = RealBox{Real3{{0.0, -1.0, 2.0}}, Real3{{1.0, 1.0, 3.0}}};
-    volume.camera = {0.7, -0.2, 2.5};
+    volume.camera = orthoCameraFromAngles(0.7, -0.2, 2.5);
     volume.outputSize = {320, 200};
     volume.range = VolumeRange{0.5, 4.0, true};
     volume.transfer.colors = {0x0000FFU, 0x00FF00U, 0xFF0000U};
     volume.transfer.opacities = {0.0F, 0.5F, 1.0F};
     volume.samplesPerVoxel = 4;
     volume.maximumVoxels = 1 << 20;
-    require(codec::fromWire(codec::toWire(volume)) == volume,
-        "a volume request with a range did not round-trip");
+    // Exact: the orientation crosses the wire as sent (protocol 1.8).
+    const auto roundTrips = [](const VolumeRenderRequest& request) {
+        return codec::fromWire(codec::toWire(request)) == request;
+    };
+    require(roundTrips(volume), "a volume request with a range did not round-trip");
+    // Protocol 1.8: the orientation is on the wire for a current peer, the
+    // two angles for an older one -- the same rotation while the camera has
+    // no roll, and zeros once it has, which the connection never sends to
+    // such a peer. A bad orientation is refused; one beside angles wins.
+    {
+        const auto sameRotation = [](const Quaternion& a, const Quaternion& b) {
+            const auto dotted = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
+            return std::abs(dotted) >= 1.0 - 1.0e-12;
+        };
+        const auto current = codec::toWire(volume);
+        require(current.has_orientation && current.orientation_w == volume.camera.rotation.w
+                && current.orientation_z == volume.camera.rotation.z
+                && current.azimuth == 0.0 && current.elevation == 0.0,
+            "a 1.8 request does not carry the orientation");
+        const auto older = codec::toWire(volume, 7);
+        require(!older.has_orientation && std::abs(older.azimuth - 0.7) < 1.0e-12
+                && std::abs(older.elevation + 0.2) < 1.0e-12
+                && sameRotation(codec::fromWire(older).camera.rotation, volume.camera.rotation)
+                && codec::fromWire(older).camera.zoom == volume.camera.zoom,
+            "a 1.7 request does not carry the camera as its angles");
+        auto rolled = volume;
+        rolled.camera.rotation
+            = axisAngle({{0.0, 0.0, 1.0}}, 0.4) * rolled.camera.rotation;
+        const auto rolledOlder = codec::toWire(rolled, 7);
+        const auto nearest = nearestOrthoAngles(rolled.camera);
+        require(!rolledOlder.has_orientation && rolledOlder.azimuth == nearest.azimuth
+                && rolledOlder.elevation == nearest.elevation,
+            "a rolled camera for a 1.7 peer did not fall to its nearest angles");
+        require(roundTrips(rolled), "a rolled camera did not round-trip");
+        auto both = codec::toWire(rolled);
+        both.azimuth = 1.0;
+        both.elevation = 0.5;
+        require(codec::fromWire(both).camera == rolled.camera,
+            "the orientation did not win over the angles beside it");
+        auto stretched = codec::toWire(volume);
+        stretched.orientation_w *= 2.0;
+        requireRejected([&] { static_cast<void>(codec::fromWire(stretched)); },
+            "a non-unit orientation was accepted");
+        auto broken = codec::toWire(volume);
+        broken.orientation_x = std::numeric_limits<double>::quiet_NaN();
+        requireRejected([&] { static_cast<void>(codec::fromWire(broken)); },
+            "a non-finite orientation was accepted");
+    }
     // Protocol 1.6: the isosurface and the volume flag round-trip, the flag
     // on the wire says when the isosurface fields mean something, and a
     // non-finite value or opacity is refused.
     {
         auto withIsosurface = volume;
         withIsosurface.isosurface = VolumeIsosurface{FieldId{3}, 1, 0.75, 0x40C0FFU, 0.6F};
-        require(codec::fromWire(codec::toWire(withIsosurface)) == withIsosurface,
+        require(roundTrips(withIsosurface),
             "a volume request with an isosurface did not round-trip");
         withIsosurface.showVolume = false;
-        require(codec::fromWire(codec::toWire(withIsosurface)) == withIsosurface,
-            "an isosurface-only request did not round-trip");
+        require(roundTrips(withIsosurface), "an isosurface-only request did not round-trip");
         const auto wire = codec::toWire(withIsosurface);
         require(wire.has_isosurface && !wire.show_volume && wire.isosurface_field == 3
                 && wire.isosurface_component == 1 && wire.isosurface_value == 0.75
@@ -828,8 +873,7 @@ int main()
     }
     volume.range.reset();
     volume.logarithmic = true;
-    require(codec::fromWire(codec::toWire(volume)) == volume,
-        "a volume request without a range did not round-trip");
+    require(roundTrips(volume), "a volume request without a range did not round-trip");
     auto volumeWire = codec::toWire(volume);
     volumeWire.transfer_opacities.pop_back();
     requireRejected([&] { static_cast<void>(codec::fromWire(volumeWire)); },

@@ -427,6 +427,17 @@ table RenderedFrameRequest {
   isosurface_value:double (id: 25);
   isosurface_color:uint (id: 26);
   isosurface_opacity:float (id: 27);
+  // Protocol 1.8: the camera's orientation as a unit quaternion, which the
+  // two angles cannot hold once the view rolls. Like the 1.5 value vectors,
+  // the old fields stay and the sender fills what its peer reads: the
+  // orientation for a 1.8 peer, azimuth and elevation for an older one. A
+  // decoder takes the orientation when the flag is set; the version gate
+  // refuses a 1.7 peer that sends one.
+  has_orientation:bool (id: 28);
+  orientation_w:double (id: 29);
+  orientation_x:double (id: 30);
+  orientation_y:double (id: 31);
+  orientation_z:double (id: 32);
 }
 
 // Premultiplied 0xAARRGGBB pixels, row 0 at the top, exactly width x height.

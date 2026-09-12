@@ -47,6 +47,12 @@ inline constexpr const char* volumeSamplingUnsupportedMessage
 inline constexpr const char* volumeIsosurfaceUnsupportedMessage
     = "the remote server predates isosurfaces (protocol 1.6) and renders the "
       "volume alone; install a current amrexplorer-server";
+// And for a camera with roll, which a 1.7 server, reading the two angles,
+// would turn the wrong way.
+inline constexpr const char* volumeOrientationUnsupportedMessage
+    = "the remote server predates free camera orientation (protocol 1.8) and "
+      "turns the view about the vertical axis only; install a current "
+      "amrexplorer-server";
 // And for derived fields, which a 1.3 server would not read off an open
 // request at all -- so it would answer a catalog of stored fields while the
 // client believed the definitions had been installed.
@@ -111,6 +117,10 @@ public:
     // visibility on a rendered frame (1.6). A 1.5 peer renders the volume
     // alone whatever it is sent.
     [[nodiscard]] bool supportsVolumeIsosurface() const noexcept;
+    // Whether the negotiated protocol carries the camera's orientation as a
+    // quaternion (1.8). A 1.7 peer reads the two angles, so it can be given
+    // any camera without roll and no camera with it.
+    [[nodiscard]] bool supportsVolumeOrientation() const noexcept;
     // Whether the negotiated protocol carries derived-field definitions on an
     // open request (1.4). A 1.3 peer opens datasets perfectly well; it just
     // cannot be asked to compute a field.

@@ -63,7 +63,7 @@ amrvis::VolumeRenderRequest requestFor(const amrvis::DatasetSession& dataset)
     request.field = amrvis::FieldId{0};
     request.maximumLevel = dataset.metadata().finestLevel;
     request.region = amrvis::datasetSampleBounds(dataset.metadata());
-    request.camera = {0.55, 0.35, 1.2};
+    request.camera = amrvis::orthoCameraFromAngles(0.55, 0.35, 1.2);
     request.outputSize = {96, 80};
     request.range = amrvis::VolumeRange{0.0, 1.0, false};
     // A ramp from transparent to opaque with a bright colour, so the
@@ -135,6 +135,24 @@ int main(int argc, char* argv[])
         require(remoteFrame.metrics.gridDims == (std::array<int, 3>{4, 4, 4})
                 && remoteFrame.metrics.coveredVoxels == 64,
             "the fixture did not sample to its native 4x4x4 grid");
+
+        // --- a rolled camera renders the same on both sides (protocol 1.8) --
+        // No two angles describe it, so it can only have crossed the wire as
+        // the orientation, and as sent: the frames match to the pixel.
+        {
+            auto rolledRemote = remoteRequest;
+            rolledRemote.camera.rotation
+                = axisAngle({{0.0, 0.0, 1.0}}, 0.7) * rolledRemote.camera.rotation;
+            require(!orthoAnglesOf(rolledRemote.camera).has_value(),
+                "the rolled camera still has two angles");
+            require(remote->supportsVolumeOrientation() && local->supportsVolumeOrientation(),
+                "a current pair does not report free camera orientation");
+            auto rolledLocal = rolledRemote;
+            rolledLocal.dataset = local->id();
+            require(remote->renderVolume(rolledRemote).pixels
+                    == local->renderVolume(rolledLocal).pixels,
+                "a rolled camera renders differently over the wire");
+        }
 
         // --- an isosurface renders the same on both sides (protocol 1.6) --
         // The fixture's field is (i + j + k) / 9, so its iso-value 0.5 is a
@@ -308,7 +326,7 @@ int main(int argc, char* argv[])
                 "the server did not negotiate 1.1 with a 1.1 client");
             auto request = requestFor(*remote);
             request.dataset = DatasetId{1};   // any: the gate fires first
-            writeFrame(socket, codec::encode(2, codec::toWire(request), 1),
+            writeFrame(socket, codec::encode(2, codec::toWire(request, 1), 1),
                 defaultMaximumFrameBytes);
             response = readFrame(socket, defaultMaximumFrameBytes);
             require(response.has_value(), "the server closed on a 1.1 volume request");
@@ -343,7 +361,7 @@ int main(int argc, char* argv[])
                 "the server did not negotiate 1.2 with a 1.2 client");
             auto request = requestFor(*remote);
             request.sampling = SamplingPolicy::Linear;
-            writeFrame(socket, codec::encode(2, codec::toWire(request), 2),
+            writeFrame(socket, codec::encode(2, codec::toWire(request, 2), 2),
                 defaultMaximumFrameBytes);
             response = readFrame(socket, defaultMaximumFrameBytes);
             require(response.has_value(),
@@ -358,7 +376,7 @@ int main(int argc, char* argv[])
             // refusal over a capability is not misbehaviour, and losing the
             // session -- with every other dataset open on it -- would be a far
             // larger answer than the question deserves.
-            writeFrame(socket, codec::encode(3, codec::toWire(request), 2),
+            writeFrame(socket, codec::encode(3, codec::toWire(request, 2), 2),
                 defaultMaximumFrameBytes);
             response = readFrame(socket, defaultMaximumFrameBytes);
             require(response.has_value(),
@@ -390,7 +408,7 @@ int main(int argc, char* argv[])
                 "the server did not negotiate 1.5 with a 1.5 client");
             auto request = requestFor(*remote);
             request.isosurface = VolumeIsosurface{FieldId{0}, 0, 0.5, 0xFFFFFFU, 1.0F};
-            writeFrame(socket, codec::encode(2, codec::toWire(request), 5),
+            writeFrame(socket, codec::encode(2, codec::toWire(request, 5), 5),
                 defaultMaximumFrameBytes);
             response = readFrame(socket, defaultMaximumFrameBytes);
             require(response.has_value(),
@@ -402,7 +420,7 @@ int main(int argc, char* argv[])
                 "a 1.5 client's isosurface request was not refused");
             request.isosurface.reset();
             request.showVolume = false;
-            writeFrame(socket, codec::encode(3, codec::toWire(request), 5),
+            writeFrame(socket, codec::encode(3, codec::toWire(request, 5), 5),
                 defaultMaximumFrameBytes);
             response = readFrame(socket, defaultMaximumFrameBytes);
             require(response.has_value(),
@@ -412,6 +430,54 @@ int main(int argc, char* argv[])
                     && codec::fromWire(*envelope->payload.AsErrorResponse()).code
                         == ErrorCode::UnsupportedProtocol,
                 "a 1.5 client hiding the volume was not refused");
+        }
+        // --- a 1.7 client is told free orientation needs 1.8 --------------
+        // The same shape again: 1.7 sends the camera as two angles, so an
+        // orientation on the wire is a peer speaking a version it did not
+        // negotiate. Refused readably; a request in its own terms is answered.
+        {
+            auto socket = connectTo("127.0.0.1", server.port());
+            HelloRequestData hello{"volume test", "test", 0, 7,
+                defaultMaximumFrameBytes, server.token(), {}};
+            writeFrame(socket, codec::encode(1, codec::toWire(hello), 7),
+                defaultMaximumFrameBytes);
+            auto response = readFrame(socket, defaultMaximumFrameBytes);
+            require(response.has_value(), "the server closed on a 1.7 hello");
+            auto envelope = codec::decode(*response);
+            require(codec::inspect(*envelope).payload == PayloadKind::HelloResponse
+                    && codec::fromWire(*envelope->payload.AsHelloResponse())
+                            .selectedMinorVersion == 7,
+                "the server did not negotiate 1.7 with a 1.7 client");
+            // Datasets are the connection's own: opened here, on this socket.
+            writeFrame(socket,
+                codec::encode(2,
+                    codec::toWire(OpenDatasetData{path, 16ULL << 20, {}}), 7),
+                defaultMaximumFrameBytes);
+            response = readFrame(socket, defaultMaximumFrameBytes);
+            require(response.has_value(), "the server closed on a 1.7 open");
+            envelope = codec::decode(*response);
+            require(codec::inspect(*envelope).payload == PayloadKind::DatasetOpened,
+                "a 1.7 client could not open the plotfile");
+            auto request = requestFor(*remote);
+            request.dataset = codec::fromWire(*envelope->payload.AsDatasetOpened()).id;
+            writeFrame(socket, codec::encode(3, codec::toWire(request), 7),
+                defaultMaximumFrameBytes);
+            response = readFrame(socket, defaultMaximumFrameBytes);
+            require(response.has_value(),
+                "the server closed on a 1.7 client sending an orientation");
+            envelope = codec::decode(*response);
+            require(codec::inspect(*envelope).payload == PayloadKind::ErrorResponse
+                    && codec::fromWire(*envelope->payload.AsErrorResponse()).code
+                        == ErrorCode::UnsupportedProtocol,
+                "a 1.7 client's orientation was not refused");
+            writeFrame(socket, codec::encode(4, codec::toWire(request, 7), 7),
+                defaultMaximumFrameBytes);
+            response = readFrame(socket, defaultMaximumFrameBytes);
+            require(response.has_value(),
+                "the refusal closed the connection instead of answering");
+            envelope = codec::decode(*response);
+            require(codec::inspect(*envelope).payload == PayloadKind::RenderedFrameResponse,
+                "a 1.7 client's request in its own terms was not rendered");
         }
         remote->close();
         local->close();

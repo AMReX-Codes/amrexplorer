@@ -2,38 +2,124 @@
 
 #include <amrexplorer/core/Geometry.hpp>
 
+#include <optional>
+
 namespace amrvis {
+
+// A rotation as a unit quaternion (w, x, y, z): Hamilton product, a vector
+// rotated by q v q*, the identity by default. q and -q are one rotation.
+struct Quaternion {
+    double w = 1.0;
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+    friend constexpr bool operator==(const Quaternion&, const Quaternion&) = default;
+};
+
+[[nodiscard]] constexpr Quaternion operator*(
+    const Quaternion& a, const Quaternion& b) noexcept
+{
+    return {a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w};
+}
+[[nodiscard]] constexpr Quaternion conjugate(const Quaternion& q) noexcept
+{
+    return {q.w, -q.x, -q.y, -q.z};
+}
+[[nodiscard]] constexpr double normSquared(const Quaternion& q) noexcept
+{
+    return q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z;
+}
+[[nodiscard]] double norm(const Quaternion& q) noexcept;
+// Unit length; the identity when the norm is not finite and positive.
+[[nodiscard]] Quaternion normalized(const Quaternion& q) noexcept;
+// Finite and within `tolerance` of unit length.
+[[nodiscard]] bool nearUnit(const Quaternion& q, double tolerance) noexcept;
+// The rotation by `angle` (radians, right-handed) about `axis`, which need
+// not be unit; the identity for a zero axis.
+[[nodiscard]] Quaternion axisAngle(const Real3& axis, double angle) noexcept;
+[[nodiscard]] Real3 rotate(const Quaternion& q, const Real3& vector) noexcept;
 
 // The orthographic camera of the 3-D overview (the iso quadrant) and of the
 // volume renderer: the domain is normalised about its centre by its largest
-// extent, rotated by `azimuth` about z and then by `elevation` about the
-// rotated x axis, and projected along the view depth. Both the Qt view that
-// draws the wireframe and the ray caster that draws the volume use these
-// functions, so the two can never disagree about where a point lands --
-// provided both are given the same `domain` box, since the normalisation is
-// about that box's own centre and largest extent.
+// extent, rotated by `rotation` from world into view coordinates (x1 right,
+// y2 up, depth toward the viewer), and projected along the view depth. Both
+// the Qt view that draws the wireframe and the ray caster that draws the
+// volume use these functions, so the two can never disagree about where a
+// point lands -- provided both are given the same `domain` box, since the
+// normalisation is about that box's own centre and largest extent. The
+// constructor is what makes a stale `{azimuth, elevation, zoom}` a compile
+// error rather than three quaternion components.
 struct OrthoCamera {
-    double azimuth = 0.0;    // radians, about z
-    double elevation = 0.0;  // radians, about the rotated x axis
+    Quaternion rotation;
     double zoom = 1.0;
-    friend bool operator==(const OrthoCamera&, const OrthoCamera&) = default;
+    constexpr OrthoCamera() = default;
+    constexpr OrthoCamera(const Quaternion& rotation_, double zoom_) noexcept
+        : rotation(rotation_)
+        , zoom(zoom_)
+    {
+    }
+    friend constexpr bool operator==(const OrthoCamera&, const OrthoCamera&) = default;
 };
 
-// The camera angles the XY / XZ / YZ preset buttons select: XY looks down -z
-// with +y up, XZ looks along +y with +z up, YZ looks along -x with +z up.
-inline constexpr OrthoCamera orthoPresetXY{0.0, 0.0, 1.0};
-inline constexpr OrthoCamera orthoPresetXZ{0.0, -1.5707963267948966, 1.0};
-inline constexpr OrthoCamera orthoPresetYZ{
-    -1.5707963267948966, -1.5707963267948966, 1.0};
+// The two-angle view of a camera: a turn by `azimuth` about world z, then by
+// `elevation` about the turned x axis. Every rotation without roll -- world
+// z drawn vertical on screen -- has exactly one such pair.
+struct OrthoAngles {
+    double azimuth = 0.0;
+    double elevation = 0.0;
+};
+[[nodiscard]] OrthoCamera orthoCameraFromAngles(
+    double azimuth, double elevation, double zoom = 1.0) noexcept;
+// The angles of a camera without roll; nothing for one with.
+[[nodiscard]] std::optional<OrthoAngles> orthoAnglesOf(
+    const OrthoCamera& camera) noexcept;
+// The same, for any camera: the angles of the roll-free camera nearest it,
+// by the angle between rotations. At a quarter-turn roll a whole family is
+// equally near and the level one is taken -- fixed, not the rounding's.
+[[nodiscard]] OrthoAngles nearestOrthoAngles(const OrthoCamera& camera) noexcept;
+// How far from unit length a camera's rotation may be and still be used.
+inline constexpr double orthoRotationTolerance = 1.0e-3;
 
-// The angle the 3-D views open at: a twelfth of a turn around the domain and
-// tilted onto it from above. The elevation is negative for the same reason
-// the presets above are -- that is the sign that puts +z up. A positive one
-// looks at the domain from underneath, so a plume hangs from the ceiling
-// instead of rising from the floor, and the axis indicator, which shares
-// these angles, agrees with it and looks equally wrong.
+// Rotations about x and about z from the cosine and sine of the half angle,
+// which the presets below need as literals: the trig functions are not
+// constant expressions.
+[[nodiscard]] constexpr Quaternion aboutX(double cosHalf, double sinHalf) noexcept
+{
+    return {cosHalf, sinHalf, 0.0, 0.0};
+}
+[[nodiscard]] constexpr Quaternion aboutZ(double cosHalf, double sinHalf) noexcept
+{
+    return {cosHalf, 0.0, 0.0, sinHalf};
+}
+inline constexpr double orthoHalfQuarterTurn = 0.70710678118654752;  // cos, sin of pi/4
+inline constexpr double orthoCosPiTwelfth = 0.96592582628906829;     // cos(pi/12)
+inline constexpr double orthoSinPiTwelfth = 0.25881904510252076;     // sin(pi/12)
+
+// The cameras the XY / XZ / YZ preset buttons select: XY looks down -z with
+// +y up (the identity), XZ looks along +y with +z up (elevation -pi/2), YZ
+// looks along -x with +z up (azimuth -pi/2, elevation -pi/2).
+inline constexpr OrthoCamera orthoPresetXY{Quaternion{}, 1.0};
+inline constexpr OrthoCamera orthoPresetXZ{
+    aboutX(orthoHalfQuarterTurn, -orthoHalfQuarterTurn), 1.0};
+inline constexpr OrthoCamera orthoPresetYZ{
+    aboutX(orthoHalfQuarterTurn, -orthoHalfQuarterTurn)
+        * aboutZ(orthoHalfQuarterTurn, -orthoHalfQuarterTurn),
+    1.0};
+
+// The angle the 3-D views open at: a twelfth of a turn around the domain
+// (azimuth pi/6) and tilted onto it from above (elevation -pi/6). The
+// elevation is negative for the same reason the presets above are -- that
+// is the sign that puts +z up. A positive one looks at the domain from
+// underneath, so a plume hangs from the ceiling instead of rising from the
+// floor, and the axis indicator, which shares the camera, agrees with it and
+// looks equally wrong.
 inline constexpr OrthoCamera orthoDefaultView{
-    0.5235987755982988, -0.5235987755982988, 1.0};
+    aboutX(orthoCosPiTwelfth, -orthoSinPiTwelfth)
+        * aboutZ(orthoCosPiTwelfth, orthoSinPiTwelfth),
+    1.0};
 
 // Which way a direction in domain space points on screen, in screen sense
 // (y down), as a unit-ish vector a caller scales for itself. The same rotation

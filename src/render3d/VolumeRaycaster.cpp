@@ -458,10 +458,11 @@ VolumeFrame raycastVolume(const RaycastGrids& grids,
         || settings.samplesPerVoxel > maxVolumeSamplesPerVoxel) {
         throw std::invalid_argument("samples per voxel must be within [1, 8]");
     }
-    if (!std::isfinite(settings.camera.azimuth) || !std::isfinite(settings.camera.elevation)
+    if (!nearUnit(settings.camera.rotation, orthoRotationTolerance)
         || !(settings.camera.zoom >= minVolumeZoom)
         || !(settings.camera.zoom <= maxVolumeZoom)) {
-        throw std::invalid_argument("camera is not finite or its zoom is out of range");
+        throw std::invalid_argument(
+            "camera orientation is not a unit quaternion or its zoom is out of range");
     }
 
     const auto width = settings.outputSize[0];

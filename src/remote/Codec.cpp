@@ -1089,7 +1089,8 @@ SliceQueryResult fromWire(const fb::SliceViewResponseT& value)
     return result;
 }
 
-fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value)
+fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value,
+    std::uint16_t minorVersion)
 {
     fb::RenderedFrameRequestT wire;
     wire.dataset_id = value.dataset.value;
@@ -1098,8 +1099,19 @@ fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value)
     wire.maximum_level = value.maximumLevel;
     wire.composition = toWireComposition(value.composition);
     wire.region = toWire(value.region);
-    wire.azimuth = value.camera.azimuth;
-    wire.elevation = value.camera.elevation;
+    if (minorVersion >= cameraOrientationMinorVersion) {
+        wire.has_orientation = true;
+        wire.orientation_w = value.camera.rotation.w;
+        wire.orientation_x = value.camera.rotation.x;
+        wire.orientation_y = value.camera.rotation.y;
+        wire.orientation_z = value.camera.rotation.z;
+    } else {
+        // The nearest two angles: exact without roll, and the closest view
+        // an older peer can draw for a caller that skipped the gate.
+        const auto angles = nearestOrthoAngles(value.camera);
+        wire.azimuth = angles.azimuth;
+        wire.elevation = angles.elevation;
+    }
     wire.zoom = value.camera.zoom;
     wire.width = value.outputSize[0];
     wire.height = value.outputSize[1];
@@ -1130,6 +1142,18 @@ VolumeRenderRequest fromWire(const fb::RenderedFrameRequestT& value)
     requireFinite(value.azimuth, "wire volume camera azimuth is non-finite");
     requireFinite(value.elevation, "wire volume camera elevation is non-finite");
     requireFinite(value.zoom, "wire volume camera zoom is non-finite");
+    if (value.has_orientation) {
+        for (const auto component : {value.orientation_w, value.orientation_x,
+                 value.orientation_y, value.orientation_z}) {
+            requireFinite(component, "wire volume camera orientation is non-finite");
+        }
+        if (!nearUnit({value.orientation_w, value.orientation_x, value.orientation_y,
+                          value.orientation_z},
+                orthoRotationTolerance)) {
+            throw std::invalid_argument(
+                "wire volume camera orientation is not a unit quaternion");
+        }
+    }
     if (value.has_range) {
         requireFinite(value.minimum, "wire volume range minimum is non-finite");
         requireFinite(value.maximum, "wire volume range maximum is non-finite");
@@ -1153,7 +1177,14 @@ VolumeRenderRequest fromWire(const fb::RenderedFrameRequestT& value)
     result.maximumLevel = value.maximum_level;
     result.composition = composition;
     result.region = region;
-    result.camera = {value.azimuth, value.elevation, value.zoom};
+    // The orientation as sent, not normalised: a request must decode to the
+    // camera it was encoded from, bit for bit, or the two sides' frames
+    // could differ by a rounding.
+    result.camera = value.has_orientation
+        ? OrthoCamera{{value.orientation_w, value.orientation_x, value.orientation_y,
+                          value.orientation_z},
+              value.zoom}
+        : orthoCameraFromAngles(value.azimuth, value.elevation, value.zoom);
     result.outputSize = {value.width, value.height};
     if (value.has_range) {
         result.range = VolumeRange{

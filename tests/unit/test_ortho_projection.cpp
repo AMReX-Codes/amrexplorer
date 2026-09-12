@@ -79,14 +79,156 @@ int main()
 
     // Pinned from the iso view's projection formula: the upper corner under
     // azimuth 30 deg, elevation 30 deg, zoom 1.
-    const amrvis::OrthoCamera oblique{30.0 * pi / 180.0, 30.0 * pi / 180.0, 1.0};
+    const auto oblique = amrvis::orthoCameraFromAngles(
+        30.0 * pi / 180.0, 30.0 * pi / 180.0, 1.0);
     const auto corner = amrvis::projectPoint(
         oblique, frame, domain, point(2.0, 1.0, 1.0));
     require(near(corner.x, 242.505752861) && near(corner.y, 111.497123569)
             && near(corner.depth, 0.449759526),
         "the oblique projection does not match the iso view's numbers");
+
+    // The camera is a unit quaternion; the two angles are a view of it. Two
+    // quaternions are one rotation when they agree up to sign.
+    const auto sameRotation = [](const amrvis::Quaternion& a, const amrvis::Quaternion& b) {
+        const auto dotted = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
+        return std::abs(dotted) >= 1.0 - 1.0e-12;
+    };
+    // The angle between two rotations -- the distance "nearest" is measured
+    // in, and what falling back to two angles costs the view.
+    const auto angleBetween = [](const amrvis::Quaternion& a, const amrvis::Quaternion& b) {
+        const auto dotted = std::abs(a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z);
+        return 2.0 * std::acos(std::min(dotted, 1.0));
+    };
+    // No roll-free camera on a fine grid is nearer than the one the angles
+    // name -- the property, not one hand-worked answer.
+    const auto isNearestRollFree = [&](const amrvis::OrthoCamera& camera) {
+        const auto angles = amrvis::nearestOrthoAngles(camera);
+        const auto chosen = angleBetween(camera.rotation,
+            amrvis::orthoCameraFromAngles(angles.azimuth, angles.elevation).rotation);
+        for (int i = 0; i < 180; ++i) {
+            for (int j = 0; j < 180; ++j) {
+                const auto azimuth = -pi + 2.0 * pi * i / 180.0;
+                const auto elevation = -pi + 2.0 * pi * j / 180.0;
+                const auto here = angleBetween(camera.rotation,
+                    amrvis::orthoCameraFromAngles(azimuth, elevation).rotation);
+                if (here < chosen - 1.0e-9) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    {
+        const auto qx = amrvis::axisAngle(point(1.0, 0.0, 0.0), 0.6);
+        const auto qz = amrvis::axisAngle(point(0.0, 0.0, 1.0), -1.1);
+        const auto qy = amrvis::axisAngle(point(0.0, 2.0, 0.0), 0.35);
+        require(near(amrvis::norm(qx * qz), 1.0)
+                && sameRotation(qx * amrvis::conjugate(qx), amrvis::Quaternion{})
+                && sameRotation((qx * qz) * qy, qx * (qz * qy)),
+            "the quaternion product is not a unit, associative rotation product");
+        // A right-handed turn about x by 0.6 carries +y toward +z.
+        const auto turned = amrvis::rotate(qx, point(0.0, 1.0, 0.0));
+        require(near(turned[0], 0.0) && near(turned[1], std::cos(0.6))
+                && near(turned[2], std::sin(0.6)),
+            "rotate does not turn right-handedly about the axis");
+        require(sameRotation(amrvis::normalized({2.0, 0.0, 0.0, 0.0}), amrvis::Quaternion{})
+                && amrvis::nearUnit({1.0, 1.0e-4, 0.0, 0.0}, 1.0e-3)
+                && !amrvis::nearUnit({2.0, 0.0, 0.0, 0.0}, 1.0e-3),
+            "normalisation or the unit test is off");
+    }
+    // The constexpr presets are the angles they stand for, and the angles
+    // come back from any roll-free camera.
+    require(sameRotation(amrvis::orthoPresetXY.rotation,
+                amrvis::orthoCameraFromAngles(0.0, 0.0).rotation)
+            && sameRotation(amrvis::orthoPresetXZ.rotation,
+                amrvis::orthoCameraFromAngles(0.0, -pi / 2.0).rotation)
+            && sameRotation(amrvis::orthoPresetYZ.rotation,
+                amrvis::orthoCameraFromAngles(-pi / 2.0, -pi / 2.0).rotation)
+            && sameRotation(amrvis::orthoDefaultView.rotation,
+                amrvis::orthoCameraFromAngles(pi / 6.0, -pi / 6.0).rotation),
+        "a preset's quaternion is not its angles' rotation");
+    for (const double azimuth : {-3.1, -2.0, -1.0, 0.0, 0.7, 1.5, 3.1}) {
+        for (const double elevation : {-3.1, -2.0, -0.5, 0.0, 1.2, 2.4, 3.1}) {
+            const auto camera = amrvis::orthoCameraFromAngles(azimuth, elevation, 1.3);
+            const auto angles = amrvis::orthoAnglesOf(camera);
+            require(angles.has_value()
+                    && sameRotation(amrvis::orthoCameraFromAngles(
+                                        angles->azimuth, angles->elevation)
+                                        .rotation,
+                        camera.rotation),
+                "a camera built from angles does not give them back");
+        }
+    }
+    {
+        // Rolled about the view's depth axis, the camera has no angles; a
+        // quarter turn carries what +y projected to onto +x.
+        amrvis::OrthoCamera rolled = oblique;
+        rolled.rotation = amrvis::axisAngle(point(0.0, 0.0, 1.0), 0.3) * oblique.rotation;
+        require(!amrvis::orthoAnglesOf(rolled).has_value()
+                && std::isfinite(amrvis::nearestOrthoAngles(rolled).azimuth),
+            "a rolled camera claims to be two angles");
+        require(isNearestRollFree(rolled), "a rolled camera's angles are not the nearest");
+        // The XZ preset rolled a quarter turn: a whole family of two-angle
+        // cameras sits a quarter turn away and none is nearer, so the answer
+        // has to come from that family. The XY view is a third of a turn
+        // off, and settling on it would swing the view for nothing.
+        amrvis::OrthoCamera quarterRolled = amrvis::orthoPresetXZ;
+        quarterRolled.rotation
+            = amrvis::axisAngle(point(0.0, 0.0, 1.0), pi / 2.0) * quarterRolled.rotation;
+        const auto settledAngles = amrvis::nearestOrthoAngles(quarterRolled);
+        require(near(angleBetween(quarterRolled.rotation,
+                         amrvis::orthoCameraFromAngles(
+                             settledAngles.azimuth, settledAngles.elevation)
+                             .rotation),
+                    pi / 2.0)
+                && near(angleBetween(quarterRolled.rotation,
+                            amrvis::orthoPresetXY.rotation),
+                    2.0 * pi / 3.0)
+                && isNearestRollFree(quarterRolled),
+            "a quarter-turn roll's nearest angles are not the nearest view");
+        // And a fixed pair, not whichever way the rounding fell: level, a
+        // quarter turn about z.
+        require(near(settledAngles.azimuth, pi / 2.0) && near(settledAngles.elevation, 0.0),
+            "a quarter-turn roll's nearest angles are the rounding's choice");
+        // The far side of the same degeneracy, where the XY view is half a
+        // turn off: the worst the old answer could cost.
+        amrvis::OrthoCamera opposed;
+        opposed.rotation = {0.0, amrvis::orthoHalfQuarterTurn, 0.0,
+            amrvis::orthoHalfQuarterTurn};
+        const auto opposedAngles = amrvis::nearestOrthoAngles(opposed);
+        require(near(angleBetween(opposed.rotation,
+                         amrvis::orthoCameraFromAngles(
+                             opposedAngles.azimuth, opposedAngles.elevation)
+                             .rotation),
+                    pi / 2.0)
+                && near(angleBetween(opposed.rotation, amrvis::orthoPresetXY.rotation), pi)
+                && isNearestRollFree(opposed),
+            "a camera half a turn from the XY view settled on it anyway");
+        amrvis::OrthoCamera quarter = amrvis::orthoPresetXY;
+        quarter.rotation = amrvis::axisAngle(point(0.0, 0.0, 1.0), pi / 2.0) * quarter.rotation;
+        const auto wasY = amrvis::projectDirection(amrvis::orthoPresetXY, point(0.0, 1.0, 0.0));
+        const auto nowX = amrvis::projectDirection(quarter, point(1.0, 0.0, 0.0));
+        require(near(nowX.x, wasY.x) && near(nowX.y, wasY.y),
+            "a quarter roll did not carry +x to where +y was");
+    }
+    // Past a pole the two-angle camera tumbles on: from the XZ preset, half
+    // a radian short of the pole +y still points up and the +z face is in
+    // front of the viewer; half a radian past it +y hangs down and the +z
+    // face is behind, the domain seen from underneath.
+    {
+        const auto shortOf = amrvis::orthoCameraFromAngles(0.0, -pi / 2.0 + 0.5);
+        const auto past = amrvis::orthoCameraFromAngles(0.0, -pi / 2.0 - 0.5);
+        require(amrvis::projectDirection(shortOf, point(0.0, 1.0, 0.0)).y < 0.0
+                && amrvis::projectDirection(past, point(0.0, 1.0, 0.0)).y > 0.0,
+            "tumbling past the pole did not turn the domain upside down");
+        const auto ceiling = point(1.0, 0.5, 1.0);
+        require(amrvis::projectPoint(shortOf, frame, domain, ceiling).depth > 0.0
+                && amrvis::projectPoint(past, frame, domain, ceiling).depth < 0.0,
+            "tumbling past the pole did not carry the +z face behind the viewer");
+    }
     // Zoom scales about the viewport centre.
-    const amrvis::OrthoCamera zoomed{oblique.azimuth, oblique.elevation, 2.0};
+    amrvis::OrthoCamera zoomed = oblique;
+    zoomed.zoom = 2.0;
     const auto zoomedCorner = amrvis::projectPoint(
         zoomed, frame, domain, point(2.0, 1.0, 1.0));
     require(near(zoomedCorner.x - 200.0, 2.0 * (corner.x - 200.0))
@@ -128,9 +270,15 @@ int main()
     // pixelRay inverts projectPoint: the ray through a point's projection
     // passes through the point, starts on the viewer's side outside the
     // domain, and points away from the viewer (toward decreasing depth).
+    amrvis::OrthoCamera rolledOblique = oblique;
+    rolledOblique.rotation
+        = amrvis::axisAngle(point(0.0, 0.0, 1.0), 0.9) * oblique.rotation;
+    rolledOblique.zoom = 0.8;
     for (const auto& camera : {oblique, zoomed, amrvis::orthoPresetXY,
              amrvis::orthoPresetXZ, amrvis::orthoPresetYZ,
-             amrvis::OrthoCamera{-2.3, 1.1, 0.7}}) {
+             amrvis::orthoCameraFromAngles(-2.3, 1.1, 0.7),
+             amrvis::orthoCameraFromAngles(0.4, 2.0, 1.0),
+             amrvis::orthoCameraFromAngles(-1.0, -2.5, 1.3), rolledOblique}) {
         for (const auto& target : {point(2.0, 1.0, 1.0), point(0.0, 0.0, 0.0),
                  point(1.3, 0.2, 0.9), point(1.0, 0.5, 0.5)}) {
             const auto projected = amrvis::projectPoint(
@@ -209,7 +357,7 @@ int main()
         // A half-size draft rendered at zoom 1, now displayed at zoom 1.15.
         const auto drafted = amrvis::viewportFrame(250, 200);
         for (const double zoom : {1.0, 1.15, 0.7, 4.0}) {
-            amrvis::OrthoCamera rendered{0.4, -0.3, 1.0};
+            const auto rendered = amrvis::orthoCameraFromAngles(0.4, -0.3, 1.0);
             auto shown = rendered;
             shown.zoom = zoom;
             const auto scale

@@ -338,8 +338,8 @@ int main()
         const auto faceOn = amrvis::raycastVolume(grid,
             settingsFor(amrvis::orthoPresetXY, 65, transfer));
         // Down the body diagonal: elevation acos(1/sqrt(3)), azimuth 45 deg.
-        const amrvis::OrthoCamera diagonal{
-            0.7853981633974483, 0.9553166181245093, 1.0};
+        const auto diagonal = amrvis::orthoCameraFromAngles(
+            0.7853981633974483, 0.9553166181245093, 1.0);
         const auto oblique = amrvis::raycastVolume(grid,
             settingsFor(diagonal, 65, transfer));
         const auto alphaOfCentre = [](const amrvis::VolumeFrame& f) {
@@ -417,7 +417,7 @@ int main()
         // A quarter turn of azimuth from XY puts +x at the top of the screen
         // (x1 = -ny, y2 = nx): the upper half lit, the lower half empty.
         {
-            const amrvis::OrthoCamera turned{1.5707963267948966, 0.0, 1.0};
+            const auto turned = amrvis::orthoCameraFromAngles(1.5707963267948966, 0.0, 1.0);
             const auto frame = amrvis::raycastVolume(grid,
                 settingsFor(turned, 64, transfer));
             require(alphaOf(pixelAt(frame, 32, 24)) == 255
@@ -438,7 +438,7 @@ int main()
                 | (static_cast<std::uint32_t>(255 - entry * 16) << 16U));
             transfer.opacities.push_back(static_cast<float>(entry) / 40.0F);
         }
-        const amrvis::OrthoCamera oblique{0.7, -0.4, 1.3};
+        const auto oblique = amrvis::orthoCameraFromAngles(0.7, -0.4, 1.3);
         // Both policies, because rows are handed out on demand and Linear
         // carries a cache that lives for one ray: a cache that outlived its
         // ray would make a pixel depend on which worker reached it and in
@@ -1128,7 +1128,7 @@ int main()
                 | (static_cast<std::uint32_t>(255 - entry * 16) << 16U));
             transfer.opacities.push_back(static_cast<float>(entry) / 40.0F);
         }
-        auto single = settingsFor(amrvis::OrthoCamera{0.7, -0.4, 1.3}, 97, transfer, 3);
+        auto single = settingsFor(amrvis::orthoCameraFromAngles(0.7, -0.4, 1.3), 97, transfer, 3);
         single.sampling = amrvis::SamplingPolicy::Linear;
         single.isosurface = isosurface(0.3, 0x40C0FFU, 0.6F);
         auto many = single;
@@ -1289,8 +1289,8 @@ int main()
         require(rejects(bad),
             "a domain whose span overflows to infinity was accepted");
         bad = settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F));
-        bad.camera.azimuth = std::numeric_limits<double>::quiet_NaN();
-        require(rejects(bad), "a non-finite camera angle was accepted");
+        bad.camera.rotation.w = std::numeric_limits<double>::quiet_NaN();
+        require(rejects(bad), "a non-finite camera orientation was accepted");
         bad = settingsFor(amrvis::orthoPresetXY, 32, twoEntries(0xFFU, 1.0F));
         bad.camera.zoom = 0.5 * amrvis::minVolumeZoom;
         require(rejects(bad), "a zoom below the minimum was accepted");

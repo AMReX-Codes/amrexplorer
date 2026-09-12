@@ -44,6 +44,7 @@ public:
     [[nodiscard]] bool supportsVolumeRendering() const noexcept override;
     [[nodiscard]] bool supportsVolumeSampling() const noexcept override;
     [[nodiscard]] bool supportsVolumeIsosurface() const noexcept override;
+    [[nodiscard]] bool supportsVolumeOrientation() const noexcept override;
     // True when the server speaks protocol 1.4 -- which is also the only way
     // this session could have installed the list it was opened with, which is
     // what the GUI's reload loop relies on (see DatasetSession).

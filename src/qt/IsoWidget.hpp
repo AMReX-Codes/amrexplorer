@@ -63,6 +63,16 @@ public:
     // interactionEnded.
     [[nodiscard]] const OrthoCamera& camera() const noexcept { return m_camera; }
     void setCamera(const OrthoCamera& camera);
+    // A preset's orientation at the current zoom, as its button applies it:
+    // emits cameraChanged and then interactionEnded, the move being over.
+    void setPreset(const OrthoCamera& preset);
+    // Whether a drag turns the view about the screen's own axes, so the face
+    // under the cursor follows the cursor in any orientation (the default),
+    // or about world z and the turned x axis, the two angles an older
+    // server reads. Turning it off puts a rolled camera on its nearest two
+    // angles, and says so as a camera change.
+    void setFreeRotation(bool free);
+    [[nodiscard]] bool freeRotation() const noexcept { return m_freeRotation; }
 
     // A rendered volume frame drawn under the wireframe, with the camera it
     // was rendered with: a premultiplied image produced at some viewport size
@@ -129,8 +139,9 @@ private:
         const IntBox& box) const;
     [[nodiscard]] QColor levelOutlineColor(int level) const;
     [[nodiscard]] QColor slicePlaneColor(int axis) const;
-    void setViewAngles(double azimuth, double elevation);
     void layoutButtons();
+    // The two-angle state the drag turns, and the camera rebuilt from it.
+    void seedAnglesFromCamera();
 
     void setGeometries(const std::vector<const DatasetMetadata*>& metadata,
         DisplayMap displayMap);
@@ -160,6 +171,11 @@ private:
     bool m_hasGeometry = false;
 
     OrthoCamera m_camera;
+    // The drag's turn about world z and tilt about the turned x axis, the
+    // camera's angles (nearestOrthoAngles); unbounded, wrapped into [-pi, pi).
+    double m_azimuth = 0.0;
+    double m_elevation = 0.0;
+    bool m_freeRotation = true;
     QPoint m_lastMousePos;
     bool m_dragging = false;
 

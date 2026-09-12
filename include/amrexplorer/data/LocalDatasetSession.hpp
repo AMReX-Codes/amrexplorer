@@ -105,6 +105,10 @@ public:
     {
         return supportsVolumeRendering();
     }
+    [[nodiscard]] bool supportsVolumeOrientation() const noexcept override
+    {
+        return supportsVolumeRendering();
+    }
     [[nodiscard]] VolumeFrame renderVolume(const VolumeRenderRequest& request,
         StopToken cancellation = {}) override;
     // The same render with a bound on the threads it may use, or 0 to leave

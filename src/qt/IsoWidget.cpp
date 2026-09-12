@@ -24,7 +24,7 @@ namespace {
 
 constexpr double pi = 3.14159265358979323846;
 
-// An angle brought into (-pi, pi]: the rotation is periodic, and a long drag
+// An angle brought into [-pi, pi): the rotation is periodic, and a long drag
 // would otherwise run the numbers off without bound.
 double wrapAngle(double angle) noexcept
 {
@@ -517,14 +517,16 @@ void IsoWidget::setFreeRotation(bool free)
     if (free) {
         return;
     }
-    // A rolled camera has no two angles: the nearest that do, so what the
-    // older server is asked for is what the view then shows.
+    // A camera that already has two angles is left as it is, bit for bit:
+    // rebuilding it from them would not reproduce it exactly, and a spurious
+    // change here -- on every geometry push against an older server -- would
+    // end a drag's draft early. A rolled camera goes onto the nearest angles,
+    // so what the older server is asked for is what the view then shows.
     seedAnglesFromCamera();
-    const auto squared = orthoCameraFromAngles(m_azimuth, m_elevation, m_camera.zoom);
-    if (squared == m_camera) {
+    if (orthoAnglesOf(m_camera).has_value()) {
         return;
     }
-    m_camera = squared;
+    m_camera = orthoCameraFromAngles(m_azimuth, m_elevation, m_camera.zoom);
     update();
     emit cameraChanged();
     emit interactionEnded();

@@ -172,7 +172,7 @@ private:
 
     OrthoCamera m_camera;
     // The drag's turn about world z and tilt about the turned x axis, the
-    // camera's angles (nearestOrthoAngles); unbounded, wrapped into (-pi, pi].
+    // camera's angles (nearestOrthoAngles); unbounded, wrapped into [-pi, pi).
     double m_azimuth = 0.0;
     double m_elevation = 0.0;
     bool m_freeRotation = true;

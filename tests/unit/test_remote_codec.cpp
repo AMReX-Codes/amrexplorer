@@ -784,9 +784,10 @@ int main()
         rolled.camera.rotation
             = axisAngle({{0.0, 0.0, 1.0}}, 0.4) * rolled.camera.rotation;
         const auto rolledOlder = codec::toWire(rolled, 7);
-        require(!rolledOlder.has_orientation && rolledOlder.azimuth == 0.0
-                && rolledOlder.elevation == 0.0,
-            "a rolled camera for a 1.7 peer did not fall to zero angles");
+        const auto nearest = nearestOrthoAngles(rolled.camera);
+        require(!rolledOlder.has_orientation && rolledOlder.azimuth == nearest.azimuth
+                && rolledOlder.elevation == nearest.elevation,
+            "a rolled camera for a 1.7 peer did not fall to its nearest angles");
         require(roundTrips(rolled), "a rolled camera did not round-trip");
         auto both = codec::toWire(rolled);
         both.azimuth = 1.0;

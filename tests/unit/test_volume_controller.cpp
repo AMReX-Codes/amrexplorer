@@ -1697,6 +1697,14 @@ int main(int argc, char** argv)
                 "on two angles");
             require(amrvis::orthoAnglesOf(view->camera()).has_value(),
                 "switching to two angles left a rolled camera on the view");
+            {
+                // Nor does a rolled camera set from outside stay rolled there.
+                auto rolled = view->camera();
+                rolled.rotation = amrvis::axisAngle({{0.0, 0.0, 1.0}}, 0.3) * rolled.rotation;
+                view->setCamera(rolled);
+                require(amrvis::orthoAnglesOf(view->camera()).has_value(),
+                    "a rolled camera set on a two-angle view stayed rolled");
+            }
             settle(application, 500);
             waitFor(application, [&] { return !controller.renderInFlight(); },
                 "the render from squaring the camera did not finish");

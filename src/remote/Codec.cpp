@@ -1106,7 +1106,9 @@ fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value,
         wire.orientation_y = value.camera.rotation.y;
         wire.orientation_z = value.camera.rotation.z;
     } else {
-        const auto angles = orthoAnglesOf(value.camera).value_or(OrthoAngles{});
+        // The nearest two angles: exact without roll, and the closest view
+        // an older peer can draw for a caller that skipped the gate.
+        const auto angles = nearestOrthoAngles(value.camera);
         wire.azimuth = angles.azimuth;
         wire.elevation = angles.elevation;
     }

@@ -571,6 +571,10 @@ void IsoWidget::setCamera(const OrthoCamera& camera)
     }
     m_camera = camera;
     seedAnglesFromCamera();
+    if (!m_freeRotation && !orthoAnglesOf(m_camera).has_value()) {
+        // On two angles the view holds no rolled camera (setFreeRotation).
+        m_camera = orthoCameraFromAngles(m_azimuth, m_elevation, m_camera.zoom);
+    }
     update();
     emit cameraChanged();
 }

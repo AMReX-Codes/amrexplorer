@@ -920,11 +920,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
             }
             updateDiagnostics();
             watcher->deleteLater();
-            // The interactive re-slice batch has drained once no view has work
-            // in flight; the smoke test waits on this to read settled state.
-            if (m_diagnosticsModel->activeRequests() == 0) {
-                emit interactiveSlicesSettled();
-            }
+            settleIfDrained();
         });
     watcher->setFuture(future);
 }
@@ -1783,6 +1779,17 @@ int MainWindow::slicesInFlight() const
     return total;
 }
 
+void MainWindow::settleIfDrained()
+{
+    // The interactive batch has drained once nothing is in flight; the smoke
+    // tests wait on this. A frame prefetch can still be running when the
+    // last slice lands, and nothing else would send the signal when it ends.
+    m_settleDeferred = m_diagnosticsModel->activeRequests() != 0;
+    if (!m_settleDeferred) {
+        emit interactiveSlicesSettled();
+    }
+}
+
 int MainWindow::slicesInFlight(const DatasetLayer& layer) const
 {
     if (m_viewDimension == 2) {
@@ -1940,9 +1947,7 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
                         reportVisibleSyncFailure(error);
                     }
                 }
-                if (m_diagnosticsModel->activeRequests() == 0) {
-                    emit interactiveSlicesSettled();
-                }
+                settleIfDrained();
             };
             // Only the extraction is guarded: takeResult rethrows a worker
             // exception (a failed extrema scan or render), which must not

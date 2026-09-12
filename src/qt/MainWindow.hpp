@@ -1411,6 +1411,10 @@ private:
     // DiagnosticsModel's active count tracks.
     [[nodiscard]] int slicesInFlight() const;
     [[nodiscard]] int slicesInFlight(const DatasetLayer& layer) const;
+    // Emits interactiveSlicesSettled once the DiagnosticsModel's active count
+    // is zero; otherwise leaves the signal to the activity that is still
+    // running (a frame prefetch, see the loadActivityChanged handler).
+    void settleIfDrained();
 
     // Slice requests: the debounce timer coalesces into per-view requests.
     // rasterDirty false means the trigger (contour mode/count) cannot change
@@ -1702,6 +1706,8 @@ private:
     std::vector<PlaneViewState*> m_pendingViews;
     // OR of the rasterDirty flags of the coalesced pending requests.
     bool m_pendingRasterDirty = false;
+    // A slice landed while other activity ran: the settle is still owed.
+    bool m_settleDeferred = false;
     StopSource m_initialStopSource;
     StopSource m_metadataStopSource;
     DisplayMode m_displayMode = DisplayMode::Raster;

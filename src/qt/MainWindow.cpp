@@ -680,6 +680,7 @@ MainWindow::MainWindow(QWidget* parent)
             m_pendingAllViews = false;
             m_pendingViews.clear();
             m_sliceDebounce->stop();
+            m_settleDeferred = false;
             // The dataset window shows the previous frame's raw values;
             // drop it, and the line plot window whose curves are snapshots
             // of this dataset, so neither goes stale across the switch.
@@ -697,6 +698,13 @@ MainWindow::MainWindow(QWidget* parent)
         this, [this](int delta) {
             m_diagnosticsModel->adjustActivity(delta);
             updateDiagnostics();
+            // A slice that landed while a prefetch ran left the settle to
+            // it (settleIfDrained).
+            if (delta < 0 && m_settleDeferred
+                && m_diagnosticsModel->activeRequests() == 0) {
+                m_settleDeferred = false;
+                emit interactiveSlicesSettled();
+            }
         });
     connect(m_sequenceController, &SequenceController::staleResultDropped,
         this, [this] {

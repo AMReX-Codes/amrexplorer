@@ -236,6 +236,11 @@ VolumeFrame RemoteDatasetSession::renderVolume(
     });
 }
 
+bool RemoteDatasetSession::peerSupportsMappedGrid() const noexcept
+{
+    return m_connection && m_connection->supportsMappedGrid();
+}
+
 bool RemoteDatasetSession::supportsMappedGrid() const noexcept
 {
     // Both halves: the protocol carries the plane and the plotfile has one.

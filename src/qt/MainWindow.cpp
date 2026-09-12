@@ -1505,10 +1505,11 @@ void MainWindow::updateMappedGridControls()
             reason = tr("Not available while a companion is open");
         } else if (displayIsSpherical()) {
             reason = tr("A 2-D spherical plotfile is drawn on its R-Z wedge");
-        } else if (layerIsRemote(primary().planeViews.front())
-            && primary().session->metadata().hasMappedGrid) {
-            // The catalog says the plotfile has node positions; only the
-            // server's protocol can be what withholds them.
+        } else if (const auto remote = std::dynamic_pointer_cast<
+                       remote::RemoteDatasetSession>(primary().session);
+            remote && !remote->peerSupportsMappedGrid()) {
+            // An older server's catalog cannot say whether the plotfile has
+            // node positions, so the version is the whole answer.
             reason = tr("The remote server predates mapped grids (protocol 1.7); "
                         "install a current amrexplorer-server");
         } else {

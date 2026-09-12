@@ -42,8 +42,8 @@ void validateSessionParticleSampleResult(
 void validateSessionVolumeResult(const DatasetMetadata& metadata,
     const VolumeRenderRequest& request, const VolumeFrame& frame);
 // A mapped grid's node plane: one node more than the request's raster along
-// each axis, the request's region, levels the catalog has in ascending
-// order with one face block each, ordered faces, everything finite.
+// each axis, the request's region verbatim, levels up to the request's in
+// ascending order with one face block each, everything finite.
 void validateSessionMappedGridResult(const DatasetMetadata& metadata,
     const MappedGridPlaneRequest& request, const MappedGridPlane& plane);
 // The derived-field half of an open reply, which the wire decoder cannot check

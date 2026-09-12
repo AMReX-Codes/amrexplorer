@@ -825,7 +825,7 @@ private:
     // Protocol 1.7: the node plane a slice is drawn on, computed here from
     // the plotfile's nodal MultiFab the way the local session computes it
     // and shipped whole. Nothing in it is optional, so the bound is checked
-    // before any block is read; the exact guard stays for the encoding.
+    // before any block is read; send() makes the exact check on the encoding.
     void mappedGridPlane(
         const codec::NativeEnvelope& envelope, StopToken cancellation)
     {
@@ -841,13 +841,7 @@ private:
         const auto dataset = requireDataset(request.dataset);
         validateMappedGridBound(request, dataset->metadata().finestLevel);
         const auto plane = dataset->requestMappedGridPlane(request, cancellation);
-        const auto encodedBytes = codec::encode(envelope.request_id,
-            codec::toWire(plane, dataset->cacheMetrics()),
-            m_selectedMinorVersion).size();
-        if (encodedBytes > m_maximumFrameBytes.load()) {
-            throw RemoteError(ErrorCode::ResourceLimitExceeded,
-                "mapped-grid plane cannot fit in one negotiated frame");
-        }
+        // send() measures the encoding and refuses what the bound let through.
         send(envelope.request_id, codec::toWire(plane, dataset->cacheMetrics()));
     }
 

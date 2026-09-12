@@ -413,19 +413,19 @@ void validateSessionMappedGridResult(const DatasetMetadata& metadata,
         throw std::invalid_argument(
             "mapped-grid plane node storage does not match its size");
     }
-    for (std::size_t axis = 0; axis < 3; ++axis) {
-        if (!std::isfinite(plane.physicalRegion.lower[axis])
-            || !std::isfinite(plane.physicalRegion.upper[axis])
-            || plane.physicalRegion.lower[axis] > plane.physicalRegion.upper[axis]) {
-            throw std::invalid_argument("mapped-grid plane region is unusable");
-        }
+    // The region the nodes were laid out for is the request's, verbatim: a
+    // plane for another region would warp the raster to the wrong place.
+    if (plane.physicalRegion != request.visibleRegion) {
+        throw std::invalid_argument(
+            "mapped-grid plane does not cover the requested region");
     }
+    const auto maximumLevel = std::min(request.maximumLevel, metadata.finestLevel);
     for (std::size_t index = 0; index < plane.faceLevels.size(); ++index) {
         const auto level = plane.faceLevels[index];
-        if (level < 0 || level > metadata.finestLevel
+        if (level < 0 || level > maximumLevel
             || (index > 0 && level <= plane.faceLevels[index - 1])) {
             throw std::invalid_argument(
-                "mapped-grid plane names a level the catalog does not have in order");
+                "mapped-grid plane names a level past the request in order");
         }
     }
     if (metadata.dimension != 3 && !plane.faceLevels.empty()) {
@@ -444,11 +444,8 @@ void validateSessionMappedGridResult(const DatasetMetadata& metadata,
             }
         }
     }
-    for (std::size_t face = 0; face < faces; ++face) {
-        if (plane.normalLower[face] > plane.normalUpper[face]) {
-            throw std::invalid_argument("mapped-grid plane faces are reversed");
-        }
-    }
+    // The two faces of a node are displaced independently and may cross;
+    // the warp takes their min and max (PlaneMapping's faceSpan).
 }
 
 void validateSessionViewResult(const DatasetMetadata& metadata,

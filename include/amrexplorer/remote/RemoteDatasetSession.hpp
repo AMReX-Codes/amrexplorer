@@ -59,6 +59,9 @@ public:
     // positions; the plane comes back computed on the server, validated
     // against the request and the catalog.
     [[nodiscard]] bool supportsMappedGrid() const noexcept override;
+    // The protocol half alone: false against a server that predates 1.7,
+    // whose catalog cannot say whether the plotfile has node positions.
+    [[nodiscard]] bool peerSupportsMappedGrid() const noexcept;
     [[nodiscard]] MappedGridPlane requestMappedGridPlane(
         const MappedGridPlaneRequest& request,
         StopToken cancellation = {}) override;

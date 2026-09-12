@@ -290,11 +290,26 @@ int main()
             validateSessionMappedGridResult(metadata, request, shortFaces);
         }, "a mapped-grid plane short of a face block was accepted");
 
-        auto reversedFaces = plane;
-        reversedFaces.normalLower[5] = 2.0;
+        // Faces may cross: each is displaced on its own and the warp
+        // orders them.
+        auto crossedFaces = plane;
+        crossedFaces.normalLower[5] = 2.0;
+        requireAccepted([&] {
+            validateSessionMappedGridResult(metadata, request, crossedFaces);
+        }, "a mapped-grid plane with crossed faces was refused");
+
+        auto elsewhere = plane;
+        elsewhere.physicalRegion.lower[0] += 1.0;
+        elsewhere.physicalRegion.upper[0] += 1.0;
         requireRejected([&] {
-            validateSessionMappedGridResult(metadata, request, reversedFaces);
-        }, "a mapped-grid plane with reversed faces was accepted");
+            validateSessionMappedGridResult(metadata, request, elsewhere);
+        }, "a mapped-grid plane for another region was accepted");
+
+        auto coarse = request;
+        coarse.maximumLevel = 0;
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, coarse, plane);
+        }, "a mapped-grid plane with faces past the requested level was accepted");
 
         auto infinite = plane;
         infinite.b[3] = std::numeric_limits<double>::infinity();

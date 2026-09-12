@@ -875,9 +875,11 @@ private:
     // window), the layers re-slice for them, and the view frames the window.
     [[nodiscard]] RealBox snappedPairRegion(
         std::size_t layer, int normal, const RealBox& region) const;
-    // A warped layer gets no region: its warp follows the view
-    // (updateMappedDemand), and its part of the framed window is the window
-    // cut to its tile (pairFramedWindow).
+    // A layer whose tile is a warp gets no region: its warp follows the
+    // view (updateMappedDemand), and its part of the framed window is the
+    // window cut to its tile (pairFramedWindow). The tile on screen decides,
+    // not the request: a layer whose plane fell back, or whose first warp
+    // has not landed, zooms as a flat one.
     [[nodiscard]] std::array<std::optional<RealBox>, 2> pairRegionsForSceneWindow(
         int normal, const QRectF& window) const;
     [[nodiscard]] std::optional<QRectF> pairFramedWindow(int normal,

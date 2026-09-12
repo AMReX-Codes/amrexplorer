@@ -1363,7 +1363,7 @@ std::array<int, 2> MainWindow::sliceOutputSize(
     const auto target = state.visibleRegion.value_or(
         datasetSampleBounds(*layerFor(state).openMetadata));
     if (m_pair && state.visibleRegion.has_value()
-        && requestedWarpFor(state) != DisplayWarp::MappedGrid) {
+        && !isWarped(state.warp)) {
         // Over a pair a zoomed layer fills only its share of the framed
         // window -- a selection straddling the interface splits the height
         // between the two -- so its raster is bounded by that share of the

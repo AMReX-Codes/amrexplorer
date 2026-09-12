@@ -899,7 +899,7 @@ std::array<std::optional<RealBox>, 2> MainWindow::pairRegionsForSceneWindow(
         // on show).
         const auto& state = dataset.planeViews[static_cast<std::size_t>(normal)];
         if (!dataset.session || !stateShown(state)
-            || requestedWarpFor(state) == DisplayWarp::MappedGrid) {
+            || isWarped(state.warp)) {
             continue;
         }
         const auto region = layout.regionForSceneRect(layer, rect);
@@ -925,7 +925,7 @@ std::optional<QRectF> MainWindow::pairFramedWindow(int normal, const QRectF& win
             continue;
         }
         std::optional<QRectF> part;
-        if (requestedWarpFor(state) == DisplayWarp::MappedGrid) {
+        if (isWarped(state.warp)) {
             // The window's part over the warped tile, as the view frames it.
             if (layout.regionForSceneRect(layer, rect)) {
                 part = window.intersected(toQRectF(layout.tileRect(layer)));
@@ -980,8 +980,8 @@ bool MainWindow::applyPairRegions(int normal,
     }
     std::vector<PlaneViewState*> changed;
     for (auto* state : statesForPanel(normal)) {
-        if (requestedWarpFor(*state) == DisplayWarp::MappedGrid) {
-            // A warped layer draws for what the view then shows.
+        if (isWarped(state->warp)) {
+            // A warped tile draws for what the view then shows.
             continue;
         }
         const auto& region = regions[state->layer];
@@ -1045,7 +1045,7 @@ void MainWindow::pairRubberBandZoom(int normal, const QRectF& sceneRect)
                 const auto& state = m_layers[layer].planeViews[static_cast<std::size_t>(normal)];
                 auto region = regions[layer];
                 if (!region && m_layers[layer].session && stateShown(state)
-                    && requestedWarpFor(state) == DisplayWarp::MappedGrid) {
+                    && isWarped(state.warp)) {
                     region = layout.regionForSceneRect(layer, rect);
                 }
                 if (!region) {
@@ -1159,8 +1159,10 @@ void MainWindow::updateShownLayers()
         // zoom, though the hidden layer took no part in it.
         const auto& window = m_pairWindows[static_cast<std::size_t>(state->normal)];
         if (shown && !wasShown && window && m_pair) {
-            if (requestedWarpFor(*state) == DisplayWarp::MappedGrid) {
-                // A warped layer draws for what the window shows of it.
+            if (isWarped(state->warp)) {
+                // A warped tile draws for what the window shows of it; a
+                // flat one, its warp fallen back or not yet landed, takes
+                // the window's part of its domain below.
                 updateMappedDemand(*state);
             } else {
                 const SceneRect rect{window->x(), window->y(), window->width(), window->height()};

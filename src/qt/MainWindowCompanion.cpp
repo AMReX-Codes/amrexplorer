@@ -973,11 +973,14 @@ bool MainWindow::applyPairRegions(int normal,
     const std::array<std::optional<RealBox>, 2>& regions,
     const QRectF& window, bool refit)
 {
-    const auto framed = refit ? pairFramedWindow(normal, window, regions)
-                              : std::optional<QRectF>(window);
-    if (!framed) {
+    // Nothing to frame over a window no layer is under (a pan into the
+    // corner of the canvas neither tile covers); a pan that is frames the
+    // shifted window itself, a selection its parts over the layers.
+    const auto covered = pairFramedWindow(normal, window, regions);
+    if (!covered) {
         return false;
     }
+    const auto framed = refit ? *covered : window;
     std::vector<PlaneViewState*> changed;
     for (auto* state : statesForPanel(normal)) {
         if (isWarped(state->warp)) {

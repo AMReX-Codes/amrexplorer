@@ -296,23 +296,23 @@ public:
         const auto upper = geometry.upperLayer;
         const auto lower = geometry.lowerLayer();
         const auto& display = geometry.displayBounds;
-        const auto interface = geometry.interfacePosition();
+        const auto seam = geometry.interfacePosition();
         if (m_axes[1] == geometry.perpendicularAxis) {
             // Vertical: scene y grows downward, so the upper layer is on top,
             // from its highest node down to the interface.
             m_bandStart[upper] = 0.0;
             m_bandAnchor[upper] = display[upper].upper[p];
-            m_bandStart[lower] = (display[upper].upper[p] - interface)
+            m_bandStart[lower] = (display[upper].upper[p] - seam)
                 * m_perpendicularUnitsPerLength[upper];
-            m_bandAnchor[lower] = interface;
+            m_bandAnchor[lower] = seam;
         } else {
             // Horizontal: the lower layer is on the left, from its lowest
             // node up to the interface.
             m_bandStart[lower] = 0.0;
             m_bandAnchor[lower] = display[lower].lower[p];
-            m_bandStart[upper] = (interface - display[lower].lower[p])
+            m_bandStart[upper] = (seam - display[lower].lower[p])
                 * m_perpendicularUnitsPerLength[lower];
-            m_bandAnchor[upper] = interface;
+            m_bandAnchor[upper] = seam;
         }
     }
 

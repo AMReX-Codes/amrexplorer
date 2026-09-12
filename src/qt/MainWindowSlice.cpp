@@ -924,6 +924,12 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                 reportVisibleSyncFailure(error);
             }
             updateDiagnostics();
+            // A layer switch waiting on this slice (updateShownLayers) is
+            // finished by showSlice; an arrival that never got there -- stale,
+            // failed -- must not leave the outgoing tile on show.
+            if (m_pair) {
+                updateShownLayers();
+            }
             watcher->deleteLater();
             settleIfDrained();
         });

@@ -280,9 +280,6 @@ void armCompanionDerivedChecks(amrvis::qt::MainWindow& window,
     QTimer::singleShot(0, &window, [&window, upper] { window.openDataset(upper); });
 }
 
-// Real zoom over a pair: a selection straddling the interface gives each
-// layer the part in its own domain, both re-slice for it and land at their
-// places, the panel frames the selection, and Reset Zoom puts both back.
 // Mapped grids over a pair: each dataset that carries node positions is
 // drawn on them, on the pair's canvas about the interface (the fixtures'
 // nodes stay inside their domains, so the tiles keep the pair's rects); a
@@ -583,6 +580,9 @@ void armMappedCompanionChecks(amrvis::qt::MainWindow& window,
     QTimer::singleShot(0, &window, [&window, upper] { window.openDataset(upper); });
 }
 
+// Real zoom over a pair: a selection straddling the interface gives each
+// layer the part in its own domain, both re-slice for it and land at their
+// places, the panel frames the selection, and Reset Zoom puts both back.
 void armCompanionZoomChecks(amrvis::qt::MainWindow& window,
     QApplication& application, const std::filesystem::path& upper,
     const std::filesystem::path& lower)

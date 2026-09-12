@@ -2232,6 +2232,19 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_idle_ui_state_smoke PROPERTIES TIMEOUT 30)
+    # View > Slice Planes (I) shows and hides the lines a 3-D panel draws for
+    # the other two planes, on by default.
+    add_test(
+        NAME qt_slice_planes_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
+            "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
+            "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_slice_planes"
+            -DMODE=slice-planes
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
+    )
+    set_tests_properties(qt_slice_planes_smoke PROPERTIES TIMEOUT 30)
     # Hiding the Animation panel while it holds the 3-D sweep controls must not
     # keep it hidden when a sequence arrives and it holds the transport.
     add_test(

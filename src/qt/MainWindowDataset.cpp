@@ -192,6 +192,16 @@ void MainWindow::restoreSettings()
             QStringLiteral("overlay/scaleBar"), false).toBool();
         m_scaleBarAction->setChecked(m_scaleBarVisible);
     }
+    if (m_slicePlanesAction != nullptr) {
+        // Blocked like the boxes; the isometric view is told directly.
+        const QSignalBlocker planesBlocker(m_slicePlanesAction);
+        const bool visible
+            = settings.value(QStringLiteral("overlay/slicePlanes"), true).toBool();
+        m_slicePlanesAction->setChecked(visible);
+        if (m_isoWidget != nullptr) {
+            m_isoWidget->setSlicePlanesVisible(visible);
+        }
+    }
     if (m_sphericalDisplayGroup != nullptr) {
         const auto stored = settings.value(QStringLiteral("spherical/display"),
             static_cast<int>(m_sphericalDisplay)).toInt();
@@ -250,6 +260,8 @@ void MainWindow::saveSettings()
         m_boxesAction->isChecked());
     settings.setValue(QStringLiteral("overlay/scaleBar"),
         m_scaleBarVisible);
+    settings.setValue(QStringLiteral("overlay/slicePlanes"),
+        m_slicePlanesAction->isChecked());
     settings.remove(QStringLiteral("scaleBar/lengthUnit"));
     settings.remove(QStringLiteral("spherical/supersample"));
     settings.setValue(QStringLiteral("spherical/display"),

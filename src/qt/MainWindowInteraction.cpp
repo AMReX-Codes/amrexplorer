@@ -708,6 +708,7 @@ void MainWindow::showKeyboardMouseReference()
     add(tr("Wheel / double click"),
         tr("Zoom this panel in or out / reset the zoom"));
     add(tr("B"), tr("Toggle AMR grid boxes"));
+    add(tr("I"), tr("Toggle the slice planes (panel lines and isometric view)"));
     add(tr("0"), tr("Reset the zoom to the whole domain"));
     add(tr("1-6"), tr("Fixed zoom scales (1x-32x)"));
     add(tr("Ctrl+0"), tr("Composite the finest available level"));

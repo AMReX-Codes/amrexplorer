@@ -250,6 +250,8 @@ public:
     [[nodiscard]] const QImage& image() const noexcept;
     [[nodiscard]] const QImage& image(std::size_t tile) const noexcept;
     [[nodiscard]] std::size_t gridBoxCount() const noexcept;
+    // The crosshair guides drawn, over every tile (at most two per tile).
+    [[nodiscard]] std::size_t crosshairCount() const noexcept;
     [[nodiscard]] std::size_t pointOverlayCount() const noexcept;
     // The points across those batches: a filter that thins a batch without
     // emptying it leaves pointOverlayCount unchanged.

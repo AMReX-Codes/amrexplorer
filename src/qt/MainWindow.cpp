@@ -2044,14 +2044,31 @@ void MainWindow::createMenus()
     lengthUnitsAction->setObjectName(QStringLiteral("lengthUnitsAction"));
     connect(lengthUnitsAction, &QAction::triggered,
         this, [this] { showLengthUnitsDialog(); });
+    // The slice planes of a 3-D dataset: the lines each panel draws where
+    // the other two planes cut it, and the planes in the isometric view.
+    // On by default; the choice persists like the boxes'.
     m_slicePlanesAction = new QAction(tr("Sl&ice Planes"), this);
     m_slicePlanesAction->setCheckable(true);
+    m_slicePlanesAction->setShortcuts(
+        {QKeySequence(Qt::Key_I), QKeySequence(Qt::SHIFT | Qt::Key_I)});
     m_slicePlanesAction->setEnabled(false);
+    m_slicePlanesAction->setObjectName(QStringLiteral("slicePlanesAction"));
     connect(m_slicePlanesAction, &QAction::toggled, this,
         [this](bool visible) {
             m_isoWidget->setSlicePlanesVisible(visible);
             m_volumeController->slicePlanesVisibilityChanged();
+            if (m_controlsReady) {
+                updateCrosshairs();
+            }
+            saveSettings();  // overlay/slicePlanes
         });
+    {
+        // The default, applied without the handler: nothing to redraw or
+        // save yet, and loadSettings may replace it.
+        const QSignalBlocker blocker(m_slicePlanesAction);
+        m_slicePlanesAction->setChecked(true);
+    }
+    m_isoWidget->setSlicePlanesVisible(true);
 
     m_contoursAction = new QAction(tr("&Contours..."), this);
     m_contoursAction->setObjectName(QStringLiteral("contoursAction"));

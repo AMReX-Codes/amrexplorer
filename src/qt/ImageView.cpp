@@ -696,6 +696,16 @@ std::size_t ImageView::gridBoxCount() const noexcept
     return count;
 }
 
+std::size_t ImageView::crosshairCount() const noexcept
+{
+    std::size_t count = 0;
+    for (const auto& tile : m_tiles) {
+        count += tile.crosshairVertical.has_value() ? 1U : 0U;
+        count += tile.crosshairHorizontal.has_value() ? 1U : 0U;
+    }
+    return count;
+}
+
 std::size_t ImageView::pointOverlayCount() const noexcept
 {
     std::size_t count = 0;

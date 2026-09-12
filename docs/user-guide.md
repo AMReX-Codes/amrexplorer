@@ -364,8 +364,10 @@ A 3-D dataset is shown as three orthogonal slices:
 
 Change a plane with the X, Y, and Z index controls in **3D Position**. A right
 click in any slice moves the other two planes so that all three intersect at
-the selected point. Crosshairs and the isometric view show their shared
-location.
+the selected point. Each panel draws two lines where the other planes cut it,
+and the isometric view draws the planes; press **I** or choose **View > Slice
+Planes** to show or hide both. They are shown by default, and the choice
+persists across sessions.
 
 Each slice panel can be navigated independently. Field, level, range,
 logarithmic mapping, and palette are shared so the three panels remain
@@ -893,6 +895,7 @@ Independent windows have independent datasets, caches, and view state.
 | Shortcut | Action |
 | --- | --- |
 | B | Toggle AMR grid boxes |
+| I | Toggle the slice planes (panel lines and isometric view) |
 | 0 | Reset the zoom to the whole domain |
 | 1 through 6 | Use fixed scales from 1x through 32x |
 | Ctrl+0 | Composite the finest available level |

@@ -798,6 +798,22 @@ std::size_t MainWindow::activeViewGridBoxCountForTest() const
         ? 0 : m_activeView->view->gridBoxCount();
 }
 
+void MainWindow::setSlicePlanesVisibleForTest(bool visible)
+{
+    m_slicePlanesAction->setChecked(visible);
+}
+
+bool MainWindow::slicePlanesVisibleForTest() const
+{
+    return m_slicePlanesAction->isChecked();
+}
+
+std::size_t MainWindow::activeViewCrosshairCountForTest() const
+{
+    return m_activeView == nullptr || m_activeView->view == nullptr
+        ? 0 : m_activeView->view->crosshairCount();
+}
+
 void MainWindow::rubberBandZoomActiveViewForTest()
 {
     if (m_activeView == nullptr || m_activeView->plane->width <= 0

@@ -174,6 +174,44 @@ Outcome dispatchLifecycle(Context& context)
             });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
+        && std::string_view(argv[1]) == "--slice-planes-smoke-test") {
+        // View > Slice Planes on a 3-D plotfile: on by default, each panel
+        // draws the two lines where the other planes cut it; off takes the
+        // lines away, on brings them back, and I is its key.
+        const std::filesystem::path path(argv[2]);
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                const auto fail = [&application](const char* message) {
+                    qCritical("%s", message);
+                    application.exit(1);
+                };
+                const auto* action = window.findChild<QAction*>(
+                    QStringLiteral("slicePlanesAction"));
+                if (action == nullptr || !action->isEnabled()
+                    || !action->shortcuts().contains(QKeySequence(Qt::Key_I))) {
+                    fail("Slice Planes is not offered on a 3-D plotfile with I as its key");
+                    return;
+                }
+                if (!window.slicePlanesVisibleForTest()
+                    || window.activeViewCrosshairCountForTest() != 2) {
+                    fail("the slice planes are not shown by default");
+                    return;
+                }
+                window.setSlicePlanesVisibleForTest(false);
+                if (window.activeViewCrosshairCountForTest() != 0) {
+                    fail("switching the slice planes off left their lines");
+                    return;
+                }
+                window.setSlicePlanesVisibleForTest(true);
+                application.exit(window.activeViewCrosshairCountForTest() == 2 ? 0 : 3);
+            });
+        QTimer::singleShot(15000, &application, [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--idle-ui-state-smoke-test") {
         // Two controls that are reachable before any dataset is, and used to
         // strand state there.

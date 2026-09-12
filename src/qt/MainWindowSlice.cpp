@@ -1105,6 +1105,7 @@ void MainWindow::updateCrosshairs(PlaneViewState& state)
     QColor verticalColor;
     QColor horizontalColor;
     if (layerFor(state).session && layerFor(state).session->metadata().dimension == 3
+        && m_slicePlanesAction->isChecked()
         && state.plane->width > 0 && state.plane->height > 0) {
         const auto axes = displayAxes(state.normal);
         const auto xAxis = static_cast<std::size_t>(axes[0]);

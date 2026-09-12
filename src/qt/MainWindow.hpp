@@ -347,6 +347,11 @@ public:
     void openStandaloneFabForTest(const std::filesystem::path& path);
     void setGridBoxesVisibleForTest(bool visible);
     [[nodiscard]] std::size_t activeViewGridBoxCountForTest() const;
+    // Test-only: View > Slice Planes, and the guide lines the active view
+    // draws for the other two planes.
+    void setSlicePlanesVisibleForTest(bool visible);
+    [[nodiscard]] bool slicePlanesVisibleForTest() const;
+    [[nodiscard]] std::size_t activeViewCrosshairCountForTest() const;
 
     // Test-only: rubber-band the central half of the active 3-D panel through
     // the same handler used by ImageView::rubberBandSelected.

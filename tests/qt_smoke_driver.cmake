@@ -35,6 +35,7 @@
 #                 scale-state | effective-scale |
 #                 arrow-key-routing | animation-dock-role | open-failure |
 #                 idle-ui-state | menu-shortcuts | sequence-scale-report |
+#                 slice-planes |
 #                 spherical-scale-report |
 #                 fixed-scale-centre | fab-overlap-failure |
 #                 fab-direct-open-failure
@@ -199,6 +200,9 @@ elseif(MODE STREQUAL "spherical-scale-report")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --spherical-scale-report-smoke-test
         "${WORK}/plt")
+elseif(MODE STREQUAL "slice-planes")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --slice-planes-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "idle-ui-state")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --idle-ui-state-smoke-test "${WORK}/plt")

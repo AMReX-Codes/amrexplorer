@@ -229,6 +229,10 @@ public:
     {
         return m_inner->supportsVolumeSampling();
     }
+    [[nodiscard]] bool supportsVolumeOrientation() const noexcept override
+    {
+        return m_inner->supportsVolumeOrientation();
+    }
     // The one that matters: render at one level coarser than asked and say
     // so, without ever throwing CacheBudgetExceeded at the pipeline.
     [[nodiscard]] amrvis::VolumeFrame renderVolume(

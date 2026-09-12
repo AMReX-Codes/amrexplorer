@@ -131,9 +131,15 @@ OrthoAngles nearestOrthoAngles(const OrthoCamera& camera) noexcept
 {
     // From the matrix of a roll-free rotation, Rx(el) * Rz(az): its top row
     // is (cos az, -sin az, 0) and its last column (0, -sin el, cos el).
+    // At a quarter-turn roll both pairs are rounding dust, and atan2 of dust
+    // could hand back any of several orientations, some far from nearest:
+    // dust counts as zero, and zero over zero is the XY view.
     const auto q = normalized(camera.rotation);
-    return {std::atan2(2.0 * (q.w * q.z - q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z)),
-        std::atan2(2.0 * (q.w * q.x - q.y * q.z), 1.0 - 2.0 * (q.x * q.x + q.y * q.y))};
+    const auto settled = [](double value) { return std::abs(value) < 1.0e-12 ? 0.0 : value; };
+    return {std::atan2(settled(2.0 * (q.w * q.z - q.x * q.y)),
+                settled(1.0 - 2.0 * (q.y * q.y + q.z * q.z))),
+        std::atan2(settled(2.0 * (q.w * q.x - q.y * q.z)),
+            settled(1.0 - 2.0 * (q.x * q.x + q.y * q.y)))};
 }
 
 std::optional<OrthoAngles> orthoAnglesOf(const OrthoCamera& camera) noexcept

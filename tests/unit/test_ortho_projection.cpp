@@ -142,6 +142,15 @@ int main()
         require(!amrvis::orthoAnglesOf(rolled).has_value()
                 && std::isfinite(amrvis::nearestOrthoAngles(rolled).azimuth),
             "a rolled camera claims to be two angles");
+        // The XZ preset rolled a quarter turn: every two-angle camera is a
+        // quarter turn away, and the answer is the XY view, not whichever
+        // way the rounding fell.
+        amrvis::OrthoCamera quarterRolled = amrvis::orthoPresetXZ;
+        quarterRolled.rotation
+            = amrvis::axisAngle(point(0.0, 0.0, 1.0), pi / 2.0) * quarterRolled.rotation;
+        const auto settledAngles = amrvis::nearestOrthoAngles(quarterRolled);
+        require(settledAngles.azimuth == 0.0 && settledAngles.elevation == 0.0,
+            "a quarter-turn roll's nearest angles are the rounding's choice");
         amrvis::OrthoCamera quarter = amrvis::orthoPresetXY;
         quarter.rotation = amrvis::axisAngle(point(0.0, 0.0, 1.0), pi / 2.0) * quarter.rotation;
         const auto wasY = amrvis::projectDirection(amrvis::orthoPresetXY, point(0.0, 1.0, 0.0));

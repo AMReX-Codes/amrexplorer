@@ -97,6 +97,13 @@ public:
     {
         return false;
     }
+    // Whether a render may carry a camera with roll -- an orientation the two
+    // angles cannot hold: the same shape again. A peer speaking an older
+    // protocol reads the angles alone and would turn the picture the wrong way.
+    [[nodiscard]] virtual bool supportsVolumeOrientation() const noexcept
+    {
+        return false;
+    }
     [[nodiscard]] virtual VolumeFrame renderVolume(
         const VolumeRenderRequest& request, StopToken cancellation = {})
     {

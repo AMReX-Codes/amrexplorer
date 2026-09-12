@@ -168,7 +168,11 @@ struct ParticleSampleRequestData {
 // vary -- finite camera and range, equal and bounded transfer vectors, a
 // pixel vector that matches the frame's size, three grid dimensions -- and
 // the session validators do the rest.
-[[nodiscard]] fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value);
+// The camera goes as its orientation to a 1.8 peer, as its two angles to an
+// older one (zeros for a rolled camera an older peer cannot take, which the
+// connection refuses before it gets here).
+[[nodiscard]] fb::RenderedFrameRequestT toWire(const VolumeRenderRequest& value,
+    std::uint16_t minorVersion = protocolMinorVersion);
 [[nodiscard]] VolumeRenderRequest fromWire(const fb::RenderedFrameRequestT& value);
 [[nodiscard]] fb::RenderedFrameResponseT toWire(
     VolumeFrame value, const CacheMetrics& cache);

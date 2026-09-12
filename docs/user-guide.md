@@ -207,8 +207,8 @@ The main controls are:
    the screen does not show the same length per pixel along both axes (see
    [Aspect ratio and axis scaling](#aspect-ratio-and-axis-scaling)).
 6. **Isometric view** shows the domain, grid boxes, and current slice planes;
-   **View > Volume Rendering...** opens the same view with the field
-   ray-cast into it.
+   drag to turn it in any direction and wheel to zoom. **View > Volume
+   Rendering...** opens the same view with the field ray-cast into it.
 7. **Color Scale** reports the active value-to-color mapping.
 8. **Animation** controls a 3-D plane sweep or an open plotfile sequence.
 
@@ -448,8 +448,9 @@ not available in this mode. Opening any other dataset closes the companion.
 **View > Volume Rendering...** opens a window that ray-casts the whole 3-D
 field: every pixel accumulates the color and opacity of the cells along its
 line of sight, so translucent structure inside the domain shows through. The
-window has its own copy of the isometric view -- drag to rotate, wheel
-to zoom, and the **XY**, **XZ**, **YZ** buttons for the axis-aligned views --
+window has its own copy of the isometric view -- drag to turn it in any
+direction, wheel to zoom, and the **XY**, **XZ**, **YZ** buttons for the
+axis-aligned views --
 with the domain outline drawn over the rendered volume.
 The AMR grid boxes can be drawn too, though they start off here.
 
@@ -553,6 +554,8 @@ does the sampling; against a 1.2 server the box is greyed out and says so,
 and the volume is rendered from the nearest voxel. The **Isosurface** group
 and **Show volume** need protocol 1.6 for the same reason; against an older
 server the group is greyed out and says so, and the volume is drawn alone.
+Turning the view freely needs protocol 1.8; against an older server a drag
+turns it about the vertical axis only, and the view's tooltip says so.
 
 The server's `--max-volume-voxels` and `--volume-cache-mib` options set how
 large one sampled grid and one dataset's cache may get. They are per grid

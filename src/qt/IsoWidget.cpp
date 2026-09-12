@@ -24,6 +24,14 @@ namespace {
 
 constexpr double pi = 3.14159265358979323846;
 
+// An angle brought into (-pi, pi]: the rotation is periodic, and a long drag
+// would otherwise run the numbers off without bound.
+double wrapAngle(double angle) noexcept
+{
+    const auto turns = std::floor((angle + pi) / (2.0 * pi));
+    return angle - turns * 2.0 * pi;
+}
+
 // Cube corner indexing: bit 0 = x side, bit 1 = y side, bit 2 = z side.
 constexpr std::array<std::array<int, 2>, 12> boxEdges{{
     {{0, 1}}, {{2, 3}}, {{4, 5}}, {{6, 7}},
@@ -39,6 +47,7 @@ IsoWidget::IsoWidget(QWidget* parent)
 {
     setMinimumSize(200, 150);
     setMouseTracking(true);
+    seedAnglesFromCamera();
 
     const auto makeBtn = [this](const QString& label) {
         auto* btn = new QPushButton(label, this);
@@ -58,15 +67,9 @@ IsoWidget::IsoWidget(QWidget* parent)
     m_btnXZ = makeBtn(QStringLiteral("XZ"));
     m_btnYZ = makeBtn(QStringLiteral("YZ"));
 
-    connect(m_btnXY, &QPushButton::clicked, this, [this] {
-        setViewAngles(orthoPresetXY.azimuth, orthoPresetXY.elevation);
-    });
-    connect(m_btnXZ, &QPushButton::clicked, this, [this] {
-        setViewAngles(orthoPresetXZ.azimuth, orthoPresetXZ.elevation);
-    });
-    connect(m_btnYZ, &QPushButton::clicked, this, [this] {
-        setViewAngles(orthoPresetYZ.azimuth, orthoPresetYZ.elevation);
-    });
+    connect(m_btnXY, &QPushButton::clicked, this, [this] { setPreset(orthoPresetXY); });
+    connect(m_btnXZ, &QPushButton::clicked, this, [this] { setPreset(orthoPresetXZ); });
+    connect(m_btnYZ, &QPushButton::clicked, this, [this] { setPreset(orthoPresetYZ); });
 }
 
 void IsoWidget::setGeometry(const DatasetMetadata& metadata, DisplayMap displayMap)
@@ -376,10 +379,29 @@ void IsoWidget::mouseMoveEvent(QMouseEvent* event)
         // while a drag right slid the near face left -- which reads as the
         // horizontal being backwards, since the vertical is what everything
         // else does too.
-        m_camera.azimuth += static_cast<double>(delta.x()) * sensitivity;
-        m_camera.elevation += static_cast<double>(delta.y()) * sensitivity;
-        m_camera.elevation = std::clamp(
-            m_camera.elevation, -pi / 2.0 + 0.01, pi / 2.0 - 0.01);
+        const auto dx = static_cast<double>(delta.x());
+        const auto dy = static_cast<double>(delta.y());
+        if (m_freeRotation) {
+            // About the screen's axes: a drag right turns about the view's
+            // vertical axis, a drag down about its horizontal one, the turn
+            // applied after the camera's own rotation. So the face under the
+            // cursor follows the cursor whatever the orientation -- upside
+            // down included, where a turn about world z would read backwards.
+            const auto length = std::hypot(dx, dy);
+            if (length > 0.0) {
+                m_camera.rotation = normalized(
+                    axisAngle({{dy, dx, 0.0}}, sensitivity * length) * m_camera.rotation);
+                seedAnglesFromCamera();
+            }
+        } else {
+            // The two angles an older server reads. Neither is limited: a
+            // vertical drag tumbles the domain on through straight-up and
+            // straight-down, where a horizontal drag, still a turn about
+            // world z, reads the other way on screen.
+            m_azimuth = wrapAngle(m_azimuth + dx * sensitivity);
+            m_elevation = wrapAngle(m_elevation + dy * sensitivity);
+            m_camera = orthoCameraFromAngles(m_azimuth, m_elevation, m_camera.zoom);
+        }
         update();
         emit cameraChanged();
         event->accept();
@@ -482,10 +504,36 @@ void IsoWidget::drawAxisIndicator(QPainter& painter) const
     painter.restore();
 }
 
-void IsoWidget::setViewAngles(double azimuth, double elevation)
+void IsoWidget::seedAnglesFromCamera()
 {
-    m_camera.azimuth = azimuth;
-    m_camera.elevation = elevation;
+    const auto angles = nearestOrthoAngles(m_camera);
+    m_azimuth = angles.azimuth;
+    m_elevation = angles.elevation;
+}
+
+void IsoWidget::setFreeRotation(bool free)
+{
+    m_freeRotation = free;
+    if (free) {
+        return;
+    }
+    // A rolled camera has no two angles: the nearest that do, so what the
+    // older server is asked for is what the view then shows.
+    seedAnglesFromCamera();
+    const auto squared = orthoCameraFromAngles(m_azimuth, m_elevation, m_camera.zoom);
+    if (squared == m_camera) {
+        return;
+    }
+    m_camera = squared;
+    update();
+    emit cameraChanged();
+    emit interactionEnded();
+}
+
+void IsoWidget::setPreset(const OrthoCamera& preset)
+{
+    m_camera.rotation = preset.rotation;
+    seedAnglesFromCamera();
     update();
     // Both, in this order: the camera moved, and the move is already over. A
     // preset has no mouse release to end it, so without the second signal a
@@ -520,6 +568,7 @@ void IsoWidget::setCamera(const OrthoCamera& camera)
         return;
     }
     m_camera = camera;
+    seedAnglesFromCamera();
     update();
     emit cameraChanged();
 }

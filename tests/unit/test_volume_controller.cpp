@@ -26,6 +26,7 @@
 #include <QDoubleSpinBox>
 #include <QGroupBox>
 #include <QLabel>
+#include <QPushButton>
 #include <QSlider>
 #include <QEvent>
 #include <QImage>
@@ -192,6 +193,12 @@ public:
     [[nodiscard]] bool supportsVolumeIsosurface() const noexcept override
     {
         return supportsVolumeRendering() && isosurfaceSupported;
+    }
+    // And for a camera with roll: off, a 1.7 server.
+    std::atomic<bool> orientationSupported{true};
+    [[nodiscard]] bool supportsVolumeOrientation() const noexcept override
+    {
+        return supportsVolumeRendering() && orientationSupported;
     }
     [[nodiscard]] amrvis::VolumeFrame renderVolume(
         const amrvis::VolumeRenderRequest& request,
@@ -1579,12 +1586,15 @@ int main(int argc, char** argv)
             "refusing to remove an end point rendered anyway");
 
         // Dragging turns the domain rather than walking the camera around it:
-        // whichever face is nearest follows the cursor, on both axes. The two
-        // disagreed once -- a drag down tipped the top toward you while a drag
-        // right slid the near face the other way -- and one axis obeying the
-        // hand while the other opposes it reads as the second being backwards.
-        // Written against the projection rather than against the angles, since
-        // which way an angle turns the picture is the thing that was wrong.
+        // whichever face is nearest follows the cursor, on both axes, in any
+        // orientation -- the default view, upside down, and looking straight
+        // down z, where a turn about world z was once a spin in the screen
+        // plane. The two disagreed once -- a drag down tipped the top toward
+        // you while a drag right slid the near face the other way -- and one
+        // axis obeying the hand while the other opposes it reads as the
+        // second being backwards. Written against the projection rather than
+        // against the angles, since which way an angle turns the picture is
+        // the thing that was wrong.
         {
             const auto domain = amrvis::datasetSampleBounds(session->metadata());
             const auto frame
@@ -1594,19 +1604,11 @@ int main(int argc, char** argv)
                 amrvis::Real3{{0.5, 1.0, 0.5}}, amrvis::Real3{{0.5, 0.0, 0.5}},
                 amrvis::Real3{{0.5, 0.5, 1.0}}, amrvis::Real3{{0.5, 0.5, 0.0}}};
             // In the domain's own coordinates, and the nearest of them:
-            // depth increases toward the viewer. A horizontal drag turns the
-            // domain about z, so the z faces sit on that axis and do not move
-            // sideways however far it turns -- picking one of those to follow
-            // would compare zero against zero. They are left out when the
-            // drag is horizontal.
-            const auto nearestFace = [&](const amrvis::OrthoCamera& camera,
-                                         bool aboutZ) {
+            // depth increases toward the viewer.
+            const auto nearestFace = [&](const amrvis::OrthoCamera& camera) {
                 amrvis::Real3 best{};
                 auto bestDepth = -std::numeric_limits<double>::infinity();
                 for (std::size_t index = 0; index < faces.size(); ++index) {
-                    if (aboutZ && index >= 4) {
-                        continue;
-                    }
                     const auto& unit = faces[index];
                     amrvis::Real3 point;
                     for (std::size_t axis = 0; axis < 3; ++axis) {
@@ -1639,24 +1641,94 @@ int main(int argc, char** argv)
             };
             const std::array<std::array<int, 2>, 4> drags{
                 {{{40, 0}}, {{-40, 0}}, {{0, 40}}, {{0, -40}}}};
-            for (const auto& pull : drags) {
-                const auto start = view->camera();
-                const auto face = nearestFace(start, pull[0] != 0);
-                const auto was
-                    = amrvis::projectPoint(start, frame, domain, face);
-                dragBy(pull[0], pull[1]);
-                const auto now = amrvis::projectPoint(
-                    view->camera(), frame, domain, face);
-                const auto shift = pull[0] != 0 ? now.x - was.x : now.y - was.y;
-                const auto asked = pull[0] != 0 ? pull[0] : pull[1];
-                require(shift * asked > 0.0,
-                    "the face under the cursor moved against the drag, so the "
-                    "view walks the camera around the domain on that axis "
-                    "instead of turning it");
+            const auto followsTheHand = [&](const char* failure) {
+                for (const auto& pull : drags) {
+                    const auto start = view->camera();
+                    const auto face = nearestFace(start);
+                    const auto was
+                        = amrvis::projectPoint(start, frame, domain, face);
+                    dragBy(pull[0], pull[1]);
+                    const auto now = amrvis::projectPoint(
+                        view->camera(), frame, domain, face);
+                    const auto shift = pull[0] != 0 ? now.x - was.x : now.y - was.y;
+                    const auto asked = pull[0] != 0 ? pull[0] : pull[1];
+                    require(shift * asked > 0.0, failure);
+                }
+            };
+            require(view->freeRotation(), "the view does not start turning freely");
+            followsTheHand("the face under the cursor moved against the drag at the "
+                           "default view");
+            dragBy(0, 400);
+            followsTheHand("the face under the cursor moved against the drag with the "
+                           "domain upside down");
+            QPushButton* xyButton = nullptr;
+            for (auto* button : view->findChildren<QPushButton*>()) {
+                if (button->text() == QStringLiteral("XY")) {
+                    xyButton = button;
+                }
             }
+            require(xyButton != nullptr, "the view has no XY button");
+            xyButton->click();
+            require(amrvis::orthoAnglesOf(view->camera()).has_value(),
+                "the XY preset is not a two-angle camera");
+            followsTheHand("the face under the cursor moved against the drag looking "
+                           "down z, where a turn about z spun the picture");
+            // A drag right then down leaves a camera no two angles describe.
+            dragBy(40, 0);
+            dragBy(0, 40);
+            require(!amrvis::orthoAnglesOf(view->camera()).has_value(),
+                "two drags did not roll the camera off its two angles");
             settle(application, 500);
             waitFor(application, [&] { return !controller.renderInFlight(); },
                 "the renders from the drags did not finish");
+
+            // Against a session that reads two angles (a 1.7 server) the drag
+            // turns about world z and the turned x axis, the view says so, and
+            // the rolled camera goes onto its nearest two angles at once -- so
+            // every request such a server sees is one it can render. A
+            // vertical drag still tumbles past the pole, and a long drag
+            // leaves the angles wrapped.
+            session->orientationSupported = false;
+            controller.configureForDataset();
+            application.processEvents();
+            require(!view->freeRotation()
+                    && view->toolTip().contains(QStringLiteral("protocol 1.8")),
+                "a session that cannot take a rolled camera did not put the view "
+                "on two angles");
+            require(amrvis::orthoAnglesOf(view->camera()).has_value(),
+                "switching to two angles left a rolled camera on the view");
+            settle(application, 500);
+            waitFor(application, [&] { return !controller.renderInFlight(); },
+                "the render from squaring the camera did not finish");
+            {
+                const std::scoped_lock lock(session->requestsMutex);
+                require(!session->recorded.empty()
+                        && amrvis::orthoAnglesOf(session->recorded.back().camera).has_value(),
+                    "the last request to a two-angle session carried a rolled camera");
+            }
+            constexpr double kPi = 3.14159265358979323846;
+            const auto anglesBefore = amrvis::nearestOrthoAngles(view->camera());
+            dragBy(0, 300);
+            const auto anglesAfter = amrvis::nearestOrthoAngles(view->camera());
+            auto tilt = anglesAfter.elevation - anglesBefore.elevation;
+            tilt -= 2.0 * kPi * std::floor((tilt + kPi) / (2.0 * kPi));
+            require(std::abs(tilt - 2.4) < 1.0e-9
+                    && amrvis::orthoAnglesOf(view->camera()).has_value(),
+                "a vertical drag on two angles did not tumble by the drag, past the pole");
+            dragBy(2000, 2000);
+            const auto wrapped = amrvis::nearestOrthoAngles(view->camera());
+            require(std::abs(wrapped.azimuth) <= kPi && std::abs(wrapped.elevation) <= kPi
+                    && amrvis::orthoAnglesOf(view->camera()).has_value(),
+                "a long drag on two angles rolled the camera or ran the angles off");
+            session->orientationSupported = true;
+            controller.configureForDataset();
+            application.processEvents();
+            require(view->freeRotation()
+                    && !view->toolTip().contains(QStringLiteral("protocol 1.8")),
+                "a session that can take a rolled camera did not free the view again");
+            settle(application, 500);
+            waitFor(application, [&] { return !controller.renderInFlight(); },
+                "the renders from the two-angle drags did not finish");
         }
         controller.closeWindow();
     }

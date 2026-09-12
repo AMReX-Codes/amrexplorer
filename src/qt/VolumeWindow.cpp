@@ -200,6 +200,7 @@ void VolumeWindow::buildControls()
     // is: this is a local render's answer, and setSamplingSelectable revises
     // it for a server that cannot be asked.
     setSamplingSelectable(true);
+    setOrientationSelectable(true);
     // Grid boxes off, domain outline on: box edges crossing a translucent
     // field read as structure in it, which is worth asking for rather than
     // having to switch off. Both are said here and only here -- the view's own
@@ -700,6 +701,16 @@ void VolumeWindow::setSamplingSelectable(bool selectable)
             : tr("This server predates smooth sampling (protocol 1.3) and "
                  "always reads the nearest voxel; install a current "
                  "amrexplorer-server"));
+}
+
+void VolumeWindow::setOrientationSelectable(bool selectable)
+{
+    m_view->setFreeRotation(selectable);
+    m_view->setToolTip(selectable
+            ? tr("Drag to rotate, wheel to zoom")
+            : tr("This server predates free camera orientation (protocol 1.8) "
+                 "and turns the view about the vertical axis only; install a "
+                 "current amrexplorer-server"));
 }
 
 qreal VolumeWindow::viewDevicePixelRatio() const

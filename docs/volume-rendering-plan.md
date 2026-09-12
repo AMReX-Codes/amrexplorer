@@ -115,7 +115,7 @@ Files: `include/amrexplorer/render2d/Palette.hpp`, `src/render2d/Palette.cpp`,
 ### PR2 — Core types, validator, shared ortho camera; IsoWidget uses it (S/M)
 New `include/amrexplorer/core/Volume.hpp` (+ `src/core/Volume.cpp`):
 ```cpp
-struct OrthoCamera { double azimuth = 0.0, elevation = 0.0, zoom = 1.0; };   // radians
+struct OrthoCamera { double azimuth = 0.0, elevation = 0.0, zoom = 1.0; };   // radians; a unit quaternion since protocol 1.8
 struct VolumeTransferFunction { std::vector<std::uint32_t> colors; std::vector<float> opacities; };
 struct VolumeRange { double minimum = 0.0, maximum = 1.0; bool logarithmic = false; };
 struct VolumeRenderRequest {
@@ -250,7 +250,8 @@ registered like `bench_slice_query` (functional guard, generous timeout).
 
 ### PR6 — Remote protocol 1.2 (L)
 `schemas/amrexplorer_wire.fbs`: `RenderedFrameRequest` (dataset_id, field,
-component, maximum_level, composition, region, azimuth, elevation, zoom, width,
+component, maximum_level, composition, region, azimuth, elevation, zoom (the
+orientation as a quaternion beside them from 1.8), width,
 height, has_range, minimum, maximum, logarithmic, transfer_colors:[uint],
 transfer_opacities:[float], samples_per_voxel, maximum_voxels) and
 `RenderedFrameResponse` (width, height, pixels:[uint], used_minimum/maximum/

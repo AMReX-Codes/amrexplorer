@@ -308,6 +308,8 @@ void VolumeController::pushGeometry()
         m_window->setSamplingSelectable(dataset->supportsVolumeSampling());
         // And whether it can be asked for an isosurface, the same way.
         m_window->setIsosurfaceSelectable(dataset->supportsVolumeIsosurface());
+        // And for a camera with roll.
+        m_window->setOrientationSelectable(dataset->supportsVolumeOrientation());
     }
     pushPalette();
     pushFields();

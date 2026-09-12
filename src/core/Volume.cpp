@@ -131,9 +131,8 @@ std::vector<std::string> validateVolumeRenderRequest(
 {
     auto errors = validateVolumeSampleRequest(
         volumeSampleRequestOf(request), datasetDimension);
-    if (!std::isfinite(request.camera.azimuth)
-        || !std::isfinite(request.camera.elevation)) {
-        errors.emplace_back("camera angles must be finite");
+    if (!nearUnit(request.camera.rotation, orthoRotationTolerance)) {
+        errors.emplace_back("camera orientation must be a finite unit quaternion");
     }
     if (!(request.camera.zoom >= minVolumeZoom)
         || !(request.camera.zoom <= maxVolumeZoom)) {

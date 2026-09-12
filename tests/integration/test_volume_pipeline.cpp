@@ -671,7 +671,7 @@ int main()
         request.field = field;
         request.maximumLevel = 1;
         request.region = amrvis::datasetSampleBounds(session->metadata());
-        request.camera = {0.6, 0.4, 1.0};
+        request.camera = amrvis::orthoCameraFromAngles(0.6, 0.4, 1.0);
         request.outputSize = {64, 48};
         request.range = amrvis::VolumeRange{1.0, 2.0, false};
         request.transfer = amrvis::makeVolumeTransferFunction(

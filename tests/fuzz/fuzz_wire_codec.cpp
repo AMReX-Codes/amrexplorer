@@ -228,7 +228,9 @@ void checkConverted(const fb::RenderedFrameRequestT& wire,
     // -- each call rebuilds the transfer vectors, and this runs every
     // iteration that reaches it.
     const auto roundTripped = codec::toWire(result);
-    if (!finite(result.camera.azimuth) || !finite(result.camera.elevation)
+    if (!finite(result.camera.rotation.w) || !finite(result.camera.rotation.x)
+        || !finite(result.camera.rotation.y) || !finite(result.camera.rotation.z)
+        || !amrvis::nearUnit(result.camera.rotation, amrvis::orthoRotationTolerance)
         || !finite(result.camera.zoom) || !finite(result.region)
         || result.range.has_value() != wire.has_range
         || (result.range
@@ -871,7 +873,9 @@ std::vector<std::vector<std::uint8_t>> wireSeeds()
         request.composition = amrvis::CompositionPolicy::ExactLevel;
         request.region.lower = {{0.0, 0.0, 0.0}};
         request.region.upper = {{1.0, 2.0, 3.0}};
-        request.camera = {0.5, -0.25, 1.5};
+        // Protocol 1.8: an orientation with every component non-zero, so all
+        // four are in the buffer to be mutated (a zero is left out).
+        request.camera = amrvis::orthoCameraFromAngles(0.5, -0.25, 1.5);
         request.outputSize = {64, 48};
         request.range = amrvis::VolumeRange{0.5, 2.0, true};
         // Not the *wire* default: Nearest is the schema's zero, which

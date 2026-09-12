@@ -81,6 +81,11 @@ public:
     // the volume (a server speaking an older protocol cannot): the shape of
     // setSamplingSelectable, for the same reason.
     void setIsosurfaceSelectable(bool selectable);
+    // Whether the session can be asked for a camera with roll (a server
+    // speaking an older protocol reads two angles): the drag turns the view
+    // freely when it can, about the vertical axis only when it cannot, and
+    // the view's tooltip says which.
+    void setOrientationSelectable(bool selectable);
     // The surface's colour: set by the colour dialog, by a host restoring a
     // remembered one, and by tests; read by the host to remember it.
     void setIsosurfaceColor(const QColor& color);

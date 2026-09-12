@@ -197,6 +197,11 @@ bool RemoteDatasetSession::supportsVolumeIsosurface() const noexcept
     return supportsVolumeRendering() && m_connection->supportsVolumeIsosurface();
 }
 
+bool RemoteDatasetSession::supportsVolumeOrientation() const noexcept
+{
+    return supportsVolumeRendering() && m_connection->supportsVolumeOrientation();
+}
+
 VolumeFrame RemoteDatasetSession::renderVolume(
     const VolumeRenderRequest& request, StopToken cancellation)
 {
@@ -227,6 +232,11 @@ VolumeFrame RemoteDatasetSession::renderVolume(
     if ((request.isosurface || !request.showVolume)
         && !m_connection->supportsVolumeIsosurface()) {
         throw std::runtime_error(volumeIsosurfaceUnsupportedMessage);
+    }
+    // And for a camera with roll: a 1.7 server reads the two angles, which
+    // such a camera has none of, and would turn the picture the wrong way.
+    if (!orthoAnglesOf(request.camera) && !m_connection->supportsVolumeOrientation()) {
+        throw std::runtime_error(volumeOrientationUnsupportedMessage);
     }
     validateSessionVolumeRequest(m_metadata, m_id, request);
     return refusingInvalidResponses(*m_connection, [&] {

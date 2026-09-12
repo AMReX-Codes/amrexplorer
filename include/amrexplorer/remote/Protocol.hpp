@@ -53,7 +53,13 @@ inline constexpr std::uint16_t isosurfaceMinorVersion = 6;
 // reason: a 1.6 server answers the request with an error, so the client
 // must know before it offers View > Mapped Grid at all.
 inline constexpr std::uint16_t mappedGridMinorVersion = 7;
-inline constexpr std::uint16_t protocolMinorVersion = mappedGridMinorVersion;
+// 1.8 carries the volume camera's orientation as a quaternion
+// (RenderedFrameRequest.orientation_*), which the two angles cannot hold
+// once the view rolls. A version for the 1.3 reason: a 1.7 server reads the
+// angles alone and returns a frame turned the wrong way, one the client
+// would draw its wireframe over.
+inline constexpr std::uint16_t cameraOrientationMinorVersion = 8;
+inline constexpr std::uint16_t protocolMinorVersion = cameraOrientationMinorVersion;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,

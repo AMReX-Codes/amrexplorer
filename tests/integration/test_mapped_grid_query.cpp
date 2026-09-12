@@ -352,6 +352,23 @@ void testRefinedFixture(const std::filesystem::path& fixture)
         require(faces, "a level's faces are its own layers at every node");
     }
 
+    // x-normal slice through level 0's cell i = 2 (x in [0.5, 0.75]), just
+    // past the refined half. Every cell drawn is level 0's, so that is the
+    // only block of faces -- though the lower node layer at x = 0.5 is still
+    // level 1's last one, which is why the levels cannot be read off it. The
+    // faces are undisplaced here: the terrain moves z alone.
+    {
+        const auto plane = session.requestMappedGridPlane(atLevel1(0, 0.5625));
+        require(plane.faceLevels.size() == 1 && plane.faceLevels[0] == 0,
+            "a slice past the refined half draws level 0 alone");
+        bool faces = true;
+        for (std::size_t n = 0; n < 81; ++n) {
+            faces = faces && near(plane.normalLower[n], 0.5)
+                && near(plane.normalUpper[n], 0.75);
+        }
+        require(faces, "the drawn level's cell reaches from x = 0.5 to 0.75");
+    }
+
     // Showing level 0 only: the fine raster interpolates in-plane, and the
     // layers are level 0's own, so nothing is interpolated along the normal.
     {

@@ -226,22 +226,38 @@ MappedGridPlane queryMappedGridPlane(PlotfileDataset& data,
     // coarse cell and drop the particles in what it cut off.
     if (metadata.dimension == 3 && layerPositions.size() == 2) {
         useField(static_cast<std::size_t>(normal));
-        {
-            // The levels drawn, from the layer through the slice's own cell.
-            const auto& drawn = queryLayer(layerPositions[0]);
-            std::vector<std::uint8_t> seen(
-                static_cast<std::size_t>(maximumLevel) + 1, 0);
-            for (std::size_t node = 0; node < nodeCount; ++node) {
-                const auto level = drawn.plane.sourceLevel[node];
-                if (drawn.plane.valid[node] != 0 && level >= 0
-                    && level <= maximumLevel) {
-                    seen[static_cast<std::size_t>(level)] = 1;
-                }
+        // A level draws a cell here when a box of it holds the slice's cell
+        // and reaches into the visible region. Read from the boxes, not from a
+        // node layer: just past a refinement boundary that layer is still the
+        // finer level's last one although every cell drawn there is the
+        // coarser level's, and the level drawing them would carry no faces.
+        for (int level = 0; level <= maximumLevel; ++level) {
+            const auto& dataLevel
+                = metadata.levels[static_cast<std::size_t>(level)];
+            Int3 lower{};
+            Int3 upper{};
+            for (int axis = 0; axis < metadata.dimension; ++axis) {
+                const auto a = static_cast<std::size_t>(axis);
+                const auto at = axis == request.normalDirection
+                    ? request.physicalPosition
+                    : region.lower[a];
+                lower[a] = sampleIndex(dataLevel, axis, at);
+                upper[a] = axis == request.normalDirection
+                    ? lower[a]
+                    : sampleIndex(dataLevel, axis, region.upper[a]);
             }
-            for (int level = 0; level <= maximumLevel; ++level) {
-                if (seen[static_cast<std::size_t>(level)] != 0) {
-                    plane.faceLevels.push_back(level);
+            const auto reaches = [&](const IntBox& box) {
+                for (int axis = 0; axis < metadata.dimension; ++axis) {
+                    const auto a = static_cast<std::size_t>(axis);
+                    if (box.lower[a] > upper[a] || box.upper[a] < lower[a]) {
+                        return false;
+                    }
                 }
+                return true;
+            };
+            if (std::any_of(dataLevel.boxes.begin(), dataLevel.boxes.end(),
+                    reaches)) {
+                plane.faceLevels.push_back(level);
             }
         }
         plane.normalLower.assign(plane.faceLevels.size() * nodeCount, 0.0);

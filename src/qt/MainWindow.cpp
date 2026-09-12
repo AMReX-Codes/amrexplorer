@@ -701,7 +701,7 @@ MainWindow::MainWindow(QWidget* parent)
             // A slice that landed while a prefetch ran left the settle to
             // it (settleIfDrained).
             if (delta < 0 && m_settleDeferred
-                && m_diagnosticsModel->activeRequests() == 0) {
+                && m_diagnosticsModel->activeRequests() == 0 && !sliceRequestQueued()) {
                 m_settleDeferred = false;
                 emit interactiveSlicesSettled();
             }

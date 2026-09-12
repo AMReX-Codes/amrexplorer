@@ -1430,7 +1430,11 @@ Outcome dispatchCompanion(Context& context)
                                 return;
                             }
                             // With the primary in Visible mode and the companion
-                            // following it, nothing may keep re-slicing.
+                            // following it, nothing may keep re-slicing. This
+                            // relies on a settle meaning the queue is empty too
+                            // (settleIfDrained): a settle sent with the
+                            // follower's request still behind the debounce
+                            // made this fail on slow CI runners.
                             QTimer::singleShot(600, &window,
                                 [&window, fail, phase, quietSettles, upper] {
                                     if (*quietSettles != 0) {

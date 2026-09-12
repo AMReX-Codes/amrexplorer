@@ -599,6 +599,13 @@ void MainWindow::flushSliceRequests()
     for (auto* state : targets) {
         requestSlice(*state, rasterDirty);
     }
+    // A settle withheld for this queue (settleIfDrained) whose flush started
+    // nothing -- the requests were refused, or nothing was queued after all.
+    if (m_settleDeferred && m_diagnosticsModel->activeRequests() == 0
+        && !sliceRequestQueued()) {
+        m_settleDeferred = false;
+        emit interactiveSlicesSettled();
+    }
 }
 
 void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
@@ -1779,12 +1786,29 @@ int MainWindow::slicesInFlight() const
     return total;
 }
 
+bool MainWindow::sliceRequestQueued() const
+{
+    // The debounce timer is normally active while a request is queued, but some
+    // paths stop it without clearing the queue (see openDataset), so check the
+    // pending views too -- "queued behind the debounce" means either.
+    return (m_sliceDebounce != nullptr && m_sliceDebounce->isActive())
+        || m_pendingAllViews || !m_pendingViews.empty();
+}
+
 void MainWindow::settleIfDrained()
 {
-    // The interactive batch has drained once nothing is in flight; the smoke
-    // tests wait on this. A frame prefetch can still be running when the
-    // last slice lands, and nothing else would send the signal when it ends.
-    m_settleDeferred = m_diagnosticsModel->activeRequests() != 0;
+    // The interactive batch has drained once nothing is in flight AND nothing
+    // is queued; the smoke tests wait on this. An arrival can schedule the
+    // next request on its way through showSlice (a following companion, a
+    // warp asked for the screen): that request sits behind the 100 ms
+    // debounce, not in the activity count, so a settle here would come
+    // before it ran and a second settle after -- which the companion smoke
+    // once saw as "range following kept re-slicing at rest", on slow CI
+    // runners only. A withheld settle is sent by flushSliceRequests when the
+    // flush issues nothing, and by the completion of what it issues. A frame
+    // prefetch can likewise still be running when the last slice lands; its
+    // end sends the signal then (loadActivityChanged).
+    m_settleDeferred = m_diagnosticsModel->activeRequests() != 0 || sliceRequestQueued();
     if (!m_settleDeferred) {
         emit interactiveSlicesSettled();
     }

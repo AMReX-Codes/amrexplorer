@@ -1755,6 +1755,8 @@ private:
     bool m_pendingRasterDirty = false;
     // A slice landed while other activity ran: the settle is still owed.
     bool m_settleDeferred = false;
+    // A slice request queued behind the debounce, or waiting to be flushed.
+    [[nodiscard]] bool sliceRequestQueued() const;
     StopSource m_initialStopSource;
     StopSource m_metadataStopSource;
     DisplayMode m_displayMode = DisplayMode::Raster;

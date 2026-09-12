@@ -181,7 +181,7 @@ void testMappedFixture(const std::filesystem::path& fixture)
     // --- executeSlice on the logical grid --------------------------------
     const auto flat = amrvis::executeSlice(session, sliceRequest(false),
         amrvis::RangeMode::File, std::nullopt, false, palette, {});
-    require(!flat.mappedGrid, "a request without mappedGrid stays Cartesian");
+    require(flat.warp != amrvis::DisplayWarp::MappedGrid, "a request without mappedGrid stays Cartesian");
     require(!flat.gridNodes && !flat.displaySourceIndex,
         "a Cartesian result carries no node plane or source index");
     require(flat.image.width == 4 && flat.image.height == 4,
@@ -192,7 +192,7 @@ void testMappedFixture(const std::filesystem::path& fixture)
     // --- executeSlice on the mapped grid ---------------------------------
     const auto mapped = amrvis::executeSlice(session, sliceRequest(true),
         amrvis::RangeMode::File, std::nullopt, false, palette, {});
-    require(mapped.mappedGrid, "a request with mappedGrid is drawn on the grid");
+    require(mapped.warp == amrvis::DisplayWarp::MappedGrid, "a request with mappedGrid is drawn on the grid");
     require(mapped.gridNodes != nullptr, "the node plane travels on the result");
     require(mapped.gridNodes->width == 5 && mapped.gridNodes->height == 5,
         "a 4x4 raster has a 5x5 node plane");
@@ -294,7 +294,7 @@ void testMappedFixture(const std::filesystem::path& fixture)
         const auto windowed = amrvis::executeSlice(session,
             windowedRequest(0.25, 0.75, 0.3, 0.8, {10, 20}),
             amrvis::RangeMode::File, std::nullopt, false, palette, {});
-        require(windowed.mappedGrid, "a windowed request is drawn on the grid");
+        require(windowed.warp == amrvis::DisplayWarp::MappedGrid, "a windowed request is drawn on the grid");
         require(windowed.image.width == 10 && windowed.image.height == 20,
             "a window is drawn at its requested pixels");
         require(near(windowed.displayRegion.lower[0], 0.25)
@@ -350,7 +350,7 @@ void testMappedFixture(const std::filesystem::path& fixture)
         const auto past = amrvis::executeSlice(session,
             windowedRequest(0.5, 1.5, 0.3, 0.8, {20, 10}),
             amrvis::RangeMode::File, std::nullopt, false, palette, {});
-        bool split = past.mappedGrid && past.image.width == 20
+        bool split = past.warp == amrvis::DisplayWarp::MappedGrid && past.image.width == 20
             && past.image.height == 10 && past.image.rgba.size() == 200U;
         for (int row = 0; split && row < 10; ++row) {
             const auto alpha = [&past, row](int col) {
@@ -365,7 +365,7 @@ void testMappedFixture(const std::filesystem::path& fixture)
         const auto below = amrvis::executeSlice(session,
             windowedRequest(0.0, 1.0, -0.5, -0.1, {8, 4}),
             amrvis::RangeMode::File, std::nullopt, false, palette, {});
-        bool clear = below.mappedGrid && below.image.rgba.size() == 32U
+        bool clear = below.warp == amrvis::DisplayWarp::MappedGrid && below.image.rgba.size() == 32U
             && below.displaySourceIndex && below.displaySourceIndex->size() == 32U;
         for (std::size_t pixel = 0; clear && pixel < 32U; ++pixel) {
             clear = below.image.rgba[pixel] == 0U
@@ -381,7 +381,7 @@ void testMappedFixture(const std::filesystem::path& fixture)
     const auto refreshed = amrvis::refreshCachedSlice(session, sliceRequest(true),
         plane, {}, {}, {}, amrvis::RangeMode::File, std::nullopt, false, palette,
         amrvis::DisplayMode::Raster, 0, 0, 10, true);
-    require(refreshed.mappedGrid, "a dirty refresh draws on the grid");
+    require(refreshed.warp == amrvis::DisplayWarp::MappedGrid, "a dirty refresh draws on the grid");
     require(refreshed.image.width == mapped.image.width
             && refreshed.image.height == mapped.image.height,
         "a dirty refresh reproduces the warped raster size");
@@ -397,7 +397,7 @@ void testMappedFixture(const std::filesystem::path& fixture)
         plane, {}, {}, {}, amrvis::RangeMode::File, std::nullopt, false, palette,
         amrvis::DisplayMode::Raster, 0, 0, 10, false);
     require(unchanged.rasterUnchanged, "an undirty refresh keeps the raster");
-    require(unchanged.mappedGrid, "an undirty refresh still reports the grid");
+    require(unchanged.warp == amrvis::DisplayWarp::MappedGrid, "an undirty refresh still reports the grid");
     require(unchanged.displayRegion == mapped.displayRegion,
         "an undirty refresh still frames the node bounding box");
     require(unchanged.gridNodes != nullptr, "an undirty refresh still carries the nodes");
@@ -423,7 +423,7 @@ void testMappedFixture(const std::filesystem::path& fixture)
             false, palette, amrvis::DisplayMode::Raster, 0, 0, 10, false);
         require(counting->nodeRequests == 0,
             "an undirty refresh with cached nodes asks for no node plane");
-        require(kept.mappedGrid && kept.gridNodes == mapped.gridNodes
+        require(kept.warp == amrvis::DisplayWarp::MappedGrid && kept.gridNodes == mapped.gridNodes
                 && kept.displayRegion == mapped.displayRegion,
             "an undirty refresh with cached nodes keeps the frame");
         // A new window at new pixels is a re-warp of the same nodes: no
@@ -434,7 +434,7 @@ void testMappedFixture(const std::filesystem::path& fixture)
             false, palette, amrvis::DisplayMode::Raster, 0, 0, 10, true);
         require(counting->nodeRequests == 0,
             "a re-warp for another window asks for no node plane");
-        require(moved.mappedGrid && moved.image.width == 7 && moved.image.height == 9
+        require(moved.warp == amrvis::DisplayWarp::MappedGrid && moved.image.width == 7 && moved.image.height == 9
                 && near(moved.displayRegion.upper[0], 0.5)
                 && near(moved.displayRegion.lower[2], 0.2),
             "a re-warp for another window draws that window at its pixels");
@@ -449,7 +449,7 @@ void testMappedFixture(const std::filesystem::path& fixture)
     const auto back = amrvis::refreshCachedSlice(session, sliceRequest(false),
         plane, {}, {}, {}, amrvis::RangeMode::File, std::nullopt, false, palette,
         amrvis::DisplayMode::Raster, 0, 0, 10, true);
-    require(!back.mappedGrid && back.image.width == 4 && back.image.height == 4,
+    require(back.warp != amrvis::DisplayWarp::MappedGrid && back.image.width == 4 && back.image.height == 4,
         "a refresh without mappedGrid draws the logical raster");
     require(back.displayRegion == plane->physicalRegion,
         "a refresh without mappedGrid frames the logical region");
@@ -471,7 +471,7 @@ void testStarvedGridPool(const std::filesystem::path& fixture)
     const amrvis::Palette palette;
     const auto result = amrvis::executeSlice(session, sliceRequest(true),
         amrvis::RangeMode::File, std::nullopt, false, palette, {});
-    require(!result.mappedGrid, "a starved grid pool draws the logical grid");
+    require(result.warp != amrvis::DisplayWarp::MappedGrid, "a starved grid pool draws the logical grid");
     require(result.image.width == 4 && result.image.height == 4,
         "a starved grid pool keeps the field's raster");
     require(!result.mappedGridFallback.empty(),
@@ -501,7 +501,7 @@ void testSharedRangeFrameLoad(const std::filesystem::path& fixture)
         fixture, amrvis::DatasetId{1}, spec, 64ULL << 20U, {});
     require(result.displays.size() == 3, "a 3-D frame load yields three panels");
     for (const auto& display : result.displays) {
-        require(display.mappedGrid, "every panel of a mapped frame load is mapped");
+        require(display.warp == amrvis::DisplayWarp::MappedGrid, "every panel of a mapped frame load is mapped");
         require(display.gridNodes != nullptr, "every mapped panel carries its nodes");
         const auto& image = display.image;
         require(display.displaySourceIndex != nullptr
@@ -541,7 +541,7 @@ void testFrameLoadDrawsTheViewWindows(const std::filesystem::path& fixture)
         fixture, amrvis::DatasetId{1}, spec, 64ULL << 20U, {});
     require(result.displays.size() == 3, "a 3-D frame load yields three panels");
     const auto& xz = result.displays[1];
-    require(xz.mappedGrid && xz.image.width == 10 && xz.image.height == 20
+    require(xz.warp == amrvis::DisplayWarp::MappedGrid && xz.image.width == 10 && xz.image.height == 20
             && near(xz.displayRegion.lower[0], 0.25)
             && near(xz.displayRegion.upper[0], 0.75)
             && near(xz.displayRegion.lower[2], 0.3)
@@ -552,7 +552,7 @@ void testFrameLoadDrawsTheViewWindows(const std::filesystem::path& fixture)
     if (yz.gridNodes) {
         yzBounds = amrvis::mappedGridDisplayBounds(*yz.gridNodes, yz.mappedAxes);
     }
-    require(yz.mappedGrid && yz.image.width == 30 && yz.image.height == 20
+    require(yz.warp == amrvis::DisplayWarp::MappedGrid && yz.image.width == 30 && yz.image.height == 20
             && yzBounds && yz.displayRegion == *yzBounds,
         "a view without a window gets the whole node box at its pixels");
 }
@@ -590,7 +590,7 @@ void testPlainPlotfile(const std::filesystem::path& mappedFixture,
     const amrvis::Palette palette;
     const auto result = amrvis::executeSlice(session, sliceRequest(true),
         amrvis::RangeMode::File, std::nullopt, false, palette, {});
-    require(!result.mappedGrid, "a plotfile without nodes reports no mapped grid");
+    require(result.warp != amrvis::DisplayWarp::MappedGrid, "a plotfile without nodes reports no mapped grid");
     require(result.image.width == 4 && result.image.height == 4,
         "a plotfile without nodes draws its logical raster");
     require(result.displayRegion == result.displayPlane().physicalRegion,
@@ -613,7 +613,7 @@ void testDamagedNodeData(const std::filesystem::path& mappedFixture,
         const auto result = amrvis::executeSlice(session, sliceRequest(true),
             amrvis::RangeMode::File, std::nullopt, false, palette, {});
         std::cerr << "  " << what << ": " << result.mappedGridFallback << '\n';
-        require(!result.mappedGrid, "damaged node data draws the logical grid");
+        require(result.warp != amrvis::DisplayWarp::MappedGrid, "damaged node data draws the logical grid");
         require(result.image.width == 4 && result.image.height == 4,
             "damaged node data keeps the field's raster");
         require(result.displayRegion == result.displayPlane().physicalRegion,

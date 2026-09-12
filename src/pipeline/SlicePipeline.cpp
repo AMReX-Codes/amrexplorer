@@ -245,6 +245,17 @@ std::string cacheBudgetDescription(std::uint64_t bytes)
 
 namespace {
 
+// A flat display: every field a warp fills, cleared.
+void clearWarp(SliceDisplayResult& result)
+{
+    result.warp = DisplayWarp::None;
+    result.gridNodes.reset();
+    result.displaySourceIndex.reset();
+    result.mappedGridFallback.clear();
+    result.mappedBounds = RealBox{};
+    result.mappedDomainBounds.reset();
+}
+
 // Draws the raster on the dataset's mapped grid when the request asks for it
 // and the session has one: the node positions of the plane's cells are
 // fetched and each cell is placed by its corners (render2d/MappedGridWarp).
@@ -259,12 +270,7 @@ void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
     const std::shared_ptr<const MappedGridPlane>& cachedNodes,
     StopToken cancellation)
 {
-    result.mappedGrid = false;
-    result.gridNodes.reset();
-    result.displaySourceIndex.reset();
-    result.mappedGridFallback.clear();
-    result.mappedBounds = RealBox{};
-    result.mappedDomainBounds.reset();
+    clearWarp(result);
     if (!result.request.mappedGrid || !dataset->supportsMappedGrid()) {
         return;
     }
@@ -352,7 +358,45 @@ void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
     }
     result.gridNodes = std::move(nodes);
     result.mappedAxes = axes;
-    result.mappedGrid = true;
+    result.warp = DisplayWarp::MappedGrid;
+}
+
+// The warped physical wedge (R, Z), drawn as a mapped grid is: for the
+// window the request names at its pixels, with the sector's bounding box as
+// the node bounds and the whole domain's as the canvas. The corners are
+// analytic, so no session query is needed and a remote dataset warps the
+// same way. A refresh without a raster keeps the window; a sector the warp
+// cannot draw stays flat over its bounding box.
+void applySphericalWarp(const DatasetMetadata& metadata,
+    SliceDisplayResult& result, bool haveImage)
+{
+    const auto& request = result.request;
+    const auto& logical = result.displayPlane().physicalRegion;
+    result.displayRegion = sphericalDisplayBounds(logical);
+    const auto window = sphericalWindow(logical, request.displayWindow);
+    if (!window) {
+        return;
+    }
+    if (haveImage) {
+        auto warped = warpSphericalRZ(result.image, logical,
+            request.displayWindow, request.displayPixels);
+        if (!warped.sourceIndex) {
+            return;
+        }
+        result.image = std::move(warped.image);
+        result.displayRegion = warped.displayRegion;
+        result.displaySourceIndex = std::move(warped.sourceIndex);
+        result.mappedBounds = warped.mappedBounds;
+    } else {
+        result.displayRegion = *window;
+        result.mappedBounds = *sphericalWindow(logical, RealBox{});
+    }
+    if (request.wantMappedDomainBounds) {
+        result.mappedDomainBounds
+            = sphericalWindow(datasetSampleBounds(metadata), RealBox{});
+    }
+    result.mappedAxes = {0, 1};
+    result.warp = DisplayWarp::SphericalRZ;
 }
 
 // Records the dataset's coordinate system on the result and, for 2-D spherical
@@ -375,6 +419,7 @@ void applyDisplayCoordinates(const std::shared_ptr<DatasetSession>& dataset,
         applyMappedGrid(dataset, result, cachedNodes, cancellation);
         return;
     }
+    clearWarp(result);
     result.sphericalDisplay = result.request.sphericalDisplay;
     const bool haveImage = result.image.width > 0 && result.image.height > 0
         && !result.image.rgba.empty();
@@ -395,14 +440,7 @@ void applyDisplayCoordinates(const std::shared_ptr<DatasetSession>& dataset,
         break;
     case SphericalDisplay::RZ:
     default:
-        // Warped physical wedge (R, Z); the supersample factor applies here.
-        result.displayRegion = sphericalDisplayBounds(logical);
-        if (haveImage) {
-            auto warped = warpSpherical(result.image, logical,
-                maxSliceOutputDimension, result.request.sphericalSupersample);
-            result.image = std::move(warped.image);
-            result.displayRegion = warped.displayRegion;
-        }
+        applySphericalWarp(metadata, result, haveImage);
         break;
     }
 }
@@ -643,17 +681,26 @@ SliceDisplayResult refreshCachedSlice(
     return result;
 }
 
-void rewarpMappedImage(SliceDisplayResult& result)
+void rewarpDisplayImage(SliceDisplayResult& result)
 {
-    if (!result.mappedGrid || !result.gridNodes || result.image.width <= 0
-        || result.image.height <= 0 || result.image.rgba.empty()) {
+    if (result.image.width <= 0 || result.image.height <= 0
+        || result.image.rgba.empty()) {
         return;
     }
-    auto warped = warpMappedGrid(result.image, *result.gridNodes,
-        result.mappedAxes, result.request.displayWindow,
-        result.request.displayPixels);
+    MappedWarpedRaster warped;
+    if (result.warp == DisplayWarp::MappedGrid && result.gridNodes) {
+        warped = warpMappedGrid(result.image, *result.gridNodes,
+            result.mappedAxes, result.request.displayWindow,
+            result.request.displayPixels);
+    } else if (result.warp == DisplayWarp::SphericalRZ) {
+        warped = warpSphericalRZ(result.image,
+            result.displayPlane().physicalRegion, result.request.displayWindow,
+            result.request.displayPixels);
+    } else {
+        return;
+    }
     if (!warped.sourceIndex) {
-        return;  // cannot happen for nodes that warped once; keep the raster
+        return;  // cannot happen for a plane that warped once; keep the raster
     }
     result.image = std::move(warped.image);
     result.displayRegion = warped.displayRegion;
@@ -829,10 +876,11 @@ InitialSliceResult executeSessionFrameLoad(
                 request.composition = selectedLevel.composition;
                 request.includeGridBoxes = spec.includeGridBoxes;
                 request.maximumLevel = attemptMaximumLevel;
-                request.sphericalSupersample = spec.sphericalSupersample;
                 request.sphericalDisplay = spec.sphericalDisplay;
                 request.mappedGrid = spec.mappedGrid;
-                if (spec.mappedGrid) {
+                if (spec.mappedGrid
+                    || (isSpherical2D(metadata)
+                        && spec.sphericalDisplay == SphericalDisplay::RZ)) {
                     // Drawn for what the view shows (see displayWindows); the
                     // domain bounds let a view without a canvas build one.
                     request.displayWindow = entry < spec.displayWindows.size()
@@ -915,7 +963,7 @@ InitialSliceResult executeSessionFrameLoad(
                     // The per-view render above was already warped; this
                     // fresh raster must be too, or a mapped panel would show
                     // the flat picture under warped overlays.
-                    rewarpMappedImage(d);
+                    rewarpDisplayImage(d);
                     // Contours were extracted per view before the shared range
                     // was known; re-extract them so their levels match the
                     // shared colorbar (see contours-stale-after-visible-range).

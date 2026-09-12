@@ -632,18 +632,16 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     request.composition = composition;
     request.maximumLevel = maximumLevel;
     request.includeGridBoxes = m_boxesAction->isChecked();
-    request.sphericalSupersample = m_sphericalSupersample;
     request.sphericalDisplay = m_sphericalDisplay;
-    // The primary alone draws on its mapped grid; a companion's tile is
-    // placed affinely (see mappedGridAvailable).
-    request.mappedGrid = state.layer == 0 && displayIsMapped();
-    if (request.mappedGrid) {
+    const auto wanted = requestedWarpFor(state);
+    request.mappedGrid = wanted == DisplayWarp::MappedGrid;
+    if (isWarped(wanted)) {
         // The warp is drawn for the window the viewport shows, at its own
         // device pixels (updateMappedDemand); until the view has asked for
-        // one -- the first mapped arrival -- over the whole node bounding
+        // one -- the first warped arrival -- over the whole node bounding
         // box, sized to the viewport, which Fit then frames. The canvas the
         // view lays that out on is asked for once, with the first arrival.
-        const bool windowed = state.mappedGrid && hasMappedWindow(state);
+        const bool windowed = state.warp == wanted && hasMappedWindow(state);
         request.displayWindow = windowed ? state.mappedWindow : RealBox{};
         request.displayPixels = windowed ? state.mappedWindowPixels
                                          : viewportPixelSize(state);
@@ -705,8 +703,7 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
                 // Cached glyphs are layout-specific for a spherical dataset:
                 // R-Z segments carry display (R, Z) coordinates while the
                 // logical layouts carry plane pixels, so a display-mode switch
-                // must regenerate them. (A supersample change is fine: R-Z
-                // segments are resolution-independent physical coordinates.)
+                // must regenerate them.
                 && (!displayIsSpherical()
                     || (state.cachedRequest.sphericalDisplay
                             == request.sphericalDisplay)
@@ -718,8 +715,8 @@ void MainWindow::requestSlice(PlaneViewState& state, bool rasterDirty)
     // view whose warp never landed (a refresh overtook the request that
     // carried it) still shows the logical raster: both need the raster
     // drawn, whatever cosmetic change asked for this refresh.
-    rasterDirty = rasterDirty || request.mappedGrid != state.mappedGrid
-        || (request.mappedGrid && !state.displaySourceIndex
+    rasterDirty = rasterDirty || wanted != state.warp
+        || (isWarped(wanted) && !state.displaySourceIndex
             && state.view->hasImage());
 
     state.stopSource.request_stop();
@@ -993,7 +990,7 @@ void MainWindow::updateGridBoxes(PlaneViewState& state)
             }
             continue;
         }
-        if (state.mappedGrid) {
+        if (state.warp == DisplayWarp::MappedGrid) {
             // The box's logical rectangle, in fractional plane pixels, drawn
             // along the stretched cell edges it maps to.
             if (!(xUpper > xLower) || !(yUpper > yLower)) {
@@ -1110,7 +1107,7 @@ void MainWindow::updateCrosshairs(PlaneViewState& state)
         // constant logical coordinate, which a straight guide cannot
         // follow, so that guide is left out; the horizontal in-plane axes
         // keep theirs.
-        const bool mapped = state.mappedGrid && state.view->hasImage();
+        const bool mapped = state.warp == DisplayWarp::MappedGrid && state.view->hasImage();
         const auto& region = mapped ? state.displayRegion
                                     : state.plane->physicalRegion;
         const auto width = mapped
@@ -1422,38 +1419,6 @@ std::optional<QRectF> MainWindow::preservedDataWindow(
     return clamped;
 }
 
-std::optional<QRectF> MainWindow::sphericalReframe(
-    const PlaneViewState& state, const SliceDisplayResult& display) const
-{
-    // Only the R-Z warp has a resolution knob (supersampling); r-theta and
-    // theta-r never resize in place, and a mode switch changes displayRegion
-    // (so the plain refit below applies). Only once a raster is already on
-    // screen (the first frame refits), and only when the user has actually
-    // zoomed (a fit-to-window view should stay fit and keep auto-fitting).
-    if (!displayIsSpherical()
-        || display.sphericalDisplay != SphericalDisplay::RZ
-        || state.sphericalDisplay != SphericalDisplay::RZ
-        || !state.view->hasImage() || state.view->isFitToWindow()
-        || !(display.displayRegion == state.displayRegion)) {
-        return std::nullopt;
-    }
-    const auto oldSize = state.view->image(state.tile).size();
-    const QSize newSize(display.image.width, display.image.height);
-    if (oldSize.width() <= 0 || oldSize.height() <= 0 || newSize == oldSize) {
-        return std::nullopt;  // no resolution change (e.g. a field/range refresh)
-    }
-    // The physical bounds are unchanged, so the currently-visible physical
-    // window occupies a scene rect scaled by the pixmap-resolution ratio.
-    const auto visible = state.view->mapToScene(
-        state.view->viewport()->rect()).boundingRect();
-    const double sx = static_cast<double>(newSize.width())
-        / static_cast<double>(oldSize.width());
-    const double sy = static_cast<double>(newSize.height())
-        / static_cast<double>(oldSize.height());
-    return QRectF(visible.x() * sx, visible.y() * sy,
-        visible.width() * sx, visible.height() * sy);
-}
-
 void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     std::uint64_t sessionEpoch)
 {
@@ -1461,13 +1426,17 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     // pixmap that is not the warp: the request carrying the warp was
     // overtaken before it landed. Such an arrival is shown as the logical
     // raster it sits on, and the warp is asked for again.
-    const bool flatPixmap = display.mappedGrid && display.rasterUnchanged
+    const bool flatPixmap = isWarped(display.warp) && display.rasterUnchanged
         && !display.displaySourceIndex
-        && !(state.mappedGrid && state.displaySourceIndex);
+        && !(isWarped(state.warp) && state.displaySourceIndex);
     if (flatPixmap) {
-        display.mappedGrid = false;
+        display.warp = DisplayWarp::None;
         display.gridNodes.reset();
-        display.displayRegion = display.displayPlane().physicalRegion;
+        // The pixmap on screen is the flat raster: the logical region, or
+        // for a spherical plane the layout that raster was drawn in.
+        display.sphericalDisplay = state.sphericalDisplay;
+        display.displayRegion = displayIsSpherical()
+            ? state.displayRegion : display.displayPlane().physicalRegion;
     }
     // The view changes made while the arrival is installed (a Fit, a
     // stretch) must not ask the warp for a window against the request this
@@ -1479,10 +1448,10 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
             : flag(value), previous(std::exchange(value, true)) {}
         ~ApplyingArrival() { flag = previous; }
     } applying{m_applyingArrival};
-    // A mapped arrival lays out on its canvas: the node bounding box of the
+    // A warped arrival lays out on its canvas: the node bounding box of the
     // whole domain, brought by the first arrival and grown -- never shrunk --
     // by every later one, so the scene's anchor holds still.
-    if (display.mappedGrid) {
+    if (isWarped(display.warp)) {
         auto bounds = display.mappedDomainBounds.value_or(display.mappedBounds);
         if (state.mappedCanvasBounds) {
             for (const auto axis : displayAxes(state.normal)) {
@@ -1496,16 +1465,16 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     // Before the raster is installed, so a Fit is computed once, with the
     // stretch the raster was sized for: none on a mapped grid, whose tile
     // carries its own placement.
-    state.mappedGrid = display.mappedGrid;
-    state.mappedNodeBounds = display.mappedGrid ? display.mappedBounds : RealBox{};
-    if (!display.mappedGrid) {
-        // The next mapped arrival starts from the whole node box again, not
-        // from a window this view showed before it left the mapped grid.
+    state.warp = display.warp;
+    state.mappedNodeBounds = isWarped(display.warp) ? display.mappedBounds : RealBox{};
+    if (!isWarped(display.warp)) {
+        // The next warped arrival starts from the whole node box again, not
+        // from a window this view showed before it left the warp.
         state.mappedWindow = {};
         state.mappedWindowPixels = {0, 0};
     }
     applyDisplayStretch(state);
-    state.view->setSmoothPixmapTransformation(display.mappedGrid);
+    state.view->setSmoothPixmapTransformation(isWarped(display.warp));
     if (flatPixmap) {
         scheduleSliceRequest(state, true);
     }
@@ -1513,87 +1482,77 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
         if (!display.image.valid()) {
             throw std::runtime_error("renderer produced an invalid image");
         }
-        // A spherical supersample change keeps the same physical (R, Z) bounds
-        // but resizes the warped pixmap. Keep what the user is looking at by
-        // re-framing the visible window to the new resolution rather than
-        // refitting to the whole sector (the GeometryAware size-change refit).
-        if (const auto sphericalWindow = sphericalReframe(state, display)) {
-            state.view->setImage(displayImageFor(display.image),
-                ImageTransformPolicy::Preserve);
-            state.view->zoomToRect(*sphericalWindow);
-        } else {
-            // Preserve/Refit/GeometryAware from the cached-vs-incoming request
-            // pair; the rationale lives with the decision in the coordinator.
-            const auto& metadata = layerFor(state).session->metadata();
-            const DisplayCoordinator::RasterGeometry incomingGeometry{
-                metadata.physicalDomain, metadata.dimension,
-                metadata.coordinateSystem, display.request.normalDirection,
-                display.sphericalDisplay, display.mappedGrid};
-            const auto transformPolicy
-                = DisplayCoordinator::rasterTransformPolicy(
-                    state.rasterGeometry, incomingGeometry);
-            // Preserve Custom mode by capturing the visible physical window
-            // through the old plane and re-framing it through the new one.
-            // This is required when pixel density changes (issue #45), and it
-            // also protects same-density sequence replacements from scene or
-            // scrollbar recentering while the pixmap item is replaced.
-            std::optional<QRectF> dataWindowInNewScene;
-            const auto axes = displayAxes(state.normal);
-            const bool ownerChanged = state.hasCachedRequest
-                && state.cachedRequest.dataset != display.request.dataset;
-            const bool densityChanged = DisplayCoordinator::planeDensitiesDiffer(
-                *state.plane, display.displayPlane(), axes);
-            // A mapped arrival lands on its canvas below and keeps the view
-            // as it is; the plane-pixel re-frame does not describe it.
-            if (transformPolicy == ImageTransformPolicy::Preserve
-                && !display.mappedGrid
-                && state.view->transformMode()
-                    == ImageView::TransformMode::Custom
-                && (ownerChanged || densityChanged)) {
-                dataWindowInNewScene = preservedDataWindow(
-                    state, display.displayPlane());
-            }
-            const auto image = displayImageFor(display.image);
-            // A view on a virtual canvas keeps it: the raster lands at its
-            // cell offset while the scroll position stays put.
-            std::optional<ImageView::VirtualPlacement> placement;
-            if (state.view->virtualCanvasActive() && !displayIsSpherical()
-                && !display.mappedGrid) {
-                placement = virtualPlacementFor(
-                    state, display.displayPlane().physicalRegion);
-            }
-            const auto mapped = display.mappedGrid ? mappedLayout(state) : std::nullopt;
-            if (mapped) {
-                // The warp of the window it was asked for lands at that
-                // window's place on the canvas; the view's transform and
-                // scroll position are untouched (Preserve), a first mapped
-                // arrival or a switch from the logical grid refits to the
-                // canvas. Never setImage: that would drop the canvas.
-                state.view->setTileImage(state.tile, image,
-                    toQRectF(mapped->sceneRectForRegion(display.displayRegion)),
-                    toQRectF(mapped->canvasRect()), transformPolicy);
-            } else if (m_pair && m_viewDimension == 3) {
-                // Two datasets share the panel's canvas: this tile lands at
-                // its layout position, the other tile stays where it is.
-                const auto& layout = pairLayout(state.normal);
-                const auto region = display.displayPlane().physicalRegion;
-                const auto rect = layout.sceneRectForRegion(state.layer, region);
-                const auto canvas = pairCanvasRect(state.normal);
-                state.view->setTileImage(state.tile, image,
-                    QRectF(rect.x, rect.y, rect.width, rect.height),
-                    QRectF(canvas.x, canvas.y, canvas.width, canvas.height),
-                    transformPolicy);
-                state.view->setTileVisible(state.tile, stateShown(state));
-            } else {
-                state.view->setImage(image, transformPolicy,
-                    logicalImageSize(state, display.displayPlane(), image),
-                    placement);
-                if (dataWindowInNewScene) {
-                    state.view->zoomToRect(*dataWindowInNewScene);
-                }
-            }
-            state.rasterGeometry = incomingGeometry;
+        // Preserve/Refit/GeometryAware from the cached-vs-incoming request
+        // pair; the rationale lives with the decision in the coordinator.
+        const auto& metadata = layerFor(state).session->metadata();
+        const DisplayCoordinator::RasterGeometry incomingGeometry{
+            metadata.physicalDomain, metadata.dimension,
+            metadata.coordinateSystem, display.request.normalDirection,
+            display.sphericalDisplay, display.warp};
+        const auto transformPolicy
+            = DisplayCoordinator::rasterTransformPolicy(
+                state.rasterGeometry, incomingGeometry);
+        // Preserve Custom mode by capturing the visible physical window
+        // through the old plane and re-framing it through the new one.
+        // This is required when pixel density changes (issue #45), and it
+        // also protects same-density sequence replacements from scene or
+        // scrollbar recentering while the pixmap item is replaced.
+        std::optional<QRectF> dataWindowInNewScene;
+        const auto axes = displayAxes(state.normal);
+        const bool ownerChanged = state.hasCachedRequest
+            && state.cachedRequest.dataset != display.request.dataset;
+        const bool densityChanged = DisplayCoordinator::planeDensitiesDiffer(
+            *state.plane, display.displayPlane(), axes);
+        // A warped arrival lands on its canvas below and keeps the view
+        // as it is; the plane-pixel re-frame does not describe it.
+        if (transformPolicy == ImageTransformPolicy::Preserve
+            && !isWarped(display.warp)
+            && state.view->transformMode()
+                == ImageView::TransformMode::Custom
+            && (ownerChanged || densityChanged)) {
+            dataWindowInNewScene = preservedDataWindow(
+                state, display.displayPlane());
         }
+        const auto image = displayImageFor(display.image);
+        // A view on a virtual canvas keeps it: the raster lands at its
+        // cell offset while the scroll position stays put.
+        std::optional<ImageView::VirtualPlacement> placement;
+        if (state.view->virtualCanvasActive() && !displayIsSpherical()
+            && !isWarped(display.warp)) {
+            placement = virtualPlacementFor(
+                state, display.displayPlane().physicalRegion);
+        }
+        const auto mapped = isWarped(display.warp) ? mappedLayout(state) : std::nullopt;
+        if (mapped) {
+            // The warp of the window it was asked for lands at that
+            // window's place on the canvas; the view's transform and
+            // scroll position are untouched (Preserve), a first warped
+            // arrival or a switch from the logical grid refits to the
+            // canvas. Never setImage: that would drop the canvas.
+            state.view->setTileImage(state.tile, image,
+                toQRectF(mapped->sceneRectForRegion(display.displayRegion)),
+                toQRectF(mapped->canvasRect()), transformPolicy);
+        } else if (m_pair && m_viewDimension == 3) {
+            // Two datasets share the panel's canvas: this tile lands at
+            // its layout position, the other tile stays where it is.
+            const auto& layout = pairLayout(state.normal);
+            const auto region = display.displayPlane().physicalRegion;
+            const auto rect = layout.sceneRectForRegion(state.layer, region);
+            const auto canvas = pairCanvasRect(state.normal);
+            state.view->setTileImage(state.tile, image,
+                QRectF(rect.x, rect.y, rect.width, rect.height),
+                QRectF(canvas.x, canvas.y, canvas.width, canvas.height),
+                transformPolicy);
+            state.view->setTileVisible(state.tile, stateShown(state));
+        } else {
+            state.view->setImage(image, transformPolicy,
+                logicalImageSize(state, display.displayPlane(), image),
+                placement);
+            if (dataWindowInNewScene) {
+                state.view->zoomToRect(*dataWindowInNewScene);
+            }
+        }
+        state.rasterGeometry = incomingGeometry;
     }
     // Stamped once the view is showing this session's pixels, not on the way
     // in: ahead of the validity check above, a view that threw before adopting
@@ -1624,19 +1583,19 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     state.coordinateSystem = display.coordinateSystem;
     state.sphericalDisplay = display.sphericalDisplay;
     state.displayRegion = display.displayRegion;
-    // Likewise the mapped-grid warp: the pixmap is physical over
-    // displayRegion, and these place plane pixels on it and back.
-    // A refresh that kept the pixmap (rasterUnchanged) drew nothing to
-    // index, so the index of the pixmap still on screen stays as well.
-    const bool keepIndex = display.mappedGrid && display.rasterUnchanged
+    // Likewise a warp: the pixmap is physical over displayRegion, and these
+    // place plane pixels on it and back. A refresh that kept the pixmap
+    // (rasterUnchanged) drew nothing to index, so the index of the pixmap
+    // still on screen stays as well.
+    const bool keepIndex = isWarped(display.warp) && display.rasterUnchanged
         && !display.displaySourceIndex;
-    state.mappedGrid = display.mappedGrid;
-    state.gridNodes = display.mappedGrid
+    state.warp = display.warp;
+    state.gridNodes = display.warp == DisplayWarp::MappedGrid
         ? (display.gridNodes ? display.gridNodes : state.gridNodes)
         : nullptr;
     if (!keepIndex) {
         state.displaySourceIndex
-            = display.mappedGrid ? display.displaySourceIndex : nullptr;
+            = isWarped(display.warp) ? display.displaySourceIndex : nullptr;
     }
     // The plotfile does not declare a length unit. The selected interpretation
     // is applied only while formatting the annotation; this width stays in
@@ -1675,7 +1634,7 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     // what this warp was drawn for (a first arrival's Fit, a view moved while
     // it was on its way): the ask the guard above held back. Queued: inside a
     // sequence frame's display, a slice request would restart that frame.
-    if (state.mappedGrid) {
+    if (isWarped(state.warp)) {
         QTimer::singleShot(0, this, [this, &state] { updateMappedDemand(state); });
     }
     if (m_activeView == &state
@@ -1690,9 +1649,9 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     // The straight-line profile tool works on the logical r-theta / theta-r
     // grid but not on the warped R-Z view, nor on a mapped grid, where a
     // straight screen line is not a constant logical coordinate.
-    state.view->setLineToolEnabled(!displayIsSphericalWarp() && !state.mappedGrid);
-    // The 2-D Spherical menu (and, within it, Supersampling only in R-Z mode)
-    // is available only for spherical datasets; Aspect Ratio for the others.
+    state.view->setLineToolEnabled(!displayIsSphericalWarp() && !isWarped(state.warp));
+    // The 2-D Spherical menu is available only for spherical datasets;
+    // Aspect Ratio for the others.
     updateSphericalControls();
     updateMappedGridControls();
     updateAspectControls();
@@ -1878,7 +1837,7 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
         const auto* state = views[index];
         snapshots[index] = {state->plane, state->contourPlane,
             state->cachedRequest.outputSize,
-            state->mappedGrid ? state->gridNodes : nullptr,
+            state->warp == DisplayWarp::MappedGrid ? state->gridNodes : nullptr,
             displayAxes(state->normal),
             state->cachedRequest.displayWindow,
             state->cachedRequest.displayPixels};
@@ -2022,11 +1981,11 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
                         // placement so the scroll position stays put.
                         std::optional<ImageView::VirtualPlacement> placement;
                         if (state->view->virtualCanvasActive()
-                            && !displayIsSpherical() && !state->mappedGrid) {
+                            && !displayIsSpherical() && state->warp != DisplayWarp::MappedGrid) {
                             placement = virtualPlacementFor(
                                 *state, state->plane->physicalRegion);
                         }
-                        const auto mapped = state->mappedGrid
+                        const auto mapped = state->warp == DisplayWarp::MappedGrid
                             ? mappedLayout(*state) : std::nullopt;
                         if (mapped && outcome.mappedWindows[index]) {
                             // The re-coloured warp of the same window lands
@@ -2637,7 +2596,6 @@ FrameSliceSpec MainWindow::buildFrameSpec()
     spec.displayMode = m_displayMode;
     spec.palette = m_paletteController->palette();
     spec.contourCount = m_contourCount;
-    spec.sphericalSupersample = m_sphericalSupersample;
     spec.sphericalDisplay = m_sphericalDisplay;
     spec.mappedGrid = m_mappedGrid;
     {
@@ -2705,9 +2663,9 @@ void MainWindow::fillMappedDisplays(FrameSliceSpec& spec,
     spec.displayWindows.clear();
     spec.displayPixels.clear();
     for (const auto* state : views) {
-        // The window a mapped view shows at its pixels; without one, the
+        // The window a warped view shows at its pixels; without one, the
         // whole node box at the viewport's.
-        const bool windowed = state->mappedGrid && hasMappedWindow(*state);
+        const bool windowed = isWarped(state->warp) && hasMappedWindow(*state);
         spec.displayWindows.push_back(windowed ? state->mappedWindow : RealBox{});
         spec.displayPixels.push_back(
             windowed ? state->mappedWindowPixels : viewportPixelSize(*state));

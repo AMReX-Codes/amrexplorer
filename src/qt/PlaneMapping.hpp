@@ -72,7 +72,9 @@ namespace amrvis::qt {
 // On the mapped path the pixmap is physical and uniform, so display <-> scene
 // stays linear over displayRegion; what changes is plane pixel -> display
 // (bilinear through the node positions) and its inverse, which is a lookup in
-// the warp's per-pixel source index rather than arithmetic.
+// the warp's per-pixel source index rather than arithmetic. The spherical R-Z
+// wedge is drawn the same way (a window at the view's pixels), but keeps the
+// analytic spherical arms, which stay exact over that window.
 struct PlaneMapping {
     bool spherical = false;
     SphericalDisplay mode = SphericalDisplay::RZ;

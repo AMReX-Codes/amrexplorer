@@ -192,20 +192,6 @@ void MainWindow::restoreSettings()
             QStringLiteral("overlay/scaleBar"), false).toBool();
         m_scaleBarAction->setChecked(m_scaleBarVisible);
     }
-    if (m_sphericalSupersampleGroup != nullptr) {
-        const auto stored = settings.value(
-            QStringLiteral("spherical/supersample"), m_sphericalSupersample).toInt();
-        // Accept only a factor the menu offers; otherwise keep the default.
-        // setChecked emits toggled, not triggered, so the re-warp slot is not
-        // fired here.
-        for (auto* action : m_sphericalSupersampleGroup->actions()) {
-            if (action->data().toInt() == stored) {
-                m_sphericalSupersample = stored;
-                action->setChecked(true);
-                break;
-            }
-        }
-    }
     if (m_sphericalDisplayGroup != nullptr) {
         const auto stored = settings.value(QStringLiteral("spherical/display"),
             static_cast<int>(m_sphericalDisplay)).toInt();
@@ -265,8 +251,7 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("overlay/scaleBar"),
         m_scaleBarVisible);
     settings.remove(QStringLiteral("scaleBar/lengthUnit"));
-    settings.setValue(QStringLiteral("spherical/supersample"),
-        m_sphericalSupersample);
+    settings.remove(QStringLiteral("spherical/supersample"));
     settings.setValue(QStringLiteral("spherical/display"),
         static_cast<int>(m_sphericalDisplay));
     settings.setValue(QStringLiteral("aspect/mode"),
@@ -839,7 +824,7 @@ void MainWindow::applyDatasetCellHighlight(PlaneViewState& state)
     const auto& region = plane.physicalRegion;
     const auto xExtent = region.upper[xAxis] - region.lower[xAxis];
     const auto yExtent = region.upper[yAxis] - region.lower[yAxis];
-    if (state.mappedGrid) {
+    if (state.warp == DisplayWarp::MappedGrid) {
         // The cell's logical rectangle in plane pixels, outlined along the
         // stretched edges it maps to (as updateGridBoxes does).
         const auto clampCol = [&](double value) {
@@ -970,7 +955,7 @@ void MainWindow::openDatasetImpl(const std::filesystem::path& path,
         state->visibleRegion.reset();
         state->vectorSegments.clear();
         state->gridBoxes.clear();
-        state->mappedGrid = false;
+        state->warp = DisplayWarp::None;
         state->gridNodes.reset();
         state->displaySourceIndex.reset();
         state->mappedCanvasBounds.reset();
@@ -1284,7 +1269,6 @@ void MainWindow::requestInitialSlice(
         spec.vectorWField =
             static_cast<std::uint32_t>(std::max(m_vectorWField, 0));
         spec.contourCount = m_contourCount;
-        spec.sphericalSupersample = m_sphericalSupersample;
         spec.sphericalDisplay = m_sphericalDisplay;
         spec.mappedGrid = m_mappedGrid;
     }

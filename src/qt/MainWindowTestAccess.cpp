@@ -528,7 +528,7 @@ bool MainWindow::displayIsMappedForTest() const
 
 bool MainWindow::activeViewIsMappedForTest() const
 {
-    return m_activeView != nullptr && m_activeView->mappedGrid;
+    return m_activeView != nullptr && m_activeView->warp == DisplayWarp::MappedGrid;
 }
 
 QRectF MainWindow::activeViewMappedWindowForTest() const
@@ -551,15 +551,22 @@ QRectF MainWindow::activeViewMappedWindowForTest() const
 MainWindow::MappedPanelForTest MainWindow::mappedPanelForTest(int normal) const
 {
     MappedPanelForTest panel;
-    if (m_viewDimension != 3 || normal < 0 || normal > 2) {
+    // A negative normal reads the 2-D view.
+    const PlaneViewState* found = nullptr;
+    if (normal < 0) {
+        found = m_viewDimension == 2 ? &m_view2d : nullptr;
+    } else if (m_viewDimension == 3 && normal <= 2) {
+        found = &primary().planeViews[static_cast<std::size_t>(normal)];
+    }
+    if (found == nullptr) {
         return panel;
     }
-    const auto& state = primary().planeViews[static_cast<std::size_t>(normal)];
+    const auto& state = *found;
     const auto* view = state.view;
     if (view == nullptr || view->viewport() == nullptr || !view->hasImage()) {
         return panel;
     }
-    panel.mapped = state.mappedGrid;
+    panel.warped = isWarped(state.warp);
     panel.fit = view->isFitToWindow();
     panel.resliced = state.visibleRegion.has_value();
     if (state.hasCachedRequest) {
@@ -783,9 +790,9 @@ void MainWindow::rubberBandZoomActiveViewForTest()
         return;
     }
     // The central half of what the view reports: the plane's pixels for a
-    // classic raster, the tile's scene rect (the physical canvas) on a mapped
-    // grid -- the two forms the rubber-band signals carry.
-    if (m_activeView->mappedGrid && m_activeView->view->hasImage()) {
+    // classic raster, the tile's scene rect (the physical canvas) on a warp
+    // -- the two forms the rubber-band signals carry.
+    if (isWarped(m_activeView->warp) && m_activeView->view->hasImage()) {
         const auto tile = m_activeView->view->tileSceneRect(m_activeView->tile);
         mappedRubberBandZoom(*m_activeView,
             QRectF(tile.left() + 0.25 * tile.width(), tile.top() + 0.25 * tile.height(),
@@ -1215,15 +1222,6 @@ QRectF MainWindow::activeViewVisibleImageRectForTest() const
 bool MainWindow::activeViewIsZoomedForTest() const
 {
     return m_activeView != nullptr && m_activeView->visibleRegion.has_value();
-}
-
-void MainWindow::setSphericalSupersampleForTest(int factor)
-{
-    // Mirror the menu handler: record the factor and re-warp the cached planes.
-    m_sphericalSupersample = factor;
-    if (displayIsSpherical()) {
-        scheduleSliceRequest(true);
-    }
 }
 
 int MainWindow::activeViewImageWidthForTest() const

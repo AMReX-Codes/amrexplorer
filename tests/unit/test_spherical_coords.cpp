@@ -90,8 +90,9 @@ int main()
         require(!isSpherical2D(md), "no geometry -> not spherical");
     }
 
-    // warpSpherical: a uniform opaque source produces a raster whose sector
-    // interior keeps the source color and whose exterior is transparent.
+    // warpSphericalRZ: a uniform opaque source produces a raster whose sector
+    // interior keeps the source color, whose exterior is transparent, and
+    // whose boundary fades between the two.
     {
         constexpr std::uint32_t kColor = 0xFF112233U;  // opaque
         ImageBuffer src;
@@ -103,26 +104,35 @@ int main()
             kColor);
 
         const auto region = logicalBox(1.0, 2.0, 0.0, 0.4);
-        const auto warped = warpSpherical(src, region, 128, 4);
+        const auto warped = warpSphericalRZ(src, region, RealBox{}, {0, 0});
         require(warped.image.width > 0 && warped.image.height > 0, "warp dims positive");
+        require(warped.sourceIndex != nullptr, "warp drew the sector");
         require(approx(warped.displayRegion.upper[1],
                     sphericalDisplayBounds(region).upper[1]),
             "warp display region");
 
         std::size_t opaque = 0;
         std::size_t transparent = 0;
+        std::size_t fading = 0;
         for (const auto pixel : warped.image.rgba) {
-            if (pixel == 0U) {
+            const auto alpha = (pixel >> 24U) & 0xFFU;
+            if (alpha == 0U) {
                 ++transparent;
-            } else {
+            } else if (alpha == 255U) {
                 require(pixel == kColor, "warp keeps source color inside sector");
                 ++opaque;
+            } else {
+                require((pixel & 0x00FFFFFFU) == (kColor & 0x00FFFFFFU),
+                    "a fading pixel carries the source color");
+                ++fading;
             }
         }
         require(opaque > 0, "warp has sector interior");
         // The sector never fills its axis-aligned bounding box, so some output
-        // pixels must fall outside it and stay transparent.
+        // pixels must fall outside it and stay transparent, and the boundary
+        // between crosses pixels part way.
         require(transparent > 0, "warp has transparent exterior");
+        require(fading > 0, "warp fades at the sector boundary");
     }
 
     // transposeImage: dimensions swap and every pixel lands at its transposed

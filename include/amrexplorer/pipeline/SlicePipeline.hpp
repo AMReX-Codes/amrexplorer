@@ -76,13 +76,15 @@ struct SliceDisplayResult {
     // scene to.
     RealBox mappedBounds;
     std::optional<RealBox> mappedDomainBounds;
-    // Set when `image` was drawn on the dataset's mapped grid
-    // (request.mappedGrid on a session that supportsMappedGrid()): the node
-    // positions the raster cells were placed by, and, parallel to image.rgba
-    // (row 0 = bottom, before displayImageFor's flip), the raster pixel each
-    // display pixel shows or -1. Overlays anchored in raster-pixel space map
-    // forward through gridNodes; the probe maps back through the index.
-    bool mappedGrid = false;
+    // How `image` was drawn (DisplayWarp): on the dataset's mapped grid
+    // (request.mappedGrid on a session that supportsMappedGrid()), on the
+    // spherical R-Z wedge, or flat. For a warp, displaySourceIndex, parallel
+    // to image.rgba (row 0 = bottom, before displayImageFor's flip), says the
+    // raster pixel each display pixel shows or -1, and the probe maps back
+    // through it. gridNodes, the node positions the raster cells were placed
+    // by, is set for the mapped grid alone; overlays anchored in raster-pixel
+    // space map forward through it.
+    DisplayWarp warp = DisplayWarp::None;
     std::shared_ptr<const MappedGridPlane> gridNodes;
     std::shared_ptr<const std::vector<std::int32_t>> displaySourceIndex;
     // The dataset axes gridNodes.a and .b run along (slicePlaneAxes), kept so
@@ -176,9 +178,6 @@ struct FrameSliceSpec {
     std::uint32_t vectorVField = 0;
     std::uint32_t vectorWField = 0;
     int contourCount = 10;
-    // 2-D spherical warp resolution carried across frame loads (see
-    // SliceRequest::sphericalSupersample).
-    int sphericalSupersample = 4;
     // 2-D spherical display layout carried across frame loads.
     SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
     // Mapped-grid display carried across frame loads (see
@@ -379,12 +378,12 @@ void appendContours(const std::shared_ptr<DatasetSession>& dataset,
 // current (possibly replaced) minimum/maximum. No-op outside contour modes.
 void recomputeContourPolylines(SliceDisplayResult& result);
 
-// Re-warps a mapped-grid display after its plane was re-coloured in place
-// (a shared 3-D Visible range, a range realignment): the fresh flat raster
-// is put through the same nodes, axes, window and pixels, and the image, its
-// region and its source index are replaced together. No-op for a Cartesian
-// display or one without nodes.
-void rewarpMappedImage(SliceDisplayResult& result);
+// Re-warps a warped display (a mapped grid, the spherical R-Z wedge) after
+// its plane was re-coloured in place (a shared 3-D Visible range, a range
+// realignment): the fresh flat raster is put through the same nodes or
+// sector, window and pixels, and the image, its region and its source index
+// are replaced together. No-op for a flat display.
+void rewarpDisplayImage(SliceDisplayResult& result);
 
 // Loads the selected particle species in dataset discovery order. Unknown
 // names are ignored, matching the behavior needed when a plotfile sequence

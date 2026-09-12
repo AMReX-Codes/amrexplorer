@@ -1595,16 +1595,19 @@ QSizeF ImageView::displaySize() const
         return {};
     }
     // Counted by rasters on show, not list length: a cleared overlay slot
-    // must not turn a single raster into a footprint measurement.
+    // must not turn a single raster into a footprint measurement. A lone
+    // raster on a layout canvas (a warp drawn for the screen) is not its own
+    // footprint: its pixels cover the scene rect it was placed over. On a
+    // virtual canvas the pixels are the cells, so the raster is.
     const auto placed = std::count_if(m_tiles.begin(), m_tiles.end(),
         [](const Tile& tile) { return tile.item != nullptr && !tile.image.isNull(); });
-    if (placed == 1) {
+    if (placed == 1 && (!m_canvasRect.has_value() || m_placement.has_value())) {
         const auto& tile0 = *std::find_if(m_tiles.begin(), m_tiles.end(),
             [](const Tile& tile) { return tile.item != nullptr && !tile.image.isNull(); });
         return {tile0.image.width() * m_stretch.x(),
             tile0.image.height() * m_stretch.y()};
     }
-    // Several tiles: their footprint is already in display units.
+    // Several tiles, or a layout canvas: the footprint is in display units.
     const auto footprint = exportSceneRect();
     return {footprint.width() * m_stretch.x(), footprint.height() * m_stretch.y()};
 }

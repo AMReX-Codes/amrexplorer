@@ -481,7 +481,7 @@ void MainWindow::updateOverlay(PlaneViewState& state)
         const bool sphericalRZ = spherical
             && state.sphericalDisplay == SphericalDisplay::RZ;
         const auto mapping = planeMapping(state);
-        if (state.mappedGrid && mapping.nodes) {
+        if (state.warp == DisplayWarp::MappedGrid && mapping.nodes) {
             // Mapped-grid glyphs are plane pixels with Cartesian components:
             // each base lands where its cell was drawn and the arrow keeps its
             // direction, at one physical length per plane pixel (the node
@@ -504,7 +504,7 @@ void MainWindow::updateOverlay(PlaneViewState& state)
                 const auto line = sphericalRZ
                     ? QLineF(mapping.sceneFromDisplay(segment.x0, segment.y0),
                         mapping.sceneFromDisplay(segment.x1, segment.y1))
-                    : (spherical || state.mappedGrid)
+                    : (spherical || state.warp == DisplayWarp::MappedGrid)
                     ? QLineF(mapping.sceneFromPlanePixel(segment.x0, segment.y0),
                         mapping.sceneFromPlanePixel(segment.x1, segment.y1))
                     : planeSegmentToScene(state,
@@ -540,7 +540,7 @@ void MainWindow::updateOverlay(PlaneViewState& state)
         // opposite to plane y (see showSlice).
         const auto contourColor = overlayColor();
         const bool spherical = displayIsSpherical();
-        const bool mapped = state.mappedGrid;
+        const bool mapped = state.warp == DisplayWarp::MappedGrid;
         const auto mapping = planeMapping(state);
         const auto height = static_cast<double>(state.plane->height);
         // Cartesian: shift to the pixel center, then flip (scene y is top-down).
@@ -598,7 +598,7 @@ void MainWindow::updateParticleOverlay(PlaneViewState& state)
         return;
     }
     const bool spherical = displayIsSpherical();
-    const bool mapped = state.mappedGrid;
+    const bool mapped = state.warp == DisplayWarp::MappedGrid;
     const auto mapping = planeMapping(state);
     const auto planeHeight = static_cast<double>(state.plane->height);
     const auto axes = displayAxes(state.normal);
@@ -775,7 +775,7 @@ double MainWindow::effectiveFixedScale(int factor) const
         || displayIsSphericalWarp()) {
         return 0.0;
     }
-    if (m_activeView->mappedGrid) {
+    if (m_activeView->warp == DisplayWarp::MappedGrid) {
         // A mapped warp is drawn for the screen at whatever scale is set:
         // one scene unit (the tightest finest cell) is `factor` pixels, with
         // no raster cap in between.
@@ -1012,7 +1012,7 @@ QString MainWindow::probeReadout(
     std::array<double, 3> printed{0.0, 0.0, 0.0};
     bool printedIsPhysical = false;
     std::size_t offset = 0;
-    if (state.mappedGrid) {
+    if (state.warp == DisplayWarp::MappedGrid) {
         const auto mapping = planeMapping(state);
         const auto pixel = mapping.planePixelFromScene(
             static_cast<double>(x) + 0.5, static_cast<double>(displayY) + 0.5);
@@ -1265,10 +1265,15 @@ void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
     if (!layerFor(state).session || plane.width <= 0 || plane.height <= 0) {
         return;
     }
+    if (isWarped(state.warp)) {
+        // The selection arrives in scene coordinates (the physical canvas);
+        // see mappedRubberBandZoom, wired from rubberBandSelectedScene.
+        return;
+    }
     if (displayIsSpherical()) {
-        // The scene is warped (R, Z); re-slicing a logical (r, theta) subregion
-        // from it is deferred. Zoom the view only, leaving the full-domain
-        // warped raster in place.
+        // The r-theta and theta-r layouts: re-slicing a logical subregion
+        // is deferred. Zoom the view only, leaving the full-domain raster
+        // in place.
         const QRectF bounds(0.0, 0.0,
             static_cast<double>(state.view->image(state.tile).width()),
             static_cast<double>(state.view->image(state.tile).height()));
@@ -1278,11 +1283,6 @@ void MainWindow::rubberBandZoom(PlaneViewState& state, const QRectF& sceneRect)
         }
         state.view->zoomToRect(selection);
         setScaleUiState(ScaleUiState::Custom);
-        return;
-    }
-    if (state.mappedGrid) {
-        // The selection arrives in scene coordinates (the physical canvas);
-        // see mappedRubberBandZoom, wired from rubberBandSelectedScene.
         return;
     }
     const auto clamped = sceneRect.normalized().intersected(
@@ -1347,7 +1347,7 @@ void MainWindow::mappedRubberBandZoom(
         const auto region = layout->regionForSceneRect(
             {selection.x(), selection.y(), selection.width(), selection.height()});
         for (auto* other : views) {
-            if (other == &state || !other->mappedGrid || other->view == nullptr
+            if (other == &state || other->warp != DisplayWarp::MappedGrid || other->view == nullptr
                 || !other->view->hasImage()) {
                 continue;
             }
@@ -1374,7 +1374,7 @@ void MainWindow::mappedRubberBandZoom(
 std::optional<QRectF> MainWindow::mappedPlaneBounds(
     const PlaneViewState& state, const QRectF& sceneRect) const
 {
-    if (!state.mappedGrid || !state.displaySourceIndex
+    if (state.warp != DisplayWarp::MappedGrid || !state.displaySourceIndex
         || !state.view->hasImage() || !state.plane
         || state.plane->width <= 0 || state.plane->height <= 0) {
         return std::nullopt;
@@ -1532,7 +1532,7 @@ void MainWindow::beginPanDrag(PlaneViewState& state)
     // what scrolls into view); the region-shifting refresh is for classic
     // rasters of a zoomed subregion.
     m_panDataRefresh = state.visibleRegion.has_value()
-        && !state.view->virtualCanvasActive() && !state.mappedGrid;
+        && !state.view->virtualCanvasActive() && !isWarped(state.warp);
     if (m_panDataRefresh) {
         m_panStartRegion = *state.visibleRegion;
         m_panPlaneWidth = state.plane->width;
@@ -1663,7 +1663,7 @@ bool MainWindow::remoteDemandCanvas(const PlaneViewState& state) const
     // Never over a pair: its tiles sit on the pair's canvas, which a virtual
     // canvas would displace (see applyFixedScale).
     return layerIsRemote(state) && !m_pair
-        && !displayIsSpherical() && !state.mappedGrid && state.view != nullptr
+        && !displayIsSpherical() && !isWarped(state.warp) && state.view != nullptr
         && state.view->virtualCanvasActive();
 }
 
@@ -1735,7 +1735,7 @@ void MainWindow::applyFixedScale(int factor)
     for (std::size_t index = 0; index < views.size(); ++index) {
         auto& state = *views[index];
         const bool demandDriven = layerIsRemote(state) && !displayIsSpherical()
-            && !state.mappedGrid && !m_pair;
+            && !isWarped(state.warp) && !m_pair;
         if (demandDriven) {
             // Host the raster on a whole-domain virtual canvas so the scroll
             // bars span the domain exactly as they do for a local fixed
@@ -1832,9 +1832,9 @@ bool MainWindow::hasMappedWindow(const PlaneViewState& state) const
 
 void MainWindow::updateMappedDemand(PlaneViewState& state)
 {
-    // A no-op unless the view shows a mapped raster on a known canvas, and
+    // A no-op unless the view shows a warped raster on a known canvas, and
     // never while an arrival is being installed (showSlice asks afterwards).
-    if (m_applyingArrival || !state.mappedGrid || !state.mappedCanvasBounds
+    if (m_applyingArrival || !isWarped(state.warp) || !state.mappedCanvasBounds
         || state.view == nullptr || state.view->viewport() == nullptr
         || !state.view->hasTileImage(state.tile) || !layerFor(state).session
         || !state.plane || state.plane->width <= 0 || state.plane->height <= 0) {
@@ -1927,7 +1927,9 @@ void MainWindow::updateMappedDemand(PlaneViewState& state)
         shrink[i] = pitch[i] > 1.0 + 1e-9 && partial[i];
         reslice = reslice || shrink[i] || pastLower[i] || pastUpper[i];
     }
-    if (reslice) {
+    // The R-Z wedge is always the whole (r, theta) plane: its zoom is the
+    // view's alone, and only the warp is re-drawn.
+    if (reslice && state.warp == DisplayWarp::MappedGrid) {
         // The logical extent of the cells on screen, through the warp's
         // source index; none when no cell of the plane is on screen.
         std::optional<RealBox> cells;
@@ -2025,7 +2027,7 @@ void MainWindow::applyPanStep(PlaneViewState& state, const QPointF& direction)
         }
         // Not zoomed: the view pans as one dataset's does below.
     }
-    if (state.mappedGrid) {
+    if (isWarped(state.warp)) {
         // The tile sits on the physical canvas and the view scrolls over it
         // (updateMappedDemand then draws the warp for what it shows): a
         // twentieth of the viewport, at least one pixel, as the scroll bars
@@ -2337,7 +2339,7 @@ void MainWindow::sliceMoveRequested(PlaneViewState& state, int imageX, int image
     // logical centre of the cell drawn there.
     auto planeX = static_cast<double>(imageX);
     auto planeY = static_cast<double>(imageY);
-    if (state.mappedGrid) {
+    if (state.warp == DisplayWarp::MappedGrid) {
         const auto pixel = planeMapping(state).planePixelFromScene(
             static_cast<double>(imageX) + 0.5, static_cast<double>(imageY) + 0.5);
         if (!pixel) {

@@ -21,8 +21,8 @@
 #include <utility>
 
 // Zoom: the zoom / pan / scale scenarios: raster and rubber-band zoom, pan,
-// spherical supersample, fixed and effective scale and its report, arrow-key
-// routing. Every branch drives MainWindow through its ForTest accessors and
+// the mapped-grid and spherical R-Z warps, fixed and effective scale and its
+// report, arrow-key routing. Every branch drives MainWindow through its ForTest accessors and
 // arms connections and timers for main() to run; see SmokeHarness.hpp.
 
 namespace amrvis::qt::smoke {
@@ -175,7 +175,7 @@ Outcome dispatchZoom(Context& context)
             const auto whole = [](double value) {
                 return std::abs(value - std::round(value)) < 1e-6;
             };
-            const bool ok = panel.mapped && !panel.window.isEmpty()
+            const bool ok = panel.warped && !panel.window.isEmpty()
                 && std::abs(tile.width() - panel.image.width()) < 1e-6
                 && std::abs(tile.height() - panel.image.height()) < 1e-6
                 && whole(tile.left()) && whole(tile.top());
@@ -542,6 +542,292 @@ Outcome dispatchZoom(Context& context)
             window.openDataset(path);
         });
     } else if (argc == 3
+        && std::string_view(argv[1]) == "--spherical-rz-smoke-test") {
+        // The R-Z view of plotfile_2d_spherical (16 x 8 cells, r in [1, 2],
+        // theta in [0, 0.5]) drawn the mapped-grid way: at Fit the warp of
+        // the sector's box at the view's own pixels, with the probe reading a
+        // cell inside the sector and nothing outside it, and the grid boxes
+        // on; a wheel zoom and a rubber band zoom the view and the warp
+        // follows without a re-slice; a scroll moves the window and its
+        // arrival leaves the view put; contours keep the probe; r-theta is
+        // the flat raster again at Fit, and R-Z once more lands on the canvas.
+        const std::filesystem::path path(argv[2]);
+        struct Progress {
+            int phase = 0;
+            double fitScale = 0.0;
+            QRectF zoomWindow;
+            std::array<double, 4> scrolled{};
+            QRectF scrolledFrom;
+            QRectF tileBefore;
+        };
+        auto progress = std::make_shared<Progress>();
+        const auto fail = [&application](const char* message) {
+            qCritical("%s", message);
+            application.exit(1);
+        };
+        // The view shows a warp drawn for its window one to one: as many
+        // pixels as its tile covers on screen, at whole device pixels.
+        const auto drawnForScreen = [&window] {
+            const auto panel = window.mappedPanelForTest(-1);
+            const auto& tile = panel.tileDevice;
+            const auto whole = [](double value) {
+                return std::abs(value - std::round(value)) < 1e-6;
+            };
+            const bool ok = panel.warped && !panel.window.isEmpty()
+                && std::abs(tile.width() - panel.image.width()) < 1e-6
+                && std::abs(tile.height() - panel.image.height()) < 1e-6
+                && whole(tile.left()) && whole(tile.top());
+            if (!ok) {
+                qCritical("warp %d x %d on a tile of %g x %g device pixels at (%g, %g)",
+                    panel.image.width(), panel.image.height(), tile.width(),
+                    tile.height(), tile.left(), tile.top());
+            }
+            return ok;
+        };
+        // The tile covers the whole canvas, reaching past each edge by less
+        // than a device pixel.
+        const auto coversCanvas = [&window] {
+            const auto panel = window.mappedPanelForTest(-1);
+            const auto pixel = 1.0 / (panel.scale * window.devicePixelRatioF());
+            const auto& tile = panel.tile;
+            const auto& canvas = panel.canvas;
+            const bool ok = !canvas.isEmpty()
+                && tile.left() <= canvas.left() + 1e-9 && tile.left() > canvas.left() - pixel
+                && tile.top() <= canvas.top() + 1e-9 && tile.top() > canvas.top() - pixel
+                && tile.right() >= canvas.right() - 1e-9
+                && tile.right() < canvas.right() + pixel
+                && tile.bottom() >= canvas.bottom() - 1e-9
+                && tile.bottom() < canvas.bottom() + pixel;
+            if (!ok) {
+                qCritical("tile %g x %g at (%g, %g), canvas %g x %g at (%g, %g)",
+                    tile.width(), tile.height(), tile.left(), tile.top(),
+                    canvas.width(), canvas.height(), canvas.left(), canvas.top());
+            }
+            return ok;
+        };
+        // The pixmap's centre lies inside the sector: R = 0.48, Z = 1.44 is
+        // r = 1.52 at theta = 0.32.
+        const auto probeCentre = [&window] {
+            const auto size = window.activeViewImageSizeForTest();
+            const auto readout
+                = window.probeReadoutActiveViewForTest(size[0] / 2, size[1] / 2);
+            return readout.contains(QStringLiteral("value"))
+                && readout.contains(QStringLiteral("R="));
+        };
+        // The view frames a physical target as a zoom to it does (see the
+        // mapped-grid smoke).
+        const auto frames = [&window](const QRectF& target) {
+            const auto panel = window.mappedPanelForTest(-1);
+            const auto& shown = panel.window;
+            const auto& tile = panel.tile;
+            const auto& visible = panel.visible;
+            if (shown.isEmpty() || tile.isEmpty() || visible.isEmpty()
+                || !(panel.scale > 0.0)) {
+                return false;
+            }
+            const auto toScene = [&shown, &tile](double x, double y) {
+                return QPointF(
+                    tile.left() + (x - shown.left()) * tile.width() / shown.width(),
+                    tile.top() + (shown.bottom() - y) * tile.height() / shown.height());
+            };
+            const QRectF wanted(toScene(target.left(), target.bottom()),
+                toScene(target.right(), target.top()));
+            const auto slack = static_cast<double>(
+                QApplication::style()->pixelMetric(QStyle::PM_ScrollBarExtent) + 6)
+                / panel.scale;
+            const bool covers = visible.left() <= wanted.left() + slack
+                && visible.right() >= wanted.right() - slack
+                && visible.top() <= wanted.top() + slack
+                && visible.bottom() >= wanted.bottom() - slack;
+            const bool fills = std::abs(visible.width() - wanted.width()) <= slack
+                || std::abs(visible.height() - wanted.height()) <= slack;
+            if (!covers || !fills) {
+                qCritical("view shows [%g, %g] x [%g, %g] for [%g, %g] x [%g, %g]",
+                    visible.left(), visible.right(), visible.top(), visible.bottom(),
+                    wanted.left(), wanted.right(), wanted.top(), wanted.bottom());
+            }
+            return covers && fills;
+        };
+        const auto runPhase = [&window, &application, progress, fail, coversCanvas,
+                                  drawnForScreen, probeCentre, frames] {
+            // Read the state once no slice is on its way (see the mapped-grid
+            // smoke).
+            if (window.sliceRequestPendingForTest()
+                || window.slicesInFlightForTest() > 0) {
+                return;
+            }
+            const auto size = window.activeViewImageSizeForTest();
+            switch (progress->phase) {
+            case 0: {
+                // Fit: the warp of the sector's whole box at the view's pixels.
+                if (!drawnForScreen() || !coversCanvas()) {
+                    fail("at Fit the R-Z view is not the warp of its canvas");
+                    return;
+                }
+                if (!window.displayIsSphericalWarpForTest() || size[0] <= 32
+                    || size[1] <= 32) {
+                    qCritical("R-Z pixmap %d x %d", size[0], size[1]);
+                    fail("the R-Z warp is not drawn at the screen's pixels");
+                    return;
+                }
+                // The box's bottom-right corner (R = 0.96, Z = 0.88) is past
+                // theta = 0.5: no cell is drawn there.
+                const auto corner = window.probeReadoutActiveViewForTest(
+                    size[0] - 1, size[1] - 1);
+                if (!probeCentre() || corner != QObject::tr("no data")) {
+                    qCritical("corner '%s'", qPrintable(corner));
+                    fail("the probe does not follow the sector");
+                    return;
+                }
+                if (window.activeViewGridBoxCountForTest() == 0) {
+                    fail("the grid boxes are missing from the warp");
+                    return;
+                }
+                progress->fitScale = window.activeViewTransformAndScrollForTest()[0];
+                progress->phase = 1;
+                for (int notch = 0; notch < 3; ++notch) {
+                    window.wheelActiveViewForTest(1);
+                }
+                break;
+            }
+            case 1: {
+                // Three notches in: the warp is the part of the sector on
+                // screen; the plane is the whole (r, theta) grid still.
+                const auto panel = window.mappedPanelForTest(-1);
+                const bool smaller = panel.tile.width() < panel.canvas.width() - 1e-6
+                    || panel.tile.height() < panel.canvas.height() - 1e-6;
+                const auto margin = 1.0 / (panel.scale * window.devicePixelRatioF());
+                if (!drawnForScreen() || panel.fit || panel.resliced
+                    || std::abs(panel.scale / progress->fitScale - 1.15 * 1.15 * 1.15) > 1e-6
+                    || !smaller
+                    || !panel.canvas.adjusted(-margin, -margin, margin, margin)
+                            .contains(panel.tile)
+                    || !probeCentre()) {
+                    qCritical("scale %g over %g, tile %gx%g of canvas %gx%g", panel.scale,
+                        progress->fitScale, panel.tile.width(), panel.tile.height(),
+                        panel.canvas.width(), panel.canvas.height());
+                    fail("a wheel zoom did not draw the warp for the window it shows");
+                    return;
+                }
+                progress->zoomWindow = panel.window;
+                progress->phase = 2;
+                window.rubberBandZoomActiveViewForTest();
+                break;
+            }
+            case 2: {
+                // The rubber band took the central half of that window: the
+                // view frames it and the warp follows, still without a
+                // re-slice.
+                const auto& zoom = progress->zoomWindow;
+                const QRectF selection(zoom.left() + 0.25 * zoom.width(),
+                    zoom.top() + 0.25 * zoom.height(), 0.5 * zoom.width(),
+                    0.5 * zoom.height());
+                const auto panel = window.mappedPanelForTest(-1);
+                if (!drawnForScreen() || panel.fit || panel.resliced || !probeCentre()
+                    || !frames(selection)) {
+                    fail("an R-Z rubber band did not frame its selection");
+                    return;
+                }
+                const auto before = window.activeViewTransformAndScrollForTest();
+                progress->scrolledFrom = panel.window;
+                progress->tileBefore = panel.tile;
+                window.scrollActiveViewForTest(-24, -24);
+                progress->scrolled = window.activeViewTransformAndScrollForTest();
+                if (progress->scrolled == before) {
+                    fail("the zoomed R-Z view had nowhere to scroll");
+                    return;
+                }
+                progress->phase = 3;
+                break;
+            }
+            case 3: {
+                // The scroll moved the window; the warp drawn for it landed
+                // with the view exactly where the scroll left it.
+                const auto now = window.activeViewTransformAndScrollForTest();
+                if (now != progress->scrolled) {
+                    qCritical("scale %g, %g scroll %g, %g; scrolled to %g, %g scroll %g, %g",
+                        now[0], now[1], now[2], now[3], progress->scrolled[0],
+                        progress->scrolled[1], progress->scrolled[2],
+                        progress->scrolled[3]);
+                    fail("an R-Z arrival moved the view");
+                    return;
+                }
+                const auto panel = window.mappedPanelForTest(-1);
+                if (!drawnForScreen() || panel.resliced
+                    || panel.window == progress->scrolledFrom
+                    || panel.tile == progress->tileBefore || !probeCentre()) {
+                    fail("a scroll did not draw the warp for the window it moved to");
+                    return;
+                }
+                progress->phase = 4;
+                window.setDisplayModeForTest(amrvis::DisplayMode::RasterContours, 3);
+                break;
+            }
+            case 4:
+            case 5:
+            case 6: {
+                // Into contours (a fresh slice), a new contour count (the
+                // cache path with the pixmap kept), then the raster again:
+                // the probe reads the cells under it and the view stays put.
+                if (!window.mappedPanelForTest(-1).warped || !probeCentre()
+                    || window.activeViewTransformAndScrollForTest() != progress->scrolled) {
+                    qCritical("phase %d", progress->phase);
+                    fail("a contour refresh lost the R-Z warp or moved the view");
+                    return;
+                }
+                if (progress->phase == 4) {
+                    window.setDisplayModeForTest(amrvis::DisplayMode::RasterContours, 7);
+                } else if (progress->phase == 5) {
+                    window.setDisplayModeForTest(amrvis::DisplayMode::Raster, 7);
+                } else {
+                    window.selectSphericalDisplayForTest(1);  // r-theta
+                }
+                ++progress->phase;
+                break;
+            }
+            case 7: {
+                // r-theta: the flat 16 x 8 raster, refitted, with the line
+                // tool back.
+                if (window.mappedPanelForTest(-1).warped
+                    || window.displayIsSphericalWarpForTest() || size[0] != 16
+                    || size[1] != 8 || !window.activeViewIsFitToWindowForTest()) {
+                    qCritical("r-theta pixmap %d x %d", size[0], size[1]);
+                    fail("switching to r-theta did not restore the flat raster");
+                    return;
+                }
+                progress->phase = 8;
+                window.selectSphericalDisplayForTest(0);  // R-Z
+                break;
+            }
+            default:
+                // R-Z again: back on the canvas, the warp of the whole sector.
+                application.exit(drawnForScreen() && coversCanvas() ? 0 : 3);
+                break;
+            }
+        };
+        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, fail](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                if (!window.displayIsSphericalWarpForTest()) {
+                    fail("the dataset did not open in the R-Z layout");
+                }
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, runPhase] {
+                QTimer::singleShot(0, &window, runPhase);
+            });
+        QTimer::singleShot(60000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window, [&window, path] {
+            window.setGridBoxesVisibleForTest(true);
+            window.selectSphericalDisplayForTest(0);  // R-Z, whatever persisted
+            window.openDataset(path);
+        });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--mapped-grid-cap-smoke-test") {
         // View > Mapped Grid on plotfile_3d_mapped_wide, whose x-z plane
         // (4200 x 4 cells) is past the 4096 output cap. At Fit it is drawn
@@ -699,41 +985,6 @@ Outcome dispatchZoom(Context& context)
             });
         QTimer::singleShot(15000, &application,
             [&application] { application.exit(4); });
-        QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
-    } else if (argc == 3
-        && std::string_view(argv[1]) == "--spherical-supersample-smoke-test") {
-        // Zoom-preserve regression for the 2-D spherical supersample control:
-        // after zooming a spherical view (view-only, no re-slice), changing the
-        // warp factor must resize the warped raster yet keep the same zoomed
-        // framing rather than refitting to the whole sector.
-        const std::filesystem::path path(argv[2]);
-        auto beforeWidth = std::make_shared<int>(0);
-        QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,
-            &application, [&window, &application, beforeWidth](bool success) {
-                if (!success) {
-                    application.exit(1);
-                    return;
-                }
-                // Spherical zoom is view-only; it must leave fit-to-window.
-                window.rubberBandZoomActiveViewForTest();
-                if (window.activeViewFitsWindowForTest()) {
-                    application.exit(2);
-                    return;
-                }
-                *beforeWidth = window.activeViewImageWidthForTest();
-                QObject::connect(&window,
-                    &amrvis::qt::MainWindow::interactiveSlicesSettled,
-                    &application, [&window, &application, beforeWidth] {
-                        const int afterWidth = window.activeViewImageWidthForTest();
-                        // The 8x warp resized the raster larger, and the view is
-                        // still zoomed (framing preserved, not refit to fit).
-                        const bool resized = afterWidth > *beforeWidth;
-                        const bool preserved = !window.activeViewFitsWindowForTest();
-                        application.exit(resized && preserved ? 0 : 3);
-                    }, Qt::SingleShotConnection);
-                // Default factor is 4x; bump to 8x so the raster grows.
-                window.setSphericalSupersampleForTest(8);
-            });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3
         && std::string_view(argv[1]) == "--rubber-zoom-sync-smoke-test") {

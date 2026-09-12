@@ -384,7 +384,7 @@ int main()
             "a displayed-orientation change should refit");
 
         incompatible = geometry;
-        incompatible.mappedGrid = true;
+        incompatible.warp = amrvis::DisplayWarp::MappedGrid;
         require(DisplayCoordinator::rasterTransformPolicy(
                 geometry, incompatible)
                 == ImageTransformPolicy::Refit,
@@ -393,6 +393,21 @@ int main()
                 incompatible, incompatible)
                 == ImageTransformPolicy::Preserve,
             "a mapped-grid refresh should preserve");
+
+        // The spherical R-Z warp: a refresh preserves; leaving it for the
+        // flat r-theta layout refits, as the layout switch alone did.
+        auto warped = geometry;
+        warped.sphericalDisplay = amrvis::SphericalDisplay::RZ;
+        warped.warp = amrvis::DisplayWarp::SphericalRZ;
+        require(DisplayCoordinator::rasterTransformPolicy(warped, warped)
+                == ImageTransformPolicy::Preserve,
+            "an R-Z warp refresh should preserve");
+        auto flat = warped;
+        flat.sphericalDisplay = amrvis::SphericalDisplay::RTheta;
+        flat.warp = amrvis::DisplayWarp::None;
+        require(DisplayCoordinator::rasterTransformPolicy(warped, flat)
+                == ImageTransformPolicy::Refit,
+            "R-Z to r-theta should refit");
     }
 
     // --- a shared range whose bounds share a logarithm ---------------------

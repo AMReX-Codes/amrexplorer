@@ -450,12 +450,9 @@ public:
     // See fab-round-trip-loses-visible-region.
     [[nodiscard]] bool activeViewIsZoomedForTest() const;
 
-    // Test-only, for the spherical supersample zoom-preserve regression:
-    // change the warp factor through the same path as the menu, read the active
-    // view's warped-pixmap width (to confirm the raster resized), and read
-    // whether it is at fit-to-window without mutating it (unlike
-    // activeViewIsFitToWindowForTest, which refits as a side effect).
-    void setSphericalSupersampleForTest(int factor);
+    // Test-only: the active view's pixmap width, and whether it is at
+    // fit-to-window without mutating it (unlike activeViewIsFitToWindowForTest,
+    // which refits as a side effect).
     [[nodiscard]] int activeViewImageWidthForTest() const;
     [[nodiscard]] std::array<int, 2> activeViewImageSizeForTest() const;
     [[nodiscard]] std::array<int, 2> activeViewViewportSizeForTest() const;
@@ -500,7 +497,7 @@ public:
     // window drawn (as above); the image; the tile on screen in device
     // pixels; the tile, canvas and visible rect in scene units; the scale.
     struct MappedPanelForTest {
-        bool mapped = false;
+        bool warped = false;
         bool fit = false;
         bool resliced = false;
         QRectF window;
@@ -664,13 +661,13 @@ private:
         int coordinateSystem = 0;
         SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
         RealBox displayRegion;
-        // The raster on screen was drawn on the mapped (stretched) grid: the
-        // pixmap is physical and uniform over displayRegion while `plane`
-        // stays logical. gridNodes places plane pixels (bilinear), and
-        // displaySourceIndex, parallel to the pixmap with row 0 at the
-        // bottom, says which plane pixel each pixmap pixel came from. Both
+        // The raster on screen was drawn warped (DisplayWarp): the pixmap is
+        // physical and uniform over displayRegion while `plane` stays
+        // logical. displaySourceIndex, parallel to the pixmap with row 0 at
+        // the bottom, says which plane pixel each pixmap pixel came from;
+        // gridNodes (a mapped grid only) places plane pixels (bilinear). Both
         // shared with the arrival that produced them, never copied.
-        bool mappedGrid = false;
+        DisplayWarp warp = DisplayWarp::None;
         std::shared_ptr<const MappedGridPlane> gridNodes;
         std::shared_ptr<const std::vector<std::int32_t>> displaySourceIndex;
         // The canvas a mapped view is laid out on: the node bounding box of
@@ -1257,8 +1254,7 @@ private:
     // three panels show, in the logical coordinates the volume samples.
     [[nodiscard]] RealBox volumeRegionOfInterest() const;
     [[nodiscard]] PlaneMapping planeMapping(const PlaneViewState& state) const;
-    // Enable/disable and re-check the 2-D Spherical menus for the current
-    // dataset and display mode (Supersampling applies only to the R-Z warp).
+    // Enable/disable the 2-D Spherical menu for the current dataset.
     void updateSphericalControls();
     // Whether the primary dataset can be drawn on its mapped grid: its
     // session carries the nodal positions and no companion is open (a pair's
@@ -1267,6 +1263,10 @@ private:
     [[nodiscard]] bool mappedGridAvailable() const;
     // The View > Mapped Grid choice as it applies now: on, and available.
     [[nodiscard]] bool displayIsMapped() const;
+    // The warp a slice request for this view asks for: the mapped grid for
+    // the primary while it is shown, the R-Z wedge for a 2-D spherical
+    // plane in that layout, else none.
+    [[nodiscard]] DisplayWarp requestedWarpFor(const PlaneViewState& state) const;
     // Enable/disable the Mapped Grid menu for the current dataset, with a
     // tooltip saying why it is off.
     void updateMappedGridControls();
@@ -1338,13 +1338,6 @@ private:
     // correct. See issue #45.
     [[nodiscard]] std::optional<QRectF> preservedDataWindow(
         const PlaneViewState& state, const ScalarPlane& incoming) const;
-    // Spherical supersample change: the physical (R, Z) bounds are unchanged
-    // but the warped pixmap is resized. Returns the scene rect that keeps the
-    // currently-visible physical window on screen at the new resolution, or
-    // nullopt when a plain refit is correct (first frame, dataset/domain
-    // change, or no resolution change).
-    [[nodiscard]] std::optional<QRectF> sphericalReframe(
-        const PlaneViewState& state, const SliceDisplayResult& display) const;
     // By value, and callers move into it: the planes are the largest thing an
     // arrival carries -- at the 4096 output cap a ScalarPlane is around 117 MB
     // and the ImageBuffer around 67 MB -- and a const& forced this function to
@@ -1625,12 +1618,9 @@ private:
     QMenu* m_variableMenu = nullptr;
     // "2-D Spherical" View section grouping the warped-display options; the
     // whole submenu is enabled only while a 2-D spherical dataset is shown.
-    // Supersampling is its first child; more options will join it.
     QMenu* m_sphericalMenu = nullptr;
     QMenu* m_sphericalDisplayMenu = nullptr;
     QActionGroup* m_sphericalDisplayGroup = nullptr;
-    QMenu* m_sphericalSupersampleMenu = nullptr;
-    QActionGroup* m_sphericalSupersampleGroup = nullptr;
     // View > Aspect Ratio: disabled for 2-D spherical data; the Physical
     // Size radio is further disabled without physical geometry.
     QMenu* m_aspectMenu = nullptr;
@@ -1712,8 +1702,6 @@ private:
     StopSource m_metadataStopSource;
     DisplayMode m_displayMode = DisplayMode::Raster;
     int m_contourCount = 15;
-    // 2-D spherical warp supersample factor (see SliceRequest::sphericalSupersample).
-    int m_sphericalSupersample = 4;
     // 2-D spherical display layout (see SliceRequest::sphericalDisplay).
     SphericalDisplay m_sphericalDisplay = SphericalDisplay::RZ;
     // View > Mapped Grid: draw slices on the plotfile's stretched grid when

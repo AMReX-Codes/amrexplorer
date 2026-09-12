@@ -33,9 +33,9 @@ public:
         int coordinateSystem = 0;
         int normalDirection = 0;
         SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
-        // Whether the raster is drawn on the dataset's mapped grid: a toggle
-        // changes the picture's shape like a spherical layout switch does.
-        bool mappedGrid = false;
+        // How the raster is warped (mapped grid, spherical R-Z, flat): a
+        // change alters the picture's shape like a spherical layout switch.
+        DisplayWarp warp = DisplayWarp::None;
 
         friend bool operator==(const RasterGeometry&, const RasterGeometry&)
             = default;

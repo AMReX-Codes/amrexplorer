@@ -774,9 +774,12 @@ the vertical axis. AMReXplorer can present it three ways, chosen under **View >
 - **r-θ** — the logical grid drawn directly, r horizontal and θ vertical.
 - **θ-r** — the same logical grid transposed, θ horizontal and r vertical.
 
-**View > 2-D Spherical > Supersampling** sets how finely the logical grid is
-resampled for the R-Z view (1x–16x); higher factors trace the curved cell
-boundaries more smoothly at the cost of a larger image.
+The R-Z view is drawn the way a [mapped grid](#mapped-grids) is: at the
+screen's resolution with smoothed cell edges, the arcs kept round at any zoom,
+and redrawn shortly after each zoom or pan. The whole (r, θ) grid is sliced
+once; zooming only changes what is drawn of it. Rubber-band zoom frames the
+selected rectangle, and an exported image holds the part of the wedge the
+panel shows.
 
 Vector glyphs are available in all three layouts. In the R-Z view each arrow is
 anchored at its physical position and the (v_r, v_θ) components are rotated
@@ -805,7 +808,8 @@ panel lists them under **Mapped grid**.
 While the mapped grid is shown the display is physical: **View > Aspect
 Ratio** shows Physical Size in effect (the persisted proportion is left as it
 was), **Axis Scaling...** still stretches the axes, and fixed scales work as
-in Physical Size. The probe reports the physical position under the cursor
+in Physical Size. The R-Z view of a
+[2-D spherical plotfile](#2-d-spherical-coordinates) is drawn the same way. The probe reports the physical position under the cursor
 and the logical cell it belongs to; rubber-band zoom frames the rectangle;
 grid boxes, contours, vector glyphs, particles and the scale bar follow the
 warp. An exported image holds the part of the slice the panel shows.

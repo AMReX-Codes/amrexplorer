@@ -274,7 +274,7 @@ Outcome dispatchSequence(Context& context)
                             const auto xz = window.mappedPanelForTest(1);
                             const bool ok = progress->displays == std::vector<int>{0, 1}
                                 && progress->settles == progress->settlesAtFrame
-                                && xz.mapped && !progress->zoomWindow.isEmpty()
+                                && xz.warped && !progress->zoomWindow.isEmpty()
                                 && xz.window == progress->zoomWindow
                                 && std::abs(xz.tileDevice.width() - xz.image.width()) < 1e-6
                                 && std::abs(xz.tileDevice.height() - xz.image.height())

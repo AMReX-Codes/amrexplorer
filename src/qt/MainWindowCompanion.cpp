@@ -655,7 +655,7 @@ void MainWindow::tearDownCompanion(bool replacing)
             for (auto* state : primaryViews()) {
                 auto* view = state->view;
                 if (view == nullptr || !layerIsRemote(*state) || displayIsSpherical()
-                    || state->mappedGrid
+                    || isWarped(state->warp)
                     || view->transformMode() != ImageView::TransformMode::FixedScale) {
                     continue;
                 }
@@ -785,8 +785,8 @@ void MainWindow::applyPairLayouts()
                 toQRectF(layout.sceneRectForRegion(state->layer,
                     state->plane->physicalRegion)),
                 toQRectF(pairCanvasRect(state->normal)));
-        } else if (!state->mappedGrid) {
-            // A mapped tile stays on its own canvas (MappedLayout); the
+        } else if (!isWarped(state->warp)) {
+            // A warped tile stays on its own canvas (MappedLayout); the
             // others go back to the classic raster-at-origin scene.
             const auto& image = view->image(state->tile);
             view->placeTile(state->tile,

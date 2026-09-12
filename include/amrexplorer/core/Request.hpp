@@ -59,14 +59,9 @@ struct SliceRequest {
     // Collection bound supplied by the execution boundary. Local queries keep
     // the default; the remote server replaces it with a frame-derived limit.
     std::size_t maximumGridBoxes = std::numeric_limits<std::size_t>::max();
-    // 2-D spherical display only: how finely the (r, theta) raster is
-    // resampled into physical (R, Z). Higher values trace the curved cell
-    // boundaries more smoothly at the cost of a larger warped raster. A pure
+    // 2-D spherical display layout (R-Z warp, r-theta, or theta-r). A pure
     // display parameter -- deliberately excluded from sameSliceSpec so changing
     // it re-warps from the cached planes without a new query.
-    int sphericalSupersample = 4;
-    // 2-D spherical display layout (R-Z warp, r-theta, or theta-r). Also a pure
-    // display parameter, excluded from sameSliceSpec.
     SphericalDisplay sphericalDisplay = SphericalDisplay::RZ;
     // Mapped-grid display only: draw the raster on the plotfile's stretched
     // node positions (core/MappedGrid.hpp) when the session has them. Pure
@@ -79,8 +74,8 @@ struct SliceRequest {
     // view's visible window at the screen's own resolution, so cell edges
     // are rasterized where they are seen rather than resampled from a
     // fixed-pitch image. An invalid window (the default) means the whole
-    // node bounding box; zero pixels mean the raster's own size. Named for
-    // any display warp, so the spherical view can take them up as well.
+    // node bounding box (the sector's, for the spherical R-Z warp); zero
+    // pixels mean the raster's own size.
     RealBox displayWindow{};
     std::array<int, 2> displayPixels{0, 0};
     // Ask for the node bounding box of the whole domain on this slice's

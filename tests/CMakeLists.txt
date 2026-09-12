@@ -141,6 +141,11 @@ target_link_libraries(test_mapped_grid_warp
     PRIVATE amrexplorer::core amrexplorer::render2d amrexplorer::warnings)
 add_test(NAME mapped_grid_warp COMMAND test_mapped_grid_warp)
 
+add_executable(test_spherical_warp unit/test_spherical_warp.cpp)
+target_link_libraries(test_spherical_warp
+    PRIVATE amrexplorer::core amrexplorer::render2d amrexplorer::warnings)
+add_test(NAME spherical_warp COMMAND test_spherical_warp)
+
 add_executable(test_vector_glyphs unit/test_vector_glyphs.cpp)
 target_link_libraries(test_vector_glyphs PRIVATE amrexplorer::render2d amrexplorer::warnings)
 add_test(NAME vector_glyphs COMMAND test_vector_glyphs)
@@ -1670,20 +1675,21 @@ if(TARGET amrexplorer_qt)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
     set_tests_properties(qt_raster_zoom_smoke_2d PROPERTIES TIMEOUT 30)
-    # Regression test for the 2-D spherical supersample control: zooming a
-    # spherical view then changing the warp factor must resize the warped raster
-    # while preserving the zoomed framing (not refit to the whole sector).
+    # The 2-D spherical R-Z view drawn the mapped-grid way: the warp of the
+    # sector at the screen's pixels at Fit, drawn again after a wheel zoom, a
+    # rubber band and a scroll that leaves the view where it is, kept through
+    # contours; r-theta is the flat raster again, and R-Z lands on the canvas.
     add_test(
-        NAME qt_spherical_supersample_smoke_2d
+        NAME qt_spherical_rz_smoke_2d
         COMMAND "${CMAKE_COMMAND}"
             "-DMATERIALIZER=$<TARGET_FILE:fixture_materializer>"
             "-DAMREXPLORER_QT=$<TARGET_FILE:amrexplorer_qt>"
             "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_2d_spherical"
-            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_spherical_supersample_2d"
-            -DMODE=spherical-supersample
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fixtures_spherical_rz_2d"
+            -DMODE=spherical-rz
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
-    set_tests_properties(qt_spherical_supersample_smoke_2d PROPERTIES TIMEOUT 30)
+    set_tests_properties(qt_spherical_rz_smoke_2d PROPERTIES TIMEOUT 90)
     # Regression test for sequence-frame-range-cache-goes-stale: across sequence
     # frames the full-domain range cache must invalidate (its key includes the
     # dataset), so a zoomed Visible color bar tracks the current frame instead

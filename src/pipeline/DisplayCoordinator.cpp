@@ -111,7 +111,7 @@ void DisplayCoordinator::realignArrivalToRange(SliceDisplayResult& result,
             });
         // The arrival's raster was the warp of its plane; the re-coloured
         // plane is warped the same way.
-        rewarpMappedImage(result);
+        rewarpDisplayImage(result);
     }
     recomputeContourPolylines(result);
 }

@@ -25,7 +25,7 @@
 #                 sequence-geometry-refit | sequence-noop | sequence-failure |
 #                 remote-canvas-wheel | remote-cell-aspect |
 #                 physical-aspect | physical-fixed-scale | mapped-grid |
-#                 mapped-grid-sequence | mapped-grid-cap |
+#                 mapped-grid-sequence | mapped-grid-cap | spherical-rz |
 #                 remote-physical-aspect | companion |
 #                 remote-companion | companion-derived | companion-zoom |
 #                 mixed-companion |
@@ -251,6 +251,9 @@ elseif(MODE STREQUAL "mapped-grid-sequence")
 elseif(MODE STREQUAL "mapped-grid-cap")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --mapped-grid-cap-smoke-test "${WORK}/plt")
+elseif(MODE STREQUAL "spherical-rz")
+    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
+    run_or_die("${AMREXPLORER_QT}" --spherical-rz-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "remote-physical-aspect")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --remote-physical-aspect-smoke-test
@@ -359,9 +362,6 @@ elseif(MODE STREQUAL "particle-settings-reset")
 elseif(MODE STREQUAL "raster-zoom")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --raster-zoom-smoke-test "${WORK}/plt")
-elseif(MODE STREQUAL "spherical-supersample")
-    run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
-    run_or_die("${AMREXPLORER_QT}" --spherical-supersample-smoke-test "${WORK}/plt")
 elseif(MODE STREQUAL "rubber-zoom-sync")
     run_or_die("${MATERIALIZER}" "${SOURCE}" "${WORK}/plt")
     run_or_die("${AMREXPLORER_QT}" --rubber-zoom-sync-smoke-test "${WORK}/plt")

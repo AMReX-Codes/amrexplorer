@@ -300,6 +300,7 @@ public:
     // display where the straight-line profile tool is not yet meaningful.
     // Probing and rubber-band zoom still work.
     void setLineToolEnabled(bool enabled) noexcept;
+    [[nodiscard]] bool lineToolEnabled() const noexcept { return m_lineToolEnabled; }
     // Highlight (or clear) a coloured border indicating the active panel.
     void setActiveBorder(bool active);
     // Remove any temporary line-plot preview guide from the scene.

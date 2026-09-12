@@ -1831,6 +1831,20 @@ bool MainWindow::hasMappedWindow(const PlaneViewState& state) const
     });
 }
 
+void MainWindow::updateLineToolAvailability(const PlaneViewState& state)
+{
+    if (state.view == nullptr) {
+        return;
+    }
+    bool warpedOnPanel = displayIsSphericalWarp() || isWarped(state.warp);
+    if (m_viewDimension == 3) {
+        for (const auto* other : statesForPanel(state.normal)) {
+            warpedOnPanel = warpedOnPanel || isWarped(other->warp);
+        }
+    }
+    state.view->setLineToolEnabled(!warpedOnPanel);
+}
+
 void MainWindow::updateMappedDemand(PlaneViewState& state)
 {
     // A no-op unless the view shows a warped raster on a known canvas, and

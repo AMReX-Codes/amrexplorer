@@ -1290,6 +1290,12 @@ bool MainWindow::activeViewIsZoomedForTest() const
     return m_activeView != nullptr && m_activeView->visibleRegion.has_value();
 }
 
+bool MainWindow::activeViewLineToolEnabledForTest() const
+{
+    return m_activeView != nullptr && m_activeView->view != nullptr
+        && m_activeView->view->lineToolEnabled();
+}
+
 int MainWindow::activeViewImageWidthForTest() const
 {
     if (m_activeView == nullptr || !m_activeView->view->hasImage()) {

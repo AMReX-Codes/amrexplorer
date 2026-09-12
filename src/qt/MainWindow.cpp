@@ -1266,11 +1266,13 @@ void MainWindow::setActiveView(PlaneViewState& state)
     if (m_activeView == &state) {
         return;
     }
-    if (m_activeView != nullptr && m_viewDimension == 3) {
+    // Two layers of one panel share its view: the border stays.
+    const bool sameView = m_activeView != nullptr && m_activeView->view == state.view;
+    if (m_activeView != nullptr && m_viewDimension == 3 && !sameView) {
         m_activeView->view->setActiveBorder(false);
     }
     m_activeView = &state;
-    if (m_viewDimension == 3) {
+    if (m_viewDimension == 3 && !sameView) {
         state.view->setActiveBorder(true);
     }
     // The clamped scale report is computed over the active view's axis pair,
@@ -1515,17 +1517,24 @@ void MainWindow::updateMappedGridControls()
     // Say why the menu is off; a disabled menu on its own explains nothing.
     QString reason;
     if (!available && primary().session) {
-        if (m_layers[1].active) {
-            reason = tr("Neither dataset carries mapped-grid node positions");
-        } else if (displayIsSpherical()) {
+        // An older server's catalog cannot say whether its plotfile has node
+        // positions, so the version is the whole answer for that layer.
+        bool olderPeer = false;
+        for (const auto& layer : m_layers) {
+            if (!layer.session || (&layer != &primary() && !layer.active)) {
+                continue;
+            }
+            const auto remote = std::dynamic_pointer_cast<
+                remote::RemoteDatasetSession>(layer.session);
+            olderPeer = olderPeer || (remote && !remote->peerSupportsMappedGrid());
+        }
+        if (displayIsSpherical()) {
             reason = tr("A 2-D spherical plotfile is drawn on its R-Z wedge");
-        } else if (const auto remote = std::dynamic_pointer_cast<
-                       remote::RemoteDatasetSession>(primary().session);
-            remote && !remote->peerSupportsMappedGrid()) {
-            // An older server's catalog cannot say whether the plotfile has
-            // node positions, so the version is the whole answer.
+        } else if (olderPeer) {
             reason = tr("The remote server predates mapped grids (protocol 1.7); "
                         "install a current amrexplorer-server");
+        } else if (m_layers[1].active) {
+            reason = tr("Neither dataset carries mapped-grid node positions");
         } else {
             reason = tr("This dataset carries no mapped-grid node positions");
         }

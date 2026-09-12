@@ -295,6 +295,7 @@ void armMappedCompanionChecks(amrvis::qt::MainWindow& window,
     constexpr int xy = 2;
     auto phase = std::make_shared<int>(-1);
     auto windowsBefore = std::make_shared<std::array<QRectF, 2>>();
+    auto scaleBefore = std::make_shared<double>(0.0);
     const auto fail = [&window, &application](const char* message) {
         for (int tile = 0; tile < 2; ++tile) {
             const auto rect = window.panelTileRectForTest(xz, tile);
@@ -349,8 +350,17 @@ void armMappedCompanionChecks(amrvis::qt::MainWindow& window,
         return readout.contains(QStringLiteral("value"))
             && readout.contains(QStringLiteral("cell"));
     };
-    const auto runPhase = [&window, &application, phase, windowsBefore, fail,
-                              drawnForScreen, probed, onBand, holds, within, lowerMapped] {
+    // A plain right click on a tile, as the mouse would deliver it.
+    const auto rightClick = [&window](int layer) {
+        const auto panel = window.mappedPanelForTest(xz, layer);
+        const auto ratio = window.devicePixelRatioF();
+        window.rightClickActiveViewForTest(QPoint(
+            static_cast<int>((panel.tileDevice.left() + 0.4 * panel.tileDevice.width()) / ratio),
+            static_cast<int>((panel.tileDevice.top() + 0.5 * panel.tileDevice.height()) / ratio)));
+    };
+    const auto runPhase = [&window, &application, phase, windowsBefore, scaleBefore, fail,
+                              drawnForScreen, probed, onBand, holds, within, rightClick,
+                              lowerMapped] {
         if (*phase < 0 || window.sliceRequestPendingForTest()
             || window.slicesInFlightForTest() > 0) {
             return;
@@ -482,10 +492,38 @@ void armMappedCompanionChecks(amrvis::qt::MainWindow& window,
                 fail("Fit over a mapped pair did not frame the whole canvas");
                 return;
             }
+            if (window.activeViewLineToolEnabledForTest()) {
+                fail("the line tool is offered over a warped tile");
+                return;
+            }
+            // Right clicks on one tile then the other move the slices; the
+            // active layer changes on the same panel, and the view's scale
+            // must not (a border that grew would redraw every warp).
+            *scaleBefore = window.mappedPanelForTest(xz).scale;
             *phase = 8;
+            rightClick(1);
+            break;
+        case 8:
+            if (!(window.slicePositionForTest(2) < 0.0)
+                || !near(window.mappedPanelForTest(xz).scale, *scaleBefore)
+                || !drawnForScreen(0) || (lowerMapped && !drawnForScreen(1))) {
+                fail("a right click on the companion moved the view's scale");
+                return;
+            }
+            *phase = 9;
+            rightClick(0);
+            break;
+        case 9:
+            if (!(window.slicePositionForTest(2) > 0.0)
+                || !near(window.mappedPanelForTest(xz).scale, *scaleBefore)
+                || !drawnForScreen(0) || (lowerMapped && !drawnForScreen(1))) {
+                fail("a right click on the primary moved the view's scale");
+                return;
+            }
+            *phase = 10;
             window.closeCompanion();
             break;
-        case 8: {
+        case 10: {
             const auto panel = window.mappedPanelForTest(xz);
             if (window.companionOpen() || window.panelTileCountForTest(xz) != 1
                 || !drawnForScreen(0) || !panel.fit

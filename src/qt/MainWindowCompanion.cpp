@@ -663,8 +663,12 @@ void MainWindow::tearDownCompanion(bool replacing)
         updateAspectControls();
         configureSlicePositionControls();
         // A warped primary goes back on its own canvas and is drawn again
-        // for what the viewport shows (applyDisplayStretches).
+        // for what the viewport shows (applyDisplayStretches); a warped
+        // companion's leaving gives the line tool back.
         applyDisplayStretches();
+        for (auto* state : primaryViews()) {
+            updateLineToolAvailability(*state);
+        }
         if (!replacing) {
             // A remote primary's fixed scale rides a demand-driven virtual
             // canvas, which the pair displaced (installCompanion); each panel

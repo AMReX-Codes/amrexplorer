@@ -1484,6 +1484,13 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     // re-lays out the panel and re-places the other tile, once.
     if (m_pair && m_viewDimension == 3 && updatePairLayouts()) {
         applyPairLayouts();
+        // The other warped tiles moved with the layout while arrivals are
+        // held back: asked again for what they now show, once this one is in.
+        for (auto* other : statesForPanel(state.normal)) {
+            if (other != &state && isWarped(other->warp)) {
+                QTimer::singleShot(0, this, [this, other] { updateMappedDemand(*other); });
+            }
+        }
     }
     // Before the raster is installed, so a Fit is computed once, with the
     // stretch the raster was sized for: none on a mapped grid, whose tile
@@ -1668,14 +1675,7 @@ void MainWindow::showSlice(PlaneViewState& state, SliceDisplayResult display,
     // The straight-line profile tool works on the logical r-theta / theta-r
     // grid but not on the warped R-Z view, nor on a mapped grid, where a
     // straight screen line is not a constant logical coordinate.
-    // The line tool is the view's: off while any tile on the panel is a warp.
-    bool warpedOnPanel = displayIsSphericalWarp() || isWarped(state.warp);
-    if (m_viewDimension == 3) {
-        for (const auto* other : statesForPanel(state.normal)) {
-            warpedOnPanel = warpedOnPanel || isWarped(other->warp);
-        }
-    }
-    state.view->setLineToolEnabled(!warpedOnPanel);
+    updateLineToolAvailability(state);
     // The 2-D Spherical menu is available only for spherical datasets;
     // Aspect Ratio for the others.
     updateSphericalControls();

@@ -461,6 +461,7 @@ public:
     // Test-only: true when the active view holds a zoom (visibleRegion set).
     // See fab-round-trip-loses-visible-region.
     [[nodiscard]] bool activeViewIsZoomedForTest() const;
+    [[nodiscard]] bool activeViewLineToolEnabledForTest() const;
 
     // Test-only: the active view's pixmap width, and whether it is at
     // fit-to-window without mutating it (unlike activeViewIsFitToWindowForTest,
@@ -1285,6 +1286,8 @@ private:
     // linear plane-pixel-to-scene mapping (line plots, particle points, vector
     // glyphs) work in the logical r-theta / theta-r layouts but not here.
     [[nodiscard]] bool displayIsSphericalWarp() const;
+    // The line tool is the view's: off while any tile on its panel is a warp.
+    void updateLineToolAvailability(const PlaneViewState& state);
     // Coordinate mapper for a view: logical (x, y)/(r, theta) <-> scene pixels,
     // built from the plane, the warped display region, and the pixmap size.
     // The volume's "limit to visible region" box: the part of the domain the

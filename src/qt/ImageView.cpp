@@ -194,6 +194,7 @@ ImageView::ImageView(QWidget* parent)
     setScene(m_scene);
     setAlignment(Qt::AlignCenter);
     setBackgroundBrush(palette().window());
+    setActiveBorder(false);
     setDragMode(QGraphicsView::RubberBandDrag);
     setMouseTracking(true);
     setRenderHint(QPainter::Antialiasing);
@@ -1512,12 +1513,11 @@ void ImageView::updateLineGuide(const QPoint& viewPosition)
 
 void ImageView::setActiveBorder(bool active)
 {
-    if (active) {
-        setStyleSheet(QStringLiteral(
-            "QGraphicsView { border: 2px solid #ff8800; }"));
-    } else {
-        setStyleSheet(QString());
-    }
+    // The same width either way: a border that grew would shrink the
+    // viewport, refit the view and redraw every warp on it.
+    setStyleSheet(active
+            ? QStringLiteral("QGraphicsView { border: 2px solid #ff8800; }")
+            : QStringLiteral("QGraphicsView { border: 2px solid transparent; }"));
 }
 
 void ImageView::clearLineGuide()

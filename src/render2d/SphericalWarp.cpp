@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
+#include <limits>
 
 namespace amrvis {
 
@@ -136,12 +138,69 @@ MappedWarpedRaster warpSphericalRZ(const ImageBuffer& src,
     const int along = sphericalThetaSubdivisions(dtheta, r1, pixelsPerLength);
     // An arc bulges at most its sagitta past the chord of its cell's corners.
     const double cullPad = r1 * dtheta * dtheta / 8.0 * pixelsPerLength + 1.0;
+
+    // Only the cells that can reach the window: those whose radius and angle
+    // ranges meet the window's, one cell of slack each side. The window's
+    // radii run from its nearest point to the origin to its farthest corner;
+    // its angles, when it lies clear of the axis R = 0, are at its corners.
+    const auto radialCells = [&](double r) {
+        return (r - r0) / dr;
+    };
+    const auto angularCells = [&](double theta) {
+        return (theta - t0) / dtheta;
+    };
+    const double maxR = drawn->upper[0];
+    const double maxZ = drawn->upper[1];
+    const double nearestR = std::clamp(0.0, minR, maxR);
+    const double nearestZ = std::clamp(0.0, minZ, maxZ);
+    const std::array<std::array<double, 2>, 4> corners{{
+        {minR, minZ}, {maxR, minZ}, {minR, maxZ}, {maxR, maxZ}}};
+    double farthest = 0.0;
+    double thetaLo = std::numeric_limits<double>::infinity();
+    double thetaHi = -thetaLo;
+    for (const auto& point : corners) {
+        farthest = std::max(farthest, std::hypot(point[0], point[1]));
+        const double theta = std::atan2(point[0], point[1]);
+        thetaLo = std::min(thetaLo, theta);
+        thetaHi = std::max(thetaHi, theta);
+    }
+    detail::CellRange cells;
+    const auto lowCell = [](double value) {
+        return static_cast<int>(std::clamp(std::floor(value) - 1.0, 0.0, 1.0e9));
+    };
+    const auto highCell = [](double value) {
+        return static_cast<int>(std::clamp(std::ceil(value) + 1.0, 0.0, 1.0e9));
+    };
+    cells.colBegin = lowCell(radialCells(std::hypot(nearestR, nearestZ)));
+    cells.colEnd = highCell(radialCells(farthest));
+    if (minR < 0.0 && maxR > 0.0) {
+        // Astride the axis, or around the origin: every angle may be on show.
+        cells.rowBegin = 0;
+        cells.rowEnd = srcH;
+    } else {
+        cells.rowBegin = lowCell(angularCells(thetaLo));
+        cells.rowEnd = highCell(angularCells(thetaHi));
+    }
+
+    // The angles the corners take, tabulated once per lattice row: a cell's
+    // theta side is cut into `along` pieces, so row j + i/along is entry
+    // j * along + i, and both cells sharing an arc read the same entry.
+    const auto latticeRows = static_cast<std::size_t>(srcH) * static_cast<std::size_t>(along) + 1;
+    std::vector<double> sinTheta(latticeRows);
+    std::vector<double> cosTheta(latticeRows);
+    for (std::size_t entry = 0; entry < latticeRows; ++entry) {
+        const double theta = t0 + static_cast<double>(entry) / along * dtheta;
+        sinTheta[entry] = std::sin(theta);
+        cosTheta[entry] = std::cos(theta);
+    }
     const auto corner = [&](double col, double row) {
-        const auto display = sphericalToDisplay(r0 + col * dr, t0 + row * dtheta);
-        return detail::Point{(display[0] - minR) * scaleR, (display[1] - minZ) * scaleZ};
+        const auto entry = static_cast<std::size_t>(std::lround(row * along));
+        const double r = r0 + col * dr;
+        return detail::Point{(r * sinTheta[entry] - minR) * scaleR,
+            (r * cosTheta[entry] - minZ) * scaleZ};
     };
     auto drawnRaster = detail::rasterizeCells(
-        src, width, height, {1, along}, cullPad, corner);
+        src, width, height, {1, along}, cullPad, corner, cells);
 
     out.displayRegion = *drawn;
     out.mappedBounds = *bounds;

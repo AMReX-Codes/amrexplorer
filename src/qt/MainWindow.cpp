@@ -1460,8 +1460,10 @@ bool MainWindow::displayIsSphericalWarp() const
 
 bool MainWindow::mappedGridAvailable() const
 {
+    // A 2-D spherical plane is drawn on its (R, Z) wedge, which the pipeline
+    // takes over any node positions the plotfile may carry.
     return primary().session && primary().session->supportsMappedGrid()
-        && !m_pair && !m_layers[1].active;
+        && !m_pair && !m_layers[1].active && !displayIsSpherical();
 }
 
 bool MainWindow::displayIsMapped() const
@@ -1471,14 +1473,14 @@ bool MainWindow::displayIsMapped() const
 
 DisplayWarp MainWindow::requestedWarpFor(const PlaneViewState& state) const
 {
-    // The primary alone draws on its mapped grid; a companion's tile is
-    // placed affinely (see mappedGridAvailable). The R-Z wedge is a warp of
-    // the same kind, drawn from the plane's own bounds.
-    if (state.layer == 0 && displayIsMapped()) {
-        return DisplayWarp::MappedGrid;
-    }
+    // The R-Z wedge first, as the pipeline decides it: a spherical plane is
+    // never drawn on a mapped grid. Otherwise the primary alone draws on its
+    // mapped grid; a companion's tile is placed affinely (mappedGridAvailable).
     if (displayIsSphericalWarp()) {
         return DisplayWarp::SphericalRZ;
+    }
+    if (state.layer == 0 && displayIsMapped()) {
+        return DisplayWarp::MappedGrid;
     }
     return DisplayWarp::None;
 }
@@ -1495,6 +1497,8 @@ void MainWindow::updateMappedGridControls()
     if (!available && primary().session) {
         if (m_pair || m_layers[1].active) {
             reason = tr("Not available while a companion is open");
+        } else if (displayIsSpherical()) {
+            reason = tr("A 2-D spherical plotfile is drawn on its R-Z wedge");
         } else if (layerIsRemote(primary().planeViews.front())) {
             // The catalog does not yet say whether a remote plotfile carries
             // node positions, so the honest answer is the feature's status.

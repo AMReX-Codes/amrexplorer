@@ -487,13 +487,13 @@ void appendVectorGlyphs(const std::shared_ptr<DatasetSession>& dataset,
     auto vSlice = requestSlice(*dataset, request, cancellation);
     // The warped R-Z spherical view anchors each glyph at its physical (R, Z)
     // position and rotates the components into display directions; the
-    // executeSlice call preceding this one already populated
-    // result.displayRegion with the sector bounds the segments map through.
+    // arrow scale follows the whole sector's bounds, not the window the warp
+    // was drawn for, so a zoomed view's glyphs keep their length.
     const bool sphericalRZ = isSpherical2D(dataset->metadata())
         && request.sphericalDisplay == SphericalDisplay::RZ;
     result.vectors = sphericalRZ
-        ? generateSphericalRZVectorGlyphs(
-              uSlice.plane, vSlice.plane, count, result.displayRegion)
+        ? generateSphericalRZVectorGlyphs(uSlice.plane, vSlice.plane, count,
+              sphericalDisplayBounds(uSlice.plane.physicalRegion))
         : generateVectorGlyphs(uSlice.plane, vSlice.plane, count);
     result.slice.metrics.candidateBlocks += uSlice.metrics.candidateBlocks
         + vSlice.metrics.candidateBlocks;

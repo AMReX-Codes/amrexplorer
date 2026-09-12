@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -155,17 +156,29 @@ struct QuadRasterOutput {
     std::shared_ptr<const std::vector<std::int32_t>> sourceIndex;
 };
 
-// Draws every cell of `src` (row-major, row 0 = bottom) into a width x
-// height output. corner(col, row) gives the output-pixel position of the
-// raster corner at fractional (col, row), integer values being the cell
+// The cells of a raster to draw: columns [colBegin, colEnd) and rows
+// [rowBegin, rowEnd). The default is every cell.
+struct CellRange {
+    int colBegin = 0;
+    int colEnd = std::numeric_limits<int>::max();
+    int rowBegin = 0;
+    int rowEnd = std::numeric_limits<int>::max();
+};
+
+// Draws the cells of `src` (row-major, row 0 = bottom) in `cells` into a
+// width x height output. corner(col, row) gives the output-pixel position of
+// the raster corner at fractional (col, row), integer values being the cell
 // corners; a cell is cut into subdivisions[0] x subdivisions[1] sub-quads
 // along its two axes, all drawn with the cell's colour and index, so a
 // mapping curved between the corners is followed rather than chorded. A
 // cell whose four corners lie more than cullPad pixels outside the output
 // is skipped: the pad is how far a curved edge can bulge past its chord.
+// A caller that knows which cells can reach the output narrows `cells`,
+// sparing the corners of the rest.
 template <class Corner>
 QuadRasterOutput rasterizeCells(const ImageBuffer& src, int width, int height,
-    std::array<int, 2> subdivisions, double cullPad, Corner corner)
+    std::array<int, 2> subdivisions, double cullPad, Corner corner,
+    CellRange cells = {})
 {
     QuadRasterOutput out;
     out.image.width = width;
@@ -190,8 +203,12 @@ QuadRasterOutput rasterizeCells(const ImageBuffer& src, int width, int height,
     const double maxY = static_cast<double>(height) + cullPad;
     const int srcW = src.width;
     const int srcH = src.height;
-    for (int row = 0; row < srcH; ++row) {
-        for (int col = 0; col < srcW; ++col) {
+    const int colBegin = std::clamp(cells.colBegin, 0, srcW);
+    const int colEnd = std::clamp(cells.colEnd, colBegin, srcW);
+    const int rowBegin = std::clamp(cells.rowBegin, 0, srcH);
+    const int rowEnd = std::clamp(cells.rowEnd, rowBegin, srcH);
+    for (int row = rowBegin; row < rowEnd; ++row) {
+        for (int col = colBegin; col < colEnd; ++col) {
             const auto p00 = corner(static_cast<double>(col), static_cast<double>(row));
             const auto p10 = corner(static_cast<double>(col + 1), static_cast<double>(row));
             const auto p01 = corner(static_cast<double>(col), static_cast<double>(row + 1));

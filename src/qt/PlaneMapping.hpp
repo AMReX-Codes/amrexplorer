@@ -264,32 +264,74 @@ struct PlaneMapping {
     }
 };
 
-// The physical faces of a mapped plane cell along the slice normal, averaged
-// over its four corner nodes. Nothing when the node plane carries no normal
-// coordinates: a 2-D slice, which has no normal to be in or out of.
+// The physical faces of a mapped plane cell along the slice normal, at the
+// in-plane position (a, b) within it. The corner nodes are read as the two
+// triangles the warp draws the cell from, so a sloped face is taken where the
+// point is: the four-corner average is the cell's centre, which over a cell
+// spanning a steep terrain is not the face above or below the point at all.
+// Nothing when the node plane carries no normal coordinates: a 2-D slice,
+// which has no normal to be in or out of.
 [[nodiscard]] inline std::optional<std::array<double, 2>> mappedCellFaces(
-    const MappedGridPlane& nodes, int column, int row)
+    const MappedGridPlane& nodes, int column, int row, double a, double b)
 {
     const auto count = static_cast<std::size_t>(std::max(0, nodes.width))
         * static_cast<std::size_t>(std::max(0, nodes.height));
     if (column < 0 || row < 0 || column + 1 >= nodes.width
-        || row + 1 >= nodes.height || nodes.normalLower.size() != count
+        || row + 1 >= nodes.height || nodes.a.size() != count
+        || nodes.b.size() != count || nodes.normalLower.size() != count
         || nodes.normalUpper.size() != count) {
         return std::nullopt;
     }
-    const auto corners = [&](const std::vector<double>& face) {
-        double sum = 0.0;
-        for (const int downRow : {0, 1}) {
-            for (const int alongRow : {0, 1}) {
-                sum += face[static_cast<std::size_t>(row + downRow)
-                        * static_cast<std::size_t>(nodes.width)
-                    + static_cast<std::size_t>(column + alongRow)];
-            }
+    const auto stride = static_cast<std::size_t>(nodes.width);
+    const auto corner = static_cast<std::size_t>(row) * stride
+        + static_cast<std::size_t>(column);
+    // The warp's own split of the quad (see warpMappedGrid).
+    const std::array<std::array<std::size_t, 3>, 2> triangles{
+        std::array<std::size_t, 3>{corner, corner + 1, corner + stride + 1},
+        std::array<std::size_t, 3>{corner, corner + stride + 1, corner + stride}};
+    std::array<std::size_t, 3> nodesOf{};
+    std::array<double, 3> weights{};
+    bool weighted = false;
+    for (const auto& triangle : triangles) {
+        const double x0 = nodes.a[triangle[0]];
+        const double y0 = nodes.b[triangle[0]];
+        const double ux = nodes.a[triangle[1]] - x0;
+        const double uy = nodes.b[triangle[1]] - y0;
+        const double vx = nodes.a[triangle[2]] - x0;
+        const double vy = nodes.b[triangle[2]] - y0;
+        const double area = ux * vy - vx * uy;
+        if (!(std::abs(area) > 0.0)) {
+            continue;
         }
-        return 0.25 * sum;
+        const double px = a - x0;
+        const double py = b - y0;
+        std::array<double, 3> candidate{};
+        candidate[1] = (px * vy - vx * py) / area;
+        candidate[2] = (ux * py - px * uy) / area;
+        candidate[0] = 1.0 - candidate[1] - candidate[2];
+        // The triangle holding the point, or the one holding it most nearly
+        // where rounding puts it just outside both.
+        const auto inside = std::min({candidate[0], candidate[1], candidate[2]});
+        if (weighted
+            && !(inside > std::min({weights[0], weights[1], weights[2]}))) {
+            continue;
+        }
+        nodesOf = triangle;
+        weights = candidate;
+        weighted = true;
+    }
+    const auto face = [&](const std::vector<double>& values) {
+        if (!weighted) {
+            // A cell with no area: its corners are all it says.
+            return 0.25
+                * (values[corner] + values[corner + 1] + values[corner + stride]
+                    + values[corner + stride + 1]);
+        }
+        return weights[0] * values[nodesOf[0]] + weights[1] * values[nodesOf[1]]
+            + weights[2] * values[nodesOf[2]];
     };
-    const double lower = corners(nodes.normalLower);
-    const double upper = corners(nodes.normalUpper);
+    const double lower = face(nodes.normalLower);
+    const double upper = face(nodes.normalUpper);
     return std::array<double, 2>{
         std::min(lower, upper), std::max(lower, upper)};
 }
@@ -315,7 +357,7 @@ struct PlaneMapping {
         // The drawn cell's own faces where the node plane carries them: the
         // level's slab is logical, and a terrain-following cell is not there.
         const auto faces = mapping.nodes
-            ? mappedCellFaces(*mapping.nodes, (*pixel)[0], (*pixel)[1])
+            ? mappedCellFaces(*mapping.nodes, (*pixel)[0], (*pixel)[1], a, b)
             : std::optional<std::array<double, 2>>{};
         if (faces) {
             // Half-open, as the slice picks its cell.

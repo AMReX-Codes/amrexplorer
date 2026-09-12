@@ -4,6 +4,7 @@
 #include <amrexplorer/query/SliceQuery.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -55,25 +56,34 @@ MappedGridPlane queryMappedGridPlane(PlotfileDataset& data,
     plane.a.assign(nodeCount, 0.0);
     plane.b.assign(nodeCount, 0.0);
 
-    // The node layers along the normal whose displacements are averaged: the
-    // two bounding the slice's cell in 3-D, the plane itself in 2-D. Indices
-    // are clamped into the nodal domain so a slice through the last cell still
-    // finds its upper layer.
-    std::vector<double> layerPositions;
-    if (metadata.dimension == 3) {
-        const auto normal = static_cast<std::size_t>(request.normalDirection);
+    // The node layers along the normal bounding the slice's cell on one level:
+    // a point in that cell lies between them. Indices are clamped into the
+    // nodal domain so a slice through the last cell still finds its upper
+    // layer.
+    const auto layersAt = [&](int level) {
+        const auto axis = static_cast<std::size_t>(request.normalDirection);
         const auto& dataLevel
-            = metadata.levels[static_cast<std::size_t>(maximumLevel)];
+            = metadata.levels[static_cast<std::size_t>(level)];
         const auto& gridLevel
-            = gridMetadata.levels[static_cast<std::size_t>(maximumLevel)];
+            = gridMetadata.levels[static_cast<std::size_t>(level)];
         const auto cell = sampleIndex(
             dataLevel, request.normalDirection, request.physicalPosition);
-        for (const auto node : {cell, cell + 1}) {
-            const auto clamped = std::clamp(
-                node, gridLevel.domain.lower[normal], gridLevel.domain.upper[normal]);
-            layerPositions.push_back(
-                samplePosition(gridLevel, request.normalDirection, clamped));
+        std::array<double, 2> positions{};
+        for (const int side : {0, 1}) {
+            const auto clamped = std::clamp(cell + side,
+                gridLevel.domain.lower[axis], gridLevel.domain.upper[axis]);
+            positions[static_cast<std::size_t>(side)]
+                = samplePosition(gridLevel, request.normalDirection, clamped);
         }
+        return positions;
+    };
+    // The layers whose displacements the in-plane coordinates average: the two
+    // bounding the cell at the finest level shown in 3-D, the plane itself in
+    // 2-D.
+    std::vector<double> layerPositions;
+    if (metadata.dimension == 3) {
+        const auto finest = layersAt(maximumLevel);
+        layerPositions.assign(finest.begin(), finest.end());
     } else {
         layerPositions.push_back(request.physicalPosition);
     }
@@ -209,18 +219,49 @@ MappedGridPlane queryMappedGridPlane(PlotfileDataset& data,
     }
     // The cell's two faces along the normal, each layer kept as it is rather
     // than averaged into a mid-plane: only these say whether a physical point
-    // lies in the cell the slice drew.
+    // lies in the cell the slice drew. A node the display took from a coarser
+    // level lies in that level's cell, so its faces are that level's node
+    // layers: the finest level's everywhere would cut every coarse cell down
+    // to a fine cell's thickness and drop the particles in the rest of it.
     if (metadata.dimension == 3 && layerPositions.size() == 2) {
         useField(static_cast<std::size_t>(normal));
-        for (std::size_t layer = 0; layer < 2; ++layer) {
-            clearAccumulator();
-            addLayer(layerPositions[layer]);
-            auto& face = layer == 0 ? plane.normalLower : plane.normalUpper;
-            face.assign(nodeCount, layerPositions[layer]);
-            for (std::size_t node = 0; node < nodeCount; ++node) {
-                if (covered[node] != 0) {
-                    face[node] += displacement[node]
-                        / static_cast<double>(covered[node]);
+        plane.normalLower.assign(nodeCount, layerPositions[0]);
+        plane.normalUpper.assign(nodeCount, layerPositions[1]);
+        std::vector<int> answeredLevel(nodeCount, -1);
+        std::vector<std::uint8_t> wanted(
+            static_cast<std::size_t>(maximumLevel) + 1, 0);
+        // The finest level shown first: its query also says which level
+        // answered each node, and so which coarser levels are still needed.
+        for (int level = maximumLevel; level >= 0; --level) {
+            if (level < maximumLevel
+                && wanted[static_cast<std::size_t>(level)] == 0) {
+                continue;
+            }
+            const auto positions = layersAt(level);
+            for (std::size_t layer = 0; layer < 2; ++layer) {
+                // No layer here is asked for twice, so the cache only has to
+                // hold the one in hand and the pair it interpolates between.
+                layers.clear();
+                clearAccumulator();
+                addLayer(positions[layer]);
+                const auto& direct = queryLayer(positions[layer]);
+                auto& face = layer == 0 ? plane.normalLower : plane.normalUpper;
+                for (std::size_t node = 0; node < nodeCount; ++node) {
+                    if (level == maximumLevel && layer == 0) {
+                        answeredLevel[node] = direct.plane.valid[node] != 0
+                            ? direct.plane.sourceLevel[node]
+                            : -1;
+                        if (answeredLevel[node] >= 0
+                            && answeredLevel[node] < maximumLevel) {
+                            wanted[static_cast<std::size_t>(
+                                answeredLevel[node])] = 1;
+                        }
+                    }
+                    if (answeredLevel[node] != level || covered[node] == 0) {
+                        continue;
+                    }
+                    face[node] = positions[layer]
+                        + displacement[node] / static_cast<double>(covered[node]);
                 }
             }
         }

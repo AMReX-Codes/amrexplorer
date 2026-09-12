@@ -260,6 +260,17 @@ int main()
                 && amrvis::qt::mappedParticlePoint(mapping, plane, 3.0, 4.5, 1.5, slab)
                        .has_value(),
             "mapped particles: the cell's displaced faces were not used");
+        // A face sloping across the cell is read where the particle is, not at
+        // the cell's centre: with the faces set to a and a + 1 the particle at
+        // a = 3 sits in [3, 4), which no corner average of the cell gives.
+        for (std::size_t n = 0; n < nodes->a.size(); ++n) {
+            nodes->normalLower[n] = nodes->a[n];
+            nodes->normalUpper[n] = nodes->a[n] + 1.0;
+        }
+        require(amrvis::qt::mappedParticlePoint(mapping, plane, 3.0, 4.5, 3.5, slab)
+                && !amrvis::qt::mappedParticlePoint(mapping, plane, 3.0, 4.5, 2.9, slab)
+                && !amrvis::qt::mappedParticlePoint(mapping, plane, 3.0, 4.5, 4.1, slab),
+            "mapped particles: a sloped face was read at the cell's centre");
         require(!mapping.planePixelFromScene(1.0e30, 2.0)
                 && !mapping.planePixelFromScene(2.0, -1.0e30),
             "mapped: scene points far off the pixmap have no plane pixel");

@@ -153,6 +153,7 @@ Outcome dispatchZoom(Context& context)
         const std::filesystem::path path(argv[2]);
         struct Progress {
             int phase = 0;
+            std::array<double, 3> positionsBefore{};
             std::array<QRectF, 3> fitWindows;  // per normal, at Fit
             double fitScale = 0.0;
             QRectF zoomWindow;
@@ -501,6 +502,20 @@ Outcome dispatchZoom(Context& context)
                          "flat pixmap flagged mapped");
                     return;
                 }
+                // A plain right click on the warp moves the other two slices
+                // to the cell under it (the line tool is off there, which
+                // must not swallow the click): from the tile's upper-left
+                // quarter point, x lands on a cell centre below the middle
+                // and z on one above it.
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    progress->positionsBefore[axis]
+                        = window.slicePositionForTest(static_cast<int>(axis));
+                }
+                const auto tile = window.mappedPanelForTest(1).tileDevice;
+                const auto ratio = window.devicePixelRatioF();
+                window.rightClickActiveViewForTest(QPoint(
+                    static_cast<int>((tile.left() + 0.25 * tile.width()) / ratio),
+                    static_cast<int>((tile.top() + 0.25 * tile.height()) / ratio)));
                 // A fixed scale on the warp has no raster clamp to report:
                 // the button says the plain factor, not "2x→2x".
                 window.selectToolbarFixedScaleForTest(2);
@@ -515,10 +530,25 @@ Outcome dispatchZoom(Context& context)
                 window.setMappedGridForTest(false);
                 break;
             }
-            default:
+            default: {
+                const auto x = window.slicePositionForTest(0);
+                const auto z = window.slicePositionForTest(2);
+                const auto onCentre = [](double value) {
+                    // 4 cells of 0.25 over [0, 1]: centres at 0.125 + k/4.
+                    const auto k = (value - 0.125) / 0.25;
+                    return std::abs(k - std::round(k)) < 1e-9;
+                };
+                if (x == progress->positionsBefore[0] || z == progress->positionsBefore[2]
+                    || !onCentre(x) || !onCentre(z) || x >= 0.5 || z <= 0.5) {
+                    qCritical("slice positions x %g z %g", x, z);
+                    fail("a right click on the warp did not move the slices to "
+                         "the clicked cell");
+                    return;
+                }
                 application.exit(window.activeViewIsMappedForTest()
                         || window.displayIsMappedForTest() ? 3 : 0);
                 break;
+            }
             }
         };
         QObject::connect(&window, &amrvis::qt::MainWindow::initialSliceFinished,

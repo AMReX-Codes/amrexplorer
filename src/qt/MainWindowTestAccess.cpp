@@ -1108,6 +1108,25 @@ void MainWindow::wheelZoomAndPanActiveViewForTest()
     m_activeView->view->panViewport(QPoint(11, -7));
 }
 
+void MainWindow::rightClickActiveViewForTest(const QPoint& viewportPosition)
+{
+    if (m_activeView == nullptr || !m_activeView->view->hasImage()) {
+        return;
+    }
+    auto* const viewport = m_activeView->view->viewport();
+    if (viewport == nullptr) {
+        return;
+    }
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(viewportPosition),
+        viewport->mapToGlobal(viewportPosition), Qt::RightButton, Qt::RightButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(viewport, &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(viewportPosition),
+        viewport->mapToGlobal(viewportPosition), Qt::RightButton, Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(viewport, &release);
+}
+
 void MainWindow::shiftDragActiveViewForTest(int dx, int dy)
 {
     if (m_activeView == nullptr || !m_activeView->view->hasImage()) {

@@ -1184,10 +1184,16 @@ void ImageView::mousePressEvent(QMouseEvent* event)
         m_panActive = false;
     }
     bool handled = false;
+    // The line tool takes a Shift+middle/right press or a right press; with
+    // it off (a warped view) a plain right press still starts a slice move.
+    const bool shiftPressed = event->modifiers() & Qt::ShiftModifier;
+    const bool linePress = m_lineToolEnabled
+        && (shiftPressed || event->button() == Qt::RightButton);
+    const bool movePress = !m_lineToolEnabled && m_sliceMoveEnabled
+        && event->button() == Qt::RightButton && !shiftPressed;
     if ((event->button() == Qt::MiddleButton || event->button() == Qt::RightButton)
-        && hasImage() && m_lineToolEnabled) {
-        if ((event->modifiers() & Qt::ShiftModifier)
-            || event->button() == Qt::RightButton) {
+        && hasImage() && (linePress || movePress)) {
+        if (shiftPressed || event->button() == Qt::RightButton) {
             m_lineDragButton = event->button();
             m_linePressPosition = event->position().toPoint();
             m_lineDragShiftHeld = event->modifiers() & Qt::ShiftModifier;
@@ -1260,7 +1266,7 @@ void ImageView::mouseReleaseEvent(QMouseEvent* event)
             // Middle drag does nothing — only shift+middle clicks produce
             // line plots. Right drags are unaffected.
             clearLineGuide();
-        } else if (shiftHeld || wasDrag) {
+        } else if (m_lineToolEnabled && (shiftHeld || wasDrag)) {
             // Leave the guide visible as a temporary preview while the line
             // plot is computed asynchronously.
             const auto effectiveButton = wasDrag
@@ -1451,6 +1457,11 @@ void ImageView::showLineGuide(const QPoint& viewPosition)
     constexpr int orientThreshold = 8;
     const bool significantDrag = std::abs(drag.x()) > orientThreshold
         || std::abs(drag.y()) > orientThreshold;
+    if (!m_lineToolEnabled && significantDrag) {
+        // A right drag with the line tool off plots nothing: no guide.
+        clearLineGuide();
+        return;
+    }
 
     // On press (no drag yet), show a slice-move guide (perpendicular).
     // Once the user drags significantly, the action switches to a line

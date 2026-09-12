@@ -311,6 +311,9 @@ public:
     // Test-only: send a real Shift+left drag through the active view's
     // viewport, exercising the same event path as interactive panning.
     void shiftDragActiveViewForTest(int dx, int dy);
+    // Test-only: a plain right click at a viewport position of the active
+    // view, as the mouse would deliver it.
+    void rightClickActiveViewForTest(const QPoint& viewportPosition);
     [[nodiscard]] bool activeViewScrollBarsVisibleForTest() const;
     [[nodiscard]] bool activeViewHasPhysicalAspectForTest(
         double expectedAspect) const;

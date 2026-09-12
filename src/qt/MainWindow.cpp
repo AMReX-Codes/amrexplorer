@@ -1709,8 +1709,10 @@ void MainWindow::applyDisplayStretches()
             // the warp is drawn again for what the viewport then shows.
             const auto placement = m_pair ? std::nullopt : tilePlacement(*state);
             if (placement) {
+                // The pixmap's own region, as applyPairLayouts places it: a
+                // refresh that kept the raster left displayRegion behind.
                 state->view->placeTile(state->tile,
-                    toQRectF(placement->sceneRectForRegion(state->displayRegion)),
+                    toQRectF(placement->sceneRectForRegion(state->pixmapRegion)),
                     toQRectF(placement->canvas));
             }
             updateMappedDemand(*state);

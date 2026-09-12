@@ -2053,6 +2053,19 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
                         const bool warpedWindow
                             = state->warp == DisplayWarp::MappedGrid
                             && outcome.mappedWindows[index].has_value();
+                        if (state->warp == DisplayWarp::MappedGrid && !warpedWindow) {
+                            // The re-warp fell back: the tile is flat now and
+                            // the state says so, or the next relayout would
+                            // place it at the warp's window and the probe read
+                            // through the warp's index.
+                            state->warp = DisplayWarp::None;
+                            state->displaySourceIndex.reset();
+                            state->mappedNodeBounds = {};
+                            state->mappedWindow = {};
+                            state->mappedWindowPixels = {0, 0};
+                            state->displayRegion = state->plane->physicalRegion;
+                            updateLineToolAvailability(*state);
+                        }
                         const auto placed = tilePlacement(*state);
                         if (placed && (warpedWindow || m_pair)) {
                             // The re-coloured warp of the same window lands
@@ -2066,6 +2079,7 @@ void MainWindow::syncVisibleRanges(DatasetLayer& layer)
                             }
                             const auto region = warpedWindow
                                 ? state->displayRegion : state->plane->physicalRegion;
+                            state->pixmapRegion = region;
                             state->view->setTileImage(state->tile,
                                 outcome.images[index],
                                 toQRectF(placed->sceneRectForRegion(region)),

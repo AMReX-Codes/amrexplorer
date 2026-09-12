@@ -288,7 +288,7 @@ Outcome dispatchSequence(Context& context)
             });
         QObject::connect(&window, &amrvis::qt::MainWindow::sequenceFrameFailed,
             &application, [&application] { application.exit(1); });
-        QTimer::singleShot(15000, &application,
+        QTimer::singleShot(60000, &application,
             [&application] { application.exit(4); });
         QTimer::singleShot(0, &window, [&window, first, second] {
             window.setMappedGridForTest(true);

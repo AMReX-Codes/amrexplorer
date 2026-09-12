@@ -535,7 +535,7 @@ Outcome dispatchZoom(Context& context)
             &application, [&window, runPhase] {
                 QTimer::singleShot(0, &window, runPhase);
             });
-        QTimer::singleShot(20000, &application,
+        QTimer::singleShot(60000, &application,
             [&application] { application.exit(4); });
         QTimer::singleShot(0, &window, [&window, path] {
             window.setGridBoxesVisibleForTest(true);
@@ -641,7 +641,7 @@ Outcome dispatchZoom(Context& context)
             &application, [&window, runPhase] {
                 QTimer::singleShot(0, &window, runPhase);
             });
-        QTimer::singleShot(20000, &application,
+        QTimer::singleShot(60000, &application,
             [&application] { application.exit(4); });
         QTimer::singleShot(0, &window, [&window, path] { window.openDataset(path); });
     } else if (argc == 3

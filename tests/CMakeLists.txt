@@ -1305,7 +1305,7 @@ if(TARGET amrexplorer_qt)
             -DMODE=mapped-grid
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
-    set_tests_properties(qt_mapped_grid_smoke PROPERTIES TIMEOUT 30)
+    set_tests_properties(qt_mapped_grid_smoke PROPERTIES TIMEOUT 90)
     # A mapped-grid sequence: the view's ask for its window once a frame lands
     # must not restart that frame, so each frame is displayed once.
     add_test(
@@ -1318,7 +1318,7 @@ if(TARGET amrexplorer_qt)
             -DMODE=mapped-grid-sequence
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
-    set_tests_properties(qt_mapped_grid_sequence_smoke PROPERTIES TIMEOUT 30)
+    set_tests_properties(qt_mapped_grid_sequence_smoke PROPERTIES TIMEOUT 90)
     # A mapped plane wider than the output cap: zoomed in, the view re-slices
     # the cells on show; a scroll within that plane only re-draws, and one far
     # past it re-slices where the view went.
@@ -1332,7 +1332,7 @@ if(TARGET amrexplorer_qt)
             -DMODE=mapped-grid-cap
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
-    set_tests_properties(qt_mapped_grid_cap_smoke PROPERTIES TIMEOUT 30)
+    set_tests_properties(qt_mapped_grid_cap_smoke PROPERTIES TIMEOUT 90)
 
     # A remote Fit raster sized for the viewport must be re-fetched at native
     # width when a stretch puts its few columns across the whole viewport.

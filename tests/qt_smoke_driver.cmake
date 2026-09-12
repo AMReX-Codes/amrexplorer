@@ -45,6 +45,9 @@ foreach(argument MATERIALIZER AMREXPLORER_QT SOURCE WORK MODE)
 endforeach()
 
 set(ENV{QT_QPA_PLATFORM} offscreen)
+# Qt logs to os_log / the debugger on macOS and Windows unless told to use
+# stderr; the driver needs a failed step's qCritical text in its output.
+set(ENV{QT_LOGGING_TO_CONSOLE} 1)
 
 # Isolate QSettings per run: a fresh, empty config directory makes every smoke
 # test start from defaults, so persisted UI state (spherical display mode and

@@ -779,8 +779,9 @@ double MainWindow::effectiveFixedScale(int factor) const
     if (m_activeView->warp == DisplayWarp::MappedGrid) {
         // A mapped warp is drawn for the screen at whatever scale is set:
         // one scene unit (the tightest finest cell) is `factor` pixels, with
-        // no raster cap in between.
-        return static_cast<double>(factor);
+        // no raster cap in between -- so, as for the R-Z wedge, no clamp to
+        // report (a positive return is one, and would label "2x" as "2x→2x").
+        return 0.0;
     }
     // The active view's own layer: with a companion it may be the one on show.
     const auto& metadata = *layerFor(*m_activeView).openMetadata;

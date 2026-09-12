@@ -501,6 +501,15 @@ Outcome dispatchZoom(Context& context)
                          "flat pixmap flagged mapped");
                     return;
                 }
+                // A fixed scale on the warp has no raster clamp to report:
+                // the button says the plain factor, not "2x→2x".
+                window.selectToolbarFixedScaleForTest(2);
+                if (window.scaleUiLabelForTest() != QStringLiteral("2x")
+                    || window.effectiveFixedScaleForTest(2) != 0.0) {
+                    qCritical("scale label '%s'", qPrintable(window.scaleUiLabelForTest()));
+                    fail("a mapped view reported a clamped fixed scale");
+                    return;
+                }
                 progress->phase = 9;
                 window.setDisplayModeForTest(amrvis::DisplayMode::Raster, 7);
                 window.setMappedGridForTest(false);

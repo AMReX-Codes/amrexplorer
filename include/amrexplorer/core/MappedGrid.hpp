@@ -3,7 +3,10 @@
 #include <amrexplorer/core/Geometry.hpp>
 #include <amrexplorer/core/Request.hpp>
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,14 +43,34 @@ struct MappedGridPlane {
     // terrain-following grid and the cell's mid-plane otherwise.
     std::vector<double> a;
     std::vector<double> b;
-    // The cell's two faces along the normal, in physical units, one value per
-    // node (3-D only; empty in 2-D). The layers are those of the level that
-    // answered the node -- its cell index c and c + 1 there -- so a point is
-    // in the cell its faces bracket, which the logical slab bounds do not say
-    // on a terrain-following grid.
+    // The levels drawn on the plane, ascending: one block of faces below per
+    // level, in this order (3-D only; empty in 2-D).
+    std::vector<int> faceLevels;
+    // The cells' two faces along the normal, in physical units: one value per
+    // node for each level in `faceLevels`, blocks in that order. A level's
+    // block holds that level's node layers -- its cell index c and c + 1 --
+    // at every node, so a cell reads its own level at all four corners, the
+    // ones it shares with a finer level's cells included. A point is in the
+    // cell its faces bracket, which the logical slab bounds do not say on a
+    // terrain-following grid.
     std::vector<double> normalLower;
     std::vector<double> normalUpper;
 };
+
+// Where `level`'s block of faces starts in `normalLower` and `normalUpper`,
+// or nothing when the plane drew no cell at that level.
+[[nodiscard]] inline std::optional<std::size_t> mappedFaceOffset(
+    const MappedGridPlane& plane, int level)
+{
+    const auto found = std::find(
+        plane.faceLevels.begin(), plane.faceLevels.end(), level);
+    if (found == plane.faceLevels.end()) {
+        return std::nullopt;
+    }
+    const auto nodes = static_cast<std::size_t>(std::max(0, plane.width))
+        * static_cast<std::size_t>(std::max(0, plane.height));
+    return static_cast<std::size_t>(found - plane.faceLevels.begin()) * nodes;
+}
 
 [[nodiscard]] std::vector<std::string> validateMappedGridPlaneRequest(
     const MappedGridPlaneRequest& request, int datasetDimension);

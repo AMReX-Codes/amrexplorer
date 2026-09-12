@@ -264,22 +264,24 @@ struct PlaneMapping {
     }
 };
 
-// The physical faces of a mapped plane cell along the slice normal, at the
-// in-plane position (a, b) within it. The corner nodes are read as the two
-// triangles the warp draws the cell from, so a sloped face is taken where the
-// point is: the four-corner average is the cell's centre, which over a cell
-// spanning a steep terrain is not the face above or below the point at all.
-// Nothing when the node plane carries no normal coordinates: a 2-D slice,
-// which has no normal to be in or out of.
+// The physical faces of a cell the plane drew at `level`, along the slice
+// normal, at the in-plane position (a, b) within it. The corner nodes are read
+// as the two triangles the warp draws the cell from, so a sloped face is taken
+// where the point is: the four-corner average is the cell's centre, which over
+// a cell spanning a steep terrain is not the face above or below the point at
+// all. Nothing when the node plane carries no faces for that level: a 2-D
+// slice, which has no normal to be in or out of.
 [[nodiscard]] inline std::optional<std::array<double, 2>> mappedCellFaces(
-    const MappedGridPlane& nodes, int column, int row, double a, double b)
+    const MappedGridPlane& nodes, int column, int row, double a, double b,
+    int level)
 {
     const auto count = static_cast<std::size_t>(std::max(0, nodes.width))
         * static_cast<std::size_t>(std::max(0, nodes.height));
-    if (column < 0 || row < 0 || column + 1 >= nodes.width
+    const auto block = mappedFaceOffset(nodes, level);
+    if (!block || column < 0 || row < 0 || column + 1 >= nodes.width
         || row + 1 >= nodes.height || nodes.a.size() != count
-        || nodes.b.size() != count || nodes.normalLower.size() != count
-        || nodes.normalUpper.size() != count) {
+        || nodes.b.size() != count || nodes.normalLower.size() < *block + count
+        || nodes.normalUpper.size() < *block + count) {
         return std::nullopt;
     }
     const auto stride = static_cast<std::size_t>(nodes.width);
@@ -321,14 +323,15 @@ struct PlaneMapping {
         weighted = true;
     }
     const auto face = [&](const std::vector<double>& values) {
+        const auto at = [&](std::size_t n) { return values[*block + n]; };
         if (!weighted) {
             // A cell with no area: its corners are all it says.
             return 0.25
-                * (values[corner] + values[corner + 1] + values[corner + stride]
-                    + values[corner + stride + 1]);
+                * (at(corner) + at(corner + 1) + at(corner + stride)
+                    + at(corner + stride + 1));
         }
-        return weights[0] * values[nodesOf[0]] + weights[1] * values[nodesOf[1]]
-            + weights[2] * values[nodesOf[2]];
+        return weights[0] * at(nodesOf[0]) + weights[1] * at(nodesOf[1])
+            + weights[2] * at(nodesOf[2]);
     };
     const double lower = face(nodes.normalLower);
     const double upper = face(nodes.normalUpper);
@@ -354,18 +357,6 @@ struct PlaneMapping {
         return std::nullopt;
     }
     if (!levelSlabs.empty()) {
-        // The drawn cell's own faces where the node plane carries them: the
-        // level's slab is logical, and a terrain-following cell is not there.
-        const auto faces = mapping.nodes
-            ? mappedCellFaces(*mapping.nodes, (*pixel)[0], (*pixel)[1], a, b)
-            : std::optional<std::array<double, 2>>{};
-        if (faces) {
-            // Half-open, as the slice picks its cell.
-            if (!(normal >= (*faces)[0]) || !(normal < (*faces)[1])) {
-                return std::nullopt;
-            }
-            return scene;
-        }
         const auto offset = static_cast<std::size_t>((*pixel)[0])
             + static_cast<std::size_t>(std::max(0, plane.width))
                 * static_cast<std::size_t>((*pixel)[1]);
@@ -376,9 +367,17 @@ struct PlaneMapping {
         if (level < 0 || static_cast<std::size_t>(level) >= levelSlabs.size()) {
             return std::nullopt;
         }
-        // Half-open, as the slice picks its cell.
+        // The drawn cell's own faces where the node plane carries that level's:
+        // the level's slab is logical, and a terrain-following cell is not
+        // there.
+        const auto faces = mapping.nodes
+            ? mappedCellFaces(*mapping.nodes, (*pixel)[0], (*pixel)[1], a, b, level)
+            : std::optional<std::array<double, 2>>{};
         const auto& slab = levelSlabs[static_cast<std::size_t>(level)];
-        if (!(normal >= slab.lower) || !(normal < slab.upper)) {
+        const auto lower = faces ? (*faces)[0] : slab.lower;
+        const auto upper = faces ? (*faces)[1] : slab.upper;
+        // Half-open, as the slice picks its cell.
+        if (!(normal >= lower) || !(normal < upper)) {
             return std::nullopt;
         }
     }

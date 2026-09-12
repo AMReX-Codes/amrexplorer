@@ -254,6 +254,7 @@ int main()
         // Displaced faces outrank that logical slab: terrain lifts the cell to
         // [1, 2), so the normal that was inside the slab is out of the cell and
         // the one that was outside is in it.
+        nodes->faceLevels = {0};
         nodes->normalLower.assign(25, 1.0);
         nodes->normalUpper.assign(25, 2.0);
         require(!amrvis::qt::mappedParticlePoint(mapping, plane, 3.0, 4.5, 0.5, slab)

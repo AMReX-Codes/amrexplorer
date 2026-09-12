@@ -319,31 +319,37 @@ void testRefinedFixture(const std::filesystem::path& fixture)
         require(ok, "x-normal nodes in the refined half are exact");
     }
 
-    // z-normal slice through fine cell k = 1 (z in [0.125, 0.25]): the faces
-    // are the node layers of the level that answered each node. Level 1 covers
-    // x < 0.5 and puts them at z = 0.125 and 0.25; elsewhere level 0's cell is
-    // twice as thick and reaches down to z = 0. Column 4 sits on the fine
-    // box's edge, where either level may answer.
+    // z-normal slice through fine cell k = 1 (z in [0.125, 0.25]): the plane
+    // carries one block of faces per level drawn, each holding that level's own
+    // node layers at every node, shared ones included. Level 0's cell is twice
+    // as thick and reaches down to z = 0 even at the nodes it shares with
+    // level 1's cells, where reading the node's own level would shorten it.
     {
         const auto plane = session.requestMappedGridPlane(atLevel1(2, 0.1875));
-        require(plane.normalLower.size() == 81 && plane.normalUpper.size() == 81,
-            "the refined fixture carries faces");
+        require(plane.faceLevels.size() == 2 && plane.faceLevels[0] == 0
+                && plane.faceLevels[1] == 1,
+            "the refined slice draws both levels");
+        require(plane.normalLower.size() == 162 && plane.normalUpper.size() == 162,
+            "one block of faces per level drawn");
         bool faces = true;
-        for (int row = 0; row <= 8; ++row) {
-            for (int column = 0; column <= 8; ++column) {
-                if (column == 4) {
-                    continue;
+        for (std::size_t block = 0; block < 2; ++block) {
+            const auto offset
+                = amrvis::mappedFaceOffset(plane, plane.faceLevels[block]);
+            require(offset && *offset == block * 81,
+                "face blocks follow the level order");
+            const double low = block == 0 ? 0.0 : 0.125;
+            for (int row = 0; row <= 8; ++row) {
+                for (int column = 0; column <= 8; ++column) {
+                    const auto n = *offset + node(plane, column, row);
+                    const double x = fine * column;
+                    const double y = fine * row;
+                    faces = faces
+                        && near(plane.normalLower[n], low + nuZAt(x, y, low))
+                        && near(plane.normalUpper[n], 0.25 + nuZAt(x, y, 0.25));
                 }
-                const auto n = node(plane, column, row);
-                const double x = fine * column;
-                const double y = fine * row;
-                const double low = x < 0.5 ? 0.125 : 0.0;
-                faces = faces
-                    && near(plane.normalLower[n], low + nuZAt(x, y, low))
-                    && near(plane.normalUpper[n], 0.25 + nuZAt(x, y, 0.25));
             }
         }
-        require(faces, "a coarse-only node took the fine level's cell thickness");
+        require(faces, "a level's faces are its own layers at every node");
     }
 
     // Showing level 0 only: the fine raster interpolates in-plane, and the

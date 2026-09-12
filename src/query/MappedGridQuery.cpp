@@ -217,52 +217,52 @@ MappedGridPlane queryMappedGridPlane(PlotfileDataset& data,
             }
         }
     }
-    // The cell's two faces along the normal, each layer kept as it is rather
+    // The cells' two faces along the normal, each layer kept as it is rather
     // than averaged into a mid-plane: only these say whether a physical point
-    // lies in the cell the slice drew. A node the display took from a coarser
-    // level lies in that level's cell, so its faces are that level's node
-    // layers: the finest level's everywhere would cut every coarse cell down
-    // to a fine cell's thickness and drop the particles in the rest of it.
+    // lies in the cell the slice drew. One block per level drawn, each filled
+    // at every node, because a cell must read its own level at all four
+    // corners: a node on a refinement boundary belongs to a coarse cell and a
+    // fine one at once, and the finer level's face there would shorten the
+    // coarse cell and drop the particles in what it cut off.
     if (metadata.dimension == 3 && layerPositions.size() == 2) {
         useField(static_cast<std::size_t>(normal));
-        plane.normalLower.assign(nodeCount, layerPositions[0]);
-        plane.normalUpper.assign(nodeCount, layerPositions[1]);
-        std::vector<int> answeredLevel(nodeCount, -1);
-        std::vector<std::uint8_t> wanted(
-            static_cast<std::size_t>(maximumLevel) + 1, 0);
-        // The finest level shown first: its query also says which level
-        // answered each node, and so which coarser levels are still needed.
-        for (int level = maximumLevel; level >= 0; --level) {
-            if (level < maximumLevel
-                && wanted[static_cast<std::size_t>(level)] == 0) {
-                continue;
+        {
+            // The levels drawn, from the layer through the slice's own cell.
+            const auto& drawn = queryLayer(layerPositions[0]);
+            std::vector<std::uint8_t> seen(
+                static_cast<std::size_t>(maximumLevel) + 1, 0);
+            for (std::size_t node = 0; node < nodeCount; ++node) {
+                const auto level = drawn.plane.sourceLevel[node];
+                if (drawn.plane.valid[node] != 0 && level >= 0
+                    && level <= maximumLevel) {
+                    seen[static_cast<std::size_t>(level)] = 1;
+                }
             }
-            const auto positions = layersAt(level);
+            for (int level = 0; level <= maximumLevel; ++level) {
+                if (seen[static_cast<std::size_t>(level)] != 0) {
+                    plane.faceLevels.push_back(level);
+                }
+            }
+        }
+        plane.normalLower.assign(plane.faceLevels.size() * nodeCount, 0.0);
+        plane.normalUpper.assign(plane.faceLevels.size() * nodeCount, 0.0);
+        for (std::size_t block = 0; block < plane.faceLevels.size(); ++block) {
+            const auto positions = layersAt(plane.faceLevels[block]);
             for (std::size_t layer = 0; layer < 2; ++layer) {
-                // No layer here is asked for twice, so the cache only has to
-                // hold the one in hand and the pair it interpolates between.
-                layers.clear();
                 clearAccumulator();
                 addLayer(positions[layer]);
-                const auto& direct = queryLayer(positions[layer]);
                 auto& face = layer == 0 ? plane.normalLower : plane.normalUpper;
                 for (std::size_t node = 0; node < nodeCount; ++node) {
-                    if (level == maximumLevel && layer == 0) {
-                        answeredLevel[node] = direct.plane.valid[node] != 0
-                            ? direct.plane.sourceLevel[node]
-                            : -1;
-                        if (answeredLevel[node] >= 0
-                            && answeredLevel[node] < maximumLevel) {
-                            wanted[static_cast<std::size_t>(
-                                answeredLevel[node])] = 1;
-                        }
+                    auto value = positions[layer];
+                    if (covered[node] != 0) {
+                        value += displacement[node]
+                            / static_cast<double>(covered[node]);
                     }
-                    if (answeredLevel[node] != level || covered[node] == 0) {
-                        continue;
-                    }
-                    face[node] = positions[layer]
-                        + displacement[node] / static_cast<double>(covered[node]);
+                    face[block * nodeCount + node] = value;
                 }
+                // No layer here is asked for twice, so the cache need only
+                // hold the one in hand and the pair it interpolates between.
+                layers.clear();
             }
         }
     }

@@ -322,6 +322,27 @@ void testSubdivisionKeepsArcsRound()
     require(wrong == 0, "at deep zoom the arc is round, not chorded");
 }
 
+// A thin annulus whose angular cells are wide: at the subdivision cap the
+// chords lie several radial cells inside their arcs, so a window at a given
+// radius is drawn by cells whose true radii are past it. Every pixel of a
+// window inside the sector must still be named.
+void testChordsReachDownIntoTheWindow()
+{
+    const auto region = sector(1.0, 1.0002, 0.0, std::numbers::pi);  // 64 x 4 cells
+    const auto centre = amrvis::sphericalToDisplay(1.0001, 0.4);
+    const double half = 1e-6;
+    const auto warped = amrvis::warpSphericalRZ(indexedRaster(64, 4), region,
+        windowOn(centre[0] - half, centre[0] + half, centre[1] - half, centre[1] + half),
+        {64, 64});
+    require(warped.sourceIndex != nullptr, "the thin annulus drew");
+    std::size_t named = 0;
+    for (const auto index : *warped.sourceIndex) {
+        named += index >= 0 ? 1 : 0;
+    }
+    require(named == warped.sourceIndex->size(),
+        "a window inside a thin annulus is drawn by the cells whose chords reach it");
+}
+
 void testDegenerateInputFallsBack()
 {
     const auto src = indexedRaster(4, 4);
@@ -367,6 +388,7 @@ int main()
     testSourceIndexRoundTrip();
     testWindowIsDrawnAsAsked();
     testSubdivisionKeepsArcsRound();
+    testChordsReachDownIntoTheWindow();
     testDegenerateInputFallsBack();
     testNaturalSize();
     if (g_failures != 0) {

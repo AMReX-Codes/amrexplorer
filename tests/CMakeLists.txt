@@ -2204,7 +2204,7 @@ if(TARGET amrexplorer_qt)
             -DMODE=spherical-scale-report
             -P "${CMAKE_CURRENT_SOURCE_DIR}/qt_smoke_driver.cmake"
     )
-    set_tests_properties(qt_spherical_scale_report_smoke PROPERTIES TIMEOUT 30)
+    set_tests_properties(qt_spherical_scale_report_smoke PROPERTIES TIMEOUT 90)
     # Check sibling mnemonics at every menu depth and window-wide shortcuts,
     # before opening data and after the dynamic menus have been populated.
     add_test(

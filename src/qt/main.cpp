@@ -140,6 +140,13 @@ void filterWaylandPopupWarning(QtMsgType type,
         && message.contains(QLatin1String("topmost grabbing popup"))) {
         return;
     }
+    // The offscreen platform (the smoke tests) says this whenever Qt itself
+    // propagates a window's size hints, which nothing here calls; a smoke
+    // that fails prints it too, and it is not the failure.
+    if (type == QtWarningMsg
+        && message == QLatin1String("This plugin does not support propagateSizeHints()")) {
+        return;
+    }
     if (g_previousMessageHandler != nullptr) {
         g_previousMessageHandler(type, context, message);
         return;

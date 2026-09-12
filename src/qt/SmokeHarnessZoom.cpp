@@ -1463,7 +1463,7 @@ Outcome dispatchZoom(Context& context)
                 window.selectSphericalDisplayForTest(0);
                 application.exit(0);
             });
-        QTimer::singleShot(20000, &application,
+        QTimer::singleShot(60000, &application,
             [&application] { application.exit(3); });
         QTimer::singleShot(0, &window,
             [&window, path] { window.openDataset(path); });

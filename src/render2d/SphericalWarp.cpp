@@ -141,8 +141,12 @@ MappedWarpedRaster warpSphericalRZ(const ImageBuffer& src,
 
     // Only the cells that can reach the window: those whose radius and angle
     // ranges meet the window's, one cell of slack each side. The window's
-    // radii run from its nearest point to the origin to its farthest corner;
-    // its angles, when it lies clear of the axis R = 0, are at its corners.
+    // radii run from its nearest point to the origin to its farthest corner,
+    // the latter reaching out by a chord's sagitta: a cell's arcs are drawn as
+    // chords lying that far inside them, so a cell whose true radii are past
+    // the window can still be drawn into it. Its angles, when it lies clear
+    // of the axis R = 0, are at its corners; a chord's points keep between
+    // its ends' angles.
     const auto radialCells = [&](double r) {
         return (r - r0) / dr;
     };
@@ -171,8 +175,10 @@ MappedWarpedRaster warpSphericalRZ(const ImageBuffer& src,
     const auto highCell = [](double value) {
         return static_cast<int>(std::clamp(std::ceil(value) + 1.0, 0.0, 1.0e9));
     };
+    const double chordAngle = dtheta / along;
+    const double sagitta = r1 * chordAngle * chordAngle / 8.0;
     cells.colBegin = lowCell(radialCells(std::hypot(nearestR, nearestZ)));
-    cells.colEnd = highCell(radialCells(farthest));
+    cells.colEnd = highCell(radialCells(farthest + sagitta));
     if (minR < 0.0 && maxR > 0.0) {
         // Astride the axis, or around the origin: every angle may be on show.
         cells.rowBegin = 0;

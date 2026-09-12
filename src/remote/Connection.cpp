@@ -316,6 +316,34 @@ public:
         return m_selectedMinorVersion >= doubleValueVectorsMinorVersion;
     }
 
+    // A 1.6 server has no answer for a node plane at all.
+    [[nodiscard]] bool supportsMappedGrid() const noexcept
+    {
+        return m_selectedMinorVersion >= mappedGridMinorVersion;
+    }
+
+    MappedGridPlane requestMappedGridPlane(
+        const MappedGridPlaneRequest& request, StopToken cancellation)
+    {
+        // Refused here as well as in RemoteDatasetSession, as renderVolume
+        // is: the version lives here.
+        if (!supportsMappedGrid()) {
+            throw std::runtime_error(mappedGridUnsupportedMessage);
+        }
+        // Indefinite, as a slice: the node blocks may have to be read.
+        const auto response = transact(codec::toWire(request),
+            PayloadKind::MappedGridPlaneResponse, cancellation,
+            ResponseWait::Indefinite);
+        const auto* payload = response->payload.AsMappedGridPlaneResponse();
+        if (payload == nullptr) {
+            throw std::runtime_error("server omitted mapped-grid plane payload");
+        }
+        // Decoded before the cache snapshot is committed (see renderVolume).
+        auto plane = codec::fromWire(*payload);
+        updateCache(request.dataset, codec::fromWire(payload->cache.get()));
+        return plane;
+    }
+
     VolumeFrame renderVolume(
         const VolumeRenderRequest& request, StopToken cancellation)
     {
@@ -857,6 +885,17 @@ VolumeFrame Connection::renderVolume(
     const VolumeRenderRequest& request, StopToken cancellation)
 {
     return m_impl->renderVolume(request, cancellation);
+}
+
+bool Connection::supportsMappedGrid() const noexcept
+{
+    return m_impl->supportsMappedGrid();
+}
+
+MappedGridPlane Connection::requestMappedGridPlane(
+    const MappedGridPlaneRequest& request, StopToken cancellation)
+{
+    return m_impl->requestMappedGridPlane(request, cancellation);
 }
 
 void Connection::closeDataset(DatasetId dataset, StopToken cancellation)

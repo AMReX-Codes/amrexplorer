@@ -53,6 +53,8 @@ AMREXPLORER_ASSERT_PAYLOAD_VALUE(ListDirectoryRequest, ListDirectoryRequest);
 AMREXPLORER_ASSERT_PAYLOAD_VALUE(DirectoryListing, DirectoryListing);
 AMREXPLORER_ASSERT_PAYLOAD_VALUE(RenderedFrameRequest, RenderedFrameRequest);
 AMREXPLORER_ASSERT_PAYLOAD_VALUE(RenderedFrameResponse, RenderedFrameResponse);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(MappedGridPlaneRequest, MappedGridPlaneRequest);
+AMREXPLORER_ASSERT_PAYLOAD_VALUE(MappedGridPlaneResponse, MappedGridPlaneResponse);
 
 #undef AMREXPLORER_ASSERT_PAYLOAD_VALUE
 
@@ -198,7 +200,7 @@ ErrorCode fromWireError(fb::ErrorCode value)
 PayloadKind payloadKind(fb::Payload value)
 {
     const auto raw = static_cast<std::uint8_t>(value);
-    if (raw > static_cast<std::uint8_t>(PayloadKind::RenderedFrameResponse)) {
+    if (raw > static_cast<std::uint8_t>(PayloadKind::MappedGridPlaneResponse)) {
         throw std::invalid_argument("unknown wire payload kind");
     }
     return static_cast<PayloadKind>(raw);
@@ -795,6 +797,8 @@ fb::DatasetOpenedT toWire(const OpenedDataset& value)
         converted->reason = boundedReason(skip.reason);
         wire.derived_field_skips.push_back(std::move(converted));
     }
+    wire.has_mapped_grid = value.catalog.hasMappedGrid;
+    wire.mapped_grid_component_names = value.mappedGridComponentNames;
     return wire;
 }
 
@@ -941,6 +945,12 @@ OpenedDataset fromWire(const fb::DatasetOpenedT& value)
     // definitions the client sent -- the decoder does not know it -- which is
     // what validateSessionOpenedDerivedFields is for.
     result.derivedFieldCount = value.derived_field_count;
+    result.catalog.hasMappedGrid = value.has_mapped_grid;
+    if (!value.has_mapped_grid && !value.mapped_grid_component_names.empty()) {
+        throw std::invalid_argument(
+            "wire catalog names mapped-grid components without a mapped grid");
+    }
+    result.mappedGridComponentNames = value.mapped_grid_component_names;
     if (result.derivedFieldCount > result.catalog.fields.size()) {
         throw std::invalid_argument(
             "wire dataset catalog claims more derived fields than it has "
@@ -1539,6 +1549,92 @@ fb::ErrorResponseT toWire(const ErrorData& value)
 ErrorData fromWire(const fb::ErrorResponseT& value)
 {
     return {fromWireError(value.code), value.message};
+}
+
+fb::MappedGridPlaneRequestT toWire(const MappedGridPlaneRequest& value)
+{
+    fb::MappedGridPlaneRequestT wire;
+    wire.dataset_id = value.dataset.value;
+    wire.normal_direction = value.normalDirection;
+    wire.physical_position = value.physicalPosition;
+    wire.visible_region = toWire(value.visibleRegion);
+    wire.maximum_level = value.maximumLevel;
+    wire.composition = toWireComposition(value.composition);
+    wire.width = value.outputSize[0];
+    wire.height = value.outputSize[1];
+    return wire;
+}
+
+MappedGridPlaneRequest fromWire(const fb::MappedGridPlaneRequestT& value)
+{
+    requireFinite(value.physical_position,
+        "wire mapped-grid plane position is non-finite");
+    const auto visibleRegion = fromWire(value.visible_region.get());
+    const auto composition = fromWireComposition(value.composition);
+    MappedGridPlaneRequest result;
+    result.dataset = DatasetId{value.dataset_id};
+    result.normalDirection = value.normal_direction;
+    result.physicalPosition = value.physical_position;
+    result.visibleRegion = visibleRegion;
+    result.maximumLevel = value.maximum_level;
+    result.composition = composition;
+    result.outputSize = {value.width, value.height};
+    return result;
+}
+
+fb::MappedGridPlaneResponseT toWire(
+    const MappedGridPlane& value, const CacheMetrics& cache)
+{
+    fb::MappedGridPlaneResponseT wire;
+    wire.width = value.width;
+    wire.height = value.height;
+    wire.physical_region = toWire(value.physicalRegion);
+    wire.a = value.a;
+    wire.b = value.b;
+    wire.face_levels = value.faceLevels;
+    wire.normal_lower = value.normalLower;
+    wire.normal_upper = value.normalUpper;
+    wire.cache = toWire(cache);
+    return wire;
+}
+
+MappedGridPlane fromWire(const fb::MappedGridPlaneResponseT& value)
+{
+    if (value.width < 2 || value.height < 2) {
+        throw std::invalid_argument("wire mapped-grid node counts are invalid");
+    }
+    const auto nodes = checkedProduct(static_cast<std::size_t>(value.width),
+        static_cast<std::size_t>(value.height),
+        "wire mapped-grid node counts overflow");
+    if (value.a.size() != nodes || value.b.size() != nodes) {
+        throw std::invalid_argument("wire mapped-grid node vectors are inconsistent");
+    }
+    requireFiniteValues(value.a, "wire mapped-grid node position is non-finite");
+    requireFiniteValues(value.b, "wire mapped-grid node position is non-finite");
+    for (std::size_t index = 0; index < value.face_levels.size(); ++index) {
+        const auto level = value.face_levels[index];
+        if (level < 0 || (index > 0 && level <= value.face_levels[index - 1])) {
+            throw std::invalid_argument(
+                "wire mapped-grid face levels are not ascending");
+        }
+    }
+    const auto faces = checkedProduct(value.face_levels.size(), nodes,
+        "wire mapped-grid face blocks overflow");
+    if (value.normal_lower.size() != faces || value.normal_upper.size() != faces) {
+        throw std::invalid_argument("wire mapped-grid face vectors are inconsistent");
+    }
+    requireFiniteValues(value.normal_lower, "wire mapped-grid face is non-finite");
+    requireFiniteValues(value.normal_upper, "wire mapped-grid face is non-finite");
+    MappedGridPlane result;
+    result.width = value.width;
+    result.height = value.height;
+    result.physicalRegion = fromWire(value.physical_region.get());
+    result.a = value.a;
+    result.b = value.b;
+    result.faceLevels = value.face_levels;
+    result.normalLower = value.normal_lower;
+    result.normalUpper = value.normal_upper;
+    return result;
 }
 
 } // namespace amrvis::remote::codec

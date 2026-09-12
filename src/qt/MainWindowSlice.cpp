@@ -1160,7 +1160,8 @@ void MainWindow::updateCrosshairs()
 }
 
 void MainWindow::appendMetadataRows(QTreeWidgetItem* root,
-    const PlotfileMetadataResult& result, const std::filesystem::path& path)
+    const PlotfileMetadataResult& result, const std::filesystem::path& path,
+    const std::shared_ptr<DatasetSession>& session)
 {
     const auto& metadata = *result.metadata;
     const auto newTopLevel = [this, root](const QStringList& columns) {
@@ -1218,6 +1219,13 @@ void MainWindow::appendMetadataRows(QTreeWidgetItem* root,
             if (result.mappedGrid) {
                 for (const auto& field : result.mappedGrid->fields) {
                     names << QString::fromStdString(field.name);
+                }
+            } else if (const auto remote = std::dynamic_pointer_cast<
+                           remote::RemoteDatasetSession>(session)) {
+                // A remote catalog names the components without the grid's
+                // own metadata.
+                for (const auto& name : remote->mappedGridComponentNames()) {
+                    names << QString::fromStdString(name);
                 }
             }
             addValue(tr("Mapped grid"), names.isEmpty()
@@ -1313,7 +1321,7 @@ void MainWindow::showMetadata(
         // name them.
         auto* primaryRoot = new QTreeWidgetItem(m_metadataTree,
             {tr("Primary"), QString::fromStdString(path.filename().string())});
-        appendMetadataRows(primaryRoot, result, path);
+        appendMetadataRows(primaryRoot, result, path, primary().session);
         PlotfileMetadataResult companionResult;
         companionResult.metadata = std::make_shared<const DatasetMetadata>(
             companion.session->metadata());
@@ -1321,9 +1329,10 @@ void MainWindow::showMetadata(
         companionResult.fileVersion = companion.session->fileVersion();
         auto* companionRoot = new QTreeWidgetItem(m_metadataTree,
             {tr("Companion"), companion.name});
-        appendMetadataRows(companionRoot, companionResult, companion.path);
+        appendMetadataRows(companionRoot, companionResult, companion.path,
+            companion.session);
     } else {
-        appendMetadataRows(nullptr, result, path);
+        appendMetadataRows(nullptr, result, path, primary().session);
     }
     m_metadataTree->expandAll();
 

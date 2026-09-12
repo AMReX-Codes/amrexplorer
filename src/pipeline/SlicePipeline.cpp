@@ -120,6 +120,53 @@ std::array<int, 2> nativeBoundedViewportOutputSize(
             1, native[1])};
 }
 
+std::uint64_t mappedGridResponseBytesPerNode(int levelCount)
+{
+    // The two in-plane coordinates and, per level drawn, two faces.
+    const auto levels = static_cast<std::uint64_t>(std::max(1, levelCount));
+    return 2U * sizeof(double) + 2U * sizeof(double) * levels;
+}
+
+std::array<int, 2> mappedFrameBudgetBoundedOutputSize(
+    std::array<int, 2> outputSize,
+    std::optional<std::uint32_t> maximumResponseBytes, int levelCount)
+{
+    // The raster and its node plane are two responses that must each fit:
+    // the raster's bound first, then the plane's on (w + 1) x (h + 1) nodes,
+    // the server's own count (validateMappedGridBound).
+    auto bounded = frameBudgetBoundedOutputSize(outputSize, maximumResponseBytes);
+    if (!maximumResponseBytes) {
+        return bounded;
+    }
+    const auto frameBytes = static_cast<std::uint64_t>(*maximumResponseBytes);
+    const auto maximumNodes = frameBytes > sliceResponseOverheadBytes
+        ? (frameBytes - sliceResponseOverheadBytes)
+            / mappedGridResponseBytesPerNode(levelCount)
+        : 0;
+    const auto nodes = [](std::array<int, 2> size) {
+        return (static_cast<std::uint64_t>(size[0]) + 1U)
+            * (static_cast<std::uint64_t>(size[1]) + 1U);
+    };
+    if (nodes(bounded) <= maximumNodes) {
+        return bounded;
+    }
+    const auto scale = std::sqrt(static_cast<double>(maximumNodes)
+        / static_cast<double>(nodes(bounded)));
+    for (auto& side : bounded) {
+        side = std::max(1, static_cast<int>(std::floor((side + 1) * scale)) - 1);
+    }
+    while (nodes(bounded) > maximumNodes) {
+        if (bounded[0] >= bounded[1] && bounded[0] > 1) {
+            --bounded[0];
+        } else if (bounded[1] > 1) {
+            --bounded[1];
+        } else {
+            break;
+        }
+    }
+    return bounded;
+}
+
 std::array<int, 2> frameBudgetBoundedOutputSize(
     std::array<int, 2> outputSize,
     std::optional<std::uint32_t> maximumResponseBytes)
@@ -312,6 +359,12 @@ void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
             result.mappedGridFallback
                 = std::string("node positions could not be read: ") + error.what();
             return;
+        } catch (const MappedGridUnavailable& error) {
+            // A remote peer refused or failed the plane (its own budget, a
+            // damaged file on its side): the slice stands, flat.
+            result.mappedGridFallback
+                = std::string("node positions were not delivered: ") + error.what();
+            return;
         }
     }
     const auto axes = slicePlaneAxes(
@@ -353,6 +406,8 @@ void applyMappedGrid(const std::shared_ptr<DatasetSession>& dataset,
         } catch (const CacheBudgetExceeded&) {
             result.mappedDomainBounds.reset();
         } catch (const BlockReadError&) {
+            result.mappedDomainBounds.reset();
+        } catch (const MappedGridUnavailable&) {
             result.mappedDomainBounds.reset();
         }
     }
@@ -871,8 +926,14 @@ InitialSliceResult executeSessionFrameLoad(
                     request.outputSize[0], 1, maxSliceOutputDimension);
                 request.outputSize[1] = std::clamp(
                     request.outputSize[1], 1, maxSliceOutputDimension);
-                request.outputSize = frameBudgetBoundedOutputSize(
-                    request.outputSize, result.dataset->maximumResponseBytes());
+                // With the mapped grid asked for, the node plane travels as
+                // its own response and must fit the frame too.
+                request.outputSize = spec.mappedGrid
+                    ? mappedFrameBudgetBoundedOutputSize(request.outputSize,
+                          result.dataset->maximumResponseBytes(),
+                          attemptMaximumLevel + 1)
+                    : frameBudgetBoundedOutputSize(request.outputSize,
+                          result.dataset->maximumResponseBytes());
                 request.composition = selectedLevel.composition;
                 request.includeGridBoxes = spec.includeGridBoxes;
                 request.maximumLevel = attemptMaximumLevel;

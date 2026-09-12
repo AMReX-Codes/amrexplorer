@@ -100,6 +100,7 @@ RemoteDatasetSession::RemoteDatasetSession(
     , m_storedFieldCount(
           m_metadata.fields.size() - opened.derivedFieldCount)
     , m_derivedFieldSkips(std::move(opened.derivedFieldSkips))
+    , m_mappedGridComponentNames(std::move(opened.mappedGridComponentNames))
 {
 }
 
@@ -233,6 +234,57 @@ VolumeFrame RemoteDatasetSession::renderVolume(
         validateSessionVolumeResult(m_metadata, request, frame);
         return frame;
     });
+}
+
+bool RemoteDatasetSession::supportsMappedGrid() const noexcept
+{
+    // Both halves: the protocol carries the plane and the plotfile has one.
+    return m_connection && m_connection->supportsMappedGrid()
+        && m_metadata.hasMappedGrid;
+}
+
+const std::vector<std::string>&
+RemoteDatasetSession::mappedGridComponentNames() const noexcept
+{
+    return m_mappedGridComponentNames;
+}
+
+MappedGridPlane RemoteDatasetSession::requestMappedGridPlane(
+    const MappedGridPlaneRequest& request, StopToken cancellation)
+{
+    requireOpen();
+    // Outside refusingInvalidResponses, as renderVolume's refusals are: a
+    // peer too old for the plane, or a plotfile without one, is not a peer
+    // that stopped speaking the protocol.
+    if (!m_connection->supportsMappedGrid()) {
+        throw std::runtime_error(mappedGridUnsupportedMessage);
+    }
+    if (!m_metadata.hasMappedGrid) {
+        throw std::runtime_error("mapped grid is not supported by this session");
+    }
+    if (request.dataset != m_id) {
+        throw std::invalid_argument("mapped-grid request uses the wrong dataset");
+    }
+    if (request.maximumLevel > m_metadata.finestLevel) {
+        throw std::invalid_argument(
+            "mapped-grid request level exceeds the finest level");
+    }
+    if (const auto errors
+        = validateMappedGridPlaneRequest(request, m_metadata.dimension);
+        !errors.empty()) {
+        throw std::invalid_argument(errors.front());
+    }
+    try {
+        return refusingInvalidResponses(*m_connection, [&] {
+            auto plane = m_connection->requestMappedGridPlane(request, cancellation);
+            validateSessionMappedGridResult(m_metadata, request, plane);
+            return plane;
+        });
+    } catch (const RemoteError& error) {
+        // The peer answered, with a refusal: past its frame budget, or a
+        // node file it could not read. The slice stands without the warp.
+        throw MappedGridUnavailable(error.what());
+    }
 }
 
 DatasetPage RemoteDatasetSession::requestDatasetPage(

@@ -275,6 +275,13 @@ inline constexpr int maxSliceOutputDimension = maxViewOutputDimension;
 [[nodiscard]] std::array<int, 2> frameBudgetBoundedOutputSize(
     std::array<int, 2> outputSize,
     std::optional<std::uint32_t> maximumResponseBytes);
+// A raster drawn on its mapped grid over a remote session also needs the
+// node plane, its own response of (w + 1) x (h + 1) nodes at this many
+// bytes each with `levelCount` levels of faces: bounded so both fit.
+[[nodiscard]] std::uint64_t mappedGridResponseBytesPerNode(int levelCount);
+[[nodiscard]] std::array<int, 2> mappedFrameBudgetBoundedOutputSize(
+    std::array<int, 2> outputSize,
+    std::optional<std::uint32_t> maximumResponseBytes, int levelCount);
 
 // The cache-key comparison for a cached slice: everything a cached slice
 // depends on. Range, log scale, palette, and contour count are deliberately

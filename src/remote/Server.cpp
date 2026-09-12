@@ -579,6 +579,9 @@ private:
             case PayloadKind::RenderedFrameRequest:
                 renderedFrame(*envelope, cancellation);
                 break;
+            case PayloadKind::MappedGridPlaneRequest:
+                mappedGridPlane(*envelope, cancellation);
+                break;
             default:
                 throw std::invalid_argument(
                     "payload is not a supported client request");
@@ -671,6 +674,7 @@ private:
             opened.derivedFieldCount = static_cast<std::uint32_t>(
                 opened.catalog.fields.size() - dataset->storedFieldCount());
             opened.derivedFieldSkips = dataset->skippedDerivedFields();
+            opened.mappedGridComponentNames = dataset->mappedGridComponentNames();
             opened.fileRangeAvailable.reserve(opened.catalog.fields.size());
             opened.levelRangeAvailable.reserve(opened.catalog.fields.size()
                 * opened.catalog.levels.size());
@@ -816,6 +820,35 @@ private:
         send(envelope.request_id,
             codec::toWire(result, dataset->cacheMetrics(),
                 m_selectedMinorVersion));
+    }
+
+    // Protocol 1.7: the node plane a slice is drawn on, computed here from
+    // the plotfile's nodal MultiFab the way the local session computes it
+    // and shipped whole. Nothing in it is optional, so the bound is checked
+    // before any block is read; the exact guard stays for the encoding.
+    void mappedGridPlane(
+        const codec::NativeEnvelope& envelope, StopToken cancellation)
+    {
+        const auto* payload = envelope.payload.AsMappedGridPlaneRequest();
+        if (payload == nullptr) {
+            throw std::invalid_argument("mapped-grid plane payload is missing");
+        }
+        if (m_selectedMinorVersion < mappedGridMinorVersion) {
+            throw RemoteError(ErrorCode::UnsupportedProtocol,
+                "mapped grids require protocol 1.7");
+        }
+        const auto request = codec::fromWire(*payload);
+        const auto dataset = requireDataset(request.dataset);
+        validateMappedGridBound(request, dataset->metadata().finestLevel);
+        const auto plane = dataset->requestMappedGridPlane(request, cancellation);
+        const auto encodedBytes = codec::encode(envelope.request_id,
+            codec::toWire(plane, dataset->cacheMetrics()),
+            m_selectedMinorVersion).size();
+        if (encodedBytes > m_maximumFrameBytes.load()) {
+            throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                "mapped-grid plane cannot fit in one negotiated frame");
+        }
+        send(envelope.request_id, codec::toWire(plane, dataset->cacheMetrics()));
     }
 
     void renderedFrame(
@@ -1067,6 +1100,29 @@ private:
         }
     }
 
+    // A node plane has (width + 1) x (height + 1) nodes, each two in-plane
+    // coordinates and two faces per level drawn: up to the finest level the
+    // request reaches, since a level's block is only sent when it draws.
+    void validateMappedGridBound(
+        const MappedGridPlaneRequest& request, int finestLevel) const
+    {
+        if (request.outputSize[0] < 1 || request.outputSize[1] < 1
+            || request.outputSize[0] > maxViewOutputDimension
+            || request.outputSize[1] > maxViewOutputDimension) {
+            throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                "mapped-grid plane dimensions are outside the server limit");
+        }
+        const auto nodes = (static_cast<std::uint64_t>(request.outputSize[0]) + 1U)
+            * (static_cast<std::uint64_t>(request.outputSize[1]) + 1U);
+        const auto levels = static_cast<std::uint64_t>(
+            std::max(0, std::min(request.maximumLevel, finestLevel)) + 1);
+        const auto bytesPerNode = 2U * sizeof(double) + 2U * sizeof(double) * levels;
+        if (!fitsResponse(nodes * bytesPerNode)) {
+            throw RemoteError(ErrorCode::ResourceLimitExceeded,
+                "mapped-grid plane cannot fit in one negotiated frame");
+        }
+    }
+
     void validateVolumeBound(const VolumeRenderRequest& request) const
     {
         // Structural validity first (a hostile peer can vary every field),
@@ -1213,6 +1269,11 @@ private:
         case PayloadKind::RenderedFrameRequest: {
             const auto* value
                 = envelope.payload.AsRenderedFrameRequest();
+            return DatasetId{value ? value->dataset_id : 0};
+        }
+        case PayloadKind::MappedGridPlaneRequest: {
+            const auto* value
+                = envelope.payload.AsMappedGridPlaneRequest();
             return DatasetId{value ? value->dataset_id : 0};
         }
         default:

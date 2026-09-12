@@ -399,6 +399,58 @@ void validateSessionVolumeResult(const DatasetMetadata& metadata,
     }
 }
 
+void validateSessionMappedGridResult(const DatasetMetadata& metadata,
+    const MappedGridPlaneRequest& request, const MappedGridPlane& plane)
+{
+    if (plane.width != request.outputSize[0] + 1
+        || plane.height != request.outputSize[1] + 1) {
+        throw std::invalid_argument(
+            "mapped-grid plane is not one node larger than the requested raster");
+    }
+    const auto nodes = static_cast<std::size_t>(plane.width)
+        * static_cast<std::size_t>(plane.height);
+    if (plane.a.size() != nodes || plane.b.size() != nodes) {
+        throw std::invalid_argument(
+            "mapped-grid plane node storage does not match its size");
+    }
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(plane.physicalRegion.lower[axis])
+            || !std::isfinite(plane.physicalRegion.upper[axis])
+            || plane.physicalRegion.lower[axis] > plane.physicalRegion.upper[axis]) {
+            throw std::invalid_argument("mapped-grid plane region is unusable");
+        }
+    }
+    for (std::size_t index = 0; index < plane.faceLevels.size(); ++index) {
+        const auto level = plane.faceLevels[index];
+        if (level < 0 || level > metadata.finestLevel
+            || (index > 0 && level <= plane.faceLevels[index - 1])) {
+            throw std::invalid_argument(
+                "mapped-grid plane names a level the catalog does not have in order");
+        }
+    }
+    if (metadata.dimension != 3 && !plane.faceLevels.empty()) {
+        throw std::invalid_argument("a 2-D mapped-grid plane carries faces");
+    }
+    const auto faces = plane.faceLevels.size() * nodes;
+    if (plane.normalLower.size() != faces || plane.normalUpper.size() != faces) {
+        throw std::invalid_argument(
+            "mapped-grid plane face storage does not match its levels");
+    }
+    for (const auto* values : {&plane.a, &plane.b, &plane.normalLower,
+             &plane.normalUpper}) {
+        for (const auto value : *values) {
+            if (!std::isfinite(value)) {
+                throw std::invalid_argument("mapped-grid plane holds a non-finite value");
+            }
+        }
+    }
+    for (std::size_t face = 0; face < faces; ++face) {
+        if (plane.normalLower[face] > plane.normalUpper[face]) {
+            throw std::invalid_argument("mapped-grid plane faces are reversed");
+        }
+    }
+}
+
 void validateSessionViewResult(const DatasetMetadata& metadata,
     const ViewDataRequest& request, const ViewDataResult& result)
 {

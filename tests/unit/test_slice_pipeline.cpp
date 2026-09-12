@@ -202,6 +202,36 @@ int main()
     require(budgetCells * amrvis::sliceResponseBytesPerCell
             + amrvis::sliceResponseOverheadBytes <= 4U * 1024U * 1024U,
         "frame-budget sizing still exceeds the negotiated response cap");
+    // With the mapped grid asked for, the node plane's cost bounds the
+    // raster instead: fewer cells for the same frame, and each level of
+    // faces costs more.
+    const auto mappedOne = amrvis::mappedFrameBudgetBoundedOutputSize(
+        {800, 800}, 4U * 1024U * 1024U, 1);
+    const auto mappedThree = amrvis::mappedFrameBudgetBoundedOutputSize(
+        {800, 800}, 4U * 1024U * 1024U, 3);
+    const auto cellsOf = [](std::array<int, 2> size) {
+        return static_cast<std::uint64_t>(size[0]) * static_cast<std::uint64_t>(size[1]);
+    };
+    require(cellsOf(mappedOne) < budgetCells && cellsOf(mappedThree) < cellsOf(mappedOne),
+        "mapped frame-budget sizing does not charge for the node plane");
+    const auto nodesOf = [](std::array<int, 2> size) {
+        return (static_cast<std::uint64_t>(size[0]) + 1U)
+            * (static_cast<std::uint64_t>(size[1]) + 1U);
+    };
+    require(nodesOf(mappedThree) * amrvis::mappedGridResponseBytesPerNode(3)
+            + amrvis::sliceResponseOverheadBytes <= 4U * 1024U * 1024U,
+        "mapped frame-budget sizing still exceeds the negotiated response cap");
+    // A two-row plane has half again as many nodes as cells: the bound is
+    // on the nodes, as the server counts them.
+    const auto thin = amrvis::mappedFrameBudgetBoundedOutputSize(
+        {4200, 2}, 256U * 1024U, 1);
+    require(thin[1] >= 1 && thin[0] < 4200
+            && nodesOf(thin) * amrvis::mappedGridResponseBytesPerNode(1)
+                + amrvis::sliceResponseOverheadBytes <= 256U * 1024U,
+        "mapped frame-budget sizing counted cells where the server counts nodes");
+    require(amrvis::mappedFrameBudgetBoundedOutputSize({800, 800}, std::nullopt, 3)
+            == (std::array<int, 2>{800, 800}),
+        "a local session was bounded by a frame it does not have");
 
     // Spherical aspect uses the unclamped finest-level sample counts. An
     // 8192x1024 logical plane must remain 8:1 even though native output is

@@ -276,6 +276,22 @@ if(TARGET amrexplorer_remote)
             "${remote_server_fixture_spherical_dir}")
     set_tests_properties(remote_server_fixture_spherical PROPERTIES
         FIXTURES_SETUP remote_server_spherical_materialized)
+    set(remote_server_fixture_mapped_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_server_mapped")
+    add_test(NAME remote_server_fixture_mapped
+        COMMAND "$<TARGET_FILE:fixture_materializer>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped"
+            "${remote_server_fixture_mapped_dir}")
+    set_tests_properties(remote_server_fixture_mapped PROPERTIES
+        FIXTURES_SETUP remote_server_mapped_materialized)
+    set(remote_server_fixture_mapped_wide_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures_remote_server_mapped_wide")
+    add_test(NAME remote_server_fixture_mapped_wide
+        COMMAND "$<TARGET_FILE:fixture_materializer>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/data/plotfile_3d_mapped_wide"
+            "${remote_server_fixture_mapped_wide_dir}")
+    set_tests_properties(remote_server_fixture_mapped_wide PROPERTIES
+        FIXTURES_SETUP remote_server_mapped_wide_materialized)
     add_test(NAME remote_server
         COMMAND test_remote_server "${remote_server_private_fixture_dir}")
     # The trickle case now paces the write through the test hook instead of
@@ -320,9 +336,10 @@ if(TARGET amrexplorer_remote)
             Threads::Threads
     )
     add_test(NAME remote_session
-        COMMAND test_remote_session "${remote_server_fixture_dir}")
+        COMMAND test_remote_session "${remote_server_fixture_dir}"
+            "${remote_server_fixture_mapped_dir}")
     set_tests_properties(remote_session PROPERTIES
-        FIXTURES_REQUIRED remote_server_materialized
+        FIXTURES_REQUIRED "remote_server_materialized;remote_server_mapped_materialized"
         TIMEOUT 30)
 
     add_executable(test_remote_volume
@@ -1477,6 +1494,29 @@ if(TARGET amrexplorer_qt)
         FIXTURES_REQUIRED remote_server_spherical_materialized
         TIMEOUT 30)
 
+    # Protocol 1.7: View > Mapped Grid over the loopback server, and over a
+    # server whose frame cannot hold the whole plane's nodes at native
+    # resolution.
+    add_test(
+        NAME qt_remote_mapped_grid_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-mapped-grid-smoke-test
+            "${remote_server_fixture_mapped_dir}"
+    )
+    set_tests_properties(qt_remote_mapped_grid_smoke PROPERTIES
+        FIXTURES_REQUIRED remote_server_mapped_materialized
+        TIMEOUT 90)
+    add_test(
+        NAME qt_remote_mapped_grid_cap_smoke
+        COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
+            "$<TARGET_FILE:amrexplorer_qt>"
+            --remote-mapped-grid-cap-smoke-test
+            "${remote_server_fixture_mapped_wide_dir}"
+    )
+    set_tests_properties(qt_remote_mapped_grid_cap_smoke PROPERTIES
+        FIXTURES_REQUIRED remote_server_mapped_wide_materialized
+        TIMEOUT 90)
     add_test(
         NAME qt_remote_grid_boxes_smoke
         COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen

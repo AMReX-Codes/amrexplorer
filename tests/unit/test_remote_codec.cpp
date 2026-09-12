@@ -135,6 +135,8 @@ int main()
         PayloadKind::DirectoryListing,
         PayloadKind::RenderedFrameRequest,
         PayloadKind::RenderedFrameResponse,
+        PayloadKind::MappedGridPlaneRequest,
+        PayloadKind::MappedGridPlaneResponse,
     };
     for (const auto kind : payloadKinds) {
         codec::NativeEnvelope native;
@@ -351,6 +353,91 @@ int main()
     }
     require(misalignedLayouts == 1,
         "the fixture did not produce a misaligned [double] layout");
+
+    // Protocol 1.7: a mapped grid's node plane round-trips, and a response
+    // whose vectors disagree with its node counts or levels is refused.
+    {
+        MappedGridPlaneRequest planeRequest;
+        planeRequest.dataset = DatasetId{9};
+        planeRequest.normalDirection = 1;
+        planeRequest.physicalPosition = 0.375;
+        planeRequest.visibleRegion = slice.plane.physicalRegion;
+        planeRequest.maximumLevel = 1;
+        planeRequest.composition = CompositionPolicy::ExactLevel;
+        planeRequest.outputSize = {3, 2};
+        const auto decodedRequest = codec::fromWire(codec::toWire(planeRequest));
+        require(decodedRequest.dataset == planeRequest.dataset
+                && decodedRequest.normalDirection == 1
+                && decodedRequest.physicalPosition == 0.375
+                && decodedRequest.maximumLevel == 1
+                && decodedRequest.composition == CompositionPolicy::ExactLevel
+                && decodedRequest.outputSize == planeRequest.outputSize,
+            "mapped-grid plane request did not round-trip");
+
+        MappedGridPlane plane;
+        plane.width = 4;   // 3 x 2 cells: 4 x 3 nodes
+        plane.height = 3;
+        plane.physicalRegion = slice.plane.physicalRegion;
+        for (int node = 0; node < 12; ++node) {
+            plane.a.push_back(0.25 * (node % 4));
+            plane.b.push_back(0.5 * (node / 4) + 0.01 * node);
+        }
+        plane.faceLevels = {0, 1};
+        plane.normalLower.assign(24, 0.0);
+        plane.normalUpper.assign(24, 0.25);
+        const auto planeEnvelope = codec::decode(codec::encode(
+            11, codec::toWire(plane, CacheMetrics{})));
+        require(codec::inspect(*planeEnvelope).payload
+                == PayloadKind::MappedGridPlaneResponse,
+            "mapped-grid plane response kind did not round-trip");
+        const auto decodedPlane
+            = codec::fromWire(*planeEnvelope->payload.AsMappedGridPlaneResponse());
+        require(decodedPlane.width == 4 && decodedPlane.height == 3
+                && decodedPlane.a == plane.a && decodedPlane.b == plane.b
+                && decodedPlane.faceLevels == plane.faceLevels
+                && decodedPlane.normalLower == plane.normalLower
+                && decodedPlane.normalUpper == plane.normalUpper,
+            "mapped-grid plane response did not round-trip");
+
+        auto shortNodes = codec::toWire(plane, CacheMetrics{});
+        shortNodes.b.pop_back();
+        requireRejected([&] { static_cast<void>(codec::fromWire(shortNodes)); },
+            "a mapped-grid plane short of a node was accepted");
+        auto unsorted = codec::toWire(plane, CacheMetrics{});
+        unsorted.face_levels = {1, 0};
+        requireRejected([&] { static_cast<void>(codec::fromWire(unsorted)); },
+            "a mapped-grid plane with unsorted levels was accepted");
+        auto shortFaces = codec::toWire(plane, CacheMetrics{});
+        shortFaces.normal_upper.resize(12);
+        requireRejected([&] { static_cast<void>(codec::fromWire(shortFaces)); },
+            "a mapped-grid plane short of a face block was accepted");
+        auto infinite = codec::toWire(plane, CacheMetrics{});
+        infinite.a[5] = std::numeric_limits<double>::infinity();
+        requireRejected([&] { static_cast<void>(codec::fromWire(infinite)); },
+            "a mapped-grid plane with a non-finite node was accepted");
+        auto huge = codec::toWire(plane, CacheMetrics{});
+        huge.width = std::numeric_limits<int>::max();
+        huge.height = std::numeric_limits<int>::max();
+        requireRejected([&] { static_cast<void>(codec::fromWire(huge)); },
+            "a mapped-grid plane whose node count overflows was accepted");
+
+        auto mapped = opened;
+        mapped.catalog.hasMappedGrid = true;
+        mapped.mappedGridComponentNames = {"amrexvec_nu_x", "amrexvec_nu_y"};
+        const auto mappedWire = codec::toWire(mapped);
+        require(mappedWire.has_mapped_grid
+                && mappedWire.mapped_grid_component_names.size() == 2,
+            "the mapped grid is not on the wire catalog");
+        const auto decodedMapped = codec::fromWire(mappedWire);
+        require(decodedMapped.catalog.hasMappedGrid
+                && decodedMapped.mappedGridComponentNames
+                    == mapped.mappedGridComponentNames,
+            "the mapped grid did not survive the wire catalog");
+        auto namesAlone = codec::toWire(opened);
+        namesAlone.mapped_grid_component_names = {"amrexvec_nu_x"};
+        requireRejected([&] { static_cast<void>(codec::fromWire(namesAlone)); },
+            "component names without a mapped grid were accepted");
+    }
 
     codec::fb::SliceViewResponseT inconsistent;
     inconsistent.width = 2;

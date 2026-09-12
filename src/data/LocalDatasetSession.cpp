@@ -336,6 +336,21 @@ bool LocalDatasetSession::supportsMappedGrid() const noexcept
     return m_dataset && m_dataset->mappedGrid() != nullptr;
 }
 
+std::vector<std::string> LocalDatasetSession::mappedGridComponentNames() const
+{
+    std::scoped_lock lock(m_mutex);
+    const auto grid = m_dataset ? m_dataset->mappedGrid() : nullptr;
+    if (!m_metadata.hasMappedGrid || !grid) {
+        return {};
+    }
+    std::vector<std::string> names;
+    names.reserve(grid->metadata().fields.size());
+    for (const auto& field : grid->metadata().fields) {
+        names.push_back(field.name);
+    }
+    return names;
+}
+
 MappedGridPlane LocalDatasetSession::requestMappedGridPlane(
     const MappedGridPlaneRequest& request, StopToken cancellation)
 {

@@ -1199,9 +1199,10 @@ private:
     void showAboutDialog();
     void showMetadata(const PlotfileMetadataResult& result, const std::filesystem::path& path);
     // The rows for one dataset, at the top level (root null) or under a parent
-    // row when two datasets are listed.
+    // row when two datasets are listed; the session is the dataset's own.
     void appendMetadataRows(QTreeWidgetItem* root,
-        const PlotfileMetadataResult& result, const std::filesystem::path& path);
+        const PlotfileMetadataResult& result, const std::filesystem::path& path,
+        const std::shared_ptr<DatasetSession>& session);
     // Re-renders the Diagnostics panel; the model owns the counters, this
     // window only supplies the lines it alone knows (see the model's Hooks).
     void updateDiagnostics();

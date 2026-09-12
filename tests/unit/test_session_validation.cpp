@@ -240,6 +240,80 @@ int main()
             "a line request without a region was rejected");
     }
 
+    // A mapped grid's node plane against its request and catalog.
+    {
+        const auto metadata = dataset(3);
+        MappedGridPlaneRequest request;
+        request.dataset = DatasetId{1};
+        request.normalDirection = 2;
+        request.visibleRegion = metadata.physicalDomain;
+        request.maximumLevel = 1;
+        request.outputSize = {2, 3};
+        MappedGridPlane plane;
+        plane.width = 3;
+        plane.height = 4;
+        plane.physicalRegion = metadata.physicalDomain;
+        plane.a.assign(12, 1.0);
+        plane.b.assign(12, 2.0);
+        plane.faceLevels = {0, 1};
+        plane.normalLower.assign(24, 0.0);
+        plane.normalUpper.assign(24, 1.0);
+        requireAccepted([&] {
+            validateSessionMappedGridResult(metadata, request, plane);
+        }, "a valid mapped-grid plane was rejected");
+
+        auto wrongSize = plane;
+        wrongSize.width = 4;
+        wrongSize.a.assign(16, 1.0);
+        wrongSize.b.assign(16, 2.0);
+        wrongSize.normalLower.assign(32, 0.0);
+        wrongSize.normalUpper.assign(32, 1.0);
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, request, wrongSize);
+        }, "a mapped-grid plane of another size was accepted");
+
+        auto unknownLevel = plane;
+        unknownLevel.faceLevels = {0, 2};
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, request, unknownLevel);
+        }, "a mapped-grid plane naming a level past the catalog was accepted");
+
+        auto unsorted = plane;
+        unsorted.faceLevels = {1, 0};
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, request, unsorted);
+        }, "a mapped-grid plane with unsorted levels was accepted");
+
+        auto shortFaces = plane;
+        shortFaces.normalUpper.resize(12);
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, request, shortFaces);
+        }, "a mapped-grid plane short of a face block was accepted");
+
+        auto reversedFaces = plane;
+        reversedFaces.normalLower[5] = 2.0;
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, request, reversedFaces);
+        }, "a mapped-grid plane with reversed faces was accepted");
+
+        auto infinite = plane;
+        infinite.b[3] = std::numeric_limits<double>::infinity();
+        requireRejected([&] {
+            validateSessionMappedGridResult(metadata, request, infinite);
+        }, "a mapped-grid plane with a non-finite node was accepted");
+
+        auto flatFaces = plane;
+        flatFaces.faceLevels.clear();
+        flatFaces.normalLower.clear();
+        flatFaces.normalUpper.clear();
+        requireAccepted([&] {
+            validateSessionMappedGridResult(dataset(2), request, flatFaces);
+        }, "a 2-D mapped-grid plane without faces was rejected");
+        requireRejected([&] {
+            validateSessionMappedGridResult(dataset(2), request, plane);
+        }, "a 2-D mapped-grid plane with faces was accepted");
+    }
+
     // The page region, at the trust boundary rather than inside the builder.
     for (const int dimension : {2, 3}) {
         const auto metadata = dataset(dimension);

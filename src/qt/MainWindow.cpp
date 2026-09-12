@@ -1392,9 +1392,15 @@ std::array<int, 2> MainWindow::sliceOutputSize(
         outputSize = viewportBoundedOutputSize(
             *layerFor(state).openMetadata, target, state.normal, viewportPixels);
     }
-    return frameBudgetBoundedOutputSize(
-        outputSize,
-        layerFor(state).session ? layerFor(state).session->maximumResponseBytes() : std::nullopt);
+    const auto budget = layerFor(state).session
+        ? layerFor(state).session->maximumResponseBytes() : std::nullopt;
+    if (requestedWarpFor(state) == DisplayWarp::MappedGrid) {
+        // The node plane comes as its own response, at up to two faces per
+        // level per node; bounded for the worst case, every level drawn.
+        return mappedFrameBudgetBoundedOutputSize(outputSize, budget,
+            layerFor(state).openMetadata->finestLevel + 1);
+    }
+    return frameBudgetBoundedOutputSize(outputSize, budget);
 }
 
 std::array<int, 2> MainWindow::stretchedViewportPixelSize(
@@ -1499,10 +1505,12 @@ void MainWindow::updateMappedGridControls()
             reason = tr("Not available while a companion is open");
         } else if (displayIsSpherical()) {
             reason = tr("A 2-D spherical plotfile is drawn on its R-Z wedge");
-        } else if (layerIsRemote(primary().planeViews.front())) {
-            // The catalog does not yet say whether a remote plotfile carries
-            // node positions, so the honest answer is the feature's status.
-            reason = tr("Mapped grid display is not available for remote datasets yet");
+        } else if (layerIsRemote(primary().planeViews.front())
+            && primary().session->metadata().hasMappedGrid) {
+            // The catalog says the plotfile has node positions; only the
+            // server's protocol can be what withholds them.
+            reason = tr("The remote server predates mapped grids (protocol 1.7); "
+                        "install a current amrexplorer-server");
         } else {
             reason = tr("This dataset carries no mapped-grid node positions");
         }

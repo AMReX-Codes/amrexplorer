@@ -4,6 +4,7 @@
 #include <amrexplorer/remote/RemoteDatasetSession.hpp>
 #include <amrexplorer/remote/Server.hpp>
 
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <future>
@@ -82,8 +83,9 @@ std::string exceptionMessage(Function&& function)
 
 int main(int argc, char* argv[])
 {
-    if (argc != 2) {
-        std::cerr << "usage: test_remote_session MATERIALIZED_PLOTFILE\n";
+    if (argc != 3) {
+        std::cerr << "usage: test_remote_session MATERIALIZED_PLOTFILE "
+                     "MATERIALIZED_MAPPED_PLOTFILE\n";
         return 2;
     }
     try {
@@ -118,6 +120,75 @@ int main(int argc, char* argv[])
         amrvis::LocalDatasetSession localDataset(
             std::filesystem::path(argv[1]), amrvis::DatasetId{1001},
             16ULL * 1024ULL * 1024ULL);
+        require(!dataset->supportsMappedGrid()
+                && !dataset->metadata().hasMappedGrid,
+            "a plotfile without node positions claims a mapped grid remotely");
+
+        // Protocol 1.7: a mapped grid's node plane over the wire equals the
+        // local session's, for each normal and for a sub-region at the
+        // finer level, with the catalog naming the node components.
+        {
+            auto mappedRemote = amrvis::remote::RemoteDatasetSession::open(
+                connection, std::filesystem::path(argv[2]).string(),
+                16ULL * 1024ULL * 1024ULL);
+            amrvis::LocalDatasetSession mappedLocal(
+                std::filesystem::path(argv[2]), amrvis::DatasetId{1003},
+                16ULL * 1024ULL * 1024ULL);
+            require(mappedRemote->metadata().hasMappedGrid
+                    && mappedRemote->supportsMappedGrid()
+                    && mappedLocal.supportsMappedGrid(),
+                "the mapped fixture is not offered as a mapped grid remotely");
+            require(mappedRemote->mappedGridComponentNames().size() == 3
+                    && mappedRemote->mappedGridComponentNames().front()
+                        == "amrexvec_nu_x",
+                "the remote catalog does not name the node components");
+            const auto compare = [&](int normal, const amrvis::RealBox& region,
+                                     int level, std::array<int, 2> size) {
+                amrvis::MappedGridPlaneRequest request;
+                request.dataset = mappedRemote->id();
+                request.normalDirection = normal;
+                request.physicalPosition = 0.375;
+                request.visibleRegion = region;
+                request.maximumLevel = level;
+                request.outputSize = size;
+                const auto remote = mappedRemote->requestMappedGridPlane(request);
+                request.dataset = mappedLocal.id();
+                const auto local = mappedLocal.requestMappedGridPlane(request);
+                require(remote.width == local.width && remote.height == local.height
+                        && remote.physicalRegion == local.physicalRegion
+                        && remote.a == local.a && remote.b == local.b
+                        && remote.faceLevels == local.faceLevels
+                        && remote.normalLower == local.normalLower
+                        && remote.normalUpper == local.normalUpper,
+                    "the remote node plane differs from the local one");
+                require(remote.width == size[0] + 1 && remote.height == size[1] + 1,
+                    "the remote node plane is not sized to its request");
+            };
+            const auto domain = mappedLocal.metadata().physicalDomain;
+            for (int normal = 0; normal < 3; ++normal) {
+                compare(normal, domain, 0, {4, 4});
+            }
+            amrvis::RealBox part = domain;
+            part.upper[0] = 0.5;
+            part.lower[1] = 0.25;
+            compare(2, part, mappedLocal.metadata().finestLevel, {2, 3});
+
+            // Refusals that leave the session up: the wrong dataset and a
+            // level past the finest are turned away before the wire.
+            bool refused = false;
+            try {
+                amrvis::MappedGridPlaneRequest wrong;
+                wrong.dataset = amrvis::DatasetId{mappedRemote->id().value + 77};
+                wrong.normalDirection = 2;
+                wrong.visibleRegion = domain;
+                wrong.outputSize = {4, 4};
+                static_cast<void>(mappedRemote->requestMappedGridPlane(wrong));
+            } catch (const std::invalid_argument&) {
+                refused = true;
+            }
+            require(refused, "a plane request for another dataset was sent");
+            compare(1, domain, 0, {4, 4});
+        }
         require(dataset->metadata().dimension == 2,
             "remote catalog has the wrong dimension");
         require(dataset->metadata().dimension

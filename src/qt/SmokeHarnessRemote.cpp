@@ -966,6 +966,169 @@ Outcome dispatchRemote(Context& context)
                 window.openDataset(path);
             });
     } else if (argc == 3
+        && std::string_view(argv[1]) == "--remote-mapped-grid-smoke-test") {
+        // View > Mapped Grid over the loopback server on plotfile_3d_mapped:
+        // offered once the remote catalog says the plotfile has node
+        // positions; on, the x-z panel shows the warp of its canvas at its
+        // own pixels with the probe reading a cell, and a wheel zoom draws
+        // the warp for the window without a re-slice -- the node plane
+        // fetched from the server each time.
+        smokeServer = std::make_shared<amrvis::remote::Server>();
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        auto phase = std::make_shared<int>(0);
+        const auto fail = [&application](const char* message) {
+            qCritical("%s", message);
+            application.exit(1);
+        };
+        const auto drawnForScreen = [&window] {
+            const auto panel = window.mappedPanelForTest(1);
+            const auto whole = [](double value) {
+                return std::abs(value - std::round(value)) < 1e-6;
+            };
+            return panel.warped && !panel.window.isEmpty()
+                && std::abs(panel.tileDevice.width() - panel.image.width()) < 1e-6
+                && std::abs(panel.tileDevice.height() - panel.image.height()) < 1e-6
+                && whole(panel.tileDevice.left()) && whole(panel.tileDevice.top());
+        };
+        const auto probeCentre = [&window] {
+            const auto size = window.activeViewImageSizeForTest();
+            const auto readout
+                = window.probeReadoutActiveViewForTest(size[0] / 2, size[1] / 2);
+            return readout.contains(QStringLiteral("value"))
+                && readout.contains(QStringLiteral("cell"));
+        };
+        const auto runPhase = [&window, &application, phase, fail, drawnForScreen,
+                                  probeCentre] {
+            if (window.sliceRequestPendingForTest()
+                || window.slicesInFlightForTest() > 0) {
+                return;
+            }
+            window.setActiveViewForTest(1);
+            const auto panel = window.mappedPanelForTest(1);
+            switch (*phase) {
+            case 0:
+                if (!drawnForScreen() || !probeCentre() || panel.resliced) {
+                    fail("a remote mapped view did not draw the warp for the screen");
+                    return;
+                }
+                if (window.backgroundErrorCountForTest() != 0) {
+                    fail("the remote mapped view reported an error");
+                    return;
+                }
+                *phase = 1;
+                for (int notch = 0; notch < 3; ++notch) {
+                    window.wheelActiveViewForTest(1);
+                }
+                break;
+            default:
+                application.exit(drawnForScreen() && !panel.fit && !panel.resliced
+                        && probeCentre() ? 0 : 3);
+                break;
+            }
+        };
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application, fail](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                if (!window.mappedGridMenuEnabledForTest()) {
+                    fail("Mapped Grid is not offered for a remote plotfile with node positions");
+                    return;
+                }
+                window.setActiveViewForTest(1);
+                window.setMappedGridForTest(true);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, runPhase] {
+                QTimer::singleShot(0, &window, runPhase);
+            });
+        QTimer::singleShot(60000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(path);
+            });
+    } else if (argc == 3
+        && std::string_view(argv[1]) == "--remote-mapped-grid-cap-smoke-test") {
+        // The same over a server whose frame holds 256 KiB, on
+        // plotfile_3d_mapped_wide (4200 x 1 x 4 cells): a fixed scale asks
+        // for the whole plane at native resolution, whose node plane alone
+        // is past the frame, so the raster is bounded by the plane's cost
+        // and the cells on show are re-sliced -- the warp stays, over a
+        // plane narrower than the domain, rather than falling back flat.
+        amrvis::remote::ServerOptions options;
+        options.maximumFrameBytes = 256U * 1024U;
+        smokeServer = std::make_shared<amrvis::remote::Server>(options);
+        smokeServerThread.emplace(
+            [server = smokeServer] { server->run(); });
+        auto phase = std::make_shared<int>(0);
+        const auto runPhase = [&window, &application, phase] {
+            if (window.sliceRequestPendingForTest()
+                || window.slicesInFlightForTest() > 0) {
+                return;
+            }
+            window.setActiveViewForTest(1);
+            const auto plane = window.activeViewPlaneRegionForTest();
+            const auto shown = window.activeViewMappedWindowForTest();
+            const auto fail = [&](const char* message) {
+                qCritical("phase %d: plane x [%g, %g], window x [%g, %g], errors %d",
+                    *phase, plane.left(), plane.right(), shown.left(), shown.right(),
+                    window.backgroundErrorCountForTest());
+                qCritical("%s", message);
+                application.exit(1);
+            };
+            switch (*phase) {
+            case 0:
+                if (!window.activeViewIsMappedForTest() || shown.isEmpty()
+                    || window.activeViewIsZoomedForTest()) {
+                    fail("the remote plane was not drawn whole at Fit");
+                    return;
+                }
+                *phase = 1;
+                window.setActiveViewScaleForTest(8);
+                break;
+            default:
+                if (!window.activeViewIsMappedForTest() || shown.isEmpty()
+                    || !window.activeViewIsZoomedForTest()
+                    || !(plane.width() < 1000.0)
+                    || plane.left() > shown.left() || plane.right() < shown.right()
+                    || window.backgroundErrorCountForTest() != 0) {
+                    fail("zooming in over a small frame did not keep the warp on "
+                         "the cells on show");
+                    return;
+                }
+                application.exit(0);
+                break;
+            }
+        };
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::initialSliceFinished,
+            &application, [&window, &application](bool success) {
+                if (!success) {
+                    application.exit(2);
+                    return;
+                }
+                window.setActiveViewForTest(1);
+                window.setMappedGridForTest(true);
+            });
+        QObject::connect(&window,
+            &amrvis::qt::MainWindow::interactiveSlicesSettled,
+            &application, [&window, runPhase] {
+                QTimer::singleShot(0, &window, runPhase);
+            });
+        QTimer::singleShot(60000, &application,
+            [&application] { application.exit(4); });
+        QTimer::singleShot(0, &window,
+            [&window, path = std::string(argv[2]), server = smokeServer] {
+                attachSmokeServer(window, server);
+                window.openRemoteDataset(path);
+            });
+    } else if (argc == 3
         && std::string_view(argv[1]) == "--remote-slice-smoke-test") {
         smokeServer = std::make_shared<amrvis::remote::Server>();
         smokeServerThread.emplace(

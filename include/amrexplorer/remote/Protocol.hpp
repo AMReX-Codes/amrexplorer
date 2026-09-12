@@ -48,7 +48,12 @@ inline constexpr std::uint16_t doubleValueVectorsMinorVersion = 5;
 // reason: a 1.5 server ignores the fields and returns the volume alone, a
 // frame the client could not tell from the one it asked for.
 inline constexpr std::uint16_t isosurfaceMinorVersion = 6;
-inline constexpr std::uint16_t protocolMinorVersion = isosurfaceMinorVersion;
+// 1.7 adds a mapped grid's node plane (MappedGridPlane*) and says on
+// DatasetOpened whether the plotfile carries one. A version for the 1.4
+// reason: a 1.6 server answers the request with an error, so the client
+// must know before it offers View > Mapped Grid at all.
+inline constexpr std::uint16_t mappedGridMinorVersion = 7;
+inline constexpr std::uint16_t protocolMinorVersion = mappedGridMinorVersion;
 
 enum class PayloadKind : std::uint8_t {
     None = 0,
@@ -82,7 +87,10 @@ enum class PayloadKind : std::uint8_t {
     // Protocol 1.2: volume rendering -- the server renders a viewport-sized
     // frame; volume field data never travels.
     RenderedFrameRequest = 27,
-    RenderedFrameResponse = 28
+    RenderedFrameResponse = 28,
+    // Protocol 1.7: a mapped grid's node plane for one slice.
+    MappedGridPlaneRequest = 29,
+    MappedGridPlaneResponse = 30
 };
 
 enum class ErrorCode : std::uint16_t {
@@ -181,6 +189,10 @@ struct OpenedDataset {
     // for one too old to have been sent any.
     std::uint32_t derivedFieldCount = 0;
     std::vector<DerivedFieldSkip> derivedFieldSkips;
+    // Protocol 1.7. The names of the plotfile's node-position components
+    // (amrexvec_nu_x, ...) when catalog.hasMappedGrid, for the metadata
+    // panel; empty otherwise, and from a server that predates 1.7.
+    std::vector<std::string> mappedGridComponentNames;
 };
 
 struct ErrorData {

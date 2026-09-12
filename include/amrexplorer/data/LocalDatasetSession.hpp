@@ -123,6 +123,9 @@ public:
 
     // A plotfile whose Header lists the Nu_nd displacement MultiFab.
     [[nodiscard]] bool supportsMappedGrid() const noexcept override;
+    // The names of its node-position components (amrexvec_nu_x, ...), for
+    // the catalog a server sends; empty without a mapped grid.
+    [[nodiscard]] std::vector<std::string> mappedGridComponentNames() const;
     [[nodiscard]] MappedGridPlane requestMappedGridPlane(
         const MappedGridPlaneRequest& request,
         StopToken cancellation = {}) override;

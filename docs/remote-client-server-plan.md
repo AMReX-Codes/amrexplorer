@@ -328,6 +328,14 @@ teardown. The server half is covered in-process by the raw-socket cases in
 `test_remote_server.cpp`, including that a 1.3 peer is told about the version
 rather than about the list.
 
+Protocol 1.7's mapped-grid gate wants the same check against a pre-1.7
+server binary serving an ERF or REMORA plotfile: View > Mapped Grid is
+greyed with the "predates mapped grids" reason, and the slice still shows
+on its logical grid. Against a current server, `--max-frame-mib` set low
+enough shows the raster coarsen and a zoom re-slice the cells on show. The
+server half -- a 1.6 peer refused by version, an oversized plane refused
+before any block is read -- is in `test_remote_server.cpp`.
+
 ### 5.3 Handshake and capabilities
 
 The first request must be `HelloRequest`. It will carry:

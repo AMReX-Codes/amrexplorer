@@ -173,6 +173,11 @@ table DatasetOpened {
   // -- while a stored count of 0 would empty the client's field list.
   derived_field_count:uint (id: 16);
   derived_field_skips:[DerivedFieldSkip] (id: 17);
+  // Protocol 1.7. Whether the plotfile carries node positions (a nodal
+  // Nu_nd MultiFab), and their component names. A 1.6 client reads neither;
+  // the version gate, not these fields, decides what it may ask for.
+  has_mapped_grid:bool (id: 18);
+  mapped_grid_component_names:[string] (id: 19);
 }
 
 table CloseDatasetRequest {
@@ -451,6 +456,35 @@ table RenderedFrameResponse {
   cache:CacheState (id: 18);
 }
 
+// Protocol 1.7: the node plane a slice is drawn on (core/MappedGrid.hpp).
+// The request mirrors the slice request it accompanies; the response holds
+// (width + 1) x (height + 1) node coordinates on the two in-plane axes and,
+// per level in face_levels, the two faces of every node's cell along the
+// normal. Doubles throughout: the field is new, so the 1.5 float split does
+// not apply.
+table MappedGridPlaneRequest {
+  dataset_id:ulong (id: 0);
+  normal_direction:int (id: 1);
+  physical_position:double (id: 2);
+  visible_region:RealBox (id: 3);
+  maximum_level:int (id: 4);
+  composition:CompositionPolicy (id: 5);
+  width:int (id: 6);
+  height:int (id: 7);
+}
+
+table MappedGridPlaneResponse {
+  width:int (id: 0);
+  height:int (id: 1);
+  physical_region:RealBox (id: 2);
+  a:[double] (id: 3);
+  b:[double] (id: 4);
+  face_levels:[int] (id: 5);
+  normal_lower:[double] (id: 6);
+  normal_upper:[double] (id: 7);
+  cache:CacheState (id: 8);
+}
+
 union Payload {
   HelloRequest = 1,
   HelloResponse = 2,
@@ -479,7 +513,9 @@ union Payload {
   ListDirectoryRequest = 25,
   DirectoryListing = 26,
   RenderedFrameRequest = 27,
-  RenderedFrameResponse = 28
+  RenderedFrameResponse = 28,
+  MappedGridPlaneRequest = 29,
+  MappedGridPlaneResponse = 30
 }
 
 table Envelope {

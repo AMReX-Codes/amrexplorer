@@ -53,6 +53,10 @@ inline constexpr const char* volumeIsosurfaceUnsupportedMessage
 inline constexpr const char* derivedFieldsUnsupportedMessage
     = "the remote server predates derived fields (protocol 1.4); install a "
       "current amrexplorer-server";
+// And for a mapped grid's node plane, which a 1.6 server has no answer for.
+inline constexpr const char* mappedGridUnsupportedMessage
+    = "the remote server predates mapped grids (protocol 1.7); install a "
+      "current amrexplorer-server";
 // The odd one out: nothing refuses, because a pre-1.5 server answers every
 // request perfectly well -- just with float values. That is invisible until a
 // field's values differ below float's resolution, where the picture comes back
@@ -120,6 +124,12 @@ public:
     // negotiated an older protocol.
     [[nodiscard]] VolumeFrame renderVolume(
         const VolumeRenderRequest& request, StopToken cancellation = {});
+    // Whether the negotiated protocol carries a mapped grid's node plane
+    // (1.7), and the plane itself, computed on the server. Ask first: this
+    // throws when the server negotiated an older protocol.
+    [[nodiscard]] bool supportsMappedGrid() const noexcept;
+    [[nodiscard]] MappedGridPlane requestMappedGridPlane(
+        const MappedGridPlaneRequest& request, StopToken cancellation = {});
     void closeDataset(DatasetId dataset, StopToken cancellation = {});
     void closeDatasetBestEffort(DatasetId dataset) noexcept;
     [[nodiscard]] ViewDataResult requestView(

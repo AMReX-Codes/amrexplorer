@@ -433,6 +433,48 @@ void checkConverted(
     }
 }
 
+void checkConverted(const fb::MappedGridPlaneRequestT& wire,
+    const amrvis::MappedGridPlaneRequest& result)
+{
+    if (result.dataset.value != wire.dataset_id
+        || result.normalDirection != wire.normal_direction
+        || result.physicalPosition != wire.physical_position
+        || !finite(result.physicalPosition) || !finite(result.visibleRegion)
+        || result.maximumLevel != wire.maximum_level
+        || result.outputSize[0] != wire.width || result.outputSize[1] != wire.height) {
+        fail("MappedGridPlaneRequest did not convert faithfully");
+    }
+}
+
+void checkConverted(const fb::MappedGridPlaneResponseT& wire,
+    const amrvis::MappedGridPlane& result)
+{
+    const auto nodes = static_cast<std::size_t>(result.width)
+        * static_cast<std::size_t>(result.height);
+    const auto faces = result.faceLevels.size() * nodes;
+    if (result.width < 2 || result.height < 2 || result.a.size() != nodes
+        || result.b.size() != nodes || result.normalLower.size() != faces
+        || result.normalUpper.size() != faces || result.a != wire.a
+        || result.b != wire.b || result.faceLevels != wire.face_levels
+        || !finite(result.physicalRegion)) {
+        fail("MappedGridPlaneResponse did not convert faithfully");
+    }
+    for (std::size_t index = 0; index < result.faceLevels.size(); ++index) {
+        if (result.faceLevels[index] < 0
+            || (index > 0 && result.faceLevels[index] <= result.faceLevels[index - 1])) {
+            fail("MappedGridPlaneResponse levels are not ascending");
+        }
+    }
+    for (const auto* values : {&result.a, &result.b, &result.normalLower,
+             &result.normalUpper}) {
+        for (const auto value : *values) {
+            if (!finite(value)) {
+                fail("MappedGridPlaneResponse carries a non-finite value");
+            }
+        }
+    }
+}
+
 // fromWire on a payload pointer, mirroring the server: a null pointer (the
 // union tag disagreeing with the stored table on a crafted buffer) is the
 // server's "payload is missing" rejection, not a dereference. An accepted
@@ -507,6 +549,12 @@ void exerciseFromWire(const codec::NativeEnvelope& envelope)
         break;
     case fb::Payload::RenderedFrameResponse:
         convert(envelope.payload.AsRenderedFrameResponse());
+        break;
+    case fb::Payload::MappedGridPlaneRequest:
+        convert(envelope.payload.AsMappedGridPlaneRequest());
+        break;
+    case fb::Payload::MappedGridPlaneResponse:
+        convert(envelope.payload.AsMappedGridPlaneResponse());
         break;
     case fb::Payload::NONE:
     case fb::Payload::ListDirectoryRequest:

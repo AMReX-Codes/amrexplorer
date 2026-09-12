@@ -816,12 +816,16 @@ and the logical cell it belongs to; rubber-band zoom frames the rectangle;
 grid boxes, contours, vector glyphs, particles and the scale bar follow the
 warp. An exported image holds the part of the slice the panel shows.
 
-Limits: remote datasets are not supported yet, and the menu says so. Line
-plots, volume rendering and a companion plotfile use the logical grid: the
-line tool is unavailable while the mapped grid is shown, and a companion
-cannot be opened until it is switched off. In the two panels that show the
-stretched axis the crosshair guide along that axis is omitted, since a
-constant logical coordinate is a curve on screen.
+Over a remote session the node positions come from the server, which must
+be current (protocol 1.7 or newer); with an older one the menu says so. The
+raster is sized so the node plane fits the server's frame budget, and a zoom
+re-slices the cells on show.
+
+Limits: line plots, volume rendering and a companion plotfile use the
+logical grid: the line tool is unavailable while the mapped grid is shown,
+and a companion cannot be opened until it is switched off. In the two
+panels that show the stretched axis the crosshair guide along that axis is
+omitted, since a constant logical coordinate is a curve on screen.
 
 ## Plotfile sequences and animation
 

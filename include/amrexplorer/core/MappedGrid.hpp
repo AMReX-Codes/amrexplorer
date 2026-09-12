@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -74,5 +75,13 @@ struct MappedGridPlane {
 
 [[nodiscard]] std::vector<std::string> validateMappedGridPlaneRequest(
     const MappedGridPlaneRequest& request, int datasetDimension);
+
+// A session that could not deliver a node plane the slice itself did not
+// need: a remote peer that refused or failed the request. The slice stands
+// on its logical grid and the message says why (see applyMappedGrid).
+class MappedGridUnavailable : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 } // namespace amrvis
